@@ -1639,11 +1639,15 @@ dependencies = [
  "dclutch-token-svm",
  "sha2 0.10.9",
  "solana-account 4.3.2",
+ "solana-address-lookup-table-interface",
+ "solana-message 4.4.1",
  "solana-program",
  "solana-program-option",
  "solana-program-pack",
  "solana-program-test",
+ "solana-sdk",
  "solana-sdk-ids",
+ "solana-transaction 4.1.6",
  "spl-token-interface",
 ]
 
@@ -1876,6 +1880,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-shadow-accelerator-auth-v4"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-execution-strategy-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
@@ -1957,6 +1974,7 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
  "dclutch-series-v3-kernel",
+ "dclutch-shadow-accelerator-auth-v4",
  "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-instructions-sysvar 3.0.1",

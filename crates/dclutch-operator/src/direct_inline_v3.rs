@@ -1354,7 +1354,9 @@ mod tests {
         ordinary_bundle_v4::{
             DirectInlineOrdinaryHotBundleInputV4, build_direct_inline_ordinary_hot_bundle_v4,
         },
-        ordinary_effect_artifacts_v3::DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        ordinary_effect_artifacts_v3::{
+            DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        },
         registered_requests_v4::encode_direct_registration_request_v3_atomic,
         successor::{
             DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_MAKER_REPLAY_BYTES_V1,
@@ -1647,6 +1649,13 @@ mod tests {
             let value = *output.get(representative).expect("representative");
             *output.get_mut(account).expect("route alias") = value;
         }
+        // Descriptive only: the Custody program's rule is opaque, so no loader
+        // record width is pinned at this coordinate.
+        *output
+            .get_mut(usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3))
+            .expect("Custody program") =
+            u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES)
+                .expect("Custody program width");
         output
     }
 

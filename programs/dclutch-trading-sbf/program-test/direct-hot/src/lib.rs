@@ -32,7 +32,9 @@ use dclutch_direct_codec::{
         DirectInlineOrdinaryHotBundleV4, build_direct_inline_ordinary_hot_bundle_v4,
         validate_direct_inline_ordinary_hot_bundle_v4,
     },
-    ordinary_effect_artifacts_v3::DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+    ordinary_effect_artifacts_v3::{
+        DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+    },
 };
 use dclutch_product_runtime_v2::{
     DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
@@ -47,13 +49,13 @@ use sha2::{Digest, Sha256};
 pub const DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5: [u8; 32] = [0x44; 32];
 /// Exact descriptor identity emitted for the fixed fixture capacity profile.
 pub const DIRECT_HOT_FIXTURE_DESCRIPTOR_ID_V5: [u8; 32] = [
-    0xd4, 0xfa, 0xea, 0xaf, 0x9d, 0x9b, 0x22, 0x8f, 0x45, 0xe6, 0x5d, 0x9e, 0xcf, 0x87, 0xfd, 0xf8,
-    0x2a, 0x01, 0x0c, 0xfa, 0xaf, 0x3e, 0x36, 0xce, 0x1c, 0xdb, 0x28, 0x1a, 0x1c, 0x00, 0x38, 0x25,
+    0xfb, 0x41, 0x92, 0x0a, 0x61, 0x5e, 0xb8, 0x64, 0x32, 0xd7, 0xf9, 0x48, 0xf3, 0x5b, 0xa0, 0x43,
+    0xb5, 0x57, 0x35, 0x6d, 0x6e, 0xc6, 0x86, 0x12, 0x6f, 0x52, 0xb6, 0x18, 0x82, 0x85, 0x68, 0x76,
 ];
 /// Exact one-entry ProgramSet identity selecting the fixture descriptor.
 pub const DIRECT_HOT_FIXTURE_PROGRAM_SET_ID_V5: [u8; 32] = [
-    0x03, 0x53, 0x88, 0x60, 0x17, 0x96, 0xdf, 0x87, 0x35, 0xee, 0x4e, 0x33, 0x65, 0xde, 0x4e, 0x5d,
-    0x02, 0xf5, 0x5c, 0x65, 0x79, 0x6f, 0x23, 0x19, 0xb7, 0x0d, 0xdd, 0x2c, 0xa3, 0xee, 0x00, 0x7c,
+    0x0c, 0x3e, 0xb4, 0xa2, 0xb9, 0x53, 0x4e, 0xf2, 0xad, 0x5e, 0xee, 0xbe, 0xae, 0x95, 0xbf, 0x23,
+    0x3b, 0xa2, 0xd1, 0x29, 0x07, 0x1c, 0x0c, 0xf5, 0x8c, 0xc3, 0x00, 0x18, 0x6e, 0x76, 0x97, 0x91,
 ];
 /// Superseded over-wide domain AccountProfile identity used only for hostile refusal evidence.
 pub const STALE_DIRECT_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
@@ -355,6 +357,15 @@ fn direct_logical_data_lengths_v5(
     ] {
         alias_width(&mut output, account, representative)?;
     }
+    // Coordinate 90 is the release-selected Custody program the four Custody
+    // routes are invoked through. Its rule is opaque, so this width is
+    // descriptive only and never pinned; ProgramTest installs the real
+    // upgradeable-loader record for this key.
+    put_width(
+        &mut output,
+        usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3),
+        LOADER_V3_PROGRAM_BYTES,
+    )?;
     Ok(output)
 }
 
@@ -476,8 +487,14 @@ mod tests {
         assert_eq!(fixture.logical_data_lengths.get(27), Some(&1_141_117));
         assert_eq!(fixture.logical_data_lengths.get(29), Some(&971_053));
         assert_eq!(fixture.logical_data_lengths.get(31), Some(&934_037));
+        assert_eq!(
+            fixture
+                .logical_data_lengths
+                .get(usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3)),
+            Some(&u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Custody program width"))
+        );
         let profile = AccountProfileV2::decode(&fixture.bundle.account_profile).expect("profile");
-        assert_eq!(profile.fixed_account_count(), 90);
+        assert_eq!(profile.fixed_account_count(), 91);
         assert_eq!(profile.dynamic_fixed_span_count(), 0);
         assert_eq!(profile.common_scalar_count(), 65);
     }

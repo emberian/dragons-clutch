@@ -20,6 +20,7 @@ use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestLayoutV1, CustodyRequestV1,
     DELEGATED_CUSTODY_RECEIPT_BYTES_V2, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
     DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2, OperationV1,
+    TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -62,7 +63,7 @@ use crate::{
 };
 
 /// Logical account count of Profile9 for ordinary inline execution.
-pub const DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3: u16 = 90;
+pub const DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3: u16 = 91;
 /// Claims fixed22 frame start.
 pub const DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3: u16 = 12;
 /// Seller-only terminal Custody frame start.
@@ -73,6 +74,27 @@ pub const DIRECT_INLINE_SELLER_INTERMEDIATE_ACCOUNT_START_V3: u16 = 48;
 pub const DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3: u16 = 62;
 /// Fee-only Custody frame start.
 pub const DIRECT_INLINE_FEE_SOLE_ACCOUNT_START_V3: u16 = 76;
+/// Executable Custody program the four Custody routes are invoked through.
+///
+/// A Custody `Transfer` FrameSpec never names the Custody program itself -- a
+/// CPI's callee is not one of its own accounts -- and the Claims frame carries
+/// its own `ClaimsProgram` coordinate, so the Claims route found its callee for
+/// free and the Custody routes had no coordinate that could carry theirs. The
+/// family-neutral Hot executor resolves a child route's program by scanning the
+/// downgraded effect accounts for the key the activated release set names for
+/// that role, so the program has to BE one of the logical coordinates. It is a
+/// Direct-owned outer coordinate, exactly like the Rent program that owns the
+/// lifecycle credit, and it is appended after every route range so that adding
+/// it renumbers no frame.
+pub const DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3: u16 = 90;
+
+const _: () = assert!(
+    DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3 + 1 == DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3
+);
+const _: () = assert!(
+    DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3
+        >= DIRECT_INLINE_FEE_SOLE_ACCOUNT_START_V3 + TRANSFER_ACCOUNT_COUNT_V1
+);
 
 const ROUTE_COUNT: usize = 5;
 const DEPENDENCY_COUNT: usize = 5;
@@ -810,7 +832,14 @@ mod tests {
         );
         let effect = effect.base();
         assert_eq!(effect.route_count(), 5);
-        assert_eq!(effect.fixed_account_count(), 90);
+        // Ninety-one: the five route ranges cover coordinates 12..90 and the
+        // Custody program the four Custody routes are invoked through is
+        // appended at 90, outside every range.
+        assert_eq!(effect.fixed_account_count(), 91);
+        assert_eq!(
+            effect.fixed_account_count(),
+            DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3 + 1
+        );
         assert_eq!(effect.common_scalar_count(), 65);
         assert_eq!(effect.item_scalar_stride(), 2);
         assert_eq!(effect.common_identity_count(), 32);

@@ -65,8 +65,8 @@ pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_P
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 /// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile14.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0xa2, 0xac, 0x6d, 0xb6, 0x8f, 0xd7, 0x1f, 0x7a, 0xfb, 0x82, 0x9e, 0x23, 0x6e, 0x91, 0x74, 0x9d,
-    0xa0, 0x7d, 0xb6, 0x2c, 0xb3, 0x2d, 0x04, 0xcb, 0x5f, 0x7c, 0x6c, 0xaf, 0x25, 0xc9, 0x21, 0x0a,
+    0xff, 0xf7, 0xc4, 0xaa, 0xf1, 0x0a, 0xe6, 0x6b, 0x4a, 0xd0, 0x9d, 0xfb, 0x58, 0xce, 0x7b, 0xe6,
+    0x09, 0xcf, 0x84, 0x78, 0xc2, 0x40, 0xb7, 0x08, 0x09, 0x59, 0xec, 0x34, 0x01, 0xea, 0x23, 0x77,
 ];
 /// SHA-256 identity of the exact maker LifecycleV5 policy.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
@@ -75,8 +75,8 @@ pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
 ];
 /// SHA-256 identity of the exact ordered EffectProgramV4.
 pub const DIRECT_INLINE_ORDINARY_EFFECT_ID_V4: [u8; 32] = [
-    0xfe, 0x9e, 0xee, 0x43, 0x96, 0x0a, 0x95, 0x3b, 0x4b, 0xd9, 0xb1, 0x43, 0xd1, 0xb1, 0x1a, 0xf0,
-    0xbd, 0xe7, 0x3e, 0xec, 0xde, 0x71, 0x20, 0x57, 0xbd, 0x1b, 0x6e, 0xa8, 0x39, 0x59, 0xc2, 0xa6,
+    0xac, 0xd5, 0x5d, 0x27, 0x8e, 0x58, 0x4d, 0x81, 0x56, 0xdf, 0x9b, 0x6b, 0xe5, 0x1b, 0xeb, 0xba,
+    0x57, 0x72, 0x74, 0x9b, 0x0b, 0xda, 0x2a, 0xbb, 0x2f, 0x9b, 0x5a, 0xe0, 0xf5, 0x9f, 0xa1, 0x4b,
 ];
 
 /// Chain-selected facts that are not owned by the Direct artifact family.
@@ -390,6 +390,7 @@ mod tests {
 
     use crate::{
         execution_v3::DirectExecutionActionV3,
+        ordinary_effect_artifacts_v3::DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3,
         state_artifacts_v3::{
             DIRECT_BUYER_MAKER_ACCOUNT_V3, DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3,
             DIRECT_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V3, DIRECT_MAKER_PAYER_ACCOUNT_V3,
@@ -460,6 +461,12 @@ mod tests {
         *output.get_mut(45).expect("seller token") = 165;
         *output.get_mut(47).expect("token program") = 36;
         *output.get_mut(73).expect("fee token") = 165;
+        // Descriptive only: the Custody program rule is opaque, so no loader's
+        // record width is pinned here.
+        *output
+            .get_mut(usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3))
+            .expect("Custody program") =
+            u32::try_from(LOADER_V3_PROGRAM_BYTES).expect("Custody program");
         for (account, representative) in [
             (49, 23),
             (50, 24),

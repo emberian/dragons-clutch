@@ -49,8 +49,9 @@ use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
 use crate::{
     ordinary_effect_artifacts_v3::{
-        DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3, DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3,
-        DIRECT_INLINE_FEE_SOLE_ACCOUNT_START_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+        DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3, DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3,
+        DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3, DIRECT_INLINE_FEE_SOLE_ACCOUNT_START_V3,
+        DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
         DIRECT_INLINE_SELLER_INTERMEDIATE_ACCOUNT_START_V3,
         DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3,
     },
@@ -323,6 +324,21 @@ fn rules(
     // The profile authenticates its identity through the trusted-builtin
     // `require_key` below and asserts nothing about its bytes.
     *rule_mut(&mut output, usize::from(SYSTEM_PROGRAM_ACCOUNT))? = opaque(executable);
+    // The Custody program the four Custody routes are invoked through. A
+    // Custody `Transfer` FrameSpec does not name its own callee, and unlike
+    // Claims -- whose frame carries a `ClaimsProgram` coordinate -- Custody has
+    // no coordinate inside its frame that could hold it, so the family-neutral
+    // Hot executor found no account matching the role the activated release set
+    // names and refused every Custody route before its first CPI. This is
+    // Direct's own outer coordinate, stated exactly like the Rent program at
+    // coordinate 10: executable, readonly, and opaque, because the loader that
+    // deployed it owns its record width and the Registry activation cache --
+    // not this profile -- is the sole authority on which program the Custody
+    // role selects.
+    *rule_mut(
+        &mut output,
+        usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3),
+    )? = opaque(executable);
 
     let claims = SparseNativeTransferFrameSpecV1;
     let mut local = 0_u16;
@@ -671,10 +687,11 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectOrdinaryAccountArtifact
         || length_at(lengths, 7)? != width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?
         || length_at(lengths, 8)? != width(DIRECT_MAKER_REPLAY_BYTES_V1)?
         || length_at(lengths, 9)? != 0
-        // Coordinates 10 and 11 are chain-supplied programs -- the Rent program
-        // that owns the lifecycle credit and the System Program. A loader owns
-        // the first record's width and the validator owns the second's, so
-        // nothing here may pin either.
+        // Coordinates 10, 11 and 90 are chain-supplied programs -- the Rent
+        // program that owns the lifecycle credit, the System Program, and the
+        // release-selected Custody program the Custody routes are invoked
+        // through. A loader owns the first and third record's width and the
+        // validator owns the second's, so nothing here may pin any of them.
         || length_at(lengths, 23)? != width(CORE_STATE_BYTES)?
         || length_at(lengths, 24)? != width(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?
         || [25_usize, 26, 28, 30]
@@ -949,7 +966,14 @@ mod tests {
             derive_effect_permissions, project_atomic,
         },
     };
-    use dclutch_effect_kernel::v2::AccountPermission;
+    use dclutch_effect_kernel::{
+        v2::{AccountPermission, FixedRole},
+        v4::ProgramV4 as EffectProgramV4,
+    };
+
+    use crate::ordinary_effect_artifacts_v3::{
+        DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4, encode_direct_inline_ordinary_effect_v4_atomic,
+    };
 
     fn lengths(basis_bytes: u32) -> [u32; FIXED_ACCOUNTS] {
         let mut output = [0_u32; FIXED_ACCOUNTS];
@@ -997,6 +1021,12 @@ mod tests {
         output[46] = 0;
         output[47] = 36;
         output[73] = 165;
+        // The release-selected Custody program. Its rule is opaque, so this
+        // width is descriptive only and is never pinned.
+        *output
+            .get_mut(usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3))
+            .expect("Custody program") =
+            width(LOADER_V3_PROGRAM_BYTES).expect("Custody program width");
         for (account, representative) in ROUTE_ALIASES {
             let value = *output
                 .get(usize::from(*representative))
@@ -1065,7 +1095,7 @@ mod tests {
                 )
             );
         }
-        assert_eq!(profile.fixed_account_count(), 90);
+        assert_eq!(profile.fixed_account_count(), 91);
         assert_eq!(profile.item_account_stride(), 0);
         assert_eq!(profile.dynamic_fixed_span_count(), 0);
         assert_eq!(profile.common_scalar_count(), 65);
@@ -1097,7 +1127,19 @@ mod tests {
             EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA
         );
         assert_eq!(maker.prestate(), AccountPrestateV2::LifecycleBound);
-        for coordinate in [11_u16, 12, 27, 29, 31, 34, 46, 48, 62, 76] {
+        for coordinate in [
+            11_u16,
+            12,
+            27,
+            29,
+            31,
+            34,
+            46,
+            48,
+            62,
+            76,
+            DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3,
+        ] {
             assert_eq!(
                 profile
                     .rule(false, coordinate)
@@ -1188,6 +1230,11 @@ mod tests {
         token_2022[47] = 1_141_117;
         // The Rent program under a fixed loader, likewise.
         token_2022[10] = 987_654;
+        // And the release-selected Custody program: whichever loader deployed
+        // it owns its record, and Direct asserts nothing about that width.
+        *token_2022
+            .get_mut(usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3))
+            .expect("Custody program") = 971_053;
         for (account, representative) in ROUTE_ALIASES {
             let value = *token_2022
                 .get(usize::from(*representative))
@@ -1504,6 +1551,14 @@ mod tests {
         fn set_data(&mut self, coordinate: usize, value: Vec<u8>) {
             *self.data.get_mut(coordinate).expect("data") = value;
         }
+
+        fn set_writable(&mut self, coordinate: usize, value: bool) {
+            *self.writable.get_mut(coordinate).expect("writable") = value;
+        }
+
+        fn set_executable(&mut self, coordinate: usize, value: bool) {
+            *self.executable.get_mut(coordinate).expect("executable") = value;
+        }
     }
 
     #[test]
@@ -1572,9 +1627,10 @@ mod tests {
         let debit = AccountPermission::new(true, false, false);
         assert_eq!(permissions.get(6), Some(&debit));
         assert_eq!(permissions.get(9), Some(&debit));
-        // Ninety logical coordinates pack into forty-three physical accounts
+        // Ninety-one logical coordinates pack into forty-four physical accounts
         // carrying exactly one signer, which is what the 1,224-byte
-        // continuation packet can actually carry.
+        // continuation packet can actually carry. The forty-fourth is the
+        // Custody program: one readonly executable key, no signer, no writable.
         assert_eq!(
             profile
                 .logical_account_count(ADMISSION_TAIL_V3)
@@ -1585,7 +1641,7 @@ mod tests {
             profile
                 .physical_account_count_with_dynamic_spans(ADMISSION_TAIL_V3, &[])
                 .expect("physical count"),
-            43
+            44
         );
         let signers = (0..FIXED_ACCOUNTS)
             .filter(|coordinate| {
@@ -1614,5 +1670,144 @@ mod tests {
                 .effect_permissions(),
             0
         );
+    }
+
+    /// The Custody routes are invoked through a program the profile must carry.
+    ///
+    /// The family-neutral Hot executor resolves a child route's callee by
+    /// scanning the downgraded effect accounts for the key the activated
+    /// release set names for that role, and accepts it only if it is unique,
+    /// executable, not a signer and not writable. A Custody `Transfer`
+    /// FrameSpec never names its own callee, so before this coordinate existed
+    /// the canonical Direct topology declared four Custody routes and carried
+    /// no account any of them could be invoked through.
+    #[test]
+    fn the_custody_routes_carry_the_release_selected_program_they_invoke() {
+        let bytes = emit(&lengths(256));
+        let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        let coordinate = DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3;
+        let rule = profile.rule(false, coordinate).expect("Custody program");
+        assert_eq!(
+            rule.prestate(),
+            AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+        );
+        assert!(rule.route_privileges().executable());
+        assert!(!rule.route_privileges().signer());
+        assert!(!rule.route_privileges().writable());
+        assert_eq!(rule.effect_permissions(), 0);
+        // A self-representative, so it packs into a physical account of its own
+        // rather than sharing one with a coordinate of another role.
+        assert_eq!(
+            profile.representative(ADMISSION_TAIL_V3, usize::from(coordinate)),
+            Ok(usize::from(coordinate))
+        );
+        assert!(
+            !ROUTE_ALIASES
+                .iter()
+                .any(|(account, _)| *account == coordinate)
+        );
+        // It sits past every declared route range, so carrying it renumbers no
+        // Claims or Custody frame.
+        for (start, count) in [
+            (DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3, 22_u16),
+            (DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3, 14),
+            (DIRECT_INLINE_SELLER_INTERMEDIATE_ACCOUNT_START_V3, 14),
+            (DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3, 14),
+            (DIRECT_INLINE_FEE_SOLE_ACCOUNT_START_V3, 14),
+        ] {
+            assert!(coordinate >= start + count, "route at {start}");
+        }
+        assert_eq!(direct_observations().project(), Ok(()));
+    }
+
+    /// The three shapes the Hot executor's role-program lookup refuses, stated
+    /// where the profile can refuse them first.
+    #[test]
+    fn a_custody_program_that_signs_writes_or_is_not_executable_is_refused() {
+        let coordinate = usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3);
+        let hostile: [&dyn Fn(&mut DirectObservationsV3); 3] = [
+            &|value| value.set_signer(coordinate, true),
+            &|value| value.set_writable(coordinate, true),
+            &|value| value.set_executable(coordinate, false),
+        ];
+        for (index, mutate) in hostile.iter().enumerate() {
+            let mut value = direct_observations();
+            mutate(&mut value);
+            assert_eq!(
+                value.project(),
+                Err(ProfileError::PrivilegeMismatch),
+                "hostile Custody program privilege {index}"
+            );
+        }
+    }
+
+    /// Every child role the EffectProgram routes to must be invocable.
+    ///
+    /// The Hot executor resolves a child route's callee by scanning the
+    /// downgraded effect accounts for the program the activated release set
+    /// names for that role, and accepts only a unique readonly executable
+    /// account. A route whose role has no such coordinate in the same topology
+    /// can never be invoked, whatever its own frame declares -- which is
+    /// exactly the state all four Custody routes were in. The roles come from
+    /// the real emitted Effect bytes; the callee coordinates are authored here,
+    /// so this is a witness rather than a mirror of the emitter.
+    #[test]
+    fn every_child_role_the_effect_routes_to_has_an_invocable_program_coordinate() {
+        const CLAIMS_PROGRAM_ACCOUNT: u16 = DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + 16;
+        let callees: &[(FixedRole, u16)] = &[
+            (FixedRole::Claims, CLAIMS_PROGRAM_ACCOUNT),
+            (FixedRole::Custody, DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3),
+        ];
+        let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
+        let mut effect_bytes = [0_u8; DIRECT_INLINE_ORDINARY_EFFECT_BYTES_V4];
+        encode_direct_inline_ordinary_effect_v4_atomic(&mut scratch, &mut effect_bytes)
+            .expect("effect");
+        let effect = EffectProgramV4::decode(&effect_bytes).expect("effect decode");
+        let effect = effect.base();
+        let bytes = emit(&lengths(256));
+        let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        let mut route = 0_u16;
+        while route < effect.route_count() {
+            let role = effect.route(route).expect("route").role();
+            let coordinate = callees
+                .iter()
+                .find(|(named, _)| *named == role)
+                .map(|(_, coordinate)| *coordinate)
+                .expect("every routed role must name a callee coordinate");
+            let rule = profile.rule(false, coordinate).expect("callee rule");
+            assert!(
+                rule.route_privileges().executable()
+                    && !rule.route_privileges().signer()
+                    && !rule.route_privileges().writable(),
+                "{role:?} callee at {coordinate} is not a readonly executable"
+            );
+            assert_eq!(
+                profile.representative(ADMISSION_TAIL_V3, usize::from(coordinate)),
+                Ok(usize::from(coordinate)),
+                "{role:?} callee at {coordinate} is an alias"
+            );
+            route += 1;
+        }
+        // The two callees are distinct physical accounts: the executor refuses a
+        // role lookup that matches more than one, and a shared one would make
+        // both roles resolve to the same program.
+        assert_eq!(callees.len(), 2);
+        assert_ne!(
+            callees.first().expect("Claims callee").1,
+            callees.last().expect("Custody callee").1
+        );
+    }
+
+    /// Custody and Claims select different releases, and the executor refuses a
+    /// role lookup that matches more than one account.
+    #[test]
+    fn the_custody_program_may_not_share_a_key_with_the_claims_program() {
+        let mut hostile = direct_observations();
+        let claims = *hostile.keys.get(28).expect("Claims program");
+        hostile.set_key(
+            usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3),
+            claims,
+        );
+        assert_eq!(hostile.project(), Err(ProfileError::CrossItemAlias));
     }
 }

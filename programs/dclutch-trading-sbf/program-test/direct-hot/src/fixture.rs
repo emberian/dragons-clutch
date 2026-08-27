@@ -63,6 +63,9 @@ use dclutch_direct_codec::{
         DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3, DirectExecutionActionV3, encode_header_v3,
     },
     intent_v2::CompactIntentV2,
+    ordinary_effect_artifacts_v3::{
+        DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
+    },
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DirectCoordinatesV1, DirectExecutionConfigV1,
         DirectRootStateV1, MakerReplaySeedsV1,
@@ -1286,7 +1289,7 @@ fn logical_accounts(
     realm: &RealmFixture,
     request: &[u8],
 ) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
-    let mut logical = (0..90)
+    let mut logical = (0..usize::from(DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3))
         .map(|index| {
             ordinary(
                 rent,
@@ -1612,6 +1615,16 @@ fn logical_accounts(
         &mut logical,
         76,
         external_empty(key(0xb2), system_program::ID, false, false),
+    )?;
+    // The four Custody routes are invoked through the Custody program the
+    // activated release set selects, and the Hot executor resolves it by
+    // scanning the effect accounts for that key. A Custody `Transfer` frame
+    // never names its own callee, so the topology carries it here, past every
+    // route range, as a readonly executable account of its own.
+    set(
+        &mut logical,
+        usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3),
+        program(input.custody_program),
     )?;
     Ok(logical)
 }
@@ -2046,6 +2059,56 @@ mod tests {
                 )
                 .count(),
             1
+        );
+    }
+
+    /// The live account the Hot executor's Custody role lookup consumes.
+    ///
+    /// `selected_role_program_v3` scans the downgraded effect accounts for the
+    /// program the activated release set names for the role and accepts it only
+    /// if it is unique, executable, not a signer and not writable. The four
+    /// Custody routes had no such account at any coordinate, so every one of
+    /// them refused before its first CPI; the Claims route found its own callee
+    /// inside its frame and did not.
+    #[test]
+    fn the_topology_carries_the_custody_program_the_custody_routes_invoke() {
+        let input = input();
+        let fixture = build_direct_hot_chain_fixture_v5(input).expect("chain fixture");
+        let matches = fixture
+            .accounts
+            .iter()
+            .filter(|value| value.key == input.custody_program)
+            .collect::<Vec<_>>();
+        assert_eq!(matches.len(), 1, "the role lookup refuses a second match");
+        let custody = matches.first().expect("Custody program account");
+        assert!(custody.account.executable);
+        assert!(!custody.snapshot_for_rollback);
+        let meta = fixture
+            .hot_instruction
+            .accounts
+            .iter()
+            .filter(|value| value.pubkey == input.custody_program)
+            .collect::<Vec<_>>();
+        assert_eq!(meta.len(), 1);
+        let meta = meta.first().expect("Custody program meta");
+        assert!(!meta.is_signer);
+        assert!(!meta.is_writable);
+        // ProgramTest owns the real deployed record for this key, exactly as it
+        // does for Claims and Core, so the fixture must hand it over rather than
+        // installing a placeholder over the deployment.
+        assert!(
+            fixture
+                .externally_installed_keys
+                .contains(&input.custody_program)
+        );
+        // Each of the four Custody routes selects the same one program, and it
+        // is not the Claims callee.
+        assert_ne!(input.custody_program, input.claims_program);
+        assert!(
+            fixture
+                .accounts
+                .iter()
+                .any(|value| value.key == input.claims_program && value.account.executable)
         );
     }
 
