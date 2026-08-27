@@ -270,6 +270,14 @@ name = "emit-source-material-v2-abi-rust"
 root = "EmitSourceMaterialV2AbiRust"
 
 [[lean_exe]]
+name = "emit-source-principal-capacity-v1-rust"
+root = "EmitSourcePrincipalCapacityV1Rust"
+
+[[lean_exe]]
+name = "emit-source-scheduled-median-v1-rust"
+root = "EmitSourceScheduledMedianV1Rust"
+
+[[lean_exe]]
 name = "emit-source-recovery-policy-v2-abi-rust"
 root = "EmitSourceRecoveryPolicyV2AbiRust"
 
