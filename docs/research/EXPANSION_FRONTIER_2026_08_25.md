@@ -143,9 +143,16 @@ must not be assumed by a later lane.
 
 - **There is no degree ≥ 2 price-plane gate.** At degree ≥ 2 the simplex
   condition stops being the no-arbitrage condition, and a Market that could
-  select such a basis without a moment-cone-style admission would carry an
-  executable arbitrage. Degree ≤ 1 is unaffected and provably so. **Trigger:
-  before any Market descriptor can select degree ≥ 2.**
+  select such a basis without a price admission rule would carry an executable
+  arbitrage. Degree ≤ 1 is unaffected and provably so. **Trigger: before any
+  Market descriptor can select degree ≥ 2.** The named answer is *not* a
+  research problem: generation two's `clutch-price-measure`
+  (`verify_quantized_atom_mixture_v1`) is a sound integer hull-membership
+  certificate that refutes generation one's moment cone in both directions and
+  needs nothing from a basis but a deterministic integer evaluator — which is
+  exactly what `Basis` is. It has no Lean, which is the part worth adding here.
+  See `ASPIRATION_LEDGER.md` `G-1` and the eclipse scorecard's correction
+  section. A transplant needs a `docs/compost/` manifest.
 - **The kernel still has no consumer**, so `M-8` is unchanged by this slice.
 
 `docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` compares the result
