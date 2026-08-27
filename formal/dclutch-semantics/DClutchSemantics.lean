@@ -66,6 +66,9 @@ import DClutchSemantics.RationalCrossDomainV3
 import DClutchSemantics.StructuredV2
 import DClutchSemantics.StructuredV2Abi
 import DClutchSemantics.StructuredV2Examples
+import DClutchSemantics.RealmPositionAbi
+import DClutchSemantics.CapabilityManifestV1Abi
+import DClutchSemantics.TsEmit
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
