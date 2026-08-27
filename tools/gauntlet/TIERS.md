@@ -14,6 +14,8 @@ tools/gauntlet/
   TIERS.md               this file
   run.sh                 build -> deploy -> campaign -> census, resumable
   blocked.json           NEVER-EXECUTED routes with reason + owning lane
+  CU_BUDGETS.json        per-transaction compute budgets; ONE file, ONE owner
+  CU_BUDGETS.md          what they catch, what they do not, how to re-pin
   census/                the route census tool (standalone cargo package)
   tier1/
     bindings.json        campaign transaction label -> census route
@@ -140,6 +142,43 @@ The three admissible provenance kinds, from `DESIGN.md`:
 
 Reading a value out of the code under test and asserting it equals itself is
 not a witness, however many lines it takes.
+
+### 4. A CU budget witness, if the tier's transactions are worth budgeting
+
+Compute is the one resource whose exhaustion is a hard refusal with no partial
+result, and it moves under a tier from OTHER lanes' work. `DCLTGMF1` went from
+84.6% to 91.3% of the 1,400,000 maximum in one evening from concurrent changes
+to Core, Claims and Trading, and nothing was watching.
+
+A tier opts in with **one** witness entry that carries no number of its own:
+
+```json
+{
+  "id": "the-golden-transactions-are-inside-their-cu-budgets",
+  "kind": "cu-budget",
+  "campaign": "tier1",
+  "provenance": "why these transactions are worth a budget, and what the independent value is"
+}
+```
+
+`campaign` is matched against the `campaign` field of entries in
+`tools/gauntlet/CU_BUDGETS.json`, which is where every number lives. **A tier
+does not carry a copy of a budget.** The witness expands to one row per budget
+entry, so an over-budget campaign names the transaction and the delta rather
+than saying the campaign got more expensive.
+
+Two things to read in `CU_BUDGETS.md` before adding budgets for a new campaign:
+
+- **These numbers are not deterministic.** Fresh keypairs per run move
+  `find_program_address` bump-search iteration counts, and each iteration is
+  1,500 CU. Measured bands range from 0 to 79,500 CU depending on the
+  transaction. Pin the HIGHEST draw you observed, over several runs, never one.
+- **A budget above 1,400,000 is refused.** That is deliberate: it is how the
+  file says out loud that a transaction has stopped fitting, rather than letting
+  someone widen a tolerance past the ceiling.
+
+A budget that matches no transaction in the campaign is red, on the same
+reasoning as a stale binding.
 
 ## The tiers that exist
 
