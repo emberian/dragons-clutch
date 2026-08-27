@@ -155,3 +155,29 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
   market, owner]` — no indexer needed); wizard = compose `/product-v2` →
   `/found` carrying compiled Product identity. The missing market *indexer*
   remains the one honest discovery gap.
+
+## The demo is the completed dClutch (direction set by ember, 2026-08-26 night)
+
+There is no scope cut. The near-term goal is to FINISH everything intended —
+all families, representations, creation, operator/frontend — as fast as the
+swarm can converge it: roughly 3–8 more swarmcycles of closing loose ends and
+implementation before any "what's in the demo" pruning conversation. Edit-heavy
+lanes that converge later are acceptable. Assurance re-enters incrementally
+during this phase (we iterate on it in public); it no longer waits for "done."
+
+**The demo shape:** the mostly-completed protocol LIVE ON DEVNET, resolving
+markets about the state of SOLANA MAINNET (pumpfun/DBC graduations, mainnet
+pool prices, majors). Cross-cluster truth transport:
+- v1 accepts a disclosed proof-of-authority relayer as the cost of doing this:
+  an off-chain daemon reads finalized mainnet account state and signs
+  attestations of RAW BYTES + slot + owner (+ the owner program's ProgramData
+  digest, so the Loopscale-class program-identity defense works cross-cluster).
+  The relayer attests OBSERVATIONS, never interpretations — all decoding stays
+  in the on-chain adapter under the CHAIN_STATE_SOURCES decoding rules, so
+  swapping trust roots never moves semantics.
+- Majors' prices need no relayer at all: Pyth's devnet deployment already
+  carries mainnet-derived prices under the existing adapter.
+- Candidate permissionless upgrade to verify: Wormhole Queries (guardian-signed
+  Solana account reads, verifiable against the devnet core bridge) — MR lane
+  owns pinning whether this actually supports what we need.
+- Later hardening path: multi-relayer quorum, TEE-attested signer.
