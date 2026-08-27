@@ -107,8 +107,13 @@ BUILD_TARGET="$WORK/sbf-target"
 
 elf_inputs_digest() {
     if [ "$WORKTREE" = 1 ]; then
-        ( cd "$SOURCE" && find programs crates Cargo.toml Cargo.lock rust-toolchain.toml -type f \
-            -exec shasum -a 256 {} + 2>/dev/null | sort ) | sha256_stdin
+        # HEAD's tree plus the working diff: content-sensitive without walking
+        # the nested target/ directories a find would drown in.
+        { git -C "$REPO" ls-tree -r --full-tree HEAD \
+              -- programs crates Cargo.toml Cargo.lock rust-toolchain.toml
+          git -C "$REPO" diff HEAD \
+              -- programs crates Cargo.toml Cargo.lock rust-toolchain.toml
+        } | sha256_stdin
     else
         git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" \
             -- programs crates Cargo.toml Cargo.lock rust-toolchain.toml | sha256_stdin
