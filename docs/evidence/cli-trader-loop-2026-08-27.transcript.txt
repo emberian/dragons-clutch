@@ -1,0 +1,93 @@
+=== $ dclutch --session /private/tmp/dclutch-sdkcli/run2/session.json markets ls
+(node:81406) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+markets under Core 2rJGzuF2AduNJCc2td1y87ApUk8NhiCUGhsKCNRqhd8o at finalized slot 4207 (getProgramAccounts returned 3 finalized Core accounts at slot 4207; 2 carry the DCLTCOR2 Market header.)
+  38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM  gen 2  Open  CHAIN · finalized slot 4207
+  8DmxJvwsQVYz6ZURfNoxssKK2YrQMwFPnsYM6t2xrzG9  gen 1  Founding  CHAIN · finalized slot 4207
+(exit 0)
+
+=== $ dclutch --session /private/tmp/dclutch-sdkcli/run2/session.json markets show 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM
+(node:81428) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+market 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM at finalized slot 4210
+  phase                     Open — The Market admits complete-set split and merge against its Hoard. No terminal receipt is written, so no claim can be redeemed.
+  generation                2
+  provenance                CHAIN · finalized slot 4210
+  outstanding capabilities  0
+  market id                 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM
+  registry program          87syw3eBN6nrXYT5RkkRSBKcRbciD1sg5X3R3hu7mh7e
+  collateral                {"status":"bound","observedSlot":"4210","realmAddress":"49zm8mKN3urN7L7BqMkBhuqvD6rFkRHXvhTzMBD6CnA5","realmContentId":"2890cdbab2e63da06ea925610131895cefc2493000ebbda983f43a5c0b378365","collateralMint":"EJtm4rypefJ29rAskdh37c5qvqCBUK2kpWqvfTcRKY6c","collateralMintShort":"EJtm…KY6c","tokenProgram":"TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb","adapterReleaseId":"228c14f9e501f86138d3f19e5ea815af628c0adf499dc6a93dd8cb185c870e29","mintAuthorityPolicy":"Require absent","freezeAuthorityPolicy":"Require absent"}
+  liability                 {"status":"bound","observedSlot":"4210","aggregateAddress":"2zebJPBrQib84Tua6ZWkXzyXMjeFpionbiiNVKPXZj67","claimsProgramId":"9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6","claimCount":4,"revision":"1","generation":"2","liabilityBasisId":"46e2988b98a7b1e7528588651cdf4a55b77632c694a77708d89c67df28ec3dde","custodyContext":"c79a5e09289d23f35b660bd28834d145338c13b99502d0ae6ac99f37a3bf9b77","supplyAtoms":["500000000","500000000","500000000","500000000"],"requiredBackingAtoms":"500000000","requiredBackingBasis":"maximum-claim-supply"}
+  hoard                     {"status":"derived","observedSlot":"4210","address":"De1ma2EJCGMw1RCEtPusfMBJzojByGySQzkD9k5TsoWD","custodyProgramId":"7H6H9NabHSQtLVpiAaMKgmuRV5VVWD5VPGzpFYNGDbiD","custodyContext":"c79a5e09289d23f35b660bd28834d145338c13b99502d0ae6ac99f37a3bf9b77","custodyAuthority":"6CYoSaHJqrmugx3dro4x9KVpFbZfgEyaAQrfzywcctxu","collateralMint":"EJtm4rypefJ29rAskdh37c5qvqCBUK2kpWqvfTcRKY6c","tokenProgram":"TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb","principalAtoms":"500000000"}
+  bindings:
+    {"label":"Market PDA","ok":true,"detail":"identity seeds + generation 2 → 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM"}
+    {"label":"Market self-identity","ok":true,"detail":"state names 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM"}
+    {"label":"Registry authority","ok":true,"detail":"Market selects 87syw3eBN6nrXYT5RkkRSBKcRbciD1sg5X3R3hu7mh7e"}
+(exit 0)
+
+=== $ dclutch --session /private/tmp/dclutch-sdkcli/run2/session.json spine --market 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM --keypair /private/tmp/dclutch-sdkcli/keys-founding-founder-0.json
+(node:81443) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+spine refused: this Market's authenticated capability manifest lists 3 entries and none is the Direct successor kind — Direct trading was never part of this Market's founding, which is the Market's own choice, not an outage
+(exit 1)
+
+=== $ dclutch --session /private/tmp/dclutch-sdkcli/run2/session.json portfolio --keypair /private/tmp/dclutch-sdkcli/keys-founding-founder-0.json
+(node:81468) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+portfolio of EV744eic4drq79Np5ZZh6tJKCgc8TmBmk9EDtGZX6Kvw at finalized slot 4216 across 2 market(s)
+  market 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM
+  position  FpgjPYktL8cQ3WGyvpGjPkEUYRY4tTZCktEhk2CnuB5W
+  balances  500000000 / 500000000 / 500000000 / 500000000
+  claim     mergeable
+  note      A complete set is one atom of every claim. Merging burns one complete set and withdraws exactly one collateral atom, so the count that can be merged is the smallest owned claim balance. This is arithmetic on these balances, not an offer.
+  market 8DmxJvwsQVYz6ZURfNoxssKK2YrQMwFPnsYM6t2xrzG9
+  position  absent — No Claims Position exists at kefbc1hdzE5tFaKZyvuDcSxzXZ7BAd7ZHr1sDTn5A4i, the address this Market and owner derive under the selected Claims program. That is the chain state at this finalized floor, not a lookup failure: this owner has never been admitted to this Market's liability basis, or the Position was closed.
+(exit 0)
+
+=== $ dclutch --session /private/tmp/dclutch-sdkcli/run2/session.json redeem --market 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM --keypair /private/tmp/dclutch-sdkcli/keys-founding-founder-0.json --dry-run
+(node:81485) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+  position  FpgjPYktL8cQ3WGyvpGjPkEUYRY4tTZCktEhk2CnuB5W
+  balances  500000000 / 500000000 / 500000000 / 500000000
+  claim     mergeable — A complete set is one atom of every claim. Merging burns one complete set and withdraws exactly one collateral atom, so the count that can be merged is the smallest owned claim balance. This is arithmetic on these balances, not an offer.
+the position is not redeemable at this floor; nothing was signed
+(exit 1)
+
+=== $ dclutch refusal 0x5002
+  claims refused: ClaimsSbfError::Identity (0x5002) — Market or Position semantic identities did not join the packet.
+(node:81497) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(exit 0)
+
+=== $ dclutch walk --dry-run (hostile probe: incomplete book)
+(Use `node --trace-deprecation ...` to show where the warning was created)
+walk of market 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM, generation 2, terminal sequence 1 — NOT submitted
+   0 Worker                             DNkGaxsqzJBfjiTbCj7Cc8n7zA8zQ8CkKxvE7FWXaofc  writable  signer
+   1 Market                             38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM
+   2 CoreProgram                        2rJGzuF2AduNJCc2td1y87ApUk8NhiCUGhsKCNRqhd8o
+   3 RegistryActivation                 GhkTb5Yvb3URWTf9z5KZRkNE2irTMpbtr4PCFmD44Xf6
+   4 SourceResolutionState              Ejz8aTnYz8YFRJ3yfaXhdKbZ2zoFzxNFqE2xCvuhUtwy  writable
+   5 ResolutionCertificate              CXCaxoNmQEXT66aCYjLJuWJXgsB63hdYf5aFzQaPpdR4  writable
+   6 SourceMaterial                     CC5cm8xBf31F8pfyHFVvNu9d6AuBy2z53o6MjhLkdrJ9
+   7 SourceMaterialStagingVacancy       CC5cm8xBf31F8pfyHFVvNu9d6AuBy2z53o6MjhLkdrJ9
+   8 WindowSpec                         DgbXHFM32S4uBQQMXR6GhR1YkRDzfDLsYCiZivjj7Zdv
+   9 WindowSpecStagingVacancy           DgbXHFM32S4uBQQMXR6GhR1YkRDzfDLsYCiZivjj7Zdv
+  10 ProductRecord                      BGRTAZuTpN4JYAxoyJcpqW5gWCazjVm1k7ddafaDWxtk
+  11 ProductRecordStagingVacancy        BGRTAZuTpN4JYAxoyJcpqW5gWCazjVm1k7ddafaDWxtk
+  12 ResultDomain                       Fjqqsa6kRwiugt1AxvSbq5TMeAYUfvwY2s7kbqUKweuQ
+  13 ResultDomainStagingVacancy         Fjqqsa6kRwiugt1AxvSbq5TMeAYUfvwY2s7kbqUKweuQ
+  14 PortfolioRecord                    CSDmfsnZrXsxeQdbxfatsSgVfXBXn9jjjhPtCzMGMBTD
+  15 PortfolioRecordStagingVacancy      CSDmfsnZrXsxeQdbxfatsSgVfXBXn9jjjhPtCzMGMBTD
+  16 CapabilityManifest                 8DPx8sHEibns5Dz1ZetsuL9YTe8xnTCv2Tjg936A5dHF
+  17 CapabilityManifestStagingVacancy   8DPx8sHEibns5Dz1ZetsuL9YTe8xnTCv2Tjg936A5dHF
+  18 FailureFunding                     49UH38PyVaSwAcgvw5ExRtrGChv8yoRcFH2FszpSf6ae  writable
+  19 ClockSysvar                        SysvarC1ock11111111111111111111111111111111
+  20 RentSysvar                         SysvarRent111111111111111111111111111111111
+  21 SystemProgram                      11111111111111111111111111111111
+  wire 767 bytes signed, of 1232 — a bare legacy packet, no lookup table
+=== $ dclutch walk (hostile probe SUBMITTED: the frame is knowingly incomplete; fail-closed must refuse it by name)
+(Use `node --trace-deprecation ...` to show where the warning was created)
+walking market 38s7BVhduYrgNJnWUizQFQMQ7khqDdtNyJifG3G6YrPM to its explicit failure outcome (703 byte legacy packet)
+refused: sendTransaction refused: Transaction simulation failed: Error processing Instruction 0: custom program error: 0x8000
+  resolution refused: ResolutionError::AccountFrame (0x8000) — Account count, order, privilege, executable state, or aliasing was invalid.
+  resolution refused: ResolutionError::AccountFrame (0x8000) — Account count, order, privilege, executable state, or aliasing was invalid.

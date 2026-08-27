@@ -19,6 +19,9 @@ dclutch found --spec run-spec.json --session-out session.json
 dclutch --session session.json markets ls
 dclutch --session session.json markets show <market>
 
+# which walls stand between this market and a Direct trade, by name
+dclutch --session session.json spine --market <market> --keypair me.json
+
 # Direct settlement is bilateral: a maker signs an intent, a taker crosses it
 dclutch --session session.json intent sell --route route.json \
     --outcome 1 --fill 5 --price 400000 --collateral <acct> \
