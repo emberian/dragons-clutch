@@ -1752,6 +1752,8 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-token-svm",
  "solana-account 4.6.0",
+ "solana-address-lookup-table-interface",
+ "solana-message 4.5.0",
  "solana-program",
  "solana-program-option",
  "solana-program-pack",

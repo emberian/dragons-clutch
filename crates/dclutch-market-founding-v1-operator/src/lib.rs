@@ -587,12 +587,9 @@ mod tests {
             0,
         )
         .expect("sibling template");
-        let sibling = construct_generic_founding_root_selection_v1(
-            trading,
-            sibling,
-            &manifest_bytes,
-        )
-        .expect("sibling selection");
+        let sibling =
+            construct_generic_founding_root_selection_v1(trading, sibling, &manifest_bytes)
+                .expect("sibling selection");
         assert_eq!(sibling.selection.kind().to_bytes(), [0x30; 32]);
         assert_ne!(sibling.capability_root, honest.capability_root);
 

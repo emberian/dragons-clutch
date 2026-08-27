@@ -56,20 +56,30 @@ after the token effect.
 ## What this lane does NOT evidence, and tier 1 must
 
 Stated plainly, because `TIERS.md`'s fast-lane bar demands it. Of its four
-conditions this lane satisfies the last two and **fails the first two**:
+conditions this lane satisfies three and **fails the first**:
 
 1. **Deployment — NOT satisfied.** The campaigns INSTALL Loader-v3 ProgramData
    accounts with the documented layout instead of deploying and revoking. A
    layout the campaign wrote cannot corroborate a layout the loader would have
    written, and nothing here proves `SetAuthority(Some -> None)` or ProgramData
    deployment slots. Tier 1 owns that.
-2. **Packet serialisation — NOT satisfied.** ProgramTest never submits a packet,
-   so a frame that exceeds Solana's 1,232-byte legacy maximum survives this lane
-   untouched. The Claims campaigns route their frames over a real Address Lookup
-   Table as v0 messages, which is the shape a validator would need — the
-   composed chain carries 64 account references and cannot ride a legacy message
-   at all — but the byte budget itself is unproven here. Found31 was exactly this
-   defect and it survived every fixture test.
+2. **Packet serialisation — satisfied by MEASUREMENT, not by enforcement.**
+   ProgramTest submits no packet, so it cannot enforce Solana's 1,232-byte
+   legacy maximum and a frame past it would survive untouched. Every campaign
+   here therefore serialises each transaction it submits, records the extent as
+   `wire_bytes`, and asserts it at submission; two witnesses check that the
+   largest extent fits and that NO transaction went unmeasured. Every campaign
+   transaction is a v0 message over a real, activated Address Lookup Table,
+   which is the shape a validator would need.
+
+   **This is how the Custody family's own packet defect was found.** With keys
+   inline as legacy messages, thirteen of the seventeen Custody transactions per
+   token profile are past the maximum: OpenVault at 1,340 bytes (+108), Transfer
+   and CloseVault at 1,306 (+74), and the DCLCUDQ2 delegated wire — a 776-byte
+   request — at 1,410 (+178). Only CloseReplay (1,174) and InitializeReplay
+   (1,208) fit. Nothing had ever noticed, because no tier had ever submitted a
+   Custody transaction as a packet. Any live caller of these routes must route
+   them over a finalized lookup table, exactly as Found31 must.
 3. **Compute and heap — satisfied.** 1,400,000 and 32,768, neither adjusted.
 4. **Real account shapes — satisfied.** The real System program with its
    NativeLoader metadata, real SPL Token and Token-2022 mints and accounts

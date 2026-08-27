@@ -174,8 +174,12 @@ fn process_activate_role(
     let rent_sysvar = next(&mut iterator)?;
     validate_activate_role_privileges(payer, cache, system, rent_sysvar, frame)?;
     let rent = authenticate_rent_and_system(system, rent_sysvar)?;
-    let (release_set_id, release_set) =
-        authenticate_release_set_record(program_id, release_set_record, release_set_staging, &rent)?;
+    let (release_set_id, release_set) = authenticate_release_set_record(
+        program_id,
+        release_set_record,
+        release_set_staging,
+        &rent,
+    )?;
     let created =
         ensure_activation_cache_account(program_id, payer, cache, system, &rent, release_set_id)?;
     let mut output = cache

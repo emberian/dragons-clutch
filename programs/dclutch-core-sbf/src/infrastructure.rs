@@ -672,8 +672,7 @@ mod tests {
             ArtifactUpgradePolicyV1::ExactAuthority,
             Some([0x42; 32]),
         );
-        let upgradeable_data =
-            programdata_account(upgradeable, 7, Some([0x42; 32]), &elf);
+        let upgradeable_data = programdata_account(upgradeable, 7, Some([0x42; 32]), &elf);
         assert_eq!(
             require_pinned_immutable_deployment(
                 &upgradeable_program,

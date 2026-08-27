@@ -272,6 +272,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-seal-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
@@ -290,6 +294,9 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-product-payoff-v2-codec"

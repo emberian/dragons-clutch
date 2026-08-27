@@ -468,6 +468,25 @@ fn wrapped(
     }
 }
 
+/// Solana's legacy packet maximum. ProgramTest submits no packet and therefore
+/// cannot enforce it, so this campaign MEASURES every transaction against it:
+/// Found31 was a frame ten bytes past this limit and it survived every fixture
+/// test in the tree.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The exact wire extent of one signed transaction.
+///
+/// One shortvec byte for the signature count, 64 bytes per signature, then the
+/// serialised message. This is what a validator would receive.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
 async fn process_legacy(
     context: &mut ProgramTestContext,
     instruction: Instruction,
@@ -489,6 +508,7 @@ async fn process_legacy(
         .first()
         .expect("signed ALT transaction")
         .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -514,6 +534,7 @@ async fn process_legacy(
         error: failure.as_deref(),
         logs: &logs,
         compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     assert!(accepted, "ALT lifecycle must commit");
@@ -595,6 +616,10 @@ async fn submit(
         .first()
         .ok_or(BanksClientError::ClientError("unsigned transaction"))?
         .to_string();
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -627,6 +652,7 @@ async fn submit(
         error: failure.as_deref(),
         logs: &logs,
         compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_bytes),
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     Ok((accepted, logs, returned, compute_units))

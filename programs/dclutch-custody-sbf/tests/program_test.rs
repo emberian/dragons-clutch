@@ -35,6 +35,10 @@ use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use solana_account::Account;
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table,
+};
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
     clock::Clock,
     hash::hash,
@@ -47,7 +51,7 @@ use solana_program_pack::Pack;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
-use solana_transaction::Transaction;
+use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
@@ -791,23 +795,142 @@ fn delegated_wrapper_instruction(
     }
 }
 
-async fn submit(
-    context: &mut ProgramTestContext,
-    instruction: Instruction,
-    label: &str,
-) -> Result<(bool, u64), BanksClientError> {
-    let blockhash = context.banks_client.get_latest_blockhash().await?;
+/// Solana's legacy packet maximum. ProgramTest submits no packet and therefore
+/// cannot enforce it, so this campaign MEASURES every transaction against it:
+/// Found31 was a frame ten bytes past this limit and it survived every fixture
+/// test in the tree.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The exact wire extent of one signed transaction.
+///
+/// One shortvec byte for the signature count, 64 bytes per signature, then the
+/// serialised message. This is what a validator would receive.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's \
+         {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
+/// Every stable address the campaign names.
+///
+/// The release-scoped caller-authority PDA is deliberately absent: it is
+/// derived from each request's own digest, so there is one per transaction and
+/// it stays in the message's static keys. So do the payer and every invoked
+/// program -- `v0::Message::try_compile` will not move those whatever this list
+/// says.
+fn campaign_addresses(fixture: &Fixture) -> Vec<Pubkey> {
+    vec![
+        CUSTODY_PROGRAM_ID,
+        CALLER_PROGRAM_ID,
+        REGISTRY_PROGRAM_ID,
+        fixture.market,
+        fixture.activation_cache,
+        fixture.caller_programdata,
+        fixture.realm_key,
+        fixture.realm_staging,
+        fixture.replay,
+        fixture.mint,
+        fixture.vault,
+        fixture.custody_authority,
+        fixture.external_source,
+        fixture.external_destination,
+        fixture.rent_refund,
+        fixture.profile.token_program(),
+        system_program::ID,
+        sysvar::rent::ID,
+    ]
+}
+
+/// Submit one legacy transaction that must commit, for lookup-table lifecycle.
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("legacy blockhash");
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&context.payer.pubkey()),
         &[&context.payer],
         blockhash,
     );
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("lookup-table lifecycle processing");
+    assert!(processed.result.is_ok(), "lookup-table lifecycle must commit");
+}
+
+/// Create and activate one lookup table carrying every campaign address.
+async fn create_live_lookup_table(
+    context: &mut ProgramTestContext,
+    addresses: &[Pubkey],
+) -> Pubkey {
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("Clock sysvar");
+    context
+        .warp_to_slot(clock.slot + 1)
+        .expect("make the lookup-table slot recent");
+    let payer = context.payer.pubkey();
+    let (create, table) = create_lookup_table(payer, payer, clock.slot);
+    process_legacy(context, create).await;
+    for chunk in addresses.chunks(20) {
+        process_legacy(
+            context,
+            extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+        )
+        .await;
+    }
+    let extension = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-extension Clock");
+    context
+        .warp_to_slot(extension.slot + 1)
+        .expect("activate the lookup addresses");
+    table
+}
+
+async fn submit(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    lookup: &AddressLookupTableAccount,
+    label: &str,
+) -> Result<(bool, u64), BanksClientError> {
+    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let payer = context.payer.pubkey();
+    // Every Custody frame but CloseReplay and InitializeReplay is past Solana's
+    // legacy packet maximum with its keys inline -- the delegated wire by 178
+    // bytes -- so the campaign routes them the way a caller would have to.
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            &payer,
+            &[instruction],
+            &[lookup.clone()],
+            blockhash,
+        )
+        .expect("v0 message"),
+    );
+    let transaction =
+        VersionedTransaction::try_new(message, &[&context.payer]).expect("transaction");
     let signature = transaction
         .signatures
         .first()
         .ok_or(BanksClientError::ClientError("unsigned transaction"))?
         .to_string();
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -834,6 +957,7 @@ async fn submit(
         error: failure.as_deref(),
         logs: &metadata.log_messages,
         compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     Ok((accepted, units))
@@ -868,10 +992,16 @@ async fn campaign(profile: Profile) {
     let mut context = test.start_with_context().await;
     let payer = context.payer.pubkey();
     let step = |name: &str| format!("custody {}: {name}", profile.label());
+    let addresses = campaign_addresses(&fixture);
+    let lookup = AddressLookupTableAccount {
+        key: create_live_lookup_table(&mut context, &addresses).await,
+        addresses,
+    };
 
     let (accepted, initialize_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, initialize_request(&fixture, payer), payer, false),
+        &lookup,
         &step("initialize replay"),
     )
     .await
@@ -881,6 +1011,7 @@ async fn campaign(profile: Profile) {
     let (accepted, open_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, open_request(&fixture, payer), payer, false),
+        &lookup,
         &step("open vault"),
     )
     .await
@@ -902,6 +1033,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &lookup,
         &step("close replay under a live vault"),
     )
     .await
@@ -917,6 +1049,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &lookup,
         &step("V1 external debit without a delegate"),
     )
     .await
@@ -936,6 +1069,7 @@ async fn campaign(profile: Profile) {
             ),
             false,
         ),
+        &lookup,
         &step("delegated external transfer"),
     )
     .await
@@ -958,6 +1092,7 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, wrong_delegate, 1, 1),
             false,
         ),
+        &lookup,
         &step("delegated transfer with a substituted delegate"),
     )
     .await
@@ -978,6 +1113,7 @@ async fn campaign(profile: Profile) {
     let (accepted, late_failure_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, terminal_deposit, true),
+        &lookup,
         &step("caller refuses after the token effect"),
     )
     .await
@@ -992,6 +1128,7 @@ async fn campaign(profile: Profile) {
     let (accepted, deposit_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, terminal_deposit, false),
+        &lookup,
         &step("delegated terminal deposit"),
     )
     .await
@@ -1014,6 +1151,7 @@ async fn campaign(profile: Profile) {
     let (accepted, stale_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, delegated_request(&fixture, stale, 1, 1), false),
+        &lookup,
         &step("delegated transfer at a stale replay revision"),
     )
     .await
@@ -1030,6 +1168,7 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, substituted_source_owner, 1, 1),
             false,
         ),
+        &lookup,
         &step("delegated transfer with a substituted source owner"),
     )
     .await
@@ -1046,6 +1185,7 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, substituted_destination_owner, 5, 5),
             false,
         ),
+        &lookup,
         &step("delegated transfer with a substituted destination owner"),
     )
     .await
@@ -1059,6 +1199,7 @@ async fn campaign(profile: Profile) {
     let (accepted, withdraw_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, withdraw_request(&fixture, 4), payer, false),
+        &lookup,
         &step("transfer vault to external destination"),
     )
     .await
@@ -1072,6 +1213,7 @@ async fn campaign(profile: Profile) {
     let (accepted, close_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, close_request(&fixture), payer, false),
+        &lookup,
         &step("close vault"),
     )
     .await
@@ -1102,6 +1244,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &lookup,
         &step("close replay at a stale revision"),
     )
     .await
@@ -1117,6 +1260,7 @@ async fn campaign(profile: Profile) {
     let (accepted, foreign_close_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, foreign, payer, false),
+        &lookup,
         &step("close replay under a foreign caller role"),
     )
     .await
@@ -1135,6 +1279,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &lookup,
         &step("close replay"),
     )
     .await
@@ -1156,6 +1301,7 @@ async fn campaign(profile: Profile) {
     let (accepted, reopen_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, reopen, payer, false),
+        &lookup,
         &step("open vault after the replay is closed"),
     )
     .await

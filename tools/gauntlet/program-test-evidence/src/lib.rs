@@ -94,6 +94,16 @@ pub struct TransactionEvidence<'a> {
     pub logs: &'a [String],
     /// Compute units the runtime reported consuming.
     pub compute_units_consumed: Option<u64>,
+    /// The transaction's serialised extent, when the campaign measured it.
+    ///
+    /// ProgramTest submits no packet, so it cannot enforce Solana's 1,232-byte
+    /// maximum and a frame that exceeds it survives a fast lane untouched --
+    /// Found31 was exactly that defect and it survived every fixture test. A
+    /// campaign that wants the second fast-lane condition has to MEASURE
+    /// against the limit rather than ask the runtime to enforce it, and record
+    /// what it measured so a witness can check it. `None` says the campaign did
+    /// not measure, which is honest; it is not a claim that the frame fits.
+    pub wire_bytes: Option<usize>,
 }
 
 /// Where evidence is being written, if a campaign asked for any.
@@ -210,6 +220,10 @@ fn render(evidence: &TransactionEvidence<'_>) -> String {
     match evidence.compute_units_consumed {
         None => out.push_str("      \"compute_units_consumed\": null,\n"),
         Some(units) => out.push_str(&format!("      \"compute_units_consumed\": {units},\n")),
+    }
+    match evidence.wire_bytes {
+        None => out.push_str("      \"wire_bytes\": null,\n"),
+        Some(bytes) => out.push_str(&format!("      \"wire_bytes\": {bytes},\n")),
     }
     out.push_str("      \"logs\": [");
     for (index, line) in evidence.logs.iter().enumerate() {

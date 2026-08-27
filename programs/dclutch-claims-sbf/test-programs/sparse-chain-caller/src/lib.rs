@@ -26,7 +26,7 @@ use dclutch_claims_svm::{
     frame_spec_v1::{ClaimsFrameSpecV1, SparseNativeTransferFrameSpecV1},
     protocol_position_v2::{
         PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_REQUEST_BYTES_V2,
-        ProtocolPositionActionV2, ProtocolPositionRequestLayoutV2,
+        ProtocolPositionActionV2, ProtocolPositionPresenceV2, ProtocolPositionRequestLayoutV2,
     },
     sparse_native_transfer_v1::{
         SPARSE_NATIVE_TRANSFER_BYTES_V1, SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1,
@@ -59,6 +59,17 @@ pub const CLOSE_ACCOUNT_COUNT: usize =
 pub const FLAG_WITH_CLOSE: u8 = 0b0000_0001;
 /// Canonical offset of the sparse request's caller-role byte.
 const SPARSE_CALLER_ROLE_OFFSET: usize = 10;
+
+/// Exact width of the Close stage's rent tail: four little-endian `u64`s.
+///
+/// The Close request is DERIVED here rather than carried whole. Sending three
+/// 320-byte requests inline puts the composed chain at 1,261 bytes, past
+/// Solana's 1,232-byte packet maximum, and a chain no validator can accept is
+/// not evidence that the chain runs. Everything the Close needs is already on
+/// the wire except the SOURCE Position's four rent facts -- the admit request
+/// carries the DESTINATION's -- so only those four travel, and the rest is
+/// patched from the two requests the composition already binds.
+pub const CLOSE_RENT_TAIL_BYTES: usize = 32;
 
 /// Refuse after every stage returned, to prove whole-chain rollback.
 pub const FLAG_FAIL_AFTER: u8 = 0b0000_0010;
@@ -115,11 +126,7 @@ pub fn process_instruction(
     let expected_body = PROTOCOL_POSITION_REQUEST_BYTES_V2
         .checked_add(SPARSE_NATIVE_TRANSFER_BYTES_V1)
         .and_then(|held| {
-            held.checked_add(if with_close {
-                PROTOCOL_POSITION_REQUEST_BYTES_V2
-            } else {
-                0
-            })
+            held.checked_add(if with_close { CLOSE_RENT_TAIL_BYTES } else { 0 })
         })
         .ok_or(SparseChainCallerError::Instruction)?;
     if body.len() != expected_body {
@@ -135,10 +142,12 @@ pub fn process_instruction(
         .get(PROTOCOL_POSITION_REQUEST_BYTES_V2..sparse_end)
         .ok_or(SparseChainCallerError::Instruction)?;
     let close_bytes = if with_close {
-        Some(
+        Some(derive_close_request(
+            admit_bytes,
+            sparse_bytes,
             body.get(sparse_end..)
                 .ok_or(SparseChainCallerError::Instruction)?,
-        )
+        )?)
     } else {
         None
     };
@@ -214,7 +223,7 @@ pub fn process_instruction(
         return Err(SparseChainCallerError::ClaimsCpi.into());
     }
 
-    if let Some(close_bytes) = close_bytes {
+    if let Some(ref close_bytes) = close_bytes {
         let mut close_data = Vec::with_capacity(
             PROTOCOL_POSITION_REQUEST_BYTES_V2
                 .checked_add(SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1)
@@ -323,6 +332,104 @@ fn stage(
         return Err(SparseChainCallerError::ClaimsCpi.into());
     }
     Ok(receipt)
+}
+
+/// Build the Close request the composition's close join requires.
+///
+/// Every field but the source Position's four rent facts is already bound by
+/// the admit and transfer requests: `require_sparse_close_join` demands the
+/// same release set, Market, generation and parent request, the transfer's
+/// SOURCE owner, and both post-revisions. Patching the admit request rather
+/// than encoding a fresh one keeps this wrapper free of the request codec, so
+/// hostile bytes still reach the adapter that owes the refusal.
+fn derive_close_request(
+    admit_bytes: &[u8],
+    sparse_bytes: &[u8],
+    rent_tail: &[u8],
+) -> Result<Vec<u8>, ProgramError> {
+    if rent_tail.len() != CLOSE_RENT_TAIL_BYTES {
+        return Err(SparseChainCallerError::Instruction.into());
+    }
+    let mut close = admit_bytes.to_vec();
+    put(&mut close, ProtocolPositionRequestLayoutV2::ACTION, &[
+        ProtocolPositionActionV2::Close as u8,
+    ])?;
+    put(&mut close, ProtocolPositionRequestLayoutV2::PRESENCE, &[
+        ProtocolPositionPresenceV2::Existing as u8,
+    ])?;
+    let source_owner: [u8; 32] = array(sparse_bytes, SparseNativeTransferLayoutV1::SOURCE_OWNER)?;
+    let request_id: [u8; 32] = array(sparse_bytes, SparseNativeTransferLayoutV1::REQUEST_ID)?;
+    put(
+        &mut close,
+        ProtocolPositionRequestLayoutV2::POSITION_OWNER,
+        &source_owner,
+    )?;
+    put(
+        &mut close,
+        ProtocolPositionRequestLayoutV2::PARENT_REQUEST_DIGEST,
+        &request_id,
+    )?;
+    // The transfer advances both revisions exactly once, and the close must
+    // name the post-revisions its receipt will carry.
+    for (source, target) in [
+        (
+            SparseNativeTransferLayoutV1::MARKET_REVISION,
+            ProtocolPositionRequestLayoutV2::EXPECTED_MARKET_REVISION,
+        ),
+        (
+            SparseNativeTransferLayoutV1::SOURCE_REVISION,
+            ProtocolPositionRequestLayoutV2::EXPECTED_POSITION_REVISION,
+        ),
+    ] {
+        let value = revision(sparse_bytes, source)?
+            .checked_add(1)
+            .ok_or(SparseChainCallerError::Instruction)?;
+        put(&mut close, target, &value.to_le_bytes())?;
+    }
+    for (index, target) in [
+        ProtocolPositionRequestLayoutV2::OBSERVED_POSITION_LAMPORTS,
+        ProtocolPositionRequestLayoutV2::OBSERVED_ADMISSION_LAMPORTS,
+        ProtocolPositionRequestLayoutV2::POSITION_RENT_PRINCIPAL,
+        ProtocolPositionRequestLayoutV2::ADMISSION_RENT_PRINCIPAL,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = index
+            .checked_mul(8)
+            .ok_or(SparseChainCallerError::Instruction)?;
+        let end = start
+            .checked_add(8)
+            .ok_or(SparseChainCallerError::Instruction)?;
+        let value = rent_tail
+            .get(start..end)
+            .ok_or(SparseChainCallerError::Instruction)?;
+        put(&mut close, target, value)?;
+    }
+    Ok(close)
+}
+
+fn put(target: &mut [u8], offset: usize, value: &[u8]) -> Result<(), ProgramError> {
+    let end = offset
+        .checked_add(value.len())
+        .ok_or(SparseChainCallerError::Instruction)?;
+    target
+        .get_mut(offset..end)
+        .ok_or(SparseChainCallerError::Instruction)?
+        .copy_from_slice(value);
+    Ok(())
+}
+
+fn revision(input: &[u8], offset: usize) -> Result<u64, ProgramError> {
+    let end = offset
+        .checked_add(8)
+        .ok_or(SparseChainCallerError::Instruction)?;
+    let bytes: [u8; 8] = input
+        .get(offset..end)
+        .ok_or(SparseChainCallerError::Instruction)?
+        .try_into()
+        .map_err(|_| SparseChainCallerError::Instruction)?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
 /// Caller-authority seeds for one ProtocolPosition stage.

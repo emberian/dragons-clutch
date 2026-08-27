@@ -603,6 +603,9 @@ async fn submit(
         error: failure.as_deref(),
         logs: &logs,
         compute_units_consumed: compute_units,
+        // This campaign does not measure its wire extent; `None` says so
+        // rather than implying the frame fits Solana's packet maximum.
+        wire_bytes: None,
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     Ok(Observed {

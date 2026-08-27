@@ -42,6 +42,20 @@
       "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
       "expect": "0",
       "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this campaign claims is a program decision, so a bare runtime refusal appearing here would mean a hostile case stopped being about the program."
+    },
+    {
+      "id": "claims-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign therefore MEASURES rather than asks: it serialises every transaction it submits (one shortvec byte for the signature count, 64 bytes per signature, then the message) and records the extent, and this witness checks the largest against the stated limit."
+    },
+    {
+      "id": "claims-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured, so the maximum above is over ALL of them rather than over whichever ones happened to be instrumented."
     }
   ]
 }

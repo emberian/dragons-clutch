@@ -26,6 +26,7 @@ fn a_log_line_carrying_json_metacharacters_still_parses() {
         error: None,
         logs: &hostile,
         compute_units_consumed: Some(731_297),
+        wire_bytes: None,
     });
     assert!(rendered.contains("\\\"no\\\""));
     assert!(rendered.contains("C:\\\\rollback\\\\state"));
@@ -46,6 +47,7 @@ fn success_and_refusal_are_distinguishable_by_the_only_field_that_decides_it() {
         error: None,
         logs: &logs(&["Program E3M3 invoke [1]"]),
         compute_units_consumed: Some(651_601),
+        wire_bytes: None,
     });
     assert!(accepted.contains("\"error\": null"));
 
@@ -56,6 +58,7 @@ fn success_and_refusal_are_distinguishable_by_the_only_field_that_decides_it() {
         error: Some("TransactionError(InstructionError(0, Custom(11)))"),
         logs: &logs(&["Program E3M3 invoke [1]", "custom program error: 0xb"]),
         compute_units_consumed: Some(608_157),
+        wire_bytes: None,
     });
     assert!(refused.contains("\"error\": \"TransactionError"));
     assert!(!refused.contains("\"error\": null"));
@@ -77,6 +80,7 @@ fn an_empty_signature_is_refused_before_anything_is_written() {
             error: None,
             logs: &[],
             compute_units_consumed: None,
+        wire_bytes: None,
         },
     );
     assert!(matches!(refused, Err(EvidenceError::EmptySignature)));
@@ -91,6 +95,7 @@ fn an_empty_signature_is_refused_before_anything_is_written() {
             error: None,
             logs: &[],
             compute_units_consumed: None,
+        wire_bytes: None,
         },
     );
     assert!(matches!(unlabelled, Err(EvidenceError::EmptyLabel)));
@@ -105,6 +110,7 @@ fn an_empty_signature_is_refused_before_anything_is_written() {
             error: None,
             logs: &[],
             compute_units_consumed: None,
+        wire_bytes: None,
         },
     )
     .expect("a labelled, signed transaction records");
@@ -124,6 +130,7 @@ fn an_empty_log_vector_still_renders_a_parseable_array() {
         error: Some("TransactionError(SanitizeFailure)"),
         logs: &[],
         compute_units_consumed: None,
+        wire_bytes: None,
     });
     assert!(rendered.contains("\"logs\": []"));
     assert!(rendered.contains("\"compute_units_consumed\": null"));
@@ -142,6 +149,7 @@ fn fold_emits_one_document_with_every_record_and_no_trailing_comma() {
             error: None,
             logs: &logs(&["Program E3M3 invoke [1]"]),
             compute_units_consumed: Some(1),
+        wire_bytes: None,
         });
         fs::write(directory.join(format!("{signature}.json")), body).expect("record");
     }
@@ -164,4 +172,32 @@ fn fold_of_an_empty_directory_is_a_valid_empty_campaign() {
     assert!(document.contains("\"transactions\": ["));
     assert!(document.trim_end().ends_with('}'));
     let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_measured_wire_extent_is_carried_and_an_unmeasured_one_says_so() {
+    let measured = render(&TransactionEvidence {
+        label: "measured",
+        signature: "sig",
+        slot: 1,
+        error: None,
+        logs: &[],
+        compute_units_consumed: Some(7),
+        wire_bytes: Some(1_232),
+    });
+    assert!(measured.contains("\"wire_bytes\": 1232"), "{measured}");
+
+    // `None` must render as null rather than vanish: a witness asking whether a
+    // campaign fits the packet maximum has to be able to tell "it fits" apart
+    // from "nobody looked", and an absent key reads as neither.
+    let unmeasured = render(&TransactionEvidence {
+        label: "unmeasured",
+        signature: "sig",
+        slot: 1,
+        error: None,
+        logs: &[],
+        compute_units_consumed: Some(7),
+        wire_bytes: None,
+    });
+    assert!(unmeasured.contains("\"wire_bytes\": null"), "{unmeasured}");
 }
