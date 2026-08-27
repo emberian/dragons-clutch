@@ -638,8 +638,11 @@ QUEUED with owners:
   `apps/dclutch-web/lib/generated/registeredDirect.ts` carries layout offsets and
   magics only. Nothing regenerated; no stale window existed to close.
 
-- DLR-HOT (charters at wave convergence), top-of-lane checks per GEN-HOT's
-  executed patterns: (i) does Dealer's descriptor name effect_kernel v4
+- DLR-HOT (charters at wave convergence) — NOW ALSO the admitted-AOT positive
+  round-trip campaign (the lane is un-dead after three fixes: the 38-literal,
+  F1's bare hash, F9's raw-index walk; dealer_chain.rs is 210 staged lines vs
+  the 3,134-line Direct fixture — size it as a campaign, use BUNDLE's
+  builder). Top-of-lane checks per GEN-HOT's executed patterns: (i) does Dealer's descriptor name effect_kernel v4
   SCHEMA_RELEASE_ID_V4? (ii) does its profile's span selector get written by
   the family RequestProfile — if not the family is forced to AdmittedAot and
   inherits the whole extras frame. Plus the known CoreState-decode defect
