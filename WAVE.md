@@ -482,3 +482,10 @@ QUEUED with owners:
 - Small batch: fixtures:verify provenance regen for realm-contract/src/lib.rs
   (moved by TSGEN's f5dfe5d); the direct-inline alias-table retirement once
   W2o yields; the inline.rs:308 composition theorem LEANGUARD queued.
+
+- Tranche-A Direct: THREE items converge on registered_fill_artifacts_v4.rs —
+  Lean-author it (the last hand-written V3 program; LEANGUARD's method),
+  migrate its V1 credits at coords 7/10 to LifecycleRentCreditV2 (DP2 fixed
+  ordinary only; DELDEC's resisted-deletion find), and its real-validator
+  width defects (System width 0, Exact loader widths). One lane, one file
+  family, one identity regeneration.
