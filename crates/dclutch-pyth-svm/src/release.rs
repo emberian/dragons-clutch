@@ -354,7 +354,14 @@ impl PythReleaseV1 {
     }
 }
 
-/// The deliberately empty typed production catalog.
+/// The deliberately empty static production catalog.
+///
+/// Production rows are validating constructors over measured cluster facts,
+/// not static data: the devnet row is [`crate::devnet::devnet_release_v1`]
+/// (minted 2026-08-27; see that module's provenance). This constant stays
+/// empty so no release claim is ever inferred from static array contents —
+/// a consumer must call a constructor whose documentation names its
+/// evidence.
 pub const PRODUCTION_RELEASES: [PythReleaseV1; 0] = [];
 
 /// Error returned while validating a synthetic local release marker.
