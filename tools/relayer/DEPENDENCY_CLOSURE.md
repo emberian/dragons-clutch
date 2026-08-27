@@ -114,10 +114,7 @@ dclutch-relayer v0.1.0 (/Users/ember/dev/dclutch/tools/relayer)
 │   ├── dclutch-registry-svm v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-registry-svm)
 │   │   ├── dclutch-core-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-core-contract)
 │   │   └── dclutch-release-set-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-release-set-contract) (*)
-│   ├── dclutch-release-set-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-release-set-contract) (*)
-│   └── dclutch-source-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-source-contract)
-│       ├── dclutch-product-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-product-contract)
-│       └── dclutch-product-runtime-v2 v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-product-runtime-v2)
+│   └── dclutch-release-set-contract v0.1.0 (/Users/ember/dev/dclutch/crates/dclutch-release-set-contract) (*)
 ├── ed25519-dalek v2.2.0
 │   ├── curve25519-dalek v4.1.3
 │   │   ├── cfg-if v1.0.4
