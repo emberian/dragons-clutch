@@ -1,6 +1,12 @@
 //! Real-ELF admission, rollback, replay-refusal, and rent-close evidence.
+//!
+//! With `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR` set the campaign also emits the
+//! finalized transactions the gauntlet's census folds into the execution
+//! ledger. See `tools/gauntlet/claims-custody/README.md`.
 
+use dclutch_program_test_evidence::TransactionEvidence;
 use std::{env, fs, path::PathBuf, vec::Vec};
+
 
 use dclutch_claims_affine_batch_program_test::fixture::{
     FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, compile_product_lbv2_fixture_v2,
@@ -462,7 +468,11 @@ fn wrapped(
     }
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) {
+async fn process_legacy(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    label: &str,
+) {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -474,12 +484,39 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed ALT transaction")
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
         .expect("ALT lifecycle processing");
-    assert!(processed.result.is_ok(), "ALT lifecycle must commit");
+    let accepted = processed.result.is_ok();
+    // The refusal is rendered from what the RUNTIME returned, never from what
+    // the campaign expected.
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert!(accepted, "ALT lifecycle must commit");
 }
 
 fn lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
@@ -511,11 +548,12 @@ async fn create_live_lookup_table(
         .expect("make lookup-table slot recent");
     let payer = context.payer.pubkey();
     let (create, table) = create_lookup_table(payer, payer, clock.slot);
-    process_legacy(context, create).await;
-    for chunk in addresses.chunks(20) {
+    process_legacy(context, create, "claims position: create lookup table").await;
+    for (index, chunk) in addresses.chunks(20).enumerate() {
         process_legacy(
             context,
             extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+            &format!("claims position: extend lookup table {index}"),
         )
         .await;
     }
@@ -535,6 +573,7 @@ async fn submit(
     instruction: Instruction,
     table: Pubkey,
     addresses: &[Pubkey],
+    label: &str,
 ) -> Result<(bool, Vec<String>, Option<(Pubkey, Vec<u8>)>, u64), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
@@ -551,10 +590,24 @@ async fn submit(
     );
     let transaction =
         VersionedTransaction::try_new(message, &[&context.payer]).expect("transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
+    let accepted = processed.result.is_ok();
+    // The refusal is rendered from what the RUNTIME returned, never from what
+    // the campaign expected.
+    let failure = processed.result.clone().err().map(|error| format!("{error:?}"));
     let (logs, returned, compute_units) = processed
         .metadata
         .map(|metadata| {
@@ -567,7 +620,16 @@ async fn submit(
             )
         })
         .unwrap_or_default();
-    Ok((processed.result.is_ok(), logs, returned, compute_units))
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Ok((accepted, logs, returned, compute_units))
 }
 
 #[tokio::test]
@@ -618,9 +680,15 @@ async fn real_sbf_admit_rolls_back_and_zero_close_reclaims_both_accounts() {
     );
     let table = create_live_lookup_table(&mut context, &addresses).await;
 
-    let (accepted, _, _, _) = submit(&mut context, hostile, table, &addresses)
-        .await
-        .expect("hostile");
+    let (accepted, _, _, _) = submit(
+        &mut context,
+        hostile,
+        table,
+        &addresses,
+        "claims position: admit under a substituted Position owner",
+    )
+    .await
+    .expect("hostile");
     assert!(!accepted);
     assert_eq!(
         context
@@ -632,9 +700,15 @@ async fn real_sbf_admit_rolls_back_and_zero_close_reclaims_both_accounts() {
         before_position
     );
 
-    let (accepted, logs, _, _) = submit(&mut context, late, table, &addresses)
-        .await
-        .expect("late");
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        late,
+        table,
+        &addresses,
+        "claims position: caller refuses after a complete admission",
+    )
+    .await
+    .expect("late");
     assert!(!accepted);
     assert!(
         logs.iter()
@@ -650,10 +724,15 @@ async fn real_sbf_admit_rolls_back_and_zero_close_reclaims_both_accounts() {
         before_admission
     );
 
-    let (accepted, _, returned, admit_compute_units) =
-        submit(&mut context, admit, table, &addresses)
-            .await
-            .expect("admit");
+    let (accepted, _, returned, admit_compute_units) = submit(
+        &mut context,
+        admit,
+        table,
+        &addresses,
+        "claims position: admit",
+    )
+    .await
+    .expect("admit");
     assert!(accepted);
     assert!(admit_compute_units <= 1_400_000);
     let (producer, bytes) = returned.expect("admit receipt");
@@ -676,9 +755,15 @@ async fn real_sbf_admit_rolls_back_and_zero_close_reclaims_both_accounts() {
             .all(|byte| *byte == 0)
     );
 
-    let (accepted, _, _, _) = submit(&mut context, replay, table, &addresses)
-        .await
-        .expect("replay");
+    let (accepted, _, _, _) = submit(
+        &mut context,
+        replay,
+        table,
+        &addresses,
+        "claims position: admit an already admitted Position",
+    )
+    .await
+    .expect("replay");
     assert!(!accepted);
 
     let rent_before = context
@@ -688,10 +773,15 @@ async fn real_sbf_admit_rolls_back_and_zero_close_reclaims_both_accounts() {
         .expect("read")
         .expect("rent")
         .lamports;
-    let (accepted, _, returned, close_compute_units) =
-        submit(&mut context, close, table, &addresses)
-            .await
-            .expect("close");
+    let (accepted, _, returned, close_compute_units) = submit(
+        &mut context,
+        close,
+        table,
+        &addresses,
+        "claims position: close a zero Position",
+    )
+    .await
+    .expect("close");
     assert!(accepted);
     assert!(close_compute_units <= 1_400_000);
     let (_, bytes) = returned.expect("close receipt");

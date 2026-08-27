@@ -1,6 +1,12 @@
 //! Real-ELF ProgramTest campaign for canonical multiprogram Custody.
+//!
+//! With `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR` set the campaign also emits the
+//! finalized transactions the gauntlet's census folds into the execution
+//! ledger. See `tools/gauntlet/claims-custody/README.md`.
 
 use std::{env, fs, path::PathBuf, vec::Vec};
+
+use dclutch_program_test_evidence::TransactionEvidence;
 
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
@@ -30,6 +36,7 @@ use dclutch_token_svm::{
 };
 use solana_account::Account;
 use solana_program::{
+    clock::Clock,
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -64,6 +71,14 @@ impl Profile {
         match self {
             Self::Legacy => Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
             Self::Token2022 => Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+        }
+    }
+
+    /// Stable census label stem for this token profile.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Token2022 => "token-2022",
         }
     }
 
@@ -779,6 +794,7 @@ fn delegated_wrapper_instruction(
 async fn submit(
     context: &mut ProgramTestContext,
     instruction: Instruction,
+    label: &str,
 ) -> Result<(bool, u64), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let transaction = Transaction::new_signed_with_payer(
@@ -787,15 +803,40 @@ async fn submit(
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map(|clock| clock.slot)
+        .unwrap_or_default();
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
-    let units = processed
+    let accepted = processed.result.is_ok();
+    let metadata = processed
         .metadata
-        .ok_or(BanksClientError::ClientError("missing metadata"))?
-        .compute_units_consumed;
-    Ok((processed.result.is_ok(), units))
+        .clone()
+        .ok_or(BanksClientError::ClientError("missing metadata"))?;
+    let units = metadata.compute_units_consumed;
+    // The refusal is rendered from what the RUNTIME returned, never from what
+    // the campaign expected.
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &metadata.log_messages,
+        compute_units_consumed: Some(units),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Ok((accepted, units))
 }
 
 async fn observed(context: &mut ProgramTestContext, key: Pubkey) -> Account {
@@ -826,10 +867,12 @@ async fn campaign(profile: Profile) {
     let (test, fixture) = fixture(profile);
     let mut context = test.start_with_context().await;
     let payer = context.payer.pubkey();
+    let step = |name: &str| format!("custody {}: {name}", profile.label());
 
     let (accepted, initialize_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, initialize_request(&fixture, payer), payer, false),
+        &step("initialize replay"),
     )
     .await
     .expect("initialize transaction");
@@ -838,6 +881,7 @@ async fn campaign(profile: Profile) {
     let (accepted, open_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, open_request(&fixture, payer), payer, false),
+        &step("open vault"),
     )
     .await
     .expect("open transaction");
@@ -858,6 +902,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &step("close replay under a live vault"),
     )
     .await
     .expect("early replay-close transaction");
@@ -872,6 +917,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &step("V1 external debit without a delegate"),
     )
     .await
     .expect("legacy external-debit transaction");
@@ -890,6 +936,7 @@ async fn campaign(profile: Profile) {
             ),
             false,
         ),
+        &step("delegated external transfer"),
     )
     .await
     .expect("distinct-owner external transfer");
@@ -911,6 +958,7 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, wrong_delegate, 1, 1),
             false,
         ),
+        &step("delegated transfer with a substituted delegate"),
     )
     .await
     .expect("delegate-substitution transaction");
@@ -930,6 +978,7 @@ async fn campaign(profile: Profile) {
     let (accepted, late_failure_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, terminal_deposit, true),
+        &step("caller refuses after the token effect"),
     )
     .await
     .expect("late-failure transaction");
@@ -943,6 +992,7 @@ async fn campaign(profile: Profile) {
     let (accepted, deposit_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, terminal_deposit, false),
+        &step("delegated terminal deposit"),
     )
     .await
     .expect("terminal deposit transaction");
@@ -964,6 +1014,7 @@ async fn campaign(profile: Profile) {
     let (accepted, stale_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, delegated_request(&fixture, stale, 1, 1), false),
+        &step("delegated transfer at a stale replay revision"),
     )
     .await
     .expect("stale replay transaction");
@@ -979,6 +1030,7 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, substituted_source_owner, 1, 1),
             false,
         ),
+        &step("delegated transfer with a substituted source owner"),
     )
     .await
     .expect("source-owner-substitution transaction");
@@ -994,6 +1046,7 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, substituted_destination_owner, 5, 5),
             false,
         ),
+        &step("delegated transfer with a substituted destination owner"),
     )
     .await
     .expect("destination-owner-substitution transaction");
@@ -1006,6 +1059,7 @@ async fn campaign(profile: Profile) {
     let (accepted, withdraw_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, withdraw_request(&fixture, 4), payer, false),
+        &step("transfer vault to external destination"),
     )
     .await
     .expect("withdraw transaction");
@@ -1018,6 +1072,7 @@ async fn campaign(profile: Profile) {
     let (accepted, close_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, close_request(&fixture), payer, false),
+        &step("close vault"),
     )
     .await
     .expect("close transaction");
@@ -1047,6 +1102,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &step("close replay at a stale revision"),
     )
     .await
     .expect("stale replay-close transaction");
@@ -1061,6 +1117,7 @@ async fn campaign(profile: Profile) {
     let (accepted, foreign_close_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, foreign, payer, false),
+        &step("close replay under a foreign caller role"),
     )
     .await
     .expect("foreign-role replay-close transaction");
@@ -1078,6 +1135,7 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &step("close replay"),
     )
     .await
     .expect("close replay transaction");
@@ -1098,6 +1156,7 @@ async fn campaign(profile: Profile) {
     let (accepted, reopen_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, reopen, payer, false),
+        &step("open vault after the replay is closed"),
     )
     .await
     .expect("reopen-without-replay transaction");

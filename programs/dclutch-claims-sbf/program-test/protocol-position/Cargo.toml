@@ -6,6 +6,7 @@ publish = false
 rust-version = "1.89"
 
 [dependencies]
+dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
 dclutch-claims-sbf = { path = "../.." }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
