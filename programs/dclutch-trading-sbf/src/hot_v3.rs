@@ -70,8 +70,9 @@ use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3},
     v4::{
-        ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
-        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4, project_atomic as project_effects_v4_atomic,
+        ErrorV4 as EffectKernelErrorV4, ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
+        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+        project_atomic_visiting as project_effects_v4_atomic_visiting,
     },
 };
 use dclutch_execution_strategy_contract::{
@@ -2422,16 +2423,11 @@ fn execute_authenticated_hot_v3(
     )?;
     let output_lamports = projected_effects.lamports;
     let output_requests = projected_effects.requests;
+    // The local-effect discipline is folded into the projection walk above, so
+    // this checkpoint now brackets nothing: it is kept so the phase table stays
+    // comparable across the lanes that measured the separate walk.
+    let locally_mutated = projected_effects.locally_mutated;
     hot_cu_checkpoint!("p7-effect-projection");
-
-    let locally_mutated = require_local_effect_discipline_v5(
-        &preplanned_plans,
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &aliases,
-    )?;
     hot_cu_checkpoint!("p7-local-effect-discipline");
     let revalidated_lifecycle = prepare_lifecycle_v4(
         program_id,
@@ -3109,6 +3105,10 @@ fn execute_interpreted_transition_v3(
 struct ProjectedEffectsV3 {
     lamports: Vec<u64>,
     requests: Vec<u8>,
+    /// One flag per representative coordinate the local effects mutate, or
+    /// `None` when the Effect declares no child route and the answer has no
+    /// consumer. Folded out of the projection's own walk.
+    locally_mutated: Option<Vec<bool>>,
 }
 
 /// One exactly-sized projection bank, refused rather than aborted when the heap
@@ -3228,8 +3228,29 @@ fn project_hot_effects_v3(
             .map_err(|_| TradingSbfError::Content)?,
     )?;
     hot_heap_mark!("effects-write-ranges");
+    // The local-effect discipline rides this projection's walk instead of
+    // making its own. Both see every operation of the same Effect at the same
+    // registers and in the same order; the second walk measured 139,214 CU on
+    // the canonical Direct bundle and resolved nothing the first had not.
+    let mut binding_count = 0_usize;
+    for prepared in lifecycle_plans {
+        binding_count = binding_count
+            .checked_add(prepared.immutable_identity_bindings.len())
+            .ok_or(TradingSbfError::Transition)?;
+    }
+    let mut written = try_projection_bank_v3(&false, binding_count)?;
+    let mut locally_mutated = if effect.route_count() == 0 {
+        None
+    } else {
+        Some(try_projection_bank_v3(&false, aliases.len())?)
+    };
+    hot_heap_mark!("effects-discipline-banks");
     hot_cu_checkpoint!("p7e-banks");
-    project_effects_v4_atomic(
+    // A refusal from the visitor is the visitor's own refusal, carried out
+    // through the kernel's single error channel and re-raised here so its exact
+    // code survives.
+    let mut refused: Option<ProgramError> = None;
+    let outcome = project_effects_v4_atomic_visiting(
         effect.successor,
         tail_count,
         ProjectionV3 {
@@ -3251,12 +3272,30 @@ fn project_hot_effects_v3(
             requests: &mut requests,
         },
         &mut write_ranges,
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
+        &mut |resolved| match inspect_local_effect_discipline_v5(
+            lifecycle_plans,
+            resolved,
+            aliases,
+            &mut written,
+            locally_mutated.as_deref_mut(),
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                refused = Some(error);
+                Err(EffectKernelErrorV4::BaseProgram)
+            }
+        },
+    );
+    if let Some(error) = refused {
+        return Err(error);
+    }
+    outcome.map_err(|_| TradingSbfError::Transition)?;
+    require_lifecycle_binding_coverage_v4(lifecycle_plans, &written)?;
     hot_heap_mark!("effects-projected");
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
         requests,
+        locally_mutated,
     })
 }
 
@@ -5262,18 +5301,24 @@ fn require_lifecycle_replan_agreement_v4(
     }
 }
 
-/// Require every local Effect operation to leave the root header alone and to
-/// write each created state's immutable identity binding exactly once, never
-/// overlapped by anything else.
+/// Apply the three local-effect predicates to ONE resolved Effect operation:
+/// leave the root header alone, mark each created state's immutable identity
+/// binding it writes, and record which representative it mutates.
 ///
-/// Two predicates, one resolution pass. Resolving one Effect operation costs
-/// orders of magnitude more than either predicate applied to the result, and
-/// both predicates have to see every operation of the same program at the same
-/// registers, so running them as two passes resolved the whole program twice to
-/// answer two questions about the same object. Measured on the canonical Direct
-/// bundle at full depth: the second pass was **110,284 CU, 7.9% of the
-/// 1,400,000 ceiling**, and it computed nothing the first pass had not already
-/// produced and discarded.
+/// Three predicates, no resolution pass of its own. Resolving one Effect
+/// operation costs orders of magnitude more than any predicate applied to the
+/// result, and all three have to see every operation of the same program at the
+/// same registers, so each pass that asked its own question walked the whole
+/// program again. Measured on the canonical Direct bundle at full depth, in the
+/// order they were folded together: the binding pass was **110,284 CU**, the
+/// route-disjointness pass a further **108,759 CU**, and the surviving joint
+/// pass **139,214 CU** — every one of them recomputing what the projection's
+/// own walk had already produced and discarded.
+///
+/// There is now exactly one walk. `project_atomic_visiting` offers each
+/// operation to this function after the runtime-write overlap refusal has
+/// accepted it and before the projection applies it, so these predicates ride
+/// the walk the projection was making anyway.
 ///
 /// The scan is over the Effect, not over the bindings: there are far more
 /// operations than bindings, and asking each binding separately re-resolved the
@@ -5291,75 +5336,32 @@ fn require_lifecycle_replan_agreement_v4(
 /// conjunction written in the other order - and the agreement still refuses
 /// first-class if they ever disagree.
 ///
-/// The third question rides along for the same reason: when the Effect has
-/// child routes at all, every route's accounts must be disjoint from what the
-/// local effects mutate, and deciding that needs one `bool` per representative
-/// folded out of exactly these resolved operations. Asking it in its own walk
-/// cost a further **108,759 CU** on the canonical Direct bundle - a third of a
-/// million compute units, across the three walks, to resolve one program three
-/// times. Returns `None` when the Effect declares no route, which is precisely
-/// when the answer has no consumer.
-#[inline(never)]
-fn require_local_effect_discipline_v5(
+/// `locally_mutated` is `None` when the Effect declares no child route, which
+/// is precisely when route disjointness has no consumer.
+fn inspect_local_effect_discipline_v5(
     plans: &[PreparedLifecycleInvocationV3],
-    effect: SelectedEffectProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
+    resolved: ResolvedEffectV3,
     aliases: &[usize],
-) -> Result<Option<Vec<bool>>, ProgramError> {
-    let mut binding_count = 0_usize;
-    for prepared in plans {
-        binding_count = binding_count
-            .checked_add(prepared.immutable_identity_bindings.len())
-            .ok_or(TradingSbfError::Transition)?;
+    written: &mut [bool],
+    locally_mutated: Option<&mut [bool]>,
+) -> Result<(), ProgramError> {
+    require_root_write_is_state_only(resolved, aliases)?;
+    inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, written)?;
+    if let Some(bank) = locally_mutated {
+        mark_local_mutation(resolved, aliases, bank)?;
     }
-    let mut written = Vec::new();
-    written
-        .try_reserve_exact(binding_count)
-        .map_err(|_| TradingSbfError::Transition)?;
-    written.resize(binding_count, false);
-    let mut locally_mutated = if effect.route_count() == 0 {
-        None
-    } else {
-        let mut bank = Vec::new();
-        bank.try_reserve_exact(aliases.len())
-            .map_err(|_| TradingSbfError::Content)?;
-        bank.resize(aliases.len(), false);
-        Some(bank)
-    };
+    Ok(())
+}
 
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        let resolved = effect
-            .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-            .map_err(|_| TradingSbfError::Transition)?;
-        require_root_write_is_state_only(resolved, aliases)?;
-        inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
-        if let Some(bank) = locally_mutated.as_deref_mut() {
-            mark_local_mutation(resolved, aliases, bank)?;
-        }
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            let resolved = effect
-                .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Transition)?;
-            require_root_write_is_state_only(resolved, aliases)?;
-            inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
-            if let Some(bank) = locally_mutated.as_deref_mut() {
-                mark_local_mutation(resolved, aliases, bank)?;
-            }
-            operation = operation
-                .checked_add(1)
-                .ok_or(TradingSbfError::Transition)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-
+/// Require every created state's immutable identity binding to have been
+/// written by exactly one of the operations the walk offered.
+///
+/// This is the only half of the discipline that cannot ride an operation: it is
+/// a fact about the whole program, answered once the walk has ended.
+fn require_lifecycle_binding_coverage_v4(
+    plans: &[PreparedLifecycleInvocationV3],
+    written: &[bool],
+) -> Result<(), ProgramError> {
     let mut ordinal = 0_usize;
     for prepared in plans {
         for _ in &prepared.immutable_identity_bindings {
@@ -5371,7 +5373,7 @@ fn require_local_effect_discipline_v5(
             ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Transition)?;
         }
     }
-    Ok(locally_mutated)
+    Ok(())
 }
 
 /// Fold one resolved Effect write against every planned binding.
