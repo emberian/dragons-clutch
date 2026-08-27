@@ -2,11 +2,6 @@
   "note": "Routes that cannot be driven by any gauntlet tier today. Every entry names WHY and WHO. A route with no entry and no observation appears in the report's 'NO stated reason at all' row, which is the row that should make someone uncomfortable. 'No tier drives it yet' is a real and admissible reason; it is deliberately NOT phrased as 'blocked' when nothing structural prevents it, so that a missing test never launders itself into an external blocker. Rules: most specific matching rule wins; a trailing '*' is a prefix glob; keep an entry only while it is true, and delete it the moment its route executes.",
   "blocked": [
     {
-      "route": "monolith/*",
-      "reason": "programs/dclutch-sbf is the gen-1 single-program prototype. It is a workspace member and still builds, but it is not one of the seven artifacts the successor release set binds (Registry, Core, Claims, Trading, Resolution, Custody, Rent), so the transaction-only bootstrap never deploys it and no route of it is reachable by any tier. Whether it is superseded debt to delete under AGENTS.md's 'do not preserve parallel legacy/current authority paths' rule, or a live target that needs its own tier, has not been decided anywhere in the tree.",
-      "owner": "UNASSIGNED \u2014 needs an owner decision, not a test"
-    },
-    {
       "route": "claims-proof/*",
       "reason": "Capability-child proof artifact, not part of the seven-role successor release set; no tier deploys it.",
       "owner": "cycle-2 tranche A (WAVE.md)"
@@ -37,34 +32,9 @@
       "owner": "TA-GEN for the campaign and the N=1 emitter/bindings/witnesses; the gauntlet lane for the run.sh stage; W2h for the Hot path"
     },
     {
-      "route": "series/*",
-      "reason": "STRUCTURALLY UNREACHABLE, not merely un-driven. Every route of programs/dclutch-series-sbf ends in a Core CPI that Core refuses by construction: the adapter sends exactly SERIES_CORE_REQUEST_BYTES_V1 (336) bytes with no receipt tail (series-sbf/src/lib.rs:844), while Core's dispatch for that magic requires a tail of CLAIMS_FOUNDING_RECEIPT_BYTES_V5 (1008) or PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1 (320), both filtered on start >= 336, so a bare request falls through to CoreSbfError::Instruction. Core also has NO handler for SeriesCoreActionV1::{Prepare, Expire, Close}; series_open.rs:253 and series_consume.rs:296 both require Consume. So no tier anyone writes can execute these four routes or raise these twelve codes. It is also the only consumer of the v1 dclutch-series-codec; Core, Trading, series-shadow and the operator are all on dclutch-series-v3-kernel, whose Core seam DOES execute (see core/series_consume::process). Full argument: docs/evidence/SERIES_ADAPTER_CORE_SEAM_2026_08_27.md. This needs an owner DECISION -- delete the superseded path per AGENTS.md, or write an ADR for the Core-side Prepare/Expire/Close seam -- not a test.",
-      "owner": "UNASSIGNED \u2014 needs an owner decision, not a test (TA-SER, 2026-08-27)"
-    },
-    {
       "route": "series-shadow/*",
       "reason": "Shadow accelerator, not part of the seven-role successor release set; no tier deploys it. The workspace half of this entry is DISCHARGED: the callback authenticator now lives in crates/dclutch-shadow-accelerator-auth-v4, dclutch-series-shadow-sbf no longer depends on dclutch-trading-sbf at all, and the package is a root workspace member that builds under `cargo check --workspace --all-targets`. What remains is that no campaign drives the ELF.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"
-    },
-    {
-      "route": "economic/*",
-      "reason": "Economic projection adapter, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
-    },
-    {
-      "route": "effect/*",
-      "reason": "Effect projection adapter, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
-    },
-    {
-      "route": "product-payoff/*",
-      "reason": "Payoff evaluator artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
-    },
-    {
-      "route": "product-evidence/*",
-      "reason": "Payoff evidence artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
     },
     {
       "route": "product-runtime-v2/*",
