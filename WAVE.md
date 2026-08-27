@@ -234,3 +234,12 @@ The monolith is fully deleted (legacy copy removed; git history only).
   building + shipping the real frontend, and the dragons-clutch wrapper tidy
   (= the graft: dclutch becomes the current tree; gen-1 handoff docs and
   stale site retired to history).
+
+## Doctrine amendment (ember, 2026-08-27): CUT THE KNOT
+
+Naming a blocker is not a deliverable; it was triage for an era of silent
+walls, and that era is over. Default: CUT — fix it, decide it, delete it, even
+across "someone else's" seam; commit; let the swarm heal any breakage (git and
+the gates are the safety net). Yield back a blocker ONLY for a genuine
+authority decision (trust surface, principal, deploy, scope) — and then as a
+question with a recommended answer, not an inventory row.
