@@ -196,4 +196,67 @@ price-plane work.** A hat attains the whole complete set at its own knot, so
 the same portfolio pays exactly zero there and the arbitrage does not exist. -/
 example : hats.evaluate (at' 1 1) = [100, 0] := by decide
 
+/-! ## The inherited supply algebra is actually usable
+
+`SplineProfile.basis` being *constructible* proves nothing on its own — a
+`Basis` instance can typecheck and still be useless if its scale or width will
+not resolve at a use site. These six applications are the check: each is one of
+`LiabilityBasisV2`'s preservation theorems applied to a concrete spline profile,
+with the scale resolving to the literal `1200`. Complete-set split, complete-set
+merge, claim transfer, terminal redemption and the `Q * peak(T)` solvency
+envelope are therefore genuinely inherited by the whole B-spline family, and not
+one of them is restated here.
+-/
+
+/-- A complete-set split raises liability at every admitted coordinate by
+exactly `quantity * Q`. -/
+example (result : uniformCubic.Admitted) (quantity : Nat) (supplies : List Nat)
+    (sameWidth : supplies.length = 8) :
+    liability (splitSupply quantity supplies) (uniformCubic.evaluate result.val) =
+      liability supplies (uniformCubic.evaluate result.val) + quantity * 1200 :=
+  uniformCubic.basis.liability_split result quantity supplies sameWidth
+
+/-- Crediting the matching collateral keeps the whole coordinate domain solvent. -/
+example (quantity hoard : Nat) (supplies : List Nat) (sameWidth : supplies.length = 8)
+    (solvent : uniformCubic.basis.GloballySolvent hoard supplies) :
+    uniformCubic.basis.GloballySolvent (hoard + quantity * 1200)
+      (splitSupply quantity supplies) :=
+  uniformCubic.basis.split_preserves_global_solvency quantity hoard supplies sameWidth solvent
+
+/-- A complete-set merge releases exactly `quantity * Q` and stays solvent. -/
+example (quantity hoard : Nat) (supplies : List Nat) (sameWidth : supplies.length = 8)
+    (admissible : MergeAdmissible quantity supplies)
+    (solvent : uniformCubic.basis.GloballySolvent hoard supplies) :
+    uniformCubic.basis.GloballySolvent (hoard - quantity * 1200)
+      (mergeSupply quantity supplies) :=
+  uniformCubic.basis.merge_preserves_global_solvency quantity hoard supplies sameWidth
+    admissible solvent
+
+/-- **Solvency without enumerating the coordinate domain.** Covering
+`Q * peak(T)` certifies every terminal coordinate at once — which matters far
+more here than for categorical claims, because a spline's coordinate domain is
+an interval of rationals and cannot be enumerated at all. -/
+example (hoard : Nat) (supplies : List Nat)
+    (covered : peakSupply supplies * 1200 ≤ hoard) :
+    uniformCubic.basis.GloballySolvent hoard supplies :=
+  Basis.peak_bound_globally_solvent uniformCubic.basis hoard supplies covered
+
+/-- Terminal redemption conserves exactly. -/
+example (result : uniformCubic.Admitted) (supplies redeemed : List Nat)
+    (backed : Dominates supplies redeemed) :
+    liability (pointwiseSub supplies redeemed) (uniformCubic.evaluate result.val) +
+      terminalPayout redeemed (uniformCubic.evaluate result.val) =
+        liability supplies (uniformCubic.evaluate result.val) :=
+  uniformCubic.basis.terminal_payout_conserves result supplies redeemed backed
+
+/-- A backed transfer moves no liability, so the Hoard is untouched. -/
+example (hoard index quantity : Nat) (seller buyer : List Nat)
+    (sameWidth : seller.length = buyer.length)
+    (backed : TransferBacked index quantity seller)
+    (solvent : uniformCubic.basis.GloballySolvent hoard (pointwiseAdd seller buyer)) :
+    uniformCubic.basis.GloballySolvent hoard
+      (pointwiseAdd (debitAt index quantity seller) (creditAt index quantity buyer)) :=
+  uniformCubic.basis.trade_preserves_global_solvency hoard index quantity seller buyer
+    sameWidth backed solvent
+
 end DClutch.LiabilityBasisV2.Spline.Examples
