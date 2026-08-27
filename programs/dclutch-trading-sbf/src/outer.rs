@@ -109,6 +109,9 @@ const MAX_RUNTIME_IDENTITIES_V2: usize = 32;
 const MAX_RUNTIME_ACCOUNTS_V2: usize = 64;
 const MAX_ROLE_REQUEST_BYTES_V2: usize = 2_048;
 
+/// Domain for the activation poststate commitment in [`poststate_digest`].
+const ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch:activation-poststate:v1";
+
 /// Which generation of capability release `selection.capability_release()` names.
 ///
 /// This is not a dispatch on a capability kind. It is a fact about one finalized
@@ -1366,20 +1369,55 @@ fn emit_ack(
     Ok(())
 }
 
+/// Commit the exact activation poststate: root account, per-allocation funding
+/// states, and output lamports.
+///
+/// Domain ‖ 0x00 ‖ u32_le(root len) ‖ u32_le(funding count) ‖ u32_le(lamport
+/// count) ‖ root ‖ funding… ‖ lamports…, matching the framing convention the
+/// rest of the protocol digests under.
+///
+/// The three counts are ahead of the data on purpose. `hashv` concatenates its
+/// parts and frames nothing, so digesting a variable-length root, a variable
+/// number of fixed-width funding states, and a variable-length lamport
+/// encoding back to back committed only to their concatenation: a longer root
+/// with fewer funding states, or funding bytes re-read as lamports, produce the
+/// same digest as the honest split. There was also no domain, so the value was
+/// a bare SHA-256 of an unframed buffer.
+///
+/// **This digest is currently verified by nobody.** It is carried as
+/// `CoreEffectAckV1::post_resource_digest`, and `CoreEffectAckV1::validate_for`
+/// compares every other field and not this one; no consumer in the tree
+/// recomputes it. The framing is fixed here so the commitment is sound whenever
+/// a consumer does start checking it, but the unchecked field is real debt and
+/// is named as such rather than treated as closed.
 fn poststate_digest(
     root: &[u8],
     funding: &[[u8; FUNDING_STATE_BYTES]],
     lamports: &[u64],
 ) -> Result<Identity, ProgramError> {
-    let mut parts: Vec<&[u8]> = Vec::with_capacity(1 + funding.len() + lamports.len());
-    parts.push(root);
-    for bytes in funding {
-        parts.push(bytes);
-    }
+    let root_len = u32::try_from(root.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let funding_count = u32::try_from(funding.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let lamport_count = u32::try_from(lamports.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
     let encoded_lamports = lamports
         .iter()
         .flat_map(|value| value.to_le_bytes())
         .collect::<Vec<_>>();
+    let mut parts: Vec<&[u8]> = Vec::with_capacity(6 + funding.len());
+    parts.push(ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V1);
+    parts.push(&[0_u8]);
+    parts.push(&root_len);
+    parts.push(&funding_count);
+    parts.push(&lamport_count);
+    parts.push(root);
+    for bytes in funding {
+        parts.push(bytes);
+    }
     parts.push(&encoded_lamports);
     identity(hashv(&parts).to_bytes())
 }
