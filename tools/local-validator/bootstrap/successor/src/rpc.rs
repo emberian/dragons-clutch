@@ -348,6 +348,63 @@ impl Rpc {
         )
     }
 
+    /// Submit one routed v0 transaction carrying additional exact signers.
+    ///
+    /// A routed frame can still require a signature that is not the fee
+    /// payer's: the projected-Custody abort needs the principal's owner to sign
+    /// while remaining non-writable, which the fee payer cannot do.
+    ///
+    /// This path carries **no heap-frame request**, deliberately. Only the two
+    /// founding routes declare the extended profile, and a route that does not
+    /// need the grant does not ask for one.
+    pub(crate) fn send_v0_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            additional_signers,
+            observation,
+            tables,
+            false,
+            None,
+        )
+    }
+
+    /// Submit one routed v0 transaction expected to refuse, carrying the exact
+    /// signatures its frame requires.
+    ///
+    /// A hostile case must differ from the honest one in exactly the coordinate
+    /// under test. If it also drops a signature the frame needs, the
+    /// transaction never reaches the chain and the refusal proves nothing.
+    pub(crate) fn send_v0_expected_failure_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            additional_signers,
+            observation,
+            tables,
+            true,
+            None,
+        )
+    }
+
     /// Submit one routed v0 transaction on a runtime-granted extended heap.
     ///
     /// Only the two founding routes may use this: `DCLTGMF1` and `DCLTPCB1`

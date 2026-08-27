@@ -300,6 +300,55 @@
       "program": "trading",
       "outcome": "executed",
       "note": "The first Open Market. Five stages in one rollback domain and one transaction: Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open LAST so that any late refusal rolls the whole chain back. It creates the Market, mints the liability aggregate, the founder Position, and the admission, moves the collateral into the Hoard, closes the source compartment, realizes the projection into the Market's normal Custody replay, and consumes the one-shot permit."
+    },
+    {
+      "label": "stage a second projected-Custody prestate for the expiry abort (DCLTPCB1)",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/initialize#Initialize",
+        "custody/open_hoard#OpenHoard",
+        "custody/open_source_compartment#OpenSourceCompartment",
+        "core/process_instruction",
+        "core/found::project",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The same four-stage ladder as the founding lane, at its own generation and with a SHORT expiry. It exists to be abandoned: the campaign stages it, proves it cannot be unwound while its founding is still satisfiable, waits for the expiry, and then unwinds it. Every projected-Custody stage asserts the inverse of a live Market, so each lane needs its own still-vacant Market PDA and therefore its own generation."
+    },
+    {
+      "label": "DCLTPCA1 refuses to abort a funded source before expiry",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/abort_source_and_close#AbortSourceAndClose",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "note": "HOSTILE, and the boundary this route is judged on. While the founding remains satisfiable the authority over funded principal may not be destroyed; an unwind that let anyone empty a live founding would be a worse defect than the permanent stranding it was written to fix. The refusal is raised by Custody's own transition rather than by the Trading outer, so it is credited to no Trading code, and the runner requires the whole multi-instruction transaction to roll back to a fee-only debit and the prestate to be bit-for-bit where it was."
+    },
+    {
+      "label": "unwind an expired founding's funded source compartment (DCLTPCA1)",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/abort_source_and_close#AbortSourceAndClose",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The only route out of a funded projection whose founding expired. Before it existed the forward direction was the sole exit, and it runs through Core's Found and Open stages, which both refuse an expired artifact - so the collateral could not be moved by anything. It returns the principal to a token account owned by the party that supplied it and closes the source vault, the source replay, the empty Hoard vault, and the projection to the lifecycle credit, whose balance the runner requires to have risen by exactly those four rents."
     }
   ]
 }

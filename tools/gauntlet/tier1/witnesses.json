@@ -138,9 +138,30 @@
     {
       "id": "the-projection-was-realized-into-a-narrower-normal-replay",
       "kind": "evidence-jq",
-      "query": "(.accounts.projected_custody_replay.data_len > .accounts.founding_normal_custody_replay.data_len) | tostring",
+      "query": "(.accounts.founding_projected_custody_replay.data_len > .accounts.founding_normal_custody_replay.data_len) | tostring",
       "expect": "true",
-      "provenance": "Two snapshots of the SAME account address, taken before and after the founding. The projected-Custody state and the normal CustodyReplayV1 are different widths, and Custody's RealizeAndClose rewrites the projection in place and resizes it rather than closing one account and opening another. A run where the replay never realized would show two equal widths."
+      "provenance": "Two snapshots of the SAME account address, taken either side of the founding. The projected-Custody state and the normal CustodyReplayV1 are different widths, and Custody's RealizeAndClose rewrites the projection in place and resizes it rather than closing one account and opening another. A run where the replay never realized shows two equal widths. The key is lane-prefixed because the campaign now stages two prestates at two generations, and evidence that silently compared one lane's account against the other's would not be evidence."
+    },
+    {
+      "id": "the-expired-source-abort-was-submitted-and-succeeded",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"unwind an expired founding\")) | .error] | tostring",
+      "expect": "[null]",
+      "provenance": "Exactly one such transaction, and the chain reports no error on it. This is the only route out of a funded projection whose founding expired; before it existed that collateral could not be moved by anything. A campaign that never submitted it fails here rather than reporting a safety route it did not exercise."
+    },
+    {
+      "id": "the-pre-expiry-source-abort-really-refused",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"DCLTPCA1 refuses\")) | .error != null] | tostring",
+      "expect": "[true]",
+      "provenance": "While a founding is still satisfiable, the authority over funded principal may not be destroyed. The chain must report an error on the pre-expiry attempt. An unwind route that let anyone empty a live founding would be a worse defect than the stranding it was written to fix, so this is the boundary the abort is judged on, not the happy path."
+    },
+    {
+      "id": "the-abort-returned-the-principal-to-a-real-token-2022-account",
+      "kind": "evidence-jq",
+      "query": ".accounts.abort_refunded_principal_wallet.owner",
+      "expect": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "provenance": "The canonical SPL Token-2022 program address, an external identity dClutch does not define. The refunded principal lands in a real token account owned by the party that supplied it; the runner separately requires the balance to have risen by exactly the principal and all four staged accounts to be closed."
     }
   ]
 }

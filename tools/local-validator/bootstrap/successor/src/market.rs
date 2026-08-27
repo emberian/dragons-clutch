@@ -511,21 +511,24 @@ pub(crate) fn execute_found_market(
     // The generic founding runs at its own generation against a Market that
     // does not exist yet: every projected-Custody stage asserts the inverse of
     // a live Market, so the Found31 Market above cannot be reused.
-    execute_projected_custody_bootstrap(
-        rpc,
-        plan,
-        input,
-        &records,
-        market_identity,
-        product_id,
-        mint,
-        collateral_wallet,
-        market,
-        payer,
-        transactions,
-        &mut accounts,
-        &mut completed,
-    )?;
+    for lane in [PrestateLaneV1::Founding, PrestateLaneV1::SourceAbort] {
+        execute_projected_custody_bootstrap(
+            rpc,
+            plan,
+            input,
+            &records,
+            market_identity,
+            product_id,
+            mint,
+            collateral_wallet,
+            market,
+            lane,
+            payer,
+            transactions,
+            &mut accounts,
+            &mut completed,
+        )?;
+    }
     Ok(MarketExecutionEvidence {
         completed,
         accounts,
@@ -1155,6 +1158,7 @@ fn derive_founding_coordinates(
     payer: Pubkey,
     founder: Pubkey,
     beneficiary: Pubkey,
+    generation: u64,
     expiry_slot: u64,
 ) -> Result<FoundingCoordinates> {
     let core = pubkey(&plan.core.program_id)?;
@@ -1168,10 +1172,6 @@ fn derive_founding_coordinates(
     // Found31 already created: every projected-Custody stage asserts the
     // inverse of a live Market, and Core's own projection requires the Market
     // account vacant. A distinct generation is a distinct, still-vacant PDA.
-    let generation = input
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| Error::new("founding generation overflow"))?;
     let identity = MarketIdentity {
         generation,
         ..identity_template
@@ -1662,6 +1662,91 @@ fn raw_request_schema_v1(role: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// What a staged projected-Custody prestate is being staged *for*.
+///
+/// Both lanes run the identical four-stage `DCLTPCB1` ladder. They differ in
+/// the generation they occupy, how long their founding stays satisfiable, and
+/// which of the two exits out of `SourceFunded` they then take.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrestateLaneV1 {
+    /// Stage the prestate and found the Market atomically through `DCLTGMF1`.
+    Founding,
+    /// Stage the prestate, let it expire, and unwind it through `DCLTPCA1`.
+    ///
+    /// This lane exists because the abort is a SAFETY route, and a safety route
+    /// with no execution evidence is the one you least want to discover is
+    /// broken at the moment somebody needs it.
+    SourceAbort,
+}
+
+impl PrestateLaneV1 {
+    /// The generation this lane's Market occupies.
+    ///
+    /// Every projected-Custody stage asserts the inverse of a live Market and
+    /// Core's projection requires the Market vacant, so each lane needs its own
+    /// still-vacant Market PDA - and therefore its own generation, distinct
+    /// from Found31's and from the other lane's.
+    fn generation(self, input: &MarketRunInput) -> Result<u64> {
+        let offset = match self {
+            Self::Founding => 1,
+            Self::SourceAbort => 2,
+        };
+        input
+            .generation
+            .checked_add(offset)
+            .ok_or_else(|| Error::new("founding generation overflow"))
+    }
+
+    /// How long this lane's founding stays satisfiable, in slots.
+    ///
+    /// The founding lane wants an expiry it will never reach. The abort lane
+    /// wants the opposite and is squeezed from both sides: `initialize` refuses
+    /// once `current_slot > expiry_slot`, so the expiry must outlast staging;
+    /// and every slot past that is dead waiting. Staging costs about thirteen
+    /// transactions at roughly thirty-two slots of finality each, so ~420
+    /// slots; 1,200 leaves nearly double that as margin and still expires
+    /// promptly afterwards. The runner does not assume the arithmetic held - it
+    /// checks the margin before staging and waits for the real slot after.
+    const fn expiry_slots(self) -> u64 {
+        match self {
+            Self::Founding => 500_000,
+            Self::SourceAbort => 900,
+        }
+    }
+
+    /// Slots that must remain before expiry for staging to be worth attempting.
+    const fn minimum_staging_margin_slots(self) -> u64 {
+        match self {
+            Self::Founding => 0,
+            Self::SourceAbort => 64,
+        }
+    }
+
+    /// Prefix for this lane's account-evidence keys.
+    ///
+    /// Both lanes stage the same shaped accounts at different generations, so
+    /// they must not overwrite one another's evidence. The abort lane's are
+    /// additionally CLOSED by the end of the run, and evidence that silently
+    /// swapped one lane's live account for the other's closed one would be
+    /// worse than no evidence.
+    const fn evidence_prefix(self) -> &'static str {
+        match self {
+            Self::Founding => "founding",
+            Self::SourceAbort => "abort",
+        }
+    }
+
+    /// The label its honest `DCLTPCB1` transaction carries.
+    const fn prestate_label(self) -> &'static str {
+        match self {
+            Self::Founding => "create the projected-Custody founding prestate (DCLTPCB1)",
+            Self::SourceAbort => {
+                "stage a second projected-Custody prestate for the expiry abort (DCLTPCB1)"
+            }
+        }
+    }
+}
+
 /// Create the projected-Custody founding prestate on a real validator.
 ///
 /// This is `DCLTPCB1`: four transitions in one rollback domain against a Market
@@ -1680,6 +1765,7 @@ fn execute_projected_custody_bootstrap(
     mint: Pubkey,
     collateral_wallet: Pubkey,
     found31_market: Pubkey,
+    lane: PrestateLaneV1,
     payer: &Keypair,
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
@@ -1700,7 +1786,7 @@ fn execute_projected_custody_bootstrap(
     let market_rent = rpc.minimum_balance(STATE_BYTES)?;
     let expiry_slot = rpc
         .finalized_slot()?
-        .checked_add(500_000)
+        .checked_add(lane.expiry_slots())
         .ok_or_else(|| Error::new("founding expiry slot overflow"))?;
 
     let coordinates = derive_founding_coordinates(
@@ -1714,6 +1800,7 @@ fn execute_projected_custody_bootstrap(
         payer.pubkey(),
         founder.pubkey(),
         beneficiary.pubkey(),
+        lane.generation(input)?,
         expiry_slot,
     )?;
     let principal = coordinates.lock.amount;
@@ -1861,15 +1948,21 @@ fn execute_projected_custody_bootstrap(
         None,
         transactions,
     )?;
-    let open_hoard_record = publish_record(
-        rpc,
-        registry,
-        payer,
-        raw_request_schema_v1("projected-custody-non-terminal"),
-        &open_hoard_bytes,
-        None,
-        transactions,
-    )?;
+    // Published only where it is used: it exists to be substituted into the
+    // founding lane's hostile case, and publishing it costs three transactions.
+    let open_hoard_record = if lane == PrestateLaneV1::Founding {
+        Some(publish_record(
+            rpc,
+            registry,
+            payer,
+            raw_request_schema_v1("projected-custody-non-terminal"),
+            &open_hoard_bytes,
+            None,
+            transactions,
+        )?)
+    } else {
+        None
+    };
 
     let bootstrap = build_projected_custody_bootstrap_v1(
         plan,
@@ -1893,9 +1986,9 @@ fn execute_projected_custody_bootstrap(
 
     let created = [
         ("projected_custody_replay", coordinates.projected_replay),
-        ("founding_hoard_vault", coordinates.hoard_vault),
-        ("founding_source_vault", coordinates.source_vault),
-        ("founding_source_replay", coordinates.source_replay),
+        ("hoard_vault", coordinates.hoard_vault),
+        ("source_vault", coordinates.source_vault),
+        ("source_replay", coordinates.source_replay),
     ];
     let refuse_left_nothing = |rpc: &mut Rpc, label: &str| -> Result<()> {
         for (name, key) in created {
@@ -1912,61 +2005,78 @@ fn execute_projected_custody_bootstrap(
     };
     refuse_left_nothing(rpc, "the founding prestate")?;
 
-    // The bootstrap admits exactly one request: the terminal Lock this
-    // founding determines. A well-formed non-terminal prestate is refused.
-    let mut non_terminal = bootstrap.clone();
-    non_terminal
-        .accounts
-        .get_mut(1)
-        .ok_or_else(|| Error::new("bootstrap omitted its terminal Lock coordinate"))?
-        .pubkey = open_hoard_record.raw;
-    transactions.push(rpc.send_v0_on_founding_heap_expected_failure_with_signers(
-        "DCLTPCB1 refuses a non-terminal projected-Custody request",
-        &[non_terminal],
-        payer,
-        &[&beneficiary],
-        routing,
-        &tables,
-    )?);
-    refuse_left_nothing(rpc, "the refused non-terminal bootstrap")?;
-
-    // The FundingState tail is the manifest binding. Reordering it derives an
-    // address the manifest entry at that position does not name, and the whole
-    // four-stage bootstrap must roll back with no funded account left behind.
-    if coordinates.funding_states.len() >= 2 {
-        let mut reordered = bootstrap.clone();
-        let first = PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNTS_V1;
-        let second = first
-            .checked_add(1)
-            .ok_or_else(|| Error::new("funding tail index overflow"))?;
-        reordered.accounts.swap(first, second);
-        let rollback_recipient = Pubkey::new_unique();
-        let before = rpc.required_account(payer.pubkey(), "bootstrap rollback prestate")?;
-        let rolled_back = rpc.send_v0_on_founding_heap_expected_failure_with_signers(
-            "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
-            &[transfer(&payer.pubkey(), &rollback_recipient, 1), reordered],
+    // Both bootstrap hostile cases belong to the founding lane. Re-running
+    // them for the abort lane's prestate would cost two transactions and
+    // 700,000 compute units to re-prove a coordinate that has not moved.
+    if lane == PrestateLaneV1::Founding {
+        // The bootstrap admits exactly one request: the terminal Lock this
+        // founding determines. A well-formed non-terminal prestate is refused.
+        let mut non_terminal = bootstrap.clone();
+        non_terminal
+            .accounts
+            .get_mut(1)
+            .ok_or_else(|| Error::new("bootstrap omitted its terminal Lock coordinate"))?
+            .pubkey = open_hoard_record
+            .ok_or_else(|| Error::new("the founding lane omitted its non-terminal record"))?
+            .raw;
+        transactions.push(rpc.send_v0_on_founding_heap_expected_failure_with_signers(
+            "DCLTPCB1 refuses a non-terminal projected-Custody request",
+            &[non_terminal],
             payer,
             &[&beneficiary],
             routing,
             &tables,
-        )?;
-        let fee = rolled_back
-            .fee_lamports
-            .ok_or_else(|| Error::new("refused bootstrap omitted its fee"))?;
-        let after = rpc.required_account(payer.pubkey(), "bootstrap rollback poststate")?;
-        if rpc.account(rollback_recipient)?.is_some()
-            || after.lamports.checked_add(fee) != Some(before.lamports)
-        {
-            return Err(Error::new(
-                "refused bootstrap did not roll its whole transaction back to a fee-only debit",
-            ));
+        )?);
+        refuse_left_nothing(rpc, "the refused non-terminal bootstrap")?;
+
+        // The FundingState tail is the manifest binding. Reordering it derives an
+        // address the manifest entry at that position does not name, and the whole
+        // four-stage bootstrap must roll back with no funded account left behind.
+        if coordinates.funding_states.len() >= 2 {
+            let mut reordered = bootstrap.clone();
+            let first = PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNTS_V1;
+            let second = first
+                .checked_add(1)
+                .ok_or_else(|| Error::new("funding tail index overflow"))?;
+            reordered.accounts.swap(first, second);
+            let rollback_recipient = Pubkey::new_unique();
+            let before = rpc.required_account(payer.pubkey(), "bootstrap rollback prestate")?;
+            let rolled_back = rpc.send_v0_on_founding_heap_expected_failure_with_signers(
+                "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
+                &[transfer(&payer.pubkey(), &rollback_recipient, 1), reordered],
+                payer,
+                &[&beneficiary],
+                routing,
+                &tables,
+            )?;
+            let fee = rolled_back
+                .fee_lamports
+                .ok_or_else(|| Error::new("refused bootstrap omitted its fee"))?;
+            let after = rpc.required_account(payer.pubkey(), "bootstrap rollback poststate")?;
+            if rpc.account(rollback_recipient)?.is_some()
+                || after.lamports.checked_add(fee) != Some(before.lamports)
+            {
+                return Err(Error::new(
+                    "refused bootstrap did not roll its whole transaction back to a fee-only debit",
+                ));
+            }
+            transactions.push(rolled_back);
+            refuse_left_nothing(rpc, "the refused reordered bootstrap")?;
         }
-        transactions.push(rolled_back);
-        refuse_left_nothing(rpc, "the refused reordered bootstrap")?;
+    }
+
+    // The staging transaction has to land before the prestate's own expiry, or
+    // Custody's `initialize` refuses outright. Say so here rather than let a
+    // slow validator turn into an opaque refusal three transactions later.
+    let staged_at = rpc.finalized_slot()?;
+    if staged_at.checked_add(lane.minimum_staging_margin_slots()) >= Some(expiry_slot) {
+        return Err(Error::new(format!(
+            "staging reached slot {staged_at} with expiry at {expiry_slot}: not enough margin left to create the prestate"
+        )));
     }
 
     transactions.push(rpc.send_v0_on_founding_heap_with_signers(
-        "create the projected-Custody founding prestate (DCLTPCB1)",
+        lane.prestate_label(),
         std::slice::from_ref(&bootstrap),
         payer,
         &[&beneficiary],
@@ -1983,20 +2093,21 @@ fn execute_projected_custody_bootstrap(
         mint,
         principal,
     )?;
+    let prefix = lane.evidence_prefix();
     for (label, key) in created {
         let account = rpc.required_account(key, label)?;
-        accounts.insert(label.into(), account_evidence(key, &account));
+        accounts.insert(format!("{prefix}_{label}"), account_evidence(key, &account));
     }
     for (index, funding) in coordinates.funding_states.iter().enumerate() {
-        let account = rpc.required_account(*funding, "founding FundingState")?;
+        let account = rpc.required_account(*funding, "staged FundingState")?;
         accounts.insert(
-            format!("founding_funding_state_{index}"),
+            format!("{prefix}_funding_state_{index}"),
             account_evidence(*funding, &account),
         );
     }
-    let credit_account = rpc.required_account(coordinates.credit, "founding lifecycle credit")?;
+    let credit_account = rpc.required_account(coordinates.credit, "staged lifecycle credit")?;
     accounts.insert(
-        "founding_lifecycle_rent_credit".into(),
+        format!("{prefix}_lifecycle_rent_credit"),
         account_evidence(coordinates.credit, &credit_account),
     );
     completed.push(
@@ -2012,25 +2123,311 @@ fn execute_projected_custody_bootstrap(
         "executed DCLTPCB1: projected replay at SourceFunded, empty Hoard vault, funded source compartment, and one prepaid FundingStateV1 per capability-manifest entry, in one rollback domain".into(),
     );
 
-    // The prestate is complete. Everything from here is one transaction.
-    execute_generic_market_founding(
-        rpc,
+    // The prestate is complete. What it is for is the lane's business.
+    match lane {
+        // Everything from here is one transaction.
+        PrestateLaneV1::Founding => execute_generic_market_founding(
+            rpc,
+            plan,
+            input,
+            records,
+            &coordinates,
+            product,
+            mint,
+            found31_market,
+            founder.pubkey(),
+            found_record.raw,
+            lock_record.raw,
+            claim_count,
+            payer,
+            transactions,
+            accounts,
+            completed,
+        ),
+        PrestateLaneV1::SourceAbort => execute_source_abort_v1(
+            rpc,
+            plan,
+            &coordinates,
+            expiry_slot,
+            lock_record.raw,
+            &beneficiary,
+            source_funder.pubkey(),
+            mint,
+            payer,
+            transactions,
+            accounts,
+            completed,
+        ),
+    }
+}
+
+/// Sole top-level projected-Custody founding-abort instruction.
+///
+/// Owned by `programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs`
+/// (`PROJECTED_CUSTODY_ABORT_MAGIC_V1`); restated here because a localhost host
+/// utility does not depend on an SBF program crate.
+const PROJECTED_CUSTODY_ABORT_MAGIC_V1: [u8; 8] = *b"DCLTPCA1";
+
+/// Exact `DCLTPCA1` frame width: one raw request, Custody, and its own frame.
+const PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1: usize = 18;
+
+/// Unwind an expired founding's funded source compartment on a real validator.
+///
+/// `OpenSourceCompartment` puts real collateral under a projected authority
+/// against a Market that does not exist, and the only way forward is the Lock
+/// stage of an atomic founding whose Core Found and Open stages both refuse an
+/// expired artifact. So this is the route that decides whether a founder who
+/// stages a prestate and does not found in time gets their principal back or
+/// loses it permanently.
+#[allow(clippy::too_many_arguments)]
+fn execute_source_abort_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    expiry_slot: u64,
+    lock_raw_account: Pubkey,
+    beneficiary: &Keypair,
+    destination: Pubkey,
+    mint: Pubkey,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+    accounts: &mut BTreeMap<String, AccountEvidence>,
+    completed: &mut Vec<String>,
+) -> Result<()> {
+    let custody = pubkey(&plan.custody.program_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+    let principal = coordinates.lock.amount;
+
+    let abort = build_projected_custody_abort_v1(
         plan,
-        input,
-        records,
-        &coordinates,
-        product,
+        coordinates,
+        lock_raw_account,
+        beneficiary.pubkey(),
+        destination,
         mint,
-        found31_market,
-        founder.pubkey(),
-        found_record.raw,
-        lock_record.raw,
-        claim_count,
+    )?;
+    let (routing, tables) = publish_routing_table(
+        rpc,
         payer,
+        "DCLTPCA1",
+        std::slice::from_ref(&abort),
         transactions,
-        accounts,
-        completed,
+    )?;
+
+    // BEFORE expiry the abort must refuse, and this is the boundary that
+    // matters most: while the founding is still satisfiable, the authority over
+    // funded principal may not be destroyed. A route that let anyone unwind a
+    // live founding would be a worse bug than the one it fixes.
+    let staged_at = rpc.finalized_slot()?;
+    if staged_at >= expiry_slot {
+        return Err(Error::new(format!(
+            "the prestate expired at {expiry_slot} before its pre-expiry refusal could be observed at {staged_at}"
+        )));
+    }
+    let before = rpc.required_account(payer.pubkey(), "source abort rollback prestate")?;
+    let rollback_recipient = Pubkey::new_unique();
+    let refused = rpc.send_v0_expected_failure_with_signers(
+        "DCLTPCA1 refuses to abort a funded source before expiry",
+        &[
+            transfer(&payer.pubkey(), &rollback_recipient, 1),
+            abort.clone(),
+        ],
+        payer,
+        &[beneficiary],
+        routing,
+        &tables,
+    )?;
+    let fee = refused
+        .fee_lamports
+        .ok_or_else(|| Error::new("refused source abort omitted its fee"))?;
+    let after = rpc.required_account(payer.pubkey(), "source abort rollback poststate")?;
+    if rpc.account(rollback_recipient)?.is_some()
+        || after.lamports.checked_add(fee) != Some(before.lamports)
+    {
+        return Err(Error::new(
+            "the refused pre-expiry abort did not roll its whole transaction back to a fee-only debit",
+        ));
+    }
+    transactions.push(refused);
+    authenticate_bootstrap_poststate(
+        rpc,
+        coordinates,
+        custody,
+        pubkey(&plan.trading.program_id)?,
+        token_program,
+        mint,
+        principal,
+    )?;
+
+    // Now let it expire. The wait is the point of the test.
+    await_finalized_slot(
+        rpc,
+        expiry_slot
+            .checked_add(1)
+            .ok_or_else(|| Error::new("expiry slot overflow"))?,
+    )?;
+
+    let credit_before = rpc
+        .required_account(coordinates.credit, "abort lifecycle credit")?
+        .lamports;
+    let destination_before = token_amount(rpc, destination, "abort refund destination")?;
+    transactions.push(rpc.send_v0_with_signers(
+        "unwind an expired founding's funded source compartment (DCLTPCA1)",
+        std::slice::from_ref(&abort),
+        payer,
+        &[beneficiary],
+        routing,
+        &tables,
+    )?);
+    authenticate_source_abort_poststate_v1(
+        rpc,
+        coordinates,
+        destination,
+        destination_before,
+        credit_before,
+        principal,
+    )?;
+    let credit_account = rpc.required_account(coordinates.credit, "abort lifecycle credit")?;
+    accounts.insert(
+        "abort_lifecycle_rent_credit".into(),
+        account_evidence(coordinates.credit, &credit_account),
+    );
+    let refunded = rpc.required_account(destination, "abort refund destination")?;
+    accounts.insert(
+        "abort_refunded_principal_wallet".into(),
+        account_evidence(destination, &refunded),
+    );
+    completed.push(
+        "proved DCLTPCA1 refuses to unwind a funded source compartment while its founding is still satisfiable, and rolls the whole transaction back to a fee-only debit".into(),
+    );
+    completed.push(
+        "executed DCLTPCA1 after expiry: the source principal is back with the party that supplied it, and the source vault, source replay, empty Hoard vault, and projection are all closed to the lifecycle credit".into(),
+    );
+    Ok(())
+}
+
+/// Build the exact 18-account `DCLTPCA1` frame.
+fn build_projected_custody_abort_v1(
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    lock_raw_account: Pubkey,
+    beneficiary: Pubkey,
+    destination: Pubkey,
+    mint: Pubkey,
+) -> Result<Instruction> {
+    let trading = pubkey(&plan.trading.program_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let cache = pubkey(&plan.activation)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let trading_programdata = pubkey(&plan.trading.programdata_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+
+    // The caller PDA is single-use and derived from the abort request itself,
+    // which is the terminal Lock with one field changed. Nothing else can sign
+    // it, including the founding's own Lock caller.
+    let request = ProjectedCustodyRequestV1 {
+        operation: ProjectedCustodyOperationV1::AbortSourceAndClose,
+        ..coordinates.lock
+    };
+    let raw = request
+        .encode()
+        .map_err(|error| Error::new(format!("abort request encoding: {error:?}")))?;
+    let digest: [u8; 32] = Sha256::digest(raw).into();
+    let caller = Pubkey::find_program_address(
+        &ProjectedCustodyCallerSeedsV1::new(request, digest).as_slices(),
+        &trading,
     )
+    .0;
+
+    let accounts = vec![
+        AccountMeta::new_readonly(lock_raw_account, false),
+        AccountMeta::new_readonly(custody, false),
+        // Custody's own sixteen-account abort frame.
+        AccountMeta::new_readonly(caller, false),
+        AccountMeta::new(coordinates.projected_replay, false),
+        AccountMeta::new_readonly(cache, false),
+        AccountMeta::new_readonly(registry, false),
+        AccountMeta::new_readonly(trading, false),
+        AccountMeta::new_readonly(trading_programdata, false),
+        AccountMeta::new(coordinates.credit, false),
+        AccountMeta::new(coordinates.source_vault, false),
+        AccountMeta::new(coordinates.source_replay, false),
+        AccountMeta::new(coordinates.hoard_vault, false),
+        AccountMeta::new(destination, false),
+        // The principal's owner signs and stays non-writable, exactly as it had
+        // to when it supplied the principal.
+        AccountMeta::new_readonly(beneficiary, true),
+        AccountMeta::new_readonly(coordinates.custody_authority, false),
+        AccountMeta::new_readonly(mint, false),
+        AccountMeta::new_readonly(token_program, false),
+        AccountMeta::new_readonly(coordinates.market, false),
+    ];
+    if accounts.len() != PROJECTED_CUSTODY_ABORT_ACCOUNTS_V1 {
+        return Err(Error::new(
+            "assembled abort frame did not match its exact width",
+        ));
+    }
+    Ok(Instruction {
+        program_id: trading,
+        accounts,
+        data: PROJECTED_CUSTODY_ABORT_MAGIC_V1.to_vec(),
+    })
+}
+
+/// Read one Token-2022 account's balance.
+fn token_amount(rpc: &mut Rpc, key: Pubkey, label: &str) -> Result<u64> {
+    let account = rpc.required_account(key, label)?;
+    Ok(TokenAccount::parse(&account.data)
+        .map_err(|error| Error::new(format!("{label}: {error:?}")))?
+        .amount)
+}
+
+/// Require the abort to have returned the principal and closed all four.
+fn authenticate_source_abort_poststate_v1(
+    rpc: &mut Rpc,
+    coordinates: &FoundingCoordinates,
+    destination: Pubkey,
+    destination_before: u64,
+    credit_before: u64,
+    principal: u64,
+) -> Result<()> {
+    if token_amount(rpc, destination, "abort refund destination")?
+        != destination_before.saturating_add(principal)
+    {
+        return Err(Error::new(
+            "the abort did not return exactly the source principal to its supplier",
+        ));
+    }
+    // All four accounts the ladder created are gone. A closed account with zero
+    // lamports does not exist afterwards, which is what `account` reports.
+    for (label, key) in [
+        ("projected replay", coordinates.projected_replay),
+        ("source vault", coordinates.source_vault),
+        ("source replay", coordinates.source_replay),
+        ("Hoard vault", coordinates.hoard_vault),
+    ] {
+        if let Some(account) = rpc.account(key)?
+            && (account.lamports != 0 || !account.data.is_empty())
+        {
+            return Err(Error::new(format!("the abort left the {label} behind")));
+        }
+    }
+    // And their rent went where it was always going, exactly.
+    let credit_after = rpc
+        .required_account(coordinates.credit, "abort lifecycle credit")?
+        .lamports;
+    let expected = credit_before
+        .checked_add(coordinates.lock.funding_source_vault_rent_lamports)
+        .and_then(|value| value.checked_add(coordinates.lock.funding_source_state_rent_lamports))
+        .and_then(|value| value.checked_add(coordinates.lock.vault_rent_lamports))
+        .and_then(|value| value.checked_add(coordinates.lock.state_rent_lamports))
+        .ok_or_else(|| Error::new("abort rent arithmetic overflow"))?;
+    if credit_after != expected {
+        return Err(Error::new(format!(
+            "the abort credited {credit_after} to the lifecycle credit, not the exact {expected} its four closures owe"
+        )));
+    }
+    Ok(())
 }
 
 /// Reacquire and check the exact prestate the founding outer will consume.
