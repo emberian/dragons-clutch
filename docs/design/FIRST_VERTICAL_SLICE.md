@@ -2,7 +2,7 @@
 
 > **Supersession notice (2026-08-27):** this is the most orphaned document in
 > the tree — no status header, no date, no evidence pointer, and none of the
-> nine acceptance conditions below carries a status claim. The target
+> eight acceptance conditions below carries a status claim. The target
 > lifecycle (compile -> create -> split -> authenticate Pyth -> resolve ->
 > redeem -> retain terminal root) reaches step 3 in the live tree; treat
 > everything below as a historical target statement, not current status. This
