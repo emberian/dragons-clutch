@@ -2,9 +2,9 @@
 //!
 //! Every fixture is assembled from semantic-owner encoders and real PDA
 //! derivations; nothing here hand-writes a root, a funding derivation, or a
-//! selection. Two of these tests are the executable form of the blockers this
-//! module's header names: they assert what the existing activation seam does,
-//! rather than describing it.
+//! selection. Two of these tests used to be the executable form of the blockers
+//! this module's header named; both blockers are closed, and the two tests now
+//! pin the premises the fixes rest on.
 
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityFundingDerivationV1,
@@ -23,7 +23,7 @@ use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_KIND_OFFSET, CAPABILITY_PROGRAM_MAGIC_V1, CAPABILITY_PROGRAM_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_PROFILE_V2, CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET,
     CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
-    initialize_root_account_v1,
+    CapabilityProgramV1, initialize_root_account_v1,
 };
 use dclutch_general_config_contract::v3::GeneralConfigV3Input;
 use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
@@ -463,47 +463,55 @@ fn composition_is_byte_identical_to_initialize_root_account_v1() {
     assert_eq!(reference, plan.composite_root);
 }
 
+/// Why the activation seam had to learn the release generation from an address.
+///
+/// A General V3 selection names a `CapabilityProgramSetV2` at
+/// `capability_release`, and those bytes are not a `CapabilityProgramV1` under
+/// any decoder. So the seam could not tell the two generations apart by trying
+/// to decode the record, and `bc5da76` made it read the generation off the raw
+/// record's own PDA -- `[RAW_RECORD_PDA_SEED_V1, schema, digest]` -- which is a
+/// fact about a finalized record rather than a kind branch. This pins the
+/// premise that argument rests on.
 #[test]
-fn the_common_activation_seam_cannot_admit_a_v3_capability_release() {
-    // Blocker 2, executed. `outer.rs::process_activation` authenticates the
-    // record at `selection.capability_release()` under
-    // `CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1` and decodes it as a
-    // `CapabilityProgramV1`. For a General V3 capability that record is the
-    // ProgramSet, and it is not a `CapabilityProgramV1`.
+fn a_v3_capability_release_is_a_program_set_and_not_a_flat_descriptor() {
     let fixture = open_fixture();
     let plan = plan_general_capability_activation_v3(&fixture.state).expect("plan");
     assert_eq!(
         plan.selection.capability_release().to_bytes(),
         hash(&fixture.program_set).to_bytes()
     );
-    assert!(!common_activation_seam_admits_v3(&fixture.program_set));
+    assert!(CapabilityProgramV1::decode(&fixture.program_set).is_err());
 }
 
+/// Why the seam refuses an activation that projects nothing into the tail.
+///
+/// `outer.rs` used to write `vec![0; root_state_bytes]` as the family tail.
+/// `GeneralRootV2` is refused at its magic, so that root was a bricked
+/// capability with a perfectly well-formed header -- which is exactly why the
+/// header alone can never be the admission argument, and why the seam's
+/// all-zero-tail refusal (`outer.rs`, `TradingSbfError::Root`) is the right
+/// rule rather than a convenience.
 #[test]
-fn the_seam_all_zero_tail_is_not_a_general_root() {
-    // Blocker 1, executed. `outer.rs` writes `vec![0; root_state_bytes]` as the
-    // family tail and `program-test/tests/activation.rs` asserts that the state
-    // is all zero. `GeneralRootV2` refuses it at the magic, so a root created
-    // by that seam is not one the General hot path can ever authenticate.
+fn an_all_zero_tail_is_not_a_general_root_behind_a_valid_header() {
     let zero_tail = vec![0_u8; GENERAL_ROOT_BYTES_V2];
     assert!(GeneralRootV2::decode(&zero_tail).is_err());
 
     let fixture = open_fixture();
     let plan = plan_general_capability_activation_v3(&fixture.state).expect("plan");
-    let mut seam_root = plan.composite_root.clone();
-    seam_root
+    let mut bricked = plan.composite_root.clone();
+    bricked
         .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)
         .expect("tail")
         .fill(0);
-    assert_ne!(seam_root, plan.composite_root);
+    assert_ne!(bricked, plan.composite_root);
     assert!(
         CapabilityRootHeaderV1::decode(
-            seam_root
+            bricked
                 .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
                 .expect("header")
         )
         .is_ok(),
-        "the seam's header is well formed; only the tail is unusable"
+        "the header is well formed; only the tail is unusable"
     );
 }
 
