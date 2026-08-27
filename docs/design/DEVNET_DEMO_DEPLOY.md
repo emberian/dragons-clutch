@@ -176,7 +176,15 @@ authenticates the Registry and Rent artifacts through
 ProgramData carries **no** upgrade authority — while
 `authenticate_current_core_upgrade_authority` in the same function requires Core
 to *still hold* an authority that signs. Both conditions are live in one
-instruction. Therefore:
+instruction.
+
+The minimal constraint is therefore only: *Registry and Rent immutable before
+Core init; Core mutable during it and immutable before activation; Claims,
+Trading, Resolution and Custody immutable before their own activation.* The
+schedule below over-constrains that deliberately, so that **at most one upgrade
+authority is live at any moment** and it is Core's ephemeral one. A deploy day
+with six spare authorities lying around is a deploy day with six ways to lose
+the protocol.
 
 ```text
 1. Registry     deploy → verify → set-upgrade-authority --final
