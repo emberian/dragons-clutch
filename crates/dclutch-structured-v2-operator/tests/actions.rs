@@ -4,17 +4,20 @@
 mod support;
 
 use dclutch_structured_v2_contract::{
-    StructuredActionV2, StructuredHotAccountRefV2, StructuredHotCandidateInputV2,
-    StructuredHotCandidateV2, StructuredHotRentCloseV2, StructuredHotTokenEffectV2,
-    StructuredHotTokenKindV2,
+    STRUCTURED_ACCOUNT_ACTOR_V2, STRUCTURED_ACCOUNT_RECEIPT_MINT_V2,
+    STRUCTURED_ACCOUNT_RECEIPT_TOKEN_V2, STRUCTURED_ACCOUNT_RENT_CREDIT_V2,
+    STRUCTURED_ACCOUNT_RENT_PROGRAM_V2, STRUCTURED_ACCOUNT_ROOT_V2,
+    STRUCTURED_ACCOUNT_TOKEN_PROGRAM_V2, StructuredActionV2, StructuredFrameSpecV2,
+    StructuredHotAccountRefV2, StructuredHotCandidateInputV2, StructuredHotCandidateV2,
+    StructuredHotRentCloseV2, StructuredHotTokenEffectV2, StructuredHotTokenKindV2,
 };
 use dclutch_structured_v2_kernel::{
     STRUCTURED_NO_COORDINATE_V2, StructuredCoordinateObservationV2, StructuredPhaseV2,
     StructuredTermsV2,
 };
 use dclutch_structured_v2_operator::{
-    Error, StructuredActionObservationV2, StructuredHotEffectCoordinatesV2, StructuredHotProfileV2,
-    StructuredIntentV2, StructuredRequestContextV2, StructuredShardAccountObservationV2,
+    Error, StructuredActionObservationV2, StructuredHotProfileV2, StructuredIntentV2,
+    StructuredRequestContextV2, StructuredShardAccountObservationV2,
     lower_structured_hot_effects_v2, lower_structured_hot_rent_close_v2, plan_structured_action_v2,
 };
 use support::{
@@ -29,17 +32,17 @@ const COEFFICIENTS: [u64; 2] = [1, 3];
 const SUPPLY: u64 = 10;
 const REVISION: u64 = 7;
 
-const TOKEN_PROGRAM_COORDINATE: u16 = 0;
-const ROOT_COORDINATE: u16 = 1;
-const OWNER_COORDINATE: u16 = 2;
-const RECEIPT_MINT_COORDINATE: u16 = 3;
-const RECEIPT_ACCOUNT_COORDINATE: u16 = 4;
-const SHARD_MINT_COORDINATE_BASE: u16 = 5;
-const HOLDER_COORDINATE_BASE: u16 = 10;
-const CUSTODY_COORDINATE_BASE: u16 = 20;
-const RENT_PROGRAM_COORDINATE: u16 = 30;
-const RENT_CREDIT_COORDINATE: u16 = 31;
-const PROFILE_WIDTH: usize = 32;
+/// Both fixture coefficients are nonzero, so the backed width IS the
+/// representation width and a backed index is its own coordinate.
+const BACKED_COORDINATES: usize = 2;
+
+fn frame() -> StructuredFrameSpecV2 {
+    StructuredFrameSpecV2::new(BACKED_COORDINATES).expect("frame")
+}
+
+fn coordinate(index: usize) -> u16 {
+    u16::try_from(index).expect("coordinate")
+}
 
 fn context(terms: StructuredTermsV2<'_>) -> StructuredRequestContextV2 {
     StructuredRequestContextV2 {
@@ -127,41 +130,78 @@ impl Observed {
     }
 }
 
-/// Dense AccountProfile expansion covering every coordinate the fixtures use.
-fn profile_keys() -> Vec<[u8; 32]> {
-    let mut keys: Vec<[u8; 32]> = (0..PROFILE_WIDTH)
+/// The AccountProfile expansion the FRAME CONTRACT specifies, at exactly the
+/// frame's own width.
+///
+/// This function used to invent its own layout -- token program at 0, root at
+/// 1, and the shard mints, holder accounts and custody accounts in three
+/// separate blocks based at 5, 10 and 20, indexed by representation coordinate.
+/// The frame contract that landed later says something different in every one
+/// of those coordinates, and interleaves the three shard accounts as one triple
+/// per BACKED coordinate.  Both were account-layout authorities and nothing
+/// made them agree, so the operator's only executable evidence was agreement
+/// with a layout the adapter would never reconstruct.  The invented constants
+/// are gone; every coordinate below is asked of `frame.rs`.
+fn profile_keys(action: StructuredActionV2) -> Vec<[u8; 32]> {
+    let spec = frame();
+    let width = spec.account_count().expect("account count");
+    // Distinct filler everywhere, so any coordinate this fixture does not name
+    // on purpose still refuses to alias one that it does.
+    let mut keys: Vec<[u8; 32]> = (0..width)
         .map(|index| identity(0x80 + u8::try_from(index).expect("index")))
         .collect();
-    let mints = shard_mints(2);
-    let assign = |keys: &mut Vec<[u8; 32]>, coordinate: u16, key: [u8; 32]| {
-        if let Some(slot) = keys.get_mut(usize::from(coordinate)) {
-            *slot = key;
-        }
+    let mut assign = |index: usize, key: [u8; 32]| {
+        *keys.get_mut(index).expect("frame coordinate") = key;
     };
-    assign(&mut keys, TOKEN_PROGRAM_COORDINATE, identity(TOKEN_PROGRAM));
-    assign(&mut keys, ROOT_COORDINATE, identity(ROOT));
-    assign(&mut keys, OWNER_COORDINATE, identity(OWNER));
-    assign(&mut keys, RECEIPT_MINT_COORDINATE, identity(RECEIPT_MINT));
-    assign(&mut keys, RENT_PROGRAM_COORDINATE, identity(RENT_PROGRAM));
-    assign(&mut keys, RENT_CREDIT_COORDINATE, identity(RENT_CREDIT));
-    for index in 0..2_u16 {
+    assign(STRUCTURED_ACCOUNT_ACTOR_V2, identity(OWNER));
+    assign(STRUCTURED_ACCOUNT_ROOT_V2, identity(ROOT));
+    assign(STRUCTURED_ACCOUNT_TOKEN_PROGRAM_V2, identity(TOKEN_PROGRAM));
+    assign(STRUCTURED_ACCOUNT_RECEIPT_MINT_V2, identity(RECEIPT_MINT));
+    assign(
+        STRUCTURED_ACCOUNT_RECEIPT_TOKEN_V2,
+        receipt_account_key(action),
+    );
+    assign(STRUCTURED_ACCOUNT_RENT_CREDIT_V2, identity(RENT_CREDIT));
+    assign(STRUCTURED_ACCOUNT_RENT_PROGRAM_V2, identity(RENT_PROGRAM));
+    let mints = shard_mints(BACKED_COORDINATES);
+    for index in 0..BACKED_COORDINATES {
+        let shard = u8::try_from(index).expect("index");
         assign(
-            &mut keys,
-            SHARD_MINT_COORDINATE_BASE + index,
-            mints.get(usize::from(index)).copied().unwrap_or_default(),
+            spec.shard_mint(index).expect("shard mint"),
+            mints.get(index).copied().expect("mint"),
         );
         assign(
-            &mut keys,
-            HOLDER_COORDINATE_BASE + index,
-            identity(HOLDER_SHARD_BASE + u8::try_from(index).expect("index")),
+            spec.actor_shard(index).expect("actor shard"),
+            identity(HOLDER_SHARD_BASE + shard),
         );
         assign(
-            &mut keys,
-            CUSTODY_COORDINATE_BASE + index,
-            identity(CUSTODY_SHARD_BASE + u8::try_from(index).expect("index")),
+            spec.custody_shard(index).expect("custody shard"),
+            identity(CUSTODY_SHARD_BASE + shard),
         );
     }
     keys
+}
+
+/// Output storage the lowering must fully overwrite; every field is wrong on
+/// purpose, so a coordinate the projection skipped cannot pass as lowered.
+fn inert_effect() -> StructuredHotTokenEffectV2 {
+    let placeholder = StructuredHotAccountRefV2::new(0, identity(TOKEN_PROGRAM)).expect("ref");
+    StructuredHotTokenEffectV2 {
+        kind: StructuredHotTokenKindV2::MintReceipts,
+        representation_coordinate: STRUCTURED_NO_COORDINATE_V2,
+        token_program: placeholder,
+        mint: placeholder,
+        source: None,
+        destination: None,
+        authority: placeholder,
+        amount: 0,
+        pre_supply: 0,
+        post_supply: 0,
+        pre_source: 0,
+        post_source: 0,
+        pre_destination: 0,
+        post_destination: 0,
+    }
 }
 
 fn receipt_account_key(action: StructuredActionV2) -> [u8; 32] {
@@ -170,59 +210,6 @@ fn receipt_account_key(action: StructuredActionV2) -> [u8; 32] {
     } else {
         identity(RECEIPT_SOURCE)
     }
-}
-
-fn effect_coordinates(
-    effects: &[dclutch_structured_v2_operator::StructuredTokenEffectPlanV2],
-) -> Vec<StructuredHotEffectCoordinatesV2> {
-    effects
-        .iter()
-        .map(|effect| {
-            let shard = effect.representation_coordinate != STRUCTURED_NO_COORDINATE_V2;
-            let index = if shard {
-                u16::try_from(effect.representation_coordinate).expect("coordinate")
-            } else {
-                0
-            };
-            StructuredHotEffectCoordinatesV2 {
-                token_program: TOKEN_PROGRAM_COORDINATE,
-                mint: if shard {
-                    SHARD_MINT_COORDINATE_BASE + index
-                } else {
-                    RECEIPT_MINT_COORDINATE
-                },
-                source: effect.source.map(|_| {
-                    if !shard {
-                        RECEIPT_ACCOUNT_COORDINATE
-                    } else if effect.kind == StructuredHotTokenKindV2::LockShards {
-                        HOLDER_COORDINATE_BASE + index
-                    } else {
-                        CUSTODY_COORDINATE_BASE + index
-                    }
-                }),
-                destination: effect.destination.map(|_| {
-                    if !shard {
-                        if effect.kind == StructuredHotTokenKindV2::CloseReceiptMint {
-                            RENT_CREDIT_COORDINATE
-                        } else {
-                            RECEIPT_ACCOUNT_COORDINATE
-                        }
-                    } else if effect.kind == StructuredHotTokenKindV2::CloseCustody {
-                        RENT_CREDIT_COORDINATE
-                    } else if effect.kind == StructuredHotTokenKindV2::LockShards {
-                        CUSTODY_COORDINATE_BASE + index
-                    } else {
-                        HOLDER_COORDINATE_BASE + index
-                    }
-                }),
-                authority: if effect.kind == StructuredHotTokenKindV2::LockShards {
-                    OWNER_COORDINATE
-                } else {
-                    ROOT_COORDINATE
-                },
-            }
-        })
-        .collect()
 }
 
 fn round_trip(action: StructuredActionV2, phase: StructuredPhaseV2, supply: u64, payouts: &[u64]) {
@@ -248,34 +235,11 @@ fn round_trip(action: StructuredActionV2, phase: StructuredPhaseV2, supply: u64,
     )
     .expect("action plan");
 
-    let keys = profile_keys();
-    let mut keys = keys;
-    if let Some(slot) = keys.get_mut(usize::from(RECEIPT_ACCOUNT_COORDINATE)) {
-        *slot = receipt_account_key(action);
-    }
+    let keys = profile_keys(action);
     let profile = StructuredHotProfileV2::new(&keys).expect("profile");
-    let coordinates = effect_coordinates(&plan.effects);
-    let mut lowered = vec![
-        StructuredHotTokenEffectV2 {
-            kind: StructuredHotTokenKindV2::MintReceipts,
-            representation_coordinate: STRUCTURED_NO_COORDINATE_V2,
-            token_program: StructuredHotAccountRefV2::new(0, identity(TOKEN_PROGRAM)).expect("ref"),
-            mint: StructuredHotAccountRefV2::new(0, identity(TOKEN_PROGRAM)).expect("ref"),
-            source: None,
-            destination: None,
-            authority: StructuredHotAccountRefV2::new(0, identity(TOKEN_PROGRAM)).expect("ref"),
-            amount: 0,
-            pre_supply: 0,
-            post_supply: 0,
-            pre_source: 0,
-            post_source: 0,
-            pre_destination: 0,
-            post_destination: 0,
-        };
-        plan.effects.len()
-    ];
-    lower_structured_hot_effects_v2(profile, &plan, &coordinates, &mut lowered)
-        .expect("lower effects");
+    let mut lowered = vec![inert_effect(); plan.effects.len()];
+    // The frame, not a hand-written table, decides where every account sits.
+    lower_structured_hot_effects_v2(profile, &plan, frame(), &mut lowered).expect("lower effects");
 
     let rent_close: Option<StructuredHotRentCloseV2> =
         if action == StructuredActionV2::ZeroSupplyRetire {
@@ -285,8 +249,6 @@ fn round_trip(action: StructuredActionV2, phase: StructuredPhaseV2, supply: u64,
                     identity(RENT_PROGRAM),
                     identity(RENT_CREDIT),
                     identity(0x99),
-                    RENT_PROGRAM_COORDINATE,
-                    RENT_CREDIT_COORDINATE,
                     40,
                 )
                 .expect("rent close"),
@@ -296,7 +258,8 @@ fn round_trip(action: StructuredActionV2, phase: StructuredPhaseV2, supply: u64,
         };
 
     let root_ref =
-        StructuredHotAccountRefV2::new(ROOT_COORDINATE, identity(ROOT)).expect("root ref");
+        StructuredHotAccountRefV2::new(coordinate(STRUCTURED_ACCOUNT_ROOT_V2), identity(ROOT))
+            .expect("root ref");
     let root_bytes = root_state(terms.terms_id(), REVISION);
     let candidate = StructuredHotCandidateV2::prepare(StructuredHotCandidateInputV2 {
         request: plan.request,
@@ -478,4 +441,196 @@ fn structured_terms_digest_is_stable() {
     let terms = structured_terms(&terms_bytes, shard);
     assert_eq!(terms.terms_id(), digest(&terms_bytes));
     assert_eq!(terms.shard_terms(), digest(&shard_bytes));
+}
+
+/// The layout this test file used to invent, kept only so that reverting to it
+/// is a failing test rather than a silent disagreement with the adapter.
+fn superseded_block_layout_keys() -> Vec<[u8; 32]> {
+    const BLOCK_WIDTH: usize = 32;
+    const BLOCK_TOKEN_PROGRAM: usize = 0;
+    const BLOCK_ROOT: usize = 1;
+    const BLOCK_OWNER: usize = 2;
+    const BLOCK_RECEIPT_MINT: usize = 3;
+    const BLOCK_RECEIPT_ACCOUNT: usize = 4;
+    const BLOCK_SHARD_MINT_BASE: usize = 5;
+    const BLOCK_HOLDER_BASE: usize = 10;
+    const BLOCK_CUSTODY_BASE: usize = 20;
+    let mut keys: Vec<[u8; 32]> = (0..BLOCK_WIDTH)
+        .map(|index| identity(0x80 + u8::try_from(index).expect("index")))
+        .collect();
+    let mut assign = |index: usize, key: [u8; 32]| {
+        *keys.get_mut(index).expect("block coordinate") = key;
+    };
+    assign(BLOCK_TOKEN_PROGRAM, identity(TOKEN_PROGRAM));
+    assign(BLOCK_ROOT, identity(ROOT));
+    assign(BLOCK_OWNER, identity(OWNER));
+    assign(BLOCK_RECEIPT_MINT, identity(RECEIPT_MINT));
+    assign(BLOCK_RECEIPT_ACCOUNT, identity(RECEIPT_DESTINATION));
+    let mints = shard_mints(BACKED_COORDINATES);
+    for index in 0..BACKED_COORDINATES {
+        let shard = u8::try_from(index).expect("index");
+        assign(
+            BLOCK_SHARD_MINT_BASE + index,
+            mints.get(index).copied().expect("mint"),
+        );
+        assign(
+            BLOCK_HOLDER_BASE + index,
+            identity(HOLDER_SHARD_BASE + shard),
+        );
+        assign(
+            BLOCK_CUSTODY_BASE + index,
+            identity(CUSTODY_SHARD_BASE + shard),
+        );
+    }
+    keys
+}
+
+#[test]
+fn the_superseded_block_layout_no_longer_expands() {
+    let shard_bytes = shard_terms_bytes(BACKED_COORDINATES, DENOMINATOR_FIXTURE);
+    let shard = shard_terms(&shard_bytes);
+    let terms_bytes = structured_terms_bytes(&COEFFICIENTS, DENOMINATOR_FIXTURE);
+    let terms = structured_terms(&terms_bytes, shard);
+    let observed = Observed::new(SUPPLY, &[0, 0]);
+    let plan = plan_structured_action_v2(
+        terms,
+        shard,
+        context(terms),
+        StructuredIntentV2 {
+            action: StructuredActionV2::Issue,
+            receipt_atoms: 4,
+        },
+        observed.observation(StructuredPhaseV2::Open, SUPPLY, StructuredActionV2::Issue),
+    )
+    .expect("action plan");
+    let keys = superseded_block_layout_keys();
+    let profile = StructuredHotProfileV2::new(&keys).expect("profile");
+    let mut lowered = vec![inert_effect(); plan.effects.len()];
+    // Every account of this expansion is a real fixture identity; it is only
+    // at the WRONG coordinate.  The frame is what refuses it.
+    assert_eq!(
+        lower_structured_hot_effects_v2(profile, &plan, frame(), &mut lowered),
+        Err(Error::AccountFrame)
+    );
+}
+
+fn shard_accounts_at(
+    base: u8,
+    coordinates: &[u32],
+    amounts: &[u64],
+) -> Vec<StructuredShardAccountObservationV2> {
+    coordinates
+        .iter()
+        .zip(amounts)
+        .enumerate()
+        .map(
+            |(backed, (coordinate, amount))| StructuredShardAccountObservationV2 {
+                representation_coordinate: *coordinate,
+                account: identity(base + u8::try_from(backed).expect("backed")),
+                amount: *amount,
+            },
+        )
+        .collect()
+}
+
+#[test]
+fn a_zero_coefficient_row_contributes_no_accounts_and_closes_the_gap() {
+    // The sharpest case for the two indexing rules: a middle row that moves
+    // nothing.  A layout keyed by REPRESENTATION coordinate would leave a hole
+    // at coordinate 1 and put the second backed row's accounts at index 2; the
+    // frame closes the gap, so the second backed row sits in triple 1.
+    const GAPPED: [u64; 3] = [1, 0, 3];
+    let shard_bytes = shard_terms_bytes(3, DENOMINATOR_FIXTURE);
+    let shard = shard_terms(&shard_bytes);
+    let terms_bytes = structured_terms_bytes(&GAPPED, DENOMINATOR_FIXTURE);
+    let terms = structured_terms(&terms_bytes, shard);
+    assert_eq!(terms.representation_width(), 3);
+
+    let rows = exact_rows(&GAPPED, SUPPLY, &[0, 0, 0]);
+    let holder = shard_accounts_at(HOLDER_SHARD_BASE, &[0, 2], &[1_000, 1_000]);
+    let custody = shard_accounts_at(CUSTODY_SHARD_BASE, &[0, 2], &[SUPPLY, SUPPLY * 3]);
+    let base = Observed::new(SUPPLY, &[0, 0]);
+    let mut observation =
+        base.observation(StructuredPhaseV2::Open, SUPPLY, StructuredActionV2::Issue);
+    observation.rows = &rows;
+    observation.holder_shard_accounts = &holder;
+    observation.custody_shard_accounts = &custody;
+
+    let plan = plan_structured_action_v2(
+        terms,
+        shard,
+        context(terms),
+        StructuredIntentV2 {
+            action: StructuredActionV2::Issue,
+            receipt_atoms: 4,
+        },
+        observation,
+    )
+    .expect("action plan");
+    // Three-wide terms, two backed rows: one receipt effect plus two shards.
+    assert_eq!(plan.effects.len(), 3);
+    assert_eq!(
+        plan.effects
+            .iter()
+            .skip(1)
+            .map(|effect| effect.representation_coordinate)
+            .collect::<Vec<_>>(),
+        vec![0, 2],
+    );
+
+    // The frame is sized by the BACKED count, not the representation width, so
+    // the zero row contributes no accounts at all.
+    let spec = StructuredFrameSpecV2::new(2).expect("frame");
+    assert_eq!(spec.account_count(), Ok(29));
+    let mints = shard_mints(3);
+    let mut keys: Vec<[u8; 32]> = (0..spec.account_count().expect("count"))
+        .map(|index| identity(0x80 + u8::try_from(index).expect("index")))
+        .collect();
+    let mut assign = |index: usize, key: [u8; 32]| {
+        *keys.get_mut(index).expect("frame coordinate") = key;
+    };
+    assign(STRUCTURED_ACCOUNT_ACTOR_V2, identity(OWNER));
+    assign(STRUCTURED_ACCOUNT_ROOT_V2, identity(ROOT));
+    assign(STRUCTURED_ACCOUNT_TOKEN_PROGRAM_V2, identity(TOKEN_PROGRAM));
+    assign(STRUCTURED_ACCOUNT_RECEIPT_MINT_V2, identity(RECEIPT_MINT));
+    assign(
+        STRUCTURED_ACCOUNT_RECEIPT_TOKEN_V2,
+        identity(RECEIPT_DESTINATION),
+    );
+    // Backed row 1 is representation coordinate 2, and its Mint goes in the
+    // SECOND triple -- the gap is closed, not preserved.
+    for (backed, coordinate) in [0_usize, 2].into_iter().enumerate() {
+        assign(
+            spec.shard_mint(backed).expect("mint"),
+            mints.get(coordinate).copied().expect("mint"),
+        );
+        assign(
+            spec.actor_shard(backed).expect("actor"),
+            identity(HOLDER_SHARD_BASE + u8::try_from(backed).expect("backed")),
+        );
+        assign(
+            spec.custody_shard(backed).expect("custody"),
+            identity(CUSTODY_SHARD_BASE + u8::try_from(backed).expect("backed")),
+        );
+    }
+    let profile = StructuredHotProfileV2::new(&keys).expect("profile");
+    let mut lowered = vec![inert_effect(); plan.effects.len()];
+    lower_structured_hot_effects_v2(profile, &plan, spec, &mut lowered).expect("lower effects");
+
+    let root_ref =
+        StructuredHotAccountRefV2::new(coordinate(STRUCTURED_ACCOUNT_ROOT_V2), identity(ROOT))
+            .expect("root ref");
+    let root_bytes = root_state(terms.terms_id(), REVISION);
+    let candidate = StructuredHotCandidateV2::prepare(StructuredHotCandidateInputV2 {
+        request: plan.request,
+        terms,
+        shard_terms: shard,
+        root_bytes: &root_bytes,
+        root: root_ref,
+        token_effects: &lowered,
+        rent_close: None,
+    })
+    .expect("candidate accepts the gapped plan");
+    assert_eq!(candidate.action(), StructuredActionV2::Issue);
+    assert_eq!(candidate.token_effects().len(), 3);
 }

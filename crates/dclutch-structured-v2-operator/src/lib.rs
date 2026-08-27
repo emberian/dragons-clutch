@@ -25,8 +25,7 @@ pub use action::{
     plan_structured_action_v2,
 };
 pub use lowering::{
-    StructuredHotEffectCoordinatesV2, StructuredHotProfileV2, lower_structured_hot_effects_v2,
-    lower_structured_hot_rent_close_v2,
+    StructuredHotProfileV2, lower_structured_hot_effects_v2, lower_structured_hot_rent_close_v2,
 };
 
 /// Stable operator refusal.

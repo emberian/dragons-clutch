@@ -5,7 +5,9 @@
 //! candidate inputs that the onchain-safe contract independently revalidates.
 
 use dclutch_structured_v2_contract::{
-    StructuredHotAccountRefV2, StructuredHotRentCloseV2, StructuredHotTokenEffectV2,
+    STRUCTURED_ACCOUNT_RENT_CREDIT_V2, STRUCTURED_ACCOUNT_RENT_PROGRAM_V2,
+    StructuredFrameEffectSlotsV2, StructuredFrameSpecV2, StructuredHotAccountRefV2,
+    StructuredHotRentCloseV2, StructuredHotTokenEffectV2, structured_frame_effect_slots_v2,
 };
 
 use crate::{Error, Result, StructuredActionPlanV2, StructuredTokenEffectPlanV2};
@@ -48,37 +50,28 @@ impl<'a> StructuredHotProfileV2<'a> {
     }
 }
 
-/// Exact profile coordinates for one Token effect.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StructuredHotEffectCoordinatesV2 {
-    /// Terms-selected Token program.
-    pub token_program: u16,
-    /// Receipt Mint or shard Mint.
-    pub mint: u16,
-    /// Source account, absent exactly when the plan has none.
-    pub source: Option<u16>,
-    /// Destination account, absent exactly when the plan has none.
-    pub destination: Option<u16>,
-    /// Root or actor authority selected by the action.
-    pub authority: u16,
-}
-
 /// Lower one already checked action plan into the onchain candidate effects.
 ///
-/// `coordinates` and `output` are caller-owned fixed storage whose lengths must
-/// equal the plan's effect count, so the projection cannot silently drop or
-/// duplicate an effect.
+/// The account coordinates are DERIVED from `frame`, never supplied: the frame
+/// contract is the single author of where an effect's accounts sit, so a caller
+/// has no way to hand this function a layout the onchain adapter would not
+/// reconstruct.  `output` is caller-owned fixed storage whose length must equal
+/// the plan's effect count, so the projection cannot silently drop or duplicate
+/// an effect, and `frame` must independently size to the same count.
 pub fn lower_structured_hot_effects_v2(
     profile: StructuredHotProfileV2<'_>,
     plan: &StructuredActionPlanV2,
-    coordinates: &[StructuredHotEffectCoordinatesV2],
+    frame: StructuredFrameSpecV2,
     output: &mut [StructuredHotTokenEffectV2],
 ) -> Result<()> {
-    if coordinates.len() != plan.effects.len() || output.len() != plan.effects.len() {
+    let effects = frame.effect_count().map_err(|_| Error::AccountFrame)?;
+    if effects != plan.effects.len() || output.len() != plan.effects.len() {
         return Err(Error::AccountFrame);
     }
+    let action = plan.request.action();
     for (index, effect) in plan.effects.iter().enumerate() {
-        let selected = coordinates.get(index).copied().ok_or(Error::AccountFrame)?;
+        let selected = structured_frame_effect_slots_v2(frame, action, index)
+            .map_err(|_| Error::AccountFrame)?;
         *output.get_mut(index).ok_or(Error::AccountFrame)? =
             lower_one_effect(profile, *effect, selected)?;
     }
@@ -86,30 +79,42 @@ pub fn lower_structured_hot_effects_v2(
 }
 
 /// Project the canonical lifecycle close into the retirement candidate.
+///
+/// Both coordinates are frame constants rather than parameters, for the same
+/// reason the effect coordinates are: the RentCredit the retirement pays into
+/// is the one the frame declares active for exactly that action.
 pub fn lower_structured_hot_rent_close_v2(
     profile: StructuredHotProfileV2<'_>,
     selected_rent_program: [u8; 32],
     rent_credit: [u8; 32],
     post_resource_digest: [u8; 32],
-    rent_program_coordinate: u16,
-    rent_credit_coordinate: u16,
     route_base: u16,
 ) -> Result<StructuredHotRentCloseV2> {
     if post_resource_digest == [0; 32] {
         return Err(Error::Rent);
     }
     Ok(StructuredHotRentCloseV2 {
-        rent_program: profile.account(rent_program_coordinate, selected_rent_program)?,
-        rent_credit: profile.account(rent_credit_coordinate, rent_credit)?,
+        rent_program: profile.account(
+            frame_coordinate(STRUCTURED_ACCOUNT_RENT_PROGRAM_V2)?,
+            selected_rent_program,
+        )?,
+        rent_credit: profile.account(
+            frame_coordinate(STRUCTURED_ACCOUNT_RENT_CREDIT_V2)?,
+            rent_credit,
+        )?,
         route_base,
         post_resource_digest,
     })
 }
 
+fn frame_coordinate(index: usize) -> Result<u16> {
+    u16::try_from(index).map_err(|_| Error::AccountFrame)
+}
+
 fn lower_one_effect(
     profile: StructuredHotProfileV2<'_>,
     effect: StructuredTokenEffectPlanV2,
-    coordinates: StructuredHotEffectCoordinatesV2,
+    coordinates: StructuredFrameEffectSlotsV2,
 ) -> Result<StructuredHotTokenEffectV2> {
     Ok(StructuredHotTokenEffectV2 {
         kind: effect.kind,
