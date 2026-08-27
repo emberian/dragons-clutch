@@ -96,6 +96,7 @@ struct Fixture {
     vault: Pubkey,
     external_source: Pubkey,
     external_destination: Pubkey,
+    rent_refund: Pubkey,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -417,6 +418,12 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
     .0;
     let external_source = Pubkey::new_unique();
     let external_destination = Pubkey::new_unique();
+    // The rent-refund beneficiary is deliberately NOT the transaction payer.
+    // CustodyFrameSpecV1 gives `RentRefund` WRITABLE, non-signer privileges, and
+    // the SVM reports the fee payer as a signer in every instruction it appears
+    // in, so a campaign that refunds to the payer can never satisfy the frame.
+    let rent_refund = Pubkey::new_unique();
+    add_protocol_account(&mut test, rent_refund, system_program::ID, Vec::new());
     add_protocol_account(
         &mut test,
         external_source,
@@ -452,6 +459,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
             vault,
             external_source,
             external_destination,
+            rent_refund,
         },
     )
 }
@@ -513,7 +521,7 @@ fn initialize_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
         fixture.mint,
     );
     request.payer = payer.to_bytes();
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.mint = [0; 32];
     request.token_program = [0; 32];
     request.rent_lamports =
@@ -534,7 +542,7 @@ fn open_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request.destination = fixture.vault.to_bytes();
     request.destination_vault_context = CONTEXT;
     request.payer = payer.to_bytes();
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = 1;
     request.resulting_revision = 2;
     request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
@@ -588,7 +596,7 @@ fn withdraw_request(fixture: &Fixture, expected_revision: u64) -> CustodyRequest
     request
 }
 
-fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
+fn close_request(fixture: &Fixture) -> CustodyRequestV1 {
     let mut request = request_base(
         fixture.profile,
         fixture.release_set,
@@ -600,7 +608,7 @@ fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request.source_compartment = CompartmentV1::HoardPrincipal;
     request.source = fixture.vault.to_bytes();
     request.source_vault_context = CONTEXT;
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = 5;
     request.resulting_revision = 6;
     request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
@@ -608,11 +616,7 @@ fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request
 }
 
-fn close_replay_request(
-    fixture: &Fixture,
-    payer: Pubkey,
-    expected_revision: u64,
-) -> CustodyRequestV1 {
+fn close_replay_request(fixture: &Fixture, expected_revision: u64) -> CustodyRequestV1 {
     let mut request = request_base(
         fixture.profile,
         fixture.release_set,
@@ -623,7 +627,7 @@ fn close_replay_request(
     request.operation = OperationV1::CloseReplay;
     request.mint = [0; 32];
     request.token_program = [0; 32];
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = expected_revision;
     request.resulting_revision = expected_revision + 1;
     request.rent_lamports =
@@ -730,9 +734,11 @@ fn wrapper_instruction(
             AccountMeta::new(fixture.vault, false),
             AccountMeta::new_readonly(fixture.custody_authority, false),
             AccountMeta::new_readonly(fixture.profile.token_program(), false),
-            AccountMeta::new(payer, false),
+            AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false),
         ]),
-        OperationV1::CloseReplay => accounts.push(AccountMeta::new(payer, false)),
+        OperationV1::CloseReplay => {
+            accounts.push(AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false));
+        }
     }
     let mut data = Vec::with_capacity(dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 + 1);
     data.push(u8::from(fail_after));
@@ -848,7 +854,7 @@ async fn campaign(profile: Profile) {
         &mut context,
         wrapper_instruction(
             &fixture,
-            close_replay_request(&fixture, payer, 2),
+            close_replay_request(&fixture, 2),
             payer,
             false,
         ),
@@ -1011,7 +1017,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, close_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, close_request(&fixture, payer), payer, false),
+        wrapper_instruction(&fixture, close_request(&fixture), payer, false),
     )
     .await
     .expect("close transaction");
@@ -1037,7 +1043,7 @@ async fn campaign(profile: Profile) {
         &mut context,
         wrapper_instruction(
             &fixture,
-            close_replay_request(&fixture, payer, 5),
+            close_replay_request(&fixture, 5),
             payer,
             false,
         ),
@@ -1050,7 +1056,7 @@ async fn campaign(profile: Profile) {
         replay_before_close
     );
 
-    let mut foreign = close_replay_request(&fixture, payer, 6);
+    let mut foreign = close_replay_request(&fixture, 6);
     foreign.caller_role = CallerRoleV1::Claims;
     let (accepted, foreign_close_cu) = submit(
         &mut context,
@@ -1068,7 +1074,7 @@ async fn campaign(profile: Profile) {
         &mut context,
         wrapper_instruction(
             &fixture,
-            close_replay_request(&fixture, payer, 6),
+            close_replay_request(&fixture, 6),
             payer,
             false,
         ),
