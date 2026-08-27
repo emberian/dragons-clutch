@@ -161,9 +161,220 @@ derivations. It is **not** a `hot_v3.rs` edit -- the four-role match is
 untouched -- but it **is** a Trading-program edit, so §6's "no `hot_v3.rs`
 change" is literally true and misleading in spirit.
 
-This record does not choose. It records that the choice exists, that it
+This record did not choose. It recorded that the choice exists, that it
 determines every byte of the effect program's route template, and that it must
 therefore be made **before** the encoder is written, not during.
+
+## 3b. AMENDMENT: Option A is taken, and the binding requirement it rides is SATISFIED
+
+Amended by the `STRUCT-CHILD` lane on 2026-08-27, before any encoder byte was
+written, per §6's instruction that "whoever writes the encoder amends §3a with
+the option taken and the reason, first."
+
+**Option A is taken.** Structured routes through the existing Rational child
+ABI. Zero new program code in `programs/dclutch-trading-sbf` or
+`programs/dclutch-claims-sbf`; no new request magic; no new `ReceiptKindV3`
+variant; `hot_v3.rs` untouched under the four-role match, as §6 already said.
+
+### The requirement that rode the choice
+
+The choice was conditional on one thing: the adopted authority's seeds must
+bind a per-family context, so that cross-family substitution refuses. If the
+Rational authority's seed tuple could not express that without a **new seed
+component**, the lane was to stop, because a seed addition is protocol work
+needing its own ruling.
+
+**Read the tuple.** The Rational representation authority -- the PDA that signs
+every Token CPI in the route -- is derived at
+`programs/dclutch-claims-sbf/src/rational_representation_v2.rs:486` and again
+at `:1141`, and identically in the lifecycle route at
+`programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:376` and `:1145`:
+
+```rust
+Pubkey::find_program_address(
+    &[RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, &header.descriptor_id],
+    program_id,          // the Claims program
+)
+```
+
+Two components: one domain constant
+(`b"dclutch:rational-authority:v2"`,
+`crates/dclutch-rational-representation-v2-kernel/src/lib.rs:70`) and one
+variable, `descriptor_id`. There is no context component, and there is no
+unused one.
+
+**`descriptor_id` is a sufficient per-family context, and it needs no new seed.**
+It is the SHA-256 content identity of a `RepresentationDescriptorV2` record,
+and the whole physical namespace of the route hangs off it. Every one of these
+is re-derived inside the Claims program from `header.descriptor_id` and
+compared against the supplied account, so naming descriptor `D` gives access to
+`D`'s objects and to nothing else:
+
+| resource | seeds | site |
+|---|---|---|
+| representation authority | `(domain, descriptor_id)` | `rational_representation_v2.rs:486` |
+| shard Mint | `(RATIONAL_SHARD_MINT_SEED_V2, descriptor_id, outcome_le)` | `:975` |
+| Structured shard custody Token account | `(RATIONAL_STRUCTURED_CUSTODY_SEED_V2, descriptor_id, outcome_le)` | `:988` |
+| Claims custody owner | `ProtocolPositionClaimsCapabilitySeedsV2::new(descriptor_id, outcome)` | `:310` |
+| replay record | `(RATIONAL_REPLAY_SEED_V2, descriptor_id, actor)` | `:743` |
+
+and the descriptor is itself admitted against exactly one Market:
+`authenticate_rational_product_v3` (`rational_product_v3.rs:154-166`) refuses
+unless `admission.market_id() == header.market`,
+`admission.product_id() == market.product_instance_id`,
+`admission.semantic_basis_id() == market.basis_id`,
+`admission.receipt_mint() == header.receipt_mint` and
+`admission.representation_authority() == header.representation_authority`,
+with the Market aggregate itself pinned at
+`(LIABILITY_BASIS_MARKET_SEED_V2, header.market)`.
+
+So the hostile §3a was worried about -- an authority minted in one family's
+context reaching into another family's shards -- **cannot be constructed**:
+there is no authority that exists independently of a descriptor to bring.
+
+**The evidence that no new seed component is needed is also the evidence that
+none could be added cheaply.** The descriptor preimage
+(`crates/dclutch-rational-representation-v2-kernel/src/lib.rs:740-782`) has
+exactly ten reserved bytes -- six at `DESCRIPTOR_RESERVED_HEADER_OFFSET` and
+four at `DESCRIPTOR_RESERVED_OFFSET` -- and `decode` runs `require_zero` over
+both. A 32-byte Structured `terms_id` does not fit in ten bytes, and would be
+refused at decode even if it did. Extending the tuple would have meant either a
+new component under `RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2` (moving every
+live Rational authority address) or `DESCRIPTOR_MAGIC_V3` -> V4 (moving every
+descriptor_id, hence every shard Mint, custody account, Position and replay
+record for every live representation). Both are exactly the class of work §3a
+said needed its own ruling. Neither is required.
+
+### What the ruling cost, stated in full -- it is more than §3a said
+
+§3a said the cost was that Structured "would adopt Rational's authority PDA and
+`seeds.rs`'s claim that the Structured root 'is simultaneously the replay
+record, the receipt Mint authority and the shard custody owner' becomes dead".
+That understated it in three ways, and the amendment records all three so the
+identity rework is done against the truth rather than against §3a.
+
+1. **All three Structured derivations lose their referent, not just the Mint
+   authority.** `STRUCTURED_ROOT_PDA_SEED_V2`,
+   `STRUCTURED_RECEIPT_MINT_PDA_SEED_V2` and
+   `STRUCTURED_SHARD_CUSTODY_PDA_SEED_V2` are all replaced by descriptor-keyed
+   Rational derivations. `terms_id` -- the Structured root's identity --
+   appears in no seed tuple, no descriptor field, and no request header field,
+   and is read by no on-chain program. It survives as a host-side name for a
+   `descriptor_id`, and `seeds.rs` must say so.
+
+2. **Replay stops being a property of the node and becomes a property of the
+   pair.** `seeds.rs` says the Structured root "is one per finalized terms
+   record and carries no owner: replay is a property of the node, not of an
+   actor." Rational's replay is `(RATIONAL_REPLAY_SEED_V2, descriptor_id,
+   actor)` -- one record **per actor per representation**. That sentence is
+   false under Option A. It is a semantics change, not a renaming.
+
+3. **The receipt Mint authority is adopted in TWO Token-2022 roles, not one.**
+   The representation authority is the Mint authority for `MintReceipt`
+   (`mint_to_checked`, `:1239`) *and* the permissioned-burn authority for
+   `BurnReceipt` (`permissioned_burn_instruction::burn_checked`, `:1362`,
+   where the PDA is the burn authority and the ACTOR is the token owner).
+   Founding must configure both roles on the receipt Mint, or `BurnReceipt`
+   fails at the Token program with the descriptor already committed.
+
+### Two divergences the encoder must absorb, found by reading the wire
+
+Neither is a blocker; both would have been expensive to find during encoding.
+
+**The six kinds are not six `TokenEffectStyleV2` kinds -- they are four plus
+two on a different wire.** `StructuredHotTokenKindV2`
+(`structured-v2-contract/src/hot_v2.rs:92`) and `TokenEffectStyleV2`
+(`rational-representation-v2-contract/src/plan.rs:35`) map:
+
+| Structured kind | Rational | wire |
+|---|---|---|
+| `MintReceipts` | `TokenEffectStyleV2::MintReceipt` | representation, `IssueStructured` |
+| `BurnReceipts` | `TokenEffectStyleV2::BurnReceipt` | representation, `UnwrapStructured` |
+| `LockShards` | `TokenEffectStyleV2::TransferShardToStructured` | representation, `IssueStructured` |
+| `ReleaseShards` | `TokenEffectStyleV2::TransferShardFromStructured` | representation, `UnwrapStructured` |
+| `CloseCustody` | `LifecycleActionV2::RetireCoordinate` | **lifecycle** |
+| `CloseReceiptMint` | `LifecycleActionV2::RetireReceipt` | **lifecycle** |
+
+The two closure kinds are not `TokenEffectStyleV2` members at all, which is the
+mechanical reason §6's last bullet is right that `ZeroSupplyRetire` is a second
+encoder. Conversely `TokenEffectStyleV2::{MintShard, BurnShard}` are
+**unreachable from Structured**: they belong to `Denominate`/`Reconstitute`,
+which create and destroy shards. Structured only ever moves shards that exist.
+
+**`Issue`'s effect ordering INVERTS.**
+`dclutch-structured-v2-operator::build_supply_effects` (`action.rs:308`) pushes
+the receipt effect first and then sweeps the shards, for both Issue and Unwrap.
+`TokenEffectIterV2` (`plan.rs:306`) emits:
+
+- `IssueStructured`: `TransferShardToStructured` at cursors `0..K-1`, then
+  `MintReceipt` at cursor `K` -- **shards first, receipt last**.
+- `UnwrapStructured`: `BurnReceipt` at cursor `0`, then
+  `TransferShardFromStructured` at cursors `1..K` -- receipt first.
+
+So Unwrap agrees with Structured's plan order and **Issue is reversed**. The
+ordering is not negotiable on the wire: the callee indexes the asset row from
+the cursor (`asset_index = cursor` when issuing, `cursor - 1` when unwrapping,
+`plan.rs:395`), so an out-of-order effect reads the wrong asset row. Structured
+must re-order its Issue plan; §2's "receipt-first-except-retirement" rule
+becomes "receipt-LAST for Issue, receipt-first for Unwrap". Note that the
+strictly ascending shard sweep is preserved for free, because the cursor is the
+row index.
+
+Also confirmed against the code, because the encoder depends on it: the callee
+derives every effect. `K_i = c_i * S` is `asset.coefficient.checked_mul(header.quantity)`
+at `plan.rs:263`, and `TokenEffectIterV2` synthesises the whole effect
+sequence from the request header and asset rows. The encoder emits a request
+header plus `K` asset rows and nothing else -- no effect list crosses the wire.
+
+### The executable ceiling is K = 3, it is hard, and it is a Product-width cap
+
+§6 already said the nearest twin caps at `K = 3`. Two things sharpen that into
+a campaign constraint, and both are refusals rather than guidance.
+
+**`K` is the full Product outcome width, not the count of backed coordinates.**
+`RepresentationRequestV2::validate` (`request-contract/src/request.rs:470-481`)
+refuses `IssueStructured`/`UnwrapStructured` unless
+`asset_count == outcome_count` exactly, with `selected_outcome == u32::MAX`;
+only the selected-outcome actions take `asset_count == 1`. Structured's own
+model sweeps only nonzero-coefficient coordinates. On this wire every outcome
+needs a full asset row **and its materialized account quadruple** (shard Mint,
+actor token account, custody token account, Claims Position) even at
+coefficient zero, where `prepare` computes `effect_amount = 0` and a
+zero-amount `transfer_checked` still executes and still costs CU.
+
+**The bound is the RequestProfile artifact, and `K = 4` is refused with 8 bytes
+to spare at `K = 3`.** `REQUEST_PROFILE_MAX_BYTES_V1 = 1312`
+(`crates/dclutch-request-profile-contract/src/generated.rs:4`) bounds one
+serialized RequestProfile V1: `32 + ops * 24`, enforced at
+`request-profile-contract/src/encode.rs:253` and `src/lib.rs:195`. So
+`ops <= (1312 - 32) / 24 = 53`. The canonical projection of a
+`RepresentationRequestV2` is `29 + 8K` operations
+(`open_structured_v3.rs:131-132`, asserted at `:674-678`; the 29 decomposes as
+13 `require_*` + 9 `project_identity` + 5 `project_u64` + 2 `project_u32`).
+Therefore `K = 3` gives 53 operations and 1,304 bytes -- **8 bytes of slack,
+which is not a fourth operation (24 bytes)** -- and `K = 4` gives 61 operations
+and 1,496 bytes, refused at `encode.rs:253`. Structured projects the identical
+request layout, so it inherits the identical 29, and the ceiling is not
+negotiable by encoding more cleverly.
+
+Note the ceiling belongs to the RequestProfile and **not** to the effect
+program: `encode_effect` emits `17 + 8K` operations
+(`open_structured_v3.rs:135-136`, asserted at `:921-925`) and no byte bound on
+`EffectProgramV4` exists in `dclutch-effect-kernel`. The AccountProfile is not
+binding either -- `48 + 16*(37 + 4K) + 16` admits `K = 10` under the same 1,312.
+Only the RequestProfile bites.
+
+**So: Structured on the Rational wire is limited to Products of outcome width
+`N <= 3`**, and `STRUCTURED_HOT_MAX_TOKEN_EFFECTS_V2 = 257` remains what §6
+called it -- a capacity-profile measurement with no executable meaning.
+
+Widths for anyone sizing artifacts: request `488 + 160K`
+(`request-contract/src/generated.rs:3-4`), so 968 bytes at `K = 3`; effect
+program `32 + 32 + 24*(17 + 8K) + 488 + 160K`, wrapped in a 24-byte V4
+envelope, so 2,040 bytes at `K = 3`; lifecycle request
+`400 + 272 * coordinate_count`
+(`lifecycle-contract/src/lib.rs:35,37`, asserted at `:497-503`), which carries
+no cap of its own and is bounded only by its own caller's profile.
 
 ## 4. `frame.rs` is two objects, and only one of them is an artifact input
 
@@ -247,7 +458,10 @@ slot assignment carry over unchanged; they were never in dispute.
   **The §3a child-ABI choice sits ahead of even that.** It decides the route
   template the effect program patches, so choosing it late invalidates the
   first item in the chain and therefore all of them. Whoever writes the encoder
-  amends §3a with the option taken and the reason, first.
+  amends §3a with the option taken and the reason, first. **Done: §3b, Option
+  A, 2026-08-27.** The chain below is now unblocked, and the route template it
+  patches is a `RepresentationRequestV2` (representation wire) or a
+  `LifecycleRequestV2` (retirement wire).
 
 - The mechanical shape of the encoder, once the ABI is chosen, is settled by
   the nearest twin (`dclutch-bearer-v2-operator::open_structured_v3::encode_effect`):
