@@ -150,6 +150,17 @@ solana program deploy --url "$URL" --buffer "$BUFFER" \
 solana program show "$PROGRAM_ID" --url "$URL"
 ```
 
+**Operational, not measured.** ~4,670 `Write` transactions will not all land
+first time on a public endpoint. `write-buffer` resumes into the *same* buffer,
+so a failed run is retried with `--buffer <SAME_KEYPAIR>` rather than restarted
+— which is the whole reason to pass an explicit buffer keypair instead of
+letting the CLI pick a random address, because a random buffer that fails
+halfway is an orphan you must find again to reclaim. `--use-rpc` avoids TPU
+submission drops at the cost of throughput, and `--max-sign-attempts` (default
+5, ~5 minutes of resigning) is the knob when blockhashes expire under load.
+Verify the buffer contents (step 2) after *any* retried write, not just a clean
+one.
+
 ### 2.3 Verification between deploy and revocation
 
 This is the last moment anything is recoverable, so check all of it:
