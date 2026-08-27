@@ -55,7 +55,36 @@ use crate::{
 
 const RUN_SPEC_SCHEMA_V2: &str = "dclutch-local-successor-run-spec-v2";
 const RUN_EVIDENCE_SCHEMA_V2: &str = "dclutch-local-successor-run-evidence-v2";
-const EXPECTED_RPC_URL: &str = "http://127.0.0.1:20890/";
+/// The historical origin, and still the default nothing has to ask for.
+///
+/// # Why this stopped being a constant
+///
+/// This used to be `EXPECTED_RPC_URL`, a hardcoded `http://127.0.0.1:20890/`
+/// that `validate_spec` required a run spec to equal exactly. That made a
+/// local-validator campaign a SINGLE GLOBAL SLOT on the machine: three lanes
+/// contending for one socket, losing six-minute races to each other, and a
+/// leaked validator blocking the whole repository's tier-1 path.
+///
+/// Nothing about the protocol wanted that. The origin is in no authenticated
+/// material — not in the keypair derivation (`seed.rs` reads the origin only to
+/// decide whether a seed is ADMISSIBLE, never to derive from it), not in a
+/// program address, not in a semantic release ID, not in an artifact
+/// attestation, not in the genesis plan. It was configuration wearing a
+/// constant's clothes.
+///
+/// What the constant DID buy is real and is kept: this process must talk to THE
+/// VALIDATOR IT STARTED and never to some other process that happens to answer
+/// on a loopback socket. That is now enforced by TELLING rather than by
+/// assuming — the spec's origin is passed down to the launcher as `--rpc-port`,
+/// the port is proved free before the launch, and the healthy RPC origin is
+/// compared back against the spec — instead of two sides independently
+/// believing in the same magic number.
+const DEFAULT_RPC_PORT: u16 = 20890;
+/// The launcher derives a 42-port block from its base (`BASE + 41` is the top
+/// of its dynamic range), so a base above this cannot be served at all.
+const MAX_RPC_PORT: u16 = 65_494;
+/// Below 1024 needs privileges the launcher deliberately never has.
+const MIN_RPC_PORT: u16 = 1024;
 const AUTHORITY_LAMPORTS: u64 = 5_000_000_000;
 const VALIDATOR_READY_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,7 +100,12 @@ pub(crate) struct ValidatorChild {
 }
 
 impl ValidatorChild {
-    fn spawn(spec: &SuccessorRunSpec, plan: &SuccessorPlan, log_path: &Path) -> Result<Self> {
+    fn spawn(
+        spec: &SuccessorRunSpec,
+        plan: &SuccessorPlan,
+        log_path: &Path,
+        rpc_port: u16,
+    ) -> Result<Self> {
         if plan.core_bootstrap.upgrade_authority == Pubkey::default().to_string() {
             return Err(Error::new("refusing zero in-memory Core authority"));
         }
@@ -91,6 +125,11 @@ impl ValidatorChild {
         let mut command = Command::new(&spec.launcher);
         command
             .arg("start")
+            // TELL the launcher which origin to serve rather than trusting that
+            // both sides independently believe in the same magic number. The
+            // launcher derives its whole port block from this base.
+            .arg("--rpc-port")
+            .arg(rpc_port.to_string())
             .arg("--ledger")
             .arg(&spec.ledger)
             .arg("--account-dir")
@@ -118,7 +157,7 @@ impl ValidatorChild {
         Ok(Self { child })
     }
 
-    fn wait_for_rpc(&mut self, plan: &SuccessorPlan) -> Result<Rpc> {
+    fn wait_for_rpc(&mut self, plan: &SuccessorPlan, rpc_url: &str) -> Result<Rpc> {
         let expected_programdata = pubkey(&plan.core.programdata_id)?;
         let expected_hash = &plan.core_bootstrap.genesis_programdata_sha256;
         let deadline = Instant::now() + VALIDATOR_READY_TIMEOUT;
@@ -132,16 +171,17 @@ impl ValidatorChild {
                     "successor validator exited before exact health: {status}"
                 )));
             }
-            if let Ok(mut rpc) = Rpc::connect(EXPECTED_RPC_URL)
+            if let Ok(mut rpc) = Rpc::connect(rpc_url)
                 && let Ok(account) = rpc.required_account(expected_programdata, "Core ProgramData")
                 && hex(&sha2::Sha256::digest(&account.data)) == *expected_hash
             {
                 return Ok(rpc);
             }
             if Instant::now() >= deadline {
-                return Err(Error::new(
-                    "successor validator did not expose the exact prepared Core ProgramData within 60 seconds",
-                ));
+                return Err(Error::new(format!(
+                    "successor validator at {rpc_url} did not expose the exact prepared Core \
+                     ProgramData within 60 seconds"
+                )));
             }
             thread::sleep(Duration::from_millis(250));
         }
@@ -253,7 +293,8 @@ pub(crate) fn found_through_open(
     // TEST-ONLY affordance whose safety depends on an unrelated check upstream
     // is one refactor away from not being safe at all.
     let forge = KeyForge::parse(keypair_seed, &spec.rpc_url)?;
-    ensure_rpc_port_free()?;
+    let (rpc_url, rpc_port) = rpc_origin(&spec.rpc_url)?;
+    ensure_rpc_port_free(rpc_port)?;
 
     let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
     let plan = crate::plan::prepare(prepare_args(&spec, authority.pubkey())?)?;
@@ -266,10 +307,13 @@ pub(crate) fn found_through_open(
     let plan_bytes = fs::read(&spec.plan)?;
     let plan_sha256 = hex(&sha2::Sha256::digest(&plan_bytes));
     let validator_log = validator_log_path(&spec)?;
-    let mut validator = ValidatorChild::spawn(&spec, &plan, &validator_log)?;
-    let mut rpc = validator.wait_for_rpc(&plan)?;
-    if rpc.url() != EXPECTED_RPC_URL {
-        return Err(Error::new("healthy RPC origin changed after launch"));
+    let mut validator = ValidatorChild::spawn(&spec, &plan, &validator_log, rpc_port)?;
+    let mut rpc = validator.wait_for_rpc(&plan, &rpc_url)?;
+    if rpc.url() != rpc_url {
+        return Err(Error::new(format!(
+            "healthy RPC origin changed after launch: asked for {rpc_url}, answering on {}",
+            rpc.url()
+        )));
     }
 
     let observed_slots = observe_deployment_slots(&mut rpc, &plan)?;
@@ -1078,12 +1122,7 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
         return Err(Error::new("unsupported successor run-spec schema"));
     }
     crate::market::validate_market_input(&spec.market)?;
-    let rpc = validate_loopback_url(&spec.rpc_url)?;
-    if rpc.as_str() != EXPECTED_RPC_URL {
-        return Err(Error::new(format!(
-            "successor launcher is pinned to exact RPC origin {EXPECTED_RPC_URL}"
-        )));
-    }
+    let _ = rpc_origin(&spec.rpc_url)?;
     validate_existing_canonical_file(Path::new(&spec.launcher), "launcher")?;
     for (label, input) in [
         ("registry", &spec.registry),
@@ -1135,17 +1174,50 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
     Ok(())
 }
 
-fn ensure_rpc_port_free() -> Result<()> {
-    let address: SocketAddr = "127.0.0.1:20890"
-        .parse()
-        .map_err(|error| Error::new(format!("internal RPC socket: {error}")))?;
+/// The campaign's own RPC origin, normalized, with the port it names.
+///
+/// One owner for "which origin is this run allowed to use". The host rule is
+/// unchanged and is `validate_loopback_url`'s: an explicit-port, credential-free
+/// loopback HTTP origin. On top of that this requires the host to be literal
+/// `127.0.0.1`, because that is the only interface the launcher binds — a spec
+/// naming `localhost` or `[::1]` would pass the loopback rule and then fail to
+/// reach a validator listening only on the dotted-quad.
+///
+/// The port is free to move; it is the thing that used to be pinned and is not
+/// authenticated anywhere. It is bounded by what the launcher's 42-port block
+/// can actually be derived from.
+fn rpc_origin(rpc_url: &str) -> Result<(String, u16)> {
+    let url = validate_loopback_url(rpc_url)?;
+    let host = url.host_str().unwrap_or_default();
+    if host != "127.0.0.1" {
+        return Err(Error::new(format!(
+            "successor RPC origin must be on 127.0.0.1, which is the only interface the \
+             launcher binds; the spec names {host}"
+        )));
+    }
+    let port = url
+        .port()
+        .ok_or_else(|| Error::new("successor RPC origin must name an explicit port"))?;
+    if !(MIN_RPC_PORT..=MAX_RPC_PORT).contains(&port) {
+        return Err(Error::new(format!(
+            "successor RPC port {port} is outside {MIN_RPC_PORT}-{MAX_RPC_PORT}; the launcher \
+             derives a 42-port block from it and the block must fit under 65535"
+        )));
+    }
+    Ok((url.as_str().to_owned(), port))
+}
+
+fn ensure_rpc_port_free(port: u16) -> Result<()> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
     match TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
-        Ok(_) => Err(Error::new(
-            "refusing to launch while another process listens on 127.0.0.1:20890",
-        )),
+        Ok(_) => Err(Error::new(format!(
+            "refusing to launch while another process listens on 127.0.0.1:{port}. Pick a free \
+             base with the run spec's rpc_url: this campaign is no longer pinned to \
+             {DEFAULT_RPC_PORT} and N campaigns can share one machine on disjoint bases."
+        ))),
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(()),
         Err(error) => Err(Error::new(format!(
-            "could not prove successor RPC port is free: {error}"
+            "could not prove successor RPC port {port} is free: {error}"
         ))),
     }
 }
@@ -1512,10 +1584,50 @@ mod tests {
     }
 
     #[test]
-    fn rpc_origin_is_the_launcher_fixed_loopback_origin() {
-        assert!(validate_loopback_url(EXPECTED_RPC_URL).is_ok());
-        assert!(validate_loopback_url("http://8.8.8.8:20890/").is_err());
-        assert!(validate_loopback_url("https://127.0.0.1:20890/").is_err());
+    fn the_rpc_origin_is_any_loopback_port_and_nothing_else() {
+        // The DEFAULT still resolves, byte for byte, so nothing that never
+        // asked for a port notices this became a parameter.
+        assert_eq!(
+            rpc_origin("http://127.0.0.1:20890/").expect("default origin"),
+            ("http://127.0.0.1:20890/".to_owned(), DEFAULT_RPC_PORT)
+        );
+        // And so does any other admissible base, which is the whole point: N
+        // campaigns on one machine instead of one global slot.
+        assert_eq!(
+            rpc_origin("http://127.0.0.1:31890/").expect("nonstandard origin"),
+            ("http://127.0.0.1:31890/".to_owned(), 31890)
+        );
+        assert_eq!(
+            rpc_origin(&format!("http://127.0.0.1:{MIN_RPC_PORT}/"))
+                .expect("the lowest admissible base")
+                .1,
+            MIN_RPC_PORT
+        );
+        assert_eq!(
+            rpc_origin(&format!("http://127.0.0.1:{MAX_RPC_PORT}/"))
+                .expect("the highest admissible base")
+                .1,
+            MAX_RPC_PORT
+        );
+
+        // What is NOT relaxed. The host rule is unchanged...
+        assert!(rpc_origin("http://8.8.8.8:20890/").is_err());
+        assert!(rpc_origin("https://127.0.0.1:20890/").is_err());
+        assert!(rpc_origin("http://127.0.0.1:20890/path").is_err());
+        assert!(rpc_origin("http://user@127.0.0.1:20890/").is_err());
+        assert!(rpc_origin("http://127.0.0.1/").is_err());
+        // ...and it is TIGHTER than validate_loopback_url alone, because the
+        // launcher binds 127.0.0.1 and nothing else. Both of these are honest
+        // loopback origins that no validator of ours would answer on.
+        assert!(validate_loopback_url("http://localhost:20890/").is_ok());
+        assert!(rpc_origin("http://localhost:20890/").is_err());
+        assert!(validate_loopback_url("http://[::1]:20890/").is_ok());
+        assert!(rpc_origin("http://[::1]:20890/").is_err());
+
+        // A base whose 42-port block would not fit under 65535 is refused
+        // here rather than by a launcher that has already spent a minute.
+        assert!(rpc_origin(&format!("http://127.0.0.1:{}/", MAX_RPC_PORT + 1)).is_err());
+        assert!(rpc_origin(&format!("http://127.0.0.1:{}/", MIN_RPC_PORT - 1)).is_err());
     }
 
     #[test]

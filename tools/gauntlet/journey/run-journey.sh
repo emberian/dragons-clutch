@@ -24,11 +24,14 @@
 #
 # WHAT THIS PRODUCES IS LOCAL-VALIDATOR EVIDENCE. Not devnet, not mainnet.
 # Nothing here signs with a persisted key, funds an external account, publishes,
-# or deploys anywhere but a fresh localhost ledger on 127.0.0.1:20890.
+# or deploys anywhere but a fresh localhost ledger on 127.0.0.1, at the base
+# --rpc-port names (default 20890).
 #
-# `--mode full` of run.sh and this script both take the SINGLE GLOBAL 20890
-# slot. Coordinate on the wave board; never kill a solana-test-validator whose
-# --ledger is not under your own --work root.
+# There is no longer a SINGLE GLOBAL SLOT: `--rpc-port auto` here and in
+# `run.sh --mode full` each take a free 42-port block, so these run beside each
+# other. The DEFAULT is still 20890, so two runs that both take the default
+# still contend -- and still never kill a solana-test-validator whose --ledger
+# is not under their own --work root.
 set -euo pipefail
 
 usage() {
@@ -36,6 +39,13 @@ usage() {
 usage: tools/gauntlet/journey/run-journey.sh [options]
 
   --repo PATH           source repository (default: this script's repository)
+  --rpc-port PORT|auto  the validator origin for this run (default 20890, or
+                        $DCLUTCH_GAUNTLET_RPC_PORT). `auto` takes a free base
+                        so this can run beside another campaign.
+  --ledger PATH         the census ledger to fold this run into
+                        (default: --gauntlet-work/out/ledger.json). Give a
+                        concurrent run its own home, or share one and let the
+                        lock serialise the fold.
   --work PATH           journey scratch root (default: /private/tmp/dclutch-journey)
   --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger this
                         tier reads and accumulates into
@@ -63,15 +73,19 @@ GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
 COMMIT="HEAD"
 HOLDERS="4"
 ALLOW_STALE_PINS="false"
+RPC_PORT="${DCLUTCH_GAUNTLET_RPC_PORT:-20890}"
+LEDGER_ARG=""
 # A fixed, checked-in campaign seed. It is safe here and ONLY here: the producer
-# refuses the flag outright unless the RPC endpoint is loopback, and this tier is
-# pinned to 127.0.0.1:20890. Its value is the SHA-256 of the ASCII string
+# refuses the flag outright unless the RPC endpoint is loopback, and this tier
+# only ever names a 127.0.0.1 origin. Its value is the SHA-256 of the ASCII string
 # "dclutch/gauntlet/journey/campaign-seed/v1", so it is a stated derivation
 # rather than a number somebody typed.
 KEYPAIR_SEED="$(printf '%s' 'dclutch/gauntlet/journey/campaign-seed/v1' | shasum -a 256 | cut -d' ' -f1)"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
+        --rpc-port) RPC_PORT="${2:?--rpc-port needs a value}"; shift 2 ;;
+        --ledger) LEDGER_ARG="${2:?--ledger needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --gauntlet-work) GAUNTLET_WORK="${2:?--gauntlet-work needs a value}"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
@@ -90,6 +104,45 @@ case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
 case "$HOLDERS" in ''|*[!0-9]*) echo "--holders must be a decimal count" >&2; exit 2 ;; esac
 [ "$HOLDERS" -gt 0 ] || { echo "--holders must be positive" >&2; exit 2; }
 
+# The origin. See the same block in tools/gauntlet/run.sh for why this is a
+# parameter and not a constant: it is in no authenticated material, so moving
+# it moves nothing the transcript, the witnesses or the CU budgets read.
+if [ "$RPC_PORT" = "auto" ]; then
+    RPC_PORT="$(python3 - <<'@MARK@'
+import socket
+for _ in range(64):
+    held = []
+    try:
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        base = probe.getsockname()[1]
+        if not (1024 <= base <= 65494):
+            probe.close()
+            continue
+        held.append(probe)
+        for offset in (2, 3, *range(10, 42)):
+            member = socket.socket()
+            member.bind(("127.0.0.1", base + offset))
+            held.append(member)
+    except OSError:
+        for sock in held:
+            sock.close()
+        continue
+    for sock in held:
+        sock.close()
+    print(base)
+    break
+else:
+    raise SystemExit("could not find a free 42-port block on 127.0.0.1")
+@MARK@
+)" || { echo "--rpc-port auto: no free port block" >&2; exit 2; }
+fi
+case "$RPC_PORT" in ''|*[!0-9]*) echo "--rpc-port must be a decimal port or 'auto'" >&2; exit 2 ;; esac
+[ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] || {
+    echo "--rpc-port must be 1024-65494 so the launcher's 42-port block fits under 65535" >&2
+    exit 2
+}
+
 GAUNTLET="$REPO/tools/gauntlet"
 TIER="$GAUNTLET/journey"
 SOURCE="$WORK/source"
@@ -100,7 +153,7 @@ LOGS="$WORK/logs"
 RUNS="$WORK/runs"
 JOURNEY_BIN="$HOST_TARGET/release/dclutch-journey-campaign"
 INVENTORY="$GAUNTLET_WORK/out/inventory.json"
-LEDGER="$GAUNTLET_WORK/out/ledger.json"
+LEDGER="${LEDGER_ARG:-$GAUNTLET_WORK/out/ledger.json}"
 
 mkdir -p "$WORK" "$LOGS" "$RUNS" "$ELF_DIR"
 
@@ -108,6 +161,42 @@ sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
 say() { printf '\n== %s\n' "$*"; }
 die() { printf 'journey: %s\n' "$*" >&2; exit 1; }
+
+# ------------------------------------------------------------- the ledger lock
+#
+# `census observe` is a READ-MODIFY-WRITE of one JSON file. Every family runner
+# and this script default to the same `/private/tmp/dclutch-gauntlet/out/
+# ledger.json`, so now that campaigns can run concurrently, two of them folding
+# evidence at the same moment would silently lose one side's observations --
+# a corruption that looks exactly like "that route never executed".
+#
+# `mkdir` is the lock because it is atomic on every filesystem this runs on and
+# needs no flock(1), which macOS does not ship. The holder's pid is recorded so
+# a stale lock names who to look for, and a lock older than the timeout is
+# broken rather than deadlocking a lane at 3am.
+ledger_lock() {
+    local lock="$1.lock" waited=0
+    while ! mkdir "$lock" 2>/dev/null; do
+        if [ "$waited" -ge 300 ]; then
+            local holder=""
+            [ -f "$lock/pid" ] && holder="$(cat "$lock/pid" 2>/dev/null || true)"
+            echo "ledger lock at $lock held for over 5 minutes by pid ${holder:-unknown}; breaking it" >&2
+            rm -rf "$lock"
+            continue
+        fi
+        [ "$waited" = 0 ] && echo "waiting for the ledger lock at $lock" >&2
+        sleep 1
+        waited=$((waited + 1))
+    done
+    printf '%s\n' "$$" > "$lock/pid"
+    LEDGER_LOCK_HELD="$lock"
+}
+ledger_unlock() {
+    [ -n "${LEDGER_LOCK_HELD:-}" ] && rm -rf "$LEDGER_LOCK_HELD"
+    LEDGER_LOCK_HELD=""
+}
+trap ledger_unlock EXIT
+
 
 for tool in git jq shasum python3 cargo solana-test-validator cargo-build-sbf; do
     command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
@@ -238,8 +327,8 @@ fi
 # ----------------------------------------------------------------- 4. campaign
 if python3 -c 'import socket,sys
 s=socket.socket(); s.settimeout(0.5)
-sys.exit(0 if s.connect_ex(("127.0.0.1",20890))==0 else 1)'; then
-    die "127.0.0.1:20890 is occupied; the successor launcher is pinned to that origin"
+sys.exit(0 if s.connect_ex(("127.0.0.1",int(sys.argv[1])))==0 else 1)' "$RPC_PORT"; then
+    die "127.0.0.1:$RPC_PORT is occupied. Pass --rpc-port auto to take a free base instead."
 fi
 
 # Checked AGAIN here, immediately before the campaign. The earlier check is six
@@ -247,8 +336,8 @@ fi
 # slot inside that window and the run died after paying for every artifact.
 if python3 -c 'import socket,sys
 s=socket.socket(); s.settimeout(0.5)
-sys.exit(0 if s.connect_ex(("127.0.0.1",20890))==0 else 1)'; then
-    die "127.0.0.1:20890 was taken while this run was building; re-run to reuse the stamped artifacts"
+sys.exit(0 if s.connect_ex(("127.0.0.1",int(sys.argv[1])))==0 else 1)' "$RPC_PORT"; then
+    die "127.0.0.1:$RPC_PORT was taken while this run was building; re-run to reuse the stamped artifacts, or pass --rpc-port auto"
 fi
 
 RUN="$RUNS/$(date -u '+%Y%m%dT%H%M%SZ')-${SOURCE_REVISION:0:12}-h$HOLDERS"
@@ -340,7 +429,7 @@ SPEC="$RUN/spec.json"
 {
     printf '{\n'
     printf '  "schema": "dclutch-local-successor-run-spec-v2",\n'
-    printf '  "rpc_url": "http://127.0.0.1:20890/",\n'
+    printf '  "rpc_url": "http://127.0.0.1:%s/",\n' "$RPC_PORT"
     printf '  "launcher": "%s",\n' "$LAUNCHER"
     printf '  "ledger": "%s/ledger",\n' "$RUN"
     printf '  "account_dir": "%s/accounts",\n' "$RUN"
@@ -418,12 +507,14 @@ jq -s '{campaign: "journey",
         bindings: (.[0].bindings + .[1].bindings)}' \
     "$GAUNTLET/tier1/bindings.json" "$TIER/bindings.json" > "$RUN/bindings.json"
 
+ledger_lock "$LEDGER"
 cargo run --quiet --manifest-path "$GAUNTLET/census/Cargo.toml" -- observe \
     --inventory "$INVENTORY" \
     --ledger "$LEDGER" \
     --bindings "$RUN/bindings.json" \
     --programs "$RUN/programs.json" \
     --evidence "$EVIDENCE"
+ledger_unlock
 
 say "done"
 echo "evidence:   $EVIDENCE"
