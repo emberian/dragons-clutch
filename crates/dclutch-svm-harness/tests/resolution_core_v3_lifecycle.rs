@@ -87,10 +87,10 @@ use dclutch_source_contract::{
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
-    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV2, SourceResolutionPhaseV1,
-    SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
-    WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
+    SourceCapacityProfileV1, SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2,
+    SourceSpecV1, StatisticKind, StatisticSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind,
+    WindowSpecV1,
 };
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::{Account, AccountSharedData};
@@ -755,10 +755,14 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     );
     let source_spec_bytes = source_spec_value.to_bytes();
     let source_spec_id = hash(&source_spec_bytes).to_bytes();
+    // A closed period ending at the captured publication, rather than a window
+    // pinned to that publication at both ends. The upper bound is load-bearing
+    // for every `TERMINAL_TIME + n` deadline in this file; the width is what
+    // the fixture was wrong about.
     let window_value = WindowSpecV1::new(
         source_id(source_spec_id),
         WindowKind::Terminal,
-        update_view.publish_time(),
+        update_view.publish_time() - 300,
         update_view.publish_time(),
         10,
         1,

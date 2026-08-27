@@ -305,7 +305,7 @@ mod tests {
             id(33),
             id(34),
         );
-        let window = WindowSpecV1::new(id(2), crate::WindowKind::Terminal, 9, 9, 1, 0, id(35))
+        let window = WindowSpecV1::new(id(2), crate::WindowKind::Terminal, 3, 9, 1, 0, id(35))
             .expect("window");
         let statistic = StatisticSpecV1::new(
             id(31),
