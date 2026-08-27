@@ -13,6 +13,7 @@ description = "Emits the browser's DCLTGMF1 golden vectors from the first-party 
 
 [dependencies]
 dclutch-market-core-codec = { path = "../../../../../crates/dclutch-market-core-codec" }
+dclutch-source-contract = { path = "../../../../../crates/dclutch-source-contract" }
 
 [[bin]]
 name = "dclutch-web-founding-vector-generator"

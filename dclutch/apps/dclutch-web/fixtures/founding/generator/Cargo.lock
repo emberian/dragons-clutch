@@ -49,6 +49,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
@@ -64,10 +72,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-source-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
+]
+
+[[package]]
 name = "dclutch-web-founding-vector-generator"
 version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
+ "dclutch-source-contract",
 ]
 
 [[package]]

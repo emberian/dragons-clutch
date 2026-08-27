@@ -11,6 +11,25 @@ export const CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1 = 4 as const;
 /** The venue floor the default kappa is scaled against, in lamports. */
 export const BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1 = 18618074000n as const;
 
+/**
+ * The magic a `ManipulationFloorV1` record announces itself with.
+ *
+ * Emitted alongside the offsets rather than left out of them. A browser
+ * that has the layout but not the magic can read a floor record and cannot
+ * RECOGNIZE one -- it would be indexing into whatever bytes it was handed,
+ * which for a value that bounds founding principal is the difference between
+ * a check and a decoration.
+ */
+export const MANIPULATION_FLOOR_V1_MAGIC = 'DCLTMFL1';
+
+/** The schema release this record is published under, as lowercase hex. */
+export const MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1 = '9c1dc900e6b6bf2c7ef2febebe2c0aa08529af8c44c4fd1d22abb765b1da1600';
+export const MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1 = 'dclutch/schema/source-manipulation-floor-v1';
+
+/** The bonding-curve buyout/exit derivation, the only one released today. */
+export const BONDING_CURVE_FLOOR_DERIVATION_ID_V1 = '0c2e4a32ad014352ec6ff0e72d6a7af1eefb01997edf56fb8308dbf19bcf80bd';
+export const BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1 = 'dclutch/source-manipulation-floor-derivation/bonding-curve-buyout-exit/v1';
+
 /** `ManipulationFloorV1` layout, for a decoder that reads a real floor record. */
 export const MANIPULATION_FLOOR_V1_BYTES = 160 as const;
 export const MANIPULATION_FLOOR_V1_SCHEMA_VERSION = 1 as const;

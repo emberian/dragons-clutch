@@ -13,11 +13,15 @@ import {
   type FoundingRungStatusV1,
 } from '@/lib/founding/ladder';
 import {
+  BONDING_CURVE_FLOOR_DERIVATION_ID_V1,
   BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
+  MANIPULATION_FLOOR_V1_BYTES,
+  MANIPULATION_FLOOR_V1_MAGIC,
 } from '@/lib/generated/principalCapacityV1';
 import {
   DEFAULT_CHAIN_STATE_CAPACITY_V1,
   admitPrincipalCapacityV1,
+  decodeManipulationFloorV1,
   formatCapacityV1,
   type PrincipalCapacityV1,
 } from '@/lib/founding/principalCapacity';
@@ -129,6 +133,7 @@ export default function CreateMarketWizard() {
   const [kappaNumerator, setKappaNumerator] = useState(String(DEFAULT_CHAIN_STATE_CAPACITY_V1.kind === 'bounded' ? DEFAULT_CHAIN_STATE_CAPACITY_V1.numerator : 1n));
   const [kappaDenominator, setKappaDenominator] = useState(String(DEFAULT_CHAIN_STATE_CAPACITY_V1.kind === 'bounded' ? DEFAULT_CHAIN_STATE_CAPACITY_V1.denominator : 4n));
   const [venueFloor, setVenueFloor] = useState(BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1.toString());
+  const [floorRecordHex, setFloorRecordHex] = useState('');
   const [compartments, setCompartments] = useState<Record<FundingCompartmentNameV1, string>>(() => ({
     Rent: '1', Creation: '1', Work: '0', Provider: '0', Bounty: '1', Liquidity: '0', Service: '0',
   }));
@@ -175,13 +180,32 @@ export default function CreateMarketWizard() {
     return { kind: 'bounded', numerator, denominator };
   }, [kappaNumerator, kappaDenominator]);
 
+  /**
+   * The floor, from an authenticated record when one is pasted.
+   *
+   * A typed number is a claim about a venue; a `ManipulationFloorV1` record is
+   * the venue's own derivation, and it names the Source, adapter configuration
+   * and collateral unit it was derived for. The typed field remains, because a
+   * wizard has to be usable before an operator has a record in hand -- but the
+   * two are never silently interchangeable, and the copy says which is in play.
+   */
+  const floorRecord = useMemo(() => {
+    const text = floorRecordHex.trim().replace(/^0x/, '');
+    if (text === '') return { kind: 'stated' as const };
+    if (!/^[0-9a-fA-F]*$/.test(text) || text.length % 2 !== 0) return { kind: 'refused' as const, message: 'A floor record is hexadecimal bytes.' };
+    try {
+      return { kind: 'decoded' as const, floor: decodeManipulationFloorV1(Uint8Array.from(text.toLowerCase().match(/../g) ?? [], (byte) => Number.parseInt(byte, 16))) };
+    } catch (error) { return { kind: 'refused' as const, message: reason(error) }; }
+  }, [floorRecordHex]);
+
   const kappa = useMemo(() => {
     const principalAtoms = bigintOrNull(principal);
-    const floor = bigintOrNull(venueFloor);
+    if (floorRecord.kind === 'refused') return { ok: false as const, message: floorRecord.message };
+    const floor = floorRecord.kind === 'decoded' ? floorRecord.floor.floorAtoms : bigintOrNull(venueFloor);
     if (principalAtoms === null || floor === null || principalAtoms < 0n || floor < 0n) return { ok: false as const, message: 'Principal and the venue floor must be whole numbers of atoms.' };
     try { return { ok: true as const, verdict: admitPrincipalCapacityV1(capacity, floor, principalAtoms) }; }
     catch (error) { return { ok: false as const, message: reason(error) }; }
-  }, [capacity, principal, venueFloor]);
+  }, [capacity, principal, venueFloor, floorRecord]);
 
   const backing = useMemo(() => {
     const principalAtoms = bigintOrNull(principal);
@@ -485,12 +509,30 @@ export default function CreateMarketWizard() {
       </div></header>
       <div className="direct-form-grid">
         <label><span>Founding principal · raw collateral atoms</span><input inputMode="numeric" value={principal} onChange={(event) => setPrincipal(event.target.value)} /></label>
-        <label><span>Venue manipulation floor · lamports</span><input inputMode="numeric" value={venueFloor} onChange={(event) => setVenueFloor(event.target.value)} /></label>
+        <label><span>Venue manipulation floor · lamports{floorRecord.kind === 'decoded' ? ' · from the record below' : ' · stated'}</span><input inputMode="numeric" disabled={floorRecord.kind === 'decoded'} value={floorRecord.kind === 'decoded' ? floorRecord.floor.floorAtoms.toString() : venueFloor} onChange={(event) => setVenueFloor(event.target.value)} /></label>
         <label><span>κ numerator / denominator</span><span className="wizard-pair">
           <input inputMode="numeric" value={kappaNumerator} onChange={(event) => setKappaNumerator(event.target.value)} />
           <input inputMode="numeric" value={kappaDenominator} onChange={(event) => setKappaDenominator(event.target.value)} />
         </span></label>
       </div>
+
+      <label><span>ManipulationFloorV1 record · {MANIPULATION_FLOOR_V1_BYTES} bytes of hexadecimal, optional</span>
+        <textarea spellCheck={false} value={floorRecordHex} onChange={(event) => setFloorRecordHex(event.target.value)} />
+      </label>
+      {floorRecord.kind === 'decoded'
+        ? <dl className="found-facts">
+            <div><dt>Recognized</dt><dd><code>{MANIPULATION_FLOOR_V1_MAGIC}</code> · {floorRecord.floor.basis.replace('-', ' ')} derivation</dd></div>
+            <div><dt>Floor</dt><dd>{floorRecord.floor.floorAtoms.toLocaleString()} atoms of the collateral unit below</dd></div>
+            <div><dt>Derived for Source</dt><dd>{floorRecord.floor.sourceSpecId}</dd></div>
+            <div><dt>Venue configuration</dt><dd>{floorRecord.floor.adapterConfigId}</dd></div>
+            <div><dt>Collateral unit</dt><dd>{floorRecord.floor.collateralUnitId}</dd></div>
+            <div><dt>Derivation release</dt><dd>{floorRecord.floor.derivationReleaseId}{floorRecord.floor.derivationReleaseId === BONDING_CURVE_FLOOR_DERIVATION_ID_V1 ? ' · bonding-curve buyout/exit' : ''}</dd></div>
+          </dl>
+        : <p className="direct-refusal">
+            {floorRecord.kind === 'refused'
+              ? `Refused: ${floorRecord.message}`
+              : 'No floor record supplied, so the number above is a stated claim about a venue rather than that venue’s own derivation. A real founding binds the floor to the Source, adapter configuration and collateral unit it was derived for; a floor derived for something else is not a weaker bound, it is an answer to a different question.'}
+          </p>}
 
       {kappa.ok ? <div className={`wizard-kappa ${kappa.verdict.admitted ? 'admitted' : 'refused'}`}>
         <strong>{kappa.verdict.admitted ? 'Under the capacity bound' : `Over the capacity bound · ${kappa.verdict.refusal}`}</strong>

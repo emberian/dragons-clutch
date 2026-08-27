@@ -67,7 +67,7 @@ outDir = path.resolve(outDir);
 const renderSet = new Map();
 renderSet.set("README.md", "readme.html");
 renderSet.set("tools/sbom/NOTICES.md", "notices.html");
-for (const base of ["docs/reference", "docs/guides"]) {
+{
   const walk = (dir) => {
     for (const e of fs.readdirSync(path.join(REPO, dir)).sort()) {
       const rel = path.posix.join(dir, e);
@@ -81,7 +81,23 @@ for (const base of ["docs/reference", "docs/guides"]) {
       }
     }
   };
-  walk(base);
+  walk("docs/guides");
+}
+// The generated reference is rendered selectively. Error meanings and byte
+// layouts are the reference a client developer actually needs, so they stay
+// on the site; the other generated ledgers (routes, budgets, decisions,
+// programs) live complete in the repository, and any link to them from a
+// rendered page is rewritten to point there.
+renderSet.set("docs/reference/refusals.md", "reference/refusals.html");
+for (const e of fs
+  .readdirSync(path.join(REPO, "docs", "reference", "abi"))
+  .sort()) {
+  if (e.endsWith(".md")) {
+    renderSet.set(
+      `docs/reference/abi/${e}`,
+      `reference/abi/${e.replace(/\.md$/, ".html")}`,
+    );
+  }
 }
 
 // --------------------------------------------------------------- inline md
@@ -379,9 +395,11 @@ yourself.</li>
 <li><strong><a href="readme.html">The README</a></strong>
 The project at a glance: what works today, the seven programs, and where
 it's going.</li>
-<li><strong><a href="reference/README.html">Protocol reference</a></strong>
-The exact numbers, generated from the code: every instruction, every error
-code with its meaning, compute costs, byte layouts.</li>
+<li><strong>For developers</strong>
+<a href="reference/refusals.html">Every error code with its meaning</a> and
+<a href="reference/abi/README.html">the exact byte layouts</a>, generated
+from the code. The rest of the generated reference lives in the
+<a href="${repoUrl}/docs/reference/README.md">repository</a>.</li>
 <li><strong><a href="app/index.html">The app</a></strong>
 The real web frontend, statically exported. It reads whatever chain you
 point it at; with nothing deployed, expect polite refusals with
