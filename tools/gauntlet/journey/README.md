@@ -45,6 +45,22 @@ HEAD to a scratch directory and check there. Observed on 2026-08-27, when a lane
 mid-way through adding a `--keypair-seed` option turned this tree red for
 several minutes while HEAD was clean.
 
+## Deterministic by default
+
+The runner passes the producer's `--keypair-seed`, defaulted on. Without it the
+`find_program_address` bump-search noise is 58,494 CU on `DCLTGMF1` inside a
+single campaign, and it moves every rent figure this tier checks — a
+conservation ledger whose numbers cannot be compared between runs is a diary.
+The seed is the SHA-256 of `dclutch/gauntlet/journey/campaign-seed/v1`, a stated
+derivation rather than a number somebody typed. `--keypair-seed none` takes
+fresh keys instead.
+
+It is safe here and **only** here: the producer refuses the flag outright unless
+the RPC endpoint is loopback, and this tier is pinned to `127.0.0.1:20890`. Read
+`seed.rs` before using it anywhere else. The transcript records
+`deterministic_keypairs`, because a transcript that does not say which mode
+produced its numbers is a transcript whose numbers cannot be used.
+
 ## The conservation ledger
 
 One object, threaded through the whole journey, that re-reads the economic state
@@ -56,7 +72,7 @@ leaking atoms across the seams between them.
 | law | what it says | why it is not a mirror |
 |---|---|---|
 | L1 | tracked collateral == `Mint.supply` | the supply is the TOKEN PROGRAM's accounting, and the founding revokes the mint authority, so it is frozen. An atom in an account nobody named breaks it. |
-| L2 | Hoard + wallets == supply | L1 re-partitioned by role; the partition must stay exhaustive, so naming a new account is the only way to make it balance |
+| L2 | the Hoard moves only by what the stage DECLARED | the one law L1 cannot state: principal moving from the Hoard into a wallet the ledger already tracks leaves the total untouched, which is what an undetected leak looks like |
 | L3 | Σ Positions == aggregate supply | who is owed, against what the Market's own liability record says it owes |
 | L4 | Hoard ≥ worst outcome × claim unit | the unit comes from the Registry's published `ProductBasisV3.payout_scale`, not from the Hoard divided by the supply |
 | L5 | observed collateral delta == DECLARED delta | a stage states what it will move before it runs; L1 alone balances for a transfer between two tracked accounts |
