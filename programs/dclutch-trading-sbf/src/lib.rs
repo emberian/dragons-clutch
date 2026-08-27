@@ -114,6 +114,16 @@ mod projected_claims_composition_v4;
 ))]
 #[allow(dead_code)]
 mod projected_core_composition_v4;
+/// Family-neutral creation of the projected-Custody prestate founding needs.
+#[cfg(all(
+    not(feature = "shadow-accelerator-auth-only"),
+    any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )
+))]
+pub mod projected_custody_bootstrap_v1;
 /// Family-neutral projected-Custody route-zero execution and receipt join.
 #[cfg(all(
     not(feature = "shadow-accelerator-auth-only"),
@@ -239,6 +249,18 @@ pub fn process_instruction(
     ))]
     if generic_market_founding_v1::is_generic_market_founding_v1(instruction_data) {
         return generic_market_founding_v1::process_generic_market_founding_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v1(instruction_data) {
+        return projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1(
             program_id,
             accounts,
             instruction_data,

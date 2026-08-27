@@ -273,20 +273,60 @@ fn authenticate_request_coordinates(
     claims: &ClaimsFoundingRequestV5,
     lock_raw: &[u8],
 ) -> Result<(), ProgramError> {
-    if lock.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
-        || realize.operation != ProjectedCustodyOperationV1::RealizeAndClose
-        || lock.caller_role != ProjectedCallerRoleV1::TradingCapability
+    if realize.operation != ProjectedCustodyOperationV1::RealizeAndClose
         || realize.caller_role != ProjectedCallerRoleV1::TradingCapability
-        || lock.caller_program != program_id.to_bytes()
         || realize.caller_program != program_id.to_bytes()
-        || lock.core_program != core_program.to_bytes()
         || realize.core_program != core_program.to_bytes()
         || claims.claims_program() != claims_program.to_bytes()
         || claims.trading_program() != program_id.to_bytes()
     {
         return Err(TradingSbfError::Release.into());
     }
+    authenticate_projected_lock_join_v1(program_id, core_program, found, lock)?;
     authenticate_projected_sequence(found, lock, realize)?;
+    if realize.resulting_revision != found.projected_resulting_revision()
+        || claims.release_set() != found.release_set().to_bytes()
+        || claims.market() != found.market().to_bytes()
+        || claims.founder() != found.founder().to_bytes()
+        || claims.funding_source() != found.funding_source().to_bytes()
+        || claims.hoard() != found.hoard().to_bytes()
+        || claims.custody_replay() != found.projected_replay().to_bytes()
+        || claims.rent_credit() != lock.rent_credit
+        || claims.generation() != found.generation()
+        || claims.quantity() != found.quantity()
+        || claims.basis_scale() != found.basis_scale()
+        || claims.custody_request_digest() != hash(lock_raw).to_bytes()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
+}
+
+/// Authenticate one terminal Lock request against its founding artifact.
+///
+/// This is the sole definition of what it means for a projected-Custody Lock
+/// request to belong to a founding. The atomic outer evaluates it before its
+/// first CPI, and `projected_custody_bootstrap_v1` evaluates the same predicate
+/// before creating the replay that Lock will consume, so the prestate route and
+/// the founding route cannot drift into disagreeing about the same pair.
+///
+/// It reads no account memory, so it can be exercised adversarially without a
+/// frame. The caller still owns every account flag, executability, and
+/// ownership check.
+#[inline(never)]
+pub(crate) fn authenticate_projected_lock_join_v1(
+    program_id: &Pubkey,
+    core_program: &Pubkey,
+    found: &GenericFoundingRequestV1,
+    lock: &ProjectedCustodyRequestV1,
+) -> Result<(), ProgramError> {
+    if lock.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
+        || lock.caller_role != ProjectedCallerRoleV1::TradingCapability
+        || lock.caller_program != program_id.to_bytes()
+        || lock.core_program != core_program.to_bytes()
+    {
+        return Err(TradingSbfError::Release.into());
+    }
     let expected_context = hashv(&[
         PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
         found.context().to_bytes().as_slice(),
@@ -305,18 +345,6 @@ fn authenticate_request_coordinates(
             != found
                 .hoard_principal()
                 .map_err(|_| TradingSbfError::Content)?
-        || realize.resulting_revision != found.projected_resulting_revision()
-        || claims.release_set() != found.release_set().to_bytes()
-        || claims.market() != found.market().to_bytes()
-        || claims.founder() != found.founder().to_bytes()
-        || claims.funding_source() != found.funding_source().to_bytes()
-        || claims.hoard() != found.hoard().to_bytes()
-        || claims.custody_replay() != found.projected_replay().to_bytes()
-        || claims.rent_credit() != lock.rent_credit
-        || claims.generation() != found.generation()
-        || claims.quantity() != found.quantity()
-        || claims.basis_scale() != found.basis_scale()
-        || claims.custody_request_digest() != hash(lock_raw).to_bytes()
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -885,6 +913,7 @@ mod tests {
             15,
             16,
             4,
+            1,
         )
         .expect("found")
     }
@@ -1086,6 +1115,84 @@ mod tests {
     }
 
     #[test]
+    fn request_join_refuses_a_substituted_capability_root_or_lock_coordinate() {
+        let found = found();
+        let lock = lock_request();
+        let lock_raw = lock.encode().expect("lock bytes");
+        let realize = realize_request(&lock);
+        let claims = claims_request(&lock, &lock_raw);
+        let join = |lock: &ProjectedCustodyRequestV1, realize: &ProjectedCustodyRequestV1| {
+            authenticate_request_coordinates(
+                &trading(),
+                &core(),
+                &claims_program(),
+                &found,
+                lock,
+                realize,
+                &claims,
+                &lock.encode().expect("lock bytes"),
+            )
+        };
+        assert_eq!(join(&lock, &realize), Ok(()));
+
+        // Decision 0004 derives the founding capability root and never reads a
+        // root account, so the request's coordinate is the only thing binding
+        // the Custody signer namespace to that Market. A substituted root must
+        // refuse here, before any CPI, and must also move the Lock and Realize
+        // caller PDAs so no signature exists for the substituted request.
+        let mut rerooted = lock;
+        rerooted.parent_capability_root = [0x7b; 32];
+        assert_eq!(
+            join(&rerooted, &realize_request(&rerooted)),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_ne!(
+            ProjectedCustodyCallerSeedsV1::new(rerooted, hash(&rerooted.encode().expect("bytes")).to_bytes())
+                .as_slices(),
+            ProjectedCustodyCallerSeedsV1::new(lock, hash(&lock_raw).to_bytes()).as_slices()
+        );
+
+        // Every other coordinate the shared Lock join owns.
+        for mutate in [
+            &|value: &mut ProjectedCustodyRequestV1| value.market = [0x7c; 32],
+            &|value: &mut ProjectedCustodyRequestV1| value.release_set = [0x7d; 32],
+            &|value: &mut ProjectedCustodyRequestV1| value.context_digest = [0x7e; 32],
+            &|value: &mut ProjectedCustodyRequestV1| value.hoard_vault = [0x7f; 32],
+            &|value: &mut ProjectedCustodyRequestV1| value.funding_source_vault = [0x80; 32],
+            &|value: &mut ProjectedCustodyRequestV1| value.refund_owner = [0x81; 32],
+            &|value: &mut ProjectedCustodyRequestV1| value.generation += 1,
+            &|value: &mut ProjectedCustodyRequestV1| value.expiry_slot += 1,
+            &|value: &mut ProjectedCustodyRequestV1| value.amount += 1,
+        ] as [&dyn Fn(&mut ProjectedCustodyRequestV1); 9]
+        {
+            let mut hostile = lock;
+            mutate(&mut hostile);
+            assert_eq!(
+                join(&hostile, &realize_request(&hostile)),
+                Err(TradingSbfError::Content.into())
+            );
+        }
+
+        // A Lock naming another Trading or Core program refuses at the release
+        // boundary, and a Lock that is not the terminal operation refuses too.
+        for mutate in [
+            &|value: &mut ProjectedCustodyRequestV1| value.caller_program = [0x82; 32],
+            &|value: &mut ProjectedCustodyRequestV1| value.core_program = [0x83; 32],
+            &|value: &mut ProjectedCustodyRequestV1| {
+                value.operation = ProjectedCustodyOperationV1::LockHoard;
+            },
+        ] as [&dyn Fn(&mut ProjectedCustodyRequestV1); 3]
+        {
+            let mut hostile = lock;
+            mutate(&mut hostile);
+            assert_eq!(
+                join(&hostile, &realize_request(&hostile)),
+                Err(TradingSbfError::Release.into())
+            );
+        }
+    }
+
+    #[test]
     fn request_join_refuses_a_broken_projected_sequence() {
         let found = found();
         let lock = lock_request();
@@ -1138,7 +1245,9 @@ mod tests {
                 + CLAIMS_FOUNDING_ACCOUNT_COUNT_V5
                 + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1
         };
-        assert_eq!(count(3), 139);
-        assert_eq!(count(16), 152);
+        // Decision 0004 removed the capability-root account from both the Found
+        // and the Open frame; the root is derived, never read.
+        assert_eq!(count(3), 137);
+        assert_eq!(count(16), 150);
     }
 }
