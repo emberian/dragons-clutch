@@ -697,27 +697,56 @@ fn signed_delta_post_resource_digest(
     if child_accounts.len() != expected {
         return Err(TradingSbfError::Content.into());
     }
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(b"dclutch/claims/signed-delta-post-resources/v3");
-    let market = child_accounts
-        .get(1)
-        .ok_or(TradingSbfError::Content)?
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
-    preimage.extend_from_slice(&market);
+    // The preimage is HASHED, never kept, so it is never CONCATENATED either.
+    // This used to grow one `Vec<u8>` from empty through `extend_from_slice`,
+    // which on the SBF bump allocator is the whole doubling ladder plus a live
+    // copy of every account body it walked: 985 bytes charged for the rest of
+    // the instruction, measured inside the child walk where the heap is
+    // scarcest. `hashv` takes the parts, so what is carried is the parts --
+    // one borrow guard and one fat pointer per account, reserved exactly.
     let end = 20_usize
         .checked_add(positions)
         .ok_or(TradingSbfError::Content)?;
-    for account in child_accounts
+    let bodies = child_accounts
         .get(20..end)
-        .ok_or(TradingSbfError::Content)?
-    {
-        let data = account
+        .ok_or(TradingSbfError::Content)?;
+    let mut guards = Vec::new();
+    guards
+        .try_reserve_exact(
+            bodies
+                .len()
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    guards.push(
+        child_accounts
+            .get(1)
+            .ok_or(TradingSbfError::Content)?
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
-        preimage.extend_from_slice(&data);
+            .map_err(|_| TradingSbfError::Transition)?,
+    );
+    for account in bodies {
+        guards.push(
+            account
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Transition)?,
+        );
     }
-    Ok(hash(&preimage).to_bytes())
+    let mut parts: Vec<&[u8]> = Vec::new();
+    parts
+        .try_reserve_exact(
+            guards
+                .len()
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    parts.push(b"dclutch/claims/signed-delta-post-resources/v3");
+    for guard in &guards {
+        parts.push(guard);
+    }
+    Ok(hashv(&parts).to_bytes())
 }
 
 fn sparse_native_post_resource_digest(
@@ -726,17 +755,33 @@ fn sparse_native_post_resource_digest(
     if child_accounts.len() != 23 {
         return Err(TradingSbfError::Content.into());
     }
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(b"dclutch/claims/sparse-native-post/v1");
-    for index in [1_usize, 20, 21] {
-        let data = child_accounts
-            .get(index)
-            .ok_or(TradingSbfError::Content)?
-            .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
-        preimage.extend_from_slice(&data);
-    }
-    Ok(hash(&preimage).to_bytes())
+    // Three accounts at fixed coordinates and a domain: the parts are known at
+    // compile time, so this hashes them where they lie and allocates nothing at
+    // all. It used to concatenate all three bodies into a `Vec<u8>` grown from
+    // empty -- the doubling ladder plus a live copy, on an allocator that never
+    // gives either back. Same fact, same bytes, same order.
+    let market = child_accounts
+        .get(1)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let position = child_accounts
+        .get(20)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let admission = child_accounts
+        .get(21)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    Ok(hashv(&[
+        b"dclutch/claims/sparse-native-post/v1",
+        &market,
+        &position,
+        &admission,
+    ])
+    .to_bytes())
 }
 
 fn founding_post_resource_digests(
@@ -821,16 +866,28 @@ mod tests {
         AccountInfo::new(key, signer, writable, lamports, data, owner, false)
     }
 
+    /// The privilege rule now lives once, in the walk's shared buffer set, and
+    /// this is still the frame that states it: coordinate 0 is the
+    /// release-pinned caller authority and signs; an ordinary coordinate does
+    /// not; a coordinate the frame already declares a signer keeps it.
     #[test]
     fn authority_signing_is_added_and_existing_actor_signer_is_preserved() {
-        let authority = account_info(false, false);
-        let ordinary = account_info(false, true);
-        let actor = account_info(true, false);
+        let mut buffers = ChildInvocationBuffersV3::new();
+        buffers.accounts.push(account_info(false, false));
+        buffers.accounts.push(account_info(false, true));
+        buffers.accounts.push(account_info(false, true));
+        buffers.accounts.push(account_info(true, false));
+        buffers.fill_metas().expect("metas");
 
-        assert!(child_account_meta_v3(0, &authority).is_signer);
-        assert!(!child_account_meta_v3(1, &ordinary).is_signer);
-        assert!(child_account_meta_v3(3, &actor).is_signer);
-        assert!(!child_account_meta_v3(3, &ordinary).is_signer);
+        let signer = |index: usize| buffers.metas.get(index).expect("meta").is_signer;
+        assert!(signer(0));
+        assert!(!signer(1));
+        assert!(!signer(2));
+        assert!(signer(3));
+        let writable = |index: usize| buffers.metas.get(index).expect("meta").is_writable;
+        assert!(!writable(0));
+        assert!(writable(1));
+        assert!(!writable(3));
     }
 
     fn position(action: ProtocolPositionActionV2) -> ProtocolPositionRequestV2 {
