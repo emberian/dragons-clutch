@@ -301,14 +301,6 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-product-contract"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-product-runtime-v2"
-version = "0.1.0"
-
-[[package]]
 name = "dclutch-registry-contract"
 version = "0.1.0"
 dependencies = [
@@ -332,7 +324,6 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
- "dclutch-source-contract",
 ]
 
 [[package]]
@@ -368,14 +359,6 @@ name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
-]
-
-[[package]]
-name = "dclutch-source-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-product-contract",
- "dclutch-product-runtime-v2",
 ]
 
 [[package]]
