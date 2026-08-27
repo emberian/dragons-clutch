@@ -258,6 +258,58 @@ them, on the same rule: measure first, across enough runs to know the band, and
 then pin. The transcript records the per-stage totals so that measurement exists
 before anybody writes a number down.
 
+## Three findings the chain made that a fixture could not
+
+All three cost a full campaign each to discover, and all three are the same
+shape: a fact that looks settled in ProgramTest and is not settled on a chain.
+
+### A fixture that binds two roles to one key hides a role confusion
+
+`ProviderExecuteDeploymentV3.trading_program` means the TRADING role.
+`resolution_core_v3_lifecycle.rs` passes CUSTODY there and passes, because that
+fixture's release set binds Custody's key to the Trading role — the two are the
+same bytes, so the confusion has nowhere to show. A real five-role activation
+binds five different keys, and `provider_instruction_v3` authenticates accounts
+13/14 against `activation.role(ExecutionRoleV1::Trading).release().program()`.
+The defect is invisible in ProgramTest *by construction* and fatal on the first
+validator: `ResolutionRelease` (0x8005) after 681,773 CU. **Anywhere a fixture
+reuses one key for two roles, this class of hole is available.**
+
+### Two live readers of one field, with incompatible rules
+
+`ProviderReleaseV1.adapter_release_id`:
+
+| reader | demands | so the field means |
+|---|---|---|
+| `PythProviderAdapterObligationV1::from_material_view` | `PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1` | which provider EXTENSION this is |
+| `authenticate_provider_release` (V3 route) | `pyth_release.adapter_id()` | which adapter release the deployment carries |
+
+The two constants differ, so **no `ProviderReleaseV1` satisfies both.** The live
+V3 route joins through the V2 obligation, which does not check the extension, and
+then through `authenticate_provider_release` — so the second reading is the one a
+chain enforces. Both refusals this campaign collected were correct *given their
+own reading*, which is exactly why neither named the problem. Carried as an owner
+decision: delete V1's reading, or split the field into the two facts it is being
+asked to be.
+
+### A refusal taxonomy that erases a distinction its own contract calls
+load-bearing
+
+`normalize_authenticated_update`'s doc comment says it plainly:
+
+> A fresh publication about the wrong period and a stale publication about the
+> right one must both refuse, and **an operator reading the log should be able to
+> tell which happened.**
+
+They cannot. `InvalidObservationSchedule`, `InvalidPublicationTime` and
+`InvalidPythObservation` all reach the wire through
+`.map_err(|_| ProviderJoinErrorV3::Provider)`, and `map_provider_join_error`
+sends that single variant to the single code `ResolutionError::ProviderObservation`
+(0x800A). Three questions — *is this about the right period, is it fresh enough,
+is it a well-formed Pyth observation* — arrive as one number. This tier paid a
+diagnosis cycle to that collapse, which is the evidence that the doc comment was
+right about it mattering.
+
 ## What does not, and exactly why
 
 The transcript carries a gap register; `src/journey.rs::gap_register` is its
