@@ -27,6 +27,7 @@ const baseUrl = argument('base-url');
 const endpoint = argument('endpoint');
 const run = argument('run');
 const work = argument('work', join(run, 'checked-release'));
+const tamperedWork = argument('tampered-work', '');
 const outDir = argument('out-dir');
 mkdirSync(outDir, { recursive: true });
 
@@ -41,7 +42,7 @@ const plan = JSON.parse(readFileSync(join(run, 'plan.json'), 'utf8'));
 const ROLES = ['core', 'claims', 'trading', 'resolution', 'custody'];
 const base64 = (path) => readFileSync(path).toString('base64');
 
-const multiprogram = base64(join(work, 'set', 'multiprogram.checked'));
+const multiprogramRef = { value: base64(join(work, 'set', 'multiprogram.checked')) };
 const manifests = Object.fromEntries(ROLES.map((role) => [role, base64(join(work, 'evidence', role, 'checked.bin'))]));
 
 /** One byte of the trading manifest, flipped. Everything else is untouched. */
@@ -63,7 +64,7 @@ async function attempt(page, label, roleManifests) {
   await page.locator('label', { hasText: /Finalized RPC endpoint/ }).locator('input').first().fill(endpoint);
   await page.locator('label', { hasText: /Registry program/ }).locator('input').first().fill(plan.registry.program_id);
   await page.locator('label', { hasText: /External fee payer public key/ }).locator('input').first().fill(payer);
-  await page.locator('label', { hasText: /checked multiprogram/ }).locator('textarea').first().fill(multiprogram);
+  await page.locator('label', { hasText: /checked multiprogram/ }).locator('textarea').first().fill(multiprogramRef.value);
   for (const role of ROLES) {
     await page.locator('label', { hasText: new RegExp(`^${role} complete checked release`) }).locator('textarea').first().fill(roleManifests[role]);
   }
@@ -93,6 +94,21 @@ const page = await context.newPage();
 const honest = await attempt(page, 'honest', manifests);
 const tampered = await attempt(page, 'tampered', { ...manifests, trading: tamper(manifests.trading) });
 
+// The strongest adversarial case: a manifest set that is INTERNALLY PERFECT -
+// built by the same pipeline, every create/verify/inspect pass agreeing - over
+// a one-byte-altered custody ELF. Nothing about it is malformed. The only thing
+// wrong with it is that the chain runs a different program, so a refusal here
+// can only have come from the chain comparison.
+let wrongArtifact = null;
+if (tamperedWork !== '') {
+  const alternate = Object.fromEntries(ROLES.map((role) => [role, base64(join(tamperedWork, 'evidence', role, 'checked.bin'))]));
+  const alternateMultiprogram = base64(join(tamperedWork, 'set', 'multiprogram.checked'));
+  const saved = multiprogramRef.value;
+  multiprogramRef.value = alternateMultiprogram;
+  wrongArtifact = await attempt(page, 'wrong-artifact', alternate);
+  multiprogramRef.value = saved;
+}
+
 await browser.close();
 
 const report = {
@@ -110,6 +126,11 @@ const report = {
     status: tampered.status,
     signButtons: tampered.signButtons,
     opened: tampered.signButtons.length > 0 && tampered.signButtons.every((button) => !button.disabled),
+  },
+  wrongArtifact: wrongArtifact === null ? null : {
+    status: wrongArtifact.status,
+    signButtons: wrongArtifact.signButtons,
+    opened: wrongArtifact.signButtons.length > 0 && wrongArtifact.signButtons.every((button) => !button.disabled),
   },
 };
 writeFileSync(join(outDir, 'ungate.json'), `${JSON.stringify(report, null, 2)}\n`);

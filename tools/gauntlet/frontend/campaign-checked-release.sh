@@ -26,6 +26,14 @@ usage: campaign-checked-release.sh --run PATH [options]
   --work PATH    scratch output root (default: <run>/checked-release)
   --tool PATH    prebuilt dclutch-release-tool binary
   --repo PATH    source repository (default: this script's repository)
+  --tamper-role ROLE
+                 build the evidence over a ONE-BYTE-ALTERED copy of that role's
+                 ELF. The result is internally perfect - every create, verify and
+                 inspect pass agrees with itself - and describes a program the
+                 chain does not run, which is the only honest way to check that a
+                 consumer's CHAIN comparison is load-bearing rather than a
+                 self-check. The release-set join will then not match, which is
+                 reported instead of refused.
   -h, --help     show this message
 USAGE
 }
@@ -34,12 +42,14 @@ RUN=""
 WORK=""
 TOOL=""
 REPO=""
+TAMPER_ROLE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --run) RUN="${2:?--run needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --tool) TOOL="${2:?--tool needs a value}"; shift 2 ;;
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
+        --tamper-role) TAMPER_ROLE="${2:?--tamper-role needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -91,6 +101,23 @@ PY
 }
 LOADER_HEX="$(base58_hex BPFLoaderUpgradeab1e11111111111111111111111)"
 
+# Flip one bit deep in a file's body, so an ELF stays a well-formed loadable SBF
+# ELF and only its CONTENT differs from what a chain loaded.
+flip_one_byte() {
+    python3 -c '
+import sys
+path = sys.argv[1]
+with open(path, "r+b") as handle:
+    handle.seek(0, 2)
+    offset = handle.tell() // 2
+    handle.seek(offset)
+    original = handle.read(1)[0]
+    handle.seek(offset)
+    handle.write(bytes([original ^ 0x01]))
+sys.stderr.write("flipped byte %d: %#04x -> %#04x\n" % (offset, original, original ^ 1))
+' "$1"
+}
+
 # The campaign's Resolution role carries a PROTOCOL semantic preimage; every
 # other role carries the gauntlet's own. Both are reproduced here from their
 # stated form and then CHECKED against the semantic release id the campaign
@@ -123,6 +150,12 @@ for role in $ROLES; do
     declared_semantic="$(jq -r ".${key}.semantic_release_id" "$RUN/plan.json")"
     [ -f "$elf" ] || { echo "the campaign's $role ELF is gone: $elf" >&2; exit 1; }
     [ "$(sha256 "$elf")" = "$elf_sha" ] || { echo "$role ELF no longer hashes to the campaign pin" >&2; exit 1; }
+    if [ "$role" = "$TAMPER_ROLE" ]; then
+        cp "$elf" "$WORK/tampered-$role.so"
+        flip_one_byte "$WORK/tampered-$role.so"
+        elf="$WORK/tampered-$role.so"
+        echo "TAMPERED: $role evidence is being built over $elf"
+    fi
 
     semantic_preimage "$role" > "$dir/semantic.bin"
     observed_semantic="$(sha256 "$dir/semantic.bin")"
@@ -234,6 +267,8 @@ printf 'execution_release_set_preimage_sha256=%s\n' "$SET_DIGEST"
 printf 'campaign_published_release_set_id=%s\n' "$PUBLISHED_SET"
 if [ "$SET_DIGEST" = "$PUBLISHED_SET" ]; then
     echo "JOIN: the checked release set IS the set this campaign activated"
+elif [ -n "$TAMPER_ROLE" ]; then
+    echo "JOIN: MISMATCH as intended - this set was built over a tampered $TAMPER_ROLE ELF"
 else
     echo "JOIN: MISMATCH - the checked release set is not the set this campaign activated" >&2
     exit 1
