@@ -22,7 +22,8 @@ use crate::{
         DirectInlineOrdinaryHotBundleV4, validate_direct_inline_ordinary_hot_bundle_v4,
     },
     registered_bundle_v4::{
-        DirectRegisterBuyHotBundleV4, validate_direct_register_buy_hot_bundle_v4,
+        DirectRegisterBuyHotBundleV4, DirectRegisterSellHotBundleV4,
+        validate_direct_register_buy_hot_bundle_v4, validate_direct_register_sell_hot_bundle_v4,
     },
 };
 
@@ -84,6 +85,23 @@ pub fn validate_direct_register_buy_capability_v4(
         .map_err(|_| DirectProgramSetErrorV4::Bundle)?;
     Ok(validated(
         DirectExecutionActionV3::RegisterBuy,
+        &bundle.descriptor,
+    ))
+}
+
+/// Validate one complete RegisterSell bundle before admitting its set entry.
+///
+/// A Sell's entry is obtained the same way every other entry is -- by its own
+/// bundle validating -- and it is a DIFFERENT entry: distinct selector, distinct
+/// descriptor, and not one artifact digest shared with the Buy.
+pub fn validate_direct_register_sell_capability_v4(
+    bundle: &DirectRegisterSellHotBundleV4,
+    capacity_profile: [u8; 32],
+) -> Result<ValidatedDirectCapabilityV4, DirectProgramSetErrorV4> {
+    validate_direct_register_sell_hot_bundle_v4(bundle, capacity_profile)
+        .map_err(|_| DirectProgramSetErrorV4::Bundle)?;
+    Ok(validated(
+        DirectExecutionActionV3::RegisterSell,
         &bundle.descriptor,
     ))
 }

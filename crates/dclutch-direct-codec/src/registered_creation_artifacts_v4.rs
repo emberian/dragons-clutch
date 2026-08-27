@@ -784,8 +784,13 @@ fn project_identity(
     ))
 }
 
+/// Test-only. `pub(crate)` for exactly one export: `transition_read_set`, which
+/// `registered_bundle_v4`'s writer witness joins against the bundle's static
+/// write declarations. The measurement needs a canonical ADMITTED bank to
+/// perturb, and that bank is built here, from this module's request and
+/// projection.
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     extern crate std;
 
     use super::*;
@@ -799,7 +804,8 @@ mod tests {
         v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
     };
     use dclutch_transition_vm::v3::{
-        ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
+        ProgramV3, RegisterInput, RegisterKindV3, RegisterOutput, RegisterSpaceV3,
+        RegisterWriteTargetV3, execute_fold_atomic,
     };
     use sha2::{Digest, Sha256};
 
@@ -876,6 +882,18 @@ mod tests {
         action: DirectExecutionActionV3,
         unwritten_identity: Option<usize>,
     ) -> Option<std::vec::Vec<u64>> {
+        execute_capturing(action, unwritten_identity, &mut None)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn execute_capturing(
+        action: DirectExecutionActionV3,
+        unwritten_identity: Option<usize>,
+        captured: &mut Option<(
+            std::vec::Vec<u64>,
+            [[u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4],
+        )>,
+    ) -> Option<std::vec::Vec<u64>> {
         let profile_bytes = profile(action);
         let profile_id: [u8; 32] = Sha256::digest(profile_bytes).into();
         let profile = RequestProfileV2::decode_selected(profile_id, profile_id, &profile_bytes)
@@ -922,6 +940,33 @@ mod tests {
                 },
             )
             .expect("projection");
+        *captured = Some((projected_scalars.clone(), projected_identities));
+        run_transition(action, &projected_scalars, &projected_identities)
+            .map(|(scalars, _)| scalars)
+    }
+
+    /// The post-projection bank one registered creation hands its Transition.
+    fn projected_bank(
+        action: DirectExecutionActionV3,
+    ) -> (
+        std::vec::Vec<u64>,
+        [[u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4],
+    ) {
+        let mut captured = None;
+        let _ = execute_capturing(action, None, &mut captured);
+        captured.expect("projection")
+    }
+
+    /// Execute the action-selected creation Transition over one exact bank.
+    #[allow(clippy::type_complexity)]
+    fn run_transition(
+        action: DirectExecutionActionV3,
+        scalars: &[u64],
+        identities: &[[u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4],
+    ) -> Option<(
+        std::vec::Vec<u64>,
+        [[u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4],
+    )> {
         let mut transition_scratch = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
         let mut transition = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
         encode_direct_registered_creation_transition_v4_atomic(
@@ -931,16 +976,16 @@ mod tests {
         )
         .expect("transition");
         let program = ProgramV3::decode(&transition).expect("transition decode");
-        let mut scratch_scalars = projected_scalars.clone();
-        let mut scratch_identities = projected_identities;
+        let mut scratch_scalars = scalars.to_vec();
+        let mut scratch_identities = *identities;
         let mut output_scalars = std::vec![0_u64; DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4];
         let mut output_identities = [[0_u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4];
         execute_fold_atomic(
             program,
             0,
             RegisterInput {
-                scalars: &projected_scalars,
-                identities: &projected_identities,
+                scalars,
+                identities,
             },
             RegisterOutput {
                 scalars: &mut scratch_scalars,
@@ -952,7 +997,199 @@ mod tests {
             },
         )
         .ok()?;
-        Some(output_scalars)
+        Some((output_scalars, output_identities))
+    }
+
+    /// The registers the action-selected Transition statically declares it
+    /// writes -- the only output coordinates a read measurement may observe.
+    #[allow(clippy::type_complexity)]
+    fn transition_write_set(
+        action: DirectExecutionActionV3,
+    ) -> (std::vec::Vec<u16>, std::vec::Vec<u16>) {
+        let mut transition_scratch = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
+        let mut transition = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
+        encode_direct_registered_creation_transition_v4_atomic(
+            action,
+            &mut transition_scratch,
+            &mut transition,
+        )
+        .expect("transition");
+        let program = ProgramV3::decode(&transition).expect("transition decode");
+        let mut scalars = std::vec::Vec::new();
+        for index in 0..DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4 {
+            let index = u16::try_from(index).expect("scalar register");
+            if program
+                .writes_register(RegisterWriteTargetV3 {
+                    kind: RegisterKindV3::Scalar,
+                    space: RegisterSpaceV3::Common,
+                    index,
+                })
+                .expect("writes")
+            {
+                scalars.push(index);
+            }
+        }
+        let mut identities = std::vec::Vec::new();
+        for index in 0..DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4 {
+            let index = u16::try_from(index).expect("identity register");
+            if program
+                .writes_register(RegisterWriteTargetV3 {
+                    kind: RegisterKindV3::Identity,
+                    space: RegisterSpaceV3::Common,
+                    index,
+                })
+                .expect("writes")
+            {
+                identities.push(index);
+            }
+        }
+        (scalars, identities)
+    }
+
+    /// What a Transition read is actually observable IN: its admission, and the
+    /// registers it writes.
+    ///
+    /// `execute_fold_atomic` copies the whole scratch bank to the output bank,
+    /// so every register the program never touches appears in the output
+    /// VERBATIM. Comparing whole output banks therefore reports "read" for every
+    /// register in the bank -- pass-through, not a read. Restricting the
+    /// observation to the program's own declared writes is what makes the
+    /// measurement a measurement: registers 50..53, the LifecycleV5 Rent quotes,
+    /// pass through this Transition untouched and are correctly NOT read by it,
+    /// which whole-bank comparison got wrong.
+    #[allow(clippy::type_complexity)]
+    fn transition_observation(
+        action: DirectExecutionActionV3,
+        writes: &(std::vec::Vec<u16>, std::vec::Vec<u16>),
+        scalars: &[u64],
+        identities: &[[u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4],
+    ) -> Option<(std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>)> {
+        let (output_scalars, output_identities) = run_transition(action, scalars, identities)?;
+        Some((
+            writes
+                .0
+                .iter()
+                .map(|index| *output_scalars.get(usize::from(*index)).expect("scalar"))
+                .collect(),
+            writes
+                .1
+                .iter()
+                .map(|index| {
+                    *output_identities
+                        .get(usize::from(*index))
+                        .expect("identity")
+                })
+                .collect(),
+        ))
+    }
+
+    /// Perturb every common register in isolation and keep the ones that move
+    /// the action-selected creation Transition's decision or one of its writes.
+    ///
+    /// The measurement, not a restatement of the emitter: the transition is
+    /// executed over a canonical ADMITTED bank and re-executed once per
+    /// perturbed candidate, and a register counts as read exactly when some
+    /// candidate moves the observation. A register the program writes before it
+    /// reads therefore does NOT count, which is the discrimination that makes
+    /// the join in `registered_bundle_v4` mean something.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn transition_read_set(
+        action: DirectExecutionActionV3,
+    ) -> (std::vec::Vec<usize>, std::vec::Vec<usize>) {
+        let (base_scalars, base_identities) = projected_bank(action);
+        let writes = transition_write_set(action);
+        let base = transition_observation(action, &writes, &base_scalars, &base_identities);
+        assert!(base.is_some(), "the canonical creation must be admitted");
+
+        let mut scalars = std::vec::Vec::new();
+        for index in 0..DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4 {
+            let original = *base_scalars.get(index).expect("scalar coordinate");
+            let moved = [0, 1, 2, u64::MAX, original.wrapping_add(1)]
+                .into_iter()
+                .filter(|candidate| *candidate != original)
+                .any(|candidate| {
+                    let mut perturbed = base_scalars.clone();
+                    *perturbed.get_mut(index).expect("scalar coordinate") = candidate;
+                    transition_observation(action, &writes, &perturbed, &base_identities) != base
+                });
+            if moved {
+                scalars.push(index);
+            }
+        }
+
+        let mut identities = std::vec::Vec::new();
+        for index in 0..DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4 {
+            let original = *base_identities.get(index).expect("identity coordinate");
+            let moved = [[9_u8; 32], [0_u8; 32], [7_u8; 32]]
+                .into_iter()
+                .filter(|candidate| *candidate != original)
+                .any(|candidate| {
+                    let mut perturbed = base_identities;
+                    *perturbed.get_mut(index).expect("identity coordinate") = candidate;
+                    transition_observation(action, &writes, &base_scalars, &perturbed) != base
+                });
+            if moved {
+                identities.push(index);
+            }
+        }
+        (scalars, identities)
+    }
+
+    /// The shared Transition reads the SAME bank on both sides, measured.
+    ///
+    /// This is the fact that makes Sell blocker (a) a blocker at all: the
+    /// comparison against `REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4` is outside
+    /// the side branch, so a Sell cannot escape it by carrying no Custody
+    /// window. The two sides select distinct Transition programs, so their
+    /// agreeing on the read set is a measurement and not a tautology -- and it
+    /// pins the count, so a schema change that moves a register fails here.
+    #[test]
+    fn both_sides_of_a_creation_read_the_same_register_bank() {
+        let sell = transition_read_set(DirectExecutionActionV3::RegisterSell);
+        let buy = transition_read_set(DirectExecutionActionV3::RegisterBuy);
+        assert_eq!(sell, buy, "the shared Transition reads one bank");
+        let (scalars, identities) = sell;
+        // Pinned exactly, so a schema change that moves a register fails HERE
+        // rather than in whatever authors an artifact against it.
+        assert_eq!(
+            scalars.as_slice(),
+            [
+                0_usize, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 22, 23, 24,
+                28, 29, 30
+            ]
+        );
+        assert_eq!(identities.as_slice(), [1_usize, 2, 3, 4, 5, 6, 7, 9, 10]);
+        assert!(
+            identities.contains(&REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4),
+            "the collateral source is read unconditionally, on both sides"
+        );
+        // The discrimination check: the constants the program loads are written
+        // before they are read, so they do NOT measure as read.
+        for constant in [
+            REGISTERED_SCALAR_ZERO_V4,
+            REGISTERED_SCALAR_ONE_V4,
+            REGISTERED_SCALAR_GTC_V4,
+            REGISTERED_SCALAR_FEE_DENOMINATOR_V4,
+            REGISTERED_SCALAR_EXPECTED_SIDE_V4,
+        ] {
+            assert!(
+                !scalars.contains(&constant),
+                "scalar {constant} is loaded by the program, not read from the bank"
+            );
+        }
+        // And the pass-through check the whole-bank comparison got wrong: the
+        // four LifecycleV5 Rent quotes are never touched by this Transition.
+        for quote in [
+            REGISTERED_SCALAR_REPLAY_RENT_V4,
+            REGISTERED_SCALAR_VAULT_RENT_V4,
+            REGISTERED_SCALAR_MAKER_CURRENT_RENT_V4,
+            REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4,
+        ] {
+            assert!(
+                !scalars.contains(&quote),
+                "scalar {quote} passes through the Transition; it is not read by it"
+            );
+        }
     }
 
     /// WHAT A `RegisterSell` MAY NOT INHERIT FROM `RegisterBuy`, decided.

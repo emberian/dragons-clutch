@@ -1,10 +1,20 @@
-//! Ordered local-state and Custody effects for registered Buy admission.
+//! Ordered local-state and Custody effects for registered creation, both sides.
 //!
-//! The fixed topology initializes the Direct maker/record candidates, then
-//! invokes Custody InitializeReplay, OpenVault, and one terminal delegated
-//! external-to-record deposit.  Receipt dependencies bind that exact order;
-//! local/root commits remain owned by common Hot after every child receipt is
-//! authenticated.
+//! A Buy initializes the Direct maker/record candidates, then invokes Custody
+//! InitializeReplay, OpenVault, and one terminal delegated external-to-record
+//! deposit.  Receipt dependencies bind that exact order; local/root commits
+//! remain owned by common Hot after every child receipt is authenticated.
+//!
+//! A Sell escrows CLAIMS, which the record itself accounts for, so it opens no
+//! Custody replay, no vault and no deposit: its Effect is the same local-state
+//! block and NO routes at all. The two sides differ in exactly one instruction
+//! operand, and it is the load-bearing one --
+//! `DirectRegisteredRecordLayoutV2::RESERVED_CLAIMS`. A Buy reserves nothing in
+//! claims and writes zero; a Sell must reserve its whole signed maximum, because
+//! the fill re-proves `maximum - filled == reservedClaims` and a fresh record has
+//! `filled == 0`. A Sell Effect that inherited the Buy's zero would produce a
+//! record no fill could ever admit, at any maximum, and nothing before the fill
+//! would refuse.
 
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
 use dclutch_custody_contract::{
@@ -26,11 +36,12 @@ use dclutch_effect_kernel::{
 };
 
 use crate::{
-    execution_v3::DIRECT_REGISTRATION_REQUEST_BYTES_V3,
+    execution_v3::{DIRECT_REGISTRATION_REQUEST_BYTES_V3, DirectExecutionActionV3},
     generated_intent_v2 as intent,
     registered_account_artifacts_v4::{
         DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4, DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4,
         DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4, DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4,
+        DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4,
     },
     registered_creation_artifacts_v4::{
         DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
@@ -69,6 +80,8 @@ use crate::{
 const ROUTE_COUNT: usize = 3;
 const DEPENDENCY_COUNT: usize = 3;
 const FIXED_INSTRUCTION_COUNT: usize = 87;
+/// The local-state block, which is the whole of a Sell Effect.
+const LOCAL_STATE_INSTRUCTION_COUNT: usize = 37;
 const REQUEST_BANK_BYTES: usize =
     2 * dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 + DELEGATED_CUSTODY_REQUEST_BYTES_V2;
 const BASE_EFFECT_BYTES: usize = HEADER_BYTES
@@ -80,6 +93,23 @@ const BASE_EFFECT_BYTES: usize = HEADER_BYTES
 /// Exact zero-extension DCE5 bytes for registered Buy creation.
 pub const DIRECT_REGISTER_BUY_EFFECT_BYTES_V4: usize = HEADER_BYTES_V4 + BASE_EFFECT_BYTES;
 
+const SELL_BASE_EFFECT_BYTES: usize =
+    HEADER_BYTES + LOCAL_STATE_INSTRUCTION_COUNT * OPERATION_BYTES;
+/// Exact zero-extension DCE5 bytes for registered Sell creation.
+pub const DIRECT_REGISTER_SELL_EFFECT_BYTES_V4: usize = HEADER_BYTES_V4 + SELL_BASE_EFFECT_BYTES;
+
+/// Exact EffectProgramV4 width for one side-selected registered creation.
+#[must_use]
+pub const fn direct_registered_creation_effect_bytes_v4(
+    action: DirectExecutionActionV3,
+) -> Option<usize> {
+    match action {
+        DirectExecutionActionV3::RegisterBuy => Some(DIRECT_REGISTER_BUY_EFFECT_BYTES_V4),
+        DirectExecutionActionV3::RegisterSell => Some(DIRECT_REGISTER_SELL_EFFECT_BYTES_V4),
+        _ => None,
+    }
+}
+
 /// Stable registered Effect artifact refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectRegisteredEffectArtifactErrorV4 {
@@ -89,6 +119,95 @@ pub enum DirectRegisteredEffectArtifactErrorV4 {
     ChildRequest,
     /// The Effect semantic-owner encoder or hostile decoder refused.
     Effect,
+}
+
+/// Emit the exact side-selected registered creation EffectProgramV4 atomically.
+pub fn encode_direct_registered_creation_effect_v4_atomic(
+    action: DirectExecutionActionV3,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectRegisteredEffectArtifactErrorV4> {
+    match action {
+        DirectExecutionActionV3::RegisterBuy => {
+            encode_direct_register_buy_effect_v4_atomic(scratch, output)
+        }
+        DirectExecutionActionV3::RegisterSell => {
+            encode_direct_register_sell_effect_v4_atomic(scratch, output)
+        }
+        _ => Err(DirectRegisteredEffectArtifactErrorV4::Coordinate),
+    }
+}
+
+/// Emit the exact registered Sell EffectProgramV4 atomically.
+///
+/// No routes: a Sell invokes no child program at all. The record and the maker
+/// replay are created by the lifecycle adapter, and this Effect writes their
+/// bodies and the root's open-maker count, which is the entire settlement.
+pub fn encode_direct_register_sell_effect_v4_atomic(
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectRegisteredEffectArtifactErrorV4> {
+    if scratch.len() != DIRECT_REGISTER_SELL_EFFECT_BYTES_V4
+        || output.len() != DIRECT_REGISTER_SELL_EFFECT_BYTES_V4
+    {
+        return Err(DirectRegisteredEffectArtifactErrorV4::Coordinate);
+    }
+    let mut base_scratch = [0_u8; SELL_BASE_EFFECT_BYTES];
+    let mut base = [0_u8; SELL_BASE_EFFECT_BYTES];
+    encode_sell_base_atomic(&mut base_scratch, &mut base)?;
+    encode_program_v4_atomic(
+        &base,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        u32::try_from(DIRECT_REGISTRATION_REQUEST_BYTES_V3)
+            .map_err(|_| DirectRegisteredEffectArtifactErrorV4::Coordinate)?,
+        &[],
+        &[],
+        scratch,
+        output,
+    )
+    .map_err(|_| DirectRegisteredEffectArtifactErrorV4::Effect)?;
+    ProgramV4::decode(output).map_err(|_| DirectRegisteredEffectArtifactErrorV4::Effect)?;
+    Ok(())
+}
+
+fn encode_sell_base_atomic(
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectRegisteredEffectArtifactErrorV4> {
+    let placeholder = EffectInstructionV3::write_u64(
+        AccountCoordinateV3::fixed(0),
+        0,
+        ScalarCoordinateV3::common(0),
+    );
+    let mut instructions = [placeholder; LOCAL_STATE_INSTRUCTION_COUNT];
+    let mut next = 0;
+    push_local_state(
+        &mut instructions,
+        &mut next,
+        DirectExecutionActionV3::RegisterSell,
+    )?;
+    if next != instructions.len() {
+        return Err(DirectRegisteredEffectArtifactErrorV4::Coordinate);
+    }
+    encode_effect_program_v4_atomic(
+        EffectGeometryV3 {
+            fixed_accounts: DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4,
+            item_account_stride: 0,
+            common_scalars: scalar(DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4)?,
+            item_scalar_stride: DIRECT_REGISTERED_CREATION_ITEM_SCALAR_STRIDE_V4,
+            common_identities: identity(DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4)?,
+            item_identity_stride: DIRECT_REGISTERED_CREATION_ITEM_IDENTITY_STRIDE_V4,
+        },
+        &[],
+        &[],
+        &instructions,
+        &[],
+        scratch,
+        output,
+    )
+    .map_err(|_| DirectRegisteredEffectArtifactErrorV4::Effect)?;
+    ProgramV3::decode(output).map_err(|_| DirectRegisteredEffectArtifactErrorV4::Effect)?;
+    Ok(())
 }
 
 /// Emit the exact registered Buy EffectProgramV4 atomically.
@@ -173,7 +292,7 @@ fn effect_instructions()
     );
     let mut output = [placeholder; FIXED_INSTRUCTION_COUNT];
     let mut next = 0;
-    push_local_state(&mut output, &mut next)?;
+    push_local_state(&mut output, &mut next, DirectExecutionActionV3::RegisterBuy)?;
     push_initialize_request(&mut output, &mut next)?;
     push_open_request(&mut output, &mut next)?;
     push_deposit_request(&mut output, &mut next)?;
@@ -186,7 +305,18 @@ fn effect_instructions()
 fn push_local_state(
     output: &mut [EffectInstructionV3],
     next: &mut usize,
+    action: DirectExecutionActionV3,
 ) -> Result<(), DirectRegisteredEffectArtifactErrorV4> {
+    // THE one-operand difference between the two sides. A Buy escrows
+    // collateral and reserves no claims; a Sell escrows claims and must reserve
+    // its whole signed maximum, because the fill re-proves
+    // `maximum - filled == reservedClaims` against a record whose `filled` is
+    // still zero.
+    let reserved_claims = match action {
+        DirectExecutionActionV3::RegisterBuy => REGISTERED_SCALAR_ZERO_V4,
+        DirectExecutionActionV3::RegisterSell => REGISTERED_SCALAR_MAXIMUM_V4,
+        _ => return Err(DirectRegisteredEffectArtifactErrorV4::Coordinate),
+    };
     push(
         output,
         next,
@@ -359,7 +489,7 @@ fn push_local_state(
         EffectInstructionV3::write_u64(
             record,
             offset(DirectRegisteredRecordLayoutV2::RESERVED_CLAIMS)?,
-            scalar_coordinate(REGISTERED_SCALAR_ZERO_V4)?,
+            scalar_coordinate(reserved_claims)?,
         ),
         EffectInstructionV3::write_u64(
             record,
@@ -817,6 +947,107 @@ mod tests {
     }
 
     #[test]
+    fn sell_effect_v4_round_trips_with_no_route_at_all() {
+        let mut scratch = [0_u8; DIRECT_REGISTER_SELL_EFFECT_BYTES_V4];
+        let mut output = [0_u8; DIRECT_REGISTER_SELL_EFFECT_BYTES_V4];
+        encode_direct_register_sell_effect_v4_atomic(&mut scratch, &mut output).expect("effect");
+        let program = ProgramV4::decode(&output).expect("decode");
+        let base = program.base();
+        assert_eq!(base.route_count(), 0);
+        assert_eq!(base.receipt_dependency_count(), 0);
+        assert_eq!(
+            base.fixed_account_count(),
+            DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4
+        );
+        assert_eq!(
+            usize::from(base.fixed_operation_count()),
+            LOCAL_STATE_INSTRUCTION_COUNT
+        );
+        // The side selector is exhaustive over the family and refuses anything
+        // else, so a third action cannot silently take the Buy's bytes.
+        assert_eq!(
+            direct_registered_creation_effect_bytes_v4(DirectExecutionActionV3::RegisterSell),
+            Some(DIRECT_REGISTER_SELL_EFFECT_BYTES_V4)
+        );
+        assert_eq!(
+            direct_registered_creation_effect_bytes_v4(
+                DirectExecutionActionV3::FillRegisteredOrdinary
+            ),
+            None
+        );
+    }
+
+    /// THE ONE OPERAND, gated.
+    ///
+    /// `7357aece` verified that a Sell record written the way `RegisterBuy`
+    /// writes one is unfillable: the fill re-proves
+    /// `maximum - filled == reservedClaims` and a fresh record has `filled == 0`,
+    /// so a `RESERVED_CLAIMS` of zero is right for a Buy and wrong for every
+    /// Sell at every maximum. Nothing before the fill refuses it -- the record
+    /// decodes, the creation admits -- which is exactly why this is a test and
+    /// not a comment.
+    ///
+    /// The two local-state blocks are otherwise the SAME block, and this states
+    /// that as a measurement rather than a claim: exactly one of the 37
+    /// operations differs, it is the `RESERVED_CLAIMS` write, and the only thing
+    /// that moved is its source scalar.
+    #[test]
+    fn the_two_local_state_blocks_differ_in_exactly_one_operand() {
+        let placeholder = EffectInstructionV3::write_u64(
+            AccountCoordinateV3::fixed(0),
+            0,
+            ScalarCoordinateV3::common(0),
+        );
+        let mut blocks = [[placeholder; LOCAL_STATE_INSTRUCTION_COUNT]; 2];
+        for (block, action) in blocks.iter_mut().zip([
+            DirectExecutionActionV3::RegisterBuy,
+            DirectExecutionActionV3::RegisterSell,
+        ]) {
+            let mut next = 0;
+            push_local_state(block, &mut next, action).expect("local state");
+            assert_eq!(next, LOCAL_STATE_INSTRUCTION_COUNT);
+        }
+        let [buy, sell] = blocks;
+
+        let record = AccountCoordinateV3::fixed(DIRECT_REGISTERED_RECORD_ACCOUNT_V4);
+        let reserved = offset(DirectRegisteredRecordLayoutV2::RESERVED_CLAIMS).expect("offset");
+        let mut differing = 0_usize;
+        let mut found = usize::MAX;
+        for index in 0..LOCAL_STATE_INSTRUCTION_COUNT {
+            if buy.get(index) != sell.get(index) {
+                differing += 1;
+                found = index;
+            }
+        }
+        assert_eq!(
+            differing, 1,
+            "the two sides may differ in exactly one local-state operation"
+        );
+        assert_eq!(
+            *buy.get(found).expect("Buy operation"),
+            EffectInstructionV3::write_u64(
+                record,
+                reserved,
+                scalar_coordinate(REGISTERED_SCALAR_ZERO_V4).expect("zero"),
+            ),
+            "a Buy reserves no claims"
+        );
+        assert_eq!(
+            *sell.get(found).expect("Sell operation"),
+            EffectInstructionV3::write_u64(
+                record,
+                reserved,
+                scalar_coordinate(REGISTERED_SCALAR_MAXIMUM_V4).expect("maximum"),
+            ),
+            "a Sell reserves its whole signed maximum, or no fill can ever admit"
+        );
+        // Not vacuous by construction: the two banks the operand selects hold
+        // different values, so the one operand is a real difference and not two
+        // names for one register.
+        assert_ne!(REGISTERED_SCALAR_ZERO_V4, REGISTERED_SCALAR_MAXIMUM_V4);
+    }
+
+    #[test]
     fn wrong_width_preserves_output() {
         let mut scratch = [0_u8; DIRECT_REGISTER_BUY_EFFECT_BYTES_V4];
         let mut output = [0x55_u8; DIRECT_REGISTER_BUY_EFFECT_BYTES_V4 - 1];
@@ -826,5 +1057,14 @@ mod tests {
             Err(DirectRegisteredEffectArtifactErrorV4::Coordinate)
         );
         assert_eq!(output, before);
+
+        let mut sell_scratch = [0_u8; DIRECT_REGISTER_SELL_EFFECT_BYTES_V4];
+        let mut sell_output = [0x55_u8; DIRECT_REGISTER_SELL_EFFECT_BYTES_V4 - 1];
+        let sell_before = sell_output;
+        assert_eq!(
+            encode_direct_register_sell_effect_v4_atomic(&mut sell_scratch, &mut sell_output),
+            Err(DirectRegisteredEffectArtifactErrorV4::Coordinate)
+        );
+        assert_eq!(sell_output, sell_before);
     }
 }
