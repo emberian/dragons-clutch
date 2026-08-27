@@ -277,11 +277,37 @@ if [ "$MODE" = "full" ]; then
         role="${entry%%:*}"
         printf '%s=%s\n' "$role" "$(sha256 "$ELF_DIR/$role.so")"
     done)"
+    # ------------------------------------------------------ campaign keypairs
+    # Tier 1 pins its signing keys to a fixed seed, and that is the whole reason
+    # the CU budgets can have teeth.
+    #
+    # Unseeded, every campaign draws fresh keys, which changes how many
+    # iterations `find_program_address` needs to find an off-curve bump, and
+    # each iteration is one `sol_create_program_address` syscall at 1,500 CU.
+    # Measured band: 58,494 CU on DCLTGMF1, and 79,500 on DCLTPCB1 INSIDE ONE
+    # CAMPAIGN. A tolerance wide enough to absorb that cannot also catch a
+    # regression smaller than it. See CU_BUDGETS.md.
+    #
+    # The seed is HASHED FROM ITS PREIMAGE, the same way the Resolution semantic
+    # release below is, so what is pinned is a sentence and not a magic number
+    # nobody can check. Changing the preimage moves every campaign key and every
+    # CU number with it -- which is a re-pin of CU_BUDGETS.json, so the seed is
+    # in the campaign stamp and a change to it re-runs the campaign rather than
+    # being skipped as up to date.
+    #
+    # `--keypair-seed` is refused by the bootstrap for any endpoint that is not
+    # loopback. That refusal is the affordance's safety gate and it is not this
+    # script's to relax; see
+    # tools/local-validator/bootstrap/successor/src/seed.rs.
+    KEYPAIR_SEED_PREIMAGE='dclutch/gauntlet/tier1/keypair-seed/v1'
+    KEYPAIR_SEED="$(printf '%s' "$KEYPAIR_SEED_PREIMAGE" | sha256_stdin)"
+
     # Deliberately NOT keyed on the bindings file: authoring a binding must
     # never cost a 13-minute campaign re-run. Bindings are consumed by the
     # census stage, which is cheap and always re-runs.
-    SPEC_INPUT_DIGEST="$(printf '%s\n%s\n%s\n' \
-        "$SOURCE_REVISION" "$ELF_DIGESTS" "$RECORD_PUBLICATION" | sha256_stdin)"
+    SPEC_INPUT_DIGEST="$(printf '%s\n%s\n%s\n%s\n' \
+        "$SOURCE_REVISION" "$ELF_DIGESTS" "$RECORD_PUBLICATION" \
+        "$KEYPAIR_SEED" | sha256_stdin)"
 
     if stage_needed campaign "$SPEC_INPUT_DIGEST"; then
         say "stage campaign (tier 1)"
@@ -441,8 +467,11 @@ PY
 
         say "campaign: submitting real transactions to a fresh localhost ledger"
         echo "record publication: $RECORD_PUBLICATION"
+        echo "keypair seed:       $KEYPAIR_SEED"
+        echo "             from:  $KEYPAIR_SEED_PREIMAGE"
         echo "run directory: $RUN"
-        if ! "$BOOTSTRAP_BIN" run --spec "$SPEC" > "$RUN/campaign.stdout" 2> "$RUN/campaign.stderr"; then
+        if ! "$BOOTSTRAP_BIN" run --spec "$SPEC" --keypair-seed "$KEYPAIR_SEED" \
+            > "$RUN/campaign.stdout" 2> "$RUN/campaign.stderr"; then
             tail -n 60 "$RUN/campaign.stderr" >&2
             echo "gauntlet: campaign FAILED; evidence and logs are under $RUN" >&2
             printf '%s\n' "$RUN" > "$WORK/last-run"
