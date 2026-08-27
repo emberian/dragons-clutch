@@ -176,6 +176,47 @@ if [ "$KEEP_ELF" != "true" ]; then
         fi
         cp "$role_target/deploy/$stem.so" "$ELF_DIR/$role.so"
     done
+
+    # Every OTHER program in the tree, for the frame gate and nothing else.
+    #
+    # The role list above is the release SET: what gets an ELF, an address, a
+    # capitalization row and an evidence chain. It is not the list of links this
+    # repository builds. programs/ carries three more entrypoints that no role
+    # names -- dclutch-dealer-sbf, dclutch-direct-aot-sbf and
+    # dclutch-product-runtime-v2-sbf, refusal namespaces 0x7, 0xA and 0x9 in
+    # decision 0007 -- and a link nobody builds is a link nobody is told about,
+    # because cargo build-sbf exits ZERO on a frame-overwrite diagnostic.
+    #
+    # Enumerated from the DIRECTORY on purpose, not from a second hand-kept
+    # list. The 82-diagnostic regression of 2026-08-27 survived a whole wave
+    # inside a link that four separate gates each had a list which did not name;
+    # a list is the thing that goes stale. A program added under programs/ is
+    # frame-checked here whether or not anyone remembers this loop exists.
+    #
+    # Nothing here enters the release set: no ELF is copied, no address is
+    # derived, no capitalization is computed. Only the diagnostic count joins
+    # the total, under its own package name so the summary says which link.
+    for manifest in "$SOURCE"/programs/*/Cargo.toml; do
+        package="$(basename "$(dirname "$manifest")")"
+        if printf '%s\n' "$ROLES" | grep -q ":$package:"; then
+            continue
+        fi
+        echo "build: $package (frame gate only, not a release artifact)"
+        gate_log="$WORK/build-$package.log"
+        gate_target="$(target_dir_for "$package")"
+        (
+            cd "$SOURCE"
+            CARGO_TARGET_DIR="$gate_target" \
+                cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
+        ) >"$gate_log" 2>&1
+        cat "$gate_log" >> "$BUILD_LOG"
+        count="$(grep -c "$DIAGNOSTIC_PATTERN" "$gate_log" || true)"
+        printf '%s=%s\n' "$package" "$count" >> "$WORK/build-diagnostics.txt"
+        if [ "$count" != "0" ]; then
+            echo "BUILD DIAGNOSTIC: $package emitted $count SBF stack-frame overwrite reports" >&2
+            grep "$DIAGNOSTIC_PATTERN" "$gate_log" | sort -u >&2
+        fi
+    done
 fi
 
 DIAGNOSTIC_TOTAL=0

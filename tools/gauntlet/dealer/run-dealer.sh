@@ -54,9 +54,20 @@ build() {
 # overwrites its own stack frame. An artifact the toolchain calls
 # potentially-undefined has no business entering a campaign unnoticed, so the
 # count is taken and a nonzero one stops the tier.
+#
+# `dclutch-dealer-accelerator-sbf` is in this list even though this campaign
+# drives `dclutch-dealer-sbf`, and the distinction is the one that cost a wave:
+# the two are different programs. The accelerator is the link that carries the
+# Dealer family through Trading's hot path -- it depends on
+# `dclutch-trading-sbf` with `default-features = false` -- and it is a different
+# monomorphization of that path from the Trading ELF every other gate builds.
+# On 2026-08-27 it carried 82 frame diagnostics on
+# `hot_v3::execute_child_routes_v3` while Trading's own ELF reported zero, and
+# no campaign in this tree built it. The Dealer tier is where that link belongs.
 diagnostics=0
 for manifest in \
     programs/dclutch-dealer-sbf/Cargo.toml \
+    programs/dclutch-dealer-accelerator-sbf/Cargo.toml \
     programs/dclutch-registry-sbf/Cargo.toml \
     programs/dclutch-core-sbf/Cargo.toml \
     programs/dclutch-custody-sbf/Cargo.toml
