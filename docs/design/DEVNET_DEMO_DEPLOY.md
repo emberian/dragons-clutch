@@ -422,6 +422,13 @@ Write counts assume ~1,012 payload bytes per `Write` transaction (the legacy
 instruction envelope) at the 5,000-lamport base fee. Fees are rounding error
 next to rent; they are listed so nobody is surprised by ~5,000 transactions.
 
+**This table has a shelf life measured in hours.** Building the same tree three
+commits later in the same session already produced a different Resolution ELF
+(`d565b318…` → `fcadd8fc…`), because a concurrent lane owns
+`programs/dclutch-resolution-proof-sbf`. Use the numbers for *sizing the
+budget*, and take the digests and byte counts for deploy day from a candidate
+built at the deploy commit.
+
 ### 4.2 The budget
 
 | line | seven roles | all ten |
