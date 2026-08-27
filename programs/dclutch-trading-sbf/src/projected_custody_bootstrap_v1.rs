@@ -22,6 +22,13 @@
 //! Child CPI metas are built from this route's own authenticated frame. This is
 //! a direct instruction, not an Effect-V3 route adapter, so it never consults a
 //! downgraded privilege view.
+//!
+//! One readonly account follows the two raw requests: the instructions sysvar.
+//! Four stages allocate from one bump allocator that never frees, so this route
+//! is on `entrypoint_adapter::declares_extended_heap_profile_v1`'s list and
+//! runs on a runtime-granted heap frame. The adapter re-derives that grant from
+//! the sysvar the runtime itself serialized, and it looks for it in this
+//! instruction's own account list, so the slot is part of the wire.
 
 extern crate alloc;
 
@@ -60,7 +67,9 @@ use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::TradingSbfError;
-use crate::generic_market_founding_v1::authenticate_projected_lock_join_v1;
+use crate::generic_market_founding_v1::{
+    authenticate_instructions_sysvar_v1, authenticate_projected_lock_join_v1,
+};
 
 /// Sole top-level projected-Custody founding-bootstrap instruction.
 pub const PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1: [u8; 8] = *b"DCLTPCB1";
@@ -71,8 +80,22 @@ pub const PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V1: usize = 2;
 
 const FOUND_RAW: usize = 0;
 const LOCK_RAW: usize = 1;
-const CUSTODY_PROGRAM: usize = 2;
-const INITIALIZE_START: usize = 3;
+
+/// Index of the instructions sysvar this route presents to its own entrypoint.
+///
+/// `328fead` measured this route dying out of memory entering its third stage
+/// with sixty percent of the compute budget unspent, and concluded that either
+/// it allocates less or the program supplies its own allocator over the
+/// runtime-granted heap. `entrypoint_adapter` is that allocator, and it
+/// re-derives the grant from the instructions sysvar rather than taking any
+/// caller's word for it — scanning **this instruction's own account list** to
+/// find it. A frame that does not present it keeps the 32 KiB ceiling and dies
+/// exactly where it died before, so the slot is part of the route's wire.
+pub const PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1: usize =
+    PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V1;
+
+const CUSTODY_PROGRAM: usize = PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1 + 1;
+const INITIALIZE_START: usize = CUSTODY_PROGRAM + 1;
 
 /// Exact fixed physical frame width, before the founding's FundingState tail.
 ///
@@ -591,6 +614,10 @@ impl<'accounts, 'info> BootstrapFrameV1<'accounts, 'info> {
                 return Err(TradingSbfError::Content.into());
             }
         }
+        authenticate_instructions_sysvar_v1(account(
+            accounts,
+            PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1,
+        )?)?;
         let open_start = INITIALIZE_START
             .checked_add(PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1)
             .ok_or(TradingSbfError::Content)?;
@@ -955,13 +982,20 @@ mod tests {
             b'D', b'C', b'L', b'T', b'P', b'C', b'B', b'1', 0
         ]));
         assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTION_BYTES_V1, 8);
-        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1, 78);
+        // 78 before the instructions sysvar the heap-frame admission reads
+        // back; presenting it is what lets the route run on the granted heap
+        // instead of the compile-time 32 KiB it exhausted at stage three.
+        assert_eq!(PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1, 79);
+        assert_eq!(
+            PROJECTED_CUSTODY_BOOTSTRAP_INSTRUCTIONS_SYSVAR_INDEX_V1,
+            PROJECTED_CUSTODY_BOOTSTRAP_RAW_ACCOUNT_COUNT_V1
+        );
         // The FundingState tail is one account per capability-manifest entry,
         // and the founding artifact's own `funding_count` pins its length.
-        assert_eq!(projected_custody_bootstrap_account_count_v1(3), 81);
+        assert_eq!(projected_custody_bootstrap_account_count_v1(3), 82);
         assert_eq!(
             projected_custody_bootstrap_account_count_v1(GENERIC_FOUNDING_MAX_FUNDING_STATES_V1),
-            94
+            95
         );
     }
 

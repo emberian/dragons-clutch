@@ -6,6 +6,13 @@
 //! those bytes against their own persisted semantic authorities before any
 //! mutation. Every immediate child receipt is then joined before the next CPI;
 //! the final Core Open is last, so any late refusal rolls back the entire chain.
+//!
+//! A fifth readonly account follows those four: the instructions sysvar. Five
+//! stages of children allocate from one bump allocator that never frees, so
+//! this route is on `entrypoint_adapter::declares_extended_heap_profile_v1`'s
+//! list and runs on a runtime-granted heap frame. The adapter re-derives that
+//! grant from the sysvar the runtime itself serialized, and it looks for it in
+//! this instruction's own account list, so the slot is part of the wire.
 
 extern crate alloc;
 
@@ -49,6 +56,24 @@ pub const GENERIC_MARKET_FOUNDING_MAGIC_V1: [u8; 8] = *b"DCLTGMF1";
 pub const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1: usize = 8;
 /// Exact readonly raw-request prefix width.
 pub const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1: usize = 4;
+
+/// Index of the instructions sysvar this route presents to its own entrypoint.
+///
+/// The route runs on a runtime-granted heap frame larger than the protocol
+/// default, and `entrypoint_adapter::admit_heap_frame_v1` re-derives that grant
+/// from the instructions sysvar rather than taking any caller's word for it.
+/// The adapter finds the sysvar by scanning **this instruction's own account
+/// list**, so a founding that does not present it keeps the 32 KiB ceiling and
+/// exhausts it. Presenting it is therefore part of the route's wire, not an
+/// optional convenience, and it is authenticated here rather than tolerated:
+/// a frame carrying something else at this index refuses instead of running
+/// out of memory three stages later.
+pub const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1: usize =
+    GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1;
+
+/// Exact readonly prefix width: the four raw requests and the sysvar.
+pub const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1: usize =
+    GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1 + 1;
 
 const FOUND_RAW: usize = 0;
 const LOCK_RAW: usize = 1;
@@ -137,7 +162,7 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
             .checked_add(funding_count)
             .and_then(|value| value.checked_add(GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1))
             .ok_or(TradingSbfError::Content)?;
-        let lock_start = GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1;
+        let lock_start = GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1;
         let found_start = lock_start
             .checked_add(PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1)
             .ok_or(TradingSbfError::Content)?;
@@ -161,6 +186,10 @@ impl<'accounts, 'info> GenericFoundingFrameV1<'accounts, 'info> {
                 .get(..GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1)
                 .ok_or(TradingSbfError::Content)?,
         )?;
+        authenticate_instructions_sysvar_v1(account(
+            accounts,
+            GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1,
+        )?)?;
         Ok(Self {
             lock: subslice(
                 accounts,
@@ -791,6 +820,30 @@ fn caller_seeds(
     .map_err(|_| TradingSbfError::Content.into())
 }
 
+/// Authenticate the instructions sysvar a heap-profile route presents.
+///
+/// Shared with `projected_custody_bootstrap_v1`, the other route on
+/// `entrypoint_adapter::declares_extended_heap_profile_v1`'s list, so the two
+/// cannot drift about what that slot holds. This is not a security boundary —
+/// the adapter re-derives the grant from the sysvar's own bytes and applies
+/// agave's `sanitize_requested_heap_size`, and a wrong account here simply
+/// means no lift happens — it is a fail-closed frame assertion: the route
+/// refuses a frame that cannot deliver the heap it is declared to need,
+/// instead of running out of memory partway through a rollback domain.
+#[inline(never)]
+pub(crate) fn authenticate_instructions_sysvar_v1(
+    account: &AccountInfo<'_>,
+) -> Result<(), ProgramError> {
+    if account.key != &solana_sdk_ids::sysvar::instructions::ID
+        || account.is_signer
+        || account.is_writable
+        || account.executable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
+}
+
 fn authenticate_raw_accounts(accounts: &[AccountInfo<'_>]) -> Result<(), ProgramError> {
     if accounts.len() != GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 {
         return Err(TradingSbfError::Content.into());
@@ -1239,7 +1292,7 @@ mod tests {
     #[test]
     fn frame_width_is_runtime_funding_polymorphic() {
         let count = |funding: usize| {
-            GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1
+            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1
                 + PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1
                 + GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1
                 + funding
@@ -1249,8 +1302,14 @@ mod tests {
                 + GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1
         };
         // Decision 0004 removed the capability-root account from both the Found
-        // and the Open frame; the root is derived, never read.
-        assert_eq!(count(3), 137);
-        assert_eq!(count(16), 150);
+        // and the Open frame; the root is derived, never read. The one account
+        // above that width is the instructions sysvar the heap-frame admission
+        // reads back, which is why the demo Market's frame is 138 and not 137.
+        assert_eq!(count(3), 138);
+        assert_eq!(count(16), 151);
+        assert_eq!(
+            GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1,
+            GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 + 1
+        );
     }
 }
