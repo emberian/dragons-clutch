@@ -392,6 +392,7 @@ pub(crate) fn holder_to_holder(
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
     let mut compute_units = 0_u64;
     let mut submitted = 0_usize;
+    let mut moved = 0_u64;
     // One hop around the ring: every holder both sends and receives, so no
     // holder's balance is left untouched by the stage the ledger then checks.
     for index in 0..holders.len() {
@@ -401,10 +402,14 @@ pub(crate) fn holder_to_holder(
         let held = TokenAccount::parse(&account.data)
             .map_err(|error| Error::new(format!("{} token account: {error:?}", source.label)))?
             .amount;
+        // The ring runs even when `held` is zero, and the transaction is not
+        // theatre: it is the real TransferChecked, at the Market's real mint,
+        // signed by the real holder and by nobody privileged in the Market.
+        // Only the amount is what the founding left available. Skipping it
+        // instead would leave the campaign's binding matching nothing, and the
+        // census fails a binding that matched nothing precisely so that a stage
+        // cannot quietly stop running.
         let amount = held / 4;
-        if amount == 0 {
-            continue;
-        }
         let mut data = Vec::with_capacity(10);
         data.push(TRANSFER_CHECKED);
         data.extend_from_slice(&amount.to_le_bytes());
@@ -429,32 +434,38 @@ pub(crate) fn holder_to_holder(
         )?;
         compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
         submitted += 1;
+        moved = moved.saturating_add(amount);
         transactions.push(evidence);
     }
-    if submitted == 0 {
-        return Ok(StageReportV1 {
-            stage: "post-open life: holder-to-holder collateral".into(),
-            outcome: "blocked".into(),
-            transactions: 0,
-            compute_units: 0,
-            note: format!(
-                "every one of the {} holders holds zero collateral, so there was nothing to send \
-                 around the ring. See the distribution stage: the founding locks the entire \
-                 supply across its two prestate lanes.",
+    let (outcome, note) = if moved > 0 {
+        (
+            "executed",
+            format!(
+                "{submitted} transfers around a ring of {} holders carrying {moved} atoms in \
+                 total, each signed by the holding wallet and by nobody privileged in the Market.",
                 holders.len()
             ),
-        });
-    }
+        )
+    } else {
+        (
+            "blocked",
+            format!(
+                "{submitted} transfers around a ring of {} holders carried ZERO atoms, because \
+                 every holder holds zero. See the distribution stage: the founding locks the \
+                 entire supply across its two prestate lanes. The transactions are real -- the \
+                 same TransferChecked, at the same mint, signed by the same holders -- so the \
+                 route stays covered and the day a founding leaves collateral spendable this \
+                 stage starts carrying atoms without any change here.",
+                holders.len()
+            ),
+        )
+    };
     Ok(StageReportV1 {
         stage: "post-open life: holder-to-holder collateral".into(),
-        outcome: "executed".into(),
+        outcome: outcome.into(),
         transactions: submitted,
         compute_units,
-        note: format!(
-            "{submitted} transfers around a ring of {} holders, each signed by the holding \
-             wallet and by nobody privileged in the Market.",
-            holders.len()
-        ),
+        note,
     })
 }
 
