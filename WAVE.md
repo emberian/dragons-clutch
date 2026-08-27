@@ -690,3 +690,26 @@ QUEUED with owners:
   production sha2 — convert to dclutch-sha256-adapter (the landed backend;
   one-shot hashv only, never the incremental Hasher). GIT-SCAN item 8 row
   CLOSED (69ea61fe, verified by SHASEAM).
+
+## DEVNET-SMOKE charter (expanded scope, awaiting ember's go)
+
+The smoke is a small public exchange, not a market. Deploy the seven roles
+once (checked-release, ~29 SOL, recycled at the end), then:
+1. The Pyth market: SOL/USD range protection under kappa, resolved by REAL
+   devnet Pyth in a widened window, redeemed, retired.
+2. The mainnet-observer market: a devnet market about a REAL mainnet
+   pumpfun/DBC graduation — the daemon reads live mainnet, relays signed
+   frames. The thesis, live.
+3. The abandoned market: relayer goes silent ON PURPOSE; the funded failure
+   walk runs in public with its bounty collectable by any devnet wallet;
+   walk instructions published on Pages.
+4. N=16 per market: distribution, ring, redemption of real atoms, refusals,
+   retirement.
+5. The conservation ledger runs against the PUBLIC chain; its verdict and
+   transcripts publish into the Pages reference as the evidence appendix.
+6. The browser live against devnet: list, detail, portfolio, redemption.
+7. Recycle: programs closed, rent recovered, transcripts kept.
+Stretch (gated on lanes landing first): General batch auction with real
+order flow; continuation trading at chosen-green seeds.
+Triggers: DECOMP-r compiling HEAD + DEMO-VERT-r yield. Authorization:
+ember's explicit go.
