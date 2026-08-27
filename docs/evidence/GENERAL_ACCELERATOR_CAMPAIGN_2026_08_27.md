@@ -20,11 +20,13 @@ document, not an omission.
 programs/dclutch-general-accelerator-sbf/program-test/run-program-test.sh
 ```
 
-At `1619124`, with `dclutch_general_accelerator_sbf.so` built by
+At `bc5da76`, with `dclutch_general_accelerator_sbf.so` built by
 `cargo build-sbf` at SHA-256
-`46ad714bd475e046fa80a0a0c2ba3b154aae190ff1ee3e841e24261856aee343` and the test
+`f71fecbc162961a6528027c4352fc3b0f98ac2bc59cb88d67e26a605aa1a6dbb` and the test
 caller at `6358c4f506582eb1d79547d9823092adf4be465ab7ba28084c7c9cbf4f4cf9c3`.
-Both builds emit **zero SBF stack-frame diagnostics**.
+Both builds emit **zero SBF stack-frame diagnostics**. The accelerator digest
+moved from `46ad714b...` when the root-lifecycle conjunct landed; the caller,
+which authenticates no artifact, is byte-identical.
 
 ## What executes
 
@@ -65,36 +67,44 @@ and the exact canonical message bytes.
 
 | action | CU | accounts | legacy packet | scratch pages |
 |---|---:|---:|---:|---:|
-| `Consider` | 56,164 | 33 | 811 | 3 |
-| `Freeze` | 32,592 | 31 | 745 | 3 |
-| `InitializeSettlement` | 81,376 | 89 | 867 | 3 |
-| `Collect` | 56,908 / 58,090 / 58,113 | 70 | 848 | 3 |
-| `Materialize` | 53,109 | 68 | 814 | 3 |
-| `Distribute` | 56,860 / 58,065 / 58,096 | 70 | 848 | 3 |
-| `Close` | 61,274 | 87 | 833 | 3 |
+| `Consider` | 56,180 | 33 | 811 | 3 |
+| `Freeze` | 32,608 | 31 | 745 | 3 |
+| `InitializeSettlement` | 81,392 | 89 | 867 | 3 |
+| `Collect` | 56,924 / 58,106 / 58,129 | 70 | 848 | 3 |
+| `Materialize` | 53,125 | 68 | 814 | 3 |
+| `Distribute` | 56,876 / 58,112 / 58,081 | 70 | 848 | 3 |
+| `Close` | 61,290 | 87 | 833 | 3 |
 
 ### N = 258
 
 | action | CU | accounts | legacy packet | scratch pages |
 |---|---:|---:|---:|---:|
-| `Consider` | 528,632 | 47 | 1,273 | 17 |
-| `Freeze` | 65,003 | 45 | 1,207 | 17 |
-| `InitializeSettlement` | 618,213 | 103 | **1,329** | 17 |
-| `Collect` | 146,864 / 147,291 / 148,085 | 84 | 1,310 | 17 |
-| `Materialize` | 141,338 | 82 | 1,276 | 17 |
-| `Distribute` | 144,503 / 145,724 / 146,526 | 84 | 1,310 | 17 |
-| `Close` | 155,764 | 101 | 1,295 | 17 |
+| `Consider` | 528,648 | 47 | 1,273 | 17 |
+| `Freeze` | 65,019 | 45 | 1,207 | 17 |
+| `InitializeSettlement` | 618,229 | 103 | **1,329** | 17 |
+| `Collect` | 146,880 / 147,307 / 148,101 | 84 | 1,310 | 17 |
+| `Materialize` | 141,356 | 82 | 1,276 | 17 |
+| `Distribute` | 144,519 / 146,542 / 145,740 | 84 | 1,310 | 17 |
+| `Close` | 155,744 | 101 | 1,295 | 17 |
 
 Repeated rows are the three settlement orders the campaign drives, in order.
 
-**Read the CU column with a caveat, and the other two without one.** This
-re-run was taken on a tree that also carried GEN-V3ACT's *uncommitted*
-`GENERAL_HOT_COMMON_SCALARS_V3` 88 -> 90 (the root-lifecycle observation pair).
-A register count moves compute and moves no accounts and no message bytes, so
-the `accounts` and `legacy packet` columns are attributable to the callee
-coordinate alone, and the `CU` column is JOINT and should be re-taken once that
-lane lands. The +2 CU on `Consider` and `Freeze`, whose account counts did not
-move at all, is the visible size of the non-account part.
+**The CU column is no longer joint, and it has been re-taken.** The caveat this
+paragraph used to carry was that the run sat on a tree holding GEN-V3ACT's
+uncommitted `GENERAL_HOT_COMMON_SCALARS_V3` 88 -> 90. That work is committed
+(`37d873f`, and the conjunct it made room for in `2e890d4`), and every number
+above is from one clean run at that HEAD. The `accounts`, `legacy packet` and
+`scratch pages` columns did not move at all, which is the load-bearing part: two
+more scalars is sixteen more bytes of bank and it crossed no boundary.
+
+**What the root-lifecycle refusal costs is 16 CU per action.** Five actions at
+N=1 and four at N=258 moved by exactly +16 against the previous run, which is
+the price of one `ProjectDataU8`, one `load_const` and one `scalar_eq` in a
+shared prelude. `Materialize` at N=258 moved +18 and `Close` at N=258 moved
+**-20**; the repeated settlement rows cannot be compared positionally because
+the prior table's row order within an action is not recoverable. Neither
+outlier was chased: the worst action is 44% of the ceiling and no decision in
+this family turns on twenty compute units.
 
 **Re-measured after the Custody callee coordinate landed.** The five actions
 that route to Custody carry one more account than the tables above did when
@@ -106,7 +116,7 @@ the cost of the extra checked add in `general_effect_account_count_v3`. Every
 other delta is +1 account, +1 legacy byte, and a few hundred CU.
 
 **Compute is not this family's blocker.** The worst action at the canonical
-width is `InitializeSettlement` at 618,213 CU — 44% of the 1,400,000 ceiling,
+width is `InitializeSettlement` at 618,229 CU — 44% of the 1,400,000 ceiling,
 and that is the accelerator's own consumption inside a caller CPI, not the
 whole Trading transaction. The N=1 → N=258 growth is sublinear in every action
 except the two that fold the whole candidate (`Consider`, `Initialize`).
