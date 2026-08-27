@@ -179,17 +179,21 @@ v = json.load(open(sys.argv[1]))["result"]["value"]
 prog, pdata = v[0], v[1]
 if prog is None and pdata is None:
     print("absent 0 nothing-deployed-at-this-id"); raise SystemExit
-total = (prog["lamports"] if prog else 0) + (pdata["lamports"] if pdata else 0)
+program_lamports = prog["lamports"] if prog else 0
 if pdata is None:
-    print(f"orphan-program {total} program-account-without-programdata"); raise SystemExit
+    print(f"orphan-program {program_lamports} program-account-without-programdata")
+    raise SystemExit
 d = base64.b64decode(pdata["data"][0])
 tag = int.from_bytes(d[0:4], "little")
 if tag != 3:
-    print(f"not-programdata {total} tag={tag}"); raise SystemExit
+    print(f"not-programdata {pdata['lamports']} tag={tag}"); raise SystemExit
+# `solana program close` reclaims the ProgramData rent ONLY. The 36-byte
+# Program account survives the close, still tag 2 and executable, holding its
+# own rent forever. Measured on a local validator, 2026-08-27.
 if d[12] == 1:
-    print(f"MUTABLE {total} closeable-by-its-upgrade-authority")
+    print(f"MUTABLE {pdata['lamports']} programdata-only;program-acct-{program_lamports}-stays")
 else:
-    print(f"IMMUTABLE {total} rent-is-permanently-burned")
+    print(f"IMMUTABLE {pdata['lamports'] + program_lamports} rent-is-permanently-burned")
 PY
 )"
     sol="$(python3 -c "print(f'{$lamports/1e9:.9f}')")"
@@ -208,8 +212,10 @@ PY
 done < "$WORK/targets"
 
 echo
-printf 'still reclaimable (mutable programs) : %.9f SOL\n' "$(python3 -c "print($TOTAL_OPEN/1e9)")"
-printf 'permanently burned (immutable)       : %.9f SOL\n' "$(python3 -c "print($TOTAL_LOCKED/1e9)")"
+printf 'still reclaimable (mutable ProgramData) : %.9f SOL\n' "$(python3 -c "print($TOTAL_OPEN/1e9)")"
+printf 'permanently burned (immutable)          : %.9f SOL\n' "$(python3 -c "print($TOTAL_LOCKED/1e9)")"
+echo   'note: a closed program leaves its 36-byte Program account behind, holding'
+echo   '      0.00114144 SOL that no route reclaims. Counted as burned, not open.'
 
 if [ -n "$BUFFER_AUTHORITY" ]; then
     echo

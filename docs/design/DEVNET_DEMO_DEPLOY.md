@@ -201,7 +201,7 @@ with `Keypair::new()`, never writes it to disk, and records
 sign two transactions — infrastructure init and its own revocation — and should
 be destroyed immediately after step 8, not archived.
 
-### 2.5 What revocation leaves behind
+### 2.5 What revocation leaves behind — measured
 
 The loader's `Some → None` serialization sets byte 12 to `0` and **leaves bytes
 `[13..45]` holding the former authority key** as inactive storage. The ELF still
@@ -209,8 +209,20 @@ starts at byte 45. The local plan pins this exact poststate
 (`plan::loader_programdata_bytes_after_revoke`, which flips byte 12 and nothing
 else) and the supervisor verifies it.
 
-This has a consequence for the evidence chain that is easy to miss and is
-written up as [§7 blocker B](#blocker-b-no-checked-manifest-can-describe-a-deployed-then-revoked-program).
+This lane measured it directly rather than trusting the pin. On a throwaway
+`solana-test-validator 4.0.2` (isolated port, ephemeral local keys, torn down
+afterwards), deploying `rent.so` and then running
+`solana program set-upgrade-authority --final`:
+
+```text
+before --final   space=152357 tag=3 slot=531 authtag=1
+                 bytes[13..45]=8d2e3468ff9086da37c9b8b5504cae7f299fb3e45807d4c2942835298cf08aa1
+after  --final   space=152357 tag=3 slot=531 authtag=0
+                 bytes[13..45]=8d2e3468ff9086da37c9b8b5504cae7f299fb3e45807d4c2942835298cf08aa1
+                                ^ unchanged: exactly the former authority's pubkey
+```
+
+Only byte 12 moved. See [§7 blocker B](#blocker-b-no-checked-manifest-can-describe-a-deployed-then-revoked-program).
 
 ---
 
@@ -351,8 +363,24 @@ Devnet rent is affine and was read from the cluster, not assumed:
 
 Loader V3 geometry per role: `Program` is **36** bytes, `ProgramData` is
 **45 + elf_len**, and `--max-len` defaults to the ELF length, so there is no
-2× allocation. The live devnet Pyth programs confirm the shape exactly
-(`space = elf + 45` on all three).
+2× allocation. The live devnet Pyth programs show the shape (`space = elf + 45`
+on all three), but they could have been deployed with an explicit `--max-len`,
+so this lane measured the CLI's actual default instead of inferring it — a 2×
+default would have made the seven-role budget ~65 SOL and this whole plan wrong.
+
+**Measured**, `solana-cli 4.0.2` deploying `rent.so` (152,312 B) to a throwaway
+local validator:
+
+```text
+Data Length: 152312 bytes          ← the ELF length, not twice it
+ProgramData space: 152357          ← 45 + 152312
+ProgramData balance: 1.0612956 SOL ← 890,880 + 6,960 × 152,357 exactly
+payer spent: 1,063,212,040 lamports
+             = 1,062,437,040 rent + 775,000 fees (155 transactions)
+```
+
+The rent matches the table below to the lamport, and 155 transactions is the
+predicted 151 writes plus buffer creation, deploy, and confirmations.
 
 ### 4.1 Per-artifact, at HEAD `3b0c5883`
 
@@ -403,6 +431,16 @@ ten-artifact deployment with ~8 SOL spare, or the seven-role deployment with
 > `UpgradeableLoaderInstruction::Close` requires an authority signature and an
 > immutable ProgramData has no authority to sign.
 
+**Measured, not assumed.** On the same throwaway validator, `solana program
+close` against the program that had just been set `--final`:
+
+```text
+Error: Program authority None does not match Some(AW7MFJYyxBoWzguBv8h3QRQKKLDEy1wb9eTi9xpPwWMN)
+```
+
+The same command against a *mutable* deployment of the same ELF succeeded and
+reported `1.0612956 SOL reclaimed`.
+
 And dClutch *requires* that immutability — `CheckedInfrastructureV1::validate`
 refuses a mutable Core/Registry/Rent, and activation refuses a role whose
 ProgramData still carries an authority. **The protocol's correctness condition
@@ -414,8 +452,9 @@ is recoverable; outside it, nothing is.
 
 | what | reclaimable? | how |
 |---|---|---|
-| orphan buffer from a failed write | **yes** | `solana program close --buffers --authority …` |
-| deployed but not yet revoked program | **yes**, Program + ProgramData in full | `solana program close <ID> --authority …` |
+| orphan buffer from a failed write | **yes**, in full | `solana program close --buffers --authority …` |
+| deployed but not yet revoked program | **the ProgramData rent only** — see below | `solana program close <ID> --authority …` |
+| the 36-byte `Program` account after a close | **NO** | it survives the close, still `tag = 2`, executable, holding 0.00114144 SOL |
 | revoked (immutable) program | **NO — permanently burned** | — |
 | address lookup table | yes | deactivate, wait the cooldown, close |
 | `RentCreditV2`, market accounts | yes | protocol closure routes |
@@ -661,6 +700,13 @@ had an authority", but **not** "immutable, formerly A" — which is the only sha
 a devnet deployment can be in. Consequently every checked manifest's
 `programdata_account_sha256` is wrong for a real deployment, in two independent
 ways: the retained authority bytes and the nonzero deployment slot.
+
+Measured side by side on the throwaway validator (§2.5):
+
+```text
+observed, after --final        tag=3  slot=531  authtag=0  [13..45]=8d2e3468…08aa1
+loader-accounts, no authority  tag=3  slot=0    authtag=0  [13..45]=0000…0000
+```
 
 This does **not** break the chain: `require_pinned_immutable_deployment` checks
 the ELF digest, the authority being `None`, and the exact deployment slot — it
