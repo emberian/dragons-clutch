@@ -674,3 +674,11 @@ QUEUED with owners:
 - For the next Sonnet reviewer: the rent Error enum carries 7 MORE
   unconstructed variants beyond the 5 deleted (SN6's flag, named in its
   yield) — verdict each (dead vs awaiting-constructor) and act.
+
+- κ ENFORCEMENT (trigger: the LBV2 layout slice / RECORDS-MIGRATE cluster):
+  the predicate exists and is proven (KAPPA), but no on-chain route calls it —
+  Found sees the Source not the principal; FoundingV5 the reverse; and a
+  founding-only check is not a cap since principal grows per complete-set
+  split. Real shape: the cap on the Market root, checked at founding AND at
+  split. Interacts with the founding-root ADR; design queued at
+  MAINNET_STATE_RELAY §11.2.
