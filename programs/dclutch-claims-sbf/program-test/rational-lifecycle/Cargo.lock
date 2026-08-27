@@ -1560,7 +1560,6 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-economic-slice-kernel",
- "dclutch-liability-basis-v2-kernel",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
  "dclutch-product-payoff-v2-codec",
@@ -1620,10 +1619,6 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-seal-contract",
 ]
-
-[[package]]
-name = "dclutch-liability-basis-v2-kernel"
-version = "0.1.0"
 
 [[package]]
 name = "dclutch-market-core-codec"
