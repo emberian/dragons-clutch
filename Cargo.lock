@@ -2681,6 +2681,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-series-shadow-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-record-contract",
+ "dclutch-request-profile-contract",
+ "dclutch-series-v3-kernel",
+ "dclutch-shadow-accelerator-auth-v4",
+ "dclutch-transition-vm",
+ "sha2 0.10.9",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-series-v3-kernel"
 version = "0.1.0"
 dependencies = [
@@ -2688,6 +2709,19 @@ dependencies = [
  "dclutch-market-core-codec",
  "dclutch-rent-contract",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-shadow-accelerator-auth-v4"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-execution-strategy-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -2779,6 +2813,7 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
  "dclutch-series-v3-kernel",
+ "dclutch-shadow-accelerator-auth-v4",
  "dclutch-token-svm",
  "dclutch-transition-vm",
  "solana-hash 4.6.0",

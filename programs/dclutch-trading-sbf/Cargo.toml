@@ -80,6 +80,7 @@ dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract", optional = true }
 dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
+dclutch-shadow-accelerator-auth-v4 = { path = "../../crates/dclutch-shadow-accelerator-auth-v4" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm", optional = true }
 solana-program = { version = "=3.0.0", default-features = false }

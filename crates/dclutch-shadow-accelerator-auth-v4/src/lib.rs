@@ -1,8 +1,23 @@
-//! Small authenticated boundary for external Shadow accelerator callbacks.
+#![no_std]
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+
+//! Trading's published read-only Shadow accelerator callback boundary.
 //!
-//! This module is deliberately separate from the full Hot interpreter so an
-//! accelerator linking the read-only verifier does not retain Trading's state
-//! transition and child-CPI orchestration code.
+//! An external Shadow accelerator is invoked by the current release-selected
+//! Trading program and must decide, on its own, that the caller really is that
+//! program and that the request and runtime frame it was handed are the exact
+//! ones Trading committed to. This crate is the whole of what an accelerator
+//! needs for that decision, and deliberately nothing else: it grants no
+//! signer, write, or child-CPI authority, and it links none of Trading's
+//! dispatch, state-transition, or entrypoint code.
+//!
+//! It lives outside `dclutch-trading-sbf` because an accelerator that depended
+//! on the Trading crate had to subtract Trading's modules with a Cargo feature,
+//! and a subtractive feature breaks Cargo's additive-feature contract: under a
+//! workspace build Cargo unions every requested feature onto one build of the
+//! dependency, so the subtraction collided with Trading's own family modules.
+//! Extraction removes the collision instead of managing it.
 
 extern crate alloc;
 
@@ -21,7 +36,31 @@ use solana_program::{
     account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey,
 };
 
-use crate::{TradingSbfError, execution_strategy_v2::authenticate_current_deployment};
+pub mod deployment;
+
+use deployment::authenticate_current_deployment;
+
+/// Stable physical refusal from the published Shadow callback boundary.
+///
+/// These are Trading's boundary codes, and the discriminants are the ABI: an
+/// accelerator that surfaces one raw reports exactly what Trading's own
+/// taxonomy would have reported. `dclutch-trading-sbf` holds a compile-time
+/// assertion that each variant here still equals its `TradingSbfError`
+/// counterpart, so the two can never drift apart silently.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShadowAcceleratorAuthErrorV4 {
+    /// The Registry receipt did not authenticate this Program as current Trading.
+    Release = 1,
+    /// Manifest, selected entry, descriptor, or config content refused.
+    Content = 3,
+}
+
+impl From<ShadowAcceleratorAuthErrorV4> for ProgramError {
+    fn from(value: ShadowAcceleratorAuthErrorV4) -> Self {
+        Self::Custom(value as u32)
+    }
+}
 
 /// Public read-only facts authenticated for one Shadow accelerator callback.
 ///
@@ -95,7 +134,7 @@ impl<'request, 'accounts, 'info>
         observations: &[ShadowRuntimeObservationV3<'_>],
     ) -> Result<(), ProgramError> {
         if observations.len() != self.runtime_accounts.len() {
-            return Err(TradingSbfError::Content.into());
+            return Err(ShadowAcceleratorAuthErrorV4::Content.into());
         }
         let runtime_data = self
             .runtime_accounts
@@ -103,7 +142,7 @@ impl<'request, 'accounts, 'info>
             .map(|runtime| {
                 runtime
                     .try_borrow_data()
-                    .map_err(|_| TradingSbfError::Content)
+                    .map_err(|_| ShadowAcceleratorAuthErrorV4::Content)
             })
             .collect::<Result<Vec<_>, _>>()?;
         if observations
@@ -119,12 +158,12 @@ impl<'request, 'accounts, 'info>
                     || observation.executable != runtime.executable
             })
         {
-            return Err(TradingSbfError::Content.into());
+            return Err(ShadowAcceleratorAuthErrorV4::Content.into());
         }
         let digest =
-            runtime_observations_digest_v3(observations).map_err(|_| TradingSbfError::Content)?;
+            runtime_observations_digest_v3(observations).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
         if digest != self.request.digests.runtime_observations {
-            Err(TradingSbfError::Content.into())
+            Err(ShadowAcceleratorAuthErrorV4::Content.into())
         } else {
             Ok(())
         }
@@ -140,14 +179,14 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
     request_bytes: &'request [u8],
 ) -> Result<Box<AuthenticatedShadowAcceleratorInvocationV4<'request, 'accounts, 'info>>, ProgramError>
 {
-    let request = ShadowRequestV3::decode(request_bytes).map_err(|_| TradingSbfError::Content)?;
+    let request = ShadowRequestV3::decode(request_bytes).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     let account_count =
-        usize::try_from(request.shape.account_count).map_err(|_| TradingSbfError::Content)?;
+        usize::try_from(request.shape.account_count).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     let expected_accounts = SHADOW_RUNTIME_ACCOUNTS_START_V3
         .checked_add(account_count)
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(ShadowAcceleratorAuthErrorV4::Content)?;
     if accounts.len() != expected_accounts {
-        return Err(TradingSbfError::Content.into());
+        return Err(ShadowAcceleratorAuthErrorV4::Content.into());
     }
     let caller_authority = account(accounts, 0)?;
     let activation = account(accounts, 1)?;
@@ -157,7 +196,7 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
     let accelerator_programdata = account(accounts, 5)?;
     let runtime_accounts = accounts
         .get(SHADOW_RUNTIME_ACCOUNTS_START_V3..)
-        .ok_or(TradingSbfError::Content)?;
+        .ok_or(ShadowAcceleratorAuthErrorV4::Content)?;
     if request.accelerator_program.to_bytes() != accelerator_program.to_bytes()
         || request.registry_program.to_bytes() != registry.key.to_bytes()
         || request.trading_program.to_bytes() != trading_program.key.to_bytes()
@@ -180,7 +219,7 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
         || accelerator_programdata.is_signer
         || accelerator_programdata.is_writable
     {
-        return Err(TradingSbfError::Release.into());
+        return Err(ShadowAcceleratorAuthErrorV4::Release.into());
     }
     require_shadow_callback_runtime_v4(
         request.root.to_bytes(),
@@ -195,30 +234,30 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
     )
     .0;
     if activation.key != &expected_cache || activation.owner != registry.key {
-        return Err(TradingSbfError::Release.into());
+        return Err(ShadowAcceleratorAuthErrorV4::Release.into());
     }
     let activation_data = activation
         .try_borrow_data()
-        .map_err(|_| TradingSbfError::Release)?;
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Release)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation_data)
-        .map_err(|_| TradingSbfError::Release)?;
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Release)?;
     if activated
         .execution_release_set_id()
-        .map_err(|_| TradingSbfError::Release)?
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Release)?
         != request.release_set
     {
-        return Err(TradingSbfError::Release.into());
+        return Err(ShadowAcceleratorAuthErrorV4::Release.into());
     }
     let trading = activated
         .role(ExecutionRoleV1::Trading)
-        .map_err(|_| TradingSbfError::Release)?;
+        .map_err(|_| ShadowAcceleratorAuthErrorV4::Release)?;
     let trading_release = trading.release();
     drop(activation_data);
     authenticate_current_deployment(trading_release, trading_program, trading_programdata)
         .map_err(ProgramError::from)?;
 
     let request_digest =
-        ContentId::new(hash(request_bytes).to_bytes()).map_err(|_| TradingSbfError::Content)?;
+        ContentId::new(hash(request_bytes).to_bytes()).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         request.release_set,
         request.market.to_bytes(),
@@ -226,17 +265,17 @@ pub fn authenticate_shadow_accelerator_invocation_v4<'request, 'accounts, 'info>
         request.root.to_bytes(),
         request_digest.to_bytes(),
     )
-    .map_err(|_| TradingSbfError::Release)?;
+    .map_err(|_| ShadowAcceleratorAuthErrorV4::Release)?;
     let expected_authority =
         Pubkey::find_program_address(&authority_seeds.as_slices(), trading_program.key).0;
     if caller_authority.key != &expected_authority {
-        return Err(TradingSbfError::Release.into());
+        return Err(ShadowAcceleratorAuthErrorV4::Release.into());
     }
 
-    if family_request_digest_v3(request.family_request).map_err(|_| TradingSbfError::Content)?
+    if family_request_digest_v3(request.family_request).map_err(|_| ShadowAcceleratorAuthErrorV4::Content)?
         != request.digests.family_request
     {
-        return Err(TradingSbfError::Content.into());
+        return Err(ShadowAcceleratorAuthErrorV4::Content.into());
     }
 
     Ok(Box::new(AuthenticatedShadowAcceleratorInvocationV4 {
@@ -266,7 +305,7 @@ fn require_shadow_callback_runtime_v4(
             runtime.is_signer || runtime.is_writable || runtime.key == caller_authority
         })
     {
-        Err(TradingSbfError::Content.into())
+        Err(ShadowAcceleratorAuthErrorV4::Content.into())
     } else {
         Ok(())
     }
@@ -278,7 +317,7 @@ fn account<'a, 'info>(
 ) -> Result<&'a AccountInfo<'info>, ProgramError> {
     accounts
         .get(index)
-        .ok_or_else(|| TradingSbfError::Content.into())
+        .ok_or_else(|| ShadowAcceleratorAuthErrorV4::Content.into())
 }
 
 #[cfg(test)]
@@ -310,17 +349,22 @@ mod tests {
         require_shadow_callback_runtime_v4(root.to_bytes(), 2, &authority, &runtime)
             .expect("exact readonly runtime");
         assert!(
-            require_shadow_callback_runtime_v4(root.to_bytes(), 1, &authority, &runtime).is_err()
+            require_shadow_callback_runtime_v4(root.to_bytes(), 1, &authority, &runtime).is_err(),
+            "a runtime longer than the declared account count is not the declared frame"
         );
-        runtime[1].is_writable = true;
+        let second = runtime.get_mut(1).expect("two runtime accounts");
+        second.is_writable = true;
         assert!(
-            require_shadow_callback_runtime_v4(root.to_bytes(), 2, &authority, &runtime).is_err()
+            require_shadow_callback_runtime_v4(root.to_bytes(), 2, &authority, &runtime).is_err(),
+            "a writable runtime account would lend mutation authority"
         );
-        runtime[1].is_writable = false;
-        let aliased_authority = *runtime[1].key;
+        let second = runtime.get_mut(1).expect("two runtime accounts");
+        second.is_writable = false;
+        let aliased_authority = *runtime.get(1).expect("two runtime accounts").key;
         assert!(
-            require_shadow_callback_runtime_v4(root.to_bytes(), 2, &aliased_authority, &runtime,)
-                .is_err()
+            require_shadow_callback_runtime_v4(root.to_bytes(), 2, &aliased_authority, &runtime)
+                .is_err(),
+            "a runtime account aliasing the caller authority would smuggle in its signature"
         );
     }
 }

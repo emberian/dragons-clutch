@@ -179,8 +179,6 @@ pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.
 #[cfg(any(feature = "families", feature = "series-family"))]
 pub mod series;
-/// Small authenticated boundary for external Shadow accelerator callbacks.
-pub mod shadow_accelerator_auth_v4;
 /// Family-neutral read-only Shadow-AOT comparison CPI.
 #[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod shadow_composition_v3;

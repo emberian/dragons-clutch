@@ -48,8 +48,8 @@
     },
     {
       "route": "series-shadow/*",
-      "reason": "Shadow accelerator. Excluded from the root workspace because `shadow-accelerator-auth-only` is a SUBTRACTIVE feature, which breaks Cargo's additive-feature contract; the sound fixes are to extract the shadow authenticator into its own crate or to invert the feature (W2 lane analysis, board 2026-08-26 22:5x). Not deployed by any tier.",
-      "owner": "UNASSIGNED — the feature refactor is queued in WAVE.md cycle-2"
+      "reason": "Shadow accelerator, not part of the seven-role successor release set; no tier deploys it. The workspace half of this entry is DISCHARGED: the callback authenticator now lives in crates/dclutch-shadow-accelerator-auth-v4, dclutch-series-shadow-sbf no longer depends on dclutch-trading-sbf at all, and the package is a root workspace member that builds under `cargo check --workspace --all-targets`. What remains is that no campaign drives the ELF.",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
     },
     {
       "route": "economic/*",

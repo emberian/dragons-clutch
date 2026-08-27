@@ -1,0 +1,22 @@
+[package]
+name = "dclutch-shadow-accelerator-auth-v4"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Trading's published read-only Shadow accelerator callback boundary"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
+dclutch-registry-contract = { path = "../dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+
+[lints]
+workspace = true
