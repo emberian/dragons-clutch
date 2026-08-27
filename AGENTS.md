@@ -55,6 +55,27 @@ is not a source tree to copy wholesale.
 - Do not call the protocol formally verified without naming the theorem, source
   digest, toolchain, assumptions, and unverified runtime boundary.
 
+## Refusal codes
+
+Every custom program error code is namespaced by program (decision 0007;
+`crates/dclutch-refusal-registry` is the authority). `band = code >> 12`, and
+band 0 is never allocated, so a code below `0x1000` is not ours.
+
+- A refusal enum that can reach the chain carries `#[repr(u32)]` and explicit
+  discriminants, written as hexadecimal literals inside its band, with a
+  `const _: () = assert!(...)` pinning it to the registered base. `#[repr]` on
+  an `*Error` enum is the declaration "these codes are protocol-visible"; the
+  census enumerates nothing else.
+- Never write a refusal code as a bare number anywhere else -- not in a test,
+  not in a binding, not in a doc comment. Derive it from the enum, or from the
+  registry base where taking a dependency on the program would be wrong.
+  `assert!(text.contains("Custom(3)"))` is not a refusal assertion: it also
+  accepts `Custom(30)`.
+- Bands are append-only. A new program takes the next free base; a deleted
+  program's band is withdrawn, never reused.
+- `dclutch-route-census inventory --check-unique` is the gate, and it runs in
+  `tools/gauntlet/run.sh`.
+
 ## Kernel policy
 
 The first-party kernel is `no_std`, `no_alloc`, safe Rust, fixed-layout, and
