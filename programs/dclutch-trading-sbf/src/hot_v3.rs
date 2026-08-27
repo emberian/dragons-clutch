@@ -4282,6 +4282,14 @@ fn require_lifecycle_replan_agreement_v4(
     }
 }
 
+/// Require every created state's immutable identity binding to be written
+/// exactly once by the Effect program, and never overlapped by anything else.
+///
+/// The scan is over the Effect, not over the bindings: resolving one effect
+/// operation costs orders of magnitude more than comparing a resolved write
+/// against a binding's coordinate and offset, and there are far more operations
+/// than bindings. Asking each binding separately re-resolved the entire program
+/// once per binding.
 #[inline(never)]
 fn require_lifecycle_effect_bindings_v4(
     plans: &[PreparedLifecycleInvocationV3],
@@ -4291,42 +4299,71 @@ fn require_lifecycle_effect_bindings_v4(
     identities: &[[u8; 32]],
     aliases: &[usize],
 ) -> Result<(), ProgramError> {
+    let mut binding_count = 0_usize;
     for prepared in plans {
-        for binding in &prepared.immutable_identity_bindings {
-            let mut exact_write = false;
-            let mut fixed = 0_u16;
-            while fixed < effect.fixed_operation_count() {
-                exact_write |= inspect_lifecycle_binding_effect_v4(
-                    prepared.state,
-                    binding,
-                    effect
-                        .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-                        .map_err(|_| TradingSbfError::Transition)?,
-                    aliases,
-                )?;
-                fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
-            }
-            let mut item = 0_u32;
-            while item < tail_count {
-                let mut operation = 0_u16;
-                while operation < effect.item_operation_count() {
-                    exact_write |= inspect_lifecycle_binding_effect_v4(
-                        prepared.state,
-                        binding,
-                        effect
-                            .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                            .map_err(|_| TradingSbfError::Transition)?,
-                        aliases,
-                    )?;
-                    operation = operation
-                        .checked_add(1)
-                        .ok_or(TradingSbfError::Transition)?;
-                }
-                item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
-            }
-            if matches!(prepared.plan, StateLifecyclePlanV3::Create(_)) && !exact_write {
+        binding_count = binding_count
+            .checked_add(prepared.immutable_identity_bindings.len())
+            .ok_or(TradingSbfError::Transition)?;
+    }
+    let mut written = Vec::new();
+    written
+        .try_reserve_exact(binding_count)
+        .map_err(|_| TradingSbfError::Transition)?;
+    written.resize(binding_count, false);
+
+    let mut fixed = 0_u16;
+    while fixed < effect.fixed_operation_count() {
+        let resolved = effect
+            .resolved_fixed_effect(fixed, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Transition)?;
+        inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
+        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
+    }
+    let mut item = 0_u32;
+    while item < tail_count {
+        let mut operation = 0_u16;
+        while operation < effect.item_operation_count() {
+            let resolved = effect
+                .resolved_item_effect(item, operation, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Transition)?;
+            inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
+            operation = operation
+                .checked_add(1)
+                .ok_or(TradingSbfError::Transition)?;
+        }
+        item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
+    }
+
+    let mut ordinal = 0_usize;
+    for prepared in plans {
+        for _ in &prepared.immutable_identity_bindings {
+            if matches!(prepared.plan, StateLifecyclePlanV3::Create(_))
+                && written.get(ordinal) != Some(&true)
+            {
                 return Err(TradingSbfError::Transition.into());
             }
+            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Transition)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fold one resolved Effect write against every planned binding.
+fn inspect_lifecycle_binding_effects_v4(
+    plans: &[PreparedLifecycleInvocationV3],
+    resolved: ResolvedEffectV3,
+    aliases: &[usize],
+    written: &mut [bool],
+) -> Result<(), ProgramError> {
+    let mut ordinal = 0_usize;
+    for prepared in plans {
+        for binding in &prepared.immutable_identity_bindings {
+            let flag = written
+                .get_mut(ordinal)
+                .ok_or(TradingSbfError::Transition)?;
+            *flag |=
+                inspect_lifecycle_binding_effect_v4(prepared.state, binding, resolved, aliases)?;
+            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Transition)?;
         }
     }
     Ok(())
@@ -7029,7 +7066,7 @@ mod tests {
 
     use super::*;
 
-    use dclutch_account_profile_contract::lifecycle_v3::CreateStatePlanV3;
+    use dclutch_account_profile_contract::lifecycle_v3::{AuthenticateStatePlanV3, CreateStatePlanV3};
     use dclutch_account_profile_contract::v2::{
         AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2,
         DYNAMIC_FIXED_SPAN_HEADER_BYTES,
@@ -8169,6 +8206,101 @@ mod tests {
                 &aliases,
             ),
             Ok(false)
+        );
+    }
+
+    /// Folding one resolved write across every planned binding must mark
+    /// exactly the bindings that write names, and must still refuse an
+    /// overlapping write that is not the exact binding.
+    #[test]
+    fn one_resolved_write_marks_only_the_binding_it_names() {
+        let plans = alloc::vec![
+            PreparedLifecycleInvocationV3 {
+                plan: StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+                    state: [0x11; 32],
+                    payer: [0x12; 32],
+                    rent_credit: [0x13; 32],
+                    beneficiary: [0x14; 32],
+                    target_data_bytes: 64,
+                    historical_rent_principal: 1,
+                    state_before: 0,
+                    state_after: 1,
+                    payer_debit: 1,
+                    payer_after: 0,
+                    bump: 255,
+                }),
+                state: 1,
+                payer: None,
+                rent_credit: None,
+                seeds: alloc::vec::Vec::new(),
+                immutable_identity_bindings: alloc::vec![PreparedImmutableIdentityBindingV4 {
+                    data_offset: 16,
+                    canonical: [0x63; 32],
+                }],
+            },
+            PreparedLifecycleInvocationV3 {
+                plan: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+                    state: [0x21; 32],
+                    data_bytes: 64,
+                    lamports: 1,
+                    bump: 254,
+                }),
+                state: 3,
+                payer: None,
+                rent_credit: None,
+                seeds: alloc::vec::Vec::new(),
+                immutable_identity_bindings: alloc::vec![PreparedImmutableIdentityBindingV4 {
+                    data_offset: 16,
+                    canonical: [0x64; 32],
+                }],
+            },
+        ];
+        let aliases = [0_usize, 1, 1, 3];
+        let mut written = alloc::vec![false; 2];
+        // A write naming the second plan's state and value marks only it.
+        assert_eq!(
+            inspect_lifecycle_binding_effects_v4(
+                &plans,
+                ResolvedEffectV3::WriteIdentity {
+                    account: 3,
+                    offset: 16,
+                    value: [0x64; 32],
+                },
+                &aliases,
+                &mut written,
+            ),
+            Ok(())
+        );
+        assert_eq!(written, alloc::vec![false, true]);
+        // A write through coordinate 1's alias marks the first.
+        assert_eq!(
+            inspect_lifecycle_binding_effects_v4(
+                &plans,
+                ResolvedEffectV3::WriteIdentity {
+                    account: 2,
+                    offset: 16,
+                    value: [0x63; 32],
+                },
+                &aliases,
+                &mut written,
+            ),
+            Ok(())
+        );
+        assert_eq!(written, alloc::vec![true, true]);
+        // An overlapping write that is not the binding still refuses, and the
+        // fold reaches it wherever the binding sits in the batch.
+        assert_eq!(
+            inspect_lifecycle_binding_effects_v4(
+                &plans,
+                ResolvedEffectV3::WriteU32 {
+                    account: 3,
+                    offset: 44,
+                    value: 0,
+                },
+                &aliases,
+                &mut written,
+            ),
+            Err(TradingSbfError::Transition.into())
         );
     }
 
