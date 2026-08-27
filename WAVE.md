@@ -185,10 +185,19 @@ of silent loss.
 6. **Dealer equity profile migration** to the FixedDataPredicate profile
    (d64d0c2 "QUEUED, NOT DONE") so its callee can be `opaque(executable)`.
    Attach to tranche-A Dealer.
-7. **blocked.json's two UNASSIGNED owner decisions**: RentCreditV1
-   Create/Withdraw supersession (delete V1 or state why both survive — O-005
-   pressure), and registry/batch_v2 reachability at real ELF sizes. Fable
-   wave / ember.
+7. **blocked.json's two UNASSIGNED owner decisions — CLOSED 2026-08-27
+   (DELDEC), both answered "delete".** RentCreditV1 Create/Withdraw are gone
+   (`LifecycleRentCreditV2` is the exercised path; OMISSION_INDEX P-005 lifted),
+   and registry/batch_v2's standalone DCLTRGB2 route is gone (the five per-role
+   activation pins sum to 2,407,858 CU against a 1,400,000 ceiling, so a batch
+   was never executable; its read-only `authenticate_request` stays, live under
+   both continuation routes). blocked.json now carries no UNASSIGNED row at all:
+   44 rows → 41, census 101 routes → 98, refusal codes unchanged at 193.
+   **Carried forward, one row:** with no V1 Create route, no `RentCreditV1`
+   account can be created, and `dclutch-direct-codec` still pins
+   `RENT_CREDIT_BYTES_V1` at registered artifact coordinates 7 and 10 — the
+   V1/V2 width skew already owned by DP2. That migration retires the last of V1;
+   DELDEC did not front-run it under a live emitter lane.
 8. **sha2 default-features latent no_std breakage** in 7 on-chain-reachable
    manifests (7123164; verified: general-config-contract,
    rational-representation-v2-lifecycle-contract, registry-svm,
