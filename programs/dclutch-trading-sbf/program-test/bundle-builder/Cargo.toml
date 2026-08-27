@@ -1,5 +1,5 @@
 [package]
-name = "dclutch-direct-hot-program-test-support"
+name = "dclutch-chain-bundle-builder"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
@@ -10,35 +10,25 @@ dclutch-account-profile-contract = { path = "../../../../crates/dclutch-account-
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
 dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
-dclutch-chain-bundle-builder = { path = "../bundle-builder" }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
-dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
-dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
-dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
-dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
-dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
-dclutch-product-runtime-v2-operator = { path = "../../../../crates/dclutch-product-runtime-v2-operator" }
-dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
+dclutch-effect-kernel = { path = "../../../../crates/dclutch-effect-kernel" }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
-dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
-dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
+dclutch-request-profile-contract = { path = "../../../../crates/dclutch-request-profile-contract" }
+dclutch-transition-vm = { path = "../../../../crates/dclutch-transition-vm" }
 sha2 = { version = "=0.10.9", default-features = false }
 solana-account = "=4.3.2"
-solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
-solana-message = "=4.4.1"
 solana-program = { version = "=3.0.0", default-features = false }
-solana-program-option = "=3.1.0"
-solana-program-pack = "=3.1.0"
-solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
-solana-sdk = "=3.0.0"
 solana-sdk-ids = "=3.1.0"
-solana-transaction = "=4.1.6"
-spl-token-interface = "=3.0.0"
+
+[dev-dependencies]
+dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+dclutch-direct-hot-program-test-support = { path = "../direct-hot" }
+dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 
 [lints.rust]
 unsafe_code = "forbid"
