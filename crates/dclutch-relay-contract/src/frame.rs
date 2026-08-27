@@ -1,4 +1,4 @@
-//! Exact ordered account frames for the five relay record routes.
+//! Exact ordered account frames for the six relay record routes.
 //!
 //! Counts, privileges and the complete no-alias policy are checked here; the
 //! *semantic* identity of each position (that this really is the Market, that
@@ -306,6 +306,37 @@ pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 28] = [
     SYSTEM,
 ];
 
+/// Exact deadline-failure frame: a silent market to its pre-disclosed outcome.
+///
+/// Nineteen positions, and the interesting fact about them is what is missing.
+/// There is no record, no provider release, no adapter configuration, no key set
+/// and no venue: the failure outcome is the Product's own and the deadline is
+/// the window's own, so nothing about the provider is an input.  That is not
+/// economy, it is the property -- a route that needed the relayer to supply
+/// anything could not run when the relayer has stopped answering, and the whole
+/// point of this walk is that it runs anyway.
+pub const COMMIT_DEADLINE_FAILURE_FRAME_V1: [RelayAccountRoleV1; 19] = [
+    WORKER,
+    MARKET_READ,
+    CORE_PROGRAM,
+    ACTIVATION,
+    SOURCE_STATE,
+    CERTIFICATE,
+    MATERIAL,
+    MATERIAL_STAGE,
+    WINDOW,
+    WINDOW_STAGE,
+    PRODUCT,
+    PRODUCT_STAGE,
+    RESULT_DOMAIN,
+    RESULT_DOMAIN_STAGE,
+    PORTFOLIO,
+    PORTFOLIO_STAGE,
+    CLOCK,
+    RENT,
+    SYSTEM,
+];
+
 /// Closed exact account-frame selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RelayFrameKindV1 {
@@ -319,6 +350,8 @@ pub enum RelayFrameKindV1 {
     RetireRecord,
     /// [`CONSUME_RECORD_FRAME_V1`].
     ConsumeRecord,
+    /// [`COMMIT_DEADLINE_FAILURE_FRAME_V1`].
+    CommitDeadlineFailure,
 }
 
 /// Return the exact ordered roles for one relay operation.
@@ -329,6 +362,7 @@ pub const fn relay_frame_roles_v1(kind: RelayFrameKindV1) -> &'static [RelayAcco
         RelayFrameKindV1::SealRecord => &SEAL_RECORD_FRAME_V1,
         RelayFrameKindV1::RetireRecord => &RETIRE_RECORD_FRAME_V1,
         RelayFrameKindV1::ConsumeRecord => &CONSUME_RECORD_FRAME_V1,
+        RelayFrameKindV1::CommitDeadlineFailure => &COMMIT_DEADLINE_FAILURE_FRAME_V1,
     }
 }
 
@@ -405,6 +439,7 @@ mod tests {
             RelayFrameKindV1::SealRecord,
             RelayFrameKindV1::RetireRecord,
             RelayFrameKindV1::ConsumeRecord,
+            RelayFrameKindV1::CommitDeadlineFailure,
         ] {
             let built = frame(kind);
             let width = relay_frame_roles_v1(kind).len();
@@ -476,6 +511,28 @@ mod tests {
                 .any(|role| role.name() == RelayAccountNameV1::RelayerKeySet),
             "the key set has no business in a route that verifies no signature"
         );
+    }
+
+    #[test]
+    fn the_deadline_walk_needs_nothing_the_relayer_supplies() {
+        // The executable form of "a silent relayer cannot make a market
+        // unresolvable": if any of these appeared in the frame, the walk would
+        // depend on the party that has stopped answering.
+        for absent in [
+            RelayAccountNameV1::Record,
+            RelayAccountNameV1::ProviderRelease,
+            RelayAccountNameV1::AdapterConfig,
+            RelayAccountNameV1::RelayerKeySet,
+            RelayAccountNameV1::VenueArtifactRelease,
+            RelayAccountNameV1::SourceSpec,
+        ] {
+            assert!(
+                !COMMIT_DEADLINE_FAILURE_FRAME_V1
+                    .iter()
+                    .any(|role| role.name() == absent),
+                "the deadline walk depends on {absent:?}, which a silent relayer controls"
+            );
+        }
     }
 
     #[test]

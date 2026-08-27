@@ -163,17 +163,31 @@ fn authenticate_graph(records: &AuthenticatedRelaySourceRecordsV1) -> Result<(),
 /// This is the second of the two time bounds and they answer different
 /// questions. `RelayedAdapterConfigV1::require_observation_freshness` asks
 /// whether the *relayer* was prompt: how far the attested foreign time has
-/// fallen behind this cluster's clock. The window asks whether the observation
-/// is about the period the Product sold: whether the foreign time lies inside
-/// `[start, end]`. A market can be resolved by a fresh observation of the wrong
-/// week, or by a stale observation of the right one, and both must refuse.
+/// fallen behind this cluster's clock. This asks whether the observation is
+/// about the period the Product sold. A market can be resolved by a fresh
+/// observation of the wrong week, or by a stale observation of the right one,
+/// and both must refuse.
+///
+/// # Why only the upper bound
+///
+/// `WindowSpecV1::new` refuses `start != end` for `WindowKind::Terminal`, so a
+/// terminal window is a single *instant* rather than a range. Requiring the
+/// attested foreign clock to also be at or after `start` would therefore require
+/// it to equal one exact second, and no read of a foreign cluster can be made to
+/// land there. That is not a bound, it is a route nothing can pass.
+///
+/// The bound that carries the Product's meaning is the upper one: the graduation
+/// has to have been observed at or before the deadline the Product sold. The
+/// lower bound is supplied by the two-clock join instead, which refuses anything
+/// older than `max_observation_age_seconds`, so an ancient observation still
+/// cannot resolve a fresh market. Together the admitted span is
+/// `[now - max_age, min(end, now + skew)]`, which is exactly the set a terminal
+/// graduation proposition should accept.
 fn require_window_admits(
     window: WindowSpecV1,
     observed_unix_seconds: i64,
 ) -> Result<(), RelayJoinErrorV1> {
-    if observed_unix_seconds < window.start_unix_seconds()
-        || observed_unix_seconds > window.end_unix_seconds()
-    {
+    if observed_unix_seconds > window.end_unix_seconds() {
         return Err(RelayJoinErrorV1::Window);
     }
     Ok(())

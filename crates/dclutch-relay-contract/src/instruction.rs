@@ -1,6 +1,6 @@
 //! The relay instruction wire.
 //!
-//! Five fixed-prefix actions behind one magic.  Unlike the signed attestation
+//! Six fixed-prefix actions behind one magic.  Unlike the signed attestation
 //! wire — which is Lean-authored ABI because it is a *release identity* that two
 //! independent implementations must agree on byte-for-byte — this is adapter
 //! framing owned by the program that dispatches it, exactly as
@@ -30,6 +30,8 @@ pub const SEAL_RECORD_PREFIX_BYTES: usize = 32;
 pub const SEAL_RECORD_INSTRUCTION_BYTES: usize = SEAL_RECORD_PREFIX_BYTES + RELAYED_SEAL_BYTES;
 /// Exact `RetireRecord` instruction width.
 pub const RETIRE_RECORD_INSTRUCTION_BYTES: usize = 24;
+/// Exact `CommitDeadlineFailure` instruction width.
+pub const COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES: usize = 32;
 /// Fixed prefix before the inline account-set entries in `ConsumeRecord`.
 pub const CONSUME_RECORD_PREFIX_BYTES: usize = 112;
 /// Wire width of one inline account-set entry, identical to its contribution to
@@ -54,6 +56,8 @@ pub enum RelayActionV1 {
     RetireRecord = 4,
     /// Interpret one sealed record into the Source's terminal result.
     ConsumeRecord = 5,
+    /// Walk a silent market to its Product's pre-disclosed failure outcome.
+    CommitDeadlineFailure = 6,
 }
 
 impl RelayActionV1 {
@@ -64,6 +68,7 @@ impl RelayActionV1 {
             3 => Ok(Self::SealRecord),
             4 => Ok(Self::RetireRecord),
             5 => Ok(Self::ConsumeRecord),
+            6 => Ok(Self::CommitDeadlineFailure),
             _ => Err(Error::UnknownInstructionAction),
         }
     }
@@ -375,6 +380,55 @@ impl ConsumeRecordInstructionV1 {
     }
 }
 
+/// Fixed `CommitDeadlineFailure` wire fields.
+///
+/// Deliberately the narrowest instruction in the family. The failure outcome is
+/// the Product's own and the deadline is the window's own, so there is nothing a
+/// caller could usefully say beyond which market generation and which terminal
+/// sequence — and in particular there is no provider, no record and no
+/// observation, which is the whole point: this route has to work when the
+/// relayer has stopped answering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommitDeadlineFailureInstructionV1 {
+    generation: u64,
+    terminal_sequence: u64,
+}
+
+impl CommitDeadlineFailureInstructionV1 {
+    /// Construct one deadline-failure request.
+    pub fn new(generation: u64, terminal_sequence: u64) -> Result<Self> {
+        if terminal_sequence == 0 {
+            return Err(Error::InvalidRecordTransition);
+        }
+        Ok(Self {
+            generation,
+            terminal_sequence,
+        })
+    }
+
+    /// Encode the exact canonical bytes.
+    pub fn to_bytes(self) -> Result<[u8; COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES]> {
+        let mut out = base::<COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES>(RELAY_INSTRUCTION_MAGIC)?;
+        put(
+            &mut out,
+            ACTION_OFFSET,
+            &[RelayActionV1::CommitDeadlineFailure.byte()],
+        )?;
+        put(&mut out, 16, &self.generation.to_le_bytes())?;
+        put(&mut out, 24, &self.terminal_sequence.to_le_bytes())?;
+        Ok(out)
+    }
+
+    /// The Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+    /// The exact positive terminal sequence naming the certificate.
+    pub const fn terminal_sequence(self) -> u64 {
+        self.terminal_sequence
+    }
+}
+
 /// Hostile-decoded closed relay instruction set.
 ///
 /// The two message-carrying variants hand back the message as a **borrowed**
@@ -393,6 +447,8 @@ pub enum RelayInstructionV1<'a> {
     RetireRecord(RetireRecordInstructionV1),
     /// Consume a sealed record, with the pinned account-set entries following.
     ConsumeRecord(ConsumeRecordInstructionV1, &'a [u8]),
+    /// Walk a silent market to its Product's pre-disclosed failure outcome.
+    CommitDeadlineFailure(CommitDeadlineFailureInstructionV1),
 }
 
 impl<'a> RelayInstructionV1<'a> {
@@ -482,6 +538,19 @@ impl<'a> RelayInstructionV1<'a> {
                     .get(CONSUME_RECORD_PREFIX_BYTES..)
                     .ok_or(Error::InvalidLength)?;
                 Ok(Self::ConsumeRecord(request, entries))
+            }
+            RelayActionV1::CommitDeadlineFailure => {
+                header(
+                    bytes,
+                    COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES,
+                    RELAY_INSTRUCTION_MAGIC,
+                )?;
+                Ok(Self::CommitDeadlineFailure(
+                    CommitDeadlineFailureInstructionV1::new(
+                        u64_at(bytes, 16)?,
+                        u64_at(bytes, 24)?,
+                    )?,
+                ))
             }
         }
     }
@@ -582,6 +651,20 @@ mod tests {
         assert_eq!(
             ConsumeRecordInstructionV1::new(7, 1, 1, [0x11; 32], [0x12; 32], 9),
             Err(Error::InvalidSetGeometry)
+        );
+    }
+
+    #[test]
+    fn the_deadline_failure_action_round_trips_and_refuses_a_zero_sequence() {
+        let request = CommitDeadlineFailureInstructionV1::new(7, 1).expect("request");
+        let bytes = request.to_bytes().expect("encode");
+        assert_eq!(
+            RelayInstructionV1::decode(&bytes),
+            Ok(RelayInstructionV1::CommitDeadlineFailure(request))
+        );
+        assert_eq!(
+            CommitDeadlineFailureInstructionV1::new(7, 0),
+            Err(Error::InvalidRecordTransition)
         );
     }
 

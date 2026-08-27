@@ -156,6 +156,20 @@ pub(crate) fn process_relay_transport_v1(
         RelayInstructionV1::ConsumeRecord(request, entries) => {
             process_consume(program_id, accounts, request, entries)
         }
+        RelayInstructionV1::CommitDeadlineFailure(_) => {
+            // Deliberately undispatched, and the reason is a refusal rather
+            // than an omission. `ResolutionCertificateV2::validate_shape`
+            // refuses a `ResolutionFailure` whose `funding_allocation` is zero
+            // or whose `work_paid` is zero, so the Lean-owned terminal schema
+            // encodes section 4.8's "prepaid, permissionless, pays whoever walks
+            // it" as a decode-time invariant: there is no such thing as an
+            // unfunded failure certificate, and a walk that emitted one would be
+            // recording a bounty nobody paid. The wire and the frame exist so
+            // the shape is fixed; the route lands with the V1-to-V2 port of the
+            // funded controller that debits a `FundingState` and credits the
+            // worker.
+            Err(ResolutionError::Funding.into())
+        }
     }
 }
 
@@ -1310,8 +1324,9 @@ fn commit_consumption<'info>(
     next_source: &[u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     next_certificate: &[u8; RESOLUTION_CERTIFICATE_BYTES_V2],
 ) -> ProgramResult {
-    initialize_terminal_certificate(
+    initialize_certificate_at_kind(
         program_id,
+        RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED,
         terminal_sequence,
         source_state,
         certificate,
@@ -1342,23 +1357,35 @@ fn commit_consumption<'info>(
     Ok(())
 }
 
-/// Allocate and assign the terminal certificate at its canonical address.
+/// The Lean-owned Runtime V2 wire tag for `ResolutionSuccess`.
+///
+/// The kind is a PDA *seed*, so a success and a failure for one Source state at
+/// one sequence live at different addresses and neither can overwrite the other.
+/// `ResolutionFailure` has the tag `4` and no route emits it yet: see the
+/// `CommitDeadlineFailure` arm above for why that is a refusal rather than an
+/// omission.
+const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
+
+/// Allocate and assign a terminal certificate at its canonical address.
 ///
 /// The domain and seed shape are the Resolution role's existing certificate
 /// address space, deliberately: two provider families resolving one Market must
 /// not have two certificate namespaces, or "the certificate for this Source
-/// state" stops being a well-defined phrase.
+/// state" stops being a well-defined phrase. The kind is a *seed*, so a success
+/// and a failure for one Source state at one sequence live at different
+/// addresses and neither can quietly overwrite the other.
 #[inline(never)]
-fn initialize_terminal_certificate<'info>(
+#[allow(clippy::too_many_arguments)]
+fn initialize_certificate_at_kind<'info>(
     program_id: &Pubkey,
+    kind: u8,
     terminal_sequence: u64,
     source_state: &AccountInfo<'info>,
     certificate: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     rent: &Rent,
 ) -> ProgramResult {
-    // The Lean-owned Runtime V2 wire tag for ResolutionSuccess.
-    let kind_seed = [1_u8];
+    let kind_seed = [kind];
     let sequence_seed = terminal_sequence.to_le_bytes();
     let (expected, bump) = Pubkey::find_program_address(
         &[

@@ -4,7 +4,7 @@ use dclutch_product_runtime_v2::ResultDomainV2;
 
 use super::{
     ContentId, Error, MarketChildDeltaV1, Result, SourceMaterialV2, SourceResolutionPhaseV1,
-    SourceResolutionRouteV1, generated_source_resolution_state_v2 as generated,
+    SourceResolutionRouteV1, WindowSpecV1, generated_source_resolution_state_v2 as generated,
 };
 
 const MAX_RECOVERY_ATTEMPTS_V2: u8 = 4;
@@ -427,6 +427,63 @@ impl SourceResolutionStateV2 {
         Ok(decision)
     }
 
+    /// Enter `Exhausted` because the primary window's own deadline passed.
+    ///
+    /// This is the V2 half of the liveness walk that `MAINNET_STATE_RELAY.md`
+    /// §4.8 describes: the property it buys is that **a silent provider cannot
+    /// make a market unresolvable**, only drive it to a pre-disclosed outcome.
+    /// Without a transition out of `Primary` there is no such property, because
+    /// `commit_failure_from_authenticated_domain` refuses anywhere but
+    /// `Exhausted` and nothing could ever get there.
+    ///
+    /// The deadline is the window's own closed upper bound plus its liveness
+    /// grace — the same `primary_deadline` the V1 view uses — and the comparison
+    /// is strict, so the last admissible second for an honest resolution and the
+    /// first admissible second for a failure are different seconds.
+    ///
+    /// A material carrying a recovery policy is refused here on purpose. A
+    /// policy means the market bought named alternative sources, and skipping
+    /// them would take an outcome away from the holders who paid for them; that
+    /// walk is `FailNext` per leg, it must debit the leg's own funding
+    /// allocation, and it belongs to the funded controller rather than to this
+    /// transition.
+    pub fn exhaust_after_primary_deadline(
+        &mut self,
+        material_id: ContentId,
+        material: SourceMaterialV2,
+        authenticated_window_spec_id: ContentId,
+        window: WindowSpecV1,
+        expected_generation: u64,
+        current_unix_seconds: i64,
+    ) -> Result<()> {
+        self.validate_material_and_generation(material_id, expected_generation)?;
+        // `window` is a value the caller authenticated against this identity by
+        // digest, exactly as the terminal transition takes an authenticated
+        // result domain. This crate hashes nothing and cannot re-derive it.
+        if material.window_spec() != authenticated_window_spec_id {
+            return Err(Error::LinkageMismatch);
+        }
+        if material.recovery_policy().is_some() {
+            return Err(Error::RecoveryNotExhausted);
+        }
+        if self.phase != SourceResolutionPhaseV1::Primary || current_unix_seconds <= 0 {
+            return Err(Error::InvalidRecoveryTransition);
+        }
+        let deadline = window
+            .end_unix_seconds()
+            .checked_add(i64::from(window.max_age_seconds()))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if current_unix_seconds <= deadline {
+            return Err(Error::DeadlineNotReached);
+        }
+        let mut candidate = *self;
+        candidate.phase = SourceResolutionPhaseV1::Exhausted;
+        candidate.active_attempt = 0;
+        candidate.validate_shape()?;
+        *self = candidate;
+        Ok(())
+    }
+
     /// Commit the Product-owned explicit-failure selector from an independently
     /// authenticated Runtime V2 domain after Source has entered Exhausted.
     #[allow(clippy::too_many_arguments)]
@@ -760,6 +817,140 @@ mod tests {
         ];
         dclutch_product_runtime_v2::compile_result_domain_v2(input, &mut output).expect("domain");
         output
+    }
+
+    /// A terminal window is one instant: `WindowSpecV1::new` refuses `start !=
+    /// end` for `WindowKind::Terminal`, so the deadline the walk waits for is
+    /// that instant plus the window's own liveness grace.
+    fn terminal_window(source_spec: ContentId, end: i64, grace: u32) -> WindowSpecV1 {
+        WindowSpecV1::new(
+            source_spec,
+            crate::WindowKind::Terminal,
+            end,
+            end,
+            grace,
+            1,
+            id(9),
+        )
+        .expect("terminal window")
+    }
+
+    #[test]
+    fn a_silent_provider_cannot_make_a_market_unresolvable() {
+        // The property, executed. Before the deadline the market is still live
+        // and the walk refuses; one second after it, anyone may drive the Source
+        // to Exhausted, from where the Product's own failure selector is
+        // reachable. Without this transition `commit_failure_from_authenticated_domain`
+        // is unreachable and a silent provider bricks the market instead of
+        // costing it a pre-disclosed outcome.
+        let product = id(3);
+        let material = material(product);
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let deadline = 1_000_600;
+        let mut state = SourceResolutionStateV2::fresh(key(1), 9, id(2), key(3), 7, 0, 0)
+            .expect("fresh")
+            .state();
+        assert_eq!(
+            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, deadline),
+            Err(Error::DeadlineNotReached),
+            "the last admissible second for an honest resolution is not a failure second"
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+        assert_eq!(
+            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, deadline + 1),
+            Ok(())
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Exhausted);
+
+        let domain_bytes = runtime_domain_bytes(2);
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let decision = state
+            .commit_failure_from_authenticated_domain(
+                id(2),
+                material,
+                product,
+                domain,
+                9,
+                deadline + 2,
+                1,
+            )
+            .expect("the pre-disclosed outcome is reachable");
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::FailureCommitted);
+        assert_eq!(decision.selector(), domain.failure_selector());
+        assert_eq!(decision.route(), SourceResolutionRouteV1::Failure);
+    }
+
+    #[test]
+    fn the_deadline_walk_refuses_a_market_that_bought_alternative_sources() {
+        // A recovery policy means the market paid for named alternative sources.
+        // Skipping straight to failure would take an outcome away from the
+        // holders who paid for it, so this transition refuses and the funded
+        // per-leg walk owns that case.
+        let with_recovery = SourceMaterialV2::new(id(3), id(4), id(5), id(6), Some(id(8)), id(7));
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let mut state = SourceResolutionStateV2::fresh(key(1), 9, id(2), key(3), 7, 0, 0)
+            .expect("fresh")
+            .state();
+        assert_eq!(
+            state.exhaust_after_primary_deadline(id(2), with_recovery, id(5), window, 9, 2_000_000),
+            Err(Error::RecoveryNotExhausted)
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Primary);
+    }
+
+    #[test]
+    fn the_deadline_walk_refuses_a_window_the_material_does_not_name() {
+        let material = material(id(3));
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let mut state = SourceResolutionStateV2::fresh(key(1), 9, id(2), key(3), 7, 0, 0)
+            .expect("fresh")
+            .state();
+        assert_eq!(
+            state.exhaust_after_primary_deadline(id(2), material, id(90), window, 9, 2_000_000),
+            Err(Error::LinkageMismatch)
+        );
+        assert_eq!(
+            state.exhaust_after_primary_deadline(id(91), material, id(5), window, 9, 2_000_000),
+            Err(Error::StateBindingMismatch)
+        );
+        assert_eq!(
+            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 8, 2_000_000),
+            Err(Error::StateBindingMismatch)
+        );
+    }
+
+    #[test]
+    fn a_resolved_market_cannot_be_walked_to_failure_afterwards() {
+        // The bound that matters most: once a real observation has resolved the
+        // market, the deadline passing must not be able to overwrite it.
+        let product = id(3);
+        let material = material(product);
+        let window = terminal_window(id(4), 1_000_000, 600);
+        let domain_bytes = runtime_domain_bytes(2);
+        let domain = ResultDomainV2::decode(&domain_bytes).expect("domain");
+        let mut state = SourceResolutionStateV2::fresh(key(1), 9, id(2), key(3), 7, 0, 0)
+            .expect("fresh")
+            .state();
+        state
+            .resolve_primary_from_authenticated_domain(
+                id(2),
+                material,
+                product,
+                domain,
+                id(20),
+                0,
+                1,
+                9,
+                999_999,
+                1,
+            )
+            .expect("primary resolution");
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
+        assert_eq!(
+            state.exhaust_after_primary_deadline(id(2), material, id(5), window, 9, 9_000_000),
+            Err(Error::InvalidRecoveryTransition)
+        );
+        assert_eq!(state.phase(), SourceResolutionPhaseV1::Resolved);
     }
 
     #[test]

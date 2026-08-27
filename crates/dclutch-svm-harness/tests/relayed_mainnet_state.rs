@@ -56,8 +56,9 @@ use dclutch_relay_contract::{
     identity::{LOADER_V3_PROGRAM_ID, reconstruct_deployment_observation_v1},
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,
-        CONSUME_RECORD_PREFIX_BYTES, ConsumeRecordInstructionV1, CreateRecordInstructionV1,
-        RetireRecordInstructionV1, SEAL_RECORD_PREFIX_BYTES, SealRecordInstructionV1,
+        CONSUME_RECORD_PREFIX_BYTES, CommitDeadlineFailureInstructionV1,
+        ConsumeRecordInstructionV1, CreateRecordInstructionV1, RetireRecordInstructionV1,
+        SEAL_RECORD_PREFIX_BYTES, SealRecordInstructionV1,
     },
     record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1},
     release::{
@@ -147,6 +148,9 @@ const MIGRATION_PROGRESS_CREATED_POOL: u8 = 3;
 const DEVNET_NOW: i64 = CREATED_UNIX + 600;
 /// The terminal sequence naming the certificate this resolution writes.
 const TERMINAL_SEQUENCE: u64 = 1;
+/// Lean-owned Runtime V2 certificate wire tags, used as PDA seeds.
+const RESOLUTION_SUCCESS_KIND: u8 = 1;
+const RESOLUTION_FAILURE_KIND: u8 = 4;
 /// The demo graduation Product: one ordinary outcome plus the explicit failure
 /// outcome.  A terminal-window graduation proposition can only ever be *proved*
 /// by graduation, so there is exactly one ordinary cell to select and the other
@@ -945,25 +949,33 @@ fn fixture_with_venue(
     );
 
     // The certificate address is the Resolution role's existing namespace, keyed
-    // by the ResolutionSuccess wire tag and the terminal sequence.
-    let certificate = Pubkey::find_program_address(
-        &[
-            RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-            source_state.as_ref(),
-            &[1],
-            &TERMINAL_SEQUENCE.to_le_bytes(),
-        ],
-        &PROGRAM_ID,
-    )
-    .0;
-    test.add_account(
-        certificate,
-        Account::new(
-            Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
-            0,
-            &system_program::ID,
-        ),
-    );
+    // by the terminal's own wire tag and the sequence. Success and failure are
+    // different addresses, so a market that resolved cannot have its certificate
+    // overwritten by a later failure walk, or the reverse.
+    let mut certificate = Pubkey::default();
+    for kind in [RESOLUTION_SUCCESS_KIND, RESOLUTION_FAILURE_KIND] {
+        let account_key = Pubkey::find_program_address(
+            &[
+                RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                source_state.as_ref(),
+                &[kind],
+                &TERMINAL_SEQUENCE.to_le_bytes(),
+            ],
+            &PROGRAM_ID,
+        )
+        .0;
+        test.add_account(
+            account_key,
+            Account::new(
+                Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+                0,
+                &system_program::ID,
+            ),
+        );
+        if kind == RESOLUTION_SUCCESS_KIND {
+            certificate = account_key;
+        }
+    }
 
     Fixture {
         test: Some(test),
@@ -1195,6 +1207,55 @@ impl Fixture {
                 AccountMeta::new_readonly(system_program::ID, false),
             ],
             data,
+        }
+    }
+
+    /// The certificate address for a terminal of one kind.
+    ///
+    /// Success and failure are different *addresses* for one Source state at one
+    /// sequence, so neither can overwrite the other.
+    fn certificate_of(&self, kind: u8) -> Pubkey {
+        Pubkey::find_program_address(
+            &[
+                RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+                self.source_state.as_ref(),
+                &[kind],
+                &TERMINAL_SEQUENCE.to_le_bytes(),
+            ],
+            &PROGRAM_ID,
+        )
+        .0
+    }
+
+    fn deadline_failure_instruction(&self) -> Instruction {
+        Instruction {
+            program_id: PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::new(self.worker.pubkey(), true),
+                AccountMeta::new_readonly(self.market, false),
+                AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+                AccountMeta::new_readonly(self.activation, false),
+                AccountMeta::new(self.source_state, false),
+                AccountMeta::new(self.certificate_of(RESOLUTION_FAILURE_KIND), false),
+                AccountMeta::new_readonly(self.graph.material.raw, false),
+                AccountMeta::new_readonly(self.graph.material.staging, false),
+                AccountMeta::new_readonly(self.graph.window.raw, false),
+                AccountMeta::new_readonly(self.graph.window.staging, false),
+                AccountMeta::new_readonly(self.product.product.raw, false),
+                AccountMeta::new_readonly(self.product.product.staging, false),
+                AccountMeta::new_readonly(self.product.result_domain.raw, false),
+                AccountMeta::new_readonly(self.product.result_domain.staging, false),
+                AccountMeta::new_readonly(self.product.portfolio.raw, false),
+                AccountMeta::new_readonly(self.product.portfolio.staging, false),
+                AccountMeta::new_readonly(sysvar::clock::ID, false),
+                AccountMeta::new_readonly(sysvar::rent::ID, false),
+                AccountMeta::new_readonly(system_program::ID, false),
+            ],
+            data: CommitDeadlineFailureInstructionV1::new(GENERATION, TERMINAL_SEQUENCE)
+                .expect("deadline failure request")
+                .to_bytes()
+                .expect("deadline failure bytes")
+                .to_vec(),
         }
     }
 
@@ -1586,7 +1647,7 @@ async fn the_hostile_corpus_is_refused_by_the_real_adapter() {
             &[&fixture.worker],
         )
         .await,
-        REFUSAL_TRANSITION,
+        REFUSAL_TRANSITION_LIVENESS,
     );
 
     submit(
@@ -1897,6 +1958,7 @@ const REFUSAL_PROVIDER_OBSERVATION: u32 = 10;
 const REFUSAL_OUTPUT_STATE: u32 = 2;
 const REFUSAL_RELAYED_RECORD: u32 = 15;
 const REFUSAL_RELAYED_WINDOW: u32 = 16;
+const REFUSAL_TRANSITION_LIVENESS: u32 = 12;
 
 /// Pin the devnet clock so both time bounds are exact.
 ///
@@ -2410,4 +2472,117 @@ async fn an_observation_outside_the_products_window_refuses_even_when_it_is_fres
         .await,
         REFUSAL_RELAYED_WINDOW,
     );
+}
+
+/// Move the pinned devnet clock past a market's primary deadline.
+///
+/// The deadline is the window's own instant plus its liveness grace, and the
+/// comparison is strict, so this lands one second after the last moment an
+/// honest resolution could have arrived.
+async fn warp_past_the_deadline(context: &mut ProgramTestContext) {
+    let mut clock: Clock = context
+        .banks_client
+        .get_sysvar()
+        .await
+        .expect("clock sysvar");
+    clock.unix_timestamp = CREATED_UNIX + i64::from(WINDOW_MAX_AGE_SECONDS) + 1;
+    context.set_sysvar(&clock);
+}
+
+#[tokio::test]
+async fn no_late_observation_can_resolve_a_market_past_its_primary_deadline() {
+    // The half of the liveness argument that *is* executable today.
+    //
+    // Past the primary deadline the observation route refuses, permanently and
+    // for every possible record: a relayer who goes quiet and comes back late
+    // cannot resolve the market on its own schedule.  What that leaves is a
+    // market pinned at `Primary` with a pre-disclosed failure outcome nobody can
+    // yet commit -- see `an_unfunded_failure_certificate_cannot_exist` for the
+    // exact thing standing in the way.
+    //
+    // The refusal is the two-clock staleness bound rather than the window, and
+    // that is worth naming because the two coincide *by construction* at exactly
+    // this moment: the walk's deadline is `window.end + window.max_age`, and the
+    // configuration's own `max_observation_age_seconds` is the same grace.  So
+    // the last second an observation may resolve the market and the first second
+    // the failure walk may take it are adjacent, with no gap in which neither
+    // route can act.  The window bound is what refuses an observation that is
+    // *fresh* and about the wrong moment, which is a different test.
+    let mut fixture = fixture(1, &[]);
+    let mut context = start(&mut fixture).await;
+    seal_record(&mut context, &fixture).await;
+    warp_past_the_deadline(&mut context).await;
+
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.consume_instruction(ConsumeSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_PROVIDER_OBSERVATION,
+    );
+    let source_data = record_bytes(&mut context, fixture.source_state).await;
+    let source = SourceResolutionStateV2::decode(&source_data).expect("Source decodes");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
+}
+
+#[test]
+fn an_unfunded_failure_certificate_cannot_exist() {
+    // Why the deadline walk has a wire, a frame, a Source transition and no
+    // route, stated as an executed refusal rather than a paragraph.
+    //
+    // `SourceResolutionStateV2::exhaust_after_primary_deadline` lands in this
+    // cycle and is unit-tested: `Primary -> Exhausted` strictly after
+    // `window.end + max_age`, refusing any material that bought recovery legs.
+    // From `Exhausted`, `commit_failure_from_authenticated_domain` already
+    // reaches the Product's own failure selector.  So the transitions exist and
+    // the walk is one route away.
+    //
+    // It is not the missing route that blocks it.  The Lean-owned terminal
+    // schema refuses a `ResolutionFailure` whose `funding_allocation` is zero or
+    // whose `work_paid` is zero, which encodes section 4.8's "bounded, prepaid,
+    // permissionless path that pays whoever walks it" as a *decode-time*
+    // invariant.  There is no such thing as an unfunded failure certificate, so
+    // there is no honest half-measure here: the route lands with the V1-to-V2
+    // port of the funded controller that debits a `FundingState` and credits the
+    // worker, and not before.
+    let unfunded = ResolutionCertificateV2 {
+        kind: ResolutionCertificateKindV2::ResolutionFailure,
+        market: [0x21; 32],
+        route: [0; 32],
+        source_material: [0x22; 32],
+        product_record_digest: [0x23; 32],
+        provider_evidence: [0; 32],
+        funding_allocation: [0; 32],
+        receipt_account: [0x24; 32],
+        generation: GENERATION,
+        attempt_index: 0,
+        schedule_index: 0,
+        selector: GRADUATION_OUTCOME_COUNT - 1,
+        work_paid: 0,
+        funding_remaining: 0,
+        result_numerator: 0,
+        result_denominator: 0,
+        observed_at: 0,
+    };
+    assert!(
+        unfunded
+            .validate_terminal_product(unfunded.product_record_digest, GRADUATION_OUTCOME_COUNT)
+            .is_ok(),
+        "the kind and the selector agree; it is the funding that does not exist"
+    );
+    assert!(
+        unfunded.to_bytes().is_err(),
+        "an unfunded failure certificate encoded, and section 4.8's prepayment rule is not an invariant after all"
+    );
+
+    // With a bounty allocation and a credited worker the same certificate is
+    // canonical, which is the shape the port has to produce.
+    let funded = ResolutionCertificateV2 {
+        funding_allocation: [0x25; 32],
+        work_paid: 100_000,
+        ..unfunded
+    };
+    assert!(funded.to_bytes().is_ok());
 }
