@@ -1822,6 +1822,27 @@ refuse, and they now refuse differently: the Pyth join reports a window miss as
 matching the split `NormalizedProviderEvidenceV1::validate` already made. The
 admitted span is `[max(start, now - max_age), min(end, now + skew)]`.
 
+**Amended 2026-08-27 (KAPPA lane).** That split existed inside the contract and
+did not reach the wire: `ProviderJoinErrorV3::Provider` flattened all three
+answers into `ResolutionError::ProviderObservation` (`0x800A`), so an operator
+reading a validator log could not act on the distinction this section demands —
+and the journey campaign paid a whole off-chain pre-evaluation of the same three
+predicates to work around it, before spending 1,070,265 CU finding out which one
+refused. Three codes now carry them:
+
+| Operator question | Named refusal | Contract refusal it carries |
+| --- | --- | --- |
+| Is it **about** the period the Market sold? | `ProviderWindow` (`0x8011`) | `InvalidObservationSchedule` |
+| Will this cluster still **act on** it? | `ProviderFreshness` (`0x8012`) | `InvalidPublicationTime` |
+| Is it the **feed, exponent and confidence** this Market's adapter configuration names? | `ProviderConfiguration` (`0x8013`) | `InvalidPythObservation` |
+
+`ProviderObservation` keeps `0x800A` and narrows to its residue: the update
+itself did not authenticate — posted bytes, digest, write authority, posted
+slot, evidence identity. The first two of the three are "come back later" and
+the third is not, which is exactly the distinction `RelayedWindow` (`0x8010`)
+already drew for the relayed family; the Pyth family now draws it too. The
+off-chain pre-evaluation is retirable.
+
 The two edges of the window are also different refusals. Below `start` the
 observation is about a period the market had not started selling; above `end` it
 is **late** — the exact case a provider cadence straddling the deadline
@@ -1871,6 +1892,9 @@ reconstructed from the attested Loader V3 bodies.
 | Product record, result domain, portfolio, outcome count | `ProductDomain` (8) | `authenticate_product_runtime_v2` |
 | Provider family or transport profile is not this family | `ProviderRelease` (9) | `consume_source_records` |
 | Account-set digest, pinned position, venue deployment, venue length, venue discriminator, incoherent body, unenumerated state, foreign clock, staleness, skew | `ProviderObservation` (10) | `interpret_sealed_record_v1` |
+| A Pyth publication outside the Product's window | `ProviderWindow` (17) | `normalize_authenticated_update` via `map_normalization_error` |
+| A Pyth publication outside this cluster's age/skew band | `ProviderFreshness` (18) | `normalize_authenticated_update` via `map_normalization_error` |
+| A Pyth feed, exponent, or confidence the adapter configuration does not admit | `ProviderConfiguration` (19) | `PythAdapterConfigV1::validate_update` via `map_normalization_error` |
 | Certificate construction or a Source transition | `Transition` (12) | `plan_relayed_resolution_v1` |
 | **Record not sealed, not quorate, not bound to this Market, or already consumed** | **`RelayedRecord` (15)** | `require_consumable` |
 | **Observed state is pre-terminal, or past the Product's window** | **`RelayedWindow` (16)** | `read_dbc_graduation`, `require_window_admits` |

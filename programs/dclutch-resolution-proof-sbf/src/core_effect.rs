@@ -1098,7 +1098,13 @@ fn process_close<'info>(
     if clock.unix_timestamp <= 0 {
         return Err(ResolutionError::Sysvar.into());
     }
-    authenticate_finalized_funding_policy(common, accounts.get(22), accounts.get(23), request, rent)?;
+    authenticate_finalized_funding_policy(
+        common,
+        accounts.get(22),
+        accounts.get(23),
+        request,
+        rent,
+    )?;
     let manifest_data = common
         .capability_manifest
         .try_borrow_data()
@@ -2559,7 +2565,7 @@ mod tests {
         let mut bytes = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
         let manifest = CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("manifest");
         let exact = request(ResolutionCoreActionV1::CreateFund);
-        authenticate_funding_entries(material, policy, manifest, exact).expect("exact join");
+        authenticate_funding_entries(material, Some(policy), manifest, exact).expect("exact join");
 
         let substituted_policy = RecoveryPolicyV2::new(
             source_id(25),
@@ -2576,7 +2582,7 @@ mod tests {
         )
         .expect("policy");
         assert_eq!(
-            authenticate_funding_entries(material, substituted_policy, manifest, exact),
+            authenticate_funding_entries(material, Some(substituted_policy), manifest, exact),
             Err(ResolutionError::Funding.into())
         );
         let no_recovery = SourceMaterialV2::new(
@@ -2587,8 +2593,19 @@ mod tests {
             None,
             source_id(24),
         );
+        // The two ways the caller's authentication and the material can
+        // disagree about whether a recovery policy exists. Both are this
+        // program contradicting itself rather than a hostile input, and both
+        // must refuse rather than pick a side. `e5b69230` widened this
+        // parameter to `Option` for the §12.7 no-recovery material and left
+        // these three call sites uncompiled; the second disagreement had no
+        // case at all.
         assert_eq!(
-            authenticate_funding_entries(no_recovery, policy, manifest, exact),
+            authenticate_funding_entries(no_recovery, Some(policy), manifest, exact),
+            Err(ResolutionError::SourceMaterial.into())
+        );
+        assert_eq!(
+            authenticate_funding_entries(material, None, manifest, exact),
             Err(ResolutionError::SourceMaterial.into())
         );
     }

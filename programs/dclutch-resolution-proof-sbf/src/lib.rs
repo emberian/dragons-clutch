@@ -55,7 +55,15 @@ pub enum ResolutionError {
     ProductDomain = 0x8008,
     /// The selected Pyth provider-release record or Loader accounts differed.
     ProviderRelease = 0x8009,
-    /// Pyth configuration or fully verified update authentication failed.
+    /// Fully verified update authentication failed: the posted bytes, their
+    /// digest, the write authority, the posted slot, or an evidence identity
+    /// was not the one this frame committed to.
+    ///
+    /// This used to be all of §12.3 as well. It is not any more: the three
+    /// questions `docs/design/MAINNET_STATE_RELAY.md` §12.3 says an operator
+    /// must be able to tell apart now have their own codes
+    /// (`ProviderWindow`, `ProviderFreshness`, `ProviderConfiguration`), and
+    /// this one is the residue — "the update itself did not authenticate".
     ProviderObservation = 0x800A,
     /// Clock or Rent sysvar identity or bytes were invalid.
     Sysvar = 0x800B,
@@ -74,6 +82,28 @@ pub enum ResolutionError {
     /// purpose, because "come back later" and "something is broken" are not the
     /// same message to whoever is holding the position.
     RelayedWindow = 0x8010,
+    /// The provider's observation is not ABOUT the period this Market sold:
+    /// its publication time is outside `[window.start, window.end]`.
+    ///
+    /// Like `RelayedWindow`, and for the same reason: this is no answer rather
+    /// than a wrong one, and the Market is still live. §12.3's first operator
+    /// question.
+    ProviderWindow = 0x8011,
+    /// The provider's observation is about the right period and this cluster
+    /// will not act on it: its publication time is outside
+    /// `[now - max_age, now + max_future_skew]`.
+    ///
+    /// §12.3's second operator question, and the one whose answer is an
+    /// instruction: if the publication is too OLD, a pinned fixture has
+    /// outlived its declared shelf life and must be recaptured — not widened.
+    ProviderFreshness = 0x8012,
+    /// The provider's observation is timely and about the right period, and its
+    /// feed identity, exponent, or confidence is not what this Market's adapter
+    /// configuration admits.
+    ///
+    /// §12.3's third operator question. Unlike the first two this one is not
+    /// "come back later": nothing about waiting changes it.
+    ProviderConfiguration = 0x8013,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -84,7 +114,7 @@ const _: () = assert!(
     "ResolutionError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (ResolutionError::RelayedWindow as u32)
+    (ResolutionError::ProviderConfiguration as u32)
         < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "ResolutionError must not run past its registered refusal band"
 );
@@ -319,7 +349,11 @@ fn removed_legacy_v1_direct_instruction(
             update.exponent(),
             update.publish_time(),
         )
-        .map_err(|_| ResolutionError::ProviderObservation)?;
+        // The V1 obligation's normalization is the adapter-configuration check
+        // alone -- it holds no window, so it cannot answer §12.3's first two
+        // questions and does not pretend to. The V2/V3 route is where all three
+        // are decided; see `provider_v3::map_normalization_error`.
+        .map_err(|_| ResolutionError::ProviderConfiguration)?;
 
     let mut next_state = prior_state;
     let decision = next_state

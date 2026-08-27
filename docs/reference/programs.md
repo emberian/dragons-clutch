@@ -23,6 +23,6 @@ request grammar.
 | `product-runtime-v2` | `dclutch-product-runtime-v2-sbf` | 0x9 | 1 | 0 | 9 | `process_instruction` (programs/dclutch-product-runtime-v2-sbf/src/lib.rs:81) |
 | `registry` | `dclutch-registry-sbf` | 0x1 | 6 | 3 | 13 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:127) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 11 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:104) |
-| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 5 | 12 | 17 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:105) |
+| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 5 | 12 | 20 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:135) |
 | `series-shadow` | `dclutch-series-shadow-sbf` | 0xB | 1 | 0 | 5 | `program_entrypoint` (programs/dclutch-series-shadow-sbf/src/lib.rs:24) |
-| `trading` | `dclutch-trading-sbf` | 0x4 | 7 | 0 | 12 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1715) |
+| `trading` | `dclutch-trading-sbf` | 0x4 | 7 | 0 | 12 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1716) |

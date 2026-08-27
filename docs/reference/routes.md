@@ -47,25 +47,25 @@ have neither an execution binding nor a blocked entry.
 | --- | --- | --- | --- | --- |
 | `core/activate_capability_child#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/activate_capability_child#ActivateCapability`: Capability child activation; needs an activated capability root first. | `programs/dclutch-core-sbf/src/capability.rs:176` |
 | `core/authenticate_no_recovery_entries#None` | action | tag `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:632` |
-| `core/begin_retiring::process#BeginRetiring` | entry | variant `Action::BeginRetiring`; length `REQUEST_BYTES` | blocked by rule `core/begin_retiring::process#BeginRetiring`: Market retirement; needs an open, then terminal, Market. | `programs/dclutch-core-sbf/src/lib.rs:268` |
+| `core/begin_retiring::process#BeginRetiring` | entry | variant `Action::BeginRetiring`; length `REQUEST_BYTES` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:268` |
 | `core/capability::process#ActivateCapability` | action | variant `Action::ActivateCapability` | blocked by rule `core/capability::process#ActivateCapability`: ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. | `programs/dclutch-core-sbf/src/capability.rs:191` |
 | `core/capability::process#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/capability::process#CloseCapability`: Capability closure; needs an activated capability root first. | `programs/dclutch-core-sbf/src/lib.rs:347` |
 | `core/close_capability_child#CloseCapability` | action | variant `Action::CloseCapability` | blocked by rule `core/close_capability_child#CloseCapability`: Capability child closure; needs an activated capability child first. | `programs/dclutch-core-sbf/src/capability.rs:180` |
-| `core/execute_provider_v3::process#ExecuteProvider` | entry | variant `Action::ExecuteProvider`; length `execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3` | blocked by rule `core/execute_provider_v3::process#ExecuteProvider`: Provider execution; needs the Source/provider tier. | `programs/dclutch-core-sbf/src/lib.rs:276` |
+| `core/execute_provider_v3::process#ExecuteProvider` | entry | variant `Action::ExecuteProvider`; length `execute_provider_v3::EXECUTE_PROVIDER_PREFIX_BYTES_V3` | executed (journey) | `programs/dclutch-core-sbf/src/lib.rs:276` |
 | `core/found::process#Found` | entry | variant `Action::Found`; length `REQUEST_BYTES` | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:265` |
 | `core/found::project` | entry | length `PROJECT_FOUND_REQUEST_BYTES_V1`; magic `DCLTPFQ1` | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:257` |
 | `core/generic_founding_v1::process` | entry | length `GENERIC_FOUNDING_REQUEST_BYTES_V1`; magic `DCLTGFQ1` | executed (tier1) | `programs/dclutch-core-sbf/src/lib.rs:180` |
 | `core/infrastructure::process_initialize` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1` | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:152` |
 | `core/open_market::process#OpenMarket` | entry | variant `Action::OpenMarket`; length `open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1` | blocked by rule `core/open_market::process#OpenMarket`: The standalone `Action::OpenMarket` route. | `programs/dclutch-core-sbf/src/lib.rs:290` |
 | `core/persist_state#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | blocked by rule `core/persist_state#AdmitTerminal`: Terminal admission; needs the Source/provider tier and a resolved Market. | `programs/dclutch-core-sbf/src/resolution.rs:232` |
-| `core/persist_state#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | blocked by rule `core/persist_state#VerifyFundReady`: Resolution Fund readiness; needs the Source/provider tier. | `programs/dclutch-core-sbf/src/resolution.rs:218` |
+| `core/persist_state#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey) | `programs/dclutch-core-sbf/src/resolution.rs:218` |
 | `core/process_found#FoundAndPermit` | action | variant `GenericFoundingStageV1::FoundAndPermit` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:380` |
-| `core/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:1` |
+| `core/process_instruction` | entry | -- | executed (journey); executed (relayed-vertical); executed (tier1); refused (journey); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:1` |
 | `core/process_instruction#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:338` |
 | `core/process_open#Open` | action | variant `GenericFoundingStageV1::Open` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:387` |
 | `core/resolution::authenticate_recovery_policy#(recovery_id,policy)` | action | tag `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-core-sbf/src/resolution.rs:611` |
-| `core/resolution::process#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | blocked by rule `core/resolution::process#CloseFund`: Resolution Fund lifecycle; needs the Source/provider tier and an open Market. | `programs/dclutch-core-sbf/src/resolution.rs:234` |
-| `core/resolution::process#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | blocked by rule `core/resolution::process#CreateFund`: Resolution Fund lifecycle; needs the Source/provider tier and an open Market. | `programs/dclutch-core-sbf/src/resolution.rs:198` |
+| `core/resolution::process#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | executed (journey) | `programs/dclutch-core-sbf/src/resolution.rs:234` |
+| `core/resolution::process#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-core-sbf/src/resolution.rs:198` |
 | `core/resolution::process#Retire` | entry | variant `Action::VerifyReadiness`; variant `Action::AdmitTerminal`; variant `Action::Retire`; length `resolution::RESOLUTION_CORE_INSTRUCTION_BYTES_V1` | blocked by rule `core/resolution::process#Retire`: Resolution readiness/terminal admission; needs the Source/provider tier and an open Market. | `programs/dclutch-core-sbf/src/lib.rs:370` |
 | `core/retire_v1::process#Retire` | entry | variant `Action::Retire`; length `retire_v1::RETIREMENT_INSTRUCTION_BYTES_V1` | blocked by rule `core/retire_v1::process#Retire`: Market retirement; needs an open, then terminal, Market. | `programs/dclutch-core-sbf/src/lib.rs:309` |
 | `core/series_consume::process` | entry | length `SERIES_CORE_REQUEST_BYTES_V1`; magic `DCLTCSR1`; magic `DCLPCL01` | executed (tier4-series-occurrence-programtest); refused (tier4-series-occurrence-programtest) | `programs/dclutch-core-sbf/src/lib.rs:235` |
@@ -134,7 +134,7 @@ have neither an execution binding nor a blocked entry.
 | `registry/process_append#2` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:52` |
 | `registry/process_begin#1` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:49` |
 | `registry/process_finalize#3` | action | tag `` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:55` |
-| `registry/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
+| `registry/process_instruction` | entry | -- | executed (relayed-vertical); executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
 | `registry/process_reauthenticate#Reauthenticate` | entry | variant `RegistryInstructionV1::Reauthenticate` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:164` |
 | `registry/record_v1::dispatch` | entry | magic `DCLTRIX1`; length `dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:149` |
 
@@ -151,23 +151,23 @@ have neither an execution binding nor a blocked entry.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `resolution/core_effect::process_core_effect` | entry | predicate `` | blocked by rule `resolution/core_effect::process_core_effect`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:119` |
+| `resolution/core_effect::process_core_effect` | entry | predicate `` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:149` |
 | `resolution/process_admit#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | blocked by rule `resolution/process_admit#AdmitTerminal`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:192` |
 | `resolution/process_append#AppendObservation` | action | variant `RelayInstructionV1::AppendObservation` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:175` |
-| `resolution/process_close#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | blocked by rule `resolution/process_close#CloseFund`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:201` |
-| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:185` |
-| `resolution/process_consume#ConsumeRecord` | action | variant `RelayInstructionV1::ConsumeRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:182` |
-| `resolution/process_create#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | blocked by rule `resolution/process_create#CreateFund`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:174` |
-| `resolution/process_create_record#CreateRecord` | action | variant `RelayInstructionV1::CreateRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:172` |
-| `resolution/process_instruction` | entry | -- | executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:1` |
+| `resolution/process_close#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:201` |
+| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:185` |
+| `resolution/process_consume#ConsumeRecord` | action | variant `RelayInstructionV1::ConsumeRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:182` |
+| `resolution/process_create#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | executed (journey); executed (relayed-vertical); refused (journey) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:174` |
+| `resolution/process_create_record#CreateRecord` | action | variant `RelayInstructionV1::CreateRecord` | executed (relayed-vertical); executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:172` |
+| `resolution/process_instruction` | entry | -- | executed (journey); executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:1` |
 | `resolution/process_reclaim#magic` | action | tag ``; magic `DCLTPRL3` | blocked by rule `resolution/process_reclaim#magic`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:80` |
 | `resolution/process_retire#RetireRecord` | action | variant `RelayInstructionV1::RetireRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:180` |
 | `resolution/process_seal#SealRecord` | action | variant `RelayInstructionV1::SealRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:178` |
-| `resolution/process_submit#magic` | action | tag ``; magic `DCLTPSB3` | blocked by rule `resolution/process_submit#magic`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:77` |
-| `resolution/process_verify#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | blocked by rule `resolution/process_verify#VerifyFundReady`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:183` |
-| `resolution/provider_instruction_v3::process_provider_resolution_v3` | entry | predicate `` | blocked by rule `resolution/provider_instruction_v3::process_provider_resolution_v3`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:122` |
-| `resolution/provider_transport_v3::process_provider_transport_v3` | entry | predicate `` | blocked by rule `resolution/provider_transport_v3::process_provider_transport_v3`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:129` |
-| `resolution/relay_transport_v1::process_relay_transport_v1` | entry | predicate `` | executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:136` |
+| `resolution/process_submit#magic` | action | tag ``; magic `DCLTPSB3` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:77` |
+| `resolution/process_verify#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey); executed (relayed-vertical) | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:183` |
+| `resolution/provider_instruction_v3::process_provider_resolution_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:152` |
+| `resolution/provider_transport_v3::process_provider_transport_v3` | entry | predicate `` | executed (journey) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:159` |
+| `resolution/relay_transport_v1::process_relay_transport_v1` | entry | predicate `` | executed (relayed-vertical); executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/lib.rs:166` |
 
 ## series-shadow
 
@@ -186,3 +186,16 @@ have neither an execution binding nor a blocked entry.
 | `trading/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:1` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:236` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:219` |
+
+## Bindings naming routes the census does not
+
+These route references appear in a bindings file but match no route id
+in the current inventory. Each is either a stale binding or a census gap;
+neither is silently droppable.
+
+| reference | bindings file | binding label |
+| --- | --- | --- |
+| `core/resolution::process#VerifyFundReady` | `tools/gauntlet/relayed-vertical/bindings.json` | relayed vertical: activate the no-recovery Resolution funding |
+| `registry/record_publication::process#Append` | `tools/gauntlet/relayed-vertical/bindings.json` | publish record: * |
+| `registry/record_publication::process#Begin` | `tools/gauntlet/relayed-vertical/bindings.json` | publish record: * |
+| `registry/record_publication::process#Finalize` | `tools/gauntlet/relayed-vertical/bindings.json` | publish record: * |

@@ -810,6 +810,34 @@ impl SourceAccessProfile {
     const fn byte(self) -> u8 {
         self as u8
     }
+
+    /// The provider extension this access profile selects.
+    ///
+    /// **This is the extension discriminator, and it is the only one.** The
+    /// question "which provider extension is this" used to be asked of
+    /// `ProviderReleaseV1::adapter_release_id`, and that reading collided with
+    /// the one the live V3 provider route enforces — `authenticate_provider_release`
+    /// requires that same field to equal the published Pyth release's own
+    /// `adapter_id`, and the two values differ, so **no `ProviderReleaseV1`
+    /// could satisfy both**. The V3 reading is authoritative (decision carried
+    /// in `docs/design/MAINNET_STATE_RELAY.md` §12.4 and measured by the
+    /// successor publisher, which pays two chain refusals for the collision).
+    ///
+    /// The access profile is a real discriminator: it is a closed decoded enum
+    /// that every reader of a Source graph already holds, its meaning is
+    /// contested by nothing, and it is what the publisher already switches on
+    /// when it picks an adapter-config schema.
+    pub const fn provider_extension_release_id(self) -> [u8; 32] {
+        match self {
+            // Both Pyth profiles reach a provider through the receiver's
+            // post/reclaim frame; they differ in how many observations one
+            // Market buys, not in which extension parses them.
+            Self::PythTerminalOneTransaction | Self::SharedObservationChild => {
+                PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+            }
+            Self::RelayedObservationRecord => RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1,
+        }
+    }
 }
 
 /// Provider-neutral semantics and unit contract for observations.
@@ -2134,7 +2162,8 @@ impl PythProviderAdapterObligationV1 {
     ) -> Result<Self> {
         let (source, provider_release_id, provider_release) = material.source(source_spec_id)?;
         let adapter_config = material.adapter_config(source_spec_id)?;
-        if provider_release.adapter_release_id().to_bytes() != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        if source.access_profile().provider_extension_release_id()
+            != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
         {
             return Err(Error::UnsupportedProviderExtension);
         }
@@ -2403,9 +2432,11 @@ impl RecoveryMaterialSlotV1 {
         provider_release: ProviderReleaseV1,
         adapter_config: PythAdapterConfigV1,
     ) -> Result<Self> {
-        if source.provider_release_id() != provider_release_id
-            || provider_release.adapter_release_id().to_bytes()
-                != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        if source.provider_release_id() != provider_release_id {
+            return Err(Error::LinkageMismatch);
+        }
+        if source.access_profile().provider_extension_release_id()
+            != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
         {
             return Err(Error::UnsupportedProviderExtension);
         }
@@ -2568,15 +2599,14 @@ fn validate_source_material_input_v1(input: SourceMaterialInputV1<'_>) -> Result
     input
         .statistic
         .validate_capacity(input.capacity_profile_id, *input.capacity_profile)?;
+    // No `adapter_release_id` check here. It used to require that field to be
+    // one of the two extension constants, which is the reading the live V3
+    // provider route contradicts (see `SourceAccessProfile::provider_extension_release_id`),
+    // and the check was vacuous under the surviving reading anyway: the
+    // extension is selected by the access profile, which is a closed decoded
+    // enum with no unknown member to refuse.
     if input.policy.capacity_profile_id() != input.capacity_profile_id
         || input.primary_source.provider_release_id() != input.primary_provider_release_id
-        || !matches!(
-            input
-                .primary_provider_release
-                .adapter_release_id()
-                .to_bytes(),
-            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 | RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
-        )
         || input.result_domain.coordinate_domain_id().to_bytes()
             != input.primary_source.domain_id().to_bytes()
         || input.result_domain.result_unit_id().to_bytes()
@@ -2840,14 +2870,11 @@ fn validate_source_material_primary_provider_v1(
     primary_source: SourceSpecV1,
 ) -> Result<()> {
     let provider_release_id = content(bytes, 1360)?;
-    let provider_release = ProviderReleaseV1::decode(slice(bytes, 1392, PROVIDER_RELEASE_BYTES)?)?;
+    // Both embedded records are still hostile-decoded; neither is read for the
+    // extension any more.
+    ProviderReleaseV1::decode(slice(bytes, 1392, PROVIDER_RELEASE_BYTES)?)?;
     PythAdapterConfigV1::decode(slice(bytes, 1568, PYTH_ADAPTER_CONFIG_BYTES)?)?;
-    if primary_source.provider_release_id() != provider_release_id
-        || !matches!(
-            provider_release.adapter_release_id().to_bytes(),
-            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 | RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
-        )
-    {
+    if primary_source.provider_release_id() != provider_release_id {
         return Err(Error::LinkageMismatch);
     }
     Ok(())
@@ -5348,11 +5375,16 @@ pub const PYTH_PROVIDER_EXTENSION_FRAME_V1: [SourceAccountRoleV1; 10] = [
     SYSTEM,
 ];
 
-/// Select the only provider extension implemented by V1.
+/// Select the only provider extension account frame implemented by V1.
+///
+/// Takes the access profile rather than an adapter-release identity: the
+/// extension is what `SourceAccessProfile::provider_extension_release_id`
+/// names, and the relayed extension reaches resolution through its own record
+/// routes rather than through a provider account frame, so it has none here.
 pub fn provider_extension_roles_v1(
-    adapter_release_id: ContentId,
+    access_profile: SourceAccessProfile,
 ) -> Result<&'static [SourceAccountRoleV1]> {
-    if adapter_release_id.to_bytes() == PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 {
+    if access_profile.provider_extension_release_id() == PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 {
         Ok(&PYTH_PROVIDER_EXTENSION_FRAME_V1)
     } else {
         Err(Error::UnsupportedProviderExtension)
@@ -5995,19 +6027,112 @@ mod tests {
             .expect("finite Product domain")
     }
 
-    fn runtime_material(
-        recovery: Option<(ContentId, RecoveryPolicyV1)>,
-        access: SourceAccessProfile,
-    ) -> ([u8; SOURCE_MATERIAL_BYTES], SourceSpecV1, ProviderReleaseV1) {
-        let capacity = profile();
-        let source = SourceSpecV1::new(id(11), id(10), id(9), access, id(12), id(1));
-        let provider = ProviderReleaseV1::new(
+    /// The cross-reading case, so a future divergence names itself.
+    ///
+    /// `ProviderReleaseV1::adapter_release_id` had two live readers that no
+    /// record could satisfy at once: this crate's V1 obligation required it to
+    /// be `PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1` ("which extension is this"),
+    /// while `authenticate_provider_release` on the live V3 provider route
+    /// requires it to equal the published Pyth release's own `adapter_id`
+    /// ("which adapter release does this deployment carry"). Both refusals the
+    /// successor campaign collected were correct under their own reading, which
+    /// is exactly why neither of them named the problem.
+    ///
+    /// The V3 reading is authoritative and the extension question moved to
+    /// `SourceAccessProfile`. These assertions pin both halves of that: a
+    /// release carrying the V3 value is admitted, and the old constant no
+    /// longer decides anything on its own.
+    #[test]
+    fn the_extension_discriminator_is_the_access_profile_not_the_adapter_release() {
+        // The V3 reading: `adapter_release_id` is an ordinary adapter identity
+        // and is nothing like the extension constant. The V1 obligation used to
+        // refuse exactly this, on chain, after 1,070,265 CU.
+        let deployment_adapter = id(0x5a);
+        assert_ne!(
+            deployment_adapter.to_bytes(),
+            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        );
+        let (material, _, provider) = runtime_material_carrying(
+            None,
+            SourceAccessProfile::PythTerminalOneTransaction,
+            deployment_adapter,
+        );
+        let view = SourceMaterialViewV1::decode(&material).expect("borrowed material");
+        let obligation = PythProviderAdapterObligationV1::from_material_view(view, id(3))
+            .expect("the V3 reading of adapter_release_id is admitted");
+        assert_eq!(obligation.provider_release(), provider);
+        assert_eq!(
+            obligation.provider_release().adapter_release_id(),
+            deployment_adapter
+        );
+
+        // And the constant does not decide on its own: a relayed Source whose
+        // provider release carries the Pyth extension constant is still not a
+        // Pyth-extension Source. Under the old reading this was admitted.
+        let relayed = SourceSpecV1::new(
+            id(11),
+            id(10),
+            id(9),
+            SourceAccessProfile::RelayedObservationRecord,
+            id(12),
+            id(1),
+        );
+        let carrying_pyth_constant = ProviderReleaseV1::new(
             id(16),
             ContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("Pyth extension"),
             id(17),
             id(18),
             id(19),
         );
+        assert_eq!(
+            RecoveryMaterialSlotV1::new(
+                id(3),
+                relayed,
+                id(9),
+                carrying_pyth_constant,
+                PythAdapterConfigV1::new([42; 32], -8, 100).expect("adapter configuration"),
+            ),
+            Err(Error::UnsupportedProviderExtension)
+        );
+
+        // The mapping itself is total and closed, so no access profile can
+        // reach a reader without an extension.
+        assert_eq!(
+            SourceAccessProfile::PythTerminalOneTransaction.provider_extension_release_id(),
+            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        );
+        assert_eq!(
+            SourceAccessProfile::SharedObservationChild.provider_extension_release_id(),
+            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        );
+        assert_eq!(
+            SourceAccessProfile::RelayedObservationRecord.provider_extension_release_id(),
+            RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
+        );
+    }
+
+    fn runtime_material(
+        recovery: Option<(ContentId, RecoveryPolicyV1)>,
+        access: SourceAccessProfile,
+    ) -> ([u8; SOURCE_MATERIAL_BYTES], SourceSpecV1, ProviderReleaseV1) {
+        runtime_material_carrying(
+            recovery,
+            access,
+            ContentId::new(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1).expect("Pyth extension"),
+        )
+    }
+
+    /// Build a runtime material whose `ProviderReleaseV1.adapter_release_id`
+    /// is whatever the caller says, so a test can exercise the field under the
+    /// reading the live V3 provider route enforces.
+    fn runtime_material_carrying(
+        recovery: Option<(ContentId, RecoveryPolicyV1)>,
+        access: SourceAccessProfile,
+        adapter_release_id: ContentId,
+    ) -> ([u8; SOURCE_MATERIAL_BYTES], SourceSpecV1, ProviderReleaseV1) {
+        let capacity = profile();
+        let source = SourceSpecV1::new(id(11), id(10), id(9), access, id(12), id(1));
+        let provider = ProviderReleaseV1::new(id(16), adapter_release_id, id(17), id(18), id(19));
         let adapter_config =
             PythAdapterConfigV1::new([42; 32], -8, 100).expect("Pyth adapter configuration");
         let window = WindowSpecV1::new(id(3), WindowKind::Terminal, 100, 100, 10, 2, id(13))
@@ -6509,7 +6634,12 @@ mod tests {
             .expect("Pyth obligation");
         assert_eq!(obligation.adapter_config_id(), id(12));
         assert_eq!(
-            provider_extension_roles_v1(id(99)),
+            provider_extension_roles_v1(SourceAccessProfile::PythTerminalOneTransaction)
+                .map(<[SourceAccountRoleV1]>::len),
+            Ok(PYTH_PROVIDER_EXTENSION_FRAME_V1.len())
+        );
+        assert_eq!(
+            provider_extension_roles_v1(SourceAccessProfile::RelayedObservationRecord),
             Err(Error::UnsupportedProviderExtension)
         );
         assert_eq!(material_view.as_bytes(), material.as_slice());
