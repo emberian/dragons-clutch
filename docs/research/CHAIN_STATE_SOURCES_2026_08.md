@@ -1444,3 +1444,135 @@ copies of the median scan — one for borrowed observations, one for normalized
 provider evidence — which could have drifted at any time and would have made the
 tolerance addable to one path and forgettable on the other. Both are gone;
 `ScheduledMedianScheduleV1` and `exact_median_by` are the single owners.
+
+## 12. The on-chain closure, costed (KAPPA-ENFORCE lane, 2026-08-27)
+
+§11.2 closed with "the predicate is a kernel function and **no on-chain route
+calls it yet**", and named the shape: carry a principal cap on the Market root at
+`Found`, check it at `FoundingV5` *and at every later complete-set split*. This
+section is what that costs, measured against the tree rather than estimated, plus
+the half of it that landed.
+
+### 12.1 What landed: the carried cap is a proved substitution, not a shortcut
+
+`admit_founding_principal` needs the whole Source graph — κ, the floor, and the
+three identities the floor is bound to. A split route has none of it. The reason
+that matters is sharper than "inconvenient": **re-deriving the predicate at split
+would let the caller choose its own bound.** `ManipulationFloorV1::validate_binding`
+compares `source_spec_id`, `adapter_config_id` and `collateral_unit_id`, and
+nothing anywhere pins *which* floor record carries those bindings — two floors
+that agree on all three and disagree on `floor_atoms` both validate. So the bound
+has to be frozen where the graph is authenticated, and carried.
+
+`MarketPrincipalCapV1` is that carried value, with `derive_market_principal_cap`
+computing it and `admit_principal_growth(cap, outstanding, added)` the single
+accessor both the founding site and every split site call. Its licence is
+`carried_cap_decides_exactly_what_the_graph_decides` in
+`SourcePrincipalCapacityV1.lean`: for a stated κ, comparing against the carried
+cap decides **exactly** what re-running §6.5 would have decided. The floored
+division loses nothing, because over ℕ `p ≤ ⌊n·f / d⌋` and `p · d ≤ n · f` are
+the same proposition (`Nat.le_div_iff_mul_le`), and the `u128` overflow refusal
+stays exact on the other side of the equivalence. `PRINCIPAL_CARRIED_CAPS_V1` is
+emitted from the same Lean model as the admission corpus, so the kernel's
+stored-cap form is graded against `cap` rather than against a second reading of
+the same arithmetic. The demo graduation Market's carried cap is
+**4,654,518,500**, and 4,654,518,501 refuses — the same boundary pair as §11.2,
+now decided from one number instead of four records.
+
+**Three wire readings, and zero is not one of the good ones.** The cap is one
+`u128` little-endian field. Zero reads `Absent` and refuses every
+principal-growing operation — the fail-closed reading a root that was never given
+a cap must have. A *stated* bound of zero (κ = 0, or a zero floor, both meaning
+"found nothing against this Source") is the same bytes and the same decision, so
+collapsing them costs nothing. An explicitly unbounded founding is sixteen
+deliberate `0xFF` bytes that no zeroed record produces by accident — and it is
+not an escape hatch in the decision either, because it is an ordinary cap whose
+value exceeds every principal the wire can express
+(`saturated_cap_admits_every_representable_principal`).
+
+### 12.2 The reserved-space census, and why the ruled shape needs a migration
+
+§11.1 and §11.3 both landed by claiming a record's existing reserved tail without
+moving a width. That move is **not available** for the Market-root cap. Every
+candidate, checked byte by byte:
+
+| Record | Width | Reserved | Verdict |
+|---|---:|---|---|
+| `CoreState` (`DCLTCOR2`) | 352 | **none** | fully packed; `terminal_receipt` ends at 352 exactly |
+| LBV2 aggregate (`DCLLBM02`) | 256 + 8·N | 2 B at 10 | the right account, two bytes short of any cap |
+| LBV2 Position (`DCLLBP02`) | 128 + 8·N | 8 B at 120 | right width, wrong scope — the cap is a Market fact |
+| `SourceCapacityProfileV1` | 112 | 16 B at 96 | 16 short of the 32 a floor `ContentId` would need |
+| `GenericFoundingRequestV1` | 400 | 4 B at 12, 6 B at 394 | a wire, not a root: does not persist to split |
+| `ClaimsFoundingRequestV5` | 832 | 4 B at 668, **16 B at 816** | a wire — but see §12.4 |
+| `FoundingIntentV5` / `SeriesFoundingPermitV1` | 544 / 608 | header only | tails full; both Lean-emitted |
+
+`CoreState` is the expensive one and the one §11.2 named. Its schema is
+`native_decide`-proved packed in `MarketCoreAbi.lean` (`state_schema_width :
+stateBytes = 352`), its decoder issues **zero** `require_zero` calls because
+there is nothing to zero-check, and `STATE_BYTES` is compared exactly at **152
+sites** tree-wide. Widening it is a Lean edit plus a regeneration plus 152
+consumers — a wire-breaking batch, which belongs to RECORDS-MIGRATE and was not
+taken solo.
+
+### 12.3 Core cannot compute the cap where it writes the root
+
+Even with space, `Found` could not fill it. `found.rs` decodes `SourceMaterialV2`
+out of `frame.resolution_raw`, content-addresses it, checks it names the Market's
+Product record, and **drops the value**. Everything below the root is an id, not
+an account: reaching κ is two hops (`primary_source_spec` → `SourceSpecV1` →
+`capacity_profile_id` → the profile), and the floor is a third record. `FoundAccounts`
+is exactly 31 accounts and carries none of them, so Core-side derivation costs
+**+3 `(raw, staging)` pairs → 37**, and `DCLTGMF1`'s outer goes 137 → 143
+references on a transaction already at **87.9% of 1,400,000 CU**.
+
+### 12.4 The recommended shape, and why it is cheaper than the ruled one
+
+**Do the whole thing in Claims, and carry the cap in complete-set units.**
+
+1. **`FoundingV5` derives and stores it, not `Found`.** FoundingV5 already parses
+   32 accounts, already authenticates four finalized records with their staging
+   cursors, already reads the Core Market account, and already holds `quantity`
+   and `basis_scale` cross-checked against the Core-owned permit. Give it four
+   more `(raw, staging)` pairs — `SourceMaterialV2`, `SourceSpecV1`,
+   `SourceCapacityProfileV1`, `ManipulationFloorV1` — and the chain closes with
+   **no Core change at all**: the material's digest must equal the Market's
+   `resolution_policy` (already persisted at `CoreState` offset 144), the
+   material names the spec, the spec names the profile, and the floor's bindings
+   are validated against the authenticated spec. 32 → 40 accounts on a route that
+   is not the CU wall, instead of 31 → 37 on the route that is.
+
+2. **Store `cap_sets`, not `cap_atoms`.** The two live split routes —
+   `signed_delta_v3` and `affine_batch_v2` — carry raw claim deltas with **no
+   `basis_scale` and no Custody principal in the packet**; `basis_scale` exists
+   only on the Core permit, which neither reads. Dividing once at founding
+   (`cap_sets = cap_atoms / basis_scale`, saturating to the unbounded sentinel)
+   turns the split check into a `u64` comparison against the supply vector those
+   routes are already writing. No scale plumbing, no new accounts, and the CU
+   cost is a compare per coordinate.
+
+3. **The migration is the LBV2 aggregate header, 256 → 264.** That is the right
+   account (per-market, written by FoundingV5, read on every split), its codec is
+   **hand-written** — no Lean, no proof regeneration — and the account is
+   *already* runtime-width, so every caller computes its size from
+   `liability_basis_vector_width_v2` rather than comparing a constant. That is a
+   different order of migration from `CoreState`'s 152 exact-width sites.
+
+4. **Compatibility, as a named choice rather than an accident.** Today the demo
+   market's profile calls no `bounding_principal` and publishes no floor record,
+   so it reads `PrincipalCapacityV1::Unstated` and would found nothing under a
+   fail-closed check; only `tools/gauntlet/relayed-vertical` founds under κ. So
+   FoundingV5 must be able to found unbounded — and must be made to *say so*.
+   `ClaimsFoundingRequestV5`'s 16 reserved tail bytes (816..832) carry
+   `declared_principal_cap_sets: u64` plus 8 reserved, needing no width change:
+   the founder writes `u64::MAX` to found unbounded, FoundingV5 refuses any
+   declared value that disagrees with what it derives from the Source graph, and
+   **zero is never admitted**. Nothing zeroed can found.
+
+### 12.5 What is still owed
+
+The four items above, as one batch: the FoundingV5 frame growth, the aggregate
+header widening, the two split checks, and the request-tail declaration. Two of
+the four sites (`programs/dclutch-claims-sbf/src/{signed_delta_v3,affine_batch_v2}.rs`)
+were under concurrent edit when this was written and were not touched. Until the
+batch lands, κ remains enforced host-side by the campaign that founds the market,
+and `docs/evidence/DEVNET_SMOKE_0.md` §6 item 8 stands as written.
