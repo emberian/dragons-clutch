@@ -2306,15 +2306,16 @@ pub fn derive_effect_permissions(
         return Err(Error::WidthMismatch);
     }
     for (coordinate, permission) in output.iter_mut().enumerate() {
-        let authority_coordinate = if expanded_rule(profile, coordinate)?.prestate
-            == AccountPrestateV2::AuthenticatedRouteAlias
-        {
-            profile.representative(tail_count, coordinate)?
+        let rule = expanded_rule(profile, coordinate)?;
+        // A coordinate that is not a route alias IS its own authority, so the
+        // rule already decoded is the rule whose permission this is. Only a
+        // route alias has another coordinate to read.
+        let authority_rule = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+            expanded_rule(profile, profile.representative(tail_count, coordinate)?)?
         } else {
-            coordinate
+            rule
         };
-        let rule = expanded_rule(profile, authority_coordinate)?;
-        *permission = rule.permission();
+        *permission = authority_rule.permission();
     }
     Ok(())
 }
@@ -2331,18 +2332,19 @@ pub fn derive_effect_permissions_with_dynamic_spans(
     }
     for (coordinate, permission) in output.iter_mut().enumerate() {
         let rule = expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
-        let authority_coordinate = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
-            profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
+        // See `derive_effect_permissions`. Here the saved decode is the one
+        // that walks the whole span table to find the coordinate's rule.
+        let authority_rule = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+            expanded_rule_with_dynamic_spans(
+                profile,
+                tail_count,
+                span_counts,
+                profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?,
+            )?
         } else {
-            coordinate
+            rule
         };
-        *permission = expanded_rule_with_dynamic_spans(
-            profile,
-            tail_count,
-            span_counts,
-            authority_coordinate,
-        )?
-        .permission();
+        *permission = authority_rule.permission();
     }
     Ok(())
 }
