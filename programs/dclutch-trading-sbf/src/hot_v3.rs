@@ -2371,7 +2371,8 @@ fn execute_authenticated_hot_v3(
     let output_lamports = projected_effects.lamports;
     let output_requests = projected_effects.requests;
 
-    preflight_local_effects(
+    require_local_effect_discipline_v5(
+        &preplanned_plans,
         effect,
         tail_count,
         &transition_output_scalars,
@@ -2403,14 +2404,6 @@ fn execute_authenticated_hot_v3(
         &revalidated_lifecycle,
         &transition_output_scalars,
         &transition_output_identities,
-    )?;
-    require_lifecycle_effect_bindings_v4(
-        &revalidated_lifecycle.plans,
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &aliases,
     )?;
     hot_cu_checkpoint!("effect-lifecycle-replan");
     let lifecycle_plans = revalidated_lifecycle.plans;
@@ -4622,16 +4615,36 @@ fn require_lifecycle_replan_agreement_v4(
     }
 }
 
-/// Require every created state's immutable identity binding to be written
-/// exactly once by the Effect program, and never overlapped by anything else.
+/// Require every local Effect operation to leave the root header alone and to
+/// write each created state's immutable identity binding exactly once, never
+/// overlapped by anything else.
 ///
-/// The scan is over the Effect, not over the bindings: resolving one effect
-/// operation costs orders of magnitude more than comparing a resolved write
-/// against a binding's coordinate and offset, and there are far more operations
-/// than bindings. Asking each binding separately re-resolved the entire program
-/// once per binding.
+/// Two predicates, one resolution pass. Resolving one Effect operation costs
+/// orders of magnitude more than either predicate applied to the result, and
+/// both predicates have to see every operation of the same program at the same
+/// registers, so running them as two passes resolved the whole program twice to
+/// answer two questions about the same object. Measured on the canonical Direct
+/// bundle at full depth: the second pass was **110,284 CU, 7.9% of the
+/// 1,400,000 ceiling**, and it computed nothing the first pass had not already
+/// produced and discarded.
+///
+/// The scan is over the Effect, not over the bindings: there are far more
+/// operations than bindings, and asking each binding separately re-resolved the
+/// entire program once per binding.
+///
+/// Each operation is checked completely before the next is resolved, so an
+/// operation that both writes the root header and collides with a binding
+/// refuses on the root header. Neither refusal is reachable-only-after the
+/// other; there is no precedence to preserve between two operations, and both
+/// are fail-closed.
+///
+/// `plans` is the **preplan's** table rather than the replan's. The replan
+/// agreement that follows proves the two are equal, so answering binding
+/// coverage against one and register identity against the other is the same
+/// conjunction written in the other order - and the agreement still refuses
+/// first-class if they ever disagree.
 #[inline(never)]
-fn require_lifecycle_effect_bindings_v4(
+fn require_local_effect_discipline_v5(
     plans: &[PreparedLifecycleInvocationV3],
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
@@ -4656,6 +4669,7 @@ fn require_lifecycle_effect_bindings_v4(
         let resolved = effect
             .resolved_fixed_effect(fixed, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Transition)?;
+        require_root_write_is_state_only(resolved, aliases)?;
         inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
         fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
     }
@@ -4666,6 +4680,7 @@ fn require_lifecycle_effect_bindings_v4(
             let resolved = effect
                 .resolved_item_effect(item, operation, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Transition)?;
+            require_root_write_is_state_only(resolved, aliases)?;
             inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
             operation = operation
                 .checked_add(1)
@@ -6938,43 +6953,6 @@ fn shadow_routes_v3(
         route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(output)
-}
-
-#[inline(never)]
-fn preflight_local_effects(
-    effect: SelectedEffectProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
-    aliases: &[usize],
-) -> Result<(), ProgramError> {
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        require_root_write_is_state_only(
-            effect
-                .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Transition)?,
-            aliases,
-        )?;
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            require_root_write_is_state_only(
-                effect
-                    .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                    .map_err(|_| TradingSbfError::Transition)?,
-                aliases,
-            )?;
-            operation = operation
-                .checked_add(1)
-                .ok_or(TradingSbfError::Transition)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-    Ok(())
 }
 
 fn require_root_write_is_state_only(
