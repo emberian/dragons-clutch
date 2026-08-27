@@ -27,14 +27,9 @@
       "owner": "cycle-2 tranche A (WAVE.md), Direct"
     },
     {
-      "route": "dealer/*",
-      "reason": "Dealer family artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md), Dealer"
-    },
-    {
       "route": "dealer-accelerator/*",
-      "reason": "Dealer accelerator, not part of the seven-role successor release set; no tier deploys it. Additionally: RL measured 36 SBF stack-frame-overwrite diagnostics naming hot_v3::process_hot_execution_v3 under this package's feature set (docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md); the gauntlet's build stage counts and reports those, and this artifact would trip that count.",
-      "owner": "cycle-2 tranche A (WAVE.md), Dealer"
+      "reason": "Dealer accelerator, not part of the seven-role successor release set. It is ALSO the one first-party artifact whose SBF build is not frame-clean, and every campaign runner refuses a campaign on an artifact the toolchain calls potentially-undefined. Measured at 9abed0c (TA-DLR, wave board 2026-08-27): 253 'overwrites values in the frame' diagnostics, every one naming hot_v3::process_hot_execution_v3 — and the ROOT CAUSE is NOT this package's family features. It is that dclutch-trading-sbf compiles without its own #[global_allocator] whenever `no-entrypoint` or `custom-heap` is set, which leaves __rust_alloc an opaque extern and spills process_hot_execution_v3 past the SBPF v0 4,096-byte frame: `families` alone is 0 diagnostics, `dealer-family,series-family` alone is 0, and `families,custom-heap` is 255 with the entrypoint still on. The fix is measured to zero and is two edits — drop `not(feature = \"no-entrypoint\")` from the five PROGRAM_HEAP_V1 cfg predicates in entrypoint_adapter.rs (W2h's file), and enable this package's own `custom-heap` feature so solana_program::entrypoint! stops installing a second allocator. The emitted .so is NOT contaminated: process_hot_execution_v3 is dead-stripped from it (.text differs by 104 bytes with the function cfg'd out of existence), so this row is blocked on build hygiene the runners enforce, not on a broken artifact.",
+      "owner": "TA-DLR (the campaign); W2h (the entrypoint_adapter.rs cfg line)"
     },
     {
       "route": "general-accelerator/*",
