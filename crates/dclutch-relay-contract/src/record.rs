@@ -20,7 +20,6 @@
 //! written **last**, so a partially written record can never advertise a more
 //! advanced phase than its contents.
 
-
 use crate::{
     ADDRESS_BYTES, Error, MAX_RELAYED_ACCOUNTS_V1, RELAYED_RECORD_ACCOUNT_SET_ID_OFFSET,
     RELAYED_RECORD_CREATED_UNIX_SECONDS_OFFSET, RELAYED_RECORD_FILLED_COUNT_OFFSET,
