@@ -368,10 +368,16 @@ fi
 # --------------------------------------------------------------- 4. inventory
 if stage_needed inventory "$CENSUS_DIGEST-$SOURCE_DIGEST"; then
     say "stage inventory"
+    # --check-unique runs the refusal-code gate BEFORE the inventory is
+    # written: no two programs may claim one custom error code, and no code may
+    # fall outside the band its package owns (decision 0007). It sweeps wider
+    # than the route inventory does -- test-program crates included -- because
+    # that is where the collisions the census had been annotating around lived.
     "$CENSUS_BIN" inventory \
         --root "$SOURCE" \
         --out "$INVENTORY" \
-        --revision "$SOURCE_REVISION"
+        --revision "$SOURCE_REVISION" \
+        --check-unique
     stage_done inventory "$CENSUS_DIGEST-$SOURCE_DIGEST"
 else
     echo "stage inventory: up to date"

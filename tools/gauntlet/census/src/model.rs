@@ -144,6 +144,33 @@ pub struct Refusal {
     pub provenance: Provenance,
 }
 
+/// Whether a band is deployed to a real cluster or exists only under
+/// `program-test`. Mirrors `dclutch_refusal_registry::BandTier`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BandTier {
+    Program,
+    TestCaller,
+}
+
+/// One package's exclusive allocation of custom program error codes, read
+/// from `crates/dclutch-refusal-registry` (decision 0007).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Band {
+    pub label: String,
+    pub package: String,
+    pub base: i64,
+    pub span: i64,
+    pub tier: BandTier,
+}
+
+impl Band {
+    /// Whether `code` falls inside this band.
+    pub const fn contains(&self, code: i64) -> bool {
+        code >= self.base && code < self.base + self.span
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Unclassified {
     pub context: String,
@@ -183,6 +210,14 @@ pub struct Observation {
     pub outcome: Outcome,
     /// The refusal the chain actually reported, when it refused.
     pub refusal: Option<String>,
+    /// The address of the program whose own log line raised the custom code.
+    ///
+    /// Not the transaction's outermost program: a propagated refusal is
+    /// re-reported by every frame it unwinds through, and the one that matters
+    /// is the frame that originated it. Absent when the refusal carried no
+    /// custom code at all (a runtime privilege or frame refusal).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal_program: Option<String>,
     pub compute_units: Option<u64>,
     /// Program addresses the finalized log messages show as invoked. This is
     /// the chain's account of what ran, not the harness's.

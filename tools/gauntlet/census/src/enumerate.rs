@@ -203,7 +203,7 @@ fn bytes_value(bytes: &[u8]) -> ConstantValue {
 
 // ------------------------------------------------------------- crate walking
 
-fn rust_sources(base: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn rust_sources(base: &Path) -> Result<Vec<PathBuf>, String> {
     let mut found = Vec::new();
     let mut stack = vec![base.to_path_buf()];
     while let Some(directory) = stack.pop() {
@@ -414,7 +414,12 @@ fn find_entrypoints(items: &[Item], relative: &str) -> Vec<(String, String, Prov
 
 // ------------------------------------------------------------------ refusals
 
-fn collect_refusals(items: &[Item], label: &str, relative: &str, out: &mut Vec<Refusal>) {
+pub(crate) fn collect_refusals(
+    items: &[Item],
+    label: &str,
+    relative: &str,
+    out: &mut Vec<Refusal>,
+) {
     for item in items {
         match item {
             Item::Enum(enumeration) => {

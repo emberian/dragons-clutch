@@ -17,6 +17,7 @@
 //! Nothing here touches a chain, signs anything, or writes into the source
 //! tree it reads.
 
+mod bands;
 mod enumerate;
 mod ledger;
 mod model;
@@ -85,7 +86,8 @@ fn run() -> Result<(), String> {
 fn usage() {
     eprintln!(
         "usage:\n  \
-         dclutch-route-census inventory --root DIR --out FILE [--revision REV]\n  \
+         dclutch-route-census inventory --root DIR --out FILE [--revision REV] \\\n    \
+             [--check-unique]\n  \
          dclutch-route-census observe --inventory FILE --ledger FILE --bindings FILE \\\n    \
              --programs FILE --evidence FILE\n  \
          dclutch-route-census report --inventory FILE --ledger FILE --blocked FILE --out FILE"
@@ -94,17 +96,26 @@ fn usage() {
 
 type Options = BTreeMap<String, String>;
 
+/// Options that stand alone. Everything else takes a value, and a missing
+/// value is an error rather than a silently-empty string.
+const FLAGS: &[&str] = &["check-unique"];
+
 fn parse_options(arguments: &[String]) -> Result<Options, String> {
     let mut options = Options::new();
-    let mut iterator = arguments.iter();
+    let mut iterator = arguments.iter().peekable();
     while let Some(argument) = iterator.next() {
         let Some(name) = argument.strip_prefix("--") else {
             return Err(format!("unexpected positional argument: {argument}"));
         };
-        let value = iterator
-            .next()
-            .ok_or_else(|| format!("--{name} requires a value"))?;
-        if options.insert(name.to_string(), value.clone()).is_some() {
+        let value = if FLAGS.contains(&name) {
+            "yes".to_string()
+        } else {
+            iterator
+                .next()
+                .ok_or_else(|| format!("--{name} requires a value"))?
+                .clone()
+        };
+        if options.insert(name.to_string(), value).is_some() {
             return Err(format!("--{name} may be supplied only once"));
         }
     }
@@ -176,6 +187,39 @@ fn command_inventory(options: &Options) -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
+    }
+
+    // The uniqueness gate runs BEFORE the inventory is written: a tree whose
+    // refusal codes collide should not leave a fresh inventory on disk
+    // implying it was accepted.
+    if options.contains_key("check-unique") {
+        let allocation = bands::read(&root_path)?;
+        let declared = bands::sweep(&root_path)?;
+        let mut present: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for entry in &declared {
+            present.insert(entry.package.clone());
+        }
+        for (package, _) in bands::package_directories(&root_path)? {
+            present.insert(package);
+        }
+        let mut problems = bands::check(&allocation, &declared);
+        problems.extend(bands::check_bands_are_live(&allocation, &present));
+        eprintln!(
+            "census: {} refusal codes declared across {} packages, against {} registered bands",
+            declared.len(),
+            present.len(),
+            allocation.bands.len()
+        );
+        if !problems.is_empty() {
+            for problem in &problems {
+                eprintln!("census COLLISION: {problem}");
+            }
+            return Err(format!(
+                "{} refusal-code problems; decision 0007 makes {} the allocation authority",
+                problems.len(),
+                allocation.source
+            ));
+        }
     }
 
     eprintln!("census: indexing constants under {}", root_path.display());
