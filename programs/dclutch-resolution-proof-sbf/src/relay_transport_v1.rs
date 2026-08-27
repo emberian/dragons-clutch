@@ -136,6 +136,21 @@ pub(crate) fn is_relay_transport_v1(bytes: &[u8]) -> bool {
 }
 
 /// Dispatch one exact relay instruction after top-level magic routing.
+///
+/// **Every arm below is `#[inline(never)]`, and that is load-bearing rather than
+/// stylistic.** An SBF stack frame is four kilobytes and `cargo build-sbf` exits
+/// *zero* when the backend reports that a call overwrites its own frame, so a
+/// dispatcher that inlines several large handlers ships a potentially-undefined
+/// artifact with a green build. This one did: the journey tier measured
+/// sixty-five such diagnostics against this symbol, every one in the whole
+/// seven-artifact build. Keeping each handler out of line makes the dispatcher's
+/// own frame the size of one match rather than the union of five bodies, which
+/// is the structural version of the fix instead of one that depends on whatever
+/// the inliner decided this week.
+///
+/// The check is on the build OUTPUT, not the exit code:
+/// `cargo build-sbf --manifest-path programs/dclutch-resolution-proof-sbf/Cargo.toml
+/// 2>&1 | grep -c 'overwrites values in the frame'` must print `0`.
 #[inline(never)]
 pub(crate) fn process_relay_transport_v1(
     program_id: &Pubkey,
@@ -534,6 +549,7 @@ fn registry_of(market: &AccountInfo<'_>, record: &AccountInfo<'_>) -> Result<Pub
     ))
 }
 
+#[inline(never)]
 fn process_create_record(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -646,6 +662,7 @@ fn process_create_record(
     Ok(())
 }
 
+#[inline(never)]
 fn process_append(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -722,6 +739,7 @@ fn process_append(
     Ok(())
 }
 
+#[inline(never)]
 fn process_seal(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -782,6 +800,7 @@ fn process_seal(
     Ok(())
 }
 
+#[inline(never)]
 fn process_retire(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
