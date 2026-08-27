@@ -808,7 +808,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
         source: [3; 32],
         destination: [4; 32],
         source_vault_context: [0; 32],
-        destination_vault_context: core_market.to_bytes(),
+        destination_vault_context: context_id,
         mint: mint.to_bytes(),
         token_program: token_program.to_bytes(),
         payer: [0; 32],
@@ -828,11 +828,16 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
         &CUSTODY_PROGRAM_ID,
     )
     .0;
+    // The Hoard Vault is namespaced by the aggregate's `custody_context`, the
+    // same coordinate the replay above uses. This fixture named the Core Market
+    // address here while telling the aggregate the context was `context_id` --
+    // two different namespaces asserted about one Market, which is exactly the
+    // shape the founding routes produce and no payout route could follow.
     let hoard = Pubkey::find_program_address(
         &CustodyVaultSeedsV1::new(
             core_market.to_bytes(),
             release_set,
-            core_market.to_bytes(),
+            context_id,
             CompartmentV1::HoardPrincipal,
         )
         .as_slices(),
@@ -1069,16 +1074,12 @@ fn build_action(
         },
         source: source.to_bytes(),
         destination: destination.to_bytes(),
-        source_vault_context: if split {
-            [0; 32]
-        } else {
-            fixture.core_market.to_bytes()
-        },
-        destination_vault_context: if split {
-            fixture.core_market.to_bytes()
-        } else {
-            [0; 32]
-        },
+        // The HoardPrincipal side is namespaced by the aggregate's
+        // `custody_context`, which this fixture already uses for the replay and
+        // the caller PDA below. Naming the Core Market address here made this
+        // one request assert two different namespaces for one Market.
+        source_vault_context: if split { [0; 32] } else { fixture.context_id },
+        destination_vault_context: if split { fixture.context_id } else { [0; 32] },
         mint: fixture.mint.to_bytes(),
         token_program: LEGACY_TOKEN_PROGRAM_ID,
         payer: [0; 32],
@@ -1497,11 +1498,15 @@ fn retired_terminal_redeem_data(accepted: &Instruction) -> Vec<u8> {
 /// crate and this campaign has no business taking a code dependency on one to
 /// read a discriminant. Provenance:
 /// `programs/dclutch-custody-sbf/src/lib.rs`, `CustodySbfError::Instruction =
-/// 0`, raised at the head of `execute_transfer` whenever
+/// 0x6000`, raised at the head of `execute_transfer` whenever
 /// `request.source_compartment == CompartmentV1::External`. The census checks
 /// the same code against the enumerated Custody taxonomy rather than against
 /// this constant (`tools/gauntlet/claims-liability-basis-v2/bindings.json`).
-const CUSTODY_INSTRUCTION_REFUSAL: u32 = 0;
+///
+/// Restated by hand, and therefore something that can go stale: it said `0`
+/// until `6cbcb3b` moved every first-party program onto its registered refusal
+/// band and this mirror did not follow.
+const CUSTODY_INSTRUCTION_REFUSAL: u32 = 0x6000;
 
 #[tokio::test]
 async fn real_sbf_liability_basis_merge_lifecycle_and_hostile_joins_are_atomic() {

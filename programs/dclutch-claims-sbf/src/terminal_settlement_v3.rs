@@ -597,10 +597,13 @@ fn authenticate_zero_custody_accounts(
         accounts[CUSTODY_PROGRAM].key,
     )
     .0;
+    // Both coordinates come from the persisted namespace. The replay above
+    // already did; this one hardcoded the Market address, which is a coordinate
+    // no founding ever used.
     let vault = CustodyVaultSeedsV1::new(
         input.market,
         input.release_set,
-        input.market,
+        custody_context,
         CompartmentV1::HoardPrincipal,
     );
     let expected_hoard =
