@@ -9,6 +9,8 @@
 
 use std::{env, fs, path::PathBuf, vec::Vec};
 
+mod structured_lowering;
+
 use dclutch_claims_sbf::ClaimsSbfError;
 use dclutch_claims_sbf::custody_replay_v1::{
     CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1, expected_request_v1,
@@ -63,7 +65,7 @@ use dclutch_rational_representation_v2_contract::{
     RepresentationRequestHeaderV2, RepresentationRequestV2,
 };
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES,
     DescriptorAdmissionV2, REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
     product_v3::{
         ProductRepresentationInputV3, ProductRuntimeProjectionV3, RepresentationContextV3,
@@ -85,9 +87,7 @@ use dclutch_release_set_contract::{
     ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_representation_composition_v3_kernel::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureInputV3, CompositionExposureRowInputV3,
-    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
-    encode_composition_exposure_v3_atomic,
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, RecordAdmissionV3,
 };
 use dclutch_token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount};
 use solana_account::{Account, AccountSharedData};
@@ -111,6 +111,9 @@ use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
+use dclutch_structured_v2_operator::Error as StructuredOperatorError;
+use structured_lowering::StructuredBasis;
+
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe1; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe2; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe3; 32]);
@@ -123,6 +126,14 @@ const WINNER: u32 = 1;
 const DENOMINATOR: u64 = 10;
 const RECEIPT_SUPPLY: u64 = 7;
 const COEFFICIENTS: [u64; 2] = [3, 7];
+/// The canonical coefficients at the WRONG coordinates.
+///
+/// A permutation is the sharpest same-width recipe hostile available: it is a
+/// canonical composition (the graph encoder refuses a root sharing a factor
+/// with its denominator, so `[4, 6]` over `10` would be rejected as malformed
+/// rather than as wrong), it has the same width, and it disagrees at every
+/// coordinate.
+const PERMUTED_COEFFICIENTS: [u64; 2] = [7, 3];
 const SHARD_SUPPLIES: [u64; 2] = [40, 70];
 const SHARD_DECIMALS: [u8; 2] = [6, u8::MAX];
 const RECEIPT_DECIMALS: u8 = 19;
@@ -141,6 +152,33 @@ const INITIAL_RECIPIENT_ATOMS: u64 = 5;
 const INITIAL_HOARD_ATOMS: u64 = 9;
 const PACKET_LIMIT: usize = 1_232;
 const TOKEN_2022_V11_PROVENANCE: &str = include_str!("../fixtures/token-2022-v11.provenance");
+
+/// The finalized EXPOSURE record's selected identity.
+///
+/// This is what the request header carries as `graph_id`, what the chain hands
+/// `CompositionExposureBundleV3::decode` as `RecordAdmissionV3::selected_id`
+/// (`rational_representation_v2.rs:318-327`), and what the descriptor's
+/// `graph_id()` accessor returns. Decision 0011 §3d: that accessor's name is
+/// the legacy one and it does NOT mean the source composition graph.
+const EXPOSURE_ID: [u8; 32] = [0x31; 32];
+/// The SOURCE composition DAG's identity — a different record entirely.
+///
+/// Until this campaign parameterized the descriptor by the derivation, THIS
+/// fixture wrote `[0x31; 32]` into both the request header's `graph_id` and the
+/// exposure record's own `graph_id` field, so the executing campaign carried
+/// exactly the conflation §3d warned Fractional's twin would inherit. The
+/// lowering cannot even produce a descriptor while the two are equal:
+/// `StructuredTermsV2::require_distinct_identities` puts `shard_exposure` and
+/// `graph_id` in one pairwise-distinct set.
+const SOURCE_GRAPH_ID: [u8; 32] = [0x32; 32];
+/// The composition graph's rank-`K` root node.
+const COMPOSITION_ROOT_ID: [u8; 32] = [0x45; 32];
+/// The canonical translation record the composition descriptor names.
+const CANONICAL_TRANSLATION_ID: [u8; 32] = [0x46; 32];
+/// Selected token-behavior profile for the shard layer.
+const SHARD_TOKEN_BEHAVIOR_ID: [u8; 32] = [0x47; 32];
+/// Selected token-behavior profile for the receipt layer.
+const RECEIPT_TOKEN_BEHAVIOR_ID: [u8; 32] = [0x48; 32];
 
 /// The caller-chosen founding action context one `DCLTGMF1` founding carries.
 ///
@@ -356,10 +394,6 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
         .copy_from_slice(input);
 }
 
-fn put_u32(output: &mut [u8], offset: usize, value: u32) {
-    put(output, offset, &value.to_le_bytes());
-}
-
 fn put_u64(output: &mut [u8], offset: usize, value: u64) {
     put(output, offset, &value.to_le_bytes());
 }
@@ -533,75 +567,57 @@ fn add_finalized_record(
     (raw, staging, digest)
 }
 
-fn graph_bytes(
-    changed: bool,
-    market: Pubkey,
-    release_set: [u8; 32],
-    product: &ProductClaimsFixture,
-) -> Vec<u8> {
-    let terms = [
-        [CompositionExposureTermV3 {
-            product_coordinate: 0,
-            numerator: if changed { 2 } else { 1 },
-        }],
-        [CompositionExposureTermV3 {
-            product_coordinate: 1,
-            numerator: 1,
-        }],
-    ];
-    let rows = [
-        CompositionExposureRowInputV3 {
-            node_id: [0x41; 32],
-            denominator: 1,
-            terms: &terms[0],
-        },
-        CompositionExposureRowInputV3 {
-            node_id: [0x42; 32],
-            denominator: 1,
-            terms: &terms[1],
-        },
-    ];
-    let length =
-        composition_exposure_bytes_v3(OUTCOME_COUNT, OUTCOME_COUNT).expect("exposure record width");
-    let mut scratch = vec![0_u8; length];
-    let mut output = vec![0_u8; length];
-    encode_composition_exposure_v3_atomic(
-        CompositionExposureInputV3 {
-            market: market.to_bytes(),
-            result_domain: product.result_domain_id,
-            release_set,
-            product_basis: product.linked_basis_digest,
-            representation_basis: product.basis_id,
-            graph_id: [0x31; 32],
-            product_width: OUTCOME_COUNT,
-            rows: &rows,
-        },
-        &mut scratch,
-        &mut output,
-    )
-    .expect("canonical exposure record");
-    output
-}
-
-fn descriptor_bytes(
-    graph_digest: [u8; 32],
+/// The Structured basis this campaign lowers onto the Rational wire.
+///
+/// Every identity here is a distinct record. Two of them used to be one value,
+/// and separating them is the whole of decision 0011 §3d's first correction:
+/// [`EXPOSURE_ID`] is the finalized exposure bundle the descriptor names, and
+/// [`SOURCE_GRAPH_ID`] is the composition DAG that bundle was projected from.
+fn campaign_basis(
     market: Pubkey,
     release_set: [u8; 32],
     receipt_mint: Pubkey,
-    coefficients: [u64; 2],
-) -> Vec<u8> {
-    let mut bytes = vec![0; DESCRIPTOR_HEADER_BYTES + 2 * DESCRIPTOR_COEFFICIENT_BYTES];
-    put(&mut bytes, 0, &DESCRIPTOR_MAGIC_V3);
-    put(&mut bytes, 8, &3_u16.to_le_bytes());
-    put(&mut bytes, 16, &[0x31; 32]);
-    put(&mut bytes, 48, &graph_digest);
-    put(&mut bytes, 80, &[0x45; 32]);
-    put(&mut bytes, 112, market.as_ref());
-    put(&mut bytes, 144, &release_set);
-    put(&mut bytes, 176, receipt_mint.as_ref());
-    put(&mut bytes, 208, &TOKEN_2022_PROGRAM_ID);
-    put_u32(&mut bytes, 240, OUTCOME_COUNT);
-    put_u64(&mut bytes, 248, DENOMINATOR);
+    product: &ProductClaimsFixture,
+) -> StructuredBasis {
+    StructuredBasis {
+        market: market.to_bytes(),
+        product_record: product.product_digest,
+        result_domain: product.result_domain_id,
+        release_set,
+        product_basis: product.linked_basis_digest,
+        representation_basis: product.basis_id,
+        exposure_id: EXPOSURE_ID,
+        source_graph_id: SOURCE_GRAPH_ID,
+        root_id: COMPOSITION_ROOT_ID,
+        translation_id: CANONICAL_TRANSLATION_ID,
+        receipt_mint: receipt_mint.to_bytes(),
+        token_program: TOKEN_2022_PROGRAM_ID,
+        shard_token_behavior: SHARD_TOKEN_BEHAVIOR_ID,
+        receipt_token_behavior: RECEIPT_TOKEN_BEHAVIOR_ID,
+        shard_mints: (0..COEFFICIENTS.len())
+            .map(|index| {
+                let mut value = [0_u8; 32];
+                value[0] = 0xd0;
+                value[1] = u8::try_from(index).expect("shard Mint index");
+                value[31] = 0xa5;
+                value
+            })
+            .collect(),
+        coefficients: COEFFICIENTS.to_vec(),
+        denominator: DENOMINATOR,
+        product_width: OUTCOME_COUNT,
+    }
+}
+
+/// A descriptor the derivation would never mint: the same composition, a
+/// different recipe.
+///
+/// This is the campaign's same-width descriptor hostile, and it is built by
+/// MUTATING the derived preimage rather than by hand-filling a seventh one.
+/// The mutation is exactly the field `require_coefficients_are_the_composition_root`
+/// exists to bind, so the hostile and the join name the same fact.
+fn descriptor_with_substituted_coefficients(preimage: &[u8], coefficients: &[u64]) -> Vec<u8> {
+    let mut bytes = preimage.to_vec();
     for (index, coefficient) in coefficients.iter().enumerate() {
         put_u64(
             &mut bytes,
@@ -609,6 +625,7 @@ fn descriptor_bytes(
             *coefficient,
         );
     }
+    assert_ne!(bytes, preimage, "the near-miss must differ from the record");
     bytes
 }
 
@@ -1219,8 +1236,8 @@ fn terminal_candidate_digest(
         },
         graph_bytes,
         graph_admission: ContentAdmissionV2 {
-            selected_graph_id: [0x31; 32],
-            finalized_graph_id: [0x31; 32],
+            selected_graph_id: EXPOSURE_ID,
+            finalized_graph_id: EXPOSURE_ID,
             recomputed_graph_digest: graph_digest,
             finalized_graph_digest: graph_digest,
             record_authenticated: true,
@@ -1274,8 +1291,8 @@ fn terminal_candidate_digest(
             representation: admission,
             composition_exposure_bytes: graph_bytes,
             composition_exposure_admission: RecordAdmissionV3 {
-                selected_id: [0x31; 32],
-                finalized_id: [0x31; 32],
+                selected_id: EXPOSURE_ID,
+                finalized_id: EXPOSURE_ID,
                 recomputed_digest: graph_digest,
                 finalized_digest: graph_digest,
                 record_authenticated: true,
@@ -1460,10 +1477,23 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     .0;
     let receipt_mint = Pubkey::new_from_array(if terminal { [0x76; 32] } else { [0x75; 32] });
     let actor_receipt = Pubkey::new_from_array(if terminal { [0x78; 32] } else { [0x77; 32] });
-    let graph = graph_bytes(false, market, release_set, &product_claims);
+    // THE DESCRIPTOR IS DERIVED, not written. `structured_lowering::lower`
+    // builds one canonical composition (graph, translation, composition
+    // descriptor), the exposure record the chain will hold, the shard layer and
+    // the immutable Structured terms, then hands all three to
+    // `derive_structured_representation_descriptor_v2`, whose `descriptor_id`
+    // is the digest of the preimage it wrote. Before this campaign the preimage
+    // was hand-filled here — the sixth such producer in the tree, and the only
+    // one that ever reached a real ELF.
+    let basis = campaign_basis(market, release_set, receipt_mint, &product_claims);
+    let lowering = structured_lowering::lower(&basis);
+    let graph = lowering.exposure.clone();
     let (graph_raw, graph_staging, graph_digest) =
         add_finalized_record(&mut test, COMPOSITION_EXPOSURE_SCHEMA_ID_V3, &graph);
-    let alternate_graph = graph_bytes(true, market, release_set, &product_claims);
+    // The same-width exposure hostile: coordinate 0 weighs its Product
+    // coordinate twice. Still a canonical record, still `K` rows, different
+    // bytes.
+    let alternate_graph = structured_lowering::exposure_bytes(&basis, &[2, 1]);
     let (alternate_graph_raw, alternate_graph_staging, alternate_graph_digest) =
         add_finalized_record(
             &mut test,
@@ -1471,20 +1501,31 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             &alternate_graph,
         );
     assert_ne!(graph_digest, alternate_graph_digest);
-    let descriptor = descriptor_bytes(
-        graph_digest,
-        market,
-        release_set,
-        receipt_mint,
-        COEFFICIENTS,
-    );
+    let descriptor = lowering.descriptor.preimage.clone();
     let (descriptor_raw, descriptor_staging, descriptor_id) = add_finalized_record(
         &mut test,
         REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
         &descriptor,
     );
+    assert_eq!(
+        descriptor_id, lowering.descriptor.descriptor_id,
+        "the finalized record's digest IS the derived descriptor identity"
+    );
+    // The recipe this composition does NOT state: the canonical coefficients at
+    // the wrong coordinates. Refused TWICE, and the two refusals are different
+    // facts. Host-side, `require_coefficients_are_the_composition_root` refuses
+    // to MINT it — the join the live chain route lost when
+    // `authenticate_exposure` replaced `authenticate_graph` (decision 0011 §3d),
+    // and the reason founding is the last moment a recipe can be checked.
+    // On-chain, the substituted ACCOUNT below is refused because the request
+    // names a `descriptor_id` that is the digest of other bytes.
+    assert_eq!(
+        structured_lowering::lower_against_root(&basis, &PERMUTED_COEFFICIENTS).err(),
+        Some(StructuredOperatorError::Terms),
+        "the derivation must refuse coefficients that are not the composition root"
+    );
     let alternate_descriptor =
-        descriptor_bytes(graph_digest, market, release_set, receipt_mint, [4, 6]);
+        descriptor_with_substituted_coefficients(&descriptor, &PERMUTED_COEFFICIENTS);
     let (alternate_descriptor_raw, alternate_descriptor_staging, alternate_descriptor_id) =
         add_finalized_record(
             &mut test,
@@ -1699,7 +1740,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         descriptor_staging,
         alternate_descriptor_raw,
         alternate_descriptor_staging,
-        graph_id: [0x31; 32],
+        graph_id: EXPOSURE_ID,
         graph_raw,
         graph_staging,
         alternate_graph_raw,
