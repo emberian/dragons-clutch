@@ -13,6 +13,7 @@ import {
 import { parseMarketAddressListV1, shortAddressV1 } from '@/lib/marketDiscovery';
 import { parsePortfolioOwnerV1 } from '@/lib/portfolio';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
+import { DEFAULT_RPC_ENDPOINT_V1, clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -50,7 +51,7 @@ function ActivityRow({ entry }: Readonly<{ entry: ActivityEntryV1 }>) {
 
 export default function ActivityWorkspace() {
   const directory = useWalletDirectoryV1();
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [claimsProgram, setClaimsProgram] = useState('');
   const [coreProgram, setCoreProgram] = useState('');
   const [tradingProgram, setTradingProgram] = useState('');
@@ -133,7 +134,7 @@ export default function ActivityWorkspace() {
           <article><span>Owner</span><strong>{shortAddressV1(activity.owner, 6)}</strong><small>identity only; nothing is signed here</small></article>
           <article><span>Watched addresses</span><strong>{activity.watched.length}</strong><small>wallet + derived Positions</small></article>
           <article><span>Transactions</span><strong>{activity.entries.length}{activity.truncated ? '+' : ''}</strong><small>{activity.truncated ? 'truncated at the explicit browser bound' : 'complete node answer'}</small></article>
-          <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
+          <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
         </div>
         {activity.entries.length === 0
           ? <p className="market-empty">{activity.reason}</p>

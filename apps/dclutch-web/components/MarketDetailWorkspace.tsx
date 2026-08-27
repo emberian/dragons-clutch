@@ -19,6 +19,7 @@ import {
 } from '@/lib/marketDiscovery';
 import MarketTradePanel from '@/components/MarketTradePanel';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
+import { DEFAULT_RPC_ENDPOINT_V1, clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -146,7 +147,7 @@ function Realm({ collateral }: Readonly<{ collateral: MarketCollateralV1 }>) {
 }
 
 export default function MarketDetailWorkspace({ address }: Readonly<{ address: string }>) {
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [coreProgram, setCoreProgram] = useState('');
   const [registryProgram, setRegistryProgram] = useState('');
   const [claimsProgram, setClaimsProgram] = useState('');
@@ -236,7 +237,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       </div>
       <p className="direct-status" aria-live="polite">{state.message}</p>
       {state.kind === 'ready' && <div className="trade-v3-evidence">
-        <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
+        <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
         <article><span>Finalized floor</span><strong>{state.detail.floorSlot}</strong><small>one observation epoch for every section</small></article>
         <article><span>Core program</span><strong>{shortAddressV1(state.detail.coreProgramId, 6)}</strong><small>owner of these bytes</small></article>
         <article><span>Capability source</span><strong>{state.detail.registryProgramId === null ? 'not selected' : shortAddressV1(state.detail.registryProgramId, 6)}</strong><small>{state.detail.registryProgramId === null ? 'manifest unread' : 'manifest authenticated by content'}</small></article>

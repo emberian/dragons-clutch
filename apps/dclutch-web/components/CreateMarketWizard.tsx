@@ -51,6 +51,7 @@ import { planLookupTableV1, lookupTableAccountV1, type LookupTablePlanV1 } from 
 import { SolanaRpcClient } from '@/lib/rpc';
 import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@/lib/walletHandoff';
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
+import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
 type StepId = 'product' | 'window' | 'funding' | 'review' | 'submit';
 
@@ -139,7 +140,7 @@ export default function CreateMarketWizard() {
   }));
 
   // 04/05 — chain
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [generation, setGeneration] = useState('2');
   const [addresses, setAddresses] = useState<AddressValues>(() => Object.fromEntries(ADDRESS_FIELDS.map(({ field }) => [field, ''])) as AddressValues);
   const [plan, setPlan] = useState<CoreFoundPlanV2 | null>(null);

@@ -6,6 +6,7 @@ import { FormEvent, useState } from 'react';
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
 import { CORE_FOUND_ACCOUNT_LABELS_V2, CORE_FOUND_ACCOUNT_ROLES_V2 } from '@/lib/generated/coreFound';
 import { SolanaRpcClient } from '@/lib/rpc';
+import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
 type AddressField = Exclude<keyof CoreFoundInputV2, 'generation'>;
 type AddressValues = Record<AddressField, string>;
@@ -61,7 +62,7 @@ function compact(value: string): string {
 }
 
 export default function CoreFoundWorkspace() {
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [addresses, setAddresses] = useState<AddressValues>(emptyAddresses);
   const [generation, setGeneration] = useState('1');
   const [state, setState] = useState<BuildState>({

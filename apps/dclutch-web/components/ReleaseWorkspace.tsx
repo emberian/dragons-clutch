@@ -26,8 +26,9 @@ import {
 import { releaseUngateV1 } from '@/lib/releaseUngate';
 import { SolanaRpcClient } from '@/lib/rpc';
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
+import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
-const LOCAL_RPC = 'http://127.0.0.1:8899';
+const LOCAL_RPC = DEFAULT_RPC_ENDPOINT_V1;
 
 function message(error: unknown): string { return error instanceof Error ? error.message : 'unknown release refusal'; }
 function compact(value: string): string { return value.length > 20 ? `${value.slice(0, 9)}…${value.slice(-7)}` : value; }

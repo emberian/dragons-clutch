@@ -15,6 +15,7 @@ import {
   type MarketEnumerationV1,
 } from '@/lib/marketDiscovery';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
+import { DEFAULT_RPC_ENDPOINT_V1, clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -92,7 +93,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
 }
 
 export default function MarketDiscoveryWorkspace() {
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [coreProgram, setCoreProgram] = useState('');
   const [registryProgram, setRegistryProgram] = useState('');
   const [claimsProgram, setClaimsProgram] = useState('');
@@ -197,10 +198,10 @@ export default function MarketDiscoveryWorkspace() {
 
     <section className="trade-v3-card">
       <header><span>02</span><div><h2>Discovered Markets</h2><p>One card per requested address. A card is decoded or refused; it is never partially invented.</p></div></header>
-      {discovery === null && <p className="market-empty">No finalized listing has been read. A local validator at <code>http://127.0.0.1:8899</code> is the expected first endpoint; until one answers, this surface stays empty rather than showing placeholder Markets.</p>}
+      {discovery === null && <p className="market-empty">No finalized listing has been read. Public devnet is the seeded endpoint (edit it for a local validator or your own); until a chain answers, this surface stays empty rather than showing placeholder Markets.</p>}
       {discovery !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
-          <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
+          <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
           <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>one observation epoch for every card</small></article>
           <article><span>Enumeration</span><strong>{discovery.enumeration.mode}</strong><small>{discovery.enumeration.addresses.length} address{discovery.enumeration.addresses.length === 1 ? '' : 'es'}</small></article>
           <article><span>Capability source</span><strong>{discovery.registryProgramId === null ? 'not selected' : shortAddressV1(discovery.registryProgramId, 6)}</strong><small>{discovery.registryProgramId === null ? 'manifests unread' : 'manifests authenticated by content'}</small></article>

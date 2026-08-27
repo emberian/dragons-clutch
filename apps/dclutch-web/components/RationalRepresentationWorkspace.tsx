@@ -20,6 +20,7 @@ import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
 import RationalRetireReceiptPanel from './RationalRetireReceiptPanel';
 import RationalOpenPanel from './RationalOpenPanel';
 import RationalTerminalPanel from './RationalTerminalPanel';
+import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
 type InspectionState = Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
   | Readonly<{ kind: 'ready'; message: string; inspection: BearerTransferInspectionV2 }>;
@@ -46,7 +47,7 @@ function short(value: string): string {
 }
 
 export default function RationalRepresentationWorkspace() {
-  const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
+  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
   const [payer, setPayer] = useState('');
   const [authority, setAuthority] = useState('');
   const [coreProgram, setCoreProgram] = useState('');

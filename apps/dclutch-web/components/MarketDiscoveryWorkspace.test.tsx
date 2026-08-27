@@ -8,7 +8,7 @@ describe('Market discovery route', () => {
 
   it('offers known-address and program-scan discovery against a local finalized endpoint', () => {
     expect(html).toContain('Market discovery · finalized reads only');
-    expect(html).toContain('http://127.0.0.1:8899');
+    expect(html).toContain('https://api.devnet.solana.com');
     expect(html).toContain('Known Market addresses');
     expect(html).toContain('Enumerate Markets from the Core program');
     expect(html).toContain('Read finalized Market discovery');
