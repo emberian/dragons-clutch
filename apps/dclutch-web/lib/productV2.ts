@@ -12,6 +12,11 @@ import { ascii, fromHex, hex, requireNonzero, requireZero, sha256, slice, u16, u
 import { decodeCapabilityManifestV1 } from './capabilityManifest';
 import { PACKET_DATA_SIZE } from './directTransaction';
 import {
+  PAYOFF_ADMISSION_REQUEST_BYTES_V1,
+  PAYOFF_REQUEST_BYTES_V2,
+  PRODUCT_V2_BYTES,
+} from './generated/productV2Payoff';
+import {
   ARTIFACT_RELEASE_SCHEMA_ID_V1,
   NATIVE_LOADER_ID,
   RENT_SYSVAR_ID,
@@ -24,12 +29,10 @@ import {
 } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
-export const PRODUCT_V2_BYTES = 576;
+export { PAYOFF_ADMISSION_REQUEST_BYTES_V1, PAYOFF_REQUEST_BYTES_V2, PRODUCT_V2_BYTES };
 export const PRODUCT_V2_MAX_KNOTS = 16;
 export const PRODUCT_V2_MAX_TERMS = 16;
-export const PAYOFF_REQUEST_BYTES_V2 = 112;
 export const PAYOFF_CERTIFICATE_BYTES_V2 = 232;
-export const PAYOFF_ADMISSION_REQUEST_BYTES_V1 = 128;
 export const PAYOFF_ADMISSION_RECEIPT_BYTES_V1 = 448;
 export const PRODUCT_EVALUATOR_ACCOUNT_COUNT = 10;
 export const PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT = 28;

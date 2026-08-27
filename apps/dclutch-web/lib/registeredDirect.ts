@@ -65,12 +65,13 @@ import {
   REGISTERED_TERMINAL_REGISTRATION_BUMP_OFFSET,
   REGISTERED_TERMINAL_RESERVED_OFFSET,
   REGISTERED_TERMINAL_VERSION_OFFSET,
+  REPLAY_STATE_BYTES,
 } from './generated/registeredDirect';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
+export { REPLAY_STATE_BYTES };
 export const REGISTERED_SEED = new TextEncoder().encode('dclutch/direct-registered/v1');
 export const LEGACY_TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-export const REPLAY_STATE_BYTES = 48;
 const MAX_REGISTERED_STATES = 128;
 const TOKEN_ACCOUNT_BYTES = 165;
 const PRICE_SCALE = 1_000_000n;

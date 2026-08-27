@@ -25,6 +25,8 @@
     "abi:dealer-v3:verify": "node scripts/generate-dealer-equity-v3.mjs --check",
     "abi:rational-terminal-v3": "node scripts/generate-rational-terminal-hot-v3.mjs",
     "abi:rational-terminal-v3:verify": "node scripts/generate-rational-terminal-hot-v3.mjs --check",
+    "abi:product-v2-payoff": "node scripts/generate-product-v2-payoff.mjs",
+    "abi:product-v2-payoff:verify": "node scripts/generate-product-v2-payoff.mjs --check",
     "fixtures:verify": "node scripts/verify-fixtures.mjs"
   },
   "dependencies": {
