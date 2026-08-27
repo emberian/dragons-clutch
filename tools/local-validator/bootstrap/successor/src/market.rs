@@ -1154,6 +1154,7 @@ fn derive_founding_coordinates(
     mint: Pubkey,
     payer: Pubkey,
     founder: Pubkey,
+    beneficiary: Pubkey,
     expiry_slot: u64,
 ) -> Result<FoundingCoordinates> {
     let core = pubkey(&plan.core.program_id)?;
@@ -1177,6 +1178,22 @@ fn derive_founding_coordinates(
     };
     let market =
         Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(identity).as_slices(), &core).0;
+    // `market_id` is not one of the nine seeds, so the template carries a
+    // placeholder there and the address is derived without it. The Core state
+    // Found writes carries the real address, and this campaign has to commit to
+    // that state's digest two stages before it exists, so the placeholder is
+    // replaced here and the derivation is required not to have moved.
+    let identity = MarketIdentity {
+        market_id: identity_of(market.to_bytes())?,
+        ..identity
+    };
+    if Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(identity).as_slices(), &core).0
+        != market
+    {
+        return Err(Error::new(
+            "the Market address moved when its own identity was completed",
+        ));
+    }
     let credit = Pubkey::find_program_address(
         &[
             LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
@@ -1311,7 +1328,7 @@ fn derive_founding_coordinates(
         identity_of([1; 32])?,
         identity_of(context)?,
         identity_of(founder.to_bytes())?,
-        identity_of(payer.to_bytes())?,
+        identity_of(beneficiary.to_bytes())?,
         identity_of(source_vault.to_bytes())?,
         identity_of(hoard_vault.to_bytes())?,
         identity_of(projected_replay.to_bytes())?,
@@ -1361,7 +1378,12 @@ fn derive_founding_coordinates(
         payer: payer.to_bytes(),
         core_program: core.to_bytes(),
         rent_program: rent_program.to_bytes(),
-        refund_owner: payer.to_bytes(),
+        // Not the payer. `OpenSourceCompartment` requires the principal's owner
+        // to sign while remaining non-writable and the creation payer to be
+        // writable, and Solana grants privileges per key; the same split is
+        // what `credit.refund_wallet() == found.beneficiary()` and
+        // `lock.refund_owner == found.beneficiary()` already required.
+        refund_owner: beneficiary.to_bytes(),
         rent_credit: credit.to_bytes(),
         hoard_vault: hoard_vault.to_bytes(),
         funding_source_vault: source_vault.to_bytes(),
@@ -1691,6 +1713,7 @@ fn execute_projected_custody_bootstrap(
         mint,
         payer.pubkey(),
         founder.pubkey(),
+        beneficiary.pubkey(),
         expiry_slot,
     )?;
     let principal = coordinates.lock.amount;
@@ -1772,6 +1795,18 @@ fn execute_projected_custody_bootstrap(
     if projection.market_address != coordinates.market {
         return Err(Error::new(
             "founding projection changed the derived Market address",
+        ));
+    }
+    // The runtime outcome width is what Core reads out of the published Product
+    // record, and it fixes the widths of the three accounts Claims allocates
+    // and therefore the rents Core folds into the request it commits to. It is
+    // taken from the authenticated graph and cross-checked against the run
+    // spec's own cut list, so a spec that disagreed with what it published
+    // refuses here instead of moving a digest three stages later.
+    let claim_count = projection.outcome_count;
+    if usize::try_from(claim_count) != Ok(input.cuts.len().saturating_add(2)) {
+        return Err(Error::new(
+            "the published Product's outcome width disagrees with the run spec's cut list",
         ));
     }
     let create = build_lifecycle_rent_create_v2(
@@ -1990,6 +2025,7 @@ fn execute_projected_custody_bootstrap(
         founder.pubkey(),
         found_record.raw,
         lock_record.raw,
+        claim_count,
         payer,
         transactions,
         accounts,
@@ -2152,6 +2188,7 @@ fn derive_founding_outer_v1(
     coordinates: &FoundingCoordinates,
     product: ProductContentId,
     founder: Pubkey,
+    claim_count: u32,
 ) -> Result<FoundingOuterV1> {
     let core = pubkey(&plan.core.program_id)?;
     let claims_program = pubkey(&plan.claims.program_id)?;
@@ -2292,14 +2329,6 @@ fn derive_founding_outer_v1(
     )
     .0;
 
-    let claim_count = u32::try_from(
-        input
-            .cuts
-            .len()
-            .checked_add(2)
-            .ok_or_else(|| Error::new("outcome width overflow"))?,
-    )
-    .map_err(|_| Error::new("outcome width exceeds the runtime domain"))?;
     let aggregate_width =
         liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, claim_count)
             .map_err(|error| Error::new(format!("aggregate width: {error:?}")))?;
@@ -2755,6 +2784,7 @@ fn execute_generic_market_founding(
     founder: Pubkey,
     found_raw_account: Pubkey,
     lock_raw_account: Pubkey,
+    claim_count: u32,
     payer: &Keypair,
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
@@ -2767,7 +2797,16 @@ fn execute_generic_market_founding(
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
     authenticate_core_state_encoding_v1(rpc, found31_market)?;
-    let outer = derive_founding_outer_v1(rpc, plan, input, records, coordinates, product, founder)?;
+    let outer = derive_founding_outer_v1(
+        rpc,
+        plan,
+        input,
+        records,
+        coordinates,
+        product,
+        founder,
+        claim_count,
+    )?;
 
     // The founding artifact and the terminal Lock are the records the
     // bootstrap already published. Requiring the chain's bytes to equal the
