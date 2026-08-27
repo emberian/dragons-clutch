@@ -24,6 +24,19 @@ pub const FUNDING_STATE_BYTES: usize = 320;
 pub const FUNDING_QUOTE_MAGIC: [u8; 8] = *b"DCLTFQ01";
 /// Implemented typed funding-quote schema.
 pub const FUNDING_QUOTE_SCHEMA_VERSION: u16 = 1;
+/// Byte offset of the remaining Rent-compartment lamport amount.
+///
+/// Published for one caller shape: a data-defined capability activation, whose
+/// `AccountProfileV1` must project this exact scalar out of the live
+/// `FundingStateV1` account with a `ProjectDataU64` operation so its
+/// EffectProgram can move that many lamports into the root it is creating. An
+/// interpreted artifact carries no decoder, so without this it would restate
+/// the layout and become a second authority for it.
+/// `the_published_rent_amount_offset_reads_the_rent_quote` requires it to read
+/// back exactly what `remaining().rent().amount()` returns.
+pub const FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1: usize =
+    STATE_REMAINING_OFFSET + AMOUNTS_RENT_OFFSET + ALLOCATION_AMOUNT_OFFSET;
+
 /// Canonical funding-state magic.
 pub const FUNDING_STATE_MAGIC: [u8; 8] = *b"DCLTCFS1";
 /// Implemented typed funding-state schema.
@@ -1586,6 +1599,50 @@ mod tests {
 
     fn id(value: u8) -> ContentId {
         ContentId::new([value; 32]).expect("nonzero fixture")
+    }
+
+    /// The published offset is a projection of the encoder, not a second layout.
+    ///
+    /// A data-defined activation reads this offset out of the live account with
+    /// one `ProjectDataU64`, so it has to name the same eight bytes
+    /// `remaining().rent().amount()` does, for any value.
+    #[test]
+    fn the_published_rent_amount_offset_reads_the_rent_quote() {
+        for lamports in [1_u64, 7, 1_234_567, u64::from(u32::MAX)] {
+            let amounts = FundingAmountsV1::new(
+                native(lamports),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+                CompartmentFundingV1::not_applicable(),
+            )
+            .expect("amounts");
+            let mut storage = [0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+            let decoded = manifest(
+                &mut storage,
+                FundingQuoteV1::new(amounts, None).expect("quote"),
+            );
+            let state = FundingStateV1::new(
+                id(1),
+                decoded,
+                0,
+                FundingCustodyObservationV1::native_only(lamports, 0).expect("custody"),
+            )
+            .expect("state");
+            assert_eq!(state.remaining().rent().amount(), lamports);
+            let bytes = state.to_bytes();
+            let offset = FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1;
+            let projected = u64::from_le_bytes(
+                bytes
+                    .get(offset..offset + 8)
+                    .expect("rent amount span")
+                    .try_into()
+                    .expect("eight bytes"),
+            );
+            assert_eq!(projected, lamports);
+        }
     }
 
     fn native(value: u64) -> CompartmentFundingV1 {
