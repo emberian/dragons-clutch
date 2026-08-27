@@ -1,6 +1,6 @@
 {
   "campaign": "journey",
-  "note": "JRNY-1's OWN transactions only. The journey submits every tier-1 transaction before these, and run-journey.sh merges tools/gauntlet/tier1/bindings.json in front of this file at run time rather than keeping a second copy of them — a copy would rot the first time tier 1 changed, and the census fails both an unbound transaction and a binding that matched nothing, so the rot would surface as a red run on someone else's change. Everything here happens after the Market is Open.",
+  "note": "The journey's OWN transactions only. The journey submits every tier-1 transaction before these, and run-journey.sh merges tools/gauntlet/tier1/bindings.json in front of this file at run time rather than keeping a second copy of them — a copy would rot the first time tier 1 changed, and the census fails both an unbound transaction and a binding that matched nothing, so the rot would surface as a red run on someone else's change. Everything here happens after the Market is Open. The routing-table transactions the resolution and provider frames need are bound by tier 1's `create * routing address lookup table` and `extend * routing table page *` rows: an oversized frame is an oversized frame whoever builds it, and giving this tier its own copy of those two rows would make them ambiguous rather than covered.",
   "bindings": [
     {
       "label": "journey: open and fund synthetic holder *",
@@ -15,6 +15,155 @@
       "program": "",
       "outcome": "executed",
       "note": "A ring of Token-2022 TransferChecked between holder wallets, each signed by the holding wallet. The founder is not a party to any of them: the conservation ledger's laws have to hold over movement the founding never authorised and cannot see. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: prepay the Source resolution state and the three Resolution Funds",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Four System transfers and nothing else. `CreateFund` consumes PRECOMMITTED, PREPAID destinations — the Source state and three Funds must be System-owned, empty, and holding exactly rent plus the native principal their own manifest entry quotes — so the funding and the creation are two facts and this campaign keeps them in two transactions. The exact top-up per destination is the operator's arithmetic, not this tier's: `build_resolution_create_fund_v3` returns it and the campaign re-derives the report afterwards and refuses to proceed unless every remaining top-up is zero."
+    },
+    {
+      "label": "journey: over-funding a Resolution Fund by one lamport refuses the creation",
+      "routes": [
+        "core/resolution::process#CreateFund",
+        "core/process_instruction",
+        "resolution/process_create#CreateFund",
+        "resolution/core_effect::process_core_effect"
+      ],
+      "program": "core",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 0,
+        "reason": "PLACEHOLDER — replaced from the first green run's logs"
+      },
+      "note": "HOSTILE. A Fund's lamports must equal rent plus EXACTLY the native principal its own manifest entry quotes, and both directions matter: over-funding is not a donation a prepaid compartment may keep. The refusal must also roll the extra lamport back with it, or the Fund becomes permanently unfundable and the refusal is worse than useless — the campaign re-derives the creation report afterwards and refuses to continue if any top-up is nonzero."
+    },
+    {
+      "label": "journey: an Open Market creates its own Resolution Fund",
+      "routes": [
+        "core/resolution::process#CreateFund",
+        "core/process_instruction",
+        "resolution/process_create#CreateFund",
+        "resolution/core_effect::process_core_effect"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The first execution of the resolution funding ladder against a real validator by any tier, and the first time an ATOMICALLY FOUNDED Market creates its own Fund on a chain. `edfcb24` admitted the `(Open, Consumed)` prestate `DCLTGMF1`'s commit-last Open leaves behind and `60a2101` walked it against the compiled ELFs; this is the campaign that composes it. Every AccountMeta in the frame is `is_signer: false`, which is why it is reachable at all while every Claims mutation is not. Poststate asserted: Source `Primary` bound to this Market at this generation, all three Funds `Pending`."
+    },
+    {
+      "label": "journey: a second CreateFund at the same generation refuses",
+      "routes": [
+        "core/resolution::process#CreateFund",
+        "core/process_instruction",
+        "resolution/process_create#CreateFund",
+        "resolution/core_effect::process_core_effect"
+      ],
+      "program": "core",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 0,
+        "reason": "PLACEHOLDER — replaced from the first green run's logs"
+      },
+      "note": "HOSTILE. The Source PDA is one per Market generation and the prepaid-output rule admits only a System-owned, empty account, so a second creation cannot overwrite the first. Submitted as the byte-identical frame that had just succeeded, which is the only version of this test that proves the guard rather than proving that two different frames differ."
+    },
+    {
+      "label": "journey: activate the three-ledger Resolution funding of an Open Market",
+      "routes": [
+        "core/persist_state#VerifyFundReady",
+        "core/process_instruction",
+        "resolution/process_verify#VerifyFundReady",
+        "resolution/core_effect::process_core_effect"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "Activation, and the assertion that matters is a NEGATIVE one: Core stays `Open + Consumed`. An already-open Market consumed its readiness at the commit-last Open, so rewriting it to `Ready` would be a second author for a fact the three FundingState accounts already hold — and terminal admission rechecks those, not the phase. The campaign also asserts the Market's rent beneficiary gained EXACTLY the lamports the operator declared."
+    },
+    {
+      "label": "journey: the captured Wormhole router initializes its synthetic guardian set",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "The real captured Wormhole router ELF, loaded by `dclutch-successor-validator` from the eleven provenance-pinned fixture artifacts it verifies before it starts. No dClutch program is invoked. The guardian set is a nineteen-key SYNTHETIC lab set, not Pyth's live five, and the fixture's PROVENANCE.md says so."
+    },
+    {
+      "label": "journey: the captured Pyth receiver initializes its Config",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "The real captured Pyth receiver ELF establishing its own Config PDA from the pinned initialization bytes. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: capitalize the canonical zero-data receiver treasury",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "One System transfer. The receiver's treasury is a zero-data PDA that has to be rent-capitalized before it can receive a posting fee."
+    },
+    {
+      "label": "journey: create the exact encoded-VAA buffer",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "System create_account for the router-owned encoded-VAA buffer, sized to the header plus the exact captured VAA. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: the real router initializes the encoded-VAA header",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "The router's own `init_encoded_vaa`. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: the real router writes signed-VAA chunk *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "The captured VAA is 952 bytes and a legacy packet is 1,232, so it arrives in two `write_encoded_vaa` transactions. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: the real router cryptographically verifies the signed VAA",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "`verify_encoded_vaa_v1` against guardian set zero — REAL signature verification by the real router ELF, not a fixture assertion. The campaign then reads the buffer back and requires ProcessingStatus::Verified. No dClutch program is invoked; this is the provider's own truth being established before dClutch reads any of it."
+    },
+    {
+      "label": "journey: prepay the provider update lifecycle",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "One System transfer. The lifecycle account is prepaid in its own transaction rather than ahead of the submit frame, so the frame's routing table never has to cover an account only the prepayment names."
+    },
+    {
+      "label": "journey: Resolution submits one update through the real receiver ELF",
+      "routes": [
+        "resolution/provider_transport_v3::process_provider_transport_v3",
+        "resolution/process_submit#magic",
+        "resolution/process_instruction"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The first provider leg: Resolution authenticates the Market's source spec, provider release, Pyth release and window as finalized records, then CPIs the real receiver to post one cryptographically verified price update and records a lifecycle for it. This is the route the demo Market could never reach until its source graph named records that can exist."
+    },
+    {
+      "label": "journey: prepay the terminal certificate and establish the distinct resolver",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Two System transfers. The resolver is deliberately NOT the submitter: the two roles are separable in the protocol, and a campaign that collapses them cannot tell whether the separation holds."
+    },
+    {
+      "label": "journey: Core admits the terminal state of an atomically founded Market",
+      "routes": [
+        "core/execute_provider_v3::process#ExecuteProvider",
+        "core/process_instruction",
+        "resolution/provider_instruction_v3::process_provider_resolution_v3",
+        "resolution/process_instruction"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "THE MARKET RESOLVES. Core drives the provider execution, the adapter decodes the posted update under the CHAIN_STATE_SOURCES rules, the statistic and window admit it, and a ResolutionSuccess certificate is minted at the Market's own terminal winner. Poststate asserted: Phase Terminal, a terminal receipt naming the certificate this campaign prepaid, Source Resolved, and a certificate whose selector equals the winner the Market itself records — the last of those is the one that would catch a certificate bound to a different Market's material."
     },
     {
       "label": "journey: sweeping past the rent floor refuses",

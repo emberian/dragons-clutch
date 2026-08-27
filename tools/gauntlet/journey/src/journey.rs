@@ -250,6 +250,26 @@ pub(crate) fn execute(
         LamportClaimV1::fees(provider_fees),
     )?;
 
+    // Retirement runs BEFORE rent recovery, and the order is load-bearing: the
+    // Source closure refunds its rent into the Market's own beneficiary credit,
+    // so sweeping first would sweep a surplus the retirement is about to add to
+    // and leave the larger half sitting there.
+    let (retirement, retirement_fees) = resolution::retire(
+        &mut session.rpc,
+        &session.authority,
+        &resolution_addresses,
+        addresses.hoard,
+        &mut session.transactions,
+    )?;
+    stages.push(retirement);
+    ledger.observe(
+        &mut session.rpc,
+        "retirement: begin retiring and close the Source subtree",
+        0,
+        0,
+        LamportClaimV1::fees(retirement_fees),
+    )?;
+
     let (rent, rent_fees) = stages::recover_rent(
         &mut session.rpc,
         &session.plan,
