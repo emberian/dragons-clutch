@@ -616,6 +616,28 @@ pub fn admit_heap_frame_v1(instructions: &AccountInfo<'_>) -> Result<usize, Prog
     }
 }
 
+/// Whether the diagnostic profile build lifts the ceiling for every route.
+///
+/// **Not a decision, and it cannot reach a shipped executable.** The Hot tail
+/// past the 32 KiB wall -- the six lifecycle creates and the child role CPIs --
+/// cannot be measured at all while the run refuses at `pf-enter`, and two
+/// separate lanes have now rebuilt the same throwaway patch to see it. This is
+/// that patch, named, so the third one does not.
+///
+/// `hot-cu-profile` is documented as "diagnostic-only phase checkpoints for
+/// measured SBF compute profiling": a build carrying it logs a labelled line
+/// and a compute reading at thirty points inside one instruction, so it is not
+/// a thing anyone ships by accident. If one ever were shipped,
+/// `program-test/tests/hot_heap_frame_is_inert.rs` fails on it, because that
+/// test asserts the shipped Hot path still refuses a granted frame.
+///
+/// The 32 KiB discipline is UNCHANGED for every executable that is not this
+/// one. Hot is still absent from the list below, and putting it there is still
+/// the single visible act that would take it off.
+const fn hot_cu_profile_lifts_every_route_v1() -> bool {
+    cfg!(feature = "hot-cu-profile")
+}
+
 /// Routes permitted to run on a runtime-granted heap frame larger than the
 /// protocol default.
 ///
@@ -637,6 +659,9 @@ pub fn admit_heap_frame_v1(instructions: &AccountInfo<'_>) -> Result<usize, Prog
 ///   allocator over the granted heap." This module is that allocator, and this
 ///   is the declaration that lets the grant reach it.
 pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
+    if hot_cu_profile_lifts_every_route_v1() {
+        return true;
+    }
     #[cfg(any(
         feature = "families",
         feature = "series-family",
