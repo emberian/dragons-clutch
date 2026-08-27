@@ -27,6 +27,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4};
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
@@ -65,8 +66,8 @@ pub fn preflight_core_route_v3<'info>(
     wire: &mut Vec<u8>,
     core_program: &AccountInfo<'_>,
     parent: CoreCompositionParentV3,
-) -> Result<(), ProgramError> {
-    let _ = prepare(
+) -> Result<u8, ProgramError> {
+    let prepared = prepare(
         program_id,
         effect,
         route_index,
@@ -81,8 +82,9 @@ pub fn preflight_core_route_v3<'info>(
         wire,
         core_program,
         parent,
+        None,
     )?;
-    Ok(())
+    Ok(prepared.bump)
 }
 
 /// Execute one preflighted Core invocation and verify its immediate receipt.
@@ -102,6 +104,9 @@ pub fn execute_core_route_v3<'info>(
     buffers: &mut ChildInvocationBuffersV3<'info>,
     core_program: &AccountInfo<'info>,
     parent: CoreCompositionParentV3,
+    // The bump `preflight_core_route_v3` already derived over byte-identical
+    // seeds; see `crate::child_authority_v4`.
+    preflighted_bump: PreflightedCallerBumpV4,
 ) -> Result<[u8; 32], ProgramError> {
     // `prepare` leaves the authenticated frame and the child wire IN the walk's
     // buffers. It used to build both for its own authority check and then be
@@ -121,6 +126,7 @@ pub fn execute_core_route_v3<'info>(
         &mut buffers.data,
         core_program,
         parent,
+        preflighted_bump,
     )?;
     // Core is the one hot-path child whose ABI genuinely READS the producer
     // receipt: `core-sbf::process_instruction`'s SERIES_CORE_REQUEST_MAGIC_V1
@@ -192,6 +198,7 @@ fn prepare<'info>(
     wire: &mut Vec<u8>,
     core_program: &AccountInfo<'_>,
     parent: CoreCompositionParentV3,
+    preflighted_bump: PreflightedCallerBumpV4,
 ) -> Result<PreparedCoreInvocationV3, ProgramError> {
     if parent.release_set == [0; 32]
         || parent.market == [0; 32]
@@ -269,7 +276,7 @@ fn prepare<'info>(
     )
     .map_err(|_| TradingSbfError::Content)?;
     let (expected_authority, bump) =
-        Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+        child_caller_authority_v4(&authority_seeds, program_id, preflighted_bump)?;
     gather_invocation_accounts(frame, invocation, effect_accounts)?;
     if frame
         .first()

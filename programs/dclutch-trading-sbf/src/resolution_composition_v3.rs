@@ -30,6 +30,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4};
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
@@ -86,8 +87,8 @@ pub fn preflight_resolution_route_v3<'info>(
     wire: &mut Vec<u8>,
     resolution_program: &AccountInfo<'_>,
     parent: ResolutionCompositionParentV3,
-) -> Result<(), ProgramError> {
-    let _ = prepare(
+) -> Result<u8, ProgramError> {
+    let prepared = prepare(
         program_id,
         effect,
         route_index,
@@ -102,8 +103,9 @@ pub fn preflight_resolution_route_v3<'info>(
         wire,
         resolution_program,
         parent,
+        None,
     )?;
-    Ok(())
+    Ok(prepared.bump)
 }
 
 /// Execute one preflighted Resolution invocation and verify its immediate receipt.
@@ -123,6 +125,9 @@ pub fn execute_resolution_route_v3<'info>(
     buffers: &mut ChildInvocationBuffersV3<'info>,
     resolution_program: &AccountInfo<'info>,
     parent: ResolutionCompositionParentV3,
+    // The bump `preflight_resolution_route_v3` already derived over
+    // byte-identical seeds; see `crate::child_authority_v4`.
+    preflighted_bump: PreflightedCallerBumpV4,
 ) -> Result<[u8; 32], ProgramError> {
     // `prepare` leaves the authenticated frame and the child wire IN the walk's
     // buffers rather than building a set of its own for the execute half to
@@ -142,6 +147,7 @@ pub fn execute_resolution_route_v3<'info>(
         &mut buffers.data,
         resolution_program,
         parent,
+        preflighted_bump,
     )?;
     // Everything past `PROVIDER_EXECUTION_REQUEST_BYTES_V3` on this wire is
     // the post-update parameter body, which `provider_instruction_v3` parses
@@ -264,6 +270,7 @@ fn prepare<'info>(
     wire: &mut Vec<u8>,
     resolution_program: &AccountInfo<'_>,
     parent: ResolutionCompositionParentV3,
+    preflighted_bump: PreflightedCallerBumpV4,
 ) -> Result<PreparedResolutionInvocationV3, ProgramError> {
     validate_parent(program_id, parent)?;
     if !resolution_program.executable
@@ -418,7 +425,7 @@ fn prepare<'info>(
     )
     .map_err(|_| TradingSbfError::Content)?;
     let (expected_authority, bump) =
-        Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+        child_caller_authority_v4(&authority_seeds, program_id, preflighted_bump)?;
     if child_accounts
         .first()
         .is_none_or(|account| account.key != &expected_authority)

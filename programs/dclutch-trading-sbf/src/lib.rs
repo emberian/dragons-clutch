@@ -20,6 +20,9 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+/// One author for the child-CPI caller authority, derived once per execution.
+pub mod child_authority_v4;
+
 /// Ephemeral exact prior-child receipt retention for the common Hot executor.
 mod child_receipt_v3;
 
