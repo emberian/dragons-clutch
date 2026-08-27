@@ -33,9 +33,12 @@ submitted to a real validator running real ELFs at real limits.
 
 Concretely, and non-negotiably:
 
-- **Real packets.** 1,232-byte legacy / 1,224-byte continuation limits are
-  actually hit by actually serialising and actually submitting. A frame that
-  does not fit is a failure, not a diagnostic.
+- **Real packets.** The 1,232-byte packet limit is actually hit by actually
+  serialising and actually submitting. A frame that does not fit is a failure,
+  not a diagnostic. There is ONE limit: 1,224 was never a second one, it was the
+  canonical Direct continuation's measured extent at one commit, and that extent
+  is 1,228 today (`direct-hot/src/waist.rs`). Quote a measured extent as a
+  measurement, never as a ceiling.
 - **Real compute.** `COMPUTE_LIMIT` is 1,400,000 because that is Solana's
   per-transaction maximum. A run that raises it to measure something is a
   *measurement* and is labeled as such; it never satisfies a gate.
