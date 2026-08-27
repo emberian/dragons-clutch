@@ -177,7 +177,8 @@ impl Fixture {
         };
         let mut accounts = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
             .map(|index| {
-                AccountMeta::new_readonly(Pubkey::new_from_array(bytes(100 + index as u8)), false)
+                let byte = 100 + u8::try_from(index).expect("fixed account index fits in a byte");
+                AccountMeta::new_readonly(Pubkey::new_from_array(bytes(byte)), false)
             })
             .collect::<Vec<_>>();
         for (index, key) in [

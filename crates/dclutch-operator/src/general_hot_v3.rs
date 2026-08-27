@@ -2288,14 +2288,14 @@ mod tests {
         let order_count = u32::try_from(rows.len()).expect("manifest order count");
         let mut output =
             vec![0; settlement_manifest_len_v2(width, order_count).expect("manifest width")];
-        output[0..8].copy_from_slice(b"DCGMAN02");
-        output[8..10].copy_from_slice(&2_u16.to_le_bytes());
-        output[10] = 11;
-        output[12..16].copy_from_slice(&width.to_le_bytes());
-        output[16..20].copy_from_slice(&order_count.to_le_bytes());
-        output[20..24].copy_from_slice(&7_u32.to_le_bytes());
-        output[24..32].copy_from_slice(&2_u64.to_le_bytes());
-        output[32..64].copy_from_slice(&[51; 32]);
+        output.get_mut(0..8).expect("manifest offset in bounds").copy_from_slice(b"DCGMAN02");
+        output.get_mut(8..10).expect("manifest offset in bounds").copy_from_slice(&2_u16.to_le_bytes());
+        *output.get_mut(10).expect("manifest offset in bounds") = 11;
+        output.get_mut(12..16).expect("manifest offset in bounds").copy_from_slice(&width.to_le_bytes());
+        output.get_mut(16..20).expect("manifest offset in bounds").copy_from_slice(&order_count.to_le_bytes());
+        output.get_mut(20..24).expect("manifest offset in bounds").copy_from_slice(&7_u32.to_le_bytes());
+        output.get_mut(24..32).expect("manifest offset in bounds").copy_from_slice(&2_u64.to_le_bytes());
+        output.get_mut(32..64).expect("manifest offset in bounds").copy_from_slice(&[51; 32]);
         let row_bytes =
             dclutch_general_adapter_contract::runtime_manifest::settlement_order_len_v2(width)
                 .expect("order width");
@@ -2303,27 +2303,31 @@ mod tests {
             rows.iter().copied().enumerate()
         {
             let row = 64 + ordinal * row_bytes;
-            output[row..row + 8].copy_from_slice(b"DCGORD02");
-            output[row + 8..row + 10].copy_from_slice(&2_u16.to_le_bytes());
-            output[row + 10] = 12;
-            output[row + 12..row + 16].copy_from_slice(&width.to_le_bytes());
-            output[row + 16..row + 20].copy_from_slice(&order_coordinate.to_le_bytes());
-            output[row + 20..row + 24].copy_from_slice(&source_page_index.to_le_bytes());
-            output[row + 24..row + 32].copy_from_slice(&9_u64.to_le_bytes());
-            output[row + 32..row + 64].copy_from_slice(&[51; 32]);
+            output.get_mut(row..row + 8).expect("manifest offset in bounds").copy_from_slice(b"DCGORD02");
+            output.get_mut(row + 8..row + 10).expect("manifest offset in bounds").copy_from_slice(&2_u16.to_le_bytes());
+            *output.get_mut(row + 10).expect("manifest offset in bounds") = 12;
+            output.get_mut(row + 12..row + 16).expect("manifest offset in bounds").copy_from_slice(&width.to_le_bytes());
+            output.get_mut(row + 16..row + 20).expect("manifest offset in bounds").copy_from_slice(&order_coordinate.to_le_bytes());
+            output.get_mut(row + 20..row + 24).expect("manifest offset in bounds").copy_from_slice(&source_page_index.to_le_bytes());
+            output.get_mut(row + 24..row + 32).expect("manifest offset in bounds").copy_from_slice(&9_u64.to_le_bytes());
+            output.get_mut(row + 32..row + 64).expect("manifest offset in bounds").copy_from_slice(&[51; 32]);
             let order_byte = u8::try_from(order_coordinate).expect("order identity");
-            output[row + 64..row + 96].copy_from_slice(&[order_byte; 32]);
-            output[row + 96..row + 128].copy_from_slice(&[72; 32]);
-            output[row + 128..row + 136].copy_from_slice(&3_u64.to_le_bytes());
-            output[row + 136..row + 144].copy_from_slice(&3_u64.to_le_bytes());
-            output[row + 152..row + 156].copy_from_slice(&source_execution_index.to_le_bytes());
+            output.get_mut(row + 64..row + 96).expect("manifest offset in bounds").copy_from_slice(&[order_byte; 32]);
+            output.get_mut(row + 96..row + 128).expect("manifest offset in bounds").copy_from_slice(&[72; 32]);
+            output.get_mut(row + 128..row + 136).expect("manifest offset in bounds").copy_from_slice(&3_u64.to_le_bytes());
+            output.get_mut(row + 136..row + 144).expect("manifest offset in bounds").copy_from_slice(&3_u64.to_le_bytes());
+            output.get_mut(row + 152..row + 156).expect("manifest offset in bounds").copy_from_slice(&source_execution_index.to_le_bytes());
             let input_start = row + 160;
             let output_start = input_start + usize::try_from(width).expect("width") * 8;
             for index in 0..usize::try_from(width).expect("width") {
                 let offset = index * 8;
-                output[input_start + offset..input_start + offset + 8]
+                output
+                    .get_mut(input_start + offset..input_start + offset + 8)
+                    .expect("manifest offset in bounds")
                     .copy_from_slice(&3_u64.to_le_bytes());
-                output[output_start + offset..output_start + offset + 8]
+                output
+                    .get_mut(output_start + offset..output_start + offset + 8)
+                    .expect("manifest offset in bounds")
                     .copy_from_slice(&3_u64.to_le_bytes());
             }
         }
@@ -2676,7 +2680,7 @@ mod tests {
         );
 
         let mut substituted = verified;
-        substituted[32] ^= 1;
+        *substituted.get_mut(32).expect("verified candidate byte exists") ^= 1;
         let candidate_substitution = settlement_state(
             Action::Collect,
             cursor,

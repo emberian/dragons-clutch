@@ -513,16 +513,29 @@ mod tests {
 
     fn fixed_state(program: Pubkey, root: Pubkey, market: Pubkey) -> DealerEquityHotStateV3 {
         let mut fixed_accounts = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
-            .map(|index| meta(Pubkey::new_from_array([index as u8 + 1; 32]), false))
+            .map(|index| {
+                let byte = u8::try_from(index).expect("fixed account index fits in a byte");
+                meta(Pubkey::new_from_array([byte + 1; 32]), false)
+            })
             .collect::<Vec<_>>();
-        fixed_accounts[HOT_MARKET_ACCOUNT_V3] = meta(market, false);
-        fixed_accounts[HOT_ROOT_ACCOUNT_V3] = ObservedAccountMetaV3 {
+        *fixed_accounts
+            .get_mut(HOT_MARKET_ACCOUNT_V3)
+            .expect("fixed account slot exists") = meta(market, false);
+        *fixed_accounts
+            .get_mut(HOT_ROOT_ACCOUNT_V3)
+            .expect("fixed account slot exists") = ObservedAccountMetaV3 {
             is_writable: true,
             ..meta(root, false)
         };
-        fixed_accounts[HOT_TRADING_PROGRAM_ACCOUNT_V3] = meta(program, true);
-        fixed_accounts[HOT_RENT_SYSVAR_ACCOUNT_V3] = meta(sysvar::rent::ID, false);
-        fixed_accounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = meta(sysvar::instructions::ID, false);
+        *fixed_accounts
+            .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+            .expect("fixed account slot exists") = meta(program, true);
+        *fixed_accounts
+            .get_mut(HOT_RENT_SYSVAR_ACCOUNT_V3)
+            .expect("fixed account slot exists") = meta(sysvar::rent::ID, false);
+        *fixed_accounts
+            .get_mut(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("fixed account slot exists") = meta(sysvar::instructions::ID, false);
         DealerEquityHotStateV3 {
             fixed_accounts,
             strategy_accounts: Vec::new(),
@@ -574,7 +587,10 @@ mod tests {
             (336, [14; 32]),
             (368, [15; 32]),
         ] {
-            request[offset..offset + 32].copy_from_slice(&key);
+            request
+                .get_mut(offset..offset + 32)
+                .expect("request offset in bounds")
+                .copy_from_slice(&key);
         }
         for (offset, value) in [
             (400, 1_u64),
@@ -587,7 +603,10 @@ mod tests {
             (456, 1),
             (464, 1),
         ] {
-            request[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+            request
+                .get_mut(offset..offset + 8)
+                .expect("request offset in bounds")
+                .copy_from_slice(&value.to_le_bytes());
         }
         request
     }
@@ -674,7 +693,10 @@ mod tests {
         assert_eq!(validate_request_coordinates(&state, outer, decoded), Ok(()));
 
         let mut substituted_state = state.clone();
-        substituted_state.fixed_accounts[HOT_TRADING_PROGRAM_ACCOUNT_V3]
+        substituted_state
+            .fixed_accounts
+            .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+            .expect("fixed account slot exists")
             .account
             .key = Pubkey::new_from_array([5; 32]);
         assert_eq!(

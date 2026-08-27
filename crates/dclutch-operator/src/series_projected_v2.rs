@@ -688,9 +688,14 @@ mod tests {
             (3, HOT_PORTFOLIO_RAW_ACCOUNT_V3),
             (4, HOT_LINKED_BASIS_RAW_ACCOUNT_V3),
         ] {
-            prefix[fixed] = logical[runtime];
+            *prefix.get_mut(fixed).expect("Hot prefix slot exists") = *logical
+                .get(runtime)
+                .expect("logical account slot exists");
         }
-        prefix[HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3].data_len = 0;
+        prefix
+            .get_mut(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3)
+            .expect("Hot prefix slot exists")
+            .data_len = 0;
         prefix
     }
 
@@ -768,7 +773,13 @@ mod tests {
             let geometry = profile
                 .physical_account_geometry_with_dynamic_spans(0, &[FUNDING_COUNT], ordinal)
                 .expect("geometry");
-            assert_eq!(meta.pubkey, logical[geometry.logical_representative()].key);
+            assert_eq!(
+                meta.pubkey,
+                logical
+                    .get(geometry.logical_representative())
+                    .expect("logical account slot exists")
+                    .key
+            );
             assert_eq!(meta.is_signer, geometry.privileges().signer());
             assert_eq!(meta.is_writable, geometry.privileges().writable());
         }
@@ -793,12 +804,38 @@ mod tests {
             packed.len(),
             105 + usize::try_from(FUNDING_COUNT).expect("count")
         );
-        assert!(packed[HOT_MARKET_ACCOUNT_V3].is_writable);
-        assert!(packed[HOT_ROOT_ACCOUNT_V3].is_writable);
-        assert!(!packed[HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3].is_signer);
-        assert!(!packed[HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3].is_writable);
-        assert_eq!(packed[0].pubkey, prefix[0].key);
-        assert_eq!(packed[44].pubkey, prefix[44].key);
+        assert!(
+            packed
+                .get(HOT_MARKET_ACCOUNT_V3)
+                .expect("packed slot exists")
+                .is_writable
+        );
+        assert!(
+            packed
+                .get(HOT_ROOT_ACCOUNT_V3)
+                .expect("packed slot exists")
+                .is_writable
+        );
+        assert!(
+            !packed
+                .get(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3)
+                .expect("packed slot exists")
+                .is_signer
+        );
+        assert!(
+            !packed
+                .get(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3)
+                .expect("packed slot exists")
+                .is_writable
+        );
+        assert_eq!(
+            packed.first().expect("packed slot exists").pubkey,
+            prefix.first().expect("prefix slot exists").key
+        );
+        assert_eq!(
+            packed.get(44).expect("packed slot exists").pubkey,
+            prefix.get(44).expect("prefix slot exists").key
+        );
         assert!(packed.get(45).is_some());
     }
 
@@ -861,21 +898,35 @@ mod tests {
         let logical = logical_accounts(profile, FUNDING_COUNT);
 
         let mut wrong_alias = logical.clone();
-        wrong_alias[20].key = Pubkey::new_from_array([251; 32]);
+        wrong_alias
+            .get_mut(20)
+            .expect("logical account slot exists")
+            .key = Pubkey::new_from_array([251; 32]);
         assert_eq!(
             pack_profile13_accounts(profile, FUNDING_COUNT, &wrong_alias),
             Err(SeriesProjectedOperatorErrorV2::AliasSubstitution)
         );
 
         let mut wrong_observation = logical.clone();
-        wrong_observation[1].observation = id(241);
+        wrong_observation
+            .get_mut(1)
+            .expect("logical account slot exists")
+            .observation = id(241);
         assert_eq!(
             pack_profile13_accounts(profile, FUNDING_COUNT, &wrong_observation),
             Err(SeriesProjectedOperatorErrorV2::Observation)
         );
 
         let mut wrong_data = logical;
-        wrong_data[1].data_len = wrong_data[1].data_len.saturating_add(1);
+        let next_data_len = wrong_data
+            .get(1)
+            .expect("logical account slot exists")
+            .data_len
+            .saturating_add(1);
+        wrong_data
+            .get_mut(1)
+            .expect("logical account slot exists")
+            .data_len = next_data_len;
         assert_eq!(
             pack_profile13_accounts(profile, FUNDING_COUNT, &wrong_data),
             Err(SeriesProjectedOperatorErrorV2::AccountData)
@@ -996,8 +1047,11 @@ mod tests {
         .expect("maximum projected Consume v0 message");
         assert_eq!(message.account_keys.len(), 3);
         assert_eq!(message.address_table_lookups.len(), 1);
-        let loaded_addresses = message.address_table_lookups[0].writable_indexes.len()
-            + message.address_table_lookups[0].readonly_indexes.len();
+        let lookup = message
+            .address_table_lookups
+            .first()
+            .expect("address table lookup exists");
+        let loaded_addresses = lookup.writable_indexes.len() + lookup.readonly_indexes.len();
         assert_eq!(loaded_addresses, physical_accounts);
         let required_signatures = usize::from(message.header.num_required_signatures);
         let wire_bytes =

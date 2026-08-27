@@ -680,7 +680,7 @@ fn bind_authorities(state: &mut GeneralSettlementStateV1, action: Action) {
             cursor.revision,
             &mut children,
         ),
-        _ => panic!("settlement action"),
+        _ => unreachable!("bind_authorities is only called with settlement actions"),
     }
     .expect("packet projection");
     let claims = children.claims;
