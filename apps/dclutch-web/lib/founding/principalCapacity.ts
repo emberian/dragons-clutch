@@ -24,10 +24,28 @@
  * below bounds what a founding may open with, not what a Market may hold.
  */
 
+import { ascii, hex, isZero, requireZero, slice, u16, u64 } from '../bytes';
 import {
   BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
   CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
   CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
+  MANIPULATION_FLOOR_V1_ADAPTER_CONFIG_OFFSET,
+  MANIPULATION_FLOOR_V1_BASIS_OFFSET,
+  MANIPULATION_FLOOR_V1_BYTES,
+  MANIPULATION_FLOOR_V1_COLLATERAL_UNIT_OFFSET,
+  MANIPULATION_FLOOR_V1_CURVE_DERIVED_TAG,
+  MANIPULATION_FLOOR_V1_DERIVATION_RELEASE_OFFSET,
+  MANIPULATION_FLOOR_V1_FLOOR_ATOMS_OFFSET,
+  MANIPULATION_FLOOR_V1_MAGIC,
+  MANIPULATION_FLOOR_V1_MAGIC_OFFSET,
+  MANIPULATION_FLOOR_V1_OBSERVED_DEPTH_TAG,
+  MANIPULATION_FLOOR_V1_RESERVED_BYTES,
+  MANIPULATION_FLOOR_V1_RESERVED_OFFSET,
+  MANIPULATION_FLOOR_V1_SCHEMA_VERSION,
+  MANIPULATION_FLOOR_V1_SOURCE_SPEC_OFFSET,
+  MANIPULATION_FLOOR_V1_TAIL_RESERVED_BYTES,
+  MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET,
+  MANIPULATION_FLOOR_V1_VERSION_OFFSET,
 } from '../generated/principalCapacityV1';
 
 const MAX_U32 = 0xffff_ffffn;
@@ -136,4 +154,93 @@ export function largestAdmittedPrincipalV1(capacity: PrincipalCapacityV1, floorA
 /** Render κ as the ratio an operator reads, without ever dividing to decide. */
 export function formatCapacityV1(capacity: PrincipalCapacityV1): string {
   return capacity.kind === 'bounded' ? `${capacity.numerator}/${capacity.denominator}` : 'unstated';
+}
+
+
+/**
+ * A venue's derived cost floor for forcing the observation a Market resolves on.
+ *
+ * The record carries no Market, no generation and no principal: it is the same
+ * immutable derivation for every Market founded against that Source. What it
+ * does carry is three identities, and they are the whole reason the record is
+ * worth authenticating rather than trusting — a floor derived for a different
+ * Source, a different venue configuration, or a different collateral unit is a
+ * number in the wrong denomination, and it would bound nothing.
+ */
+export type ManipulationFloorV1 = Readonly<{
+  basis: 'curve-derived' | 'observed-depth';
+  sourceSpecId: string;
+  adapterConfigId: string;
+  collateralUnitId: string;
+  derivationReleaseId: string;
+  floorAtoms: bigint;
+}>;
+
+function identity(bytes: Uint8Array, offset: number, field: string): string {
+  const value = slice(bytes, offset, 32);
+  // `ContentId::new` refuses the all-zero sentinel, so a floor record that
+  // named one would be vacuous in exactly the binding it exists to check.
+  if (isZero(value)) throw new Error(`manipulation floor ${field} is the reserved all-zero identity`);
+  return hex(value);
+}
+
+/**
+ * Hostile-decode one exact canonical floor preimage.
+ *
+ * Mirrors `ManipulationFloorV1::decode` check for check: exact width, magic,
+ * schema version, both reserved runs zero, a known basis tag, and four nonzero
+ * identities. Nothing here is lenient — the bytes either are a floor record or
+ * they are not, and a decoder that guessed would be inventing the bound.
+ */
+export function decodeManipulationFloorV1(bytes: Uint8Array): ManipulationFloorV1 {
+  if (bytes.length !== MANIPULATION_FLOOR_V1_BYTES) {
+    throw new Error(`manipulation floor is ${bytes.length} bytes, not the ${MANIPULATION_FLOOR_V1_BYTES} its schema declares`);
+  }
+  if (ascii(bytes, MANIPULATION_FLOOR_V1_MAGIC_OFFSET, MANIPULATION_FLOOR_V1_MAGIC.length) !== MANIPULATION_FLOOR_V1_MAGIC) {
+    throw new Error('these bytes are not a ManipulationFloorV1 record');
+  }
+  if (u16(bytes, MANIPULATION_FLOOR_V1_VERSION_OFFSET) !== MANIPULATION_FLOOR_V1_SCHEMA_VERSION) {
+    throw new Error('manipulation floor names an unsupported schema version');
+  }
+  requireZero(bytes, MANIPULATION_FLOOR_V1_RESERVED_OFFSET, MANIPULATION_FLOOR_V1_RESERVED_BYTES, 'manipulation floor reserved');
+  requireZero(bytes, MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET, MANIPULATION_FLOOR_V1_TAIL_RESERVED_BYTES, 'manipulation floor tail reserved');
+  const tag = bytes[MANIPULATION_FLOOR_V1_BASIS_OFFSET];
+  const basis = tag === MANIPULATION_FLOOR_V1_CURVE_DERIVED_TAG ? 'curve-derived'
+    : tag === MANIPULATION_FLOOR_V1_OBSERVED_DEPTH_TAG ? 'observed-depth'
+    : null;
+  if (basis === null) throw new Error(`manipulation floor names an unknown derivation basis ${tag}`);
+  return Object.freeze({
+    basis,
+    sourceSpecId: identity(bytes, MANIPULATION_FLOOR_V1_SOURCE_SPEC_OFFSET, 'Source spec'),
+    adapterConfigId: identity(bytes, MANIPULATION_FLOOR_V1_ADAPTER_CONFIG_OFFSET, 'adapter config'),
+    collateralUnitId: identity(bytes, MANIPULATION_FLOOR_V1_COLLATERAL_UNIT_OFFSET, 'collateral unit'),
+    derivationReleaseId: identity(bytes, MANIPULATION_FLOOR_V1_DERIVATION_RELEASE_OFFSET, 'derivation release'),
+    // A floor of zero is representable and means "found nothing against this
+    // Source". It is not an error; it admits no principal at all, which the
+    // predicate reports as `PrincipalExceedsCapacity`.
+    floorAtoms: u64(bytes, MANIPULATION_FLOOR_V1_FLOOR_ATOMS_OFFSET),
+  });
+}
+
+/**
+ * The whole chain-state founding admission, as one decision.
+ *
+ * Mirrors `admit_founding_principal`: bind the floor to the authenticated
+ * Source and the Market's collateral unit FIRST, then apply §6.5. The order is
+ * the point — a floor that binds to something else is not a weaker bound, it is
+ * an answer to a different question, and applying §6.5 to it would produce a
+ * verdict that looks exactly like a real one.
+ */
+export function admitFoundingPrincipalV1(
+  capacity: PrincipalCapacityV1,
+  floor: ManipulationFloorV1,
+  binding: Readonly<{ sourceSpecId: string; adapterConfigId: string; collateralUnitId: string }>,
+  totalPrincipalAtoms: bigint,
+): PrincipalCapacityVerdictV1 {
+  if (floor.sourceSpecId !== binding.sourceSpecId
+      || floor.adapterConfigId !== binding.adapterConfigId
+      || floor.collateralUnitId !== binding.collateralUnitId) {
+    throw new Error('this manipulation floor was derived for another Source, venue configuration, or collateral unit');
+  }
+  return admitPrincipalCapacityV1(capacity, floor.floorAtoms, totalPrincipalAtoms);
 }

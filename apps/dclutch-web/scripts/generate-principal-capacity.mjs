@@ -11,6 +11,31 @@ function scalar(name) {
 }
 
 /**
+ * Read a byte constant, in either form the Lean emitter writes.
+ *
+ * Fixed identities come out as `[u8; N]` and carry their own declared width,
+ * which is checked; preimages come out as `&[u8]` and do not. Accepting both
+ * here beats two near-identical readers that could drift apart.
+ */
+function byteArray(name) {
+  const sized = generated.match(new RegExp(`pub const ${name}: \\[u8; ([0-9]+)\\] = \\[([\\s\\S]*?)\\n\\];`));
+  const slice = sized ? null : generated.match(new RegExp(`pub const ${name}: &\\[u8\\] = &\\[([\\s\\S]*?)\\n\\];`));
+  const body = sized ? sized[2] : slice?.[1];
+  if (body === undefined || body === null) throw new Error(`missing Rust byte constant ${name}`);
+  const values = [...body.matchAll(/0x([0-9a-f]{2})/g)].map((byte) => Number.parseInt(byte[1], 16));
+  if (sized && values.length !== Number(sized[1])) throw new Error(`${name} declares ${sized[1]} bytes but lists ${values.length}`);
+  if (values.length === 0) throw new Error(`${name} is empty`);
+  return values;
+}
+
+/** Render a byte array as the ASCII text it is, refusing anything that is not. */
+function asciiOf(name) {
+  const values = byteArray(name);
+  if (values.some((byte) => byte < 0x20 || byte > 0x7e)) throw new Error(`${name} is not printable ASCII`);
+  return String.fromCharCode(...values);
+}
+
+/**
  * Lift the Lean-emitted admission corpus.
  *
  * `PRINCIPAL_ADMISSION_CASES_V1` is emitted by
@@ -48,6 +73,25 @@ lines.push(`export const CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1 = ${scalar('CH
 lines.push('');
 lines.push('/** The venue floor the default kappa is scaled against, in lamports. */');
 lines.push(`export const BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1 = ${scalar('BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1')}n as const;`);
+lines.push('');
+lines.push('/**');
+lines.push(' * The magic a `ManipulationFloorV1` record announces itself with.');
+lines.push(' *');
+lines.push(' * Emitted alongside the offsets rather than left out of them. A browser');
+lines.push(' * that has the layout but not the magic can read a floor record and cannot');
+lines.push(' * RECOGNIZE one -- it would be indexing into whatever bytes it was handed,');
+lines.push(' * which for a value that bounds founding principal is the difference between');
+lines.push(' * a check and a decoration.');
+lines.push(' */');
+lines.push(`export const MANIPULATION_FLOOR_V1_MAGIC = '${asciiOf('MANIPULATION_FLOOR_V1_MAGIC')}';`);
+lines.push('');
+lines.push('/** The schema release this record is published under, as lowercase hex. */');
+lines.push(`export const MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1 = '${byteArray('MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1').map((byte) => byte.toString(16).padStart(2, '0')).join('')}';`);
+lines.push(`export const MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1 = '${asciiOf('MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1')}';`);
+lines.push('');
+lines.push('/** The bonding-curve buyout/exit derivation, the only one released today. */');
+lines.push(`export const BONDING_CURVE_FLOOR_DERIVATION_ID_V1 = '${byteArray('BONDING_CURVE_FLOOR_DERIVATION_ID_V1').map((byte) => byte.toString(16).padStart(2, '0')).join('')}';`);
+lines.push(`export const BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1 = '${asciiOf('BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1')}';`);
 lines.push('');
 lines.push('/** `ManipulationFloorV1` layout, for a decoder that reads a real floor record. */');
 for (const name of [

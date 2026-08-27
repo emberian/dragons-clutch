@@ -503,6 +503,21 @@ import {
   REGISTERED_TERMINAL_RESERVED_OFFSET,
   REGISTERED_TERMINAL_VERSION_OFFSET,
 } from '../generated/registeredDirect';
+import {
+  MANIPULATION_FLOOR_V1_ADAPTER_CONFIG_OFFSET,
+  MANIPULATION_FLOOR_V1_BASIS_OFFSET,
+  MANIPULATION_FLOOR_V1_BYTES,
+  MANIPULATION_FLOOR_V1_COLLATERAL_UNIT_OFFSET,
+  MANIPULATION_FLOOR_V1_CURVE_DERIVED_TAG,
+  MANIPULATION_FLOOR_V1_DERIVATION_RELEASE_OFFSET,
+  MANIPULATION_FLOOR_V1_FLOOR_ATOMS_OFFSET,
+  MANIPULATION_FLOOR_V1_MAGIC,
+  MANIPULATION_FLOOR_V1_OBSERVED_DEPTH_TAG,
+  MANIPULATION_FLOOR_V1_RESERVED_OFFSET,
+  MANIPULATION_FLOOR_V1_SOURCE_SPEC_OFFSET,
+  MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET,
+  MANIPULATION_FLOOR_V1_VERSION_OFFSET,
+} from '../generated/principalCapacityV1';
 
 /** Width of the canonical eight-byte ASCII magic every dClutch record opens with. */
 export const RECORD_MAGIC_BYTES = ADMISSION_MAGIC_BYTES_V2;
@@ -698,6 +713,30 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     width: { kind: 'fixed', bytes: LIFECYCLE_RENT_CREDIT_BYTES_V2 },
     fields: [],
     note: 'coreFound.ts emits this magic, its schema version and its exact width, and no field offsets. lib/decoders.ts still states this record’s layout by hand — it is in the abi-coverage baseline — and this view will not restate it a third time; the bytes are shown raw until the layout is emitted.',
+  },
+  {
+    magic: MANIPULATION_FLOOR_V1_MAGIC,
+    name: 'Source manipulation floor',
+    family: 'Source',
+    summary: 'What it costs to force the observation a Market resolves on — the venue-derived bound §6.5 scales founding principal against.',
+    width: { kind: 'fixed', bytes: MANIPULATION_FLOOR_V1_BYTES },
+    fields: [
+      version(MANIPULATION_FLOOR_V1_VERSION_OFFSET),
+      field('Derivation basis', MANIPULATION_FLOOR_V1_BASIS_OFFSET, 'enum', {
+        tags: [
+          { tag: MANIPULATION_FLOOR_V1_CURVE_DERIVED_TAG, name: 'Curve derived' },
+          { tag: MANIPULATION_FLOOR_V1_OBSERVED_DEPTH_TAG, name: 'Observed depth' },
+        ],
+      }),
+      field('Reserved', MANIPULATION_FLOOR_V1_RESERVED_OFFSET, 'reserved'),
+      field('Source spec identity', MANIPULATION_FLOOR_V1_SOURCE_SPEC_OFFSET, 'identity'),
+      field('Adapter configuration identity', MANIPULATION_FLOOR_V1_ADAPTER_CONFIG_OFFSET, 'identity'),
+      field('Collateral unit identity', MANIPULATION_FLOOR_V1_COLLATERAL_UNIT_OFFSET, 'identity'),
+      field('Derivation release identity', MANIPULATION_FLOOR_V1_DERIVATION_RELEASE_OFFSET, 'identity'),
+      field('Floor', MANIPULATION_FLOOR_V1_FLOOR_ATOMS_OFFSET, 'u64'),
+      field('Reserved', MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET, 'reserved'),
+    ],
+    note: 'The three identities above are the whole reason this record is worth authenticating: a floor derived for another Source, venue configuration or collateral unit is not a weaker bound, it is an answer to a different question. Zero is representable and means "found nothing against this Source". No on-chain route applies this bound today — it is proven in Lean and checked off chain.',
   },
   {
     magic: REALM_MAGIC_V1,
