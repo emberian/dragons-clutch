@@ -4,13 +4,6 @@
 //! not cache generated identities: every content edge is re-derived from the
 //! exact bytes which ProgramTest installs as finalized Registry records.
 
-use dclutch_account_profile_contract::v2::{
-    DYNAMIC_FIXED_SPAN_ENTRY_BYTES, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES,
-    TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
-    encode::{
-        RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
-    },
-};
 use dclutch_capability_program_contract::{
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
@@ -31,10 +24,8 @@ use dclutch_execution_strategy_contract::v2::{
 };
 use dclutch_general_adapter_contract::{
     account_rules_v3::{
-        GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
-        general_account_profile_operation_count_v3, general_account_profile_operation_v3,
-        general_account_profile_rule_v3, general_scratch_page_rule_v3,
-        general_scratch_page_span_v3,
+        GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
+        general_account_profile_bytes_v3,
     },
     artifacts_v3::{
         GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3, GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3,
@@ -44,10 +35,6 @@ use dclutch_general_adapter_contract::{
         GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
         general_effect_template_bytes_v3,
-    },
-    hot_candidate_v3::{
-        GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity,
     },
     release_v3::GENERAL_ACTIONS_V3,
     state_artifacts_v3::{
@@ -350,56 +337,17 @@ fn account_profile(
     widths: GeneralExternalAccountWidthsV3,
     action: Action,
 ) -> Result<Vec<u8>, JoinedGeneralArtifactErrorV5> {
-    let fixed_count = general_account_profile_fixed_count_v3(action)
+    // The whole artifact has one author, not just its operation list. The
+    // trusted-environment declaration, the scratch-page span, the extra page
+    // rule and the register geometry used to be restated here AND in a
+    // contract-side test fixture, with nothing able to compare the two -- the
+    // same shape `2e890d4` had to undo one level down.
+    let bytes = general_account_profile_bytes_v3(action)
         .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
-    // The canonical operation list has one author: the same module that owns
-    // the account rules. It used to be written here and again in a contract-side
-    // test fixture, and nothing could compare the two.
-    let operations = (0..general_account_profile_operation_count_v3(action))
-        .map(|index| {
-            general_account_profile_operation_v3(action, index)
-                .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)
-        })
-        .collect::<Result<Vec<_>, JoinedGeneralArtifactErrorV5>>()?;
-    let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
-        .checked_add(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
-        .and_then(|value| value.checked_add((usize::from(fixed_count) + 1) * RULE_BYTES))
-        .and_then(|value| value.checked_add(operations.len() * OPERATION_BYTES))
-        .ok_or(JoinedGeneralArtifactErrorV5::Input)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    let common_scalars = u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
-        .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?;
-    let item_scalar_stride = u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
-        .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?;
-    let common_identities = u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-        .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?;
-    let encoded = encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
-        TrustedEnvironmentV2::None,
-        TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
-            destination: u16::try_from(identity::TRADING_PROGRAM)
-                .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-        },
-        TrustedBuiltinIdentityV2::None,
-        &[general_scratch_page_span_v3(action)
-            .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?],
-        fixed_count,
-        |coordinate| {
-            general_account_profile_rule_v3(action, coordinate, widths)
-                .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
-        },
-        &[general_scratch_page_rule_v3()],
-        &operations,
-        RegisterGeometryV2 {
-            common_scalars,
-            item_scalar_stride,
-            common_identities,
-            item_identity_stride: 0,
-        },
-        &mut scratch,
-        &mut output,
-    );
-    encoded.map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
+    encode_general_account_profile_v3_atomic(action, widths, &mut scratch, &mut output)
+        .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
     Ok(output)
 }
 

@@ -8,12 +8,15 @@
 //! derived from canonical register-bank geometry.
 
 use dclutch_account_profile_contract::v2::{
-    AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
+    AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE, DYNAMIC_FIXED_SPAN_ENTRY_BYTES,
+    DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES, TrustedBuiltinIdentityV2,
+    TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
         AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
         AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
         AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
-        ScalarCoordinateV2,
+        RegisterGeometryV2, ScalarCoordinateV2,
+        encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
     },
 };
 use dclutch_capability_program_contract::{
@@ -42,7 +45,10 @@ use crate::{
         general_custody_callee_coordinate_v3, general_effect_account_count_v3,
         general_effect_route_count_v3, general_effect_route_frame_v3,
     },
-    hot_candidate_v3::{identity, scalar},
+    hot_candidate_v3::{
+        GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
+        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, scalar,
+    },
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
     runtime_selection::RUNTIME_SELECTION_CURSOR_BYTES_V2,
@@ -269,6 +275,111 @@ pub fn general_account_profile_operation_v3(
         }),
         _ => Err(GeneralAccountRuleErrorV3::Geometry),
     }
+}
+
+/// Exact encoded width of the action-selected General Profile13 artifact.
+///
+/// # Errors
+///
+/// Refuses an action whose geometry overflows a `usize`.
+pub fn general_account_profile_bytes_v3(action: Action) -> Result<usize> {
+    let fixed_count = general_account_profile_fixed_count_v3(action)?;
+    let rules = usize::from(fixed_count)
+        .checked_add(1)
+        .and_then(|count| count.checked_mul(RULE_BYTES))
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    let operations = usize::from(general_account_profile_operation_count_v3(action))
+        .checked_mul(OPERATION_BYTES)
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    DYNAMIC_FIXED_SPAN_HEADER_BYTES
+        .checked_add(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
+        .and_then(|value| value.checked_add(rules))
+        .and_then(|value| value.checked_add(operations))
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)
+}
+
+/// Encode the action-selected General Profile13 artifact atomically.
+///
+/// The rules and the operation list already have exactly one author, which is
+/// this module. The ENCODER INVOCATION did not: the trusted-environment
+/// declaration, the scratch-page span, the extra scratch-page rule and the
+/// register geometry were written out twice, once in the release builder and
+/// once in a contract test fixture, with nothing able to compare them -- the
+/// same shape `2e890d4` had to undo for the operation list, one level up.
+/// This is that fix applied to the invocation, so the artifact has one author
+/// end to end.
+///
+/// `scratch` and `output` must both be exactly [`general_account_profile_bytes_v3`]
+/// wide. `output` is unchanged on every refusal.
+///
+/// # Errors
+///
+/// Refuses an action-selected geometry this module cannot generate, and every
+/// refusal the AccountProfile V2 encoder raises against the candidate.
+pub fn encode_general_account_profile_v3_atomic(
+    action: Action,
+    widths: GeneralExternalAccountWidthsV3,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let fixed_count = general_account_profile_fixed_count_v3(action)?;
+    let mut operations = [GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3;
+        GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3];
+    let operation_count = usize::from(general_account_profile_operation_count_v3(action));
+    for index in 0..operation_count {
+        let operation = general_account_profile_operation_v3(
+            action,
+            u16::try_from(index).map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+        )?;
+        *operations
+            .get_mut(index)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)? = operation;
+    }
+    encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
+        TrustedEnvironmentV2::None,
+        TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
+            destination: narrow_u32(identity::TRADING_PROGRAM)?,
+        },
+        TrustedBuiltinIdentityV2::None,
+        &[general_scratch_page_span_v3(action)?],
+        fixed_count,
+        |coordinate| {
+            general_account_profile_rule_v3(action, coordinate, widths)
+                .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
+        },
+        &[general_scratch_page_rule_v3()],
+        operations
+            .get(..operation_count)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
+        RegisterGeometryV2 {
+            common_scalars: narrow_u32(GENERAL_HOT_COMMON_SCALARS_V3)?,
+            item_scalar_stride: narrow_u32(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)?,
+            common_identities: narrow_u32(GENERAL_HOT_COMMON_IDENTITIES_V3)?,
+            item_identity_stride: 0,
+        },
+        scratch,
+        output,
+    )
+    .map_err(|_| GeneralAccountRuleErrorV3::Geometry)
+}
+
+/// Widest canonical operation list any action declares.
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 9;
+
+/// Inert operation the fixed-width operation buffer is filled with.
+const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
+    AccountOperationInputV2::ProjectLamports {
+        account: AccountCoordinateV2::fixed(0),
+        destination: ScalarCoordinateV2::common(0),
+    };
+
+const _: () = assert!(
+    GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3
+        == general_account_profile_operation_count_v3(Action::Close) as usize
+);
+
+fn narrow_u32(value: u32) -> Result<u16> {
+    u16::try_from(value).map_err(|_| GeneralAccountRuleErrorV3::Geometry)
 }
 
 fn narrow(value: usize) -> Result<u16> {
@@ -1305,5 +1416,70 @@ mod tests {
                 "{action:?} creates its own primary state"
             );
         }
+    }
+
+    /// The published profile encoder generates every action, and the width it
+    /// advertises is the width it writes.
+    ///
+    /// Before this function existed the encoder invocation had two authors and
+    /// only one of them -- the release builder -- ever ran for all seven
+    /// actions; the contract-side copy was pinned to `Freeze`. Now there is one
+    /// author and this exercises it across the whole action set, including
+    /// `Close`, which is the only action with a nine-operation list.
+    #[test]
+    fn the_published_profile_encoder_generates_every_action() {
+        const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 256,
+            result_domain: 192,
+            rent_sysvar: 17,
+            core_market: 320,
+            activation_cache: 160,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 112,
+            rent_credit: 48,
+        };
+        for action in ACTIONS {
+            let bytes = general_account_profile_bytes_v3(action).expect("profile width");
+            let mut scratch = vec![0_u8; bytes];
+            let mut output = vec![0x55_u8; bytes];
+            encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut output)
+                .expect("profile artifact");
+            let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(&output)
+                .expect("the encoder emits a decodable profile");
+            assert_eq!(
+                profile.artifact_profile(),
+                DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
+            );
+            assert_eq!(profile.dynamic_fixed_span_count(), 1);
+            assert_eq!(profile.bytes().len(), bytes);
+            // One rule per fixed coordinate plus the single scratch-page
+            // template, which the dynamic span expands at projection time.
+            assert_eq!(
+                profile
+                    .logical_account_count_with_dynamic_spans(1, &[3])
+                    .expect("logical count"),
+                usize::from(general_account_profile_fixed_count_v3(action).expect("fixed count"))
+                    + 3
+            );
+        }
+
+        // Buffers that are not the exact advertised width refuse, and `output`
+        // keeps its fill.
+        let bytes = general_account_profile_bytes_v3(Action::Freeze).expect("profile width");
+        let mut scratch = vec![0_u8; bytes];
+        let mut short = vec![0x55_u8; bytes - 1];
+        assert_eq!(
+            encode_general_account_profile_v3_atomic(
+                Action::Freeze,
+                WIDTHS,
+                &mut scratch,
+                &mut short,
+            ),
+            Err(GeneralAccountRuleErrorV3::Geometry)
+        );
+        assert!(short.iter().all(|byte| *byte == 0x55));
     }
 }
