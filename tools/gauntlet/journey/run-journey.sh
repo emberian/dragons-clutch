@@ -178,15 +178,20 @@ fi
 # say so. Unlike run.sh, this tier REFUSES rather than warning: the journey's
 # whole claim is about state that survives a long chain of transactions, and
 # undefined behaviour anywhere in that chain voids the claim silently.
-DIAGNOSTICS=0
+# The narrow exception is frame-diagnostics.json, shaped like blocked.json: it
+# names the exact mangled symbol, the measured count, why this campaign does not
+# reach it, and who owns the fix. Anything it does not name, or a count that
+# GREW, stops the run.
+: > "$WORK/frame-diagnostics.txt"
 for entry in $ROLES; do
     role="${entry%%:*}"
-    count="$(grep -c "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
-    DIAGNOSTICS=$((DIAGNOSTICS + count))
+    grep -h "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" 2>/dev/null \
+        | sed "s|^|$role\t|" >> "$WORK/frame-diagnostics.txt" || true
 done
-if [ "$DIAGNOSTICS" -ne 0 ]; then
-    grep -h "$DIAGNOSTIC_PATTERN" "$LOGS"/build-*.log | sort -u >&2
-    die "$DIAGNOSTICS SBF stack-frame-overwrite diagnostics; refusing to run a journey on artifacts the toolchain calls potentially-undefined."
+if [ -s "$WORK/frame-diagnostics.txt" ]; then
+    python3 "$TIER/check-frame-diagnostics.py" \
+            "$TIER/frame-diagnostics.json" "$WORK/frame-diagnostics.txt" >&2 || \
+        die "SBF stack-frame-overwrite diagnostics are not covered by tools/gauntlet/journey/frame-diagnostics.json; refusing to run a journey on artifacts the toolchain calls potentially-undefined."
 fi
 
 # ----------------------------------------------------------- 3. journey binary

@@ -75,6 +75,33 @@ it refuses `Balance` and moved nothing, and only then sweeps the surplus,
 asserting the credit is left holding exactly the rent minimum and that the
 refund wallet's delta is the surplus less the transaction fee.
 
+## The build gate, and what it caught on its first run
+
+`cargo build-sbf` exits **zero** when the SBF backend reports that a call
+overwrites its own stack frame and "may cause undefined behavior during
+execution". `run.sh` counts them and warns. This tier **refuses**: the journey's
+whole claim is about state surviving a long chain of transactions, and
+undefined behaviour anywhere in that chain voids the claim silently.
+
+The first time it ran it refused, on **65 diagnostics — every one of them in
+`dclutch_resolution_proof_sbf::relay_transport_v1::process_relay_transport_v1`**,
+with the other six role artifacts at zero. That artifact is bound into the
+five-role release set and activated by tier 1, which has been producing evidence
+on it under a warning nobody had to read.
+
+The narrow exception is `frame-diagnostics.json`, shaped like `blocked.json`:
+each entry names the exact mangled symbol, the measured count, why this campaign
+does not reach the function, and who owns the fix.
+`check-frame-diagnostics.py` refuses a diagnostic that matches no entry, refuses
+one attributed to the wrong role, and refuses a **count that grew** — a growing
+count is a new defect wearing an old exemption. A count that shrank is reported
+loudly as stale and does *not* fail, so whoever lands the fix is not met with a
+red run. All three refusals are exercised.
+
+The exemption is that the journey does not execute the function. It is **not**
+that the function is fine; the shipped Resolution ELF still has it. The known
+fix is the frame split W2h used on `hot_v3::process_hot_execution_v3`.
+
 ## What does not, and exactly why
 
 The transcript carries a gap register; `src/journey.rs::gap_register` is its

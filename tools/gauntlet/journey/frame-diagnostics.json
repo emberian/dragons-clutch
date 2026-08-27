@@ -1,0 +1,14 @@
+{
+  "note": "SBF stack-frame-overwrite diagnostics this tier will run despite. `cargo build-sbf` exits ZERO when the backend reports that a call overwrites its own stack frame and 'may cause undefined behavior during execution', so the only thing between a potentially-undefined artifact and a campaign is a build stage that counts them. run.sh WARNS; this tier REFUSES, because the journey's whole claim is about state surviving a long chain of transactions and undefined behaviour anywhere in that chain voids the claim silently. This file is the narrow exception, and it is deliberately shaped like blocked.json: every entry names the exact mangled symbol, the measured count, why the journey does not reach it, and who owns the fix. The runner refuses any diagnostic whose line does not match an entry here, and refuses a MEASURED COUNT THAT GREW — a growing count is a new defect wearing an old exemption. A count that shrank is reported loudly as stale so the entry gets deleted rather than outliving its reason.",
+  "allowed": [
+    {
+      "role": "resolution",
+      "symbol_fragment": "dclutch_resolution_proof_sbf18relay_transport_v126process_relay_transport_v1",
+      "measured": 65,
+      "measured_on": "2026-08-27, cargo build-sbf, journey tier build stage, six of the seven role artifacts clean at zero",
+      "reason": "Every one of the 65 diagnostics in the whole seven-artifact build is this single function. `relay_transport_v1` is the RelayedMainnetStateV1 transport rehomed into the Resolution program on 2026-08-27; its create frame is 21 accounts and its handler is one large body. This is the same class of defect W2h fixed in hot_v3::process_hot_execution_v3 by splitting one 3,904-byte frame into an authentication half and an execution half, and the same fix shape applies here.",
+      "unreached_by_this_tier": "The journey submits no DCLTRIX1 instruction. `process_relay_transport_v1` is reached only from the Resolution program's fourth dispatch arm, behind the RELAY_INSTRUCTION_MAGIC prefix, and this campaign never encodes one. The artifact is still SHIPPED with the defect in it — the exemption is that the journey does not execute the function, NOT that the function is fine.",
+      "owner": "the Resolution program owner (RELAY-REHOME landed it); a frame split like W2h's is the known fix"
+    }
+  ]
+}
