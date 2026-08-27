@@ -101,6 +101,17 @@
       "note": "Submitted after the Core Market is forced into Retiring so the terminal-gated retirement path is reachable. The chain's own logs show `Program <claims> success` inside a transaction that did not commit; the campaign asserts every coordinate resource and the RentCredit are byte-identical to their prestate."
     },
     {
+      "label": "claims rational-lifecycle: retire a coordinate whose shards are still outstanding",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_lifecycle_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/RationalLifecycleSbfErrorV2::Token",
+      "note": "HOSTILE, nonzero-supply retire. Retirement's whole safety property is that a coordinate is closed only when nothing it backed is still outstanding, and a request cannot even STATE otherwise: LifecycleRequestV2's own decoder refuses expected_shard_supply != 0 with InvalidPhysicalState (lifecycle-contract/src/lib.rs:819,835), so an honest hostile never becomes a request. The hostile that CAN exist is a request that lies -- it declares zero while the Mint the chain holds carries a supply -- and the only thing between that and a closed Mint with live shards against it is the adapter's own observation. The campaign writes the supply straight into the Mint the program itself created and submits the canonical retirement unchanged. Refuses Token (0x5216) at 147,827 CU, having read the Token2022CloseableMintProfileV2; the campaign then asserts nothing was closed and restores the Mint, and asserts the retirement's whole prestate is byte-identical before the real RetireCoordinate runs."
+    },
+    {
       "label": "claims rational-lifecycle: RetireCoordinate commits",
       "routes": [
         "claims/process_instruction",
