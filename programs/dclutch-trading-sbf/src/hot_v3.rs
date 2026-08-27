@@ -2233,6 +2233,7 @@ fn execute_authenticated_hot_v3(
     }
     let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent)?;
     hot_heap_mark!("rent-quotes");
+    hot_cu_checkpoint!("p5-geometry-rent");
 
     let projected_request = project_account_and_request_registers_v3(
         invocation.current_instruction,
@@ -2255,6 +2256,7 @@ fn execute_authenticated_hot_v3(
         identity_count,
     )?;
     hot_heap_mark!("request-registers");
+    hot_cu_checkpoint!("p5-request-registers");
     let request_output_scalars = projected_request.scalars;
     let request_output_identities = projected_request.identities;
     sealed_ownership
@@ -2289,6 +2291,7 @@ fn execute_authenticated_hot_v3(
     let preplan_output_scalars = vec![0_u64; scalar_count];
     let preplan_output_identities = vec![[0_u8; 32]; identity_count];
     hot_heap_mark!("preplan-output");
+    hot_cu_checkpoint!("p5-sealed-ownership-arena");
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2392,6 +2395,7 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         &transition_output_scalars,
     )?;
+    hot_cu_checkpoint!("p7-post-candidate-checks");
 
     require_borrowed_witness_coverage_v3(
         request_profile,
@@ -2401,6 +2405,7 @@ fn execute_authenticated_hot_v3(
         &transition_output_identities,
         family_request,
     )?;
+    hot_cu_checkpoint!("p7-borrowed-witness");
 
     let projected_effects = project_hot_effects_v3(
         effect,
@@ -2417,6 +2422,7 @@ fn execute_authenticated_hot_v3(
     )?;
     let output_lamports = projected_effects.lamports;
     let output_requests = projected_effects.requests;
+    hot_cu_checkpoint!("p7-effect-projection");
 
     let locally_mutated = require_local_effect_discipline_v5(
         &preplanned_plans,
@@ -2426,6 +2432,7 @@ fn execute_authenticated_hot_v3(
         &transition_output_identities,
         &aliases,
     )?;
+    hot_cu_checkpoint!("p7-local-effect-discipline");
     let revalidated_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2447,6 +2454,7 @@ fn execute_authenticated_hot_v3(
         replan_output_scalars,
         replan_output_identities,
     )?;
+    hot_cu_checkpoint!("p7-replan");
     require_lifecycle_replan_agreement_v4(
         &revalidated_lifecycle,
         &transition_output_scalars,
@@ -2466,6 +2474,22 @@ fn execute_authenticated_hot_v3(
     )?;
     let effect_accounts = downgraded_effect_accounts_v3(&runtime_accounts, &effect_privileges)?;
     hot_heap_mark!("downgraded-effects");
+    // Resolved ONCE for the preflight walk and the execution walk both. See
+    // `ChildWalkResolutionV3` for what each walk was paying to re-derive.
+    let child_walk = resolve_child_walk_v3(
+        *frame,
+        effect,
+        tail_count,
+        &transition_output_scalars,
+        &transition_output_identities,
+        effect_accounts,
+        &aliases,
+        &output_requests,
+        family_request,
+        request_digest,
+        envelope,
+    )?;
+    hot_cu_checkpoint!("pf-composition");
     preflight_child_routes_v3(
         program_id,
         *frame,
@@ -2481,6 +2505,7 @@ fn execute_authenticated_hot_v3(
         context.selection().capability_release().to_bytes(),
         selected_program.to_bytes(),
         &aliases,
+        &child_walk,
         locally_mutated.as_deref(),
     )?;
     hot_cu_checkpoint!("preflight-children");
@@ -2541,6 +2566,7 @@ fn execute_authenticated_hot_v3(
         market,
         product_runtime_v3,
         product_outcome_count,
+        child_walk: &child_walk,
     }));
     hot_cu_checkpoint!("after-commit");
     if commit_status == 0 {
@@ -2578,6 +2604,9 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     market: &'a CoreState,
     product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
     product_outcome_count: u32,
+    // What the preflight walk already resolved out of the same Effect, the same
+    // registers and the same activation cache; see `ChildWalkResolutionV3`.
+    child_walk: &'a ChildWalkResolutionV3<'a, 'info>,
 }
 
 #[inline(never)]
@@ -2634,13 +2663,13 @@ fn execute_prepared_child_routes_v3(
         prepared.scalars,
         prepared.identities,
         prepared.effect_accounts,
-        prepared.aliases,
         prepared.request_bank,
         prepared.family_request,
         prepared.request_digest,
         prepared.envelope,
         prepared.context.selection().capability_release().to_bytes(),
         prepared.selected_program.to_bytes(),
+        prepared.child_walk,
     )
 }
 
@@ -5784,6 +5813,171 @@ fn decode_claims_composition_boxed_v3<'request>(
     )
 }
 
+/// Everything the preflight walk and the execution walk BOTH resolve, resolved
+/// once for the pair.
+///
+/// The two walks are made over the same Effect, at the same registers, against
+/// the same downgraded account vector, for the same release set, and nothing
+/// between them can change any of those: the child routes have not run yet at
+/// preflight, and the commit phase re-enters with the identical arguments. Each
+/// walk was therefore paying, in full, for a decode whose answer the other walk
+/// had already computed:
+///
+/// | resolved | per walk | across the pair |
+/// | --- | ---: | ---: |
+/// | Claims composition (`ClaimsCompositionV3::decode_selected_with_witness`) | 41,584 CU | 83,168 CU |
+/// | three role programs (`selected_role_programs_v3`) | 36,562 CU | 73,124 CU |
+///
+/// Sharing removes the SECOND occurrence of both, which is the one the
+/// execution walk makes -- 78,146 CU and 1,465 bytes of bump-allocated heap
+/// that the run had no room for, since the execution walk reaches them only
+/// after the six lifecycle account creations.
+///
+/// It needs no V3/V4 unification: both walks already resolve these from the
+/// same V4-shifted inputs, and the V3-unshifted `effect.base()` the per-role
+/// composition preparers take is untouched here.
+struct ChildWalkResolutionV3<'request, 'info> {
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    claims_composition: Option<HeapBoxV3<ClaimsCompositionV3<'request>>>,
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    roles: SelectedRoleProgramsV3<'info>,
+    // The family-less outer profile resolves neither, and still has to name the
+    // two lifetimes the walks are parameterised over.
+    lifetimes: core::marker::PhantomData<(&'request [u8], &'info [u8])>,
+}
+
+/// Resolve, once, what both child walks would each have resolved for themselves.
+///
+/// Deliberately ONE out-of-line function returning a `Box`: the decoded
+/// composition and the three `AccountInfo` handles are about 200 bytes, and
+/// `process_hot_execution_v3` is already near the SBPF v0 4,096-byte static
+/// frame bound. Only the box pointer crosses back. The walks read through it
+/// rather than holding the handles, which takes those same bytes back OFF
+/// `execute_child_routes_v3`'s frame, where four frame-overwrite diagnostics
+/// were reported the last time it held three decoded addresses of its own.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn resolve_child_walk_v3<'request, 'accounts, 'info>(
+    frame: HotFrameV3<'accounts, 'info>,
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
+    aliases: &[usize],
+    request_bank: &'request [u8],
+    family_request: &'request [u8],
+    request_digest: [u8; 32],
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<HeapBoxV3<ChildWalkResolutionV3<'request, 'info>>, ProgramError> {
+    #[cfg(not(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )))]
+    let _ = (
+        frame,
+        effect,
+        tail_count,
+        scalars,
+        identities,
+        effect_accounts,
+        aliases,
+        request_bank,
+        family_request,
+        request_digest,
+        envelope,
+    );
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let claims_composition = if effect.route_count() != 0
+        && has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)?
+    {
+        Some(decode_claims_composition_boxed_v3(
+            effect,
+            tail_count,
+            scalars,
+            identities,
+            request_bank,
+            family_request,
+            ClaimsCompositionParentV3 {
+                release_set: envelope.release_set(),
+                market: envelope.market(),
+                generation: envelope.generation(),
+                parent_request_digest: request_digest,
+            },
+        )?)
+    } else {
+        None
+    };
+    hot_heap_mark!("shared-claims-composition");
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let roles = if effect.route_count() == 0 {
+        SelectedRoleProgramsV3 {
+            claims: None,
+            custody: None,
+            #[cfg(feature = "families")]
+            resolution: None,
+        }
+    } else {
+        selected_role_programs_v3(
+            frame,
+            effect_accounts,
+            aliases,
+            envelope.release_set(),
+            RequiredRolesV3 {
+                claims: claims_composition.is_some(),
+                custody: has_active_role(
+                    effect,
+                    tail_count,
+                    scalars,
+                    identities,
+                    FixedRole::Custody,
+                )?,
+                resolution: has_active_role(
+                    effect,
+                    tail_count,
+                    scalars,
+                    identities,
+                    FixedRole::Resolution,
+                )?,
+            },
+        )?
+    };
+    hot_heap_mark!("shared-role-programs");
+    let resolution = ChildWalkResolutionV3 {
+        #[cfg(any(
+            feature = "families",
+            feature = "series-family",
+            feature = "dealer-family"
+        ))]
+        claims_composition,
+        #[cfg(any(
+            feature = "families",
+            feature = "series-family",
+            feature = "dealer-family"
+        ))]
+        roles,
+        lifetimes: core::marker::PhantomData,
+    };
+    HeapBoxV3::new(resolution)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn preflight_child_routes_v3<'accounts, 'info>(
@@ -5801,6 +5995,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     capability_program_set: [u8; 32],
     selected_capability_program: [u8; 32],
     aliases: &[usize],
+    // Resolved once for both walks; see `ChildWalkResolutionV3`.
+    resolved: &ChildWalkResolutionV3<'_, 'info>,
     // Folded out of the one walk over this Effect that
     // `require_local_effect_discipline_v5` already makes, at these exact
     // registers. `None` only when that walk saw no route to answer for.
@@ -5820,71 +6016,34 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         return Err(TradingSbfError::Content.into());
     }
     hot_heap_mark!("pf-enter");
+    #[cfg(not(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )))]
+    let _ = resolved;
+    // Both the Claims composition and the three role carriers were resolved
+    // once for this walk AND the execution walk; see `ChildWalkResolutionV3`.
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_composition =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
-            Some(decode_claims_composition_boxed_v3(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                request_bank,
-                family_request,
-                ClaimsCompositionParentV3 {
-                    release_set: envelope.release_set(),
-                    market: envelope.market(),
-                    generation: envelope.generation(),
-                    parent_request_digest: request_digest,
-                },
-            )?)
-        } else {
-            None
-        };
-    hot_heap_mark!("pf-claims-composition");
-    hot_cu_checkpoint!("pf-composition");
-    // One decode of the activation cache for this whole walk, in ONE
-    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
-    // cost and why the decode does not live in this function's frame.
+    let claims_composition = resolved.claims_composition.as_deref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let selected_role_programs = selected_role_programs_v3(
-        frame,
-        effect_accounts,
-        aliases,
-        envelope.release_set(),
-        RequiredRolesV3 {
-            claims: claims_composition.is_some(),
-            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
-            resolution: has_active_role(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                FixedRole::Resolution,
-            )?,
-        },
-    )?;
+    let claims_program = resolved.roles.claims.as_ref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = selected_role_programs.claims;
-    #[cfg(any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    ))]
-    let custody_program = selected_role_programs.custody;
+    let custody_program = resolved.roles.custody.as_ref();
     #[cfg(feature = "families")]
-    let resolution_program = selected_role_programs.resolution;
+    let resolution_program = resolved.roles.resolution.as_ref();
 
     hot_cu_checkpoint!("pf-role-programs");
     let mut route = 0_u16;
@@ -5929,10 +6088,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         feature = "dealer-family"
                     ))]
                     {
-                        let composition = claims_composition
-                            .as_deref()
-                            .ok_or(TradingSbfError::Content)?;
-                        let selected = claims_program.as_ref().ok_or(TradingSbfError::Release)?;
+                        let composition = claims_composition.ok_or(TradingSbfError::Content)?;
+                        let selected = claims_program.ok_or(TradingSbfError::Release)?;
                         if invocation_index != 0
                             || !(composition.admit_route() == Some(route)
                                 || composition.mutation_route() == route
@@ -5969,7 +6126,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         identities,
                         effect_accounts,
                         request_bank,
-                        custody_program.as_ref().ok_or(TradingSbfError::Release)?,
+                        custody_program.ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -5998,9 +6155,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         effect_accounts,
                         request_bank,
                         family_request,
-                        resolution_program
-                            .as_ref()
-                            .ok_or(TradingSbfError::Release)?,
+                        resolution_program.ok_or(TradingSbfError::Release)?,
                         ResolutionCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -6050,19 +6205,28 @@ fn execute_child_routes_v3<'accounts, 'info>(
     scalars: &[u64],
     identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
-    // The per-logical-coordinate representative table `effect_accounts` was
-    // downgraded at. Only `selected_role_program_v3` reads it here, to tell one
-    // physical account named several times from several physical accounts.
-    aliases: &[usize],
     request_bank: &[u8],
     family_request: &[u8],
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
     capability_program_set: [u8; 32],
     selected_capability_program: [u8; 32],
+    // Resolved once for this walk AND the preflight walk; see
+    // `ChildWalkResolutionV3`. This is the whole reason the walk can reach a
+    // child CPI at all: re-deriving them here cost 78,146 CU and 1,465 bytes
+    // that the run does not have by the time it gets here. It also takes the
+    // per-logical-coordinate alias table off this signature: the only reader
+    // was the role-carrier resolution, which now happens once, elsewhere.
+    shared: &ChildWalkResolutionV3<'_, 'info>,
 ) -> Result<[u8; 32], ProgramError> {
     #[cfg(not(feature = "families"))]
-    let _ = (capability_program_set, selected_capability_program, aliases);
+    let _ = (capability_program_set, selected_capability_program);
+    #[cfg(not(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )))]
+    let _ = shared;
     let mut execution = Box::new(ChildExecutionStateV3 {
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
         receipt_bank: ChildReceiptBankV3::new(),
@@ -6077,64 +6241,21 @@ fn execute_child_routes_v3<'accounts, 'info>(
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_composition =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
-            Some(decode_claims_composition_boxed_v3(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                request_bank,
-                family_request,
-                ClaimsCompositionParentV3 {
-                    release_set: envelope.release_set(),
-                    market: envelope.market(),
-                    generation: envelope.generation(),
-                    parent_request_digest: request_digest,
-                },
-            )?)
-        } else {
-            None
-        };
-    // One decode of the activation cache for this whole walk, in ONE
-    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
-    // cost and why the decode does not live in this function's frame.
+    let claims_composition = shared.claims_composition.as_deref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let selected_role_programs = selected_role_programs_v3(
-        frame,
-        effect_accounts,
-        aliases,
-        envelope.release_set(),
-        RequiredRolesV3 {
-            claims: claims_composition.is_some(),
-            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
-            resolution: has_active_role(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                FixedRole::Resolution,
-            )?,
-        },
-    )?;
+    let claims_program = shared.roles.claims.as_ref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = selected_role_programs.claims;
-    #[cfg(any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    ))]
-    let custody_program = selected_role_programs.custody;
+    let custody_program = shared.roles.custody.as_ref();
     #[cfg(feature = "families")]
-    let resolution_program = selected_role_programs.resolution;
+    let resolution_program = shared.roles.resolution.as_ref();
 
     while execution.route < effect.route_count() {
         let route = execution.route;
@@ -6159,19 +6280,15 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Claims => claims_program.as_ref().ok_or(TradingSbfError::Release)?,
+                    FixedRole::Claims => claims_program.ok_or(TradingSbfError::Release)?,
                     #[cfg(any(
                         feature = "families",
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Custody => {
-                        custody_program.as_ref().ok_or(TradingSbfError::Release)?
-                    }
+                    FixedRole::Custody => custody_program.ok_or(TradingSbfError::Release)?,
                     #[cfg(feature = "families")]
-                    FixedRole::Resolution => resolution_program
-                        .as_ref()
-                        .ok_or(TradingSbfError::Release)?,
+                    FixedRole::Resolution => resolution_program.ok_or(TradingSbfError::Release)?,
                     #[cfg(not(feature = "families"))]
                     _ => return Err(TradingSbfError::UnsupportedContent.into()),
                 };
@@ -6255,7 +6372,6 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             program_id,
                             effect.base(),
                             claims_composition
-                                .as_deref()
                                 .copied()
                                 .ok_or(TradingSbfError::Content)?,
                             route,
@@ -6266,12 +6382,12 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            claims_program.ok_or(TradingSbfError::Release)?,
                         )?;
                         (
                             FixedRole::Claims,
                             claims_receipt_digest_v3(receipt)?,
-                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            claims_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -6299,7 +6415,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             prior_receipt,
-                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            custody_program.ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6311,7 +6427,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Custody,
                             digest,
-                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            custody_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -6336,9 +6452,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            resolution_program
-                                .as_ref()
-                                .ok_or(TradingSbfError::Release)?,
+                            resolution_program.ok_or(TradingSbfError::Release)?,
                             ResolutionCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6353,9 +6467,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Resolution,
                             digest,
-                            resolution_program
-                                .as_ref()
-                                .ok_or(TradingSbfError::Release)?,
+                            resolution_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(feature = "families"))]
