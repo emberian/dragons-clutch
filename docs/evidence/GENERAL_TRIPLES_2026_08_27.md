@@ -263,10 +263,13 @@ it:
    `TrustedEnvironmentV2::None`. The collection half needs
    `TrustedEnvironmentV2::CurrentSlot { destination }` and a scalar to receive
    it; the mechanism exists and General has never used it.
-6. **`GeneralRequestProfilesV1.lean` is not imported by `DClutchSemantics.lean`**,
-   so `lake build` does not typecheck it or run its `native_decide` theorems.
-   Adding the seven request profiles there without fixing that leaves seven new
-   decided theorems that the default build never decides.
+6. ~~**`GeneralRequestProfilesV1.lean` is not imported by
+   `DClutchSemantics.lean`**~~ **— FIXED here.** It was not, so `lake build`
+   neither typechecked it nor ran its nine `native_decide` theorems, and only
+   its own freshness test built it. Site 1 of the eleven adds seven more decided
+   theorems to that module; landing them into a build that never decides them
+   would have been the wrong kind of quiet. Now imported, and the default build
+   goes 91 → 93 jobs and stays green.
 
 Unchanged from GEN-ESCROW §5 and still owed: the lamport mover behind the
 triples, the canonical-width census row (ALT/v0), General's absent
