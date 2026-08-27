@@ -14,6 +14,7 @@ dclutch-claims-sbf = { path = "../.." }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
+dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 dclutch-rational-representation-v2-contract = { path = "../../../../crates/dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../../../../crates/dclutch-rational-representation-v2-lifecycle-contract" }

@@ -1531,13 +1531,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-seal-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-claims-affine-batch-program-test"
 version = "0.1.0"
 dependencies = [
  "dclutch-claims-svm",
  "dclutch-core-contract",
- "dclutch-liability-basis-v2-kernel",
  "dclutch-market-core-codec",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
@@ -1611,6 +1615,9 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-liability-basis-v2-kernel"
@@ -1693,6 +1700,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-rational-lifecycle-program-test"
 version = "0.1.0"
 dependencies = [
@@ -1701,6 +1712,7 @@ dependencies = [
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-market-core-codec",
+ "dclutch-program-test-evidence",
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-lifecycle-contract",

@@ -32,6 +32,7 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_RECEIPT_BYTES_V2, LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2,
     LifecycleReceiptV2, LifecycleRequestV2,
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -833,7 +834,22 @@ async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Option<Accoun
         .expect("read account")
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) {
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The extent of a legacy or v0 message once signed, checked against Solana's
+/// packet maximum. `solana-program-test` submits no packet and cannot enforce
+/// this itself -- Found31 was ten bytes over and survived every fixture test --
+/// so the campaign measures it directly.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -845,12 +861,39 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed ALT transaction")
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
         .expect("ALT transaction");
-    assert!(processed.result.is_ok(), "ALT transaction commits");
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert!(accepted, "ALT transaction commits");
 }
 
 fn lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
@@ -868,7 +911,11 @@ fn lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> 
     addresses
 }
 
-async fn create_lookup_table(context: &mut ProgramTestContext, addresses: &[Pubkey]) -> Pubkey {
+async fn create_lookup_table(
+    context: &mut ProgramTestContext,
+    addresses: &[Pubkey],
+    label_prefix: &str,
+) -> Pubkey {
     let clock = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -877,11 +924,17 @@ async fn create_lookup_table(context: &mut ProgramTestContext, addresses: &[Pubk
     context.warp_to_slot(clock.slot + 1).expect("recent slot");
     let payer = context.payer.pubkey();
     let (create, table) = create_lookup_table_instruction(payer, payer, clock.slot);
-    process_legacy(context, create).await;
-    for chunk in addresses.chunks(20) {
+    process_legacy(
+        context,
+        create,
+        &format!("{label_prefix}: create lookup table"),
+    )
+    .await;
+    for (index, chunk) in addresses.chunks(20).enumerate() {
         process_legacy(
             context,
             extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+            &format!("{label_prefix}: extend lookup table {index}"),
         )
         .await;
     }
@@ -899,6 +952,7 @@ async fn submit(
     instruction: Instruction,
     table: Pubkey,
     addresses: &[Pubkey],
+    label: &str,
 ) -> Result<(bool, Vec<String>, Option<(Pubkey, Vec<u8>)>, u64), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
@@ -915,10 +969,27 @@ async fn submit(
     );
     let transaction =
         VersionedTransaction::try_new(message, &[&context.payer]).expect("transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
+    let accepted = processed.result.is_ok();
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
     let (logs, returned, compute_units) = processed
         .metadata
         .map(|metadata| {
@@ -931,7 +1002,17 @@ async fn submit(
             )
         })
         .unwrap_or_default();
-    Ok((processed.result.is_ok(), logs, returned, compute_units))
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Ok((accepted, logs, returned, compute_units))
 }
 
 fn make_core_retiring(context: &mut ProgramTestContext, f: &Fixture, mut account: Account) {
@@ -1012,7 +1093,12 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
             retire_receipt.clone(),
         ],
     );
-    let table = create_lookup_table(&mut context, &addresses).await;
+    let table = create_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-lifecycle: Token-2022 lifecycle",
+    )
+    .await;
 
     let initial_receipt = account(&mut context, f.receipt_mint)
         .await
@@ -1020,18 +1106,30 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
     let initial_rent = account(&mut context, f.rent_credit)
         .await
         .expect("RentCredit");
-    let (accepted, _, _, _) = submit(&mut context, hostile_ata, table, &addresses)
-        .await
-        .expect("ATA substitution");
+    let (accepted, _, _, _) = submit(
+        &mut context,
+        hostile_ata,
+        table,
+        &addresses,
+        "claims rational-lifecycle: activate receipt against an obsolete ATA coordinate",
+    )
+    .await
+    .expect("ATA substitution");
     assert!(!accepted, "old ATA coordinate refuses");
     assert_eq!(
         account(&mut context, f.receipt_mint).await,
         Some(initial_receipt.clone())
     );
 
-    let (accepted, logs, _, _) = submit(&mut context, late_receipt, table, &addresses)
-        .await
-        .expect("late receipt activation");
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        late_receipt,
+        table,
+        &addresses,
+        "claims rational-lifecycle: caller refuses after activating the receipt",
+    )
+    .await
+    .expect("late receipt activation");
     assert!(!accepted);
     assert!(
         logs.iter()
@@ -1046,10 +1144,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         Some(initial_rent.clone())
     );
 
-    let (accepted, _, returned, activate_receipt_cu) =
-        submit(&mut context, activate_receipt, table, &addresses)
-            .await
-            .expect("activate receipt");
+    let (accepted, _, returned, activate_receipt_cu) = submit(
+        &mut context,
+        activate_receipt,
+        table,
+        &addresses,
+        "claims rational-lifecycle: ActivateReceipt commits",
+    )
+    .await
+    .expect("activate receipt");
     assert!(accepted);
     assert_lifecycle_receipt(
         returned,
@@ -1069,9 +1172,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         0,
     )
     .expect("closeable receipt Mint profile");
-    let (accepted, _, _, _) = submit(&mut context, replay_receipt, table, &addresses)
-        .await
-        .expect("receipt replay");
+    let (accepted, _, _, _) = submit(
+        &mut context,
+        replay_receipt,
+        table,
+        &addresses,
+        "claims rational-lifecycle: replayed ActivateReceipt refuses",
+    )
+    .await
+    .expect("receipt replay");
     assert!(!accepted);
 
     let before_coordinate = [
@@ -1080,9 +1189,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         account(&mut context, f.position).await,
         account(&mut context, f.admission).await,
     ];
-    let (accepted, logs, _, _) = submit(&mut context, late_coordinate, table, &addresses)
-        .await
-        .expect("late coordinate activation");
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        late_coordinate,
+        table,
+        &addresses,
+        "claims rational-lifecycle: caller refuses after activating the coordinate",
+    )
+    .await
+    .expect("late coordinate activation");
     assert!(!accepted);
     assert!(
         logs.iter()
@@ -1098,10 +1213,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         before_coordinate
     );
 
-    let (accepted, _, returned, activate_coordinate_cu) =
-        submit(&mut context, activate_coordinate, table, &addresses)
-            .await
-            .expect("activate coordinate");
+    let (accepted, _, returned, activate_coordinate_cu) = submit(
+        &mut context,
+        activate_coordinate,
+        table,
+        &addresses,
+        "claims rational-lifecycle: ActivateCoordinate commits",
+    )
+    .await
+    .expect("activate coordinate");
     assert!(accepted);
     assert_lifecycle_receipt(
         returned,
@@ -1143,9 +1263,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         account(&mut context, f.admission).await,
         account(&mut context, f.rent_credit).await,
     ];
-    let (accepted, logs, _, _) = submit(&mut context, late_retire_coordinate, table, &addresses)
-        .await
-        .expect("late coordinate retirement");
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        late_retire_coordinate,
+        table,
+        &addresses,
+        "claims rational-lifecycle: caller refuses after retiring the coordinate",
+    )
+    .await
+    .expect("late coordinate retirement");
     assert!(!accepted);
     assert!(
         logs.iter()
@@ -1162,10 +1288,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         before_retire
     );
 
-    let (accepted, _, returned, retire_coordinate_cu) =
-        submit(&mut context, retire_coordinate, table, &addresses)
-            .await
-            .expect("retire coordinate");
+    let (accepted, _, returned, retire_coordinate_cu) = submit(
+        &mut context,
+        retire_coordinate,
+        table,
+        &addresses,
+        "claims rational-lifecycle: RetireCoordinate commits",
+    )
+    .await
+    .expect("retire coordinate");
     assert!(accepted);
     let receipt = assert_lifecycle_receipt(
         returned,
@@ -1187,9 +1318,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
     let before_receipt_close = account(&mut context, f.receipt_mint)
         .await
         .expect("receipt before close");
-    let (accepted, logs, _, _) = submit(&mut context, late_retire_receipt, table, &addresses)
-        .await
-        .expect("late receipt retirement");
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        late_retire_receipt,
+        table,
+        &addresses,
+        "claims rational-lifecycle: caller refuses after retiring the receipt",
+    )
+    .await
+    .expect("late receipt retirement");
     assert!(!accepted);
     assert!(
         logs.iter()
@@ -1207,10 +1344,15 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         after_coordinate_close
     );
 
-    let (accepted, _, returned, retire_receipt_cu) =
-        submit(&mut context, retire_receipt, table, &addresses)
-            .await
-            .expect("retire receipt");
+    let (accepted, _, returned, retire_receipt_cu) = submit(
+        &mut context,
+        retire_receipt,
+        table,
+        &addresses,
+        "claims rational-lifecycle: RetireReceipt commits",
+    )
+    .await
+    .expect("retire receipt");
     assert!(accepted);
     let receipt = assert_lifecycle_receipt(
         returned,
