@@ -137,6 +137,83 @@ Both legs address the escrow **by the order's own content identity**:
 `Distribute` is unchanged and stays `Settlement(candidate_id) -> External(owner)`:
 credits are earned, not escrowed.
 
+## 2a. CORRECTION: the ruling reached the contract and never reached the artifact
+
+Landed `4f823c4a` (GEN-ESCROW, 2026-08-27). §2 above says `Collect` is now
+`Settlement(order_id) -> Settlement(candidate_id)` and that "the old
+`External(owner)` route is refused outright". **That was true of the pure
+contract and false of the artifact the chain executes**, and the two were not
+merely different — they were mutually exclusive.
+
+`effect_artifacts_v3::build_action` built `Collect`'s Custody template as
+`External -> Settlement`, and `artifacts_v3::validate_routes` REQUIRED exactly
+that of any admitted release. `Collect` is not one of the actions whose
+compartment bytes the admitted EffectProgram patches at runtime — only
+`Materialize` is — so the template's two literals are what a chain-executed
+`Collect` carries. Meanwhile Custody's own `CustodyRequestV1::validate` ties the
+compartment to the shape of its side:
+
+```text
+(source_compartment == External) == is_zero(source_vault_context)
+(source_compartment == External) == !is_zero(source_owner)
+```
+
+An `External` source therefore DEMANDS a nonzero owner and a zero vault context,
+while `build_row_custody_packets_v2` demands a zero owner and
+`source_vault_context == order_id`. A frame either side accepts, the other
+refuses. The published artifact still debited the maker's own external account at
+settlement time: decision 0009 §2's live credit regression, in the only copy that
+would have executed.
+
+**Why it survived.** The escrow packet builders have no caller outside their own
+tests, no `Collect` has ever executed on chain, and each side's tests assert
+against its own author. §5 above draws the lesson from GEN-HOT as "a family's own
+emitter and its own authenticator are not two authorities". It generalises one
+level further: **a family's own contract and its own artifact are not two
+authorities either.** Ruling in prose and landing it in the half of the tree that
+happens to be under the cursor is how a decision record becomes false about its
+own subject.
+
+**The repair is not to correct the second copy; it is to delete it.**
+`escrow_v1::general_child_custody_movement_v1` is now the single place General
+states, per child effect, which compartments the atoms move between AND which
+identity keys each side's vault — both halves, because Custody ties them
+together. Four packet builders, the EffectProgram builder and the artifact join
+all read it. A future ruling moves one table.
+
+Three things landed with it, because a single table would otherwise weaken what
+it consolidates:
+
+1. **The addressing is now checked on chain.** §2 rests "a maker can never be
+   paid more than they escrowed" on the vault being keyed by the order's own
+   identity, and nothing required the vault presented in the frame to BE that
+   one: the vault context reaches the register bank from the AccountProfile's
+   projection of caller-supplied Custody accounts, and the order identity from
+   the authenticated manifest row. A `Collect` could name order A and draw on
+   order B's vault. Two transition conjuncts now bind them on each of the three
+   actions whose direction is fixed at authoring time — `Collect`
+   (source = order, destination = candidate), `Distribute` (source = candidate,
+   destination owner = the row's maker) and `Close` (source = candidate,
+   destination owner = the configured beneficiary). `Materialize` patches its
+   compartments at runtime from the authenticated complete-set move, so which
+   side is the Hoard is not a constant of its artifact; it is named here rather
+   than half-checked there.
+2. **An independent pin on the table.** One table means neither end fixes the
+   value alone. `a_release_whose_transfer_names_another_compartment_is_refused`
+   patches the EMITTED bytes to a real, live, correctly-shaped neighbouring
+   compartment and requires the join to refuse. The substitution is
+   vault-to-vault on purpose: an `External` swap would be caught by Custody's own
+   decode and would prove nothing about this join.
+3. **The escrow accounting gets a referent** — see the correction to §6 item 3.
+
+**Cost.** The `Collect` effect digest moves, and the `Collect`/`Distribute`/
+`Close` transition digests move; per §5 that carries the certificate, the
+admission, the strategy, the descriptor, the ProgramSet and the capability seal.
+One batched regeneration. Measured against the accelerator campaign: 19/19, zero
+frame diagnostics, and accounts, legacy packet extent and scratch pages identical
+in all 22 evidence rows, with `Collect` at N=258 reproducing
+146,909 / 147,336 / 148,130 CU exactly.
+
 ### Per-order, not per-batch
 
 The instruction was "a batch compartment"; the implementation is per-order, and
@@ -305,6 +382,40 @@ byte.
    operation and these are pure transitions. Rent ownership is the same shape:
    the solver owns a submission's rent and the maker owns an order's, and
    closure has no route.
+
+   **CORRECTION and partial close (`4f823c4a`).** This item named the movement
+   and missed the sharper gap underneath it: **nothing bound the accounting to a
+   balance either.** `validate_capitalization` compares `verification_remaining`
+   against a number it derives from the same record, so a submission whose
+   account holds nothing at all re-proves its capitalization at every transition
+   and passes every time. A compartment taxonomy exact about a quantity with no
+   referent is exact about nothing.
+
+   `escrow_v1` supplies the referent —
+   `escrow_lamports == rent_floor + verification_remaining + cleanup_remaining`,
+   re-proven at every transition — and the exact movements: the submission
+   funding (vacant account, exact in both directions), the per-crank draw (built
+   from the observed balance AND the successor record together, so a transition
+   cannot advance its record and leave the account untouched, or the reverse),
+   and the close-out (cleanup crank to whoever performed it; the unspent
+   verification compartment AND the record's rent back to the solver, with the
+   three credits required to sum to what the account held). The rent floor is a
+   floor and never a compartment: a crank drawn into it is refused here rather
+   than surfacing later as an unattributable rent failure. The order escrow gets
+   the same treatment for its deposit, refund and residual legs.
+
+   **What remains, precisely.** The physical layer that assigns the lamports is
+   Trading's, and General has no on-chain route to reach it: the seven
+   collection and candidate actions still have no artifact triple (item 1), so
+   there is no admitted EffectProgram to carry a work-escrow coordinate into
+   `commit_output_lamports_v3`. The plans above are executed end-to-end in the
+   real-ELF campaign — the whole escrow life runs beside the settlement it funds,
+   every movement planned against an observed balance and applied only through
+   its own postcondition check — and no lamport has yet moved on a chain. That
+   is the honest state: the accounting now has a referent and a discipline, and
+   the mover is downstream of item 1.
+
+   The claim escrow's Position lifecycle (item 5) is unchanged by this.
 4. **`ExpireSettlement` has no gen-3 counterpart.** Gen-2 could expire a
    settlement that stalled. `GeneralBatchV1::release` covers the maker-facing
    half; a settlement cursor that stalls mid-graph is still stuck.

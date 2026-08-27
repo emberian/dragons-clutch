@@ -1,0 +1,57 @@
+// @generated from the Lean-owned Rational terminal Hot V3 and Claims-child ABIs; do not edit.
+// Regenerate with: npm run abi:rational-terminal-v3
+
+export const PHYSICAL_ABI_VERSION_V2 = 2 as const;
+export const REQUEST_HEADER_BYTES_V2 = 488 as const;
+export const ASSET_BYTES_V2 = 160 as const;
+export const REQUEST_MAGIC_OFFSET = 0 as const;
+export const REQUEST_VERSION_OFFSET = 8 as const;
+export const REQUEST_ACTION_OFFSET = 10 as const;
+export const REQUEST_CALLER_ROLE_OFFSET = 11 as const;
+export const REQUEST_RESERVED_HEADER_OFFSET = 12 as const;
+export const REQUEST_RELEASE_SET_OFFSET = 16 as const;
+export const REQUEST_MARKET_OFFSET = 48 as const;
+export const REQUEST_GRAPH_ID_OFFSET = 80 as const;
+export const REQUEST_DESCRIPTOR_ID_OFFSET = 112 as const;
+export const REQUEST_PARENT_CONTEXT_OFFSET = 144 as const;
+export const REQUEST_ACTOR_OFFSET = 176 as const;
+export const REQUEST_RECEIPT_MINT_OFFSET = 208 as const;
+export const REQUEST_RECEIPT_ACCOUNT_OFFSET = 240 as const;
+export const REQUEST_REPRESENTATION_AUTHORITY_OFFSET = 272 as const;
+export const REQUEST_TOKEN_PROGRAM_OFFSET = 304 as const;
+export const REQUEST_REALM_OFFSET = 336 as const;
+export const REQUEST_COLLATERAL_RECIPIENT_OFFSET = 368 as const;
+export const REQUEST_EXPECTED_REPRESENTATION_REVISION_OFFSET = 400 as const;
+export const REQUEST_EXPECTED_CLAIMS_MARKET_REVISION_OFFSET = 408 as const;
+export const REQUEST_EXPECTED_ACTOR_POSITION_REVISION_OFFSET = 416 as const;
+export const REQUEST_EXPECTED_CUSTODY_POSITION_REVISION_OFFSET = 424 as const;
+export const REQUEST_EXPECTED_CUSTODY_REPLAY_REVISION_OFFSET = 432 as const;
+export const REQUEST_GENERATION_OFFSET = 440 as const;
+export const REQUEST_QUANTITY_OFFSET = 448 as const;
+export const REQUEST_DENOMINATOR_OFFSET = 456 as const;
+export const REQUEST_EXPECTED_RECEIPT_SUPPLY_OFFSET = 464 as const;
+export const REQUEST_OUTCOME_COUNT_OFFSET = 472 as const;
+export const REQUEST_SELECTED_OUTCOME_OFFSET = 476 as const;
+export const REQUEST_ASSET_COUNT_OFFSET = 480 as const;
+export const REQUEST_RESERVED_TAIL_OFFSET = 484 as const;
+export const ASSET_SHARD_MINT_OFFSET = 0 as const;
+export const ASSET_ACTOR_SHARD_ACCOUNT_OFFSET = 32 as const;
+export const ASSET_STRUCTURED_CUSTODY_ACCOUNT_OFFSET = 64 as const;
+export const ASSET_CLAIMS_CUSTODY_OWNER_OFFSET = 96 as const;
+export const ASSET_COEFFICIENT_OFFSET = 128 as const;
+export const ASSET_EXPECTED_SHARD_SUPPLY_OFFSET = 136 as const;
+export const ASSET_EXPECTED_ACTOR_SHARDS_OFFSET = 144 as const;
+export const ASSET_EXPECTED_STRUCTURED_SHARDS_OFFSET = 152 as const;
+export const ACTION_REDEEM_TERMINAL = 5 as const;
+export const CALLER_ROLE_TRADING = 2 as const;
+export const RATIONAL_TERMINAL_HOT_VERSION_V3 = 3 as const;
+export const RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3 = 648 as const;
+export const RATIONAL_TERMINAL_HOT_FIXED_ASSET_COUNT_V3 = 1 as const;
+export const RATIONAL_TERMINAL_HOT_MAGIC_OFFSET_V3 = 0 as const;
+export const RATIONAL_TERMINAL_HOT_VERSION_OFFSET_V3 = 8 as const;
+export const RATIONAL_TERMINAL_HOT_ACTION_OFFSET_V3 = 10 as const;
+export const RATIONAL_TERMINAL_HOT_CALLER_ROLE_OFFSET_V3 = 11 as const;
+export const RATIONAL_TERMINAL_HOT_PARENT_CONTEXT_OFFSET_V3 = 144 as const;
+
+export const REQUEST_MAGIC_V2 = Uint8Array.from([0x44, 0x43, 0x52, 0x52, 0x50, 0x52, 0x51, 0x32]);
+export const RATIONAL_TERMINAL_HOT_MAGIC_V3 = Uint8Array.from([0x44, 0x43, 0x52, 0x52, 0x48, 0x54, 0x56, 0x33]);

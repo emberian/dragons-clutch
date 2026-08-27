@@ -1,0 +1,911 @@
+{
+  "schema": "dclutch-web-local-successor-checkpoint-v1",
+  "provenance": {
+    "tool_commit": "98f8588c5219ffaf836419ecad72b13c6177e429",
+    "exact_source_commit": "30dc6cbb2929de00ffd41cd1a720e9390f3a94fe",
+    "plan_sha256": "179dbfd1ac4a940d15521f7df529e2d4d949caaab5211a127634cc2419b2e5a9",
+    "evidence_sha256": "321a6f1d4acaeb9abd539c1570757d76325106c7a822615d822cb281514a11fe",
+    "profile_sha256": "66c57a45d5978bd2f788a633db0b3322db338d8d2bdbf36185570c07beeda071"
+  },
+  "network": {
+    "rpc_url": "http://127.0.0.1:20890/",
+    "genesis_hash": "F6x7Lf6PBNu5e8cecisH2o25y9cj4xW9xd4iZzWKZeqn",
+    "version": {
+      "feature-set": 1878484565,
+      "solana-core": "4.0.2"
+    }
+  },
+  "evidence": {
+    "evidence_class": "localhost-real-registry-resolution-and-pyth-execution",
+    "checked_production_release_claimed": false,
+    "captured_release_identity_claimed": false,
+    "genesis_fixture_boundary": [
+      "Finalized semantic records are genesis-prepared because Registry activation consumes but does not publish them.",
+      "Market roots are genesis-prepared because the Registry successor does not yet own Market creation.",
+      "Source resolution states and capability funding are genesis-prepared because their effect-packet creation owners are not yet executable in this split.",
+      "Certificate PDAs alone are only prepaid as system-owned zero-data accounts; Resolution allocates, assigns, and writes them in the final atomic output gate."
+    ],
+    "rollback": {
+      "state_unchanged": true,
+      "certificate_unchanged": true,
+      "funding_unchanged": true,
+      "worker_unchanged": true,
+      "before": {
+        "certificate": {
+          "address": "CgQ59vnDyoSa34uSs4td6cSZRq4wU55prxriC2n7HKvv",
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "lamports": 3062400,
+          "executable": false,
+          "data_len": 312,
+          "data_sha256": "bc0e1151e196f506d4b0ad2ded285d67a6b21ceb333c8b86dace0055881e8737",
+          "account_sha256": "18b74232b6d94d866876d06e89e315e33ac80e836262548799718fdb7cdb33dc"
+        },
+        "funding": {
+          "address": "7Lmg7K4PHnvkwvjnQXMoTYEJhbTwp3Qk9zotkU5KysmL",
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "lamports": 3218080,
+          "executable": false,
+          "data_len": 320,
+          "data_sha256": "05b1b7d6bcaeda349ccd5abb51898608ce584c77f8a7dc2596520c0650589056",
+          "account_sha256": "538adc4e84b957511307ce2baff1ed5b4639ba5dbc3b40860309aa07b0f12ff1"
+        },
+        "state": {
+          "address": "CAxL8Wo4sbQE9UXED5rdXLczBh1zXjtRwt8qYD7A1LkU",
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "lamports": 2449920,
+          "executable": false,
+          "data_len": 224,
+          "data_sha256": "31610a72db4098221d841a53872262104e7532b803f693053f429bf9dbb105ce",
+          "account_sha256": "6fe0d2e63d0dd9b0aa07cf04fa9ec92443ad8a6fdd50fd2ee8cdd59ecff5d179"
+        },
+        "worker": {
+          "address": "8ZC5o8v58J4GNDztJdgCzxwi9E5suW2xbmYTj3uvGLZv",
+          "owner": "11111111111111111111111111111111",
+          "lamports": 1500000,
+          "executable": false,
+          "data_len": 0,
+          "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "account_sha256": "1a04a037dd5f2243b2b2c5d49e7e2f41bcefc08974b7c73f8cee3d22c84cd2d5"
+        }
+      },
+      "after": {
+        "certificate": {
+          "address": "CgQ59vnDyoSa34uSs4td6cSZRq4wU55prxriC2n7HKvv",
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "lamports": 3062400,
+          "executable": false,
+          "data_len": 312,
+          "data_sha256": "bc0e1151e196f506d4b0ad2ded285d67a6b21ceb333c8b86dace0055881e8737",
+          "account_sha256": "18b74232b6d94d866876d06e89e315e33ac80e836262548799718fdb7cdb33dc"
+        },
+        "funding": {
+          "address": "7Lmg7K4PHnvkwvjnQXMoTYEJhbTwp3Qk9zotkU5KysmL",
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "lamports": 3218080,
+          "executable": false,
+          "data_len": 320,
+          "data_sha256": "05b1b7d6bcaeda349ccd5abb51898608ce584c77f8a7dc2596520c0650589056",
+          "account_sha256": "538adc4e84b957511307ce2baff1ed5b4639ba5dbc3b40860309aa07b0f12ff1"
+        },
+        "state": {
+          "address": "CAxL8Wo4sbQE9UXED5rdXLczBh1zXjtRwt8qYD7A1LkU",
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "lamports": 2449920,
+          "executable": false,
+          "data_len": 224,
+          "data_sha256": "31610a72db4098221d841a53872262104e7532b803f693053f429bf9dbb105ce",
+          "account_sha256": "6fe0d2e63d0dd9b0aa07cf04fa9ec92443ad8a6fdd50fd2ee8cdd59ecff5d179"
+        },
+        "worker": {
+          "address": "8ZC5o8v58J4GNDztJdgCzxwi9E5suW2xbmYTj3uvGLZv",
+          "owner": "11111111111111111111111111111111",
+          "lamports": 1500000,
+          "executable": false,
+          "data_len": 0,
+          "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "account_sha256": "1a04a037dd5f2243b2b2c5d49e7e2f41bcefc08974b7c73f8cee3d22c84cd2d5"
+        }
+      }
+    }
+  },
+  "programs": {
+    "registry": {
+      "program_id": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "programdata_id": "Anq2cteZxQe1MSJba8du6iBFFNhWwB1FbXavpoYxKGQQ",
+      "deployment_slot": 0,
+      "upgrade_authority": null,
+      "upgrade_authority_effectively_disabled": true,
+      "elf_sha256": "b7d6634a23de84cb1b1f0a3368493b9008d88278c460f90e26b522af5e9a6e39",
+      "loader_header_sha256": "0b04ec955da3a1fb386040889c4a94fc5621abbf38ab33af2f2a73987a943976",
+      "program": {
+        "address": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+        "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+        "lamports": 1141440,
+        "executable": true,
+        "data_len": 36,
+        "data_sha256": "f5a6a009ed6f590bd1f382958a9b9c129bef54853d53913ca60dad64a049ad95",
+        "account_sha256": "b83e39abd3ae0bd944d4db4806e83db22b451dcaea8e29746210ad99bb98ffd9"
+      },
+      "programdata": {
+        "address": "Anq2cteZxQe1MSJba8du6iBFFNhWwB1FbXavpoYxKGQQ",
+        "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+        "lamports": 625933680,
+        "executable": false,
+        "data_len": 89805,
+        "data_sha256": "89b45c6b70c1f68652ee5667d0c4bb27a1bbbac7b939af1290090c61fe795ed6",
+        "account_sha256": "4dc2813832c9fda02d0d5b2f8cd3e94204fa29364533e010f6fcbe63aaf9d42a"
+      }
+    },
+    "resolution": {
+      "program_id": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "programdata_id": "HRe7vBu6cyaLfvp7J6LsP5M8DeALcjdXJWQWWTjjuVsf",
+      "deployment_slot": 0,
+      "upgrade_authority": null,
+      "upgrade_authority_effectively_disabled": true,
+      "elf_sha256": "a1b75d4093d688cea61456f5d2124cd7e9e1f95b010259d0ac61509811dde6d8",
+      "loader_header_sha256": "0b04ec955da3a1fb386040889c4a94fc5621abbf38ab33af2f2a73987a943976",
+      "program": {
+        "address": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+        "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+        "lamports": 1141440,
+        "executable": true,
+        "data_len": 36,
+        "data_sha256": "34b3fa99341c8c4224da045d8fb669aa4f9c18a2ecda2e08ce594a55a8c33701",
+        "account_sha256": "48fadf43ea4cfc290951eaf9e9f665f49cb14a7cbc777bd2179691f4529ebee4"
+      },
+      "programdata": {
+        "address": "HRe7vBu6cyaLfvp7J6LsP5M8DeALcjdXJWQWWTjjuVsf",
+        "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+        "lamports": 1466478960,
+        "executable": false,
+        "data_len": 210573,
+        "data_sha256": "b8ceaf604d08e4670959061b578c9148ae43b40f3c8c521182ef951174b7b897",
+        "account_sha256": "771a71a71992cc4075735069cddf48576a40479c3a1d69f220d2476457dfd716"
+      }
+    }
+  },
+  "scenarios": {
+    "primary": {
+      "market": "E67jiqdyhDEZvzPqhJeFbKsmVTN1845zRBoZnqsxwRvL",
+      "state": "E8YoBFnUoaoZPrUU2wLMDGpBrZq8xY1GUXNWnAzmN4ii",
+      "certificates": {
+        "success": "D18D7rsaxdFKLfjCcEEhgJGSgQNLNibL9SXPoZXi9x9Y"
+      },
+      "funding": {},
+      "hostile_certificate_preoccupied": false
+    },
+    "lifecycle": {
+      "market": "AsWv4sqfEt7xyztFvtniTHGZx1WE1hu1z65t36DCPJcE",
+      "state": "8tiZgQZ5WGcuF5oN4xQprYLKJWhGeVuHVqrPFTWGAbTx",
+      "certificates": {
+        "exhaustion": "HdP4LKe5QuPU3kKTxvFVcvHHAVhhn5gDBBFaqQqog2Pi",
+        "failure": "2XD5UkWtn7e8A8K94Cp64p8eoG4YEs8kyyRfUAMLRYNB",
+        "recovery": "vBrCRGVCzHtwdHfYP1US2vtFeB5EBHQS1QkZBd31M65"
+      },
+      "funding": {
+        "exhaustion": "CSSEbnheh5XLcG91SMVdSDxeL1P2Hxisokfkv6ExAY8C",
+        "failure": "5r1fDVfh7J8LCWTM5poxmewuirivQeubAjbqhgUZhfCf",
+        "recovery": "G4Q69htHYvLSfD3wdPntrZPWXqTSYkCQf9VrKFd7QtcC"
+      },
+      "hostile_certificate_preoccupied": false
+    },
+    "rollback": {
+      "market": "4USbnLahSLSEDuHCJXgJhMdmQ4ZESWkYJdS8rsvBiwCZ",
+      "state": "CAxL8Wo4sbQE9UXED5rdXLczBh1zXjtRwt8qYD7A1LkU",
+      "certificates": {
+        "exhaustion": "Bswu7NdnrsEsgpKpLPbKkq3uQrhqKiaJmkUZVYN6e8EJ",
+        "failure": "CgQ59vnDyoSa34uSs4td6cSZRq4wU55prxriC2n7HKvv",
+        "recovery": "6m1LkHuKXFKp6God4A9g5yf4akDXjaBK5P4mQuwX4YU"
+      },
+      "funding": {
+        "exhaustion": "3dqadvHMwbZd1yGJYZd5gj8b86N6TULN46N7kcrfs1Ko",
+        "failure": "7Lmg7K4PHnvkwvjnQXMoTYEJhbTwp3Qk9zotkU5KysmL",
+        "recovery": "C7ygHfWPxGaWKRkwH4ZyakW3WKvDhjLqYWJvJh4Ypcnq"
+      },
+      "hostile_certificate_preoccupied": true
+    }
+  },
+  "expected_accounts": {
+    "lifecycle.certificate.exhaustion": {
+      "address": "HdP4LKe5QuPU3kKTxvFVcvHHAVhhn5gDBBFaqQqog2Pi",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3062403,
+      "executable": false,
+      "data_len": 312,
+      "data_sha256": "f22a4bc238070f8189dc28ca7ed791e410afbc51a857b95af20a5edd94b887f9",
+      "account_sha256": "0596fb2c4ed698b41c65f3a8d726c8393cc05e87ad881a8013b93d0ba81f5119",
+      "origin": "transaction-created"
+    },
+    "lifecycle.certificate.failure": {
+      "address": "2XD5UkWtn7e8A8K94Cp64p8eoG4YEs8kyyRfUAMLRYNB",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3062403,
+      "executable": false,
+      "data_len": 312,
+      "data_sha256": "ac6facdee98345ce8c42de7ee5c1832361b1c7ee7a4d508751e7f5b6c4e90cb2",
+      "account_sha256": "f633756c0d269087512dea5428eab46ed4b81afce9815c8b5ea4066851c6a378",
+      "origin": "transaction-created"
+    },
+    "lifecycle.certificate.recovery": {
+      "address": "vBrCRGVCzHtwdHfYP1US2vtFeB5EBHQS1QkZBd31M65",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3062403,
+      "executable": false,
+      "data_len": 312,
+      "data_sha256": "080df5f1ed211aa9b76dfa9475a5fad952602963583d69d999b468227e484308",
+      "account_sha256": "e2c9d7d45b14d06bbac5d4b6bef07f92a947b596b37bbfc2a0f4ff70d0f1cfbb",
+      "origin": "transaction-created"
+    },
+    "lifecycle.funding.exhaustion": {
+      "address": "CSSEbnheh5XLcG91SMVdSDxeL1P2Hxisokfkv6ExAY8C",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3118080,
+      "executable": false,
+      "data_len": 320,
+      "data_sha256": "620d4dfd24b26093181fb02045a59464b182c77c0b0e99c278f602e21b94e9c6",
+      "account_sha256": "c49c4a86a9abb2384430a7b413510cabe57c18c87c65c64d06a70ce88324c33f",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "lifecycle.funding.failure": {
+      "address": "5r1fDVfh7J8LCWTM5poxmewuirivQeubAjbqhgUZhfCf",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3118080,
+      "executable": false,
+      "data_len": 320,
+      "data_sha256": "8f75c5a3ac20ff6e6d8b9192f1df15dabf72e575e20858e9d034c541efc104f7",
+      "account_sha256": "4ca7767305f50ea7bdadb1015942640047c089668e80035ebbece4eca5c4d285",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "lifecycle.funding.recovery": {
+      "address": "G4Q69htHYvLSfD3wdPntrZPWXqTSYkCQf9VrKFd7QtcC",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3118080,
+      "executable": false,
+      "data_len": 320,
+      "data_sha256": "62acc6b13905296dd705d102f215ce14bea12efa3393e293eeb10a24758095bd",
+      "account_sha256": "69ae1b18225b44061f29ffe3b57d321ec22af7f5d68cfd5cea8dc051ca78322c",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "lifecycle.market": {
+      "address": "AsWv4sqfEt7xyztFvtniTHGZx1WE1hu1z65t36DCPJcE",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 3285120,
+      "executable": false,
+      "data_len": 344,
+      "data_sha256": "453cada33d2dff608ba77d8d1cdbb85d3398b4f05b10435e89101fae4a3dd77d",
+      "account_sha256": "0b8afd871112771bdcd4fc9515a71799966d5ee172337d3509c43956fd4b680a",
+      "origin": "genesis-prepared"
+    },
+    "lifecycle.state": {
+      "address": "8tiZgQZ5WGcuF5oN4xQprYLKJWhGeVuHVqrPFTWGAbTx",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 2449920,
+      "executable": false,
+      "data_len": 224,
+      "data_sha256": "895e538e29427452d6c72ad326c93a20591ba19198630fb157bee577c0e85fed",
+      "account_sha256": "efa0ea7339b8687036af407a2c52fc41f78593468ba6fb39086a685901fb5185",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "loader.registry.program": {
+      "address": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "lamports": 1141440,
+      "executable": true,
+      "data_len": 36,
+      "data_sha256": "f5a6a009ed6f590bd1f382958a9b9c129bef54853d53913ca60dad64a049ad95",
+      "account_sha256": "b83e39abd3ae0bd944d4db4806e83db22b451dcaea8e29746210ad99bb98ffd9",
+      "origin": "genesis-prepared"
+    },
+    "loader.registry.programdata": {
+      "address": "Anq2cteZxQe1MSJba8du6iBFFNhWwB1FbXavpoYxKGQQ",
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "lamports": 625933680,
+      "executable": false,
+      "data_len": 89805,
+      "data_sha256": "89b45c6b70c1f68652ee5667d0c4bb27a1bbbac7b939af1290090c61fe795ed6",
+      "account_sha256": "4dc2813832c9fda02d0d5b2f8cd3e94204fa29364533e010f6fcbe63aaf9d42a",
+      "origin": "genesis-prepared"
+    },
+    "loader.resolution.program": {
+      "address": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "lamports": 1141440,
+      "executable": true,
+      "data_len": 36,
+      "data_sha256": "34b3fa99341c8c4224da045d8fb669aa4f9c18a2ecda2e08ce594a55a8c33701",
+      "account_sha256": "48fadf43ea4cfc290951eaf9e9f665f49cb14a7cbc777bd2179691f4529ebee4",
+      "origin": "genesis-prepared"
+    },
+    "loader.resolution.programdata": {
+      "address": "HRe7vBu6cyaLfvp7J6LsP5M8DeALcjdXJWQWWTjjuVsf",
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "lamports": 1466478960,
+      "executable": false,
+      "data_len": 210573,
+      "data_sha256": "b8ceaf604d08e4670959061b578c9148ae43b40f3c8c521182ef951174b7b897",
+      "account_sha256": "771a71a71992cc4075735069cddf48576a40479c3a1d69f220d2476457dfd716",
+      "origin": "genesis-prepared"
+    },
+    "primary.certificate.success": {
+      "address": "D18D7rsaxdFKLfjCcEEhgJGSgQNLNibL9SXPoZXi9x9Y",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3062403,
+      "executable": false,
+      "data_len": 312,
+      "data_sha256": "00f286c2e7441c7787dd617565fd131fd21b3deca61122d8d3f45b6ad8cc2057",
+      "account_sha256": "3814e2e7fece836e261740c1f286091428f99155e327483b137e9b9c9c4349d9",
+      "origin": "transaction-created"
+    },
+    "primary.market": {
+      "address": "E67jiqdyhDEZvzPqhJeFbKsmVTN1845zRBoZnqsxwRvL",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 3285120,
+      "executable": false,
+      "data_len": 344,
+      "data_sha256": "80f2aee618b42029f55e2ed8ed4db1bcfafc2e6420c3e18b96c65c22f40753ff",
+      "account_sha256": "66dbf91274c8ddb340676a26fdb704e8c5b9634820c73b3e6668d81481296b99",
+      "origin": "genesis-prepared"
+    },
+    "primary.state": {
+      "address": "E8YoBFnUoaoZPrUU2wLMDGpBrZq8xY1GUXNWnAzmN4ii",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 2449920,
+      "executable": false,
+      "data_len": 224,
+      "data_sha256": "d0152428dd66a12fa16f01b19b69d12024518f916f042fc44f175b5c1810c505",
+      "account_sha256": "91d4bece1a6844f8843cddd6647df1de959968ff11d0dcaeb563709ea71ee3b0",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "record.capability_manifest": {
+      "address": "2e7BY1DC3A51d7RCKjCWbT1H1qKgyUehHdZws8ZRY4Rf",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 12026880,
+      "executable": false,
+      "data_len": 1600,
+      "data_sha256": "e106f4e1550c76244821f6eca6abbec28d589f63ee48923275a17aa9feca6a35",
+      "account_sha256": "a59b8edcb3c36ec6488666c085179f552fb1ddf55bc80a92f5d6f0dceaeba314",
+      "origin": "genesis-prepared"
+    },
+    "record.execution_authority_manifest": {
+      "address": "Es62ePoktiKHd7TiAtGk9peaiNbWMgfuVRjn4xfn8Koz",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 1447680,
+      "executable": false,
+      "data_len": 80,
+      "data_sha256": "2a081ced3862ce610cfe76b7d134006bf7c3b753a69fc35cf6ed02aabb80a4a4",
+      "account_sha256": "13bf796e1dae41c895407c646f2f31772b0f5d4c38fd947c2ae8fc3b502e6609",
+      "origin": "genesis-prepared"
+    },
+    "record.execution_release_set": {
+      "address": "3AB6RiwL2Z9bYP3YfFtCPHGBXHuQtBRscQzLJbj1offr",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 3229440,
+      "executable": false,
+      "data_len": 336,
+      "data_sha256": "9515838fc926dd1180502a1466d5aafc21c29e2e99fc31e13c8d28930d233134",
+      "account_sha256": "e398848169f1717234088a79f3877b2a508520bd10ef6ef1d58d1a0cdeccfc3d",
+      "origin": "genesis-prepared"
+    },
+    "record.funded_source_material": {
+      "address": "8dkGKygJripqkrzZfHUw7xAZUxNiyJtyithJqQCXiWop",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 29955840,
+      "executable": false,
+      "data_len": 4176,
+      "data_sha256": "065b00ee73675a7be35dd28a2b0e65faf8d7bb0a687f46b40d9805df060e56fc",
+      "account_sha256": "746ed0543e887558955cd8d74fe8b69bbda2ad66c70060b16e46bedd43d84938",
+      "origin": "genesis-prepared"
+    },
+    "record.pyth_release": {
+      "address": "GA74zVYwpJoPCBU6GEUzaHgSBYTtxCvP6WJu2sUEoYDw",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 3953280,
+      "executable": false,
+      "data_len": 440,
+      "data_sha256": "e8a3f3ca7af1612f9d4a78d72019a4e50110b00691fb27fb6590f45ebda9b173",
+      "account_sha256": "febebae4423d55a503585254c2d3cfac59fb8320035b4af4fc544263a444be20",
+      "origin": "genesis-prepared"
+    },
+    "record.registry_artifact_release": {
+      "address": "rpk1Sfy6t39zD1AzepSBQp8UN79Cg9BW38f41jBtqYv",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 2394240,
+      "executable": false,
+      "data_len": 216,
+      "data_sha256": "4082eae18641219356ab931339ac481aaaec62f998e7ddb9340712dcd51cbe75",
+      "account_sha256": "427f442683364f02bad775ff49dc01436ba8ac515d7232901b1384d0f8dd2af8",
+      "origin": "genesis-prepared"
+    },
+    "record.resolution_artifact_release": {
+      "address": "64JYVBgo6WZ7BAVywb9wVsptwd9CRhr7QgGbKLTBhfnF",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 2394240,
+      "executable": false,
+      "data_len": 216,
+      "data_sha256": "9ed113004f5dbbcb68616842b53e5b57ed184fad8cc88ee946567717c8b7936d",
+      "account_sha256": "55950c5d1107b10a5a2a447cfb7baf52f1ec70bc8041074bab1c825234a41936",
+      "origin": "genesis-prepared"
+    },
+    "record.result_domain": {
+      "address": "AYeroP7XfLHFNJHr6i3nWGz5sEayxX3zV7kGAf5xxt2i",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 3340800,
+      "executable": false,
+      "data_len": 352,
+      "data_sha256": "a78506d5c9db1709151a28b77bb64e24ee7c13990afcd695b591495b7fb11bd5",
+      "account_sha256": "7b8a7585a85cf86748cf45214cf46f44abfb5826d4f01735307e058a9f0a53e4",
+      "origin": "genesis-prepared"
+    },
+    "record.source_material": {
+      "address": "Em5c9vqdfh2rUZ8n37oaGX4euoJo4eyQkDgrocKdyMDj",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 29955840,
+      "executable": false,
+      "data_len": 4176,
+      "data_sha256": "cea265ed92c3779c91e153b74341389023b730bad1ae42d1173edfb1d25f36e0",
+      "account_sha256": "a475de1e994421489113bc90db6845a1b54ba32bee3c12e748f4da108ddd2a28",
+      "origin": "genesis-prepared"
+    },
+    "registry.activation": {
+      "address": "8U6WLdLy2g96L2Zamx2psEbP8Z7rZ8Z2AScANsL3hYVh",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 9855360,
+      "executable": false,
+      "data_len": 1288,
+      "data_sha256": "aaded9f3b9bdb814f94ed6c6103bc23eb18a8dbbf48fcf2049446e504417afb6",
+      "account_sha256": "3fb6a53dd5dbd489b099d1dba2bf7c959c31821953fad3aa0144d5960c2ba2b9",
+      "origin": "transaction-created"
+    },
+    "rollback.certificate.exhaustion": {
+      "address": "Bswu7NdnrsEsgpKpLPbKkq3uQrhqKiaJmkUZVYN6e8EJ",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3062403,
+      "executable": false,
+      "data_len": 312,
+      "data_sha256": "167620443ba29ae0e5242291b0709276a824ceab536003f95128b03101228536",
+      "account_sha256": "fd5c985b37f79b50ceffbad7fbd82e2662c9fe8b612864a264a02cce43cf4e63",
+      "origin": "transaction-created"
+    },
+    "rollback.certificate.failure.occupied": {
+      "address": "CgQ59vnDyoSa34uSs4td6cSZRq4wU55prxriC2n7HKvv",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3062400,
+      "executable": false,
+      "data_len": 312,
+      "data_sha256": "bc0e1151e196f506d4b0ad2ded285d67a6b21ceb333c8b86dace0055881e8737",
+      "account_sha256": "18b74232b6d94d866876d06e89e315e33ac80e836262548799718fdb7cdb33dc",
+      "origin": "genesis-prepared-refusal-sentinel"
+    },
+    "rollback.certificate.recovery": {
+      "address": "6m1LkHuKXFKp6God4A9g5yf4akDXjaBK5P4mQuwX4YU",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3062403,
+      "executable": false,
+      "data_len": 312,
+      "data_sha256": "71cdf227062f5e36319bde26f3c675575796889848006e3c48b6bb93dcb0fc3e",
+      "account_sha256": "75ec891eea636f876de1e53926a9d368fffd9f66e35da16ec8657f7d4c6410d6",
+      "origin": "transaction-created"
+    },
+    "rollback.funding.exhaustion": {
+      "address": "3dqadvHMwbZd1yGJYZd5gj8b86N6TULN46N7kcrfs1Ko",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3118080,
+      "executable": false,
+      "data_len": 320,
+      "data_sha256": "620d4dfd24b26093181fb02045a59464b182c77c0b0e99c278f602e21b94e9c6",
+      "account_sha256": "c49c4a86a9abb2384430a7b413510cabe57c18c87c65c64d06a70ce88324c33f",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "rollback.funding.failure": {
+      "address": "7Lmg7K4PHnvkwvjnQXMoTYEJhbTwp3Qk9zotkU5KysmL",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3218080,
+      "executable": false,
+      "data_len": 320,
+      "data_sha256": "05b1b7d6bcaeda349ccd5abb51898608ce584c77f8a7dc2596520c0650589056",
+      "account_sha256": "538adc4e84b957511307ce2baff1ed5b4639ba5dbc3b40860309aa07b0f12ff1",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "rollback.funding.recovery": {
+      "address": "C7ygHfWPxGaWKRkwH4ZyakW3WKvDhjLqYWJvJh4Ypcnq",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 3118080,
+      "executable": false,
+      "data_len": 320,
+      "data_sha256": "62acc6b13905296dd705d102f215ce14bea12efa3393e293eeb10a24758095bd",
+      "account_sha256": "69ae1b18225b44061f29ffe3b57d321ec22af7f5d68cfd5cea8dc051ca78322c",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    },
+    "rollback.market": {
+      "address": "4USbnLahSLSEDuHCJXgJhMdmQ4ZESWkYJdS8rsvBiwCZ",
+      "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+      "lamports": 3285120,
+      "executable": false,
+      "data_len": 344,
+      "data_sha256": "6c4c40504aadd71d17d5615934076d6c1d07252e0600c52407e0e9edfc0ff85e",
+      "account_sha256": "51fa1bc3915a938a3064f8b1a2e3b71034c4260482c927ebe33737b16b1a3163",
+      "origin": "genesis-prepared"
+    },
+    "rollback.state": {
+      "address": "CAxL8Wo4sbQE9UXED5rdXLczBh1zXjtRwt8qYD7A1LkU",
+      "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+      "lamports": 2449920,
+      "executable": false,
+      "data_len": 224,
+      "data_sha256": "31610a72db4098221d841a53872262104e7532b803f693053f429bf9dbb105ce",
+      "account_sha256": "6fe0d2e63d0dd9b0aa07cf04fa9ec92443ad8a6fdd50fd2ee8cdd59ecff5d179",
+      "origin": "genesis-prepared-then-transaction-mutated"
+    }
+  },
+  "expected_transactions": [
+    {
+      "label": "registry_activate_release_set",
+      "signature": "5ZLMVydUwefHegg3srHwyrhq1BB49y8YGoDrTGuRtJfWmQygvDuodTxdHNor6Zn1senR2zfKL5CPzkB3NdY5HroN",
+      "slot": 101,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 619265,
+      "error": null
+    },
+    {
+      "label": "registry_reauthenticate_resolution",
+      "signature": "5qfeLyUu71SxeoVDw1zToNfFkYK15vPAAcwqhLYoFsgCfqZtbM7gvBZtm9rW2bbHetidrMTN1KRUwX31VSTYVb2y",
+      "slot": 133,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 127044,
+      "error": null
+    },
+    {
+      "label": "resolution_accept_real_pyth_primary",
+      "signature": "5LaCENFcrJiRXoMetKr15rdHHQwfT8EYZW5E3bjqpiX1biLyXr4hASnLZvNdJbpk3pTLrQfDhRmvXsQz8ZgJv2pA",
+      "slot": 165,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 224287,
+      "error": null
+    },
+    {
+      "label": "resolution_lifecycle_recovery",
+      "signature": "bQQdM8UxCbzoT2x7hgGrwxTfYurTXZfMZUUZy9FLyqtABgwg1tU2hWR3B41xwsBVAJn9QDH8wdCVVwrdsBmWzcK",
+      "slot": 197,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 283229,
+      "error": null
+    },
+    {
+      "label": "resolution_lifecycle_exhaustion",
+      "signature": "5D2whDLBAoYgmWVipczUt13XhPZNZzMXmkdGX6tBC6tB1CecBZnofoQ9et72NLW1GefmNCUuY9ZibdezRNoe7aPp",
+      "slot": 229,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 285940,
+      "error": null
+    },
+    {
+      "label": "resolution_lifecycle_failure",
+      "signature": "2374Vy9iroSYXpf9EbBAPsdRiMLKERsL1yJwK3fKUeWPURE1Vv6KmAkJ93EezUDrXGZrzxFybf5DQZbZdKigZWQi",
+      "slot": 261,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 294399,
+      "error": null
+    },
+    {
+      "label": "resolution_rollback_recovery",
+      "signature": "SrFpJYYYRiveS4pmmY3g8wt2a7s2AadKRwFA6g7TKdG2znCHvatcwdRczXcrQunhx7R62mJzME4gvnCxprabQCF",
+      "slot": 293,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 286229,
+      "error": null
+    },
+    {
+      "label": "resolution_rollback_exhaustion",
+      "signature": "4XmArTW4rP7NyDJQy6NR4PxfoLL8dZZRLHHryED176R2tomDMo3LBCU7szqbBhuZhBNjZ2RosfyYkRByN18sNbut",
+      "slot": 325,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 284440,
+      "error": null
+    },
+    {
+      "label": "resolution_rollback_failure",
+      "signature": "3FpVVqGtpSbSpoLTXMVjtnRPBperyBTe3iTNbzEvLsy3toWEeNYbVW5NvZE7MHLBQSiXKz46nRcm2X5na4DR5pLz",
+      "slot": 357,
+      "transaction_metadata_available": true,
+      "fee_lamports": 5000,
+      "compute_units_consumed": 278204,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 2
+          }
+        ]
+      }
+    }
+  ],
+  "parser_fixtures": {
+    "accounts": {
+      "registry.activation": {
+        "address": "8U6WLdLy2g96L2Zamx2psEbP8Z7rZ8Z2AScANsL3hYVh",
+        "account": {
+          "data": [
+            "RENMVEFDVDEBAAEAAAAAAJUVg4/JJt0RgFAqFGbVqvwhwp4umfwx4TyNKJMNIzE0QILq4YZBIZNWq5MTOaxIGqrsYvmY5925NAcS3NUcvnVEQ0xUQVJGMQEAAQAAAAAAQBMcuHlU1iaNEucl/BBq+lfHDX0iK3ClRIDvDjn3/tICqPaRToihsOIQFT73Y64rAMK5PRbBJNLAU3oQBIAAAJF2n8OBcsegcQOjxvZtM4LL4QNWBdkhLIo40a8N1jIJ1ODwIB07G3G+pvDME0lb6DsKqhkv4bIY8VMwTjTgSVu31mNKI96EyxsfCjNoSTuQCNiCeMRg+Q4mtSKvXppuOQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACe0RMAT127y2hhaEK1PltX7RhPrYzIjulGVncXyLeTbURDTFRBUkYxAQABAAAAAABHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHRwKo9pFOiKGw4hAVPvdjrisAwrk9FsEk0sBTehAEgAAA9Armr8ZDf6gv0DZSjBXzP9DJvACNx4gPEw6iY2VWfmqaYsLkbaO0+oDRx1rN/MtEjBkhGmMavLEpuCa1WqglO6G3XUCT1ojOphRW9dISTNfp4flbAQJZ0KxhUJgR3ebYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJ7REwBPXbvLaGFoQrU+W1ftGE+tjMiO6UZWdxfIt5NtRENMVEFSRjEBAAEAAAAAAEdHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHAqj2kU6IobDiEBU+92OuKwDCuT0WwSTSwFN6EASAAAD0CuavxkN/qC/QNlKMFfM/0Mm8AI3HiA8TDqJjZVZ+appiwuRto7T6gNHHWs38y0SMGSEaYxq8sSm4JrVaqCU7obddQJPWiM6mFFb10hJM1+nh+VsBAlnQrGFQmBHd5tgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAntETAE9du8toYWhCtT5bV+0YT62MyI7pRlZ3F8i3k21EQ0xUQVJGMQEAAQAAAAAAR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0cCqPaRToihsOIQFT73Y64rAMK5PRbBJNLAU3oQBIAAAPQK5q/GQ3+oL9A2UowV8z/QybwAjceIDxMOomNlVn5qmmLC5G2jtPqA0cdazfzLRIwZIRpjGryxKbgmtVqoJTuht11Ak9aIzqYUVvXSEkzX6eH5WwECWdCsYVCYEd3m2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACe0RMAT127y2hhaEK1PltX7RhPrYzIjulGVncXyLeTbURDTFRBUkYxAQABAAAAAABHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHRwKo9pFOiKGw4hAVPvdjrisAwrk9FsEk0sBTehAEgAAA9Armr8ZDf6gv0DZSjBXzP9DJvACNx4gPEw6iY2VWfmqaYsLkbaO0+oDRx1rN/MtEjBkhGmMavLEpuCa1WqglO6G3XUCT1ojOphRW9dISTNfp4flbAQJZ0KxhUJgR3ebYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+            "base64"
+          ],
+          "executable": false,
+          "lamports": 9855360,
+          "owner": "5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD",
+          "rentEpoch": 18446744073709552000,
+          "space": 1288
+        }
+      },
+      "primary.certificate.success": {
+        "address": "D18D7rsaxdFKLfjCcEEhgJGSgQNLNibL9SXPoZXi9x9Y",
+        "account": {
+          "data": [
+            "RENTUkNFUjEBAAEAAAAAAMJ3c38R8alzJDGVcJG8nO/fq7PIIN9xUZ7CEwVpplwV6KPzynrxYS+dSnjXIBmk5QEQsAaR+yf7ZZD0Xr2psXPOomXtksN3nJHhU7dDQTiQI7cwutGuQtEXPt+x0l824KSniUbKBoITdRGwwWxo818seOdLI01J+41p0T5YTcZr9V0omXC6dhxhq5hb7OY+zS+gkx0U685OdO+osxx5otkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALJUZO/rLHMW5Zfor+fAJkaRMB6U8b8m5B6YREGvfac7AQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADh9QUAAAAAAAAAAAAAAAABAAAAAAAAAAALimoAAAAA",
+            "base64"
+          ],
+          "executable": false,
+          "lamports": 3062403,
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "rentEpoch": 18446744073709552000,
+          "space": 312
+        }
+      },
+      "lifecycle.state": {
+        "address": "8tiZgQZ5WGcuF5oN4xQprYLKJWhGeVuHVqrPFTWGAbTx",
+        "account": {
+          "data": [
+            "RENMVFNSUzEBAAQAAwL9AJKqDDfgIkCWgYdbYRzL8QoBe1wtkXc6hWxJdSBjmAU/AQAAAAAAAAAGWwDuc2dae+Nd0oorDmX6+Ne7Cmh/RrQNmAXfBg5W/NHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHRAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGWwDuc2dae+Nd0oorDmX6+Ne7Cmh/RrQNmAXfBg5W/AIAAAAAAAAAyAiOagAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "base64"
+          ],
+          "executable": false,
+          "lamports": 2449920,
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "rentEpoch": 18446744073709552000,
+          "space": 224
+        }
+      },
+      "lifecycle.funding.failure": {
+        "address": "5r1fDVfh7J8LCWTM5poxmewuirivQeubAjbqhgUZhfCf",
+        "account": {
+          "data": [
+            "RENMVENGUzEBAAEAAAAAAOEG9OFVDHYkSCH27KarvsKNWJ9j7kiSMnWheqn+ymo1AgAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAlC8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAoIYBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKAaMQAAAAAAAAAAAAAAAAA=",
+            "base64"
+          ],
+          "executable": false,
+          "lamports": 3118080,
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "rentEpoch": 18446744073709552000,
+          "space": 320
+        }
+      },
+      "rollback.certificate.failure.occupied": {
+        "address": "CgQ59vnDyoSa34uSs4td6cSZRq4wU55prxriC2n7HKvv",
+        "account": {
+          "data": [
+            "paWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWl",
+            "base64"
+          ],
+          "executable": false,
+          "lamports": 3062400,
+          "owner": "5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC",
+          "rentEpoch": 0,
+          "space": 312
+        }
+      }
+    },
+    "transactions": [
+      {
+        "captured": {
+          "label": "registry_activate_release_set",
+          "signature": "5ZLMVydUwefHegg3srHwyrhq1BB49y8YGoDrTGuRtJfWmQygvDuodTxdHNor6Zn1senR2zfKL5CPzkB3NdY5HroN",
+          "slot": 101,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 619265,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD invoke [1]",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD consumed 619115 of 1399850 compute units",
+            "Program 5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "registry_reauthenticate_resolution",
+          "signature": "5qfeLyUu71SxeoVDw1zToNfFkYK15vPAAcwqhLYoFsgCfqZtbM7gvBZtm9rW2bbHetidrMTN1KRUwX31VSTYVb2y",
+          "slot": 133,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 127044,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD invoke [1]",
+            "Program 5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD consumed 126894 of 1399850 compute units",
+            "Program return: 5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD RENMVFJSUjEBAAMAAAAAAJUVg4/JJt0RgFAqFGbVqvwhwp4umfwx4TyNKJMNIzE0R0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0ee0RMAT127y2hhaEK1PltX7RhPrYzIjulGVncXyLeTbZpiwuRto7T6gNHHWs38y0SMGSEaYxq8sSm4JrVaqCU7",
+            "Program 5K7zk7Vh1d6vGQW3HBiRMNuXjESUX7TSXYbYa9V8kDcD success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "resolution_accept_real_pyth_primary",
+          "signature": "5LaCENFcrJiRXoMetKr15rdHHQwfT8EYZW5E3bjqpiX1biLyXr4hASnLZvNdJbpk3pTLrQfDhRmvXsQz8ZgJv2pA",
+          "slot": 165,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 224287,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC invoke [1]",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC consumed 224137 of 1399850 compute units",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "resolution_lifecycle_recovery",
+          "signature": "bQQdM8UxCbzoT2x7hgGrwxTfYurTXZfMZUUZy9FLyqtABgwg1tU2hWR3B41xwsBVAJn9QDH8wdCVVwrdsBmWzcK",
+          "slot": 197,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 283229,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC invoke [1]",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC consumed 283079 of 1399850 compute units",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "resolution_lifecycle_exhaustion",
+          "signature": "5D2whDLBAoYgmWVipczUt13XhPZNZzMXmkdGX6tBC6tB1CecBZnofoQ9et72NLW1GefmNCUuY9ZibdezRNoe7aPp",
+          "slot": 229,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 285940,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC invoke [1]",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC consumed 285790 of 1399850 compute units",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "resolution_lifecycle_failure",
+          "signature": "2374Vy9iroSYXpf9EbBAPsdRiMLKERsL1yJwK3fKUeWPURE1Vv6KmAkJ93EezUDrXGZrzxFybf5DQZbZdKigZWQi",
+          "slot": 261,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 294399,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC invoke [1]",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC consumed 294249 of 1399850 compute units",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "resolution_rollback_recovery",
+          "signature": "SrFpJYYYRiveS4pmmY3g8wt2a7s2AadKRwFA6g7TKdG2znCHvatcwdRczXcrQunhx7R62mJzME4gvnCxprabQCF",
+          "slot": 293,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 286229,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC invoke [1]",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC consumed 286079 of 1399850 compute units",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "resolution_rollback_exhaustion",
+          "signature": "4XmArTW4rP7NyDJQy6NR4PxfoLL8dZZRLHHryED176R2tomDMo3LBCU7szqbBhuZhBNjZ2RosfyYkRByN18sNbut",
+          "slot": 325,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 284440,
+          "error": null,
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC invoke [1]",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 11111111111111111111111111111111 invoke [2]",
+            "Program 11111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC consumed 284290 of 1399850 compute units",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC success"
+          ]
+        },
+        "rpc_transaction": null
+      },
+      {
+        "captured": {
+          "label": "resolution_rollback_failure",
+          "signature": "3FpVVqGtpSbSpoLTXMVjtnRPBperyBTe3iTNbzEvLsy3toWEeNYbVW5NvZE7MHLBQSiXKz46nRcm2X5na4DR5pLz",
+          "slot": 357,
+          "transaction_metadata_available": true,
+          "fee_lamports": 5000,
+          "compute_units_consumed": 278204,
+          "error": {
+            "InstructionError": [
+              1,
+              {
+                "Custom": 2
+              }
+            ]
+          },
+          "logs": [
+            "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+            "Program ComputeBudget111111111111111111111111111111 success",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC invoke [1]",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC consumed 278054 of 1399850 compute units",
+            "Program 5oEzAP4izB65uRm2yDAEf9oALGwHpWkDfyKb8zBY3euC failed: custom program error: 0x2"
+          ]
+        },
+        "rpc_transaction": null
+      }
+    ]
+  }
+}
