@@ -1,4 +1,4 @@
-import { PublicKey } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 
 import { decodeBase64 } from './bytes';
 import {
@@ -56,6 +56,38 @@ export type LatestBlockhashObservation = Readonly<{
 export type RentExemptionObservation = Readonly<{
   dataLength: number;
   lamports: string;
+}>;
+
+export type SignatureRecordObservation = Readonly<{
+  signature: string;
+  slot: string;
+  succeeded: boolean;
+  errorText: string | null;
+  blockTime: string | null;
+  memo: string | null;
+}>;
+
+export type SignatureStatusObservation = Readonly<{
+  signature: string;
+  known: boolean;
+  slot: string | null;
+  confirmationStatus: string | null;
+  succeeded: boolean | null;
+  errorText: string | null;
+}>;
+
+export type TransactionMetaObservation = Readonly<{
+  signature: string;
+  slot: string;
+  blockTime: string | null;
+  succeeded: boolean;
+  errorText: string | null;
+  feeLamports: string;
+  accountAddresses: ReadonlyArray<string>;
+  preBalances: ReadonlyArray<string>;
+  postBalances: ReadonlyArray<string>;
+  logMessages: ReadonlyArray<string>;
+  transactionBytes: Uint8Array;
 }>;
 
 export type ProgramSnapshot = Readonly<{
@@ -259,6 +291,105 @@ export class SolanaRpcClient {
     if (!Number.isSafeInteger(dataLength) || dataLength < 0 || dataLength > 10_485_760) throw new Error('rent data length is outside the bounded account profile');
     const lamports = exactUnsigned(await this.request('getMinimumBalanceForRentExemption', [dataLength, { commitment: 'finalized' }]), 'rent-exempt lamports');
     return Object.freeze({ dataLength, lamports: String(lamports) });
+  }
+
+  /**
+   * The RPC node's own signature index for one address, newest first.
+   *
+   * This is the node's transaction history, not a protocol index: a node
+   * configured without history answers with an empty list, and nothing here
+   * pretends otherwise. Callers state that provenance on the surface.
+   */
+  async signaturesForAddress(address: string, limit: number): Promise<ReadonlyArray<SignatureRecordObservation>> {
+    new PublicKey(address);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error('signature listing limit must be 1..50');
+    const raw = await this.request('getSignaturesForAddress', [address, { commitment: 'finalized', limit }]);
+    if (!Array.isArray(raw)) throw new Error('getSignaturesForAddress did not return an array');
+    return Object.freeze(raw.map((entry, index) => {
+      if (!plain(entry)) throw new Error(`signature record ${index} is malformed`);
+      const signature = exactText(entry.signature, `signature record ${index}`, 96);
+      if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error(`signature record ${index} is not canonical base58 text`);
+      return Object.freeze({
+        signature,
+        slot: String(exactUnsigned(entry.slot, `signature record ${index} slot`)),
+        succeeded: entry.err === null || entry.err === undefined,
+        errorText: entry.err === null || entry.err === undefined ? null : JSON.stringify(entry.err).slice(0, 240),
+        blockTime: typeof entry.blockTime === 'number' && Number.isSafeInteger(entry.blockTime) ? String(entry.blockTime) : null,
+        memo: typeof entry.memo === 'string' ? entry.memo.slice(0, 240) : null,
+      });
+    }));
+  }
+
+  /** Poll the status of explicitly named signatures, including node history. */
+  async signatureStatuses(signatures: ReadonlyArray<string>): Promise<ReadonlyArray<SignatureStatusObservation>> {
+    if (signatures.length === 0 || signatures.length > 16) throw new Error('signature status polling requires 1..16 exact signatures');
+    for (const signature of signatures) {
+      if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error('signature status polling requires canonical base58 signatures');
+    }
+    const raw = await this.request('getSignatureStatuses', [signatures, { searchTransactionHistory: true }]);
+    if (!plain(raw) || !Array.isArray(raw.value) || raw.value.length !== signatures.length) {
+      throw new Error('getSignatureStatuses did not return one status per signature');
+    }
+    return Object.freeze(signatures.map((signature, index) => {
+      const entry = raw.value[index];
+      if (entry === null || entry === undefined) {
+        return Object.freeze({ signature, known: false, slot: null, confirmationStatus: null, succeeded: null, errorText: null });
+      }
+      if (!plain(entry)) throw new Error(`signature status ${index} is malformed`);
+      return Object.freeze({
+        signature,
+        known: true,
+        slot: String(exactUnsigned(entry.slot, `signature status ${index} slot`)),
+        confirmationStatus: typeof entry.confirmationStatus === 'string' ? entry.confirmationStatus.slice(0, 32) : null,
+        succeeded: entry.err === null || entry.err === undefined,
+        errorText: entry.err === null || entry.err === undefined ? null : JSON.stringify(entry.err).slice(0, 240),
+      });
+    }));
+  }
+
+  /** Read one finalized transaction with its balance movements and logs. */
+  async transaction(signature: string): Promise<TransactionMetaObservation | null> {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error('transaction read requires one canonical base58 signature');
+    const raw = await this.request('getTransaction', [signature, {
+      commitment: 'finalized',
+      encoding: 'base64',
+      maxSupportedTransactionVersion: 0,
+    }]);
+    if (raw === null) return null;
+    if (!plain(raw) || !plain(raw.meta) || !Array.isArray(raw.transaction) || typeof raw.transaction[0] !== 'string') {
+      throw new Error('getTransaction did not return base64 transaction bytes and meta');
+    }
+    const meta = raw.meta;
+    const bytes = decodeBase64(raw.transaction, 'finalized transaction');
+    if (!Array.isArray(meta.preBalances) || !Array.isArray(meta.postBalances) || meta.preBalances.length !== meta.postBalances.length) {
+      throw new Error('getTransaction meta balances are malformed');
+    }
+    let accountAddresses: string[] = [];
+    try {
+      const decoded = VersionedTransaction.deserialize(bytes);
+      const staticKeys = decoded.message.staticAccountKeys.map((accountKey) => accountKey.toBase58());
+      const loaded = plain(meta.loadedAddresses) ? meta.loadedAddresses : {};
+      const writable = Array.isArray(loaded.writable) ? loaded.writable.map((entry) => exactText(entry, 'loaded writable address', 64)) : [];
+      const readonly = Array.isArray(loaded.readonly) ? loaded.readonly.map((entry) => exactText(entry, 'loaded readonly address', 64)) : [];
+      accountAddresses = [...staticKeys, ...writable, ...readonly];
+    } catch {
+      accountAddresses = [];
+    }
+    return Object.freeze({
+      signature,
+      slot: String(exactUnsigned(raw.slot, 'transaction slot')),
+      blockTime: typeof raw.blockTime === 'number' && Number.isSafeInteger(raw.blockTime) ? String(raw.blockTime) : null,
+      succeeded: meta.err === null || meta.err === undefined,
+      errorText: meta.err === null || meta.err === undefined ? null : JSON.stringify(meta.err).slice(0, 240),
+      feeLamports: String(exactUnsigned(meta.fee, 'transaction fee')),
+      accountAddresses: Object.freeze(accountAddresses),
+      preBalances: Object.freeze(meta.preBalances.map((value, index) => String(exactUnsigned(value, `pre-balance ${index}`)))),
+      postBalances: Object.freeze(meta.postBalances.map((value, index) => String(exactUnsigned(value, `post-balance ${index}`)))),
+      logMessages: Object.freeze(Array.isArray(meta.logMessages)
+        ? meta.logMessages.slice(0, 64).map((entry, index) => exactText(entry, `log message ${index}`, 512))
+        : []),
+      transactionBytes: bytes,
+    });
   }
 
   /**

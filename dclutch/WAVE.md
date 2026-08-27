@@ -726,3 +726,38 @@ ember's explicit go.
 - M-46 hunt (small batch): main sat at 18/20 somewhere in
   211079f6..a4be9a83 (~+23,000 CU unboarded); 7ead0716 MASKS it. Bisect with
   the per-phase tables and attribute — margin honesty demands the name.
+
+- DOCTRINE (STRUCT-CAMP): an artifact builder with no caller outside its own
+  crate is not landed, it is PARKED — it has no gate. (The bearer operator
+  sat at 5/20 through two sweeps; sixteen tests passed a join no chain-
+  acceptable descriptor could satisfy because the fixture was bent to the
+  wrong side.)
+- RECORDS-MIGRATE row (from 27dbcca0): root_id's dead consumer + the
+  graph_id/graph_digest double-booking in the representation descriptor.
+- FEE-GEO row (2026-08-27, study landed: docs/design/FEE_GEOMETRY.md — the
+  N-1 reconciliation). RULED there: flat `fee_basis_points` CONFIRMED for
+  v1-devnet as the recorded placeholder; ADOPTED_2026-08-20 item 9's
+  composite `kappa*G + kappa'*R` remains the selected target shape (nothing
+  reversed; rates still open, still ember's). Post-smoke lane, in order:
+  (1) geometry kernel in Lean — monotone-accrual `feeAt` generalizing
+  `cumulativeFee`; the telescoping lemma (DirectProofs.lean:145) already
+  covers any monotone feeAt; (2) the composite on the fee-free General
+  batch relation (gen-1's native threat model; gen-2's RevenuePolicyV2 /
+  0x82-0x84 registry vocabulary is the precedent); (3) Direct keeps flat,
+  optional time-bracket ramp; (4) RevenuePolicyV2-style registered
+  destination record (treasury pubkey stays reserved to ember, M-26);
+  (5) bounds frozen BEFORE implementation (the B2 ordering two generations
+  violated); N-15 (formalize the characterization before any rate freezes)
+  rides step 1-2. STANDING REFUSALS: source-adaptive fees (Mango/kappa
+  lens + hot-path CU), redemption fees (the objective), geometry-as-code,
+  floats, fee-record mutation. Smoke demo: per-market signed rate
+  diversity + conservation ledger fee take — zero new code. Trigger:
+  cycle 3 / post-DEVNET-SMOKE.
+
+- CORRECTION (STRUCT-CAMP-2, derived not asserted): Structured's binding K
+  ceiling is 2, not 3 — the PACKET, not the 1312 profile bound: full-width
+  Issue at K=3 = 1,357 B on a live ALT vs 1,232 (168 B/coordinate). A K=3
+  product can be denominated/reconstituted/redeemed but never issued on a
+  cluster. The cliff doctrine's second exhibit (first: the copied-1312).
+  The K-lift is a SESSION-SPLIT question (paged Issue) — belongs to the
+  cliff-doctrine design pass, which still awaits ember's go.

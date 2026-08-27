@@ -1,16 +1,56 @@
 //! Canonical non-self-referential Structured V2 resource identities.
 //!
-//! Three physical resources are derived rather than named: the Structured root
-//! (which is simultaneously the replay record, the receipt Mint authority and
-//! the shard custody owner), the receipt Mint, and one shard custody Token
-//! account per backed representation coordinate.
+//! Three physical resources are derived rather than named: the Structured root,
+//! the receipt Mint, and one shard custody Token account per backed
+//! representation coordinate.
 //!
-//! This module owns the exact seed ORDER and the anti-aliasing rule.  It
-//! deliberately does not derive an address: `find_program_address` needs the
-//! owning program id and a curve check, both of which belong to the small SVM
-//! adapter boundary.  Every derivation this module describes is joined back to
-//! an observed or persisted address through `authenticate_address`, so an
-//! adapter that derives with the wrong seeds cannot pass its own join.
+//! # These derivations have no on-chain referent, and that is decided
+//!
+//! Decision 0011 §3b (2026-08-27) took Option A: Structured reaches the chain
+//! through the **Rational** child ABI, so every physical resource in the live
+//! route is keyed by the Rational `descriptor_id` rather than by anything in
+//! this module.  What that costs is exactly this module's claims, and the list
+//! is longer than §3a predicted:
+//!
+//! | this module derives | what actually executes | keyed by |
+//! |---|---|---|
+//! | root (`STRUCTURED_ROOT_PDA_SEED_V2`, `terms_id`) | `(RATIONAL_REPLAY_SEED_V2, descriptor_id, actor)` | descriptor **and actor** |
+//! | receipt Mint (`STRUCTURED_RECEIPT_MINT_PDA_SEED_V2`) | the address the Rational descriptor persists, whose Mint **and** permissioned-burn authorities are `(RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, descriptor_id)` | descriptor |
+//! | shard custody (`STRUCTURED_SHARD_CUSTODY_PDA_SEED_V2`, `terms_id`, shard Mint) | `(RATIONAL_STRUCTURED_CUSTODY_SEED_V2, descriptor_id, outcome_le)` | descriptor **and outcome index** |
+//!
+//! Three consequences are worth stating rather than leaving to be rediscovered:
+//!
+//! - **The root is not the receipt Mint authority.**  The Rational
+//!   representation authority is, in two Token-2022 roles at once: Mint
+//!   authority for `MintReceipt` and permissioned-burn authority for
+//!   `BurnReceipt`.  Founding must configure both.
+//! - **Replay is not a property of the node.**  It is one record per
+//!   `(representation, actor)` pair.  The paragraph below that says otherwise
+//!   describes this module's model, not the chain's.
+//! - **Custody is keyed by the outcome index, not by the shard Mint.**  The
+//!   self-authenticating property claimed below is not lost, because Rational
+//!   derives the shard Mint from `(descriptor_id, outcome_le)` too -- the
+//!   mint-to-custody pairing is still a derivation, just anchored at the index.
+//!
+//! `terms_id` therefore names no account.  It survives as the host-side
+//! identity of a Structured terms record whose economic content -- market,
+//! release set, Token program, receipt Mint, graph identity, width,
+//! denominator, coefficients -- is carried on chain by the Rational descriptor
+//! preimage, and whose remaining coordinates (Product record, result domain,
+//! Token behavior, shard terms, shard exposure) are bound by the Rational
+//! product admission (`rational_product_v3.rs:154-166`) rather than by a seed.
+//!
+//! This module is retained deliberately, for the same reason `hot_v2.rs` is
+//! (decision 0011 §5): it is a host-side authority on the exact seed ORDER and
+//! the anti-aliasing rule, and it is the record of what Structured's own
+//! physics would have been.  It is not the chain's.
+//!
+//! This module deliberately does not derive an address:
+//! `find_program_address` needs the owning program id and a curve check, both
+//! of which belong to the small SVM adapter boundary.  Every derivation this
+//! module describes is joined back to an observed or persisted address through
+//! `authenticate_address`, so an adapter that derives with the wrong seeds
+//! cannot pass its own join.
 //!
 //! # Why the root may be keyed by the terms identity and the Mint may not
 //!
@@ -89,6 +129,11 @@ fn join(derived: [u8; 32], expected: [u8; 32], coordinates: &[[u8; 32]]) -> Resu
 ///
 /// The root is one per finalized terms record and carries no owner: replay is a
 /// property of the node, not of an actor.
+///
+/// **That last sentence describes this module's model and not the executing
+/// chain.**  Under decision 0011 §3b the live replay record is
+/// `(RATIONAL_REPLAY_SEED_V2, descriptor_id, actor)` -- one per
+/// `(representation, actor)` pair.  See the module documentation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructuredRootSeedsV2 {
     terms_id: [u8; 32],

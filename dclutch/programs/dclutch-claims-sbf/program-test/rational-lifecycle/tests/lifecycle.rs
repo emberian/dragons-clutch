@@ -19,6 +19,7 @@ use dclutch_claims_svm::protocol_position_v2::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{CoreState, Identity, Phase};
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_rational_representation_v2_contract::{
     RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2, RATIONAL_SHARD_MINT_SEED_V2,
     RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReceiptMintSeedsV2,
@@ -32,7 +33,6 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     LIFECYCLE_RECEIPT_BYTES_V2, LifecycleActionV2, LifecycleCoordinateV2, LifecycleHeaderV2,
     LifecycleReceiptV2, LifecycleRequestV2,
 };
-use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -826,6 +826,14 @@ fn wrapped(f: &Fixture, bytes: Vec<u8>, fail_after: bool, old_ata: bool) -> Inst
     }
 }
 
+/// Byte offset of `supply` in a packed SPL Mint.
+///
+/// `mint_authority` is a `COption<Pubkey>`: a four-byte tag then thirty-two
+/// bytes, so the supply starts at 36. Named here rather than inlined because a
+/// wrong offset would make the hostile below silently write into the authority
+/// and prove nothing.
+const SPL_MINT_SUPPLY_OFFSET: usize = 36;
+
 async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Option<Account> {
     context
         .banks_client
@@ -974,7 +982,10 @@ async fn submit(
         .first()
         .ok_or(BanksClientError::ClientError("unsigned transaction"))?
         .to_string();
-    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -1286,6 +1297,65 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
             account(&mut context, f.rent_credit).await,
         ],
         before_retire
+    );
+
+    // NONZERO-SUPPLY RETIRE. Retirement's whole safety property is that a
+    // coordinate is closed only when nothing it backed is still outstanding, and
+    // the request cannot even STATE otherwise: LifecycleRequestV2's own decoder
+    // refuses `expected_shard_supply != 0` with InvalidPhysicalState
+    // (lifecycle-contract/src/lib.rs:819,835), so a hostile that honestly
+    // declares outstanding shards never becomes a request. The hostile that CAN
+    // exist is a request that lies -- it declares zero while the Mint the chain
+    // holds carries a supply -- and the only thing standing between that and a
+    // closed Mint with live shards against it is the adapter's own observation.
+    // So the supply is written straight into the Mint the program itself created
+    // and the canonical retirement is submitted unchanged.
+    let live_shard = account(&mut context, f.shard_mint)
+        .await
+        .expect("shard Mint before the nonzero-supply hostile");
+    let mut outstanding = live_shard.clone();
+    outstanding
+        .data
+        .get_mut(SPL_MINT_SUPPLY_OFFSET..SPL_MINT_SUPPLY_OFFSET + 8)
+        .expect("Mint supply field")
+        .copy_from_slice(&COEFFICIENT.to_le_bytes());
+    context.set_account(&f.shard_mint, &AccountSharedData::from(outstanding));
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        retire_coordinate.clone(),
+        table,
+        &addresses,
+        "claims rational-lifecycle: retire a coordinate whose shards are still outstanding",
+    )
+    .await
+    .expect("nonzero-supply retirement");
+    assert!(
+        !accepted,
+        "a coordinate whose Mint still carries supply must not be retired"
+    );
+    assert!(
+        logs.iter()
+            .any(|line| line.starts_with(&format!("Program {CLAIMS} failed"))),
+        "the nonzero-supply refusal must be Claims's own: {}",
+        logs.join("\n")
+    );
+    for key in [f.structured_custody, f.position, f.admission, f.rent_credit] {
+        assert!(
+            account(&mut context, key).await.is_some(),
+            "a refused retirement closes nothing"
+        );
+    }
+    context.set_account(&f.shard_mint, &AccountSharedData::from(live_shard));
+    assert_eq!(
+        [
+            account(&mut context, f.shard_mint).await,
+            account(&mut context, f.structured_custody).await,
+            account(&mut context, f.position).await,
+            account(&mut context, f.admission).await,
+            account(&mut context, f.rent_credit).await,
+        ],
+        before_retire,
+        "the hostile must leave the retirement's prestate exactly as it found it"
     );
 
     let (accepted, _, returned, retire_coordinate_cu) = submit(

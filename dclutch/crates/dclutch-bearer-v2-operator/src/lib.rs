@@ -76,8 +76,10 @@ pub use open_structured_v3::{
     RATIONAL_OPEN_STRUCTURED_COMMON_IDENTITIES_V3, RATIONAL_OPEN_STRUCTURED_COMMON_SCALARS_V3,
     RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_ITEM_ACCOUNTS_V3,
     RATIONAL_OPEN_STRUCTURED_ITEM_IDENTITIES_V3, RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3,
-    RationalOpenStructuredHotBundleInputV3, RationalOpenStructuredHotBundleV3,
-    build_rational_open_structured_hot_bundle_v3,
+    RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+    RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3,
+    RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3, RationalOpenStructuredHotBundleInputV3,
+    RationalOpenStructuredHotBundleV3, build_rational_open_structured_hot_bundle_v3,
     validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3,
     validate_rational_open_structured_hot_bundle_v3,
 };

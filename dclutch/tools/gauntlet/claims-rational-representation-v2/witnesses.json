@@ -9,11 +9,25 @@
       "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it."
     },
     {
-      "id": "rational-representation-v2-fits-the-packet-maximum",
+      "id": "rational-representation-v2-the-only-frames-over-the-packet-maximum-are-the-full-width-structured-ones",
       "kind": "evidence-jq",
-      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "query": "[.transactions[] | select(.wire_bytes > 1232) | select((.label | test(\"Issue|issue|Unwrap|unwrap|K_i skew|receipt backed|cross-schema|recipe substitution\")) | not)] | length | tostring",
+      "expect": "0",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). This campaign used to assert that its largest frame fit; at the K = 3 campaign basis it does NOT, and the honest witness is which frames are over rather than a claim that none are. Every transaction past the limit is one of the two FULL-WIDTH structured actions or a hostile shaped like one: RepresentationRequestV2::validate refuses IssueStructured/UnwrapStructured unless asset_count == outcome_count (request.rs:470-481), so those two carry K asset rows and K materialized account quadruples while every selected-outcome action carries exactly one. A frame over the limit that is NOT one of those would mean the wall moved somewhere nobody measured."
+    },
+    {
+      "id": "rational-representation-v2-the-full-width-structured-frame-is-1357-bytes",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes > 1232) | .wire_bytes] | max | tostring",
+      "expect": "1357",
+      "provenance": "THE MEASUREMENT. A v0 message carrying IssueStructured or UnwrapStructured at K = 3, compiled against a real activated Address Lookup Table, is 1,357 bytes against a 1,232-byte limit -- over by 125. The ALT is not an unpulled lever here: it is what takes the same frame from 2,594 down to 1,357, so the house v0/ALT pattern is applied and the frame is still too wide. Decision 0011 s3b measured the executable ceiling at K = 3 from the RequestProfile artifact (29 + 8K operations at 24 bytes against REQUEST_PROFILE_MAX_BYTES_V1 = 1312) and called it hard; the packet caps the two full-width actions at K = 2, one coordinate lower, and nothing had measured it because this route had never been submitted at K = 3. A coordinate costs ASSET_BYTES_V2 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2 = 168 wire bytes; the campaign derives the ceiling from that constant and two measurements in the_full_width_structured_frame_does_not_fit_a_packet_at_k_three."
+    },
+    {
+      "id": "rational-representation-v2-every-selected-outcome-frame-still-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"terminal|Denominate|Reconstitute|replay|namespace|lookup table\")) | .wire_bytes] | max | (. <= 1232) | tostring",
       "expect": "true",
-      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign serialises every transaction it submits over a real activated Address Lookup Table and records the extent (the test's own PACKET_LIMIT constant); this witness checks the largest against Solana's stated limit independently."
+      "provenance": "The selected-outcome actions -- Denominate, Reconstitute, RedeemTerminal -- carry asset_count == 1 at every K, so their request is 488 + 160 bytes at any representation width and their frames fit with room. So a K = 3 Structured product can be denominated, reconstituted and redeemed on a cluster and can never be issued or unwrapped there; this witness is the half of that sentence the previous packet witness used to cover for the whole campaign."
     },
     {
       "id": "rational-representation-v2-measured-every-transaction",
@@ -33,8 +47,8 @@
       "id": "the-canonical-token-2022-v11-elf-authenticated",
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.label | endswith(\"commits\")) | .logs[] | select(. == \"Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb success\")] | length | tostring",
-      "expect": "11",
-      "provenance": "This campaign's Token-2022 fixture is the byte-for-byte canonical, cross-host-reproducible spl-token-2022 11.0.0 ELF pinned in programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance (SHA-256 e2acdfb750881462ad613a15cc9c54ae17ce066580e867e1e635fbdfe01f5697), authenticated at TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb -- Solana's real, deployed Token-2022 program address, which only the canonical artifact can occupy under the fixture's own digest check. This counts the runtime's own success logs for it across the six committing transactions (IssueStructured 3, UnwrapStructured 3, Denominate 1, Reconstitute 1, winning terminal 2, losing terminal 1 -- each mint/transfer/burn CPI logs its own success line)."
+      "expect": "13",
+      "provenance": "This campaign's Token-2022 fixture is the byte-for-byte canonical, cross-host-reproducible spl-token-2022 11.0.0 ELF pinned in programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance (SHA-256 e2acdfb750881462ad613a15cc9c54ae17ce066580e867e1e635fbdfe01f5697), authenticated at TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb -- Solana's real, deployed Token-2022 program address, which only the canonical artifact can occupy under the fixture's own digest check. This counts the runtime's own success logs for it across the six committing transactions, and the count is a function of the campaign basis width K: IssueStructured 4 (K = 3 shard transfers plus the receipt mint), UnwrapStructured 4 (the receipt burn plus K shard transfers), Denominate 1, Reconstitute 1, winning terminal 2, losing terminal 1 -- thirteen. It was eleven at K = 2 and it moves with K by design, so a silent width change fails here."
     },
     {
       "id": "the-late-refusal-let-claims-custody-and-token-run-first",

@@ -578,7 +578,7 @@ mod tests {
     }
 
     fn fixed() -> Vec<AccountMeta> {
-        let mut fixed = (0_u8..38)
+        let mut fixed = (0_u8..u8::try_from(HOT_FIXED_ACCOUNT_COUNT_V3).expect("Hot width"))
             .map(|index| AccountMeta::new_readonly(key(150_u8.wrapping_add(index)), false))
             .collect::<Vec<_>>();
         *fixed.get_mut(HOT_MARKET_ACCOUNT_V3).expect("Market meta") =
@@ -642,12 +642,15 @@ mod tests {
         )
         .expect("hot");
         assert_eq!(report.instruction.program_id, key(60));
-        assert_eq!(report.instruction.accounts.len(), 38 + 43);
+        assert_eq!(
+            report.instruction.accounts.len(),
+            HOT_FIXED_ACCOUNT_COUNT_V3 + 43
+        );
         assert!(
             !report
                 .instruction
                 .accounts
-                .get(38)
+                .get(HOT_FIXED_ACCOUNT_COUNT_V3)
                 .expect("outer caller")
                 .is_signer
         );
@@ -655,7 +658,7 @@ mod tests {
             report
                 .instruction
                 .accounts
-                .get(41)
+                .get(HOT_FIXED_ACCOUNT_COUNT_V3 + 3)
                 .expect("outer actor")
                 .is_signer
         );

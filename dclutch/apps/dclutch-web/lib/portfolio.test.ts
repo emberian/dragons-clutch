@@ -109,7 +109,10 @@ describe('portfolio by Claims Position derivation', () => {
     expect(entry.position.claim.winningClaim).toBe(1);
     expect(entry.position.claim.redeemableAtoms).toBe('500000000');
     expect(entry.position.claim.perClaimAtoms).toEqual(['0', '500000000', '0', '0']);
-    expect(entry.position.claim.note).toMatch(/every losing claim pays zero/);
+    expect(entry.position.claim.note).toMatch(/Every losing claim pays zero/);
+    // The 1:1 payout claim is scoped to the categorical Q=1 basis; a graded
+    // basis pays its own exact rate and the note must not overstate it.
+    expect(entry.position.claim.note).toMatch(/categorical Q=1 basis/);
   });
 
   it('calls a derived address with no account exactly what it is', async () => {

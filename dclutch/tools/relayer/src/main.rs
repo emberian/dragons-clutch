@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 
+use dclutch_relay_contract::record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1};
 use dclutch_relayer::artifacts::ArtifactWriter;
 use dclutch_relayer::config::Config;
 use dclutch_relayer::error::{RelayerError, Result};
@@ -540,6 +541,16 @@ impl Submitter {
             let context = format!("append position {set_index}");
             let signature = self.send(&context, &plan, &set.signer, signature).await?;
             println!("  appended position {set_index} in {signature}");
+            // Appends fill strictly increasing positions and the NEXT append's
+            // preflight simulates against the FINALIZED bank, so an append
+            // submitted before its predecessor finalizes is refused as
+            // out-of-order -- correctly, by the record's own replay rule. The
+            // record's state is the precondition, so the record's state is
+            // what this waits on, not a signature status.
+            let expected = set_index
+                .checked_add(1)
+                .ok_or_else(|| RelayerError::config("append position overflowed"))?;
+            self.await_filled(record, expected).await?;
         }
 
         let plan = seal_record_instruction(
@@ -553,7 +564,56 @@ impl Submitter {
             .send("seal", &plan, &set.signer, &set.seal_signature)
             .await?;
         println!("  sealed in {signature}");
+        // Exit only once the seal is FINAL: the process boundary is the
+        // contract, and a caller that reads the record after this command
+        // returns success must find it Sealed rather than race the bank.
+        self.await_sealed(record).await?;
         Ok(())
+    }
+
+    /// Poll the record at finalized commitment until `expected` positions are
+    /// filled.
+    async fn await_filled(&self, record: [u8; ID_BYTES], expected: u16) -> Result<()> {
+        self.await_record(record, &format!("filled_count {expected}"), |view| {
+            view.filled_count() == Ok(expected)
+        })
+        .await
+    }
+
+    /// Poll the record at finalized commitment until it is Sealed.
+    async fn await_sealed(&self, record: [u8; ID_BYTES]) -> Result<()> {
+        self.await_record(record, "phase Sealed", |view| {
+            view.phase() == Ok(RelayedRecordPhaseV1::Sealed)
+        })
+        .await
+    }
+
+    async fn await_record(
+        &self,
+        record: [u8; ID_BYTES],
+        condition: &str,
+        reached: impl Fn(RelayedObservationRecordViewV1<'_>) -> bool,
+    ) -> Result<()> {
+        // 300 seconds at one read per second, matching the campaign's own
+        // finalization patience: a co-tenant laptop can stall finalization
+        // past a minute while the validator is healthy.
+        for _ in 0..300 {
+            let read = self
+                .rpc
+                .get_multiple_accounts(&[record], u16::MAX, None)
+                .await?;
+            if let Some(Some(account)) = read.accounts.first()
+                && let Ok(view) = RelayedObservationRecordViewV1::decode(&account.data)
+                && reached(view)
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        Err(RelayerError::config(format!(
+            "the observation record did not reach {condition} within 300 seconds of the \
+             transaction landing; the validator may have stopped finalizing"
+        )))
     }
 
     async fn send(

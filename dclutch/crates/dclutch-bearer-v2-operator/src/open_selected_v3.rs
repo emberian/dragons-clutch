@@ -380,7 +380,12 @@ fn encode_account_profile(input: RationalOpenSelectedHotBundleInputV3<'_>) -> Re
     for index in 0..input.logical_data_lengths.len() {
         let writable = matches!(index, 0 | 16 | 17 | 28 | 37 | 38 | 39);
         let signer = index == 8;
-        let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 26 | 27);
+        // A route alias carries NO privileges of its own: `authenticate` takes
+        // `representative_privileges` for any coordinate whose representative is
+        // another (v2.rs:2360-2369), and cc228cdd made a nonzero privilege on an
+        // alias a refusal because it is dead weight that reads as authority.
+        // The aliased coordinate is the executable one.
+        let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 27);
         let alias = match index {
             26 => AccountAliasInputV2::Fixed(19),
             29 => AccountAliasInputV2::Fixed(4),

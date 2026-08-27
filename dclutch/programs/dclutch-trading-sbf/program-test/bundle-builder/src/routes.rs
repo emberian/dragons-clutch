@@ -103,8 +103,8 @@ fn claims_context(request: &[u8]) -> Result<([u8; 32], [u8; 32]), BuilderError> 
         let input = decoded.input();
         Ok((input.market, input.request_id))
     } else if request.get(..8) == Some(PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice()) {
-        let decoded =
-            ProtocolPositionRequestV2::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
+        let decoded = ProtocolPositionRequestV2::decode(request)
+            .map_err(|_| BuilderError::UnsupportedRoute)?;
         Ok((decoded.market, decoded.position_owner))
     } else if request.get(..8) == Some(AFFINE_BATCH_PLAN_MAGIC_V2.as_slice()) {
         let decoded =

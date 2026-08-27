@@ -48,6 +48,13 @@ spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 [dev-dependencies]
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
+# Structured V2's founding-time lowering, so the campaign's execution descriptor
+# is DERIVED (decision 0011 §3c/§3d) rather than a sixth hand-written preimage.
+# DEV only: none of these reach the cdylib, and the ELF digest is the control.
+dclutch-fractional-claim-kernel = { path = "../../crates/dclutch-fractional-claim-kernel" }
+dclutch-rational-representation-v2-request-contract = { path = "../../crates/dclutch-rational-representation-v2-request-contract" }
+dclutch-structured-v2-kernel = { path = "../../crates/dclutch-structured-v2-kernel" }
+dclutch-structured-v2-operator = { path = "../../crates/dclutch-structured-v2-operator" }
 solana-account = "=4.6.0"
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.5.0"

@@ -579,39 +579,19 @@ fn build_action<'a>(
         unauthored_actions!() => Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
         Action::Consider | Action::Freeze => Ok(0),
         Action::InitializeSettlement => build_initialize(instructions, fixed, templates, routes),
-        Action::Collect => build_settlement(
-            action,
-            2,
-            CompartmentV1::External,
-            CompartmentV1::Settlement,
-            instructions,
-            fixed,
-            item,
-            templates,
-            routes,
-        ),
-        Action::Materialize => build_settlement(
-            action,
-            1,
-            CompartmentV1::Settlement,
-            CompartmentV1::HoardPrincipal,
-            instructions,
-            fixed,
-            item,
-            templates,
-            routes,
-        ),
-        Action::Distribute => build_settlement(
-            action,
-            2,
-            CompartmentV1::Settlement,
-            CompartmentV1::External,
-            instructions,
-            fixed,
-            item,
-            templates,
-            routes,
-        ),
+        // The two compartment bytes are NOT restated here. They come from
+        // `escrow_v1`, which is also what the packet builder and the artifact
+        // join read -- see that module's header for the defect this retires,
+        // and note that `Collect`'s row moved when it landed.
+        Action::Collect => {
+            build_settlement(action, 2, instructions, fixed, item, templates, routes)
+        }
+        Action::Materialize => {
+            build_settlement(action, 1, instructions, fixed, item, templates, routes)
+        }
+        Action::Distribute => {
+            build_settlement(action, 2, instructions, fixed, item, templates, routes)
+        }
         Action::Close => build_close(instructions, fixed, templates, routes),
     }
 }
@@ -686,14 +666,13 @@ fn build_initialize<'a>(
 fn build_settlement<'a>(
     action: Action,
     position_count: u32,
-    source: CompartmentV1,
-    destination: CompartmentV1,
     instructions: &mut [EffectInstructionV3],
     fixed: &mut usize,
     item: &mut usize,
     templates: &'a mut [u8],
     routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
 ) -> Result<usize> {
+    let (source, destination) = action_template_compartments(action)?;
     let (affine_bytes, affine_len) = affine_template(position_count)?;
     let custody_bytes = custody_template(OperationV1::Transfer, source, destination)?;
     let affine_offset = 0;
@@ -759,11 +738,8 @@ fn build_close<'a>(
     templates: &'a mut [u8],
     routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
 ) -> Result<usize> {
-    let transfer = custody_template(
-        OperationV1::Transfer,
-        CompartmentV1::Settlement,
-        CompartmentV1::External,
-    )?;
+    let (surplus_source, surplus_destination) = action_template_compartments(Action::Close)?;
+    let transfer = custody_template(OperationV1::Transfer, surplus_source, surplus_destination)?;
     let close_vault = custody_template(
         OperationV1::CloseVault,
         CompartmentV1::Settlement,
@@ -2056,6 +2032,17 @@ fn slice_at(input: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
                     .checked_add(len)
                     .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
         )
+        .ok_or(GeneralEffectArtifactErrorV3::Geometry)
+}
+
+/// Compartments one action's Custody `Transfer` template must carry.
+///
+/// The values live in [`crate::escrow_v1`]. An action that reaches a template
+/// builder and names no movement there is a wiring error, not a shape: it is
+/// refused rather than defaulted, because a default would be a second author of
+/// the fact this indirection exists to have exactly one author for.
+fn action_template_compartments(action: Action) -> Result<(CompartmentV1, CompartmentV1)> {
+    crate::escrow_v1::general_action_template_compartments_v1(action)
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)
 }
 

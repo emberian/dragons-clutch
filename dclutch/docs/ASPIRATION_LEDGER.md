@@ -470,6 +470,40 @@ census row is still not flippable and `"structured"` still appears in neither
 `blocked.json` nor the census — that is downstream of the artifacts, in the
 order decision 0011 §6 fixes.
 
+**AMENDED AGAIN, 2026-08-27 (STRUCT-CAMP-2). The last sentence above is now
+false, and the row's headline is half false.** `"structured"` is in the census.
+`tools/gauntlet/structured/` binds thirteen rows — all of them to existing
+`claims/*` route ids, because under decision 0011 §3b Structured has no program
+and every route it can execute is a Claims route — plus seven witnesses and nine
+enforced CU-budget rows under the campaign id `structured-v2-programtest`. The
+census report now names that campaign as a corroborating source on
+`claims/process_instruction` and `claims/rational_representation_v2::process`.
+There is deliberately still no census TARGETS row (0011 §6).
+
+**And `dclutch-structured-v2-{kernel,operator}` now has a consumer outside its
+own three crates**, which is the specific charge in the table above: the real-ELF
+campaign at `programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs`
+DERIVES its execution descriptor through
+`derive_structured_representation_descriptor_v2` over real Structured terms, a
+real composition bundle and the real exposure record. It is a dev dependency and
+it is a real caller — the campaign cannot start without it, and the descriptor it
+produces keys every shard Mint, custody account, Position and replay record the
+campaign then drives. What 0011 §3d said about a builder with no caller having no
+gate is exactly what this closes.
+
+What did NOT close, stated so nobody reads the row as finished: no `programs/`
+crate depends on the Structured crates for its cdylib and none should — the
+lowering is host-side by construction. `hot_v2.rs` still has zero non-test
+callers and is still the operator's adversary rather than a route.
+`RetireCoordinate`/`RetireReceipt` are still unexercised, so §3b's two closure
+kinds have no chain evidence. And the campaign measured a wall the ruling did not
+have: the FULL-WIDTH structured actions at `K = 3` compile to 1,357 bytes on a v0
+message over a live Address Lookup Table against a 1,232-byte packet limit, so
+`IssueStructured`/`UnwrapStructured` cap at `K = 2` on a cluster — one coordinate
+below the `K = 3` RequestProfile ceiling §3b derived and called hard. The
+selected-outcome actions carry `asset_count == 1` at every width and are
+unaffected.
+
 One more thing this row should not let a reader assume: **an effect program
 cannot move a token.** `ResolvedEffectV3` is lamports, account-data writes and
 child-request patches, so Structured's six Token kinds cannot become effect

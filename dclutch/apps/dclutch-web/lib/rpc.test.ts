@@ -124,4 +124,69 @@ describe('bounded finalized RPC client', () => {
       globalThis.fetch = original;
     }
   });
+
+  it('reads the node signature history with exact bounds and canonical text', async () => {
+    const signature = '5'.repeat(88);
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getSignaturesForAddress');
+      expect(request.params[1]).toEqual({ commitment: 'finalized', limit: 3 });
+      return response([
+        { signature, slot: 90, err: null, blockTime: 1790000000, memo: null },
+        { signature: '4'.repeat(88), slot: 88, err: { InstructionError: [1, 'Custom'] }, blockTime: null },
+      ]);
+    };
+    const client = new SolanaRpcClient('http://127.0.0.1:8899', fetcher);
+    const records = await client.signaturesForAddress('11111111111111111111111111111111', 3);
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ signature, slot: '90', succeeded: true, errorText: null, blockTime: '1790000000' });
+    expect(records[1]).toMatchObject({ slot: '88', succeeded: false });
+    expect(records[1].errorText).toContain('InstructionError');
+    await expect(client.signaturesForAddress('11111111111111111111111111111111', 0)).rejects.toThrow('1..50');
+  });
+
+  it('polls signature statuses one-for-one including unknown signatures', async () => {
+    const known = '6'.repeat(88);
+    const unknown = '7'.repeat(88);
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getSignatureStatuses');
+      expect(request.params[1]).toEqual({ searchTransactionHistory: true });
+      return response({ context: { slot: 99 }, value: [{ slot: 91, confirmationStatus: 'finalized', err: null }, null] });
+    };
+    const statuses = await new SolanaRpcClient('http://127.0.0.1:8899', fetcher).signatureStatuses([known, unknown]);
+    expect(statuses[0]).toEqual({ signature: known, known: true, slot: '91', confirmationStatus: 'finalized', succeeded: true, errorText: null });
+    expect(statuses[1]).toEqual({ signature: unknown, known: false, slot: null, confirmationStatus: null, succeeded: null, errorText: null });
+  });
+
+  it('reads one finalized transaction as exact bytes, balances, and logs', async () => {
+    const signature = '8'.repeat(88);
+    const bytes = Uint8Array.from([1, 2, 3, 4]);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getTransaction');
+      expect(request.params[1]).toEqual({ commitment: 'finalized', encoding: 'base64', maxSupportedTransactionVersion: 0 });
+      return response({
+        slot: 92,
+        blockTime: 1790000101,
+        transaction: [btoa(binary), 'base64'],
+        meta: { err: null, fee: 5000, preBalances: [10, 20], postBalances: [5, 25], logMessages: ['Program log: ok'] },
+      });
+    };
+    const observation = await new SolanaRpcClient('http://127.0.0.1:8899', fetcher).transaction(signature);
+    expect(observation).toMatchObject({
+      signature, slot: '92', blockTime: '1790000101', succeeded: true, feeLamports: '5000',
+      preBalances: ['10', '20'], postBalances: ['5', '25'], logMessages: ['Program log: ok'],
+    });
+    expect(Array.from(observation?.transactionBytes ?? [])).toEqual([1, 2, 3, 4]);
+    // Bytes that are not one canonical versioned transaction decode no account list.
+    expect(observation?.accountAddresses).toEqual([]);
+  });
+
+  it('reports an unserved transaction as null rather than inventing one', async () => {
+    const fetcher: typeof fetch = async () => response(null);
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).transaction('9'.repeat(88))).resolves.toBeNull();
+  });
 });
