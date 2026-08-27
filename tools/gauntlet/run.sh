@@ -103,49 +103,16 @@ case "$RECORD_PUBLICATION" in genesis|transaction) ;; *) echo "--record-publicat
 # is exactly the contention it exists to end.
 #
 # 20890 stays the default and reproduces the historical run byte for byte.
-# `auto` binds port 0, reads back what the kernel gave, and closes it: a
-# race remains theoretically possible, and the bootstrap's own
-# `ensure_rpc_port_free` plus the launcher's bind are what actually decide.
-if [ "$RPC_PORT" = "auto" ]; then
-    RPC_PORT="$(python3 - <<'PY'
-import socket
-# Ask for a free base whose whole 42-port block is also free, since the
-# launcher derives faucet/gossip/dynamic from it. Held sockets are closed only
-# after all of them are proven bindable together.
-for _ in range(64):
-    held = []
-    try:
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        base = probe.getsockname()[1]
-        if not (1024 <= base <= 65494):
-            probe.close()
-            continue
-        held.append(probe)
-        for offset in (2, 3, *range(10, 42)):
-            member = socket.socket()
-            member.bind(("127.0.0.1", base + offset))
-            held.append(member)
-    except OSError:
-        for sock in held:
-            sock.close()
-        continue
-    for sock in held:
-        sock.close()
-    print(base)
-    break
-else:
-    raise SystemExit("could not find a free 42-port block on 127.0.0.1")
-PY
-)" || { echo "--rpc-port auto: no free port block" >&2; exit 2; }
+# `auto` is resolved LATE, at the campaign stage, by allocate_rpc_port below.
+if [ "$RPC_PORT" != "auto" ]; then
+    case "$RPC_PORT" in
+        ''|*[!0-9]*) echo "--rpc-port must be a decimal port or 'auto'" >&2; exit 2 ;;
+    esac
+    [ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] || {
+        echo "--rpc-port must be 1024-65494 so the launcher's 42-port block fits under 65535" >&2
+        exit 2
+    }
 fi
-case "$RPC_PORT" in
-    ''|*[!0-9]*) echo "--rpc-port must be a decimal port or 'auto'" >&2; exit 2 ;;
-esac
-[ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] || {
-    echo "--rpc-port must be 1024-65494 so the launcher's 42-port block fits under 65535" >&2
-    exit 2
-}
 
 GAUNTLET="$REPO/tools/gauntlet"
 SOURCE="$WORK/source"
@@ -173,6 +140,47 @@ sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
 say() { printf '\n== %s\n' "$*"; }
 die() { printf 'gauntlet: %s\n' "$*" >&2; exit 1; }
+# Resolve `--rpc-port auto` into a base whose WHOLE 42-port block binds.
+#
+# Deliberately NOT `bind(0)`. The kernel's ephemeral range is the range it also
+# hands to every ordinary outbound connection, so a base drawn from it is the
+# most likely port on the machine to be stolen out from under a validator. And
+# it is resolved LATE, immediately before the campaign, because a base chosen
+# at argument-parse time is six minutes of SBF builds away from being used.
+# Both halves are measured, not theorised: the first parallel campaign attempt
+# picked ephemeral 49952 at parse time and found it occupied when it got there.
+#
+# So: a band well below the ephemeral range, a start offset keyed to this
+# process so two concurrent runs do not begin at the same candidate, and every
+# candidate proved by actually binding all 42 ports at once.
+allocate_rpc_port() {
+    python3 - "$$" <<'PY'
+import socket, sys
+
+BAND_LOW, BAND_HIGH, STRIDE = 21000, 48000, 64
+count = (BAND_HIGH - BAND_LOW) // STRIDE
+start = int(sys.argv[1]) % count
+for step in range(count):
+    base = BAND_LOW + ((start + step) % count) * STRIDE
+    held = []
+    try:
+        for offset in (0, 2, 3, *range(10, 42)):
+            member = socket.socket()
+            member.bind(("127.0.0.1", base + offset))
+            held.append(member)
+    except OSError:
+        for sock in held:
+            sock.close()
+        continue
+    for sock in held:
+        sock.close()
+    print(base)
+    break
+else:
+    raise SystemExit("no free 42-port block in 21000-48000 on 127.0.0.1")
+PY
+}
+
 
 # ------------------------------------------------------------- the ledger lock
 #
@@ -413,6 +421,11 @@ if [ "$MODE" = "full" ]; then
             || die "solana-test-validator not found"
         [ -x "$BOOTSTRAP_BIN" ] || die "bootstrap binary missing: $BOOTSTRAP_BIN"
 
+        if [ "$RPC_PORT" = "auto" ]; then
+            RPC_PORT="$(allocate_rpc_port)" || die "--rpc-port auto: no free 42-port block"
+            echo "allocated rpc base: $RPC_PORT"
+        fi
+
         # The launcher refuses to start while anything else listens on its base,
         # and so does the bootstrap. Say so here before a 60-second timeout
         # does. Deliberately NOT in SPEC_INPUT_DIGEST above: the origin moves no
@@ -463,6 +476,41 @@ for byte in raw:
     out = "1" + out
 print(out)
 PY
+        }
+
+        # ------------------------------------------------ deployment slots
+        #
+        # DEVNET_DEMO_DEPLOY.md section 7 blocker A: plan.rs used to build every
+        # ArtifactReleaseV1 with `deployment_slot` literal 0, which is correct
+        # for a genesis install and wrong for every real deploy. It is
+        # load-bearing on chain -- artifact.rs returns DeploymentSlotMismatch
+        # when the observed slot differs -- and the value cannot be
+        # pre-committed, because the measured local deploy landed at slot 167
+        # and its redeploy at 531.
+        #
+        # 993a9ec fixed the tool. NOTHING drove it: no caller in the repository
+        # supplied a nonzero slot, so the whole path stayed at 0 == 0 and the
+        # rule it enforces was never exercised.
+        #
+        # It is driven HERE, and only in `transaction` mode, which is the
+        # devnet rehearsal (deploy -> revoke -> observe -> mint -> publish).
+        # `genesis` mode is the local install where slot 0 is the honest
+        # answer, so its plan, its addresses and every one of its CU budget
+        # rows are byte-identical to before this existed.
+        #
+        # Distinct primes, all small: the Loader's own rule is that a program
+        # is not executable until AFTER the slot it was deployed in, so the
+        # campaign must wait the chain past the highest of them -- at 16 ticks
+        # a slot that is a few seconds, and it is the first time that wait has
+        # ever had anything to wait for. Distinct rather than uniform so a
+        # role reading another role's slot cannot pass by coincidence.
+        genesis_deployment_slot_for() {
+            case "$1" in
+                registry) printf 11 ;; core) printf 13 ;; claims) printf 17 ;;
+                trading)  printf 19 ;; resolution) printf 23 ;; custody) printf 29 ;;
+                rent)     printf 31 ;;
+                *) die "no genesis deployment slot for role $1" ;;
+            esac
         }
 
         mkdir -p "$RUN/attestation"
@@ -556,6 +604,9 @@ PY
                 printf '    "elf_path": "%s",\n' "$ELF_DIR/$role.so"
                 printf '    "elf_sha256": "%s",\n' "$(sha256 "$ELF_DIR/$role.so")"
                 printf '    "semantic_release_id": "%s",\n' "$(semantic_release_for "$role")"
+                if [ "$RECORD_PUBLICATION" = "transaction" ]; then
+                    printf '    "genesis_deployment_slot": %s,\n' "$(genesis_deployment_slot_for "$role")"
+                fi
                 printf '    "attestation": "%s"\n' "$RUN/attestation/$role.json"
                 printf '  },\n'
             done

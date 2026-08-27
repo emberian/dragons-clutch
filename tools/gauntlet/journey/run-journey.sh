@@ -107,41 +107,16 @@ case "$HOLDERS" in ''|*[!0-9]*) echo "--holders must be a decimal count" >&2; ex
 # The origin. See the same block in tools/gauntlet/run.sh for why this is a
 # parameter and not a constant: it is in no authenticated material, so moving
 # it moves nothing the transcript, the witnesses or the CU budgets read.
-if [ "$RPC_PORT" = "auto" ]; then
-    RPC_PORT="$(python3 - <<'@MARK@'
-import socket
-for _ in range(64):
-    held = []
-    try:
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        base = probe.getsockname()[1]
-        if not (1024 <= base <= 65494):
-            probe.close()
-            continue
-        held.append(probe)
-        for offset in (2, 3, *range(10, 42)):
-            member = socket.socket()
-            member.bind(("127.0.0.1", base + offset))
-            held.append(member)
-    except OSError:
-        for sock in held:
-            sock.close()
-        continue
-    for sock in held:
-        sock.close()
-    print(base)
-    break
-else:
-    raise SystemExit("could not find a free 42-port block on 127.0.0.1")
-@MARK@
-)" || { echo "--rpc-port auto: no free port block" >&2; exit 2; }
+# `auto` is resolved LATE, at the campaign stage, by allocate_rpc_port below.
+if [ "$RPC_PORT" != "auto" ]; then
+    case "$RPC_PORT" in
+        ''|*[!0-9]*) echo "--rpc-port must be a decimal port or 'auto'" >&2; exit 2 ;;
+    esac
+    [ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] || {
+        echo "--rpc-port must be 1024-65494 so the launcher's 42-port block fits under 65535" >&2
+        exit 2
+    }
 fi
-case "$RPC_PORT" in ''|*[!0-9]*) echo "--rpc-port must be a decimal port or 'auto'" >&2; exit 2 ;; esac
-[ "$RPC_PORT" -ge 1024 ] && [ "$RPC_PORT" -le 65494 ] || {
-    echo "--rpc-port must be 1024-65494 so the launcher's 42-port block fits under 65535" >&2
-    exit 2
-}
 
 GAUNTLET="$REPO/tools/gauntlet"
 TIER="$GAUNTLET/journey"
@@ -161,6 +136,47 @@ sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
 say() { printf '\n== %s\n' "$*"; }
 die() { printf 'journey: %s\n' "$*" >&2; exit 1; }
+# Resolve `--rpc-port auto` into a base whose WHOLE 42-port block binds.
+#
+# Deliberately NOT `bind(0)`. The kernel's ephemeral range is the range it also
+# hands to every ordinary outbound connection, so a base drawn from it is the
+# most likely port on the machine to be stolen out from under a validator. And
+# it is resolved LATE, immediately before the campaign, because a base chosen
+# at argument-parse time is six minutes of SBF builds away from being used.
+# Both halves are measured, not theorised: the first parallel campaign attempt
+# picked ephemeral 49952 at parse time and found it occupied when it got there.
+#
+# So: a band well below the ephemeral range, a start offset keyed to this
+# process so two concurrent runs do not begin at the same candidate, and every
+# candidate proved by actually binding all 42 ports at once.
+allocate_rpc_port() {
+    python3 - "$$" <<'PY'
+import socket, sys
+
+BAND_LOW, BAND_HIGH, STRIDE = 21000, 48000, 64
+count = (BAND_HIGH - BAND_LOW) // STRIDE
+start = int(sys.argv[1]) % count
+for step in range(count):
+    base = BAND_LOW + ((start + step) % count) * STRIDE
+    held = []
+    try:
+        for offset in (0, 2, 3, *range(10, 42)):
+            member = socket.socket()
+            member.bind(("127.0.0.1", base + offset))
+            held.append(member)
+    except OSError:
+        for sock in held:
+            sock.close()
+        continue
+    for sock in held:
+        sock.close()
+    print(base)
+    break
+else:
+    raise SystemExit("no free 42-port block in 21000-48000 on 127.0.0.1")
+PY
+}
+
 
 # ------------------------------------------------------------- the ledger lock
 #
@@ -325,6 +341,10 @@ fi
 [ -x "$JOURNEY_BIN" ] || die "journey binary missing: $JOURNEY_BIN"
 
 # ----------------------------------------------------------------- 4. campaign
+if [ "$RPC_PORT" = "auto" ]; then
+    RPC_PORT="$(allocate_rpc_port)" || die "--rpc-port auto: no free 42-port block"
+    echo "allocated rpc base: $RPC_PORT"
+fi
 if python3 -c 'import socket,sys
 s=socket.socket(); s.settimeout(0.5)
 sys.exit(0 if s.connect_ex(("127.0.0.1",int(sys.argv[1])))==0 else 1)' "$RPC_PORT"; then

@@ -130,6 +130,20 @@ impl ValidatorChild {
             // launcher derives its whole port block from this base.
             .arg("--rpc-port")
             .arg(rpc_port.to_string())
+            // Bind the validator's lifetime to THIS process, structurally.
+            //
+            // `Drop` below already kills the child, and it is not enough: a
+            // supervisor that is SIGKILLed never runs Drop, and the validator
+            // reparents to PID 1 and outlives everything. That is not a
+            // hypothetical -- on 2026-08-27 a finished campaign left a
+            // validator with PPID 1 holding the one port every tier-1 run
+            // needed, and the chain it held was unusable by anyone because the
+            // founder key had died with the supervisor's memory.
+            //
+            // Given this pid the launcher starts a watchdog before it execs,
+            // so the containment survives a signal this process cannot catch.
+            .arg("--supervisor-pid")
+            .arg(std::process::id().to_string())
             .arg("--ledger")
             .arg(&spec.ledger)
             .arg("--account-dir")

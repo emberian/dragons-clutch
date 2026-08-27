@@ -107,6 +107,50 @@ port_from_profile() {
   printf '%s\n' "$port"
 }
 
+
+# ------------------------------------------------------------- the watchdog
+#
+# The supervisor owns this validator's lifetime and kills it on Drop. That is
+# correct and it is not enough: a supervisor that is SIGKILLed -- a rate-limit
+# kill, a harness timeout, a `kill -9` on the wrong pid -- never runs Drop, and
+# the validator reparents to PID 1 and lives forever. That happened on
+# 2026-08-27: a finished campaign left a validator with PPID 1 holding the one
+# port every tier-1 run needed, with no bootstrap, launcher or gauntlet process
+# alive anywhere. Nothing could reach it either: the founder key existed only
+# in the dead supervisor's memory, so the chain it was holding was unusable by
+# anyone while blocking everyone.
+#
+# Containment has to be STRUCTURAL, not a caller remembering to be polite. This
+# runs before the exec, so `$$` is already the pid the validator will have --
+# exec preserves it. When the supervisor is gone, the validator goes.
+#
+# Pid reuse is the one hazard, and it is closed rather than narrowed: the
+# watchdog exits the moment its target stops being a solana-test-validator, and
+# it re-checks the command line immediately before signalling. It never sends a
+# signal to a pid it has not just confirmed.
+spawn_supervisor_watchdog() {
+  local supervisor=$1 target=$$
+  (
+    still_ours() {
+      local command_line
+      command_line=$(ps -o command= -p "$target" 2>/dev/null) || return 1
+      [[ "$command_line" == *"solana-test-validator"* ]]
+    }
+    while kill -0 "$supervisor" 2>/dev/null; do
+      still_ours || exit 0
+      sleep 1
+    done
+    still_ours || exit 0
+    kill -TERM "$target" 2>/dev/null || exit 0
+    for _ in $(seq 1 40); do
+      sleep 0.25
+      still_ours || exit 0
+    done
+    still_ours && kill -KILL "$target" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -126,13 +170,18 @@ Usage:
     --custody-sha256 SHA256 --custody-attestation ABSOLUTE_JSON \
     --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF \
     --rent-credit-sha256 SHA256 --rent-credit-attestation ABSOLUTE_JSON \
-    [--rpc-port PORT] [--foreground]
+    [--rpc-port PORT] [--supervisor-pid PID] [--foreground]
   dclutch-successor-validator status --ledger ABSOLUTE_DIR
   dclutch-successor-validator stop --ledger ABSOLUTE_DIR
 
 The profile binds only to 127.0.0.1, on a 42-port block derived from one base:
 
   rpc BASE   faucet BASE+2   gossip BASE+3   dynamic BASE+10..BASE+41
+
+--supervisor-pid names the process whose lifetime this validator is bound to.
+Given it, the validator is killed when that process dies EVEN IF the process is
+SIGKILLed and never runs its own cleanup -- which is how a finished campaign
+left a validator with PPID 1 holding the pinned port on 2026-08-27.
 
 BASE comes from --rpc-port, else $DCLUTCH_RPC_PORT, else 20890 -- so the default
 block is the historical 20890-20931 and N campaigns can run concurrently on one
@@ -363,10 +412,11 @@ write_profile() {
 }
 
 start() {
-  local ledger_arg='' account_dir_arg='' plan_arg='' registry_id='' registry_elf_arg='' registry_hash='' registry_attestation_arg='' core_id='' core_elf_arg='' core_hash='' core_attestation_arg='' claims_id='' claims_elf_arg='' claims_hash='' claims_attestation_arg='' trading_id='' trading_elf_arg='' trading_hash='' trading_attestation_arg='' resolution_id='' resolution_elf_arg='' resolution_hash='' resolution_attestation_arg='' custody_id='' custody_elf_arg='' custody_hash='' custody_attestation_arg='' rent_credit_id='' rent_credit_elf_arg='' rent_credit_hash='' rent_credit_attestation_arg='' foreground=0 rpc_port_arg=''
+  local ledger_arg='' account_dir_arg='' plan_arg='' registry_id='' registry_elf_arg='' registry_hash='' registry_attestation_arg='' core_id='' core_elf_arg='' core_hash='' core_attestation_arg='' claims_id='' claims_elf_arg='' claims_hash='' claims_attestation_arg='' trading_id='' trading_elf_arg='' trading_hash='' trading_attestation_arg='' resolution_id='' resolution_elf_arg='' resolution_hash='' resolution_attestation_arg='' custody_id='' custody_elf_arg='' custody_hash='' custody_attestation_arg='' rent_credit_id='' rent_credit_elf_arg='' rent_credit_hash='' rent_credit_attestation_arg='' foreground=0 rpc_port_arg='' supervisor_pid_arg=''
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --rpc-port) rpc_port_arg=${2-}; shift 2 ;;
+      --supervisor-pid) supervisor_pid_arg=${2-}; shift 2 ;;
       --ledger) ledger_arg=${2-}; shift 2 ;;
       --account-dir) account_dir_arg=${2-}; shift 2 ;;
       --plan) plan_arg=${2-}; shift 2 ;;
@@ -405,6 +455,10 @@ start() {
   [[ -n "$ledger_arg" && -n "$account_dir_arg" && -n "$plan_arg" && -n "$registry_id" && -n "$registry_elf_arg" && -n "$registry_hash" && -n "$registry_attestation_arg" && -n "$core_id" && -n "$core_elf_arg" && -n "$core_hash" && -n "$core_attestation_arg" && -n "$claims_id" && -n "$claims_elf_arg" && -n "$claims_hash" && -n "$claims_attestation_arg" && -n "$trading_id" && -n "$trading_elf_arg" && -n "$trading_hash" && -n "$trading_attestation_arg" && -n "$resolution_id" && -n "$resolution_elf_arg" && -n "$resolution_hash" && -n "$resolution_attestation_arg" && -n "$custody_id" && -n "$custody_elf_arg" && -n "$custody_hash" && -n "$custody_attestation_arg" && -n "$rent_credit_id" && -n "$rent_credit_elf_arg" && -n "$rent_credit_hash" && -n "$rent_credit_attestation_arg" ]] || die "start requires every plan and artifact pin"
   [[ "$foreground" -eq 1 ]] || die "start requires --foreground under a same-process in-memory Core-authority supervisor"
   resolve_start_port "$rpc_port_arg"
+  if [[ -n "$supervisor_pid_arg" ]]; then
+    [[ "$supervisor_pid_arg" =~ ^[1-9][0-9]*$ ]] || die "--supervisor-pid must be a positive decimal pid: $supervisor_pid_arg"
+    kill -0 "$supervisor_pid_arg" 2>/dev/null || die "--supervisor-pid $supervisor_pid_arg is not a live process"
+  fi
   is_pubkey "$registry_id" || die "invalid Registry program ID"
   is_pubkey "$core_id" || die "invalid Core program ID"
   is_pubkey "$claims_id" || die "invalid Claims program ID"
@@ -495,6 +549,7 @@ start() {
   )
   if [[ "$foreground" -eq 1 ]]; then
     printf '%s\n' "$$" > "$ledger/$PID_NAME"
+    [[ -n "$supervisor_pid_arg" ]] && spawn_supervisor_watchdog "$supervisor_pid_arg"
     printf 'starting foreground validator at http://127.0.0.1:%s\nprofile: %s\n' "$RPC_PORT" "$ledger/$PROFILE_NAME"
     exec "$validator" "${validator_args[@]}"
   fi
