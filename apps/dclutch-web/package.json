@@ -31,6 +31,7 @@
     "abi:realm-position:verify": "node scripts/lean-emit.mjs DClutchSemantics.RealmPositionAbi EmitRealmPositionAbiTs.lean lib/generated/realmPositionV1.ts --check",
     "abi:capability-manifest": "node scripts/lean-emit.mjs DClutchSemantics.CapabilityManifestV1Abi EmitCapabilityManifestV1AbiTs.lean lib/generated/capabilityManifestV1.ts",
     "abi:capability-manifest:verify": "node scripts/lean-emit.mjs DClutchSemantics.CapabilityManifestV1Abi EmitCapabilityManifestV1AbiTs.lean lib/generated/capabilityManifestV1.ts --check",
+    "abi:coverage": "node scripts/abi-coverage.mjs",
     "fixtures:verify": "node scripts/verify-fixtures.mjs"
   },
   "dependencies": {

@@ -7,6 +7,71 @@ import {
 
 import { PACKET_DATA_SIZE } from './directTransaction';
 import {
+  CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1,
+  CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1,
+  CAPABILITY_ENTRY_BYTES_V1,
+  CAPABILITY_ENTRY_CAPACITY_PROFILE_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CHILD_DERIVATION_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CHILD_SCHEMA_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CONFIG_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_DEPENDENCIES_OFFSET_V1,
+  CAPABILITY_ENTRY_DEPENDENCY_COUNT_OFFSET_V1,
+  CAPABILITY_ENTRY_KIND_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_QUOTE_OFFSET_V1,
+  CAPABILITY_ENTRY_RELEASE_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_RESERVED_BYTES_V1,
+  CAPABILITY_ENTRY_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1,
+  CAPABILITY_FUNDING_ALLOCATION_CLASS_OFFSET_V1,
+  CAPABILITY_FUNDING_ALLOCATION_RESERVED_BYTES_V1,
+  CAPABILITY_FUNDING_ALLOCATION_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1,
+  CAPABILITY_FUNDING_AMOUNTS_REALM_TOTAL_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_BENEFICIARY_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_BYTES_V1,
+  CAPABILITY_FUNDING_BINDING_MINT_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_REALM_ID_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_RELEASE_ID_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_TOKEN_PROGRAM_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_AMOUNTS_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_BYTES_V1,
+  CAPABILITY_FUNDING_QUOTE_COLLATERAL_KIND_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_MAGIC_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_MAGIC_V1,
+  CAPABILITY_FUNDING_QUOTE_RESERVED_BYTES_V1,
+  CAPABILITY_FUNDING_QUOTE_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_SCHEMA_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_SCHEMA_VERSION_V1,
+  CAPABILITY_MANIFEST_ARTIFACT_PROFILE_V1,
+  CAPABILITY_MANIFEST_COUNT_OFFSET_V1,
+  CAPABILITY_MANIFEST_HEADER_BYTES_V1,
+  CAPABILITY_MANIFEST_HEADER_RESERVED_BYTES_V1,
+  CAPABILITY_MANIFEST_MAGIC_OFFSET_V1,
+  CAPABILITY_MANIFEST_MAGIC_V1,
+  CAPABILITY_MANIFEST_PROFILE_OFFSET_V1,
+  CAPABILITY_MANIFEST_RESERVED_OFFSET_V1,
+  CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1,
+  CAPABILITY_MANIFEST_SCHEMA_VERSION_V1,
+  FUNDING_COMPARTMENTS_V1,
+  MAX_CAPABILITIES_V1,
+  MAX_DEPENDENCIES_PER_CAPABILITY_V1,
+} from './generated/capabilityManifestV1';
+import {
+  REALM_ADAPTER_RELEASE_ID_OFFSET_V1,
+  REALM_BYTES_V1,
+  REALM_COLLATERAL_MINT_OFFSET_V1,
+  REALM_FREEZE_AUTHORITY_POLICY_OFFSET_V1,
+  REALM_MAGIC_OFFSET_V1,
+  REALM_MAGIC_V1,
+  REALM_MINT_AUTHORITY_POLICY_OFFSET_V1,
+  REALM_RESERVED_BYTES_V1,
+  REALM_RESERVED_OFFSET_V1,
+  REALM_SCHEMA_VERSION_OFFSET_V1,
+  REALM_SCHEMA_VERSION_V1,
+  REALM_TOKEN_PROGRAM_OFFSET_V1,
+} from './generated/realmPositionV1';
+import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
   ARTIFACT_RELEASE_SCHEMA_ID_V1,
   CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
@@ -45,9 +110,6 @@ const PRODUCT_RECORD_BYTES = 112;
 const DOMAIN_HEADER_BYTES = 240;
 const PORTFOLIO_HEADER_BYTES = 208;
 const SOURCE_MATERIAL_BYTES = 208;
-const REALM_BYTES = 112;
-const MANIFEST_HEADER_BYTES = 16;
-const MANIFEST_ENTRY_BYTES = 528;
 const MAX_U32 = 0xffff_ffff;
 
 export type CoreFoundInputV2 = Readonly<{
@@ -193,10 +255,13 @@ async function recordAuthority(
 }
 
 function validateRealm(bytes: Uint8Array): void {
-  if (bytes.length !== REALM_BYTES || ascii(bytes, 0, 8) !== 'DCLTRLM1' || u16(bytes, 8) !== 1) throw new Error('Realm record has the wrong exact ABI');
-  if (bytes[10] > 1 || bytes[11] > 1) throw new Error('Realm authority policy is undefined');
-  requireZero(bytes, 12, 4, 'Realm header');
-  [16, 48, 80].forEach((offset) => requireNonzero(slice(bytes, offset, 32), 'Realm identity'));
+  if (bytes.length !== REALM_BYTES_V1
+      || ascii(bytes, REALM_MAGIC_OFFSET_V1, 8) !== REALM_MAGIC_V1
+      || u16(bytes, REALM_SCHEMA_VERSION_OFFSET_V1) !== REALM_SCHEMA_VERSION_V1) throw new Error('Realm record has the wrong exact ABI');
+  if (bytes[REALM_MINT_AUTHORITY_POLICY_OFFSET_V1] > 1 || bytes[REALM_FREEZE_AUTHORITY_POLICY_OFFSET_V1] > 1) throw new Error('Realm authority policy is undefined');
+  requireZero(bytes, REALM_RESERVED_OFFSET_V1, REALM_RESERVED_BYTES_V1, 'Realm header');
+  [REALM_TOKEN_PROGRAM_OFFSET_V1, REALM_COLLATERAL_MINT_OFFSET_V1, REALM_ADAPTER_RELEASE_ID_OFFSET_V1]
+    .forEach((offset) => requireNonzero(slice(bytes, offset, 32), 'Realm identity'));
 }
 
 export function validateCoreFoundSourceMaterialV2(bytes: Uint8Array, productDigest: Uint8Array): void {
@@ -210,20 +275,32 @@ export function validateCoreFoundSourceMaterialV2(bytes: Uint8Array, productDige
 }
 
 function validateFundingQuote(bytes: Uint8Array): Readonly<{ rent: bigint; creation: bigint }> {
-  if (bytes.length !== 304 || ascii(bytes, 0, 8) !== 'DCLTFQ01' || u16(bytes, 8) !== 1 || bytes[10] > 1) throw new Error('capability funding quote has the wrong exact ABI');
-  requireZero(bytes, 11, 5, 'capability funding quote header');
-  const binding = slice(bytes, 16, 160);
-  if (bytes[10] === 0) requireZero(binding, 0, 160, 'absent Realm funding binding');
-  else [0, 32, 64, 96, 128].forEach((offset) => requireNonzero(slice(binding, offset, 32), 'Realm funding binding'));
+  const kindOffset = CAPABILITY_FUNDING_QUOTE_COLLATERAL_KIND_OFFSET_V1;
+  if (bytes.length !== CAPABILITY_FUNDING_QUOTE_BYTES_V1
+      || ascii(bytes, CAPABILITY_FUNDING_QUOTE_MAGIC_OFFSET_V1, 8) !== CAPABILITY_FUNDING_QUOTE_MAGIC_V1
+      || u16(bytes, CAPABILITY_FUNDING_QUOTE_SCHEMA_OFFSET_V1) !== CAPABILITY_FUNDING_QUOTE_SCHEMA_VERSION_V1
+      || bytes[kindOffset] > 1) throw new Error('capability funding quote has the wrong exact ABI');
+  requireZero(bytes, CAPABILITY_FUNDING_QUOTE_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_QUOTE_RESERVED_BYTES_V1, 'capability funding quote header');
+  const binding = slice(bytes, CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1, CAPABILITY_FUNDING_BINDING_BYTES_V1);
+  if (bytes[kindOffset] === 0) requireZero(binding, 0, CAPABILITY_FUNDING_BINDING_BYTES_V1, 'absent Realm funding binding');
+  else [
+    CAPABILITY_FUNDING_BINDING_REALM_ID_OFFSET_V1,
+    CAPABILITY_FUNDING_BINDING_RELEASE_ID_OFFSET_V1,
+    CAPABILITY_FUNDING_BINDING_TOKEN_PROGRAM_OFFSET_V1,
+    CAPABILITY_FUNDING_BINDING_MINT_OFFSET_V1,
+    CAPABILITY_FUNDING_BINDING_BENEFICIARY_OFFSET_V1,
+  ].forEach((offset) => requireNonzero(slice(binding, offset, 32), 'Realm funding binding'));
   let nativeTotal = 0n;
   let realmTotal = 0n;
   const amounts: bigint[] = [];
-  for (let index = 0; index < 7; index += 1) {
-    const offset = 176 + index * 16;
-    const asset = bytes[offset];
-    const amount = u64(bytes, offset + 8);
-    requireZero(bytes, offset + 1, 7, 'capability funding allocation');
-    if (asset > 2 || (amount === 0n) !== (asset === 0) || (index < 2 && asset === 2)) throw new Error('capability funding allocation has a noncanonical asset class');
+  const amountsOffset = CAPABILITY_FUNDING_QUOTE_AMOUNTS_OFFSET_V1;
+  for (let index = 0; index < FUNDING_COMPARTMENTS_V1.length; index += 1) {
+    const offset = amountsOffset + FUNDING_COMPARTMENTS_V1[index].offset;
+    const asset = bytes[offset + CAPABILITY_FUNDING_ALLOCATION_CLASS_OFFSET_V1];
+    const amount = u64(bytes, offset + CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1);
+    requireZero(bytes, offset + CAPABILITY_FUNDING_ALLOCATION_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_ALLOCATION_RESERVED_BYTES_V1, 'capability funding allocation');
+    const nativeOnly = FUNDING_COMPARTMENTS_V1[index].assetPolicy === 'native-lamports-only';
+    if (asset > 2 || (amount === 0n) !== (asset === 0) || (nativeOnly && asset === 2)) throw new Error('capability funding allocation has a noncanonical asset class');
     if (asset === 1) nativeTotal += amount;
     if (asset === 2) realmTotal += amount;
     if (nativeTotal > 0xffff_ffff_ffff_ffffn || realmTotal > 0xffff_ffff_ffff_ffffn) {
@@ -231,38 +308,49 @@ function validateFundingQuote(bytes: Uint8Array): Readonly<{ rent: bigint; creat
     }
     amounts.push(amount);
   }
-  if (u64(bytes, 288) !== nativeTotal || u64(bytes, 296) !== realmTotal) throw new Error('capability funding totals do not equal their typed compartments');
-  if ((realmTotal === 0n) !== (bytes[10] === 0)) throw new Error('Realm funding binding does not match Realm collateral use');
+  if (u64(bytes, amountsOffset + CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1) !== nativeTotal
+      || u64(bytes, amountsOffset + CAPABILITY_FUNDING_AMOUNTS_REALM_TOTAL_OFFSET_V1) !== realmTotal) throw new Error('capability funding totals do not equal their typed compartments');
+  if ((realmTotal === 0n) !== (bytes[kindOffset] === 0)) throw new Error('Realm funding binding does not match Realm collateral use');
   return Object.freeze({ rent: amounts[0], creation: amounts[1] });
 }
 
 export function validateCoreFoundCapabilityManifestV1(bytes: Uint8Array): void {
-  if (bytes.length < MANIFEST_HEADER_BYTES || ascii(bytes, 0, 8) !== 'DCLTCAP1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('capability manifest has the wrong exact header');
-  requireZero(bytes, 14, 2, 'capability manifest header');
-  const count = u16(bytes, 12);
-  if (count > 16 || bytes.length !== MANIFEST_HEADER_BYTES + count * MANIFEST_ENTRY_BYTES) throw new Error('capability manifest width is not canonical');
+  if (bytes.length < CAPABILITY_MANIFEST_HEADER_BYTES_V1
+      || ascii(bytes, CAPABILITY_MANIFEST_MAGIC_OFFSET_V1, 8) !== CAPABILITY_MANIFEST_MAGIC_V1
+      || u16(bytes, CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1) !== CAPABILITY_MANIFEST_SCHEMA_VERSION_V1
+      || u16(bytes, CAPABILITY_MANIFEST_PROFILE_OFFSET_V1) !== CAPABILITY_MANIFEST_ARTIFACT_PROFILE_V1) throw new Error('capability manifest has the wrong exact header');
+  requireZero(bytes, CAPABILITY_MANIFEST_RESERVED_OFFSET_V1, CAPABILITY_MANIFEST_HEADER_RESERVED_BYTES_V1, 'capability manifest header');
+  const count = u16(bytes, CAPABILITY_MANIFEST_COUNT_OFFSET_V1);
+  if (count > MAX_CAPABILITIES_V1 || bytes.length !== CAPABILITY_MANIFEST_HEADER_BYTES_V1 + count * CAPABILITY_ENTRY_BYTES_V1) throw new Error('capability manifest width is not canonical');
   const dependencies: number[][] = [];
   let previous: Uint8Array | null = null;
   for (let index = 0; index < count; index += 1) {
-    const offset = MANIFEST_HEADER_BYTES + index * MANIFEST_ENTRY_BYTES;
-    const kind = slice(bytes, offset, 32);
-    [0, 32, 64, 96, 128, 160].forEach((relative) => requireNonzero(slice(bytes, offset + relative, 32), 'capability entry identity'));
+    const offset = CAPABILITY_MANIFEST_HEADER_BYTES_V1 + index * CAPABILITY_ENTRY_BYTES_V1;
+    const kind = slice(bytes, offset + CAPABILITY_ENTRY_KIND_ID_OFFSET_V1, 32);
+    [
+      CAPABILITY_ENTRY_KIND_ID_OFFSET_V1,
+      CAPABILITY_ENTRY_RELEASE_ID_OFFSET_V1,
+      CAPABILITY_ENTRY_CONFIG_ID_OFFSET_V1,
+      CAPABILITY_ENTRY_CAPACITY_PROFILE_ID_OFFSET_V1,
+      CAPABILITY_ENTRY_CHILD_SCHEMA_ID_OFFSET_V1,
+      CAPABILITY_ENTRY_CHILD_DERIVATION_ID_OFFSET_V1,
+    ].forEach((relative) => requireNonzero(slice(bytes, offset + relative, 32), 'capability entry identity'));
     if (previous !== null && compareBytes(previous, kind) >= 0) throw new Error('capability entries are not strictly ordered');
     previous = kind;
-    const policy = bytes[offset + 192];
-    const dependencyCount = bytes[offset + 193];
-    if (policy > 1 || dependencyCount > 16) throw new Error('capability entry policy or dependency count is undefined');
-    requireZero(bytes, offset + 194, 6, 'capability entry header');
+    const policy = bytes[offset + CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1];
+    const dependencyCount = bytes[offset + CAPABILITY_ENTRY_DEPENDENCY_COUNT_OFFSET_V1];
+    if (policy > 1 || dependencyCount > MAX_DEPENDENCIES_PER_CAPABILITY_V1) throw new Error('capability entry policy or dependency count is undefined');
+    requireZero(bytes, offset + CAPABILITY_ENTRY_RESERVED_OFFSET_V1, CAPABILITY_ENTRY_RESERVED_BYTES_V1, 'capability entry header');
     const active: number[] = [];
-    for (let position = 0; position < 16; position += 1) {
-      const dependency = bytes[offset + 208 + position];
+    for (let position = 0; position < MAX_DEPENDENCIES_PER_CAPABILITY_V1; position += 1) {
+      const dependency = bytes[offset + CAPABILITY_ENTRY_DEPENDENCIES_OFFSET_V1 + position];
       if (position < dependencyCount) {
         if (dependency >= count || dependency === index || (active.length > 0 && active[active.length - 1] >= dependency)) throw new Error('capability dependency is invalid or noncanonical');
         active.push(dependency);
       } else if (dependency !== 0) throw new Error('inactive capability dependency is nonzero');
     }
-    const deadline = u64(bytes, offset + 200);
-    const quote = validateFundingQuote(slice(bytes, offset + 224, 304));
+    const deadline = u64(bytes, offset + CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1);
+    const quote = validateFundingQuote(slice(bytes, offset + CAPABILITY_ENTRY_QUOTE_OFFSET_V1, CAPABILITY_FUNDING_QUOTE_BYTES_V1));
     if ((policy === 0 && deadline !== 0n) || (policy === 1 && (deadline === 0n || (quote.rent === 0n && quote.creation === 0n)))) throw new Error('capability activation policy and prepaid creation facts do not join');
     dependencies.push(active);
   }

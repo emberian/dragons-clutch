@@ -152,17 +152,10 @@ output += `export const LIABILITY_BASIS_MARKET_SEED_V2 = new TextEncoder().encod
 output += `export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().encode('${byteString('claimsPosition', 'PROTOCOL_POSITION_STATE_SEED_V2')}');\n`;
 
 // -------------------------------------------------------- the Realm record
-// A Market names its Realm by content identity, and on a live chain the
-// canonical body is a finalized Registry record rather than a Core account. The
-// browser reacquires it and re-hashes it, so it needs the body layout.
-output += '\n';
-output += array('REALM_MAGIC', bytes('realm', 'REALM_MAGIC'));
-output += `export const REALM_BYTES = ${scalar('realm', 'REALM_BYTES')} as const;\n`;
-output += `export const REALM_SCHEMA_VERSION = ${scalar('realm', 'REALM_SCHEMA_VERSION')} as const;\n`;
-for (const name of [
-  'REALM_MINT_AUTHORITY_POLICY_OFFSET', 'REALM_FREEZE_AUTHORITY_POLICY_OFFSET',
-  'REALM_TOKEN_PROGRAM_OFFSET', 'REALM_COLLATERAL_MINT_OFFSET', 'REALM_ADAPTER_RELEASE_ID_OFFSET',
-]) output += `export const ${name} = ${scalar('realm', name)} as const;\n`;
+// The Realm body layout used to be re-emitted here from the crate's literals.
+// It is now Lean-emitted directly into lib/generated/realmPositionV1.ts by
+// `npm run abi:realm-position`; a Realm coordinate stated in two generated
+// modules would be exactly the drift this pipeline exists to remove.
 
 if (process.argv.includes('--check')) {
   if (readFileSync(outputUrl, 'utf8') !== output) {

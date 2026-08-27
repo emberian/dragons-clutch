@@ -2,6 +2,51 @@ import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../../../', import.meta.url);
+
+/**
+ * The `DCLTCAP1` manifest coordinates moved to a Lean schema
+ * (`DClutchSemantics/CapabilityManifestV1Abi.lean`), so the crate no longer
+ * writes them as literals — it projects `generated_abi.rs`, which is where they
+ * are read from now. The names this ABI has always exported are kept by
+ * relabelling; the values are the Lean-emitted ones either way.
+ *
+ * The browser's own copy of this layout lives in
+ * `lib/generated/capabilityManifestV1.ts`, emitted from the same schema. A
+ * later pass should retire these aliases in favour of that module; doing it
+ * here would edit direct-hot surfaces another lane owns.
+ */
+const MANIFEST_ALIASES = Object.freeze({
+  MANIFEST_HEADER_BYTES: 'CAPABILITY_MANIFEST_HEADER_BYTES_V1',
+  CAPABILITY_ENTRY_BYTES: 'CAPABILITY_ENTRY_BYTES_V1',
+  MAX_CAPABILITIES: 'MAX_CAPABILITIES_V1',
+  MANIFEST_MAGIC: 'CAPABILITY_MANIFEST_MAGIC_V1',
+  MANIFEST_SCHEMA_OFFSET: 'CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1',
+  MANIFEST_PROFILE_OFFSET: 'CAPABILITY_MANIFEST_PROFILE_OFFSET_V1',
+  MANIFEST_COUNT_OFFSET: 'CAPABILITY_MANIFEST_COUNT_OFFSET_V1',
+  MANIFEST_RESERVED_OFFSET: 'CAPABILITY_MANIFEST_RESERVED_OFFSET_V1',
+  KIND_ID_OFFSET: 'CAPABILITY_ENTRY_KIND_ID_OFFSET_V1',
+  RELEASE_ID_OFFSET: 'CAPABILITY_ENTRY_RELEASE_ID_OFFSET_V1',
+  CONFIG_ID_OFFSET: 'CAPABILITY_ENTRY_CONFIG_ID_OFFSET_V1',
+  CAPACITY_PROFILE_ID_OFFSET: 'CAPABILITY_ENTRY_CAPACITY_PROFILE_ID_OFFSET_V1',
+  CHILD_SCHEMA_ID_OFFSET: 'CAPABILITY_ENTRY_CHILD_SCHEMA_ID_OFFSET_V1',
+  CHILD_DERIVATION_ID_OFFSET: 'CAPABILITY_ENTRY_CHILD_DERIVATION_ID_OFFSET_V1',
+  ACTIVATION_POLICY_OFFSET: 'CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1',
+  DEPENDENCY_COUNT_OFFSET: 'CAPABILITY_ENTRY_DEPENDENCY_COUNT_OFFSET_V1',
+  ENTRY_RESERVED_OFFSET: 'CAPABILITY_ENTRY_RESERVED_OFFSET_V1',
+  ACTIVATION_DEADLINE_OFFSET: 'CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1',
+  DEPENDENCIES_OFFSET: 'CAPABILITY_ENTRY_DEPENDENCIES_OFFSET_V1',
+});
+
+function relabel(rust, aliases) {
+  let text = rust;
+  for (const [exported, emitted] of Object.entries(aliases)) {
+    const before = text;
+    text = text.replace(new RegExp(`(const )${emitted}(:)`), `$1${exported}$2`);
+    if (text === before) throw new Error(`generated_abi.rs no longer emits ${emitted}`);
+  }
+  return text;
+}
+
 const sources = Object.freeze({
   hot: readFileSync(new URL('crates/dclutch-capability-program-contract/src/hot_v3.rs', root), 'utf8'),
   descriptor: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_v3.rs', root), 'utf8'),
@@ -10,13 +55,19 @@ const sources = Object.freeze({
   descriptorContractV4: readFileSync(new URL('crates/dclutch-capability-program-contract/src/v4.rs', root), 'utf8'),
   root: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated.rs', root), 'utf8'),
   selection: readFileSync(new URL('crates/dclutch-release-set-contract/src/generated_capability_execution.rs', root), 'utf8'),
-  manifest: readFileSync(new URL('crates/dclutch-capability-contract/src/lib.rs', root), 'utf8'),
+  manifest: relabel(
+    readFileSync(new URL('crates/dclutch-capability-contract/src/generated_abi.rs', root), 'utf8'),
+    MANIFEST_ALIASES,
+  ),
   set: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v1.rs', root), 'utf8'),
   setV2: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v2.rs', root), 'utf8'),
   direct: readFileSync(new URL('crates/dclutch-direct-codec/src/execution_v3.rs', root), 'utf8'),
   nativeEvidence: readFileSync(new URL('crates/dclutch-direct-codec/src/native_evidence_v3.rs', root), 'utf8'),
   intent: readFileSync(new URL('crates/dclutch-direct-codec/src/generated_intent_v2.rs', root), 'utf8'),
-  ordinary: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_v3.rs', root), 'utf8'),
+  ordinary: readFileSync(
+    new URL('crates/dclutch-direct-codec/src/generated_ordinary_v3.rs', root),
+    'utf8',
+  ),
   ordinaryArtifacts: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_artifacts_v3.rs', root), 'utf8'),
   ordinaryBundle: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_bundle_v4.rs', root), 'utf8'),
   successor: readFileSync(new URL('crates/dclutch-direct-codec/src/successor.rs', root), 'utf8'),

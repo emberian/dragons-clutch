@@ -2,7 +2,33 @@ import { PublicKey } from '@solana/web3.js';
 
 import checkpointJson from '../fixtures/successor-checkpoint.json';
 import { ascii, decodeBase64, hex, requireZero, sha256, slice, u16, u64 } from './bytes';
+import {
+  CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1,
+  CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_ACTIVATION_SLOT_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_BODY_RESERVED_BYTES_V1,
+  CAPABILITY_FUNDING_STATE_BODY_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_BYTES_V1,
+  CAPABILITY_FUNDING_STATE_ENTRY_INDEX_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_HEADER_RESERVED_BYTES_V1,
+  CAPABILITY_FUNDING_STATE_HEADER_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_MAGIC_V1,
+  CAPABILITY_FUNDING_STATE_MANIFEST_ID_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_RELEASED_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_SCHEMA_OFFSET_V1,
+  CAPABILITY_FUNDING_STATE_SCHEMA_VERSION_V1,
+  CAPABILITY_FUNDING_STATE_STATUS_OFFSET_V1,
+  FUNDING_COMPARTMENTS_V1,
+} from './generated/capabilityManifestV1';
 import { SolanaRpcClient, type ConnectionFacts, type RpcAccount } from './rpc';
+
+/** Offset of one remaining compartment's amount inside a `DCLTCFS1` account. */
+function remainingAmount(compartment: (typeof FUNDING_COMPARTMENTS_V1)[number]['name']): number {
+  const entry = FUNDING_COMPARTMENTS_V1.find((candidate) => candidate.name === compartment);
+  if (entry === undefined) throw new Error(`${compartment} is not a canonical funding compartment`);
+  return CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1 + entry.offset + CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1;
+}
 
 const MAX_HISTORY = 64;
 const MAX_RPC_BYTES = 2 * 1024 * 1024;
@@ -103,7 +129,7 @@ export function parseSuccessorAccount(name: string, account: RpcAccount, checkpo
   if (magic === 'DCLTACT1') { if (bytes.length !== 1288 || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact profile'); requireZero(bytes, 12, 4, 'activation cache'); return Object.freeze({ kind: 'Registry activation cache', headline: 'five checked roles', facts: Object.freeze([fact('release set', hex(slice(bytes, 16, 32))), fact('roles', 5), fact('origin', 'transaction-created')]) }); }
   if (magic === 'DCSRCER1') { if (bytes.length !== 312 || u16(bytes, 8) !== 1 || bytes[10] < 1 || bytes[10] > 4) throw new Error('Resolution certificate has the wrong exact layout'); requireZero(bytes, 11, 5, 'Resolution certificate header'); requireZero(bytes, 260, 4, 'Resolution certificate body'); const kinds = ['unknown', 'primary success', 'recovery advanced', 'exhausted', 'failure committed']; return Object.freeze({ kind: 'signed Resolution certificate', headline: kinds[bytes[10]], facts: Object.freeze([fact('market', pubkey(bytes, 16)), fact('generation', u64(bytes, 240)), fact('attempt / schedule', `${new DataView(bytes.buffer, bytes.byteOffset + 248, 4).getUint32(0, true)} / ${new DataView(bytes.buffer, bytes.byteOffset + 252, 4).getUint32(0, true)}`), fact('selector', new DataView(bytes.buffer, bytes.byteOffset + 256, 4).getUint32(0, true)), fact('work paid', u64(bytes, 264)), fact('funding remaining', u64(bytes, 272)), fact('result', `${readI128(bytes, 280)}/${u64(bytes, 296)}`), fact('observed at', u64(bytes, 304))]) }); }
   if (magic === 'DCLTSRS1') { if (bytes.length !== 224 || u16(bytes, 8) !== 1 || bytes[10] > 5 || bytes[12] > 3) throw new Error('Source resolution state has the wrong exact layout'); requireZero(bytes, 15, 1, 'Source state header'); requireZero(bytes, 208, 16, 'Source state tail'); const phases = ['primary', 'recovery', 'resolved', 'exhausted', 'failure committed', 'retired']; const routes = ['none', 'primary', 'recovery', 'failure']; return Object.freeze({ kind: 'Source resolution state', headline: phases[bytes[10]], facts: Object.freeze([fact('market', pubkey(bytes, 16)), fact('generation', u64(bytes, 48)), fact('active attempt', bytes[11]), fact('terminal route', routes[bytes[12]]), fact('selector', bytes[13]), fact('terminal sequence', u64(bytes, 184)), fact('resolved at', readI64(bytes, 192))]) }); }
-  if (magic === 'DCLTCFS1') { if (bytes.length !== 320 || u16(bytes, 8) !== 1 || bytes[10] > 1) throw new Error('capability funding state has the wrong exact layout'); requireZero(bytes, 11, 5, 'funding state header'); requireZero(bytes, 50, 6, 'funding state body'); return Object.freeze({ kind: 'typed capability funding', headline: bytes[10] === 1 ? 'active' : 'pending', facts: Object.freeze([fact('manifest', hex(slice(bytes, 16, 32))), fact('entry', u16(bytes, 48)), fact('activation slot', u64(bytes, 56)), fact('remaining work', u64(bytes, 104)), fact('remaining bounty', u64(bytes, 136)), fact('remaining native total', u64(bytes, 176)), fact('released native total', u64(bytes, 304))]) }); }
+  if (magic === CAPABILITY_FUNDING_STATE_MAGIC_V1) { const status = bytes[CAPABILITY_FUNDING_STATE_STATUS_OFFSET_V1]; if (bytes.length !== CAPABILITY_FUNDING_STATE_BYTES_V1 || u16(bytes, CAPABILITY_FUNDING_STATE_SCHEMA_OFFSET_V1) !== CAPABILITY_FUNDING_STATE_SCHEMA_VERSION_V1 || status > 1) throw new Error('capability funding state has the wrong exact layout'); requireZero(bytes, CAPABILITY_FUNDING_STATE_HEADER_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_STATE_HEADER_RESERVED_BYTES_V1, 'funding state header'); requireZero(bytes, CAPABILITY_FUNDING_STATE_BODY_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_STATE_BODY_RESERVED_BYTES_V1, 'funding state body'); return Object.freeze({ kind: 'typed capability funding', headline: status === 1 ? 'active' : 'pending', facts: Object.freeze([fact('manifest', hex(slice(bytes, CAPABILITY_FUNDING_STATE_MANIFEST_ID_OFFSET_V1, 32))), fact('entry', u16(bytes, CAPABILITY_FUNDING_STATE_ENTRY_INDEX_OFFSET_V1)), fact('activation slot', u64(bytes, CAPABILITY_FUNDING_STATE_ACTIVATION_SLOT_OFFSET_V1)), fact('remaining work', u64(bytes, remainingAmount('Work'))), fact('remaining bounty', u64(bytes, remainingAmount('Bounty'))), fact('remaining native total', u64(bytes, CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1 + CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1)), fact('released native total', u64(bytes, CAPABILITY_FUNDING_STATE_RELEASED_OFFSET_V1 + CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1))]) }); }
   if (magic === 'DCLTCAT1') { if (bytes.length < 336 || u16(bytes, 8) !== 1 || bytes[11] !== 1 || bytes.length !== 320 + bytes[10] * 8 || ascii(bytes, 16, 8) !== 'DCLTROOT') throw new Error('categorical Market has the wrong exact profile'); return Object.freeze({ kind: 'categorical Market root', headline: `${bytes[10]} outcomes`, facts: Object.freeze([fact('generation', u64(bytes, 192)), fact('phase byte', bytes[200]), fact('origin', 'genesis-prepared')]) }); }
   if (/^DCLT[A-Z0-9]{4}$/.test(magic)) return Object.freeze({ kind: 'finalized semantic record', headline: magic, facts: Object.freeze([fact('bytes', bytes.length), fact('origin', 'genesis-prepared')]) });
   throw new Error(`unrecognized exact successor account magic ${hex(bytes.slice(0, Math.min(bytes.length, 8)))}`);
