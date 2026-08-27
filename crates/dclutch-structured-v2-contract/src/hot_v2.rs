@@ -15,7 +15,13 @@
 //! between Token CPIs, which is what decision 0006 forbids.  The chain reaches
 //! a family through its sealed artifact closure -- an `AccountProfileV2`, a
 //! `TransitionProgramV3`, an `EffectProgramV4` and three more, named by a
-//! `CapabilityProgramV4` -- and never through Rust the family wrote.
+//! `CapabilityProgramV4` -- and never by calling into a family's own crates.
+//!
+//! Token atoms move only through a `FixedRole` child, because no effect
+//! operation can move them: the whole vocabulary is lamports, account-data
+//! writes and child-request patches (decision 0011 §3a).  So the Token work
+//! this module describes will be done by a Claims-role program, and this
+//! module will still not be the thing describing it to the chain.
 //!
 //! What this module is for is the operator: `plan_structured_action_v2` builds
 //! an action, and this candidate is the independent judge of whether the plan

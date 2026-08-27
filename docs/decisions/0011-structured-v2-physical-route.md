@@ -97,11 +97,73 @@ before anything else is read:
   A profile-only span forces `AdmittedAot`, which drags in eight authenticated
   strategy extras, per-page caller authorities and a deployed accelerator ELF.
 
-The consequence for Structured's six Token effect kinds is that they stop being
+**ERRATUM, same day, before any code was written against this section.** The
+paragraph that stood here said Structured's six Token effect kinds "stop being
 Rust and become `EffectProgramV4` operations resolved through the existing
-`FixedRole` composition. Structured has no Claims child of its own -- its
-single backing edge stops at the claim-shard layer -- so it adds no new role,
-and therefore triggers no `hot_v3.rs` edit.
+`FixedRole` composition", and that "Structured has no Claims child of its own
+... so it adds no new role". Those two clauses contradict each other, and the
+first is false. Corrected in §3a; the rest of this section stands.
+
+## 3a. There is no such thing as an effect operation that moves a token
+
+An effect program cannot mint, burn, transfer or close a Token-2022 account.
+The whole vocabulary is `ResolvedEffectV3` (`crates/dclutch-effect-kernel/src/v3.rs:390`):
+`TransferLamports`, `WriteScalar`, `WriteIdentity`, `RequireLamportsEq`,
+`WriteRequest` -- lamports, bytes into authenticated account data, and bytes
+into a child route's request. No CPI, no invoke, no Token.
+
+A family causes a Token CPI in exactly one way: its effect program declares a
+**route** to a `FixedRole`, `WriteRequest`-patches that route's request
+template, and the executor CPIs the release-selected program for that role,
+which performs the Token CPI itself. So "resolved through the existing
+`FixedRole` composition" *is* having a child; the erratum's two clauses could
+never both be true.
+
+`FixedRole` (`crates/dclutch-effect-kernel/src/v2.rs:354`) is closed at four --
+`Core`, `Claims`, `Resolution`, `Custody` -- and only Claims can mint, burn or
+close a Mint. Custody cannot substitute: `dclutch-custody-contract::OperationV1`
+is `InitializeReplay | OpenVault | Transfer | CloseVault | CloseReplay`, with
+no mint and no burn.
+
+**So Structured needs a Claims child.** Its own §1 claim -- one backing edge,
+stopping at the claim-shard layer -- describes its *economics*, not its
+physics: the edge stops there, and moving atoms across it still requires the
+role that owns them.
+
+### The child ABI is a fork in the road, and it must be chosen before encoding
+
+Trading refuses an unknown child request before the Claims program ever sees
+it. `programs/dclutch-trading-sbf/src/claims_composition_v3.rs:332-449` is a
+closed if/else chain over seven request magics ending in
+`Err(TradingSbfError::Content)`. A `STRUCTURED_REQUEST_MAGIC_V2` child request
+is refused there.
+
+**Option A -- adopt the Rational child ABI. No new program code.** All six
+kinds already execute on chain, and
+`dclutch-rational-representation-v2-contract::TokenEffectStyleV2` names four of
+them after Structured itself: `TransferShardToStructured`,
+`TransferShardFromStructured`, `MintReceipt`, `BurnReceipt`, with closure via
+`LifecycleActionV2::{RetireCoordinate, RetireReceipt}`. The multiply
+`K_i = S · c_i` happens in the callee
+(`rational-representation-v2-contract/src/plan.rs`), not in the effect program
+-- there is no multiply opcode.
+
+  The cost is identity. Structured would adopt Rational's authority PDA, and
+  `seeds.rs`'s claim that the Structured root "is simultaneously the replay
+  record, the receipt Mint authority and the shard custody owner" becomes dead
+  -- along with `STRUCTURED_ROOT_PDA_SEED_V2` as a Mint authority. That is a
+  larger rewrite of the island than the encoder is.
+
+**Option B -- give Structured its own Claims child.** A new handler in
+`programs/dclutch-claims-sbf`, plus a new magic arm and `ReceiptKindV3` variant
+in `claims_composition_v3.rs` and its decoder. This keeps Structured's own
+derivations. It is **not** a `hot_v3.rs` edit -- the four-role match is
+untouched -- but it **is** a Trading-program edit, so §6's "no `hot_v3.rs`
+change" is literally true and misleading in spirit.
+
+This record does not choose. It records that the choice exists, that it
+determines every byte of the effect program's route template, and that it must
+therefore be made **before** the encoder is written, not during.
 
 ## 4. `frame.rs` is two objects, and only one of them is an artifact input
 
@@ -159,8 +221,12 @@ slot assignment carry over unchanged; they were never in dispute.
 
 ## 6. Consequences
 
-- No `hot_v3.rs` change is required or permitted by this route. The
-  coordination stop the charter reserved against `DECOMP-r` is not needed.
+- No `hot_v3.rs` change is required or permitted by this route, under either
+  child option: the four-role dispatch is untouched. **Option B does require a
+  Trading-program edit** in `claims_composition_v3.rs`, which is a different
+  file and a different owner, and this bullet originally read as though it
+  ruled that out. The coordination stop the charter reserved against `DECOMP-r`
+  is still not needed.
 - Structured adds no row to the census `TARGETS` table
   (`tools/gauntlet/census/src/main.rs:41`), because that table lists
   `programs/` entrypoints and Structured ships none. It appears in the census
@@ -177,3 +243,25 @@ slot assignment carry over unchanged; they were never in dispute.
   the AccountProfile against the runtime coordinate space, then the remaining
   four artifacts, then the descriptor, then the set, then the campaign. An
   effect-schema mistake invalidates everything downstream of it.
+
+  **The §3a child-ABI choice sits ahead of even that.** It decides the route
+  template the effect program patches, so choosing it late invalidates the
+  first item in the chain and therefore all of them. Whoever writes the encoder
+  amends §3a with the option taken and the reason, first.
+
+- The mechanical shape of the encoder, once the ABI is chosen, is settled by
+  the nearest twin (`dclutch-bearer-v2-operator::open_structured_v3::encode_effect`):
+  one route, `FixedRole::Claims`, `RouteKindV3::Once`, `span_count = 0`,
+  `range_count = 0`, `BorrowedRangePolicyV4::DisjointExactCoverage`,
+  `semantic_prefix_bytes` = the child request width, `item_*_stride = 0`
+  throughout, and K flattened into COMMON registers so the artifact is
+  regenerated per K rather than parameterised by it. `ProgramV4` is a 24-byte
+  envelope over a V3 body; the encode is two steps,
+  `encode_effect_program_v3_atomic` then `v4::encode_program_v4_atomic`.
+  Note that `dclutch_effect_kernel::v3::encode::encode_effect_program_v4_atomic`
+  is NOT a V4 encoder -- the "v4" there names the plural receipt-dependency
+  table revision and it emits a V3 body.
+
+- `ZeroSupplyRetire` needs a different child ABI from the other three
+  (lifecycle, not representation), so it is a second encoder rather than a
+  fourth branch of the first.

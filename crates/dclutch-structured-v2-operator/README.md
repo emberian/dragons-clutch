@@ -13,8 +13,11 @@ derivation, AccountProfile expansion, and CPI belong to a physical adapter that
 does not exist yet. Decision 0011 records the shape it must take: the chain
 reaches this family through a sealed artifact closure — an `AccountProfileV2`,
 a `TransitionProgramV3`, an `EffectProgramV4` and three more, named by a
-`CapabilityProgramV4` — and never by calling into these crates. The operator
-therefore adds nothing to the SDK version surface.
+`CapabilityProgramV4` — and never by calling into these crates. Token atoms
+themselves move only through a `FixedRole` child, since no effect operation can
+move them; decision 0011 §3a records the open choice between adopting the
+Rational child ABI and giving Structured its own. The operator adds nothing to
+the SDK version surface either way.
 
 `tests/actions.rs` runs the full round trip for all four actions: chain
 observation to operator plan to frame-derived lowering to
