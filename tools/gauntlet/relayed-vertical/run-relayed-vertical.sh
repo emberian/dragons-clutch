@@ -377,10 +377,17 @@ run_walk() {
         jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.program_id,
              trading:.trading.program_id, resolution:.resolution.program_id,
              custody:.custody.program_id, rent:.rent_credit.program_id}'             "$run/plan.json" > "$run/programs.json"
-        jq -s '{campaign: "relayed-vertical",
+        # Tier 1's bindings merge in front (the vertical submits every tier-1
+        # transaction before its own; one copy). The vertical's own rows may
+        # carry a "walk" field binding them to one walk's evidence — filtered
+        # and stripped HERE, because the shared evaluator rightly reports a
+        # success-only wire as a stale binding when handed failure evidence.
+        jq -s --arg walk "$walk" '{campaign: "relayed-vertical",
                 note: ("Relayed vertical. Tier 1'"'"'s bindings are merged in at run time because " +
                        "the vertical submits every tier-1 transaction before its own; one copy."),
-                bindings: (.[0].bindings + .[1].bindings)}'             "$GAUNTLET/tier1/bindings.json" "$SCRIPT_DIR/bindings.json" > "$run/bindings.json"
+                bindings: (.[0].bindings
+                           + ([.[1].bindings[] | select((.walk // $walk) == $walk)]
+                              | map(del(.walk))))}'             "$GAUNTLET/tier1/bindings.json" "$SCRIPT_DIR/bindings.json" > "$run/bindings.json"
         ledger_lock "$census_ledger"
         cargo run --quiet --manifest-path "$GAUNTLET/census/Cargo.toml" -- observe             --inventory "$inventory"             --ledger "$census_ledger"             --bindings "$run/bindings.json"             --programs "$run/programs.json"             --evidence "$run/evidence.json"
         ledger_unlock
