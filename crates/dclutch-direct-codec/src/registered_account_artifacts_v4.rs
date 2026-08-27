@@ -22,7 +22,9 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_GENERATION_OFFSET, CAPABILITY_ROOT_HEADER_BYTES_V1,
     CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_RELEASE_SET_OFFSET,
 };
-use dclutch_custody_contract::{CustodyFrameDataV1, CustodyFrameSpecV1, OperationV1};
+use dclutch_custody_contract::{
+    CustodyFrameDataV1, CustodyFrameSpecV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
+};
 use dclutch_market_core_codec::STATE_BYTES as CORE_STATE_BYTES;
 use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use dclutch_product_runtime_v2::{
@@ -75,7 +77,27 @@ pub const DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4: u16 = 24;
 /// First logical account of the delegated reserve-deposit frame.
 pub const DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4: u16 = 40;
 /// Exact fixed logical account count for registered Buy creation.
-pub const DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4: u16 = 54;
+pub const DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4: u16 = 55;
+/// Executable Custody program all three Custody routes are invoked through.
+///
+/// A Custody FrameSpec names `CallerProgram`/`CallerProgramData` -- Trading's --
+/// and never its own callee, because a CPI's callee is not one of its own
+/// accounts. The family-neutral Hot executor resolves a child route's program by
+/// scanning the downgraded effect accounts for the key the activated release set
+/// names for that role, so the program has to BE one of the logical coordinates
+/// or every route refuses before its first CPI. RegisterBuy routes to Custody
+/// three times and to Claims never, so unlike the inline-ordinary topology it
+/// had no frame-supplied program coordinate of any kind. Appended past every
+/// route range so that carrying it renumbers no frame.
+pub const DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4: u16 = 54;
+
+const _: () = assert!(
+    DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4 + 1 == DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4
+);
+const _: () = assert!(
+    DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4
+        >= DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + TRANSFER_ACCOUNT_COUNT_V1
+);
 
 const FIXED_ACCOUNTS: usize = DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4 as usize;
 const FIXED_OPERATIONS: usize = 33;
@@ -295,6 +317,15 @@ fn rules(
     rule_mut(&mut output, usize::from(SYSTEM_PROGRAM_ACCOUNT))?
         .rule
         .privileges = executable;
+    // The Custody program the three Custody routes are invoked through. Stated
+    // opaque for the same reason the inline-ordinary topology states its own:
+    // the loader that deployed it owns the record width, and the Registry
+    // activation cache -- not this profile -- is the sole authority on which
+    // program the Custody role selects.
+    *rule_mut(
+        &mut output,
+        usize::from(DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4),
+    )? = opaque(executable);
 
     for (operation, start) in [
         (
@@ -800,6 +831,11 @@ mod tests {
     use dclutch_custody_contract::{
         INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1, TRANSFER_ACCOUNT_COUNT_V1,
     };
+    use dclutch_effect_kernel::{v2::FixedRole, v4::ProgramV4 as EffectProgramV4};
+
+    use crate::registered_effect_artifacts_v4::{
+        DIRECT_REGISTER_BUY_EFFECT_BYTES_V4, encode_direct_register_buy_effect_v4_atomic,
+    };
 
     fn lengths() -> [u32; FIXED_ACCOUNTS] {
         let mut output = [0_u32; FIXED_ACCOUNTS];
@@ -824,6 +860,12 @@ mod tests {
         output[35] = 0;
         output[36] = 36;
         output[50] = 165;
+        // Descriptive only: the Custody program rule is opaque, so no loader's
+        // record width is pinned here.
+        *output
+            .get_mut(usize::from(DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4))
+            .expect("Custody program") =
+            width(LOADER_V3_PROGRAM_BYTES).expect("Custody program width");
         for (account, representative) in ROUTE_ALIASES {
             let value = *output
                 .get(usize::from(*representative))
@@ -846,6 +888,58 @@ mod tests {
         )
         .expect("profile");
         output
+    }
+
+    /// Every child role the EffectProgram routes to must be invocable.
+    ///
+    /// The Hot executor resolves a child route's callee out of the effect
+    /// accounts and accepts only a unique readonly executable match. RegisterBuy
+    /// routes to Custody three times and to Claims never, so it has no
+    /// frame-supplied program coordinate at all: without an outer Custody
+    /// program coordinate its very first route refuses before any CPI. The roles
+    /// come from the real emitted Effect bytes; the callee coordinate is
+    /// authored here, so this is a witness rather than a mirror of the emitter.
+    #[test]
+    fn every_child_role_the_effect_routes_to_has_an_invocable_program_coordinate() {
+        let callees: &[(FixedRole, u16)] = &[(
+            FixedRole::Custody,
+            DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4,
+        )];
+        let mut scratch = [0_u8; DIRECT_REGISTER_BUY_EFFECT_BYTES_V4];
+        let mut effect_bytes = [0_u8; DIRECT_REGISTER_BUY_EFFECT_BYTES_V4];
+        encode_direct_register_buy_effect_v4_atomic(&mut scratch, &mut effect_bytes)
+            .expect("effect");
+        let effect = EffectProgramV4::decode(&effect_bytes).expect("effect decode");
+        let effect = effect.base();
+        let bytes = emit();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile decode");
+        assert_eq!(effect.route_count(), 3);
+        let mut route = 0_u16;
+        while route < effect.route_count() {
+            let role = effect.route(route).expect("route").role();
+            let coordinate = callees
+                .iter()
+                .find(|(named, _)| *named == role)
+                .map(|(_, coordinate)| *coordinate)
+                .expect("every routed role must name a callee coordinate");
+            let rule = profile.rule(false, coordinate).expect("callee rule");
+            assert!(
+                rule.route_privileges().executable()
+                    && !rule.route_privileges().signer()
+                    && !rule.route_privileges().writable(),
+                "{role:?} callee at {coordinate} is not a readonly executable"
+            );
+            assert_eq!(
+                rule.prestate(),
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData
+            );
+            assert_eq!(
+                profile.representative(3, usize::from(coordinate)),
+                Ok(usize::from(coordinate)),
+                "{role:?} callee at {coordinate} is an alias"
+            );
+            route += 1;
+        }
     }
 
     #[test]
