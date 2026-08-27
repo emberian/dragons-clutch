@@ -65,9 +65,6 @@ mod dynamic_accounts_v4;
 pub mod entrypoint_adapter;
 /// Registry-authenticated family-neutral Execution Strategy V2 admission.
 pub mod execution_strategy_v2;
-/// General family projection behind the common data-defined Trading boundary.
-#[cfg(feature = "families")]
-pub mod general;
 /// Generic atomic Custody→Core→Claims Market founding and commit-last Open.
 #[cfg(any(
     feature = "families",

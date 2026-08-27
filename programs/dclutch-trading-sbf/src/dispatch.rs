@@ -3,8 +3,7 @@
 use dclutch_capability_contract::{CapabilityEntryV1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_ACCOUNT_MAX_BYTES_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
-    CapabilityRegistersV2, CapabilityRootHeaderV1, Error as CapabilityProgramError,
-    SupportedContentV1,
+    CapabilityRootHeaderV1, Error as CapabilityProgramError,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
@@ -344,39 +343,6 @@ impl TradingFamilyContextV1 {
     }
 }
 
-/// Hostile-authenticate activation content and run one data-defined transition.
-///
-/// `supported` is compiled into the current checked Trading artifact by the
-/// exact register projector/effect boundary. It is never decoded from the
-/// instruction. The function mutates `registers` only if every content join
-/// and every TransitionVM instruction succeeds. This fail-closed foundation
-/// is not the open-family gate: a named-family list of `supported` values is
-/// still a closed adapter and must be superseded by interpreted or certified
-/// physical profile languages.
-pub fn dispatch_activation_authenticated<'descriptor>(
-    context: TradingFamilyContextV1,
-    manifest_bytes: &[u8],
-    descriptor_bytes: &'descriptor [u8],
-    config_bytes: &[u8],
-    supported: SupportedContentV1,
-    registers: CapabilityRegistersV2<'_>,
-) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
-    let descriptor = authenticate_activation_program(
-        context,
-        context.selection().capability_release(),
-        manifest_bytes,
-        descriptor_bytes,
-        config_bytes,
-    )?;
-    supported
-        .require(descriptor)
-        .map_err(map_capability_program_error)?;
-    descriptor
-        .execute(registers)
-        .map_err(map_capability_program_error)?;
-    Ok(descriptor)
-}
-
 /// Authenticate one activation descriptor without selecting a Rust family.
 ///
 /// The executable outer uses this join before interpreting the descriptor's
@@ -412,38 +378,6 @@ pub fn authenticate_activation_program<'descriptor>(
         authenticate_common_content(context, descriptor_id, descriptor_bytes, config_bytes)?;
     descriptor
         .validate_selection(selection, entry)
-        .map_err(map_capability_program_error)?;
-    Ok(descriptor)
-}
-
-/// Hostile-authenticate persisted hot-action content and run one transition.
-///
-/// Activation already joined the embedded selector to the exact manifest
-/// entry before creating the immutable root header. Hot actions therefore do
-/// not repeat either the selector or the manifest account. They authenticate
-/// the persisted header and still require the exact descriptor and config
-/// digests on every call so neither semantic input can be substituted.
-pub fn dispatch_hot_authenticated<'descriptor>(
-    context: TradingFamilyContextV1,
-    descriptor_bytes: &'descriptor [u8],
-    config_bytes: &[u8],
-    supported: SupportedContentV1,
-    registers: CapabilityRegistersV2<'_>,
-) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
-    let descriptor = authenticate_common_content(
-        context,
-        context.selection().capability_release(),
-        descriptor_bytes,
-        config_bytes,
-    )?;
-    supported
-        .require(descriptor)
-        .map_err(map_capability_program_error)?;
-    descriptor
-        .validate_persisted_selection(context.selection())
-        .map_err(map_capability_program_error)?;
-    descriptor
-        .execute(registers)
         .map_err(map_capability_program_error)?;
     Ok(descriptor)
 }
@@ -526,7 +460,6 @@ mod tests {
     };
     use dclutch_release_set_contract::CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
     use dclutch_release_set_contract::{ArtifactReleaseIdV1, ProgramIdentityV1};
-    use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
     use solana_hash::Hash;
     use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
     use solana_program::instruction::{AccountMeta, Instruction};
@@ -613,39 +546,24 @@ mod tests {
         bytes
     }
 
+    /// The activation join, with the transition and the compiled family list gone.
+    ///
+    /// Both wrappers used to run one TransitionVM program through
+    /// `dispatch_activation_authenticated` / `dispatch_hot_authenticated`. Those
+    /// belonged to the V1/V2 family generation and went with it; what these
+    /// tests were always about is the digest join underneath, which is live.
     fn activation_result<'descriptor>(
         context: TradingFamilyContextV1,
         manifest: &[u8],
         descriptor: &'descriptor [u8],
         config: &[u8],
-        supported: SupportedContentV1,
     ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
-        let input = [0_u64; 1];
-        let input_identities: [[u8; 32]; 0] = [];
-        let mut scratch = [0_u64; 1];
-        let mut scratch_identities: [[u8; 32]; 0] = [];
-        let mut output = [0_u64; 1];
-        let mut output_identities: [[u8; 32]; 0] = [];
-        dispatch_activation_authenticated(
+        authenticate_activation_program(
             context,
+            context.selection().capability_release(),
             manifest,
             descriptor,
             config,
-            supported,
-            CapabilityRegistersV2::new(
-                RegisterInput {
-                    scalars: &input,
-                    identities: &input_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut scratch,
-                    identities: &mut scratch_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut output,
-                    identities: &mut output_identities,
-                },
-            ),
         )
     }
 
@@ -653,33 +571,12 @@ mod tests {
         context: TradingFamilyContextV1,
         descriptor: &'descriptor [u8],
         config: &[u8],
-        supported: SupportedContentV1,
     ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
-        let input = [0_u64; 1];
-        let input_identities: [[u8; 32]; 0] = [];
-        let mut scratch = [0_u64; 1];
-        let mut scratch_identities: [[u8; 32]; 0] = [];
-        let mut output = [0_u64; 1];
-        let mut output_identities: [[u8; 32]; 0] = [];
-        dispatch_hot_authenticated(
+        authenticate_common_content(
             context,
+            context.selection().capability_release(),
             descriptor,
             config,
-            supported,
-            CapabilityRegistersV2::new(
-                RegisterInput {
-                    scalars: &input,
-                    identities: &input_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut scratch,
-                    identities: &mut scratch_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut output,
-                    identities: &mut output_identities,
-                },
-            ),
         )
     }
 
@@ -688,7 +585,6 @@ mod tests {
         vec::Vec<u8>,
         vec::Vec<u8>,
         vec::Vec<u8>,
-        SupportedContentV1,
     ) {
         let descriptor = descriptor_bytes();
         let descriptor_id = ContentId::new(hash(&descriptor).to_bytes()).expect("descriptor ID");
@@ -743,21 +639,13 @@ mod tests {
             receipt,
         )
         .expect("context");
-        let supported = SupportedContentV1 {
-            config_schema: id(2),
-            request_schema: id(3),
-            root_schema: id(4),
-            account_profile: id(5),
-            derivation_policy: id(6),
-            effect_schema: id(8),
-        };
-        (context, manifest, descriptor, config, supported)
+        (context, manifest, descriptor, config)
     }
 
     #[test]
     fn descriptor_hash_is_the_manifest_release_authority() {
-        let (context, manifest, descriptor, config, supported) = canonical_dispatch_fixture();
-        let admitted = activation_result(context, &manifest, &descriptor, &config, supported)
+        let (context, manifest, descriptor, config) = canonical_dispatch_fixture();
+        let admitted = activation_result(context, &manifest, &descriptor, &config)
             .expect("authenticated data-defined dispatch");
         assert_eq!(admitted.kind(), id(1));
         assert_eq!(admitted.transition_program().instruction_count(), 1);
@@ -775,33 +663,21 @@ mod tests {
             substituted_effect,
         );
         assert_eq!(
-            activation_result(
-                context,
-                &manifest,
-                &substituted_descriptor,
-                &config,
-                supported,
-            ),
+            activation_result(context, &manifest, &substituted_descriptor, &config),
             Err(TradingSbfError::Content)
         );
         let mut substituted_config = config;
         let first = substituted_config.first().copied().expect("config byte") ^ 1;
         fixture_set(&mut substituted_config, 0, first);
         assert_eq!(
-            activation_result(
-                context,
-                &manifest,
-                &descriptor_bytes(),
-                &substituted_config,
-                supported,
-            ),
+            activation_result(context, &manifest, &descriptor_bytes(), &substituted_config),
             Err(TradingSbfError::Content)
         );
     }
 
     #[test]
     fn activation_request_has_one_exact_selector_and_funding_header() {
-        let (context, _manifest, _descriptor, _config, _supported) = canonical_dispatch_fixture();
+        let (context, _manifest, _descriptor, _config) = canonical_dispatch_fixture();
         let family = [31_u8; 9];
         let funding = CapabilityFundingHeaderV1::new(16).expect("funding header");
         let mut bytes = vec![
@@ -918,8 +794,8 @@ mod tests {
 
     #[test]
     fn hot_dispatch_uses_persisted_selection_without_manifest_input() {
-        let (context, _manifest, descriptor, config, supported) = canonical_dispatch_fixture();
-        let admitted = hot_result(context, &descriptor, &config, supported)
+        let (context, _manifest, descriptor, config) = canonical_dispatch_fixture();
+        let admitted = hot_result(context, &descriptor, &config)
             .expect("authenticated hot dispatch");
         assert_eq!(admitted.kind(), id(1));
         assert_eq!(admitted.transition_program().instruction_count(), 1);
@@ -936,7 +812,7 @@ mod tests {
             byte,
         );
         assert_eq!(
-            hot_result(context, &substituted_descriptor, &config, supported,),
+            hot_result(context, &substituted_descriptor, &config),
             Err(TradingSbfError::Content)
         );
 
@@ -944,7 +820,7 @@ mod tests {
         let first = substituted_config.first().copied().expect("config byte") ^ 1;
         fixture_set(&mut substituted_config, 0, first);
         assert_eq!(
-            hot_result(context, &descriptor_bytes(), &substituted_config, supported,),
+            hot_result(context, &descriptor_bytes(), &substituted_config),
             Err(TradingSbfError::Content)
         );
     }

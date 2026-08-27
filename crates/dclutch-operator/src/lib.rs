@@ -61,8 +61,6 @@ pub mod foundation;
 pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.
 pub mod general_hot_v3;
-/// Chain-derived unsigned General physical-controller workflows.
-pub mod general_physical;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
 /// Lifecycle-scoped RentCredit creation, sweeping, and close evidence.
