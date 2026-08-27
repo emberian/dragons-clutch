@@ -1241,3 +1241,173 @@ fails on pre-existing test-target lints this lane did not touch
 integration tests). Recorded rather than fixed: they are not this lane's and
 fixing them would put another lane's files in this lane's commits.
 
+## W1e supersession 2026-08-27
+
+**W1d's verdict was refuted, and the gap it missed has since been closed by
+another lane.** A fifth structural blocker did remain — Core's Found stage and
+Claims `FoundingV5` required the same account to be two different records — and
+it is recorded below as this lane found it, because the reasoning is what
+located it. **It is fixed at `dba22b5`/`712490d`/`d163c32` by the Claims lane**,
+along exactly the line the V3 reader's own documentation prescribed, and this
+campaign already publishes the record the fixed path wants.
+
+What this lane leaves behind: `DCLTPCB1` built chain-derived and executed on a
+real localhost validator — the first on-chain evidence the four-stage
+projected-Custody bootstrap has ever had — plus a measured heap bound on it that
+no static reading had found. `DCLTGMF1` is **still not built**. That is now a
+runner gap and no longer a protocol gap.
+
+| W1d said | W1e |
+|---|---|
+| no protocol gap remains on the path to an Open Market; only the runner does not exist | **false at the time**: Core's Found stage and Claims `FoundingV5` required the same account to be two different records. Fixed since, at `dba22b5` |
+| the runner has to build two transactions | one of them is built and executed; the other is now satisfiable and still unbuilt |
+| (unrecorded) | `DCLTPCB1` is **heap-bound, not compute-bound**, and no static reading found it |
+| the runner must pre-fund three vacant Claims addresses | **four**: the Found caller-authority PDA is also the Core Found payer |
+| `DCLTPCB1` at 81 accounts, 49 distinct keys | confirmed by construction |
+| (unrecorded) | the founding cannot reuse the Found31 Market; it needs its own generation |
+| (unrecorded) | the principal supplier cannot be the rent payer |
+| (unrecorded) | the demo Market never published the liability basis its Product declares |
+
+### Blocker E — the liability basis has two incompatible authorities
+
+Found by building the Claims stage's request bytes and discovering that the
+record Core commits to and the record Claims demands cannot be the same file.
+
+Core's generic Found stage authenticates the suffix `linked_basis_raw` /
+`linked_basis_staging` pair through `authenticate_product_basis_v3`
+(`crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs:377-434`), called at
+`programs/dclutch-core-sbf/src/generic_founding_v1.rs:891-900`:
+
+```text
+raw PDA      [b"dclutch-raw-record-v1", GRADED_BASIS_RECORD_SCHEMA_ID_V3, sha256(raw)]  under REGISTRY
+raw owner    the Registry program
+body         ProductBasisV3, magic DCLTPAY3
+identity     sha256(b"dclutch/product-basis/semantic/v3" || raw[..32] || raw[96..])
+             must equal the Product record's liability_basis_id
+```
+
+Core then writes **both of those** into the `ClaimsFoundingRequestV5` it
+commits to inside the one-shot permit
+(`generic_founding_v1.rs:919-920`, `:1426-1427`):
+`linked_basis_record_digest = sha256(that V3 account's data)`, and
+`semantic_basis_id =` that V3 semantic identity.
+
+Claims `FoundingV5` authenticates its own account 8/9 pair through
+`authenticate_runtime_product_basis_core_v2`
+(`programs/dclutch-claims-sbf/src/founding_v5.rs:736-761` into
+`affine_batch_v2.rs:557-590`, whose record check is
+`liability_basis_v2.rs:925-984`):
+
+```text
+raw PDA      [b"dclutch-raw-record-v1", LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, digest]  under CORE
+raw owner    the Core program
+digest       must equal request.linked_basis_record_digest()  -- the V3 digest above
+body         LinkedBasisRecordV2, magic DCLTLNK2, length exactly 224 or 248
+identity     sha256(b"dclutch/lbv2/semantic-id/v2" || v2prefix || v2suffix)
+             must equal request.semantic_basis_id()  -- the V3 identity above
+```
+
+Equal digests mean equal bytes. Those bytes would have to begin with
+`DCLTPAY3` and `DCLTLNK2`, be 256 bytes and 224-or-248 bytes, live at a
+Registry-derived address and a Core-derived one, and satisfy two
+domain-separated SHA-256 identities — all at once. **Unsatisfiable.** No frame,
+no lookup table, and no compute budget reaches Core's commit-last Open through
+this pair.
+
+### Blocker E is fixed
+
+`dba22b5` (with `712490d` and `d163c32`) makes Claims `FoundingV5` and its three
+sibling routes authenticate the basis through `authenticate_product_basis_v3`
+against the Registry-owned V3 record — exactly what Core commits — and deletes
+the legacy `LinkedBasisRecordV2` path from the founding route. No identity and
+no frame width moved, and this campaign was already publishing the right record,
+so nothing in the bootstrap had to change.
+
+That is the direction this section argued for, and it is worth being explicit
+that it is the *only* terminating direction: a `LinkedBasisRecordV2` is a
+**Core-owned** raw record at a Core-derived PDA, and nothing in the repo creates
+one for a founding. Teaching Core to admit V2 would have required inventing a
+creator for a record type the successor had already replaced.
+
+**It was already named as debt, with an owner and a remedy.** From the V3
+reader's own module documentation
+(`crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs:12-17`), verbatim:
+
+> Follow-on convergence is mechanically limited to the remaining legacy
+> `LinkedBasisRecordV2` Claims consumers:
+> `src/{affine_batch_v2,liability_basis_v2,rational_representation_v2}.rs`
+> and `program-test/affine-batch/src/lib.rs` under `dclutch-claims-sbf`, plus
+> `dclutch-liability-basis-v2-kernel::{src,tests}/product_claims.rs`. They must
+> consume this V3 authentication result rather than add another basis decoder.
+
+So this is exactly the parallel legacy/current authority path the project
+method forbids, surfaced by the first route that needs both halves inside one
+transaction. Generic founding is that route. **The remedy is the one the reader
+already prescribes** — `affine_batch_v2` consumes `authenticate_product_basis_v3`
+against the Registry-owned V3 record and stops deriving a Core-owned V2 record —
+and it belongs to a Claims lane. This lane owns the runner,
+`generic_market_founding_v1.rs`, and the bootstrap tree, and deliberately did
+not widen either side: **the fix deletes the V2 basis path from the founding
+route; it does not teach Core to admit V2.**
+
+Named consequence for whoever takes it: `LinkedBasisRecordV2` records are
+**Core-owned** raw records at Core-derived PDAs, and nothing in the repo
+creates one for a founding. Even if the two decoders agreed, that record has no
+creator — so the convergence is the only direction that terminates.
+
+### Defect 5 — the demo Market's liability basis did not exist
+
+Upstream of Blocker E and repaired here at `4b12ee1`, because Core requires it
+under either resolution.
+
+The Product record has always carried a `liability_basis_id`, and the demo
+Market has always filled it with a domain-separated *name*. Found31 does not
+read it, so nothing noticed. Core's generic Found stage reads it and refuses
+unless a canonical `ProductBasisV3` exists whose semantic identity is exactly
+that value **and** whose Product, result-domain, coordinate-domain, and
+result-unit links match the authenticated graph.
+
+The run spec now carries the record itself. The join is acyclic rather than a
+fixed point: the V3 semantic preimage omits the Product and result-domain links
+(`raw[..32] || raw[96..]`), so the identity is derivable before the Product that
+declares it exists. The demo derives it from a placeholder-linked record,
+compiles the Product against it, recompiles the record with both real links, and
+asserts the identity did not move. `CategoricalQ1` is forced, not chosen: a
+categorical Product admits unit payout scale, no knots, no graded terms, and one
+basis claim per outcome, and Core separately requires
+`basis.payout_scale == request.basis_scale`.
+
+### Four corrections to W1d's runner brief, each paid for by building against it
+
+1. **The Found sub-frame's index 0 is the payer *and* the Trading caller PDA.**
+   `FoundAccounts::parse` requires index 0 signer-and-writable, and the outer's
+   `invoke_child` marks index 0 signer-and-writable — one slot, both roles. So
+   the pre-funding list is four, not three. The bite is small in practice
+   (`market.lamports()` must equal `rent.minimum_balance(352)` exactly, so the
+   Found rent top-up is zero) but the slot is still a real payer.
+2. **`DCLTPCB1`'s `ProjectFound` sub-frame payer slot cannot be the bootstrap
+   payer.** `parse_project` requires that slot non-signer and non-writable while
+   the bootstrap payer is a transaction-level signer and writable, and Solana
+   grants privileges per key, not per index. It must be a distinct funded
+   readonly key, and it must actually hold at least the Market rent, because the
+   kernel debits `payer_lamports` by the Market rent top-up even in projection
+   mode (`crates/dclutch-market-core-codec/src/generated.rs:809-815`).
+3. **The founding cannot run against the Market Found31 created.** Every
+   projected-Custody stage asserts `require_vacant_market`, and Core's `project`
+   requires the Market vacant. A campaign that keeps the Found31 evidence must
+   found at a **different generation**, whose Market PDA is a different, still
+   vacant address, with its own `LifecycleRentCreditV2`.
+4. **The principal supplier cannot be the rent payer.** `OpenSourceCompartment`
+   requires `funder_owner.is_signer && !funder_owner.is_writable` while
+   `payer` must be writable. Same key, contradictory privileges. So the founding
+   names a separate beneficiary — which is also what
+   `credit.refund_wallet() == request.beneficiary()` and
+   `lock.refund_owner == found.beneficiary()` already required — with its own
+   Token-2022 source wallet.
+
+Also confirmed, against FT's report: **`cargo build-sbf` on
+`dclutch-trading-sbf` at `ff02df0` emits zero `overwrites values in the frame`
+diagnostics**, both from an isolated `git archive HEAD` tree with a dedicated
+target directory and in the gauntlet's own shared-target build log. The two
+diagnostics FT saw in `authenticate_and_project` do not reproduce at this
+revision.

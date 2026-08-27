@@ -112,29 +112,41 @@ the distance was a missing runner. It is not.
 
 ## Why `DCLTGMF1` is not built here
 
-Core's generic Found stage and Claims `FoundingV5` require **the same account to
-be two different records**, so the founding outer's Lock → Found/permit →
-Realize → Claims → Open chain is unsatisfiable at this revision.
-
-Core authenticates the liability basis as a **Registry**-owned `ProductBasisV3`
+**Not because it cannot succeed.** It could not, until `dba22b5`. Core's Found
+stage authenticates the liability basis as a **Registry**-owned `ProductBasisV3`
 (magic `DCLTPAY3`, schema `GRADED_BASIS_RECORD_SCHEMA_ID_V3`, semantic domain
 `dclutch/product-basis/semantic/v3`) and writes that record's digest and
 semantic identity into the `ClaimsFoundingRequestV5` it commits to inside the
-one-shot permit. Claims then requires an account carrying **that same digest**
-which decodes as a legacy **Core**-owned `LinkedBasisRecordV2` (magic
-`DCLTLNK2`, schema `LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2`, semantic domain
-`dclutch/lbv2/semantic-id/v2`, length 224 or 248). Equal digests mean equal
-bytes, and no byte string is both records.
+one-shot permit. Claims `FoundingV5` then demanded an account carrying **that
+same digest** which decoded as a legacy **Core**-owned `LinkedBasisRecordV2`
+(magic `DCLTLNK2`, length 224 or 248). Equal digests mean equal bytes, and no
+byte string is both records — so the Lock → Found/permit → Realize → Claims →
+Open chain was unsatisfiable, and this runner did not ship a stage that pretends.
 
-This is a parallel legacy authority path, not a missing route, and it is already
-named as debt in the V3 reader's own module documentation
-(`crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs:12-17`): the remaining
-`LinkedBasisRecordV2` Claims consumers "must consume this V3 authentication
-result rather than add another basis decoder." Until `affine_batch_v2` does,
-building `DCLTGMF1` here would only produce a transaction that cannot succeed,
-and this runner does not ship stages that pretend. The full decomposition is in
-the W1e supersession of
-`docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.
+The Claims lane has since made `FoundingV5` authenticate the basis Core actually
+commits and deleted the legacy path. **This campaign already publishes exactly
+that record**, so nothing here needed to change: the founding outer is now
+satisfiable and simply has not been built.
+
+What building it needs, recorded because establishing it was most of this lane's
+cost:
+
+- **137 accounts** (`134 + funding_count`): four readonly raw-request accounts,
+  then Lock (14), Found (`34 + funding_count + 15`), Realize (12), Claims (32),
+  Open (23), over the same `publish_routing_table` machinery `DCLTPCB1` uses.
+- **No account in the frame may be a transaction-level signer** — every stage's
+  signer is a PDA under `invoke_signed` — so the fee payer must be a key that
+  appears nowhere in it.
+- **Four pre-fundings, not three.** Claims `FoundingV5` allocates the aggregate,
+  the founder Position, and the admission with `allocate` + `assign` and never
+  transfers, so all three vacant program addresses need
+  `rent.minimum_balance(width)`. The fourth is the Found caller-authority PDA:
+  index 0 of the Found sub-frame is both the Trading caller PDA and Core's
+  `payer`, and `FoundAccounts::parse` requires it signer-and-writable.
+- The prestate `DCLTPCB1` leaves is exactly what its Lock stage consumes, so the
+  two stages compose without a third party agreeing about anything.
+
+## What the campaign does reach
 
 ## What the campaign does reach
 
