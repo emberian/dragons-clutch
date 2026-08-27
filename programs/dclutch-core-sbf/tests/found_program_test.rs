@@ -123,6 +123,88 @@ const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_token_svm::LEGAC
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xb2; 32]);
 const GENERATION: u64 = 1;
 
+/// Preimage of this campaign's fixed key seed.
+///
+/// The seed is HASHED FROM THIS STRING rather than written down as an opaque
+/// 32-byte constant, so what is pinned is the sentence and not a magic number
+/// nobody can check. Changing this string moves every fixture key and every
+/// compute-unit number this campaign produces, which is a re-pin of
+/// `tools/gauntlet/CU_BUDGETS.json` and not a refactor.
+const FIXTURE_SEED_PREIMAGE_V1: &[u8] =
+    b"dclutch/gauntlet/tier4/found-program-test/keypair-seed/v1";
+
+/// Domain separator for the per-role derivation below.
+const FIXTURE_KEY_DOMAIN_V1: &[u8] = b"dclutch/gauntlet/tier4/fixture-key/v1";
+
+/// Role names. Part of the derivation, so they live in one place: a typo at a
+/// call site would silently be a different key rather than a compile error.
+const ROLE_PAYER: &[u8] = b"payer";
+const ROLE_HOARD_VAULT: &[u8] = b"hoard-vault";
+const ROLE_FUNDING_SOURCE_VAULT: &[u8] = b"funding-source-vault";
+const ROLE_FUNDING_SOURCE_REPLAY_VAULT: &[u8] = b"funding-source-replay-vault";
+const ROLE_SUBSTITUTED_CLAIMS_PROGRAMDATA: &[u8] = b"substituted-claims-programdata";
+
+/// Deterministic 32 bytes for one fixture role.
+///
+/// # Why this exists
+///
+/// This campaign used to draw its fixture addresses from `Keypair::new()` and
+/// `Pubkey::new_unique()`. Both are per-run: `Keypair::new()` is random, and
+/// `Pubkey::new_unique()` reads a process-global counter, so with four
+/// `series_consume` tests running concurrently in one binary the values a given
+/// test receives depend on thread interleaving. A different address changes how
+/// many iterations `find_program_address` needs to find an off-curve bump, and
+/// each iteration is one `sol_create_program_address` syscall at **1,500 CU** —
+/// which is the entire reason `tools/gauntlet/CU_BUDGETS.md` records a
+/// 24,000-CU band on the tier-4 founding case and had to admit that six runs
+/// did not bound the substituted-ProgramData one.
+///
+/// Seeded, the band is zero and the budget tolerances drop to their floor.
+///
+/// # The derivation
+///
+/// ```text
+/// seed     = SHA-256(FIXTURE_SEED_PREIMAGE_V1)
+/// material = SHA-256(FIXTURE_KEY_DOMAIN_V1 || 0 || seed || 0 || role || 0)
+/// ```
+///
+/// `hashv` is SHA-256. This is the same shape as the successor bootstrap's
+/// `--keypair-seed` derivation (`tools/local-validator/bootstrap/successor/
+/// src/seed.rs`) under its own domain, so the two campaigns cannot derive the
+/// same key from the same role name.
+///
+/// # Why no safety gate here
+///
+/// The bootstrap's flag needs one because it can be pointed at an RPC endpoint.
+/// This cannot: these keys exist only inside a `solana-program-test` bank that
+/// is created and dropped inside one test process. There is no cluster, no
+/// network and no funded account for a reproducible key to endanger. The seed
+/// is checked in deliberately — a fixture whose seed nobody can read is a
+/// fixture nobody can reproduce.
+fn fixture_key_material(role: &[u8]) -> [u8; 32] {
+    let seed = hashv(&[FIXTURE_SEED_PREIMAGE_V1]).to_bytes();
+    hashv(&[
+        FIXTURE_KEY_DOMAIN_V1,
+        &[0],
+        seed.as_slice(),
+        &[0],
+        role,
+        &[0],
+    ])
+    .to_bytes()
+}
+
+/// The signing keypair for one fixture role.
+fn fixture_keypair(role: &[u8]) -> Keypair {
+    // Every 32-byte string is a valid ed25519 secret seed, so this is total.
+    Keypair::new_from_array(fixture_key_material(role))
+}
+
+/// A fixture address that is never signed for.
+fn fixture_pubkey(role: &[u8]) -> Pubkey {
+    Pubkey::new_from_array(fixture_key_material(role))
+}
+
 struct Artifacts {
     core: Vec<u8>,
     registry: Vec<u8>,
@@ -802,11 +884,11 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
         },
     );
 
-    let hoard = Pubkey::new_unique();
-    let funding_source = Pubkey::new_unique();
-    let funding_source_replay = Pubkey::new_unique();
+    let hoard = fixture_pubkey(ROLE_HOARD_VAULT);
+    let funding_source = fixture_pubkey(ROLE_FUNDING_SOURCE_VAULT);
+    let funding_source_replay = fixture_pubkey(ROLE_FUNDING_SOURCE_REPLAY_VAULT);
     let claims_programdata_meta = if fault == SeriesFault::BatchClaimsProgramdata {
-        let substituted = Pubkey::new_unique();
+        let substituted = fixture_pubkey(ROLE_SUBSTITUTED_CLAIMS_PROGRAMDATA);
         let data = programdata_bytes(&[0x42; 32], None);
         test.add_account(
             substituted,
@@ -1177,7 +1259,7 @@ fn fixture(core_mutable: bool) -> Fixture {
         record.add(&mut test);
     }
 
-    let payer = Keypair::new();
+    let payer = fixture_keypair(ROLE_PAYER);
     test.add_account(
         payer.pubkey(),
         Account {

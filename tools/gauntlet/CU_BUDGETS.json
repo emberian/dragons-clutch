@@ -303,55 +303,55 @@
       "campaign": "tier4-series-occurrence-programtest",
       "scope": "transaction",
       "transaction": "Series occurrence Consume founds its Market with a Core permit",
-      "measured": 744795,
-      "tolerance": 40000,
-      "budget": 784795,
+      "measured": 722142,
+      "tolerance": 15000,
+      "budget": 737142,
       "enforced": true,
-      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit — the same Core code that costs the 433,129-CU stage 2 of DCLTGMF1 — with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Pinned at the highest of six runs on the same ELFs (720,795 / 720,799 / 725,295-shape draws through 744,795); band 24,000."
+      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit — the same Core code that costs stage 2 of DCLTGMF1 — with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
     },
     {
       "id": "series-consume-founds-with-permit-replay-campaign",
       "campaign": "tier4-series-occurrence-programtest",
       "scope": "transaction",
       "transaction": "Series occurrence Consume founds its Market with a Core permit (replay campaign)",
-      "measured": 737295,
-      "tolerance": 30000,
-      "budget": 767295,
+      "measured": 722142,
+      "tolerance": 15000,
+      "budget": 737142,
       "enforced": true,
-      "provenance": "The same founding driven by the fixture that then replays its ticket. Highest of six runs; band 19,500."
+      "provenance": "The same founding driven by the fixture that then replays its ticket. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. It now measures EXACTLY the same as series-consume-founds-with-permit, which is the honest answer: it is the same transaction against the same prestate, and the 14,847 CU that used to separate the two pins was entirely bump-search noise. Previous pin 737,295, highest of six unseeded runs, band 19,500."
     },
     {
       "id": "series-consume-late-hoard-refusal",
       "campaign": "tier4-series-occurrence-programtest",
       "scope": "transaction",
       "transaction": "Series Consume refuses a late Hoard postcondition",
-      "measured": 692942,
-      "tolerance": 30000,
-      "budget": 722942,
+      "measured": 682391,
+      "tolerance": 15000,
+      "budget": 697391,
       "enforced": true,
-      "provenance": "The rollback case: a refusal raised AFTER the child committed, which must take Found and all replay state with it. Highest of six runs; band 15,000."
+      "provenance": "The rollback case: a refusal raised AFTER the child committed, which must take Found and all replay state with it. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. Previous pin 692,942, highest of six unseeded runs, band 15,000."
     },
     {
       "id": "series-consume-replayed-ticket-refusal",
       "campaign": "tier4-series-occurrence-programtest",
       "scope": "transaction",
       "transaction": "Series Consume refuses a replayed ticket",
-      "measured": 370694,
-      "tolerance": 20000,
-      "budget": 390694,
+      "measured": 366167,
+      "tolerance": 15000,
+      "budget": 381167,
       "enforced": true,
-      "provenance": "Highest of six runs; band 4,500."
+      "provenance": "Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. Previous pin 370,694, highest of six unseeded runs, band 4,500."
     },
     {
       "id": "series-consume-substituted-programdata-refusal",
       "campaign": "tier4-series-occurrence-programtest",
       "scope": "transaction",
       "transaction": "Series Consume refuses a substituted Claims ProgramData",
-      "measured": 189223,
-      "tolerance": 20000,
-      "budget": 209223,
+      "measured": 183196,
+      "tolerance": 15000,
+      "budget": 198196,
       "enforced": true,
-      "provenance": "Highest of SEVEN runs, range 183,223-189,223, band 6,000. It looked like the quietest row in the fast lane at band 1,500 over the first six runs, and the seventh drew 189,223. That seventh run is NOISE and not a regression, and the attribution is exact rather than argued: none of the five programs this campaign builds (registry, rent, custody, core, the series-consume caller) changed at all between the first run and the seventh, so the ELFs are identical bytes and 4,500 is three `find_program_address` iterations. It is the clearest single demonstration in this file that six runs is not enough to bound a band."
+      "provenance": "Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. This row is why the seed exists. Its previous pin was the highest of SEVEN runs, range 183,223-189,223, band 6,000. It looked like the quietest row in the fast lane at band 1,500 over the first six runs, and the seventh drew 189,223. That seventh run is NOISE and not a regression, and the attribution is exact rather than argued: none of the five programs this campaign builds (registry, rent, custody, core, the series-consume caller) changed at all between the first run and the seventh, so the ELFs are identical bytes and 4,500 is three `find_program_address` iterations. It is the clearest single demonstration in this file that six runs is not enough to bound a band."
     },
     {
       "id": "hot-canonical-bundle-phase-subtotals",
