@@ -16,6 +16,8 @@ use core::convert::{TryFrom, TryInto};
 use dclutch_effect_kernel::v2::AccountPermission;
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 
+/// Typed, allocation-free encoder for the V1 account-profile generation.
+pub mod encode_v1;
 /// Data-defined Trading-owned PDA derivation and state lifecycle policy.
 pub mod lifecycle_v3;
 /// Runtime-tail account and register projection profiles.

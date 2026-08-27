@@ -30,7 +30,8 @@ use solana_program::{
 };
 
 use crate::{
-    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    TradingSbfError,
+    child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
     hot_v3::DowngradedEffectAccountsV3,
 };
 
@@ -113,7 +114,18 @@ pub fn execute_core_route_v3<'info>(
         core_program,
         parent,
     )?;
-    append_receipt_dependency_v3(prepared.invocation, &mut prepared.child_data, prior_receipt)?;
+    // Core is the one hot-path child whose ABI genuinely READS the producer
+    // receipt: `core-sbf::process_instruction`'s SERIES_CORE_REQUEST_MAGIC_V1
+    // branch splits a trailing CLAIMS_FOUNDING_RECEIPT_MAGIC_V5 or
+    // PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1 off the tail and refuses the
+    // request outright when neither is there. The suffix is that ABI, not a
+    // Trading convenience, so it stays.
+    deliver_receipt_dependency_v3(
+        prepared.invocation,
+        &mut prepared.child_data,
+        prior_receipt,
+        ReceiptDeliveryV3::ExactSuffix,
+    )?;
     let mut child_accounts = invocation_accounts(prepared.invocation, effect_accounts)?;
     let mut metas = Vec::with_capacity(child_accounts.len());
     for (index, account) in child_accounts.iter().enumerate() {

@@ -27,7 +27,9 @@ use dclutch_general_adapter_contract::artifacts_v3::{
 };
 use dclutch_general_adapter_contract::{
     admitted_accelerator_v3::authenticate_frozen_selection_v3,
-    effect_artifacts_v3::{GeneralChildFrameV3, general_effect_route_frame_v3},
+    effect_artifacts_v3::{
+        GeneralChildFrameV3, general_effect_route_count_v3, general_effect_route_frame_v3,
+    },
     hot_candidate_v3::{identity as general_identity, scalar as general_scalar},
     local_state_v3::{GeneralLocalStateKindV3, GeneralLocalStateV3},
     runtime_manifest::SettlementManifestV2,
@@ -48,8 +50,8 @@ use dclutch_general_adapter_contract::{
         GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
         GeneralChildRentWidthsV5, GeneralReadonlyEvidenceKindV3,
         encode_general_state_lifecycle_v5_atomic, general_child_account_start_v3,
-        general_readonly_evidence_count_v3, general_readonly_evidence_v3,
-        general_state_lifecycle_bytes_v5,
+        general_readonly_evidence_count_v3, general_readonly_evidence_start_v3,
+        general_readonly_evidence_v3, general_state_lifecycle_bytes_v5,
     },
 };
 use dclutch_general_codec::{
@@ -1503,14 +1505,40 @@ fn project_general_lifecycle_v5(
     } else {
         None
     };
-    let child_account_start = general_child_account_start_v3(request.action);
-    let expected_child_start = if request.action == Action::Close {
+    // Geometry coherence between the emitter's tables and this operator's
+    // frame. Both conjuncts compare two quantities with independent authors, so
+    // neither is a self-comparison.
+    //
+    // The single check this replaces compared `general_child_account_start_v3`
+    // against literal 8/9 -- which is `general_readonly_evidence_start_v3`'s own
+    // table, copied. Children begin AFTER evidence, so that equality holds only
+    // for an action with no readonly evidence at all: the check refused six of
+    // the seven actions outright. It had never fired because
+    // `build_general_hot_instruction_v3` had no caller.
+    //
+    // (a) Readonly evidence begins exactly at the fixed-prefix boundary. The
+    //     literals belong to THIS quantity: the five injected Hot runtime
+    //     representatives plus the action's own lifecycle accounts, four for
+    //     `Close` and three for every other action.
+    let expected_evidence_start = if request.action == Action::Close {
         9
     } else {
         8
     };
-    if child_account_start != expected_child_start {
+    if general_readonly_evidence_start_v3(request.action) != expected_evidence_start {
         return Err(GeneralHotOperatorErrorV3::Lifecycle);
+    }
+    // (b) Children begin exactly where evidence ends: no gap, no overlap. The
+    //     independent side is the EffectProgram's own route table, which is
+    //     authored separately from the evidence coordinates -- not
+    //     `general_child_account_start_v3`'s definition restated back at it.
+    let child_account_start = general_child_account_start_v3(request.action);
+    if general_effect_route_count_v3(request.action) != 0 {
+        let first = general_effect_route_frame_v3(request.action, 0)
+            .map_err(|_| GeneralHotOperatorErrorV3::Lifecycle)?;
+        if first.account_start != child_account_start {
+            return Err(GeneralHotOperatorErrorV3::Lifecycle);
+        }
     }
     let projection = GeneralLifecycleProjectionV3 {
         primary_state: primary.key,
@@ -2838,6 +2866,56 @@ mod tests {
         assert_eq!(
             StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &legacy),
             Err(LifecycleErrorV3::UnsupportedProfile)
+        );
+    }
+
+    /// The two live geometry conjuncts, and the witness for why the one they
+    /// replaced had to go.
+    ///
+    /// The stale form compared `general_child_account_start_v3` against literal
+    /// 8/9 -- `general_readonly_evidence_start_v3`'s own table, copied into this
+    /// operator. Children begin AFTER evidence, so that equality can hold only
+    /// when an action declares no readonly evidence: SIX of the seven actions
+    /// were refused outright, and nobody noticed because
+    /// `build_general_hot_instruction_v3` had no caller to run it.
+    ///
+    /// Both replacements compare quantities with independent authors. (a) pins
+    /// the literals to the thing they were always describing -- evidence begins
+    /// at the fixed-prefix boundary -- so a drifted evidence table still fires
+    /// them. (b) pins the EffectProgram's own route table against the evidence
+    /// arithmetic, which is a different author, rather than restating
+    /// `general_child_account_start_v3`'s definition back at itself.
+    #[test]
+    fn the_geometry_conjuncts_hold_for_every_action_and_the_stale_one_could_not() {
+        let mut refused_by_the_stale_form = 0_usize;
+        for action in GENERAL_ACTIONS_V3 {
+            let expected_evidence_start = if action == Action::Close { 9 } else { 8 };
+            assert_eq!(
+                general_readonly_evidence_start_v3(action),
+                expected_evidence_start,
+                "{action:?} moved the fixed-prefix boundary",
+            );
+
+            let child_start = general_child_account_start_v3(action);
+            if general_effect_route_count_v3(action) != 0 {
+                assert_eq!(
+                    general_effect_route_frame_v3(action, 0)
+                        .expect("first route frame")
+                        .account_start,
+                    child_start,
+                    "{action:?} put a gap or an overlap between evidence and children",
+                );
+            }
+
+            // The reversion witness: the stale conjunct, evaluated.
+            if child_start != expected_evidence_start {
+                refused_by_the_stale_form += 1;
+            }
+        }
+        assert_eq!(
+            refused_by_the_stale_form,
+            GENERAL_ACTIONS_V3.len() - 1,
+            "only an action with no readonly evidence could ever have passed the stale check",
         );
     }
 }

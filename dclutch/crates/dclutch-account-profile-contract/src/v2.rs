@@ -2306,15 +2306,16 @@ pub fn derive_effect_permissions(
         return Err(Error::WidthMismatch);
     }
     for (coordinate, permission) in output.iter_mut().enumerate() {
-        let authority_coordinate = if expanded_rule(profile, coordinate)?.prestate
-            == AccountPrestateV2::AuthenticatedRouteAlias
-        {
-            profile.representative(tail_count, coordinate)?
+        let rule = expanded_rule(profile, coordinate)?;
+        // A coordinate that is not a route alias IS its own authority, so the
+        // rule already decoded is the rule whose permission this is. Only a
+        // route alias has another coordinate to read.
+        let authority_rule = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+            expanded_rule(profile, profile.representative(tail_count, coordinate)?)?
         } else {
-            coordinate
+            rule
         };
-        let rule = expanded_rule(profile, authority_coordinate)?;
-        *permission = rule.permission();
+        *permission = authority_rule.permission();
     }
     Ok(())
 }
@@ -2331,18 +2332,19 @@ pub fn derive_effect_permissions_with_dynamic_spans(
     }
     for (coordinate, permission) in output.iter_mut().enumerate() {
         let rule = expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
-        let authority_coordinate = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
-            profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?
+        // See `derive_effect_permissions`. Here the saved decode is the one
+        // that walks the whole span table to find the coordinate's rule.
+        let authority_rule = if rule.prestate == AccountPrestateV2::AuthenticatedRouteAlias {
+            expanded_rule_with_dynamic_spans(
+                profile,
+                tail_count,
+                span_counts,
+                profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?,
+            )?
         } else {
-            coordinate
+            rule
         };
-        *permission = expanded_rule_with_dynamic_spans(
-            profile,
-            tail_count,
-            span_counts,
-            authority_coordinate,
-        )?
-        .permission();
+        *permission = authority_rule.permission();
     }
     Ok(())
 }
@@ -2356,7 +2358,16 @@ fn validate_accounts(
         let rule = expanded_rule(profile, coordinate)?;
         let representative = profile.representative(tail_count, coordinate)?;
         let expected_privileges = if profile.supports_route_alias_packing() {
-            representative_privileges(profile, tail_count, representative)?
+            if representative == coordinate {
+                // `representative` is idempotent, so a self-representative
+                // coordinate satisfies the alias check by the value already in
+                // hand, and its representative's rule IS `rule`. Taking it here
+                // is the same value at two artifact decodes less; the branch
+                // below is the only one that has another coordinate to read.
+                rule.privileges
+            } else {
+                representative_privileges(profile, tail_count, representative)?
+            }
         } else {
             rule.privileges
         };
@@ -2407,7 +2418,11 @@ fn validate_accounts(
             .get(representative)
             .copied()
             .ok_or(Error::InvalidCoordinate)?;
-        let canonical_rule = expanded_rule(profile, representative)?;
+        let canonical_rule = if representative == coordinate {
+            rule
+        } else {
+            expanded_rule(profile, representative)?
+        };
         if account.key() != canonical.key()
             || account.owner() != canonical.owner()
             || account.lamports() != canonical.lamports()
@@ -2425,8 +2440,17 @@ fn validate_accounts(
         if representative == coordinate {
             let mut prior = 0_usize;
             while prior < coordinate {
-                if profile.representative(tail_count, prior)? == prior
-                    && accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key() == account.key()
+                // The key comparison first, the artifact decode only if it
+                // matches. Both conjuncts are pure and `&&` short-circuits, so
+                // the predicate is unchanged -- and no refusal can be skipped:
+                // this outer loop already evaluated
+                // `profile.representative(tail_count, prior)` successfully in
+                // an earlier iteration for every `prior < coordinate`, or it
+                // returned that error instead of reaching here. What changes is
+                // that a 32-byte comparison stands where a rule decode stood,
+                // `coordinate * (coordinate - 1) / 2` times.
+                if accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key() == account.key()
+                    && profile.representative(tail_count, prior)? == prior
                 {
                     return Err(Error::CrossItemAlias);
                 }
@@ -2450,12 +2474,18 @@ fn validate_accounts_with_dynamic_spans(
         let rule = expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, coordinate)?;
         let representative =
             profile.representative_with_dynamic_spans(tail_count, span_counts, coordinate)?;
-        let expected_privileges = representative_privileges_with_dynamic_spans(
-            profile,
-            tail_count,
-            span_counts,
-            representative,
-        )?;
+        let expected_privileges = if representative == coordinate {
+            // See `validate_accounts`: a self-representative coordinate's
+            // representative rule is the rule already decoded.
+            representative_privileges_of_rule(rule)
+        } else {
+            representative_privileges_with_dynamic_spans(
+                profile,
+                tail_count,
+                span_counts,
+                representative,
+            )?
+        };
         if account.privileges() != expected_privileges {
             return Err(Error::PrivilegeMismatch);
         }
@@ -2503,8 +2533,11 @@ fn validate_accounts_with_dynamic_spans(
             .get(representative)
             .copied()
             .ok_or(Error::InvalidCoordinate)?;
-        let canonical_rule =
-            expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?;
+        let canonical_rule = if representative == coordinate {
+            rule
+        } else {
+            expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?
+        };
         if account.key() != canonical.key()
             || account.owner() != canonical.owner()
             || account.lamports() != canonical.lamports()
@@ -2522,9 +2555,12 @@ fn validate_accounts_with_dynamic_spans(
         if representative == coordinate {
             let mut prior = 0_usize;
             while prior < coordinate {
-                if profile.representative_with_dynamic_spans(tail_count, span_counts, prior)?
-                    == prior
-                    && accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key() == account.key()
+                // See `validate_accounts`. The dynamic representative is the
+                // more expensive of the two -- it walks the whole span table --
+                // so putting the key comparison first matters more here.
+                if accounts.get(prior).ok_or(Error::InvalidCoordinate)?.key() == account.key()
+                    && profile.representative_with_dynamic_spans(tail_count, span_counts, prior)?
+                        == prior
                 {
                     return Err(Error::CrossItemAlias);
                 }
@@ -2557,13 +2593,22 @@ fn representative_privileges_with_dynamic_spans(
     {
         return Err(Error::InvalidAlias);
     }
-    let representative_rule =
-        expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?;
-    let mut union = representative_rule.privileges;
-    if representative_rule.effect_permissions != 0 {
-        union |= 0x02;
+    Ok(representative_privileges_of_rule(
+        expanded_rule_with_dynamic_spans(profile, tail_count, span_counts, representative)?,
+    ))
+}
+
+/// The privileges a representative's own rule declares.
+///
+/// One owner, so the self-representative fast path in
+/// `validate_accounts_with_dynamic_spans` cannot drift from the general path:
+/// a rule that grants any effect permission is writable.
+const fn representative_privileges_of_rule(rule: AccountRuleV2) -> u8 {
+    if rule.effect_permissions != 0 {
+        rule.privileges | 0x02
+    } else {
+        rule.privileges
     }
-    Ok(union)
 }
 
 fn inject_indices(

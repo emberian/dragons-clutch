@@ -684,6 +684,29 @@ impl<'a> ProgramV4<'a> {
         Ok(())
     }
 
+    /// How many local-effect ordinals write account DATA at `tail_count`.
+    ///
+    /// The exact width of the runtime-write scratch bank [`project_atomic`]
+    /// requires, and the one owner of it: [`project_atomic`] checks the bank it
+    /// is handed against this, so the width is a checked precondition rather
+    /// than a formula repeated on both sides of the call. See
+    /// [`v3::ProgramV3::data_write_operation_count`] for why it is this and not
+    /// the ordinal count.
+    pub fn data_write_operation_count(self, tail_count: u32) -> ResultV4<usize> {
+        Ok(self.base.data_write_operation_count(tail_count)?)
+    }
+
+    /// How many local-effect ordinals this program resolves at `tail_count`.
+    ///
+    /// The one owner of `item_operation_count * tail_count + fixed_operation_count`.
+    pub fn resolved_operation_count(self, tail_count: u32) -> ResultV4<usize> {
+        let total = u64::from(self.base.item_operation_count())
+            .checked_mul(u64::from(tail_count))
+            .and_then(|value| value.checked_add(u64::from(self.base.fixed_operation_count())))
+            .ok_or(ErrorV4::Arithmetic)?;
+        usize::try_from(total).map_err(|_| ErrorV4::Arithmetic)
+    }
+
     /// Resolve and shift one fixed-body local effect.
     pub fn resolved_fixed_effect(
         self,
@@ -909,10 +932,16 @@ impl<'a> ProgramV4<'a> {
 /// Request templates remain owned by the canonical embedded V3 program;
 /// borrowed family ranges are appended only at child-invocation time and never
 /// become caller-authored bytes in this local request bank.
+///
+/// `write_ranges` is a caller-owned scratch bank exactly
+/// [`ProgramV4::data_write_operation_count`] entries wide, used only by the
+/// runtime-write overlap refusal. Its incoming contents are not read and its
+/// outgoing contents are not a result.
 pub fn project_atomic(
     program: ProgramV4<'_>,
     tail_count: u32,
     mut projection: ProjectionV3<'_>,
+    write_ranges: &mut [ResolvedWriteRangeV4],
 ) -> ResultV4<()> {
     let accounts = program.account_count(tail_count, projection.scalars)?;
     let scalar_count = program.base.scalar_count(tail_count)?;
@@ -942,6 +971,7 @@ pub fn project_atomic(
         projection.scalars,
         projection.identities,
         projection.aliases,
+        write_ranges,
     )?;
     initialize_requests(program.base, tail_count, projection.requests)?;
     for (output, input) in projection
@@ -1036,37 +1066,97 @@ fn alias_region_accepts_v4(
     )
 }
 
+/// One resolved data write: the account the alias table resolves it onto, and
+/// the byte range it covers there.
+///
+/// This exists so [`project_atomic`] can answer a question about PAIRS of
+/// writes without resolving both sides of every pair. It is caller-owned
+/// because this crate allocates nothing: `v3::ProjectionV3`'s lamport and
+/// request banks are the same discipline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedWriteRangeV4 {
+    account: u32,
+    start: u32,
+    width: u32,
+}
+
+impl ResolvedWriteRangeV4 {
+    /// The value a caller fills a fresh scratch bank with.
+    ///
+    /// Not load-bearing in either direction: the validator writes every entry
+    /// it reads before reading it, and refuses without reading the rest.
+    #[must_use]
+    pub const fn vacant() -> Self {
+        Self {
+            account: 0,
+            start: 0,
+            width: 0,
+        }
+    }
+}
+
+/// Refuse a program whose local effects write overlapping bytes of one account.
+///
+/// The predicate is over PAIRS: no two data-writing operations may cover
+/// overlapping bytes of the same alias-resolved account. It used to be answered
+/// by resolving BOTH sides of every pair, which is `total * (total + 1) / 2`
+/// full resolutions of a program whose answer for a given ordinal cannot change
+/// within one projection -- each of them an artifact `Operation::decode`, a
+/// register resolve, and a walk of the whole span table per account coordinate.
+///
+/// Every ordinal is now resolved exactly once, in order, and compared against
+/// the ranges already resolved. Same pairs, same refusal, same order of first
+/// failure: `total` resolutions and integer comparisons for the rest.
+///
+/// `ranges` is a caller-owned scratch bank exactly
+/// [`ProgramV4::data_write_operation_count`] entries wide -- the number of
+/// ordinals that will actually record a range, not the number that will be
+/// resolved. Its incoming contents are not read.
 fn validate_runtime_write_nonoverlap_v4(
     program: ProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
     aliases: &[usize],
+    ranges: &mut [ResolvedWriteRangeV4],
 ) -> ResultV4<()> {
-    let total = u64::from(program.base.item_operation_count())
-        .checked_mul(u64::from(tail_count))
-        .and_then(|value| value.checked_add(u64::from(program.base.fixed_operation_count())))
-        .ok_or(ErrorV4::Arithmetic)?;
-    let mut right = 0_u64;
-    while right < total {
-        if let Some((right_account, right_start, right_width)) = resolved_data_range(
-            resolved_by_ordinal_v4(program, right, tail_count, scalars, identities)?,
+    let total = program.resolved_operation_count(tail_count)?;
+    if ranges.len() != program.data_write_operation_count(tail_count)? {
+        return Err(ErrorV4::BaseProgram);
+    }
+    // How many entries of `ranges` carry a resolved write. Operations that
+    // write no account data contribute none, exactly as they entered no pair
+    // before.
+    let mut resolved_writes = 0_usize;
+    let mut ordinal = 0_usize;
+    while ordinal < total {
+        if let Some((account, start, width)) = resolved_data_range(
+            resolved_by_ordinal_v4(
+                program,
+                u64::try_from(ordinal).map_err(|_| ErrorV4::Arithmetic)?,
+                tail_count,
+                scalars,
+                identities,
+            )?,
             aliases,
         )? {
-            let mut left = 0_u64;
-            while left < right {
-                if let Some((left_account, left_start, left_width)) = resolved_data_range(
-                    resolved_by_ordinal_v4(program, left, tail_count, scalars, identities)?,
-                    aliases,
-                )? && left_account == right_account
-                    && overlaps(left_start, left_width, right_start, right_width)?
+            let account = u32::try_from(account).map_err(|_| ErrorV4::Arithmetic)?;
+            let prior = ranges.get(..resolved_writes).ok_or(ErrorV4::Arithmetic)?;
+            for earlier in prior {
+                if earlier.account == account
+                    && overlaps(earlier.start, earlier.width, start, width)?
                 {
                     return Err(ErrorV4::BaseProgram);
                 }
-                left = left.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
             }
+            *ranges.get_mut(resolved_writes).ok_or(ErrorV4::Arithmetic)? = ResolvedWriteRangeV4 {
+                account,
+                start,
+                width,
+            };
+            resolved_writes = resolved_writes.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
         }
-        right = right.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+        ordinal = ordinal.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
     }
     Ok(())
 }
@@ -1540,6 +1630,16 @@ mod tests {
         permissions[27] = AccountPermission::new(false, false, true);
         let mut scratch_lamports = [0; 28];
         let mut output_lamports = [9; 28];
+        // `series_successor` declares exactly one fixed operation, a scalar
+        // write, and no item operations -- so one entry is the exact width the
+        // validator requires.
+        assert_eq!(
+            program
+                .data_write_operation_count(0)
+                .expect("data write operation count"),
+            1
+        );
+        let mut write_ranges = [ResolvedWriteRangeV4::vacant(); 1];
         project_atomic(
             program,
             0,
@@ -1553,6 +1653,7 @@ mod tests {
                 output_lamports: &mut output_lamports,
                 requests: &mut [],
             },
+            &mut write_ranges,
         )
         .expect("V4 shifted projection");
         assert_eq!(output_lamports, [3; 28]);
@@ -1560,6 +1661,7 @@ mod tests {
         permissions[27] = AccountPermission::read_only();
         let mut hostile_scratch = [0; 28];
         let mut hostile_output = [7; 28];
+        let mut hostile_write_ranges = write_ranges;
         assert!(
             project_atomic(
                 program,
@@ -1574,6 +1676,7 @@ mod tests {
                     output_lamports: &mut hostile_output,
                     requests: &mut [],
                 },
+                &mut hostile_write_ranges,
             )
             .is_err()
         );

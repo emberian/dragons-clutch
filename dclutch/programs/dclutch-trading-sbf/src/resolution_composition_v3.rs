@@ -33,7 +33,8 @@ use solana_program::{
 };
 
 use crate::{
-    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    TradingSbfError,
+    child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
     hot_v3::DowngradedEffectAccountsV3,
 };
 
@@ -134,7 +135,16 @@ pub fn execute_resolution_route_v3<'info>(
         resolution_program,
         parent,
     )?;
-    append_receipt_dependency_v3(prepared.invocation, &mut prepared.child_data, prior_receipt)?;
+    // Everything past `PROVIDER_EXECUTION_REQUEST_BYTES_V3` on this wire is
+    // the post-update parameter body, which `provider_instruction_v3` parses
+    // and which `prepare` has already bound to the request's
+    // `post_params_body_digest`. There is no receipt suffix in that ABI.
+    deliver_receipt_dependency_v3(
+        prepared.invocation,
+        &mut prepared.child_data,
+        prior_receipt,
+        ReceiptDeliveryV3::VerifiedOnly,
+    )?;
     let mut child_accounts = invocation_accounts(prepared.invocation, effect_accounts)?;
     let mut metas = Vec::with_capacity(child_accounts.len());
     for (index, account) in child_accounts.iter().enumerate() {

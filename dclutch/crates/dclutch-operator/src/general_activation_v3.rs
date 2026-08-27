@@ -9,32 +9,36 @@
 //! [`activate_general_owned_v3`] for the exact General-owned poststate. It
 //! performs no RPC, no signing, no submission, and no account mutation.
 //!
-//! It deliberately does **not** build a Trading instruction. No in-tree route
-//! can consume this plan yet, for two reasons this module's tests pin as
-//! executable facts rather than prose:
+//! It deliberately does **not** build a Trading instruction, and it no longer
+//! needs to. The two blockers this header used to name are both closed:
 //!
 //! 1. `programs/dclutch-trading-sbf/src/outer.rs::process_activation` — the sole
-//!    creator of capability roots — writes an all-zero family tail. A
-//!    `GeneralRootV2` is refused at its magic, so the root that seam creates is
-//!    not a root the General hot path will accept.
-//! 2. That seam authenticates the record at `selection.capability_release()` as
-//!    a `CapabilityProgramV1` (`DCLTCPR1`), while `hot_v3.rs` authenticates the
-//!    record at the *same* selection field as a `CapabilityProgramSetV2`
-//!    (`DCLTCPS2`). The selection is a seed of the root PDA, so one selection
-//!    cannot satisfy both, and a General V3 root is therefore unreachable
-//!    through the only route that creates roots.
+//!    creator of capability roots — used to write an all-zero family tail. Since
+//!    `ec3731d` the tail IS the effect program's projected request buffer, and
+//!    an activation that projects nothing into a nonzero tail refuses rather
+//!    than committing a root no family can decode.
+//! 2. That seam used to authenticate the record at
+//!    `selection.capability_release()` as a `CapabilityProgramV1` (`DCLTCPR1`)
+//!    only. Since `bc5da76` it reads the release generation off the raw
+//!    record's OWN PDA and admits a `CapabilityProgramSetV2` (`DCLTCPS2`),
+//!    selecting the activation descriptor out of the set. That is a fact about
+//!    a finalized record's address, not a kind branch.
 //!
-//! Both are recorded in the accompanying decision record. Until a successor
-//! activation route exists, this planner is what produces the exact composite
-//! root bytes every downstream General fixture and pre-commitment needs, and it
-//! is the single place that computes them.
+//! General's own three activation artifacts exist as of the GEN-ART lane, and
+//! `programs/dclutch-trading-sbf/program-test/tests/activation.rs`
+//! (`Campaign::General`) creates a real `GeneralRootV2` through that seam on a
+//! validator, then requires this module's [`activate_general_owned_v3`] to
+//! agree with it byte for byte on both the root tail and the FundingState
+//! poststate. So this planner is no longer the only thing that can produce
+//! those bytes -- it is now one of two independent authorities that produce the
+//! same ones, which is a considerably stronger position than it had.
 
 use dclutch_capability_contract::{
     ActivationPolicy, CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1,
     ContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
 };
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1, CapabilityRootHeaderV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
 };
 use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
@@ -422,19 +426,6 @@ pub fn retire_planned_general_root_v3(
         root_state: state,
         ..plan.clone()
     })
-}
-
-/// Whether the sole in-tree root-creating seam can consume a V3 selection.
-///
-/// `outer.rs::process_activation` authenticates the record at
-/// `selection.capability_release()` as a `CapabilityProgramV1`. For a General
-/// V3 capability that field is the digest of a `CapabilityProgramSetV2`, whose
-/// bytes are not a `CapabilityProgramV1`. This returns the refusal that seam
-/// would produce, so the gap is a value a caller can branch on rather than a
-/// comment.
-#[must_use]
-pub fn common_activation_seam_admits_v3(capability_release_record: &[u8]) -> bool {
-    CapabilityProgramV1::decode(capability_release_record).is_ok()
 }
 
 #[cfg(test)]

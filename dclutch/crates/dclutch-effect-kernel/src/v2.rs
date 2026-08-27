@@ -10,6 +10,9 @@
 
 use core::convert::TryInto;
 
+/// Typed, allocation-free encoder for this generation's artifacts.
+pub mod encode;
+
 /// Canonical runtime-width effect-program magic.
 pub const MAGIC: [u8; 4] = *b"DCE2";
 /// Finalized-record schema label for runtime-width effect programs.
@@ -1164,78 +1167,78 @@ mod tests {
 
     use std::vec;
 
+    use super::encode::{
+        EffectGeometryV2, EffectInstructionV2, RoleFrameV2, effect_program_v2_bytes,
+        encode_effect_program_v2_atomic,
+    };
     use super::*;
 
-    fn instruction(
-        opcode: u8,
-        account_a: u16,
-        account_b: u16,
-        register: u16,
-        offset: u32,
-    ) -> [u8; INSTRUCTION_BYTES] {
-        extended_instruction(opcode, 0, account_a, account_b, register, offset, 0)
-    }
+    /// Exact bytes `fixture_program` produced before it had a public encoder.
+    ///
+    /// This is the byte-identity pin for the fixture replacement: it was
+    /// captured from the hand-written builder this module used to carry, and
+    /// the encoder has to reproduce it exactly. Unlike the transition VM and
+    /// AccountProfile generations there is no Lean-emitted V2 effect artifact
+    /// to compare against, so the prior wire bytes are the oracle.
+    const FIXTURE_PROGRAM_BYTES_V2: [u8; 96] = [
+        0x44, 0x43, 0x45, 0x32, 0x02, 0x00, 0x05, 0x00, 0x03, 0x00, 0x04, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
 
-    fn extended_instruction(
-        opcode: u8,
-        auxiliary: u8,
-        account_a: u16,
-        account_b: u16,
-        register: u16,
-        offset: u32,
-        extra: u32,
-    ) -> [u8; INSTRUCTION_BYTES] {
-        let mut bytes = [0_u8; INSTRUCTION_BYTES];
-        bytes[0] = opcode;
-        bytes[1] = auxiliary;
-        bytes[2..4].copy_from_slice(&account_a.to_le_bytes());
-        bytes[4..6].copy_from_slice(&account_b.to_le_bytes());
-        bytes[6..8].copy_from_slice(&register.to_le_bytes());
-        bytes[8..12].copy_from_slice(&offset.to_le_bytes());
-        bytes[12..16].copy_from_slice(&extra.to_le_bytes());
-        bytes
-    }
-
+    /// One canonical program, built only by the crate's public encoder.
+    ///
+    /// This is the single fixture authority in the module. Nothing here writes
+    /// a header field or an operand slot by hand any more, so a fixture cannot
+    /// disagree with the artifact a real author would emit.
     fn program(
-        account_count: u16,
-        scalar_count: u16,
-        identity_count: u16,
-        instructions: &[[u8; INSTRUCTION_BYTES]],
+        accounts: u16,
+        scalars: u16,
+        identities: u16,
+        instructions: &[EffectInstructionV2],
     ) -> vec::Vec<u8> {
-        let mut bytes = vec![0_u8; HEADER_BYTES + instructions.len() * INSTRUCTION_BYTES];
-        bytes
-            .get_mut(..4)
-            .expect("fixture magic destination")
-            .copy_from_slice(&MAGIC);
-        *bytes.get_mut(4).expect("fixture version destination") = VERSION;
-        bytes
-            .get_mut(6..8)
-            .expect("fixture count destination")
-            .copy_from_slice(
-                &u16::try_from(instructions.len())
-                    .expect("fixture instruction count")
-                    .to_le_bytes(),
-            );
-        bytes
-            .get_mut(8..10)
-            .expect("fixture account count destination")
-            .copy_from_slice(&account_count.to_le_bytes());
-        bytes
-            .get_mut(10..12)
-            .expect("fixture scalar count destination")
-            .copy_from_slice(&scalar_count.to_le_bytes());
-        bytes
-            .get_mut(12..14)
-            .expect("fixture identity count destination")
-            .copy_from_slice(&identity_count.to_le_bytes());
-        for (index, value) in instructions.iter().enumerate() {
-            let start = HEADER_BYTES + index * INSTRUCTION_BYTES;
-            bytes
-                .get_mut(start..start + INSTRUCTION_BYTES)
-                .expect("fixture instruction destination")
-                .copy_from_slice(value);
-        }
-        bytes
+        request_program(accounts, scalars, identities, 0, instructions)
+    }
+
+    /// One canonical program that also declares a request buffer.
+    fn request_program(
+        accounts: u16,
+        scalars: u16,
+        identities: u16,
+        request_bytes: u16,
+        instructions: &[EffectInstructionV2],
+    ) -> vec::Vec<u8> {
+        let width = effect_program_v2_bytes(instructions.len()).expect("fixture width");
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_effect_program_v2_atomic(
+            EffectGeometryV2 {
+                accounts,
+                scalars,
+                identities,
+                request_bytes,
+            },
+            instructions,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("fixture program");
+        output
+    }
+
+    /// Overwrite one byte of a canonical artifact.
+    ///
+    /// Every hostile case below is exactly one byte away from something the
+    /// encoder accepted, which is a stronger statement than a fixture that was
+    /// never canonical to begin with.
+    fn patched(canonical: &[u8], offset: usize, value: u8) -> vec::Vec<u8> {
+        let mut hostile = canonical.to_vec();
+        *hostile.get_mut(offset).expect("patch offset") = value;
+        hostile
     }
 
     fn fixture_program() -> vec::Vec<u8> {
@@ -1244,13 +1247,137 @@ mod tests {
             4,
             1,
             &[
-                instruction(OP_TRANSFER_LAMPORTS, 0, 1, 0, 0),
-                instruction(OP_WRITE_SCALAR, 0, 0, 1, 8),
-                instruction(OP_WRITE_IDENTITY, 0, 0, 0, 32),
-                instruction(OP_REQUIRE_LAMPORTS_EQ, 0, 0, 2, 0),
-                instruction(OP_REQUIRE_LAMPORTS_EQ, 1, 0, 3, 0),
+                EffectInstructionV2::transfer_lamports(0, 1, 0),
+                EffectInstructionV2::write_u64(0, 8, 1),
+                EffectInstructionV2::write_identity(0, 32, 0),
+                EffectInstructionV2::require_lamports_eq(0, 2),
+                EffectInstructionV2::require_lamports_eq(1, 3),
             ],
         )
+    }
+
+    /// The public encoder reproduces the module's prior fixture byte for byte.
+    #[test]
+    fn the_public_encoder_reproduces_the_prior_fixture_bytes() {
+        assert_eq!(fixture_program().as_slice(), FIXTURE_PROGRAM_BYTES_V2);
+    }
+
+    /// The encoder is total: it refuses whatever the decoder refuses, and a
+    /// refusal never leaves partial bytes in `output`.
+    #[test]
+    fn the_public_encoder_refuses_what_the_decoder_refuses() {
+        let attempt = |geometry: EffectGeometryV2,
+                       instructions: &[EffectInstructionV2],
+                       width: usize| {
+            let mut scratch = vec![0_u8; width];
+            let mut output = vec![0xcd_u8; width];
+            let result =
+                encode_effect_program_v2_atomic(geometry, instructions, &mut scratch, &mut output);
+            assert!(
+                output.iter().all(|byte| *byte == 0xcd),
+                "a refused encode left bytes in output"
+            );
+            result
+        };
+        let geometry = |accounts, scalars, identities, request_bytes| EffectGeometryV2 {
+            accounts,
+            scalars,
+            identities,
+            request_bytes,
+        };
+        let one = effect_program_v2_bytes(1).expect("width");
+
+        // An account coordinate outside the declared vector.
+        assert_eq!(
+            attempt(
+                geometry(1, 1, 0, 0),
+                &[EffectInstructionV2::require_lamports_eq(1, 0)],
+                one,
+            ),
+            Err(Error::InvalidAccount)
+        );
+        // A transfer whose source and destination are the same coordinate.
+        assert_eq!(
+            attempt(
+                geometry(2, 1, 0, 0),
+                &[EffectInstructionV2::transfer_lamports(0, 0, 0)],
+                one,
+            ),
+            Err(Error::InvalidAccount)
+        );
+        // A scalar register outside the declared bank.
+        assert_eq!(
+            attempt(
+                geometry(1, 1, 0, 0),
+                &[EffectInstructionV2::require_lamports_eq(0, 1)],
+                one,
+            ),
+            Err(Error::InvalidRegister)
+        );
+        // A request write that runs off the end of the declared buffer.
+        assert_eq!(
+            attempt(
+                geometry(1, 1, 0, 4),
+                &[EffectInstructionV2::write_request_u64(0, 0)],
+                one,
+            ),
+            Err(Error::DataOutOfBounds)
+        );
+        // Two data writes to the same account that overlap.
+        assert_eq!(
+            attempt(
+                geometry(1, 1, 1, 0),
+                &[
+                    EffectInstructionV2::write_u64(0, 8, 0),
+                    EffectInstructionV2::write_identity(0, 0, 0),
+                ],
+                effect_program_v2_bytes(2).expect("width"),
+            ),
+            Err(Error::OverlappingWrites)
+        );
+        // No instruction, and no account coordinate.
+        assert_eq!(
+            attempt(
+                geometry(1, 1, 0, 0),
+                &[],
+                effect_program_v2_bytes(0).expect("width"),
+            ),
+            Err(Error::EmptyProgram)
+        );
+        assert_eq!(
+            attempt(
+                geometry(0, 1, 0, 0),
+                &[EffectInstructionV2::require_lamports_eq(0, 0)],
+                one,
+            ),
+            Err(Error::EmptyProgram)
+        );
+        // A child frame or child request of width zero.
+        assert_eq!(
+            attempt(
+                geometry(2, 1, 0, 8),
+                &[EffectInstructionV2::invoke_role(
+                    FixedRole::Claims,
+                    RoleFrameV2 {
+                        account_start: 0,
+                        account_count: 0,
+                        request_offset: 0,
+                        request_len: 8,
+                    },
+                )],
+                one,
+            ),
+            Err(Error::NonCanonicalInstruction)
+        );
+        // Buffers that are not the exact encoded width.
+        assert_eq!(
+            attempt(
+                geometry(1, 1, 0, 0),
+                &[EffectInstructionV2::require_lamports_eq(0, 0)],
+                one + 1,
+            ),
+            Err(Error::InvalidLength)
+        );
     }
 
     #[test]
@@ -1423,14 +1550,19 @@ mod tests {
             Err(Error::NonCanonicalInstruction)
         );
 
-        let overlapping = program(
-            1,
-            1,
-            1,
-            &[
-                instruction(OP_WRITE_SCALAR, 0, 0, 0, 8),
-                instruction(OP_WRITE_IDENTITY, 0, 0, 0, 0),
-            ],
+        // Two writes to one account, moved into each other by one patched byte.
+        let overlapping = patched(
+            &program(
+                1,
+                1,
+                1,
+                &[
+                    EffectInstructionV2::write_u64(0, 32, 0),
+                    EffectInstructionV2::write_identity(0, 0, 0),
+                ],
+            ),
+            HEADER_BYTES + DATA_OFFSET,
+            8,
         );
         assert_eq!(
             ProgramV2::decode(&overlapping),
@@ -1465,9 +1597,9 @@ mod tests {
             3,
             0,
             &[
-                instruction(OP_TRANSFER_LAMPORTS, 0, 2, 0, 0),
-                instruction(OP_REQUIRE_LAMPORTS_EQ, 1, 0, 1, 0),
-                instruction(OP_REQUIRE_LAMPORTS_EQ, 2, 0, 2, 0),
+                EffectInstructionV2::transfer_lamports(0, 2, 0),
+                EffectInstructionV2::require_lamports_eq(1, 1),
+                EffectInstructionV2::require_lamports_eq(2, 2),
             ],
         );
         let program = ProgramV2::decode(&bytes).expect("alias-aware effect program");
@@ -1512,7 +1644,7 @@ mod tests {
 
     #[test]
     fn alias_self_transfer_and_cross_coordinate_overlap_refuse_atomically() {
-        let transfer_bytes = program(2, 1, 0, &[instruction(OP_TRANSFER_LAMPORTS, 0, 1, 0, 0)]);
+        let transfer_bytes = program(2, 1, 0, &[EffectInstructionV2::transfer_lamports(0, 1, 0)]);
         let transfer = ProgramV2::decode(&transfer_bytes).expect("coordinate-distinct transfer");
         let alias_accounts = [
             AccountInput {
@@ -1551,8 +1683,8 @@ mod tests {
             1,
             1,
             &[
-                instruction(OP_WRITE_SCALAR, 0, 0, 0, 0),
-                instruction(OP_WRITE_IDENTITY, 1, 0, 0, 0),
+                EffectInstructionV2::write_u64(0, 0, 0),
+                EffectInstructionV2::write_identity(1, 0, 0),
             ],
         );
         let writes = ProgramV2::decode(&write_bytes)
@@ -1599,8 +1731,8 @@ mod tests {
             258,
             257,
             &[
-                instruction(OP_TRANSFER_LAMPORTS, 299, 298, 257, 0),
-                instruction(OP_WRITE_IDENTITY, 297, 0, 256, 0),
+                EffectInstructionV2::transfer_lamports(299, 298, 257),
+                EffectInstructionV2::write_identity(297, 0, 256),
             ],
         );
         let decoded = ProgramV2::decode(&bytes).expect("wide effect program");
@@ -1611,20 +1743,26 @@ mod tests {
 
     #[test]
     fn fixed_role_requests_are_projected_and_conditionally_emitted() {
-        let mut bytes = program(
+        let bytes = request_program(
             4,
             2,
             1,
+            48,
             &[
-                instruction(OP_WRITE_REQUEST_SCALAR, 0, 0, 0, 0),
-                instruction(OP_WRITE_REQUEST_IDENTITY, 0, 0, 0, 16),
-                extended_instruction(OP_INVOKE_ROLE_IF_NONZERO, 2, 1, 1, 1, 0, 48),
+                EffectInstructionV2::write_request_u64(0, 0),
+                EffectInstructionV2::write_request_identity(16, 0),
+                EffectInstructionV2::invoke_role_if_nonzero(
+                    FixedRole::Claims,
+                    RoleFrameV2 {
+                        account_start: 1,
+                        account_count: 2,
+                        request_offset: 0,
+                        request_len: 48,
+                    },
+                    1,
+                ),
             ],
         );
-        bytes
-            .get_mut(REQUEST_BYTES_OFFSET..HEADER_BYTES)
-            .expect("request width destination")
-            .copy_from_slice(&48_u16.to_le_bytes());
         let program = ProgramV2::decode(&bytes).expect("typed role effect program");
         let accounts = [AccountInput {
             lamports: 1,
@@ -1695,31 +1833,54 @@ mod tests {
 
     #[test]
     fn request_routes_refuse_trading_targets_and_bad_ranges() {
-        let mut trading = program(
+        // Trading is not a fixed role, so `FixedRole` cannot name it and the
+        // encoder cannot emit it. One patched byte retargets a canonical
+        // Claims route at role coordinate two.
+        let trading = patched(
+            &request_program(
+                2,
+                1,
+                0,
+                8,
+                &[EffectInstructionV2::invoke_role(
+                    FixedRole::Claims,
+                    RoleFrameV2 {
+                        account_start: 0,
+                        account_count: 1,
+                        request_offset: 0,
+                        request_len: 8,
+                    },
+                )],
+            ),
+            HEADER_BYTES + ACCOUNT_A_OFFSET,
             2,
-            1,
-            0,
-            &[extended_instruction(OP_INVOKE_ROLE, 1, 2, 0, 0, 0, 8)],
         );
-        trading
-            .get_mut(REQUEST_BYTES_OFFSET..HEADER_BYTES)
-            .expect("request width destination")
-            .copy_from_slice(&8_u16.to_le_bytes());
         assert_eq!(
             ProgramV2::decode(&trading),
             Err(Error::NonCanonicalInstruction)
         );
 
-        let mut outside = program(
+        // A child frame that runs off the end of the account vector, made so by
+        // narrowing the declared account count under a canonical route.
+        let outside = patched(
+            &request_program(
+                3,
+                1,
+                0,
+                12,
+                &[EffectInstructionV2::invoke_role(
+                    FixedRole::Claims,
+                    RoleFrameV2 {
+                        account_start: 1,
+                        account_count: 2,
+                        request_offset: 4,
+                        request_len: 8,
+                    },
+                )],
+            ),
+            ACCOUNT_COUNT_OFFSET,
             2,
-            1,
-            0,
-            &[extended_instruction(OP_INVOKE_ROLE, 2, 1, 1, 0, 4, 8)],
         );
-        outside
-            .get_mut(REQUEST_BYTES_OFFSET..HEADER_BYTES)
-            .expect("request width destination")
-            .copy_from_slice(&8_u16.to_le_bytes());
         assert_eq!(ProgramV2::decode(&outside), Err(Error::InvalidAccount));
     }
 }

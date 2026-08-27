@@ -51,7 +51,8 @@ use solana_program::{
 };
 
 use crate::{
-    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    TradingSbfError,
+    child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
     hot_v3::DowngradedEffectAccountsV3,
 };
 
@@ -134,7 +135,12 @@ pub fn execute_claims_route_v3<'info>(
         metas.push(child_account_meta_v3(index, account));
     }
     let mut child_data = request.to_vec();
-    append_receipt_dependency_v3(invocation, &mut child_data, prior_receipt)?;
+    deliver_receipt_dependency_v3(
+        invocation,
+        &mut child_data,
+        prior_receipt,
+        receipt_kind.delivery(),
+    )?;
     let instruction = Instruction {
         program_id: *claims_program.key,
         accounts: metas,
@@ -199,6 +205,38 @@ enum ReceiptKindV3 {
     RationalLifecycle,
     RationalRepresentation,
     Close,
+}
+
+impl ReceiptKindV3 {
+    /// What `claims-sbf` does with a producer receipt on THIS request's wire.
+    ///
+    /// The Claims dispatcher routes on a magic prefix, so a suffix reaches the
+    /// handler either way and each handler decides for itself. Three of the
+    /// eight read one; the other five hash their WHOLE instruction data into
+    /// the packet digest their caller authority is derived from, so bytes
+    /// appended after the request do not merely go unread -- they change the
+    /// digest and the child refuses. Delivering a receipt there was never a
+    /// widening the child tolerated; it was a refusal waiting for a second
+    /// child CPI to reach it.
+    const fn delivery(self) -> ReceiptDeliveryV3 {
+        match self {
+            // `protocol_position_v2::split_sparse_receipt` reads an optional
+            // trailing `SparseNativeTransferReceiptV1` on Close and refuses any
+            // suffix on Admit.
+            Self::Close
+            // `sparse_native_transfer_v1::split_instruction` reads an optional
+            // trailing `ProtocolPositionAdmissionV2`.
+            | Self::SparseNativeTransfer
+            // `founding_v5::decode_instruction` requires the lock receipt and
+            // the projected receipt at an exact total width.
+            | Self::Founding => ReceiptDeliveryV3::ExactSuffix,
+            Self::Admit
+            | Self::Affine
+            | Self::SignedDelta
+            | Self::RationalLifecycle
+            | Self::RationalRepresentation => ReceiptDeliveryV3::VerifiedOnly,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

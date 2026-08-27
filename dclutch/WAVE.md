@@ -284,3 +284,33 @@ question with a recommended answer, not an inventory row.
   instructions NO program implements. Delete-or-succeed decisions for the
   Fable wave (what else in apps/dclutch-web speaks to programs that no longer
   exist?).
+
+- GEN-HOT (a lane, not a follow-up, per GEN-ART): the General Hot bundle in
+  trading's program-test (~4,000-line analog of direct-hot) — two-thirds of
+  its inputs now exist; it carries the zombie refusal THROUGH the ELF and,
+  with W2's walls down, General's first hot execution.
+- The eighth CapabilityProgramSetV2 entry + relaxing the exactly-seven rule:
+  what stands between "General's artifacts exist" and "a live General release
+  activates".
+- CapabilityProgramV1 (DCLTCPR1) has NO public encoder — hand-written in five
+  places, two in trading-sbf (same defect class GEN-ART just cured for three
+  generations; fourth generation, trading-sbf owner).
+- Small batch: GENERAL_ACTIVATION_ACCOUNT_PROFILE_ID_V1 is a test-demo digest
+  with zero consumers whose name now collides with the real thing.
+
+## Cook summary (2026-08-27, the wall series)
+
+Twelve walls found by execution, eleven down: heap phases 4→7→8 (arenas,
+borrowed identities, the seal), the reentrancy (cache-read auth, one shared
+crate, five families), the receipt-append (typed ReceiptDeliveryV3 split; the
+unread append was corrupting five Claims digests), the n²-resolution CU pass
+(−343k), the walk-sharing (−78k), the commit bitset (−116k, test-first).
+Standing at W2n: the Realm address-vs-digest emitter defect
+(ordinary_account_artifacts_v3:571, identity regen #7), 2,747 B of heap
+(p7e-banks +5,166 / runtime-observations +7,440), and residual CU (1,378,546
+spent at the Custody refusal). The bundle now executes Claims TO SUCCESS and
+enters Custody's body. Census 56+/121; journey CONSERVED at N=4 and N=16;
+General root real; three artifact generations have one encoder each; the
+funded failure walk executes; terminal windows have width and a one-answer
+proof. Formatting: use `rustup run 1.97.1 rustfmt --edition 2024` — bare
+rustfmt is unpinned and reflows ~178 lines of hot_v3.

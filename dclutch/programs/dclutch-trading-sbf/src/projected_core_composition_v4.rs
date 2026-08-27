@@ -29,7 +29,8 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{
-        ChildReceiptBankV3, ExpectedReceiptProvenanceV4, append_receipt_dependency_v3,
+        ChildReceiptBankV3, ExpectedReceiptProvenanceV4, ReceiptDeliveryV3,
+        deliver_receipt_dependency_v3,
     },
     hot_v3::DowngradedEffectAccountsV3,
     projected_custody_composition_v4::AuthenticatedProjectedCustodyPrefixV4,
@@ -307,10 +308,13 @@ fn prepare(
     );
     child_data.extend_from_slice(request_bytes);
     child_data.extend_from_slice(witness);
-    append_receipt_dependency_v3(
+    // `core-sbf` routes this to `series_consume` only when the tail carries
+    // PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1.
+    deliver_receipt_dependency_v3(
         resolved.invocation,
         &mut child_data,
         Some(lock_prefix.raw_receipt()),
+        ReceiptDeliveryV3::ExactSuffix,
     )?;
     let request_digest = hash(request_bytes).to_bytes();
     let child_accounts = invocation_accounts(resolved.invocation, effect_accounts)?;

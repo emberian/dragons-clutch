@@ -70,8 +70,8 @@ use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3},
     v4::{
-        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
-        project_atomic as project_effects_v4_atomic,
+        ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
+        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4, project_atomic as project_effects_v4_atomic,
     },
 };
 use dclutch_execution_strategy_contract::{
@@ -2233,6 +2233,7 @@ fn execute_authenticated_hot_v3(
     }
     let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent)?;
     hot_heap_mark!("rent-quotes");
+    hot_cu_checkpoint!("p5-geometry-rent");
 
     let projected_request = project_account_and_request_registers_v3(
         invocation.current_instruction,
@@ -2255,6 +2256,7 @@ fn execute_authenticated_hot_v3(
         identity_count,
     )?;
     hot_heap_mark!("request-registers");
+    hot_cu_checkpoint!("p5-request-registers");
     let request_output_scalars = projected_request.scalars;
     let request_output_identities = projected_request.identities;
     sealed_ownership
@@ -2289,6 +2291,7 @@ fn execute_authenticated_hot_v3(
     let preplan_output_scalars = vec![0_u64; scalar_count];
     let preplan_output_identities = vec![[0_u8; 32]; identity_count];
     hot_heap_mark!("preplan-output");
+    hot_cu_checkpoint!("p5-sealed-ownership-arena");
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2392,6 +2395,7 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         &transition_output_scalars,
     )?;
+    hot_cu_checkpoint!("p7-post-candidate-checks");
 
     require_borrowed_witness_coverage_v3(
         request_profile,
@@ -2401,6 +2405,7 @@ fn execute_authenticated_hot_v3(
         &transition_output_identities,
         family_request,
     )?;
+    hot_cu_checkpoint!("p7-borrowed-witness");
 
     let projected_effects = project_hot_effects_v3(
         effect,
@@ -2417,6 +2422,7 @@ fn execute_authenticated_hot_v3(
     )?;
     let output_lamports = projected_effects.lamports;
     let output_requests = projected_effects.requests;
+    hot_cu_checkpoint!("p7-effect-projection");
 
     let locally_mutated = require_local_effect_discipline_v5(
         &preplanned_plans,
@@ -2426,6 +2432,7 @@ fn execute_authenticated_hot_v3(
         &transition_output_identities,
         &aliases,
     )?;
+    hot_cu_checkpoint!("p7-local-effect-discipline");
     let revalidated_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2447,6 +2454,7 @@ fn execute_authenticated_hot_v3(
         replan_output_scalars,
         replan_output_identities,
     )?;
+    hot_cu_checkpoint!("p7-replan");
     require_lifecycle_replan_agreement_v4(
         &revalidated_lifecycle,
         &transition_output_scalars,
@@ -2466,6 +2474,22 @@ fn execute_authenticated_hot_v3(
     )?;
     let effect_accounts = downgraded_effect_accounts_v3(&runtime_accounts, &effect_privileges)?;
     hot_heap_mark!("downgraded-effects");
+    // Resolved ONCE for the preflight walk and the execution walk both. See
+    // `ChildWalkResolutionV3` for what each walk was paying to re-derive.
+    let child_walk = resolve_child_walk_v3(
+        *frame,
+        effect,
+        tail_count,
+        &transition_output_scalars,
+        &transition_output_identities,
+        effect_accounts,
+        &aliases,
+        &output_requests,
+        family_request,
+        request_digest,
+        envelope,
+    )?;
+    hot_cu_checkpoint!("pf-composition");
     preflight_child_routes_v3(
         program_id,
         *frame,
@@ -2481,6 +2505,7 @@ fn execute_authenticated_hot_v3(
         context.selection().capability_release().to_bytes(),
         selected_program.to_bytes(),
         &aliases,
+        &child_walk,
         locally_mutated.as_deref(),
     )?;
     hot_cu_checkpoint!("preflight-children");
@@ -2541,6 +2566,7 @@ fn execute_authenticated_hot_v3(
         market,
         product_runtime_v3,
         product_outcome_count,
+        child_walk: &child_walk,
     }));
     hot_cu_checkpoint!("after-commit");
     if commit_status == 0 {
@@ -2578,6 +2604,9 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     market: &'a CoreState,
     product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
     product_outcome_count: u32,
+    // What the preflight walk already resolved out of the same Effect, the same
+    // registers and the same activation cache; see `ChildWalkResolutionV3`.
+    child_walk: &'a ChildWalkResolutionV3<'a, 'info>,
 }
 
 #[inline(never)]
@@ -2634,13 +2663,13 @@ fn execute_prepared_child_routes_v3(
         prepared.scalars,
         prepared.identities,
         prepared.effect_accounts,
-        prepared.aliases,
         prepared.request_bank,
         prepared.family_request,
         prepared.request_digest,
         prepared.envelope,
         prepared.context.selection().capability_release().to_bytes(),
         prepared.selected_program.to_bytes(),
+        prepared.child_walk,
     )
 }
 
@@ -2657,7 +2686,8 @@ fn commit_prepared_post_children_v3(
         prepared.runtime_accounts,
         prepared.rent,
     )?;
-    commit_local_effects(
+    hot_cu_checkpoint!("commit-lifecycle-closes");
+    let plan = commit_non_root_effects_v3(
         prepared.effect,
         prepared.tail_count,
         prepared.scalars,
@@ -2666,9 +2696,9 @@ fn commit_prepared_post_children_v3(
         prepared.aliases,
         prepared.output_lamports,
         prepared.rent,
-        false,
     )?;
-    commit_local_effects(
+    hot_cu_checkpoint!("commit-non-root");
+    commit_root_effects_v3(
         prepared.effect,
         prepared.tail_count,
         prepared.scalars,
@@ -2677,8 +2707,9 @@ fn commit_prepared_post_children_v3(
         prepared.aliases,
         prepared.output_lamports,
         prepared.rent,
-        true,
+        &plan,
     )?;
+    hot_cu_checkpoint!("commit-root");
     Ok(())
 }
 
@@ -3141,6 +3172,7 @@ fn project_hot_effects_v3(
             .map_err(|_| TradingSbfError::Content)?;
     }
     require_common_projection_permissions_v3(&permissions)?;
+    hot_cu_checkpoint!("p7e-permissions");
     let effect_account_count = effect
         .successor
         .account_count(tail_count, scalars)
@@ -3183,6 +3215,20 @@ fn project_hot_effects_v3(
     // instruction. The single bank carries the same bytes into preflight/CPI.
     let mut requests = try_projection_bank_v3(&0_u8, request_bytes)?;
     hot_heap_mark!("effects-request-bank");
+    // The kernel allocates nothing, so the runtime-write overlap refusal's
+    // scratch is one of this function's banks. It is what lets that refusal
+    // resolve each local-effect ordinal once instead of once per PAIR of them,
+    // and it is twelve bytes per ordinal that RECORDS a range -- not per
+    // ordinal. A Direct walk resolves 131 and records two of them.
+    let mut write_ranges = try_projection_bank_v3(
+        &ResolvedWriteRangeV4::vacant(),
+        effect
+            .successor
+            .data_write_operation_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?,
+    )?;
+    hot_heap_mark!("effects-write-ranges");
+    hot_cu_checkpoint!("p7e-banks");
     project_effects_v4_atomic(
         effect.successor,
         tail_count,
@@ -3204,6 +3250,7 @@ fn project_hot_effects_v3(
                 .ok_or(TradingSbfError::Content)?,
             requests: &mut requests,
         },
+        &mut write_ranges,
     )
     .map_err(|_| TradingSbfError::Transition)?;
     hot_heap_mark!("effects-projected");
@@ -5784,6 +5831,171 @@ fn decode_claims_composition_boxed_v3<'request>(
     )
 }
 
+/// Everything the preflight walk and the execution walk BOTH resolve, resolved
+/// once for the pair.
+///
+/// The two walks are made over the same Effect, at the same registers, against
+/// the same downgraded account vector, for the same release set, and nothing
+/// between them can change any of those: the child routes have not run yet at
+/// preflight, and the commit phase re-enters with the identical arguments. Each
+/// walk was therefore paying, in full, for a decode whose answer the other walk
+/// had already computed:
+///
+/// | resolved | per walk | across the pair |
+/// | --- | ---: | ---: |
+/// | Claims composition (`ClaimsCompositionV3::decode_selected_with_witness`) | 41,584 CU | 83,168 CU |
+/// | three role programs (`selected_role_programs_v3`) | 36,562 CU | 73,124 CU |
+///
+/// Sharing removes the SECOND occurrence of both, which is the one the
+/// execution walk makes -- 78,146 CU and 1,465 bytes of bump-allocated heap
+/// that the run had no room for, since the execution walk reaches them only
+/// after the six lifecycle account creations.
+///
+/// It needs no V3/V4 unification: both walks already resolve these from the
+/// same V4-shifted inputs, and the V3-unshifted `effect.base()` the per-role
+/// composition preparers take is untouched here.
+struct ChildWalkResolutionV3<'request, 'info> {
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    claims_composition: Option<HeapBoxV3<ClaimsCompositionV3<'request>>>,
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    roles: SelectedRoleProgramsV3<'info>,
+    // The family-less outer profile resolves neither, and still has to name the
+    // two lifetimes the walks are parameterised over.
+    lifetimes: core::marker::PhantomData<(&'request [u8], &'info [u8])>,
+}
+
+/// Resolve, once, what both child walks would each have resolved for themselves.
+///
+/// Deliberately ONE out-of-line function returning a `Box`: the decoded
+/// composition and the three `AccountInfo` handles are about 200 bytes, and
+/// `process_hot_execution_v3` is already near the SBPF v0 4,096-byte static
+/// frame bound. Only the box pointer crosses back. The walks read through it
+/// rather than holding the handles, which takes those same bytes back OFF
+/// `execute_child_routes_v3`'s frame, where four frame-overwrite diagnostics
+/// were reported the last time it held three decoded addresses of its own.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn resolve_child_walk_v3<'request, 'accounts, 'info>(
+    frame: HotFrameV3<'accounts, 'info>,
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
+    aliases: &[usize],
+    request_bank: &'request [u8],
+    family_request: &'request [u8],
+    request_digest: [u8; 32],
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<HeapBoxV3<ChildWalkResolutionV3<'request, 'info>>, ProgramError> {
+    #[cfg(not(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )))]
+    let _ = (
+        frame,
+        effect,
+        tail_count,
+        scalars,
+        identities,
+        effect_accounts,
+        aliases,
+        request_bank,
+        family_request,
+        request_digest,
+        envelope,
+    );
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let claims_composition = if effect.route_count() != 0
+        && has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)?
+    {
+        Some(decode_claims_composition_boxed_v3(
+            effect,
+            tail_count,
+            scalars,
+            identities,
+            request_bank,
+            family_request,
+            ClaimsCompositionParentV3 {
+                release_set: envelope.release_set(),
+                market: envelope.market(),
+                generation: envelope.generation(),
+                parent_request_digest: request_digest,
+            },
+        )?)
+    } else {
+        None
+    };
+    hot_heap_mark!("shared-claims-composition");
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let roles = if effect.route_count() == 0 {
+        SelectedRoleProgramsV3 {
+            claims: None,
+            custody: None,
+            #[cfg(feature = "families")]
+            resolution: None,
+        }
+    } else {
+        selected_role_programs_v3(
+            frame,
+            effect_accounts,
+            aliases,
+            envelope.release_set(),
+            RequiredRolesV3 {
+                claims: claims_composition.is_some(),
+                custody: has_active_role(
+                    effect,
+                    tail_count,
+                    scalars,
+                    identities,
+                    FixedRole::Custody,
+                )?,
+                resolution: has_active_role(
+                    effect,
+                    tail_count,
+                    scalars,
+                    identities,
+                    FixedRole::Resolution,
+                )?,
+            },
+        )?
+    };
+    hot_heap_mark!("shared-role-programs");
+    let resolution = ChildWalkResolutionV3 {
+        #[cfg(any(
+            feature = "families",
+            feature = "series-family",
+            feature = "dealer-family"
+        ))]
+        claims_composition,
+        #[cfg(any(
+            feature = "families",
+            feature = "series-family",
+            feature = "dealer-family"
+        ))]
+        roles,
+        lifetimes: core::marker::PhantomData,
+    };
+    HeapBoxV3::new(resolution)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn preflight_child_routes_v3<'accounts, 'info>(
@@ -5801,6 +6013,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     capability_program_set: [u8; 32],
     selected_capability_program: [u8; 32],
     aliases: &[usize],
+    // Resolved once for both walks; see `ChildWalkResolutionV3`.
+    resolved: &ChildWalkResolutionV3<'_, 'info>,
     // Folded out of the one walk over this Effect that
     // `require_local_effect_discipline_v5` already makes, at these exact
     // registers. `None` only when that walk saw no route to answer for.
@@ -5820,71 +6034,34 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         return Err(TradingSbfError::Content.into());
     }
     hot_heap_mark!("pf-enter");
+    #[cfg(not(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )))]
+    let _ = resolved;
+    // Both the Claims composition and the three role carriers were resolved
+    // once for this walk AND the execution walk; see `ChildWalkResolutionV3`.
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_composition =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
-            Some(decode_claims_composition_boxed_v3(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                request_bank,
-                family_request,
-                ClaimsCompositionParentV3 {
-                    release_set: envelope.release_set(),
-                    market: envelope.market(),
-                    generation: envelope.generation(),
-                    parent_request_digest: request_digest,
-                },
-            )?)
-        } else {
-            None
-        };
-    hot_heap_mark!("pf-claims-composition");
-    hot_cu_checkpoint!("pf-composition");
-    // One decode of the activation cache for this whole walk, in ONE
-    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
-    // cost and why the decode does not live in this function's frame.
+    let claims_composition = resolved.claims_composition.as_deref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let selected_role_programs = selected_role_programs_v3(
-        frame,
-        effect_accounts,
-        aliases,
-        envelope.release_set(),
-        RequiredRolesV3 {
-            claims: claims_composition.is_some(),
-            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
-            resolution: has_active_role(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                FixedRole::Resolution,
-            )?,
-        },
-    )?;
+    let claims_program = resolved.roles.claims.as_ref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = selected_role_programs.claims;
-    #[cfg(any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    ))]
-    let custody_program = selected_role_programs.custody;
+    let custody_program = resolved.roles.custody.as_ref();
     #[cfg(feature = "families")]
-    let resolution_program = selected_role_programs.resolution;
+    let resolution_program = resolved.roles.resolution.as_ref();
 
     hot_cu_checkpoint!("pf-role-programs");
     let mut route = 0_u16;
@@ -5929,10 +6106,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         feature = "dealer-family"
                     ))]
                     {
-                        let composition = claims_composition
-                            .as_deref()
-                            .ok_or(TradingSbfError::Content)?;
-                        let selected = claims_program.as_ref().ok_or(TradingSbfError::Release)?;
+                        let composition = claims_composition.ok_or(TradingSbfError::Content)?;
+                        let selected = claims_program.ok_or(TradingSbfError::Release)?;
                         if invocation_index != 0
                             || !(composition.admit_route() == Some(route)
                                 || composition.mutation_route() == route
@@ -5969,7 +6144,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         identities,
                         effect_accounts,
                         request_bank,
-                        custody_program.as_ref().ok_or(TradingSbfError::Release)?,
+                        custody_program.ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -5998,9 +6173,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         effect_accounts,
                         request_bank,
                         family_request,
-                        resolution_program
-                            .as_ref()
-                            .ok_or(TradingSbfError::Release)?,
+                        resolution_program.ok_or(TradingSbfError::Release)?,
                         ResolutionCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -6050,19 +6223,28 @@ fn execute_child_routes_v3<'accounts, 'info>(
     scalars: &[u64],
     identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
-    // The per-logical-coordinate representative table `effect_accounts` was
-    // downgraded at. Only `selected_role_program_v3` reads it here, to tell one
-    // physical account named several times from several physical accounts.
-    aliases: &[usize],
     request_bank: &[u8],
     family_request: &[u8],
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
     capability_program_set: [u8; 32],
     selected_capability_program: [u8; 32],
+    // Resolved once for this walk AND the preflight walk; see
+    // `ChildWalkResolutionV3`. This is the whole reason the walk can reach a
+    // child CPI at all: re-deriving them here cost 78,146 CU and 1,465 bytes
+    // that the run does not have by the time it gets here. It also takes the
+    // per-logical-coordinate alias table off this signature: the only reader
+    // was the role-carrier resolution, which now happens once, elsewhere.
+    shared: &ChildWalkResolutionV3<'_, 'info>,
 ) -> Result<[u8; 32], ProgramError> {
     #[cfg(not(feature = "families"))]
-    let _ = (capability_program_set, selected_capability_program, aliases);
+    let _ = (capability_program_set, selected_capability_program);
+    #[cfg(not(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    )))]
+    let _ = shared;
     let mut execution = Box::new(ChildExecutionStateV3 {
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
         receipt_bank: ChildReceiptBankV3::new(),
@@ -6077,64 +6259,21 @@ fn execute_child_routes_v3<'accounts, 'info>(
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_composition =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)? {
-            Some(decode_claims_composition_boxed_v3(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                request_bank,
-                family_request,
-                ClaimsCompositionParentV3 {
-                    release_set: envelope.release_set(),
-                    market: envelope.market(),
-                    generation: envelope.generation(),
-                    parent_request_digest: request_digest,
-                },
-            )?)
-        } else {
-            None
-        };
-    // One decode of the activation cache for this whole walk, in ONE
-    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
-    // cost and why the decode does not live in this function's frame.
+    let claims_composition = shared.claims_composition.as_deref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let selected_role_programs = selected_role_programs_v3(
-        frame,
-        effect_accounts,
-        aliases,
-        envelope.release_set(),
-        RequiredRolesV3 {
-            claims: claims_composition.is_some(),
-            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
-            resolution: has_active_role(
-                effect,
-                tail_count,
-                scalars,
-                identities,
-                FixedRole::Resolution,
-            )?,
-        },
-    )?;
+    let claims_program = shared.roles.claims.as_ref();
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = selected_role_programs.claims;
-    #[cfg(any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    ))]
-    let custody_program = selected_role_programs.custody;
+    let custody_program = shared.roles.custody.as_ref();
     #[cfg(feature = "families")]
-    let resolution_program = selected_role_programs.resolution;
+    let resolution_program = shared.roles.resolution.as_ref();
 
     while execution.route < effect.route_count() {
         let route = execution.route;
@@ -6159,19 +6298,15 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Claims => claims_program.as_ref().ok_or(TradingSbfError::Release)?,
+                    FixedRole::Claims => claims_program.ok_or(TradingSbfError::Release)?,
                     #[cfg(any(
                         feature = "families",
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Custody => {
-                        custody_program.as_ref().ok_or(TradingSbfError::Release)?
-                    }
+                    FixedRole::Custody => custody_program.ok_or(TradingSbfError::Release)?,
                     #[cfg(feature = "families")]
-                    FixedRole::Resolution => resolution_program
-                        .as_ref()
-                        .ok_or(TradingSbfError::Release)?,
+                    FixedRole::Resolution => resolution_program.ok_or(TradingSbfError::Release)?,
                     #[cfg(not(feature = "families"))]
                     _ => return Err(TradingSbfError::UnsupportedContent.into()),
                 };
@@ -6255,7 +6390,6 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             program_id,
                             effect.base(),
                             claims_composition
-                                .as_deref()
                                 .copied()
                                 .ok_or(TradingSbfError::Content)?,
                             route,
@@ -6266,12 +6400,12 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            claims_program.ok_or(TradingSbfError::Release)?,
                         )?;
                         (
                             FixedRole::Claims,
                             claims_receipt_digest_v3(receipt)?,
-                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            claims_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -6299,7 +6433,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             prior_receipt,
-                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            custody_program.ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6311,7 +6445,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Custody,
                             digest,
-                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
+                            custody_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -6336,9 +6470,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            resolution_program
-                                .as_ref()
-                                .ok_or(TradingSbfError::Release)?,
+                            resolution_program.ok_or(TradingSbfError::Release)?,
                             ResolutionCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6353,9 +6485,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Resolution,
                             digest,
-                            resolution_program
-                                .as_ref()
-                                .ok_or(TradingSbfError::Release)?,
+                            resolution_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(feature = "families"))]
@@ -7484,6 +7614,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         project_accounts_atomic(account_profile, tail_count, observations, account_registers)
     }
     .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("p5r-account-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
     require_projected_tail_count_agreement_v3(
@@ -7506,6 +7637,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
             },
         )
         .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("p5r-rent-quote-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
 
     if let RequestProfileKindV3::Signed(profile) = request_profile {
@@ -7525,6 +7657,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         )?;
         core::mem::swap(&mut current_identities, &mut next_identities);
     }
+    hot_cu_checkpoint!("p5r-native-signatures");
 
     request_profile.project_atomic(
         tail_count,
@@ -7538,6 +7671,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
             output_identities: &mut next_identities,
         },
     )?;
+    hot_cu_checkpoint!("p5r-request-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
     if account_profile.uses_dynamic_fixed_spans() {
@@ -7776,8 +7910,68 @@ fn require_root_write_is_state_only(
     }
 }
 
+/// The local-effect ordinals the commit-last pass owns, recorded by the pass
+/// that has already resolved every one of them.
+///
+/// The two passes of [`commit_prepared_post_children_v3`] walk the SAME ordinal
+/// space — `fixed_operation_count` fixed effects, then `tail_count *
+/// item_operation_count` item effects — and differ only in which resolved
+/// writes they act on. Resolving that space twice is what this plan removes:
+/// one resolution is about 900-1,060 CU, the canonical Direct bundle has 131 of
+/// them, and the second pass acted on exactly one.
+///
+/// Recording is sound because resolution is a pure function of the effect
+/// artifact, `tail_count`, the transition's output scalars and its output
+/// identities. The non-root pass mutates none of those — it writes account
+/// lamports and account data — so an ordinal that resolved to the root
+/// coordinate during the first pass resolves to it during the second, and one
+/// that did not, does not. Nor can a refusal be skipped: the first pass
+/// resolves every ordinal unconditionally and fails the whole commit if any
+/// resolution or alias lookup fails, so the second pass never reaches an
+/// ordinal the first one did not already accept.
+struct RootCommitPlanV3 {
+    ordinals: u32,
+    bits: Vec<u8>,
+}
+
+impl RootCommitPlanV3 {
+    fn for_geometry(
+        effect: SelectedEffectProgramV4<'_>,
+        tail_count: u32,
+    ) -> Result<Self, ProgramError> {
+        let ordinals = root_commit_ordinal_count_v3(effect, tail_count)?;
+        let bytes = usize::try_from(ordinals.div_ceil(8)).map_err(|_| TradingSbfError::Commit)?;
+        let mut bits = Vec::new();
+        bits.try_reserve_exact(bytes)
+            .map_err(|_| TradingSbfError::Commit)?;
+        bits.resize(bytes, 0);
+        Ok(Self { ordinals, bits })
+    }
+
+    fn record(&mut self, ordinal: u32) -> Result<(), ProgramError> {
+        let index = usize::try_from(ordinal).map_err(|_| TradingSbfError::Commit)?;
+        *self
+            .bits
+            .get_mut(index / 8)
+            .ok_or(TradingSbfError::Commit)? |= 1_u8 << (index % 8);
+        Ok(())
+    }
+}
+
+/// Total local-effect ordinals for one execution's geometry.
+fn root_commit_ordinal_count_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+) -> Result<u32, ProgramError> {
+    u32::from(effect.item_operation_count())
+        .checked_mul(tail_count)
+        .and_then(|items| items.checked_add(u32::from(effect.fixed_operation_count())))
+        .ok_or_else(|| TradingSbfError::Commit.into())
+}
+
+/// Commit every non-root coordinate and record what the commit-last pass owns.
 #[allow(clippy::too_many_arguments)]
-fn commit_local_effects(
+fn commit_non_root_effects_v3(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
@@ -7786,6 +7980,103 @@ fn commit_local_effects(
     aliases: &[usize],
     output_lamports: &[u64],
     rent: &Rent,
+) -> Result<RootCommitPlanV3, ProgramError> {
+    let mut plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
+    commit_output_lamports_v3(accounts, aliases, output_lamports, false)?;
+    let mut ordinal = 0_u32;
+    let mut fixed = 0_u16;
+    while fixed < effect.fixed_operation_count() {
+        let resolved = effect
+            .resolved_fixed_effect(fixed, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Commit)?;
+        if commit_data_effect(resolved, accounts, aliases, false)? {
+            plan.record(ordinal)?;
+        }
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Commit)?;
+        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Commit)?;
+    }
+    let mut item = 0_u32;
+    while item < tail_count {
+        let mut operation = 0_u16;
+        while operation < effect.item_operation_count() {
+            let resolved = effect
+                .resolved_item_effect(item, operation, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Commit)?;
+            if commit_data_effect(resolved, accounts, aliases, false)? {
+                plan.record(ordinal)?;
+            }
+            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Commit)?;
+            operation = operation.checked_add(1).ok_or(TradingSbfError::Commit)?;
+        }
+        item = item.checked_add(1).ok_or(TradingSbfError::Commit)?;
+    }
+    require_committed_rent_exemption_v3(accounts, aliases, rent, false)?;
+    Ok(plan)
+}
+
+/// Commit the root coordinate last, resolving only the recorded ordinals.
+#[allow(clippy::too_many_arguments)]
+fn commit_root_effects_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    output_lamports: &[u64],
+    rent: &Rent,
+    plan: &RootCommitPlanV3,
+) -> Result<(), ProgramError> {
+    if plan.ordinals != root_commit_ordinal_count_v3(effect, tail_count)? {
+        return Err(TradingSbfError::Commit.into());
+    }
+    commit_output_lamports_v3(accounts, aliases, output_lamports, true)?;
+    let item_operations = u32::from(effect.item_operation_count());
+    for (byte_index, byte) in plan.bits.iter().enumerate() {
+        let mut remaining = *byte;
+        while remaining != 0 {
+            let bit = remaining.trailing_zeros();
+            remaining &= remaining.wrapping_sub(1);
+            let ordinal = u32::try_from(byte_index)
+                .ok()
+                .and_then(|index| index.checked_mul(8))
+                .and_then(|base| base.checked_add(bit))
+                .ok_or(TradingSbfError::Commit)?;
+            let resolved = match ordinal.checked_sub(u32::from(effect.fixed_operation_count())) {
+                None => effect
+                    .resolved_fixed_effect(
+                        u16::try_from(ordinal).map_err(|_| TradingSbfError::Commit)?,
+                        tail_count,
+                        scalars,
+                        identities,
+                    )
+                    .map_err(|_| TradingSbfError::Commit)?,
+                Some(offset) => {
+                    if item_operations == 0 {
+                        return Err(TradingSbfError::Commit.into());
+                    }
+                    effect
+                        .resolved_item_effect(
+                            offset / item_operations,
+                            u16::try_from(offset % item_operations)
+                                .map_err(|_| TradingSbfError::Commit)?,
+                            tail_count,
+                            scalars,
+                            identities,
+                        )
+                        .map_err(|_| TradingSbfError::Commit)?
+                }
+            };
+            commit_data_effect(resolved, accounts, aliases, true)?;
+        }
+    }
+    require_committed_rent_exemption_v3(accounts, aliases, rent, true)
+}
+
+fn commit_output_lamports_v3(
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    output_lamports: &[u64],
     root_only: bool,
 ) -> Result<(), ProgramError> {
     for (coordinate, account) in accounts.iter().enumerate() {
@@ -7802,34 +8093,15 @@ fn commit_local_effects(
                 .map_err(|_| TradingSbfError::Commit)? = output;
         }
     }
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        commit_data_effect(
-            effect
-                .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Commit)?,
-            accounts,
-            aliases,
-            root_only,
-        )?;
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Commit)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            commit_data_effect(
-                effect
-                    .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                    .map_err(|_| TradingSbfError::Commit)?,
-                accounts,
-                aliases,
-                root_only,
-            )?;
-            operation = operation.checked_add(1).ok_or(TradingSbfError::Commit)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Commit)?;
-    }
+    Ok(())
+}
+
+fn require_committed_rent_exemption_v3(
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    rent: &Rent,
+    root_only: bool,
+) -> Result<(), ProgramError> {
     for (coordinate, account) in accounts.iter().enumerate() {
         if *aliases.get(coordinate).ok_or(TradingSbfError::Commit)? == coordinate
             && (coordinate == 0) == root_only
@@ -7842,12 +8114,18 @@ fn commit_local_effects(
     Ok(())
 }
 
+/// Apply one resolved local effect if it belongs to this pass, and report
+/// whether it belongs to the commit-last pass at all.
+///
+/// The answer is what [`RootCommitPlanV3`] records: an effect that writes
+/// nothing, or writes a coordinate whose representative is not the root, is
+/// `false` and the second pass never has to resolve it again.
 fn commit_data_effect(
     resolved: ResolvedEffectV3,
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     root_only: bool,
-) -> Result<(), ProgramError> {
+) -> Result<bool, ProgramError> {
     let (coordinate, offset, bytes): (usize, usize, Vec<u8>) = match resolved {
         ResolvedEffectV3::WriteScalar {
             account,
@@ -7894,11 +8172,12 @@ fn commit_data_effect(
             usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
             Vec::from(value.to_le_bytes()),
         ),
-        _ => return Ok(()),
+        _ => return Ok(false),
     };
     let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Commit)?;
-    if (representative == 0) != root_only {
-        return Ok(());
+    let commits_last = representative == 0;
+    if commits_last != root_only {
+        return Ok(commits_last);
     }
     let account = accounts
         .get(representative)
@@ -7912,7 +8191,7 @@ fn commit_data_effect(
     data.get_mut(offset..end)
         .ok_or(TradingSbfError::Commit)?
         .copy_from_slice(&bytes);
-    Ok(())
+    Ok(commits_last)
 }
 
 fn authenticate_descriptor_root_selection(
@@ -9868,7 +10147,7 @@ mod tests {
                 value: 0xd4e5_f607,
             },
         ] {
-            commit_data_effect(effect, &accounts, &aliases, false).expect("typed write");
+            assert!(!commit_data_effect(effect, &accounts, &aliases, false).expect("typed write"));
         }
         let data = state.try_borrow_data().expect("state data");
         assert_eq!(data.first(), Some(&0xa1));
@@ -9878,6 +10157,306 @@ mod tests {
             Some(0xd4e5_f607_u32.to_le_bytes().as_slice())
         );
         assert!(data.get(7..).expect("tail").iter().all(|byte| *byte == 0));
+    }
+
+    /// One authored Effect artifact whose writes straddle the commit-last
+    /// boundary: two fixed writes (one non-root, one root) and one per-item
+    /// write whose first item aliases onto the root coordinate.
+    ///
+    /// The whole point of building a real artifact rather than hand-made
+    /// [`ResolvedEffectV3`] values is that the commit passes RESOLVE — their
+    /// ordinal walk, not just `commit_data_effect`, is what the two share and
+    /// what the commit-last ordering depends on.
+    struct CommitLastFixtureV1 {
+        artifact: Vec<u8>,
+        scalars: [u64; 5],
+        root_data_offset: u32,
+        item_data_offset: u32,
+        tail_count: u32,
+    }
+
+    fn commit_last_fixture_v1() -> CommitLastFixtureV1 {
+        use dclutch_effect_kernel::{
+            v3::{
+                HEADER_BYTES, OPERATION_BYTES,
+                encode::{
+                    AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, ScalarCoordinateV3,
+                    encode_effect_program_v3_atomic,
+                },
+            },
+            v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic},
+        };
+        const ROOT_DATA_OFFSET: u32 = 40;
+        const ITEM_DATA_OFFSET: u32 = 32;
+        let fixed = [
+            // ordinal 0: non-root, committed by the first pass.
+            EffectInstructionV3::write_u64(
+                AccountCoordinateV3::fixed(1),
+                0,
+                ScalarCoordinateV3::common(0),
+            ),
+            // ordinal 1: root, committed by the second pass only.
+            EffectInstructionV3::write_u64(
+                AccountCoordinateV3::fixed(0),
+                ROOT_DATA_OFFSET,
+                ScalarCoordinateV3::common(1),
+            ),
+        ];
+        // ordinals 2..5: one per item. Item 0's account aliases onto the root,
+        // so exactly one ITEM ordinal also belongs to the second pass.
+        let item = [EffectInstructionV3::write_u64(
+            AccountCoordinateV3::item(0),
+            ITEM_DATA_OFFSET,
+            ScalarCoordinateV3::item(0),
+        )];
+        let base_bytes = HEADER_BYTES + (fixed.len() + item.len()) * OPERATION_BYTES;
+        let mut base_scratch = vec![0_u8; base_bytes];
+        let mut base = vec![0_u8; base_bytes];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 2,
+                item_account_stride: 1,
+                common_scalars: 2,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &fixed,
+            &item,
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("commit-last base program");
+        let mut scratch = vec![0_u8; HEADER_BYTES_V4 + base_bytes];
+        let mut artifact = vec![0_u8; HEADER_BYTES_V4 + base_bytes];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut artifact,
+        )
+        .expect("commit-last successor");
+        CommitLastFixtureV1 {
+            artifact,
+            scalars: [0xa1a1_a1a1, 0xb2b2_b2b2, 0xc001, 0xc002, 0xc003],
+            root_data_offset: ROOT_DATA_OFFSET,
+            item_data_offset: ITEM_DATA_OFFSET,
+            tail_count: 3,
+        }
+    }
+
+    fn commit_last_account_v1(key: &'static Pubkey, lamports: u64) -> AccountInfo<'static> {
+        AccountInfo::new(
+            key,
+            false,
+            true,
+            Box::leak(Box::new(lamports)),
+            Box::leak(vec![0_u8; 64].into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::new_unique())),
+            false,
+        )
+    }
+
+    /// The commit-last split is a REAL ordering, and the second pass really
+    /// writes.
+    ///
+    /// `commit_prepared_post_children_v3` commits every non-root coordinate and
+    /// then the root, so a Market's own state lands only after every other
+    /// account has been committed. Until this test nothing in the tree executed
+    /// the second pass at all: the only path that reaches it is a complete Hot
+    /// execution past three child CPIs. Anything that changes how the second
+    /// pass selects its work — a recorded plan, a narrower sweep — is refutable
+    /// here instead of landing silently green.
+    #[test]
+    fn commit_last_writes_the_root_only_after_every_other_coordinate() {
+        let fixture = commit_last_fixture_v1();
+        let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &fixture.artifact)
+            .expect("selected commit-last effect");
+        assert_eq!(effect.fixed_operation_count(), 2);
+        assert_eq!(effect.item_operation_count(), 1);
+
+        let rent = Rent::default();
+        let exempt = rent.minimum_balance(64);
+        let root = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let state = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_one = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_two = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let aliased = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        // Coordinate 2 (item 0's account) aliases onto the root coordinate.
+        let accounts = [&root, &state, &aliased, &item_one, &item_two];
+        let aliases = [0_usize, 1, 0, 3, 4];
+        let output_lamports = [exempt + 1_000, exempt + 500, exempt, exempt, exempt];
+
+        let plan = commit_non_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+        )
+        .expect("non-root commit pass");
+        // Two of the five ordinals belong to the commit-last pass: the root's
+        // own fixed write, and item 0's write through the aliased coordinate.
+        assert_eq!(plan.ordinals, 5);
+        assert_eq!(plan.bits, [0b0000_0110]);
+
+        let root_offset = usize::try_from(fixture.root_data_offset).expect("root offset");
+        let item_offset = usize::try_from(fixture.item_data_offset).expect("item offset");
+        assert!(
+            root.try_borrow_data()
+                .expect("root data")
+                .iter()
+                .all(|byte| *byte == 0),
+            "the first pass must not write the root coordinate"
+        );
+        assert_eq!(root.lamports(), exempt, "root lamports commit last too");
+        assert_eq!(
+            state.try_borrow_data().expect("state data").get(..8),
+            Some(fixture.scalars[0].to_le_bytes().as_slice())
+        );
+        assert_eq!(state.lamports(), exempt + 500);
+        for (account, scalar) in [
+            (&item_one, fixture.scalars[3]),
+            (&item_two, fixture.scalars[4]),
+        ] {
+            assert_eq!(
+                account
+                    .try_borrow_data()
+                    .expect("item data")
+                    .get(item_offset..item_offset + 8),
+                Some(scalar.to_le_bytes().as_slice())
+            );
+        }
+
+        commit_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+            &plan,
+        )
+        .expect("root commit pass");
+        {
+            let data = root.try_borrow_data().expect("root data");
+            assert_eq!(
+                data.get(root_offset..root_offset + 8),
+                Some(fixture.scalars[1].to_le_bytes().as_slice()),
+                "the second pass writes the root's fixed effect"
+            );
+            assert_eq!(
+                data.get(item_offset..item_offset + 8),
+                Some(fixture.scalars[2].to_le_bytes().as_slice()),
+                "the second pass writes the item effect that aliases onto the root"
+            );
+        }
+        assert_eq!(root.lamports(), exempt + 1_000);
+        // Nothing the first pass committed moves when the second pass runs.
+        assert_eq!(state.lamports(), exempt + 500);
+        assert_eq!(
+            state.try_borrow_data().expect("state data").get(..8),
+            Some(fixture.scalars[0].to_le_bytes().as_slice())
+        );
+    }
+
+    /// A root coordinate left below its rent floor is refused by the pass that
+    /// owns it, not by the one that ran first.
+    #[test]
+    fn commit_last_refuses_a_root_left_below_the_rent_floor() {
+        let fixture = commit_last_fixture_v1();
+        let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &fixture.artifact)
+            .expect("selected commit-last effect");
+        let rent = Rent::default();
+        let exempt = rent.minimum_balance(64);
+        let root = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let state = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let aliased = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_one = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_two = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let accounts = [&root, &state, &aliased, &item_one, &item_two];
+        let aliases = [0_usize, 1, 0, 3, 4];
+        let output_lamports = [exempt - 1, exempt, exempt, exempt, exempt];
+        let plan = commit_non_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+        )
+        .expect("non-root commit pass");
+        assert_eq!(
+            commit_root_effects_v3(
+                effect,
+                fixture.tail_count,
+                &fixture.scalars,
+                &[],
+                &accounts,
+                &aliases,
+                &output_lamports,
+                &rent,
+                &plan,
+            ),
+            Err(TradingSbfError::Commit.into())
+        );
+    }
+
+    /// A plan recorded against a different geometry is refused, not replayed.
+    ///
+    /// The ordinal space is a function of `tail_count`, so a plan is only
+    /// meaningful for the execution that recorded it. Without this the second
+    /// pass would silently decode ordinals into the wrong item indices.
+    #[test]
+    fn commit_last_refuses_a_plan_recorded_for_another_geometry() {
+        let fixture = commit_last_fixture_v1();
+        let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &fixture.artifact)
+            .expect("selected commit-last effect");
+        let rent = Rent::default();
+        let exempt = rent.minimum_balance(64);
+        let root = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let state = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let aliased = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let accounts = [&root, &state, &aliased];
+        let aliases = [0_usize, 1, 0];
+        let output_lamports = [exempt, exempt, exempt];
+        let plan = commit_non_root_effects_v3(
+            effect,
+            1,
+            &fixture.scalars[..3],
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+        )
+        .expect("non-root commit pass at tail one");
+        assert_eq!(plan.ordinals, 3);
+        assert_eq!(
+            commit_root_effects_v3(
+                effect,
+                fixture.tail_count,
+                &fixture.scalars,
+                &[],
+                &accounts,
+                &aliases,
+                &output_lamports,
+                &rent,
+                &plan,
+            ),
+            Err(TradingSbfError::Commit.into())
+        );
     }
 
     #[test]

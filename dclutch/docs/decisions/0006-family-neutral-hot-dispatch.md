@@ -230,22 +230,46 @@ path.
    measured at 16 CU per action with no account, packet or scratch-page moved.
 3. A capability seal for the selected `(descriptor, action)` pair — its own
    outer, already implemented (`hot_v3::process_capability_seal_v1`).
-4. `build_general_hot_instruction_v3` exercised against a real `GeneralHotStateV3`.
-   Still true as written: the twelve `general_hot_v3` operator tests synthesize
-   `GeneralHotInstructionV3` values directly and never enter the builder.
+4. ~~`build_general_hot_instruction_v3` exercised against a real
+   `GeneralHotStateV3`.~~ — landed (GEN-ART, `09bd277`).
+   `programs/dclutch-general-accelerator-sbf/program-test/tests/hot_instruction_v3.rs`
+   assembles one complete finalized snapshot -- real Product graph, real Market,
+   real composite root, all thirty-nine fixed-frame coordinates, and a runtime
+   suffix generated entirely from the emitted `AccountProfileV2` -- and builds,
+   compiles and refuses through it: ten tests, seven of them adversarial with
+   exact `GeneralHotOperatorErrorV3` variants.
+
+   Running it is what found the thing this item existed to find. The tail of
+   `project_general_lifecycle_v5` compared `general_child_account_start_v3`
+   against literal 8/9 -- `general_readonly_evidence_start_v3`'s own table,
+   copied -- and children begin AFTER evidence, so SIX of the seven actions were
+   refused outright with `Lifecycle`. Fixed in `1755c86` by two conjuncts whose
+   two sides have independent authors, with the stale form's six-action failure
+   kept as the reversion witness.
 5. ~~The packet witness for the N=258 account sets~~ — landed
    (`docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`).
 6. The Trading hot tail past phase 7 (W2i), which is not General's to move.
-7. **New, and it is what item 1 uncovered: General has no activation artifacts.**
-   The seam will create a root out of whatever a family's `AccountProfileV1`,
-   transition `ProgramV2` and `EffectProgramV2` project. General has none of the
-   three for activation, needs an eighth `CapabilityProgramSetV2` entry naming
-   them, and needs `authenticate_general_program_set_v3` to stop requiring
-   exactly seven V4 entries. The coordinates that work needs are published --
-   `GeneralRootV2`'s creation words and offsets (`72e0a96`),
-   `activation_registers_v2` (`402bf2e`), and
-   `FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1` (`601fc2a`) -- but the
-   artifact ENCODERS are not: the field offsets and opcodes of all three artifact
-   generations are private to their crates, and every author in the tree
-   hand-encodes them from a test fixture. `dclutch-account-profile-contract::v2::encode`
-   is what the V1/activation generation should have and does not.
+7. ~~**General has no activation artifacts.**~~ — landed (GEN-ART). All three
+   artifact generations now have a public typed encoder in their owning crate:
+   `dclutch-transition-vm::v2::encode`, `dclutch-effect-kernel::v2::encode` and
+   `dclutch-account-profile-contract::encode_v1`, each a total function that
+   hostile-decodes its own candidate before `output` changes. Two of the three
+   are pinned byte-for-byte against Lean-emitted artifacts
+   (`WIDE_AGREEMENT_PROGRAM_V2`, `AGREEMENT_PROFILE_V1`,
+   `ALIAS_AGREEMENT_PROFILE_V1`); the third is pinned against the exact bytes
+   the deleted hand-encoder produced. General's own three artifacts are authored
+   against the published coordinates only (`72e0a96` / `402bf2e` / `601fc2a`)
+   and `programs/dclutch-trading-sbf/program-test/tests/activation.rs`
+   (`Campaign::General`) creates a real `GeneralRootV2` through the seam on a
+   validator, with `activate_general_owned_v3` agreeing byte for byte on both
+   the root tail and the FundingState poststate.
+
+   **Still open, and it is a different thing from what this item said:** the
+   ACTIVATION descriptor is a `CapabilityProgramV1` selected out of a
+   `CapabilityProgramSetV2`, and a live General release therefore needs an
+   eighth set entry naming it, plus `authenticate_general_program_set_v3` to
+   stop requiring exactly seven `CapabilityProgramV4` entries with selectors
+   `GENERAL_ACTIONS_V3[i] as u8`. The activation selector must sit at the set's
+   declared `selector_offset` and must not collide with an action byte. That is
+   a second batched artifact regeneration for the family; the first cost 16 CU
+   per action and moved no account, packet or page, so it is affordable.

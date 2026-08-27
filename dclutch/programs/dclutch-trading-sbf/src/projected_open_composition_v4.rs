@@ -30,7 +30,9 @@ use solana_sdk_ids::system_program;
 
 use crate::{
     TradingSbfError,
-    child_receipt_v3::{ExpectedReceiptProvenanceV4, append_receipt_dependency_v3},
+    child_receipt_v3::{
+        ExpectedReceiptProvenanceV4, ReceiptDeliveryV3, deliver_receipt_dependency_v3,
+    },
     hot_v3::DowngradedEffectAccountsV3,
     projected_claims_composition_v4::AuthenticatedProjectedClaimsV4,
     projected_core_composition_v4::AuthenticatedProjectedCorePrefixV4,
@@ -361,10 +363,13 @@ fn prepare(
     }
     let mut child_data = request_bytes.to_vec();
     child_data.extend_from_slice(witness);
-    append_receipt_dependency_v3(
+    // `core-sbf` routes this to `series_open` only when the tail carries
+    // CLAIMS_FOUNDING_RECEIPT_MAGIC_V5.
+    deliver_receipt_dependency_v3(
         resolved.invocation,
         &mut child_data,
         Some(claims_prefix.raw_receipt()),
+        ReceiptDeliveryV3::ExactSuffix,
     )?;
     Ok(PreparedProjectedOpenV4 {
         invocation: resolved.invocation,

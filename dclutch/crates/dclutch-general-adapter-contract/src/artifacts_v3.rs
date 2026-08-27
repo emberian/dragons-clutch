@@ -924,17 +924,19 @@ mod tests {
     }
 
     fn account_profile() -> Vec<u8> {
+        account_profile_for(Action::Freeze)
+    }
+
+    /// Exact Profile13 bytes for one action, from the artifact's one author.
+    ///
+    /// This used to restate the encoder invocation -- trusted environment,
+    /// scratch-page span, extra page rule, register geometry -- which the
+    /// release builder also restated. Both call
+    /// `encode_general_account_profile_v3_atomic` now.
+    fn account_profile_for(action: Action) -> Vec<u8> {
         use crate::account_rules_v3::{
-            GeneralExternalAccountWidthsV3, general_account_profile_operation_count_v3,
-            general_account_profile_operation_v3, general_account_profile_rule_v3,
-            general_scratch_page_rule_v3, general_scratch_page_span_v3,
-        };
-        use dclutch_account_profile_contract::v2::{
-            TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
-            encode::{
-                RegisterGeometryV2,
-                encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
-            },
+            GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
+            general_account_profile_bytes_v3,
         };
 
         const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
@@ -950,47 +952,11 @@ mod tests {
             realm_record: 112,
             rent_credit: 48,
         };
-        let action = Action::Freeze;
-        let fixed_count = general_account_profile_fixed_count_v3(action).expect("fixed count");
-        let operations = (0..general_account_profile_operation_count_v3(action))
-            .map(|index| {
-                general_account_profile_operation_v3(action, index).expect("canonical operation")
-            })
-            .collect::<Vec<_>>();
-        let bytes = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
-            + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
-            + (usize::from(fixed_count) + 1) * dclutch_account_profile_contract::v2::RULE_BYTES
-            + operations.len() * dclutch_account_profile_contract::v2::OPERATION_BYTES;
+        let bytes = general_account_profile_bytes_v3(action).expect("profile width");
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
-        encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
-            TrustedEnvironmentV2::None,
-            TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
-                destination: u16::try_from(crate::hot_candidate_v3::identity::TRADING_PROGRAM)
-                    .expect("program coordinate"),
-            },
-            TrustedBuiltinIdentityV2::None,
-            &[general_scratch_page_span_v3(action).expect("scratch span")],
-            fixed_count,
-            |coordinate| {
-                general_account_profile_rule_v3(action, coordinate, WIDTHS)
-                    .map_err(|_| dclutch_account_profile_contract::v2::Error::InvalidLength)
-            },
-            &[general_scratch_page_rule_v3()],
-            &operations,
-            RegisterGeometryV2 {
-                common_scalars: u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
-                    .expect("common scalars"),
-                item_scalar_stride: u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
-                    .expect("item scalars"),
-                common_identities: u16::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-                    .expect("common identities"),
-                item_identity_stride: 0,
-            },
-            &mut scratch,
-            &mut output,
-        )
-        .expect("Profile13 account artifact");
+        encode_general_account_profile_v3_atomic(action, WIDTHS, &mut scratch, &mut output)
+            .expect("Profile13 account artifact");
         output
     }
 
