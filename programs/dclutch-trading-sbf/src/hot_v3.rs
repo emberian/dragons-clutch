@@ -603,11 +603,11 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         descriptor.config_schema().to_bytes(),
         family_context.selection().config().to_bytes(),
     )?;
-    let config_digest = hash(&config_data).to_bytes();
+    // As on the canonical path: `borrow_finalized_record` already refused
+    // unless `hash(config_data)` is the selected config identity.
     drop(config_data);
     require_common_projection_bindings_v3(CommonProjectionBindingsV3 {
         selected_config: family_context.selection().config().to_bytes(),
-        authenticated_config: config_digest,
         selected_product_record: market.identity.product_record.to_bytes(),
         authenticated_product_record: product_runtime
             .runtime
@@ -1620,17 +1620,23 @@ pub fn process_hot_execution_v3(
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, context)?;
 
+    let capability_release = context.selection().capability_release().to_bytes();
     let program_set_data = borrow_finalized_record(
         *frame,
         frame.program_set_raw,
         frame.program_set_staging,
         &rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
-        context.selection().capability_release().to_bytes(),
+        capability_release,
     )?;
+    // The record's own authentication is the single owner of its content
+    // digest: `borrow_finalized_record` refuses unless `hash(program_set_data)`
+    // is exactly `capability_release`, so the selected identity and the
+    // authenticated digest are one value and hashing the record again here only
+    // recomputed it.
     let program_set = CapabilityProgramSetV2::decode_selected(
-        context.selection().capability_release().to_bytes(),
-        hash(&program_set_data).to_bytes(),
+        capability_release,
+        capability_release,
         &program_set_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
@@ -1666,11 +1672,13 @@ pub fn process_hot_execution_v3(
         descriptor.config_schema().to_bytes(),
         context.selection().config().to_bytes(),
     )?;
-    let config_digest = hash(&config_data).to_bytes();
+    // The config record needs no digest of its own here either: the borrow
+    // above refuses unless `hash(config_data)` is the selected config identity,
+    // so re-hashing it and comparing the result against that identity could
+    // only ever agree.
     drop(config_data);
     require_common_projection_bindings_v3(CommonProjectionBindingsV3 {
         selected_config: context.selection().config().to_bytes(),
-        authenticated_config: config_digest,
         selected_product_record: market.identity.product_record.to_bytes(),
         authenticated_product_record: product_runtime.product_record.content_digest.to_bytes(),
         market_product: market.identity.product_id.to_bytes(),
@@ -1695,9 +1703,12 @@ pub fn process_hot_execution_v3(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    // Same single owner as the program set above: the borrow already proved
+    // `hash(lifecycle_data)` is the selected lifecycle program identity.
+    let selected_lifecycle = descriptor.lifecycle().program().to_bytes();
     let lifecycle = StateLifecyclePolicyV5::decode_selected(
-        descriptor.lifecycle().program().to_bytes(),
-        hash(&lifecycle_data).to_bytes(),
+        selected_lifecycle,
+        selected_lifecycle,
         &lifecycle_data,
     )
     .map_err(|_| TradingSbfError::Content)?;
@@ -3517,7 +3528,6 @@ fn downgraded_effect_accounts_v3<'info>(
 #[derive(Clone, Copy)]
 struct CommonProjectionBindingsV3 {
     selected_config: [u8; 32],
-    authenticated_config: [u8; 32],
     selected_product_record: [u8; 32],
     authenticated_product_record: [u8; 32],
     market_product: [u8; 32],
@@ -3531,7 +3541,6 @@ fn require_common_projection_bindings_v3(
     bindings: CommonProjectionBindingsV3,
 ) -> Result<(), ProgramError> {
     if bindings.selected_config == [0; 32]
-        || bindings.selected_config != bindings.authenticated_config
         || bindings.selected_product_record == [0; 32]
         || bindings.selected_product_record != bindings.authenticated_product_record
         || bindings.market_product == [0; 32]
@@ -8159,7 +8168,6 @@ mod tests {
         );
         let canonical = CommonProjectionBindingsV3 {
             selected_config: id(1),
-            authenticated_config: id(1),
             selected_product_record: id(2),
             authenticated_product_record: id(2),
             market_product: id(3),
@@ -8170,8 +8178,12 @@ mod tests {
         };
         assert_eq!(require_common_projection_bindings_v3(canonical), Ok(()));
         for hostile in [
+            // The selected config's binding to an authenticated finalized
+            // record is owned by `borrow_finalized_record`, which refuses
+            // before this predicate is reached; what stays here is the refusal
+            // of an unset selection.
             CommonProjectionBindingsV3 {
-                selected_config: id(6),
+                selected_config: [0; 32],
                 ..canonical
             },
             CommonProjectionBindingsV3 {
