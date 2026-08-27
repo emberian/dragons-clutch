@@ -49,7 +49,7 @@ use crate::runtime_verify::{
 use crate::runtime_width::{CandidateV2, PageV2, VerifiedCandidateV2, verified_candidate_len};
 
 /// Exact width of one General candidate submission record.
-pub const GENERAL_CANDIDATE_BYTES_V1: usize = 192;
+pub const GENERAL_CANDIDATE_BYTES_V1: usize = 224;
 
 /// Canonical PDA seed domain for one candidate submission record.
 pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch-general-candidate-v1";
@@ -104,6 +104,8 @@ pub enum GeneralCandidateErrorV1 {
     Substitution,
     /// The submission window had closed for this slot.
     OutsideWindow,
+    /// The work escrow does not cover exactly the work still owed.
+    Uncapitalized,
     /// The batch refused the candidate or one of its execution rows.
     Collection(GeneralCollectionErrorV1),
     /// The streamed verifier refused this row.
@@ -171,6 +173,40 @@ pub struct GeneralCandidateOpeningV1 {
     pub batch_id: [u8; 32],
     /// Solver who submitted it and who owns its rent.
     pub solver_id: [u8; 32],
+    /// Exact number of execution rows across every declared page.
+    ///
+    /// Declared at submission because it is what the work escrow is sized
+    /// against, and checked by construction: the verifier cursor advances its
+    /// revision exactly once per row, so a candidate whose real row count
+    /// differs from this cannot complete.
+    pub row_count: u32,
+    /// Exact lamports one crank of this candidate's work pays its caller.
+    pub reward_rate_lamports: u64,
+}
+
+impl GeneralCandidateOpeningV1 {
+    /// Exact lamports that must be escrowed for verification and selection.
+    ///
+    /// One reward per execution row, plus one for the single consideration.
+    pub fn verification_capacity(self) -> GeneralCandidateResultV1<u64> {
+        u64::from(self.row_count)
+            .checked_add(1)
+            .and_then(|cranks| cranks.checked_mul(self.reward_rate_lamports))
+            .ok_or(GeneralCandidateErrorV1::ArithmeticOverflow)
+    }
+
+    /// Exact lamports that must be escrowed to close this candidate out.
+    #[must_use]
+    pub const fn cleanup_capacity(self) -> u64 {
+        self.reward_rate_lamports
+    }
+
+    /// Exact total work escrow one submission must carry.
+    pub fn work_capacity(self) -> GeneralCandidateResultV1<u64> {
+        self.verification_capacity()?
+            .checked_add(self.cleanup_capacity())
+            .ok_or(GeneralCandidateErrorV1::ArithmeticOverflow)
+    }
 }
 
 /// Mutable submission state advanced by verification and by selection.
@@ -182,6 +218,33 @@ pub struct GeneralCandidateStateV1 {
     pub verified_digest: [u8; 32],
     /// Verification revision the certificate carries; zero until verified.
     pub verified_revision: u64,
+    /// Unspent lamports in the verification-and-selection compartment.
+    pub verification_remaining: u64,
+    /// Unspent lamports in the cleanup compartment.
+    pub cleanup_remaining: u64,
+}
+
+/// One crank's exact reward and the actor it is owed to.
+///
+/// Every permissionless transition on a candidate returns one of these. It is
+/// not advisory: the compartment has already been debited by the transition
+/// that produced it, so a caller that drops it has taken work and withheld the
+/// payment its own record now says was made.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkRewardV1 {
+    /// Exact lamports this crank earned.
+    pub lamports: u64,
+    /// Which compartment it came out of.
+    pub compartment: WorkCompartmentV1,
+}
+
+/// The two funded compartments of one candidate's work escrow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkCompartmentV1 {
+    /// Pays one crank per execution row, and the single consideration.
+    Verification,
+    /// Pays the one crank that closes a spent candidate out.
+    Cleanup,
 }
 
 /// One complete candidate submission record.
@@ -198,21 +261,40 @@ pub struct GeneralCandidateV1 {
 impl GeneralCandidateV1 {
     /// Submit one candidate against a closed batch.
     ///
-    /// Permissionless and unbonded, which is gen-2's answer and the family's:
+    /// Permissionless and UNBONDED, which is gen-2's answer and the family's:
     /// every verb in its collection half was permissionless, gated on windows
-    /// and counters rather than on identity. A submission bond would be a fee
-    /// on being right as much as on being wrong, and the thing that actually
-    /// bounds spam here is that a candidate costs its solver rent for a
-    /// submission record, a verifier cursor and every page, none of which is
-    /// returned until the candidate is closed out.
+    /// and counters rather than on identity, and gen-2 carried no bond
+    /// anywhere. A bond is a fee on being right as much as on being wrong -- a
+    /// solver whose valid candidate simply loses the comparison has done the
+    /// protocol a service -- and slashing the honest case is what makes an open
+    /// solver set close.
     ///
-    /// The solver signs, but only to own the rent and the refund -- not to be
+    /// What replaces it is gen-2's real invention: a COMPARTMENTALIZED, FULLY
+    /// REFUNDABLE WORK ESCROW. The submission funds exactly the cranks its own
+    /// life requires -- one per execution row, one for the single
+    /// consideration, one to close it out -- each crank draws exactly one
+    /// reward to whoever performs it, and everything unspent goes back to the
+    /// solver. That is what lets submission be unbounded and permissionless
+    /// without a candidate cap and without drawing on the Market's Hoard.
+    ///
+    /// **And it closes a liveness gap gen-2 had.** Gen-2's consideration was
+    /// permissionless and UNPAID, which makes a verb permissible rather than
+    /// live: a valid candidate nobody cranked before the selection window
+    /// closed never competed at all, and a submitter whose consideration was
+    /// censored had no recourse. Here the consideration is the last crank the
+    /// verification compartment was sized for.
+    ///
+    /// The solver signs, but only to own the escrow and its refund -- not to be
     /// authorized. Anyone may submit.
+    #[allow(clippy::too_many_arguments)]
     pub fn submit(
         batch: GeneralBatchV1,
         candidate: CandidateV2<'_>,
         page_revision: u64,
+        row_count: u32,
+        reward_rate_lamports: u64,
         solver_id: [u8; 32],
+        funded_lamports: u64,
         current_slot: u64,
     ) -> GeneralCandidateResultV1<Self> {
         // The identity a submission carries must be the record's own digest.
@@ -234,22 +316,107 @@ impl GeneralCandidateV1 {
         if page_revision == 0 || is_zero(&solver_id) {
             return Err(GeneralCandidateErrorV1::ZeroIdentity);
         }
-        Ok(Self {
-            opening: GeneralCandidateOpeningV1 {
-                outcome_count: header.outcome_count,
-                page_count: header.page_count,
-                page_revision,
-                submitted_slot: current_slot,
-                candidate_id: header.candidate_id,
-                batch_id: header.batch_id,
-                solver_id,
-            },
+        if row_count == 0 || row_count < header.page_count || reward_rate_lamports == 0 {
+            return Err(GeneralCandidateErrorV1::ZeroIdentity);
+        }
+        let opening = GeneralCandidateOpeningV1 {
+            outcome_count: header.outcome_count,
+            page_count: header.page_count,
+            page_revision,
+            submitted_slot: current_slot,
+            candidate_id: header.candidate_id,
+            batch_id: header.batch_id,
+            solver_id,
+            row_count,
+            reward_rate_lamports,
+        };
+        // The escrow is exact in both directions. Underfunding buys work nobody
+        // is paid for; overfunding leaves lamports with no rule for who gets
+        // them, which is the same hole facing the other way.
+        if funded_lamports != opening.work_capacity()? {
+            return Err(GeneralCandidateErrorV1::Uncapitalized);
+        }
+        let value = Self {
+            opening,
             state: GeneralCandidateStateV1 {
                 status: GeneralCandidateStatusV1::Submitted,
                 verified_digest: [0; 32],
                 verified_revision: 0,
+                verification_remaining: opening.verification_capacity()?,
+                cleanup_remaining: opening.cleanup_capacity(),
             },
+        };
+        value.validate_capitalization(0)?;
+        Ok(value)
+    }
+
+    /// Re-prove that the work escrow still covers exactly the work still owed.
+    ///
+    /// **This is the invariant gen-2 got right and gen-3 had not carried.** A
+    /// funded escrow that is only checked when it is created decays into a
+    /// balance nobody can reason about after the first crank. Re-proving it at
+    /// every transition means the remaining lamports are always exactly the
+    /// remaining cranks, so an over-draw is caught at the draw rather than at
+    /// the last crank that finds the compartment empty.
+    pub fn validate_capitalization(self, rows_verified: u32) -> GeneralCandidateResultV1<()> {
+        let cranks_left = match self.state.status {
+            GeneralCandidateStatusV1::Submitted => u64::from(
+                self.opening
+                    .row_count
+                    .checked_sub(rows_verified)
+                    .ok_or(GeneralCandidateErrorV1::Uncapitalized)?,
+            )
+            .checked_add(1)
+            .ok_or(GeneralCandidateErrorV1::ArithmeticOverflow)?,
+            // Verified but not yet considered: the single consideration remains.
+            GeneralCandidateStatusV1::Verified => 1,
+            GeneralCandidateStatusV1::Considered => 0,
+        };
+        let owed = cranks_left
+            .checked_mul(self.opening.reward_rate_lamports)
+            .ok_or(GeneralCandidateErrorV1::ArithmeticOverflow)?;
+        if self.state.verification_remaining != owed
+            || self.state.cleanup_remaining > self.opening.cleanup_capacity()
+        {
+            return Err(GeneralCandidateErrorV1::Uncapitalized);
+        }
+        Ok(())
+    }
+
+    /// Draw exactly one verification crank's reward.
+    fn draw_verification(&mut self) -> GeneralCandidateResultV1<WorkRewardV1> {
+        let rate = self.opening.reward_rate_lamports;
+        self.state.verification_remaining = self
+            .state
+            .verification_remaining
+            .checked_sub(rate)
+            .ok_or(GeneralCandidateErrorV1::Uncapitalized)?;
+        Ok(WorkRewardV1 {
+            lamports: rate,
+            compartment: WorkCompartmentV1::Verification,
         })
+    }
+
+    /// Draw the single cleanup crank's reward, closing this candidate out.
+    ///
+    /// Permissionless, and the residual verification compartment goes back to
+    /// the solver rather than to the caller: a candidate that lost, or that
+    /// nobody finished verifying, must not pay a stranger for work not done.
+    pub fn close_out(&mut self) -> GeneralCandidateResultV1<(WorkRewardV1, u64)> {
+        let rate = self.opening.reward_rate_lamports;
+        if self.state.cleanup_remaining != rate {
+            return Err(GeneralCandidateErrorV1::Uncapitalized);
+        }
+        self.state.cleanup_remaining = 0;
+        let solver_refund = self.state.verification_remaining;
+        self.state.verification_remaining = 0;
+        Ok((
+            WorkRewardV1 {
+                lamports: rate,
+                compartment: WorkCompartmentV1::Cleanup,
+            },
+            solver_refund,
+        ))
     }
 
     /// Hostile-decode one exact 192-byte submission record.
@@ -265,7 +432,8 @@ impl GeneralCandidateV1 {
             return Err(GeneralCandidateErrorV1::InvalidHeader);
         }
         require_zero(bytes, 21, 3)?;
-        require_zero(bytes, 176, 16)?;
+        require_zero(bytes, 180, 4)?;
+        require_zero(bytes, 208, 16)?;
         let opening = GeneralCandidateOpeningV1 {
             outcome_count: read_u32(bytes, 12)?,
             page_count: read_u32(bytes, 16)?,
@@ -274,11 +442,15 @@ impl GeneralCandidateV1 {
             candidate_id: read_array(bytes, 32)?,
             batch_id: read_array(bytes, 64)?,
             solver_id: read_array(bytes, 96)?,
+            row_count: read_u32(bytes, 176)?,
+            reward_rate_lamports: read_u64(bytes, 184)?,
         };
         let state = GeneralCandidateStateV1 {
             status: GeneralCandidateStatusV1::decode(read_u8(bytes, 20)?)?,
             verified_digest: read_array(bytes, 128)?,
             verified_revision: read_u64(bytes, 168)?,
+            verification_remaining: read_u64(bytes, 192)?,
+            cleanup_remaining: read_u64(bytes, 200)?,
         };
         let value = Self { opening, state };
         value.validate()?;
@@ -306,6 +478,22 @@ impl GeneralCandidateV1 {
             168,
             &self.state.verified_revision.to_le_bytes(),
         );
+        put(&mut output, 176, &self.opening.row_count.to_le_bytes());
+        put(
+            &mut output,
+            184,
+            &self.opening.reward_rate_lamports.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            192,
+            &self.state.verification_remaining.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            200,
+            &self.state.cleanup_remaining.to_le_bytes(),
+        );
         output
     }
 
@@ -320,8 +508,15 @@ impl GeneralCandidateV1 {
         if self.opening.outcome_count == 0
             || self.opening.page_count == 0
             || self.opening.page_revision == 0
+            || self.opening.row_count < self.opening.page_count
+            || self.opening.reward_rate_lamports == 0
         {
             return Err(GeneralCandidateErrorV1::ZeroIdentity);
+        }
+        if self.state.verification_remaining > self.opening.verification_capacity()?
+            || self.state.cleanup_remaining > self.opening.cleanup_capacity()
+        {
+            return Err(GeneralCandidateErrorV1::Uncapitalized);
         }
         match self.state.status {
             GeneralCandidateStatusV1::Submitted => {
@@ -382,6 +577,10 @@ impl GeneralCandidateV1 {
         self.state.status = GeneralCandidateStatusV1::Verified;
         self.state.verified_digest = sha256(verified_bytes);
         self.state.verified_revision = header.revision;
+        // Recording the certificate spends no crank: the row that produced it
+        // was already paid. What it must not do is leave the compartment
+        // holding more than the one consideration still owed.
+        self.validate_capitalization(self.opening.row_count)?;
         Ok(())
     }
 
@@ -390,12 +589,21 @@ impl GeneralCandidateV1 {
     /// `consider_verified_candidate_v2` refuses an exact replay of the same
     /// certificate digest, so this is not the sole replay guard; it is what
     /// makes the submission record say, on its own, whether its work is spent.
-    pub fn record_considered(&mut self) -> GeneralCandidateResultV1<()> {
+    pub fn record_considered(&mut self) -> GeneralCandidateResultV1<WorkRewardV1> {
         if self.state.status != GeneralCandidateStatusV1::Verified {
             return Err(GeneralCandidateErrorV1::InvalidPhaseTransition);
         }
+        // THE LIVENESS GAP GEN-2 LEFT, closed. In gen-2 a valid candidate that
+        // nobody cranked before the selection window closed simply never
+        // competed, and a submitter whose consideration was censored had no
+        // recourse at all -- the verb was permissionless and unpaid, which
+        // makes it permissible rather than live. Here the consideration is the
+        // last crank the verification compartment was sized for, so whoever
+        // performs it is paid out of the candidate's own escrow.
+        let reward = self.draw_verification()?;
         self.state.status = GeneralCandidateStatusV1::Considered;
-        Ok(())
+        self.validate_capitalization(self.opening.row_count)?;
+        Ok(reward)
     }
 }
 
@@ -477,6 +685,10 @@ pub struct CandidateVerifyRowSummaryV1 {
     pub revision: u64,
     /// Number of manifest order rows this step emitted.
     pub manifest_order_count: u32,
+    /// The exact reward this crank earned its caller.
+    pub reward: WorkRewardV1,
+    /// The submission record this step advanced.
+    pub submission: GeneralCandidateV1,
 }
 
 /// Return the exact manifest capacity one verification step will require.
@@ -520,6 +732,13 @@ pub fn verify_candidate_row_v1(
     if view.submission.state().status != GeneralCandidateStatusV1::Submitted {
         return Err(GeneralCandidateErrorV1::InvalidPhaseTransition);
     }
+    // The revision counts rows consumed, so it is also the count of verification
+    // cranks already paid. Re-proving the capitalization against it before the
+    // work happens is what keeps "remaining lamports" and "remaining cranks"
+    // the same number at every step.
+    let rows_verified = u32::try_from(view.expected_revision)
+        .map_err(|_| GeneralCandidateErrorV1::ArithmeticOverflow)?;
+    view.submission.validate_capitalization(rows_verified)?;
     let (execution, terminal_step) = select_row(&view)?;
     let manifest_order_count = runtime_manifest_orders_for_row_v2(
         view.cursor_before,
@@ -563,11 +782,25 @@ pub fn verify_candidate_row_v1(
     if summary.complete != terminal_step {
         return Err(GeneralCandidateErrorV1::Substitution);
     }
+    // The terminal row is the candidate's declared last row, or the declared
+    // count was wrong and the escrow was sized against a lie.
+    if terminal_step && summary.revision != u64::from(view.submission.opening().row_count) {
+        return Err(GeneralCandidateErrorV1::Uncapitalized);
+    }
+    let mut submission = view.submission;
+    let reward = submission.draw_verification()?;
+    submission.validate_capitalization(
+        rows_verified
+            .checked_add(1)
+            .ok_or(GeneralCandidateErrorV1::ArithmeticOverflow)?,
+    )?;
     Ok(CandidateVerifyRowSummaryV1 {
         complete: summary.complete,
         order_count: summary.order_count,
         revision: summary.revision,
         manifest_order_count,
+        reward,
+        submission,
     })
 }
 
