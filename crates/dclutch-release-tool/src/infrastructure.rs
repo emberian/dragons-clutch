@@ -1,10 +1,18 @@
-//! Checked evidence for one immutable Core/Registry/Rent authority chain.
+//! Checked evidence for one pinned Core/Registry/Rent authority chain.
 //!
 //! This manifest joins a complete checked execution release set to the
 //! Core-owned infrastructure profile and independently checked Registry and
 //! Rent releases. It is user-supplied recognition evidence, never an embedded
 //! official-program list and never a substitute for observing current Loader
 //! state.
+//!
+//! It used to be evidence for an IMMUTABLE chain specifically, and refused
+//! anything else. Decision 0012 admits a second substrate — upgradeable by an
+//! exact named authority, sound on the Loader's slot write rather than on
+//! irrevocability — and the two are not the same evidence. So the manifest
+//! carries an `evidence_class` naming which one it is, derived from the
+//! components rather than supplied beside them; see
+//! [`CheckedInfrastructureV1::evidence_class`].
 
 use dclutch_core_contract::ContentId;
 use dclutch_registry_contract::{
@@ -25,7 +33,7 @@ use crate::{
 pub const CHECKED_INFRASTRUCTURE_MAGIC_V1: [u8; 8] = *b"DCLTIEV1";
 /// Implemented checked-infrastructure evidence schema.
 pub const CHECKED_INFRASTRUCTURE_SCHEMA_V1: u16 = 1;
-/// Number of immutable checked program components: Core, Registry, and Rent.
+/// Number of checked program components: Core, Registry, and Rent.
 pub const CHECKED_INFRASTRUCTURE_COMPONENTS_V1: u16 = 3;
 /// Fixed checked-infrastructure header width.
 pub const CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1: usize = 16;
@@ -219,7 +227,41 @@ impl CheckedInfrastructureV1 {
             "recognition_class",
             "user-supplied-checked-manifest",
         );
+        // APPENDED, never inserted: tools/release/checked-release-candidate.sh
+        // and its relatives scrape these projections line by line.
+        push_line(&mut output, "evidence_class", self.evidence_class());
         Ok(output)
+    }
+
+    /// Name the substrate class this manifest is evidence for.
+    ///
+    /// Decision 0012 admits two substrates, and they do not prove the same
+    /// thing. An immutable release set proves the bytes can never move. A
+    /// slot-pinned one proves only that they have not moved YET, and that a
+    /// named authority holds the key that could move them — which is exactly
+    /// the trade the decision made on purpose, and exactly the kind of thing a
+    /// reader must not have to reconstruct from the artifact bytes.
+    ///
+    /// This is where release-tool's strictness went when
+    /// [`require_pinned_component`] stopped refusing mutable components. It is
+    /// a derived FIELD, in the precedent of the checked-release projection's
+    /// own `evidence_class=loader-state-carrying-an-observed-retained-authority`:
+    /// nothing about it is caller-selectable, and a manifest cannot claim the
+    /// stronger class while carrying a component that contradicts it, because
+    /// the claim is computed from the components rather than supplied beside
+    /// them.
+    pub fn evidence_class(self) -> &'static str {
+        let core = self.execution.artifacts().first().copied();
+        let upgradeable = core.is_some_and(|artifact| {
+            artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
+        }) || self.registry_artifact.upgrade_policy()
+            != ArtifactUpgradePolicyV1::Immutable
+            || self.rent_artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable;
+        if upgradeable {
+            INFRASTRUCTURE_EVIDENCE_CLASS_SLOT_PINNED_V1
+        } else {
+            INFRASTRUCTURE_EVIDENCE_CLASS_IMMUTABLE_V1
+        }
     }
 
     /// Return the complete checked execution-release-set evidence.
@@ -263,9 +305,9 @@ impl CheckedInfrastructureV1 {
             .first()
             .copied()
             .ok_or(Error::InvalidInfrastructureManifest)?;
-        require_immutable(core)?;
-        require_immutable(self.registry_artifact)?;
-        require_immutable(self.rent_artifact)?;
+        require_pinned_component(core)?;
+        require_pinned_component(self.registry_artifact)?;
+        require_pinned_component(self.rent_artifact)?;
         let core_program = core.program().to_bytes();
         let registry_program = self.profile.registry().program().to_bytes();
         let rent_program = self.profile.rent().program().to_bytes();
@@ -348,7 +390,7 @@ fn binding_from_checked(
     checked: &CheckedReleaseV1,
 ) -> Result<dclutch_release_set_contract::ExecutionRoleBindingV1> {
     let artifact = artifact_release_from_checked(checked)?;
-    require_immutable(artifact)?;
+    require_pinned_component(artifact)?;
     let artifact_id = ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
         .map_err(|_| Error::InvalidArtifactRelease)?;
     Ok(dclutch_release_set_contract::ExecutionRoleBindingV1::new(
@@ -398,14 +440,40 @@ fn validate_binding(
     Ok(())
 }
 
-fn require_immutable(artifact: ArtifactReleaseV1) -> Result<()> {
-    if artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
-        || artifact.upgrade_authority().is_some()
-    {
-        return Err(Error::InfrastructureMustBeImmutable);
-    }
-    Ok(())
+/// Admit one component onto the slot-pinned path, and refuse a non-canonical shape.
+///
+/// This was `upgrade_policy() != Immutable || upgrade_authority().is_some()`,
+/// which decision 0012 retired: a release the whole protocol now admits was
+/// refused here, so no checked manifest could describe the iteration substrate
+/// at all. What replaces it is
+/// [`dclutch_registry_contract::require_slot_pinned_release_v1`] — the SAME
+/// predicate every on-chain reader calls, not a second copy of the rule.
+///
+/// The strictness that used to live in this function did not disappear; it
+/// moved to where it can be read. See [`INFRASTRUCTURE_EVIDENCE_CLASS_*`]: a
+/// manifest now SAYS which substrate class it describes, derived from the
+/// components it actually carries. That is deliberately not a decode flag —
+/// making a codec's strictness caller-selectable would make the same bytes mean
+/// two things depending on who called, and then the manifest would no longer be
+/// evidence of anything on its own.
+fn require_pinned_component(artifact: ArtifactReleaseV1) -> Result<()> {
+    dclutch_registry_contract::require_slot_pinned_release_v1(artifact)
+        .map_err(|_| Error::InfrastructureMustBeImmutable)
 }
+
+/// Every component can never be redeployed: the strongest class, and the one
+/// the public demo ceremony produces.
+pub const INFRASTRUCTURE_EVIDENCE_CLASS_IMMUTABLE_V1: &str = "immutable-release-set";
+/// At least one component is upgradeable by an exact named authority.
+///
+/// Decision 0012's iteration substrate. Soundness here rests on the Loader V3
+/// slot write rather than on irrevocability: the named authority CAN ship new
+/// bytes, and the instant it does every dependent market refuses by name
+/// (`ReleaseSuperseded`) until a re-release re-pins. That is a real and
+/// disclosed difference in what this manifest proves, so it is stated rather
+/// than left for a reader to infer from the artifact bytes.
+pub const INFRASTRUCTURE_EVIDENCE_CLASS_SLOT_PINNED_V1: &str =
+    "slot-pinned-release-set-with-a-retained-upgrade-authority";
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(read_array(bytes, offset)?))
@@ -502,6 +570,54 @@ mod tests {
             }
         }
 
+        /// The same shape with every component upgradeable by one exact key.
+        ///
+        /// Decision 0012's iteration substrate. Before this lane nothing in
+        /// this module could construct it: `require_immutable` refused it three
+        /// times inside `validate`, so no fixture, no test and no operator
+        /// could produce a checked manifest describing the substrate the
+        /// project actually iterates on.
+        fn slot_pinned(authority: [u8; 32]) -> Self {
+            let execution_releases = [
+                release(11, Some(authority)),
+                release(21, Some(authority)),
+                release(31, Some(authority)),
+                release(41, Some(authority)),
+                release(51, Some(authority)),
+            ];
+            let execution_artifacts = execution_releases
+                .each_ref()
+                .map(|checked| artifact_release_from_checked(checked).expect("artifact"));
+            let bindings = execution_artifacts.map(binding);
+            let [core, claims, trading, resolution, custody] = bindings;
+            let release_set =
+                ExecutionReleaseSetV1::new(core, claims, trading, resolution, custody)
+                    .expect("release set");
+            let execution =
+                build_checked_execution_release_set(release_set, execution_releases.each_ref())
+                    .expect("execution evidence");
+            let registry = release(71, Some(authority));
+            let rent = release(81, Some(authority));
+            let profile = derive_protocol_infrastructure_profile_v1(&registry, &rent)
+                .expect("slot-pinned profile");
+            let checked = build_checked_infrastructure_v1(
+                execution,
+                profile,
+                &execution_releases[0],
+                &registry,
+                &rent,
+            )
+            .expect("slot-pinned infrastructure evidence");
+            Self {
+                execution,
+                execution_releases,
+                registry,
+                rent,
+                profile,
+                checked,
+            }
+        }
+
         fn execution_manifests(&self) -> [Vec<u8>; 5] {
             self.execution_releases
                 .each_ref()
@@ -546,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn the_infrastructure_profile_is_derivable_and_refuses_upgradeable_components() {
+    fn the_infrastructure_profile_is_derivable_and_carries_each_component_policy() {
         let fixture = Fixture::immutable();
         let derived = derive_protocol_infrastructure_profile_v1(&fixture.registry, &fixture.rent)
             .expect("derived profile");
@@ -561,19 +677,24 @@ mod tests {
             ),
             Ok(fixture.checked),
         );
-        // Derivation must never launder an upgradeable component into a profile
-        // that the infrastructure manifest would then have to refuse.
-        assert_eq!(
-            derive_protocol_infrastructure_profile_v1(&release(71, Some([9; 32])), &fixture.rent),
-            Err(Error::InfrastructureMustBeImmutable)
-        );
-        assert_eq!(
-            derive_protocol_infrastructure_profile_v1(
-                &fixture.registry,
-                &release(81, Some([9; 32]))
-            ),
-            Err(Error::InfrastructureMustBeImmutable)
-        );
+        // Decision 0012. This used to assert that derivation REFUSED an
+        // upgradeable component, so that the manifest would never have to. The
+        // protocol admits it now, and derivation carries it — but it can never
+        // launder one: an upgradeable Registry produces a DIFFERENT profile
+        // from the immutable one, because the artifact bytes carry the policy
+        // and the authority and the binding is their digest. So substituting a
+        // mutable component for an immutable one is still refused everywhere a
+        // profile is compared, by identity rather than by a policy check.
+        let upgradeable_registry =
+            derive_protocol_infrastructure_profile_v1(&release(71, Some([9; 32])), &fixture.rent)
+                .expect("slot-pinned Registry derives");
+        assert_ne!(upgradeable_registry, derived);
+        let upgradeable_rent = derive_protocol_infrastructure_profile_v1(
+            &fixture.registry,
+            &release(81, Some([9; 32])),
+        )
+        .expect("slot-pinned Rent derives");
+        assert_ne!(upgradeable_rent, derived);
         // A different Rent release must move the derived profile.
         assert_ne!(
             derive_protocol_infrastructure_profile_v1(&fixture.registry, &release(91, None))
@@ -664,53 +785,116 @@ mod tests {
         );
     }
 
+    /// Decision 0012, and the whole point of this lane's change to this module.
+    ///
+    /// This test was `every_infrastructure_release_must_be_immutable` and it
+    /// asserted three `Err(InfrastructureMustBeImmutable)`. That is no longer
+    /// the protocol: an `ExactAuthority` release with a bound authority is one
+    /// of the two canonical pinned shapes and every on-chain reader admits it.
+    /// What must remain true, and what this asserts instead, is that the
+    /// weaker substrate can never be MISTAKEN for the stronger one — so the
+    /// manifest states which it is, and the statement is computed from the
+    /// components rather than supplied beside them.
     #[test]
-    fn every_infrastructure_release_must_be_immutable() {
+    fn every_infrastructure_release_states_the_substrate_class_it_is_evidence_for() {
         let fixture = Fixture::immutable();
-        let mutable_registry = release(71, Some([72; 32]));
-        let mutable_rent = release(81, Some([82; 32]));
-        let mut mutable_core_releases = fixture.execution_releases.clone();
-        mutable_core_releases[0] = release(11, Some([12; 32]));
-        let mutable_core_artifacts = mutable_core_releases
-            .each_ref()
-            .map(|checked| artifact_release_from_checked(checked).expect("artifact"));
-        let [core, claims, trading, resolution, custody] = mutable_core_artifacts.map(binding);
-        let mutable_execution = build_checked_execution_release_set(
-            ExecutionReleaseSetV1::new(core, claims, trading, resolution, custody)
-                .expect("mutable Core release set"),
-            mutable_core_releases.each_ref(),
-        )
-        .expect("mutable Core execution evidence");
+        assert_eq!(
+            fixture.checked.evidence_class(),
+            INFRASTRUCTURE_EVIDENCE_CLASS_IMMUTABLE_V1
+        );
+        let pinned = Fixture::slot_pinned([72; 32]);
+        assert_eq!(
+            pinned.checked.evidence_class(),
+            INFRASTRUCTURE_EVIDENCE_CLASS_SLOT_PINNED_V1
+        );
+        assert!(
+            pinned
+                .checked
+                .render_text()
+                .expect("render")
+                .contains(INFRASTRUCTURE_EVIDENCE_CLASS_SLOT_PINNED_V1)
+        );
+        // Round-trips as its own bytes, which the Immutable-only gate made
+        // impossible: `decode` calls `validate`, so no such manifest could
+        // survive its own codec.
+        assert_eq!(
+            CheckedInfrastructureV1::decode(&pinned.checked.encode()),
+            Ok(pinned.checked)
+        );
 
-        assert_eq!(
-            build_checked_infrastructure_v1(
+        // ONE upgradeable component out of three is enough to move the class.
+        // A manifest whose Core can be replaced does not become immutable
+        // evidence because Registry and Rent cannot.
+        for mutable in [release(71, Some([72; 32])), release(81, Some([82; 32]))] {
+            let is_registry = mutable.deployment_slot() == 71;
+            let mixed = build_checked_infrastructure_v1(
                 fixture.execution,
-                fixture.profile,
+                derive_protocol_infrastructure_profile_v1(
+                    if is_registry {
+                        &mutable
+                    } else {
+                        &fixture.registry
+                    },
+                    if is_registry { &fixture.rent } else { &mutable },
+                )
+                .expect("mixed profile"),
                 &fixture.execution_releases[0],
-                &mutable_registry,
-                &fixture.rent,
-            ),
-            Err(Error::InfrastructureMustBeImmutable),
+                if is_registry {
+                    &mutable
+                } else {
+                    &fixture.registry
+                },
+                if is_registry { &fixture.rent } else { &mutable },
+            )
+            .expect("a mixed substrate is admissible and says so");
+            assert_eq!(
+                mixed.evidence_class(),
+                INFRASTRUCTURE_EVIDENCE_CLASS_SLOT_PINNED_V1
+            );
+        }
+
+        // The residue of the gate. `require_pinned_component` is TOTAL on
+        // anything this tool can build, exactly as the contract's own predicate
+        // is total on decoded records: `ArtifactReleaseV1::new` refuses a
+        // non-canonical policy/authority pairing before it can reach here, and
+        // `artifact_release_from_checked` derives the policy FROM the authority
+        // so it cannot construct one either. The check stays because it states
+        // the admission out loud in a greppable place, and because a future
+        // caller that skipped the constructor must still be refused — not
+        // because a fixture in this file can reach it.
+        for artifact in [
+            artifact_release_from_checked(&fixture.registry).expect("immutable artifact"),
+            artifact_release_from_checked(&release(71, Some([72; 32]))).expect("pinned artifact"),
+        ] {
+            assert_eq!(require_pinned_component(artifact), Ok(()));
+        }
+        assert!(
+            ArtifactReleaseV1::new(
+                ProgramIdentityV1::new([1; 32]).expect("program"),
+                ProgramIdentityV1::new([2; 32]).expect("loader"),
+                [3; 32],
+                ContentId::new([4; 32]).expect("semantic"),
+                [5; 32],
+                7,
+                ArtifactUpgradePolicyV1::Immutable,
+                Some([6; 32]),
+            )
+            .is_err(),
+            "an Immutable release carrying an authority is not constructible",
         );
-        assert_eq!(
-            build_checked_infrastructure_v1(
-                fixture.execution,
-                fixture.profile,
-                &fixture.execution_releases[0],
-                &fixture.registry,
-                &mutable_rent,
-            ),
-            Err(Error::InfrastructureMustBeImmutable),
-        );
-        assert_eq!(
-            build_checked_infrastructure_v1(
-                mutable_execution,
-                fixture.profile,
-                &mutable_core_releases[0],
-                &fixture.registry,
-                &fixture.rent,
-            ),
-            Err(Error::InfrastructureMustBeImmutable),
+        assert!(
+            ArtifactReleaseV1::new(
+                ProgramIdentityV1::new([1; 32]).expect("program"),
+                ProgramIdentityV1::new([2; 32]).expect("loader"),
+                [3; 32],
+                ContentId::new([4; 32]).expect("semantic"),
+                [5; 32],
+                7,
+                ArtifactUpgradePolicyV1::ExactAuthority,
+                None,
+            )
+            .is_err(),
+            "an ExactAuthority release carrying no authority is not constructible",
         );
     }
 

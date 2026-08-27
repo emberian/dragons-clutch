@@ -237,16 +237,23 @@ enum ArtifactAdmissionV1 {
     /// Core's own Loader upgrade authority, and it is what makes the immutable
     /// profile's pinned record a truthful description of the deployed code.
     FirstAdmission,
-    /// The immutable profile already pinned this exact record.
+    /// The profile already pinned this exact record.
     ///
-    /// The profile is immutable and content-pins the artifact record; the
-    /// record is content-addressed and finalized, so its bytes cannot change;
-    /// the record admits `Immutable` with no upgrade authority and the observed
-    /// ProgramData must currently carry none, so the deployed ELF cannot change
-    /// either. The digest checked at first admission is therefore still exact,
-    /// and re-hashing a multi-hundred-kilobyte ELF on every Found recomputes an
-    /// already authenticated fact. The deployment slot, identity, link,
-    /// ownership, and authority are all still rechecked.
+    /// The profile content-pins the artifact record; the record is
+    /// content-addressed and finalized, so its bytes cannot change; and the
+    /// slot pin says the deployed ELF has not changed either. Decision 0012
+    /// widened that last step and this doc had not caught up — it read "the
+    /// record admits `Immutable` with no upgrade authority and the observed
+    /// ProgramData must currently carry none", which is one of the two admitted
+    /// shapes, not the rule. The rule is `slot_pinned_release_elf_digest_v1`:
+    /// an `Immutable` release cannot move at all, and an `ExactAuthority`
+    /// release cannot have moved while the observed deployment slot still
+    /// equals the slot it bound, because Loader V3 writes the current slot on
+    /// every `Upgrade` and refuses one in the deployment's own slot. Either
+    /// way the digest checked at first admission is still exact, and re-hashing
+    /// a multi-hundred-kilobyte ELF on every Found recomputes an already
+    /// authenticated fact. The deployment slot, identity, link, ownership, and
+    /// authority are all still rechecked.
     AlreadyPinned,
 }
 
