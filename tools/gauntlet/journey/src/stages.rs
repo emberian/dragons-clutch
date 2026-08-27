@@ -431,6 +431,20 @@ pub(crate) fn holder_to_holder(
         submitted += 1;
         transactions.push(evidence);
     }
+    if submitted == 0 {
+        return Ok(StageReportV1 {
+            stage: "post-open life: holder-to-holder collateral".into(),
+            outcome: "blocked".into(),
+            transactions: 0,
+            compute_units: 0,
+            note: format!(
+                "every one of the {} holders holds zero collateral, so there was nothing to send \
+                 around the ring. See the distribution stage: the founding locks the entire \
+                 supply across its two prestate lanes.",
+                holders.len()
+            ),
+        });
+    }
     Ok(StageReportV1 {
         stage: "post-open life: holder-to-holder collateral".into(),
         outcome: "executed".into(),
