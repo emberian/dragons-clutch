@@ -92,5 +92,32 @@ dclutch-rational-representation-v2-request-contract = { path = "../../crates/dcl
 solana-hash = "=4.6.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
 
-[lints]
-workspace = true
+# The workspace lint set, with ONE deliberate change: `unsafe_code` is "deny"
+# rather than "forbid" so that exactly one module -- `src/entrypoint_adapter.rs`,
+# carrying the single `#[allow(unsafe_code)]` in this crate, on its `mod`
+# declaration in `src/lib.rs` -- can hold the SBF loader's machine boundary.
+#
+# Why the exemption lives here and not in a separate crate: the loader's
+# `entrypoint` symbol and the `#[global_allocator]` static must be *defined in
+# the cdylib itself* to be reliably emitted (an unreferenced `#[no_mangle]` in a
+# dependency rlib is collectable, and hiding it behind a macro would put the
+# `unsafe` back into this crate's expansion invisibly, which is the opposite of
+# a named boundary). A separate crate would also be a reusable facility other
+# programs could adopt, widening the exemption from one named module to the
+# whole tree.
+#
+# Every other lint is byte-identical to `[workspace.lints]` in the root
+# Cargo.toml. Keep them in step.
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unexpected_cfgs = { level = "deny", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

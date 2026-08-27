@@ -1,5 +1,5 @@
 #![no_std]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 //! Canonical data-driven SBF adapter for the fixed Trading execution role.
@@ -10,9 +10,9 @@
 //! root, its FundingState accounts, and the exact Core acknowledgment. It has
 //! no family discriminator.
 
-// The canonical physical profiles exceed the 64-account hard limit of the
-// pinned `entrypoint_no_alloc!` deserializer. The standard entrypoint owns its
-// bounded per-instruction account vector on the SBF heap instead.
+// The kernel crates this adapter calls are `no_std`; the adapter layer itself
+// allocates, so the executable links `std` for `Vec`/`Box` and for the
+// `GlobalAlloc` implementation `entrypoint_adapter` installs.
 extern crate std;
 
 #[cfg(feature = "shadow-accelerator-auth-only")]
@@ -68,6 +68,15 @@ pub mod dispatch_v3;
 /// Profile13 physical representative expansion shared by prefix and continuation.
 #[cfg(not(feature = "shadow-accelerator-auth-only"))]
 mod dynamic_accounts_v4;
+/// The named machine boundary: SBF entrypoint, input deserialization, heap.
+///
+/// The ONE `unsafe` exemption in this executable. Everything reachable from
+/// `process_instruction` is safe Rust; this module converts the loader's raw
+/// input region into the safe values that boundary consumes and owns the bump
+/// allocator they are measured against. Its module documentation carries the
+/// full trust surface. No other module in this crate may carry this attribute.
+#[allow(unsafe_code)]
+pub mod entrypoint_adapter;
 /// Registry-authenticated family-neutral Execution Strategy V2 admission.
 pub mod execution_strategy_v2;
 /// General family projection behind the common data-defined Trading boundary.
@@ -207,28 +216,13 @@ impl From<TradingSbfError> for ProgramError {
 /// This covers the Registry-continuation Hot frame at the common heap-profile
 /// maxima: 38 fixed accounts, one continuation admission, eight admitted-AOT
 /// evidence accounts, ten 880-byte bank pages, and 251 non-injected physical
-/// runtime representatives. The standard entrypoint deserializes this vector
-/// without the obsolete 64-account fixed-array limit; larger frames refuse
-/// before any family or mutation path executes.
+/// runtime representatives. `entrypoint_adapter` deserializes this vector
+/// without the obsolete 64-account fixed-array limit, on the stack up to
+/// `entrypoint_adapter::ADAPTER_STACK_SLOTS_V1` and in an exactly-sized heap
+/// buffer above it; larger frames refuse before any family or mutation path
+/// executes.
 pub const TRADING_MAX_INSTRUCTION_ACCOUNTS_V3: usize = 308;
 
-#[cfg(all(
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
-))]
-solana_program::entrypoint!(program_entrypoint);
-
-#[cfg(all(
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
-))]
-fn program_entrypoint(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    instruction_data: &[u8],
-) -> ProgramResult {
-    process_instruction(program_id, accounts, instruction_data)
-}
 
 /// Execute the family-neutral authenticated activation route.
 ///
