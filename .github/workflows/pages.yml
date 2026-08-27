@@ -1,9 +1,24 @@
-# Publish the hand-authored microsite in site/ to GitHub Pages, verbatim.
-# There is no build step: the directory is uploaded as-is.
+# Publish the dClutch public face to GitHub Pages: the real frontend's static
+# export plus the generated protocol reference and guides, assembled by
+# dclutch/tools/genref/render-site.mjs (which link-checks the artifact and
+# refuses it on any broken internal link). This replaces the gen-1 microsite
+# in site/, which is no longer published.
 #
 # Publication is deliberately manual. A repository push is not release or
-# publication authority, and the site currently describes an unreleased local
-# implementation rather than an official deployment.
+# publication authority, and the site describes an unreleased local
+# implementation rather than an official deployment — the landing page and
+# every rendered page carry that labeling.
+#
+# Two facts to know before dispatching:
+#   - This builds from the dclutch/ SUBTREE. If the subtree lags the live
+#     tree (it is updated in waves), the build fails or publishes stale
+#     truth; refresh the subtree first.
+#   - The app export uses root-absolute asset URLs and works when the site
+#     is served at a domain root (a custom domain). Under the default
+#     /<repo>/ project-page subpath the app's assets do not resolve —
+#     vinext 1.0.0-beta.3's basePath is incompatible with output:'export'.
+#     The docs pages are subpath-safe either way, and the landing page
+#     states the app caveat rather than hiding it.
 name: pages
 
 on:
@@ -21,17 +36,28 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check local links and static asset boundary
-        run: python3 scripts/check_site.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the frontend static export
+        working-directory: dclutch/apps/dclutch-web
+        run: |
+          npm ci
+          DCLUTCH_PAGES_EXPORT=1 npm run build
+      - name: Assemble and link-check the site
+        run: |
+          node dclutch/tools/genref/render-site.mjs \
+            --out _site \
+            --app dclutch/apps/dclutch-web/dist/client
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/
+          path: _site/
       - id: deployment
         uses: actions/deploy-pages@v4
