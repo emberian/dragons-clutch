@@ -8,6 +8,7 @@
 //! physical executor and writer.
 
 use crate::effect_artifacts_v3::unauthored_actions;
+use crate::escrow_v1::ActionCustodyTransferV1;
 use dclutch_account_profile_contract::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
@@ -636,15 +637,17 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
                 Some((FixedRole::Custody, 1)),
             )
         }
+        // The compartments every arm below requires come from
+        // `escrow_v1::general_action_custody_transfer_v1`, which is also what
+        // the EffectProgram builder reads. Before that indirection the artifact
+        // and its authenticator were two copies of the same literal, and when
+        // decision 0010 §2 moved `Collect` to draw on the order's own escrow it
+        // moved neither of them -- so the join went on admitting a release that
+        // debited the maker's external account at settlement time.
         Action::Collect => {
             require_route_count(effect, 2)?;
             require_affine_route(effect, 0, 2)?;
-            require_custody_transfer_route(
-                effect,
-                1,
-                CompartmentV1::External,
-                CompartmentV1::Settlement,
-            )
+            require_named_custody_transfer_route(effect, 1, action)
         }
         Action::Materialize => {
             require_route_count(effect, 2)?;
@@ -653,31 +656,16 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
             // complete-set move: Mint is Settlement -> Hoard, Merge is the
             // inverse.  Both use one canonical Transfer template and the
             // admitted EffectProgram patches the two typed compartment bytes.
-            require_custody_transfer_route_either(
-                effect,
-                1,
-                (CompartmentV1::Settlement, CompartmentV1::HoardPrincipal),
-                (CompartmentV1::HoardPrincipal, CompartmentV1::Settlement),
-            )
+            require_named_custody_transfer_route(effect, 1, action)
         }
         Action::Distribute => {
             require_route_count(effect, 2)?;
             require_affine_route(effect, 0, 2)?;
-            require_custody_transfer_route(
-                effect,
-                1,
-                CompartmentV1::Settlement,
-                CompartmentV1::External,
-            )
+            require_named_custody_transfer_route(effect, 1, action)
         }
         Action::Close => {
             require_route_count(effect, 4)?;
-            require_custody_transfer_route(
-                effect,
-                0,
-                CompartmentV1::Settlement,
-                CompartmentV1::External,
-            )?;
+            require_named_custody_transfer_route(effect, 0, action)?;
             require_position_route(effect, 1, ProtocolPositionActionV2::Close)?;
             require_custody_route(
                 effect,
@@ -793,6 +781,45 @@ fn require_affine_route(
         return Err(GeneralArtifactErrorV3::Effect);
     }
     Ok(())
+}
+
+/// Require one route to be the exact Custody transfer this action performs.
+///
+/// The compartments are not a parameter. They are looked up from the single
+/// table in [`crate::escrow_v1`], so this join and the artifact builder read one
+/// fact rather than agreeing by inspection. An `Either` action admits both of
+/// its named directions, because its EffectProgram patches the two compartment
+/// bytes at runtime from the authenticated complete-set move.
+fn require_named_custody_transfer_route(
+    effect: EffectProgramV3<'_>,
+    index: u16,
+    action: Action,
+) -> Result<()> {
+    match crate::escrow_v1::general_action_custody_transfer_v1(action) {
+        ActionCustodyTransferV1::None => Err(GeneralArtifactErrorV3::Effect),
+        ActionCustodyTransferV1::Fixed(child) => {
+            let movement = crate::escrow_v1::general_child_custody_movement_v1(child)
+                .ok_or(GeneralArtifactErrorV3::Effect)?;
+            require_custody_transfer_route(
+                effect,
+                index,
+                movement.source_compartment,
+                movement.destination_compartment,
+            )
+        }
+        ActionCustodyTransferV1::Either(first, second) => {
+            let first = crate::escrow_v1::general_child_custody_movement_v1(first)
+                .ok_or(GeneralArtifactErrorV3::Effect)?;
+            let second = crate::escrow_v1::general_child_custody_movement_v1(second)
+                .ok_or(GeneralArtifactErrorV3::Effect)?;
+            require_custody_transfer_route_either(
+                effect,
+                index,
+                (first.source_compartment, first.destination_compartment),
+                (second.source_compartment, second.destination_compartment),
+            )
+        }
+    }
 }
 
 fn require_custody_transfer_route(
@@ -1451,6 +1478,76 @@ mod tests {
             ),
             Err(GeneralArtifactErrorV3::Admission)
         );
+    }
+
+    /// Emit one action's V3 effect body, for tests that need to patch it.
+    fn effect_body(action: Action) -> Vec<u8> {
+        use crate::effect_artifacts_v3::{
+            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+            general_effect_instruction_count_v3, general_effect_program_bytes_v3,
+            general_effect_template_bytes_v3,
+        };
+        let (fixed, item) = general_effect_instruction_count_v3(action);
+        let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; fixed + item];
+        let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
+        let len = general_effect_program_bytes_v3(action).expect("width");
+        let mut scratch = vec![0_u8; len];
+        let mut output = vec![0_u8; len];
+        encode_general_effect_program_v3_atomic(
+            action,
+            &mut instructions,
+            &mut templates,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("effect body");
+        output
+    }
+
+    /// **The independent pin on the compartment table.**
+    ///
+    /// The artifact builder and this join now read one table, which is what
+    /// stops them disagreeing -- and it also means neither of them independently
+    /// fixes the value. This restores that: an artifact whose Custody transfer
+    /// draws on a real, live, correctly-shaped neighbouring compartment instead
+    /// of the one the action names is refused here, on the emitted bytes.
+    ///
+    /// The substitution is deliberately vault-to-vault. Custody's own `Transfer`
+    /// validation already refuses a compartment paired with the wrong side
+    /// shape, so a swap to `External` would be caught by the child's decode and
+    /// would prove nothing about this join.
+    #[test]
+    fn a_release_whose_transfer_names_another_compartment_is_refused() {
+        use dclutch_custody_contract::{CustodyRequestLayoutV1, CustodyRequestV1};
+
+        for (action, route, substitute) in [
+            (Action::Collect, 1_u16, CompartmentV1::HoardPrincipal),
+            (Action::Distribute, 1, CompartmentV1::HoardPrincipal),
+            (Action::Close, 0, CompartmentV1::HoardPrincipal),
+        ] {
+            let mut bytes = effect_body(action);
+            let program = EffectProgramV3::decode(&bytes).expect("program");
+            validate_routes(action, program).expect("the emitted release joins");
+            let (template, _) = program.route_template(route).expect("transfer template");
+            let template = template.to_vec();
+            assert_eq!(
+                CustodyRequestV1::decode(&template)
+                    .expect("template decodes")
+                    .source_compartment,
+                CompartmentV1::Settlement,
+            );
+            let start = bytes
+                .windows(template.len())
+                .position(|window| window == template.as_slice())
+                .expect("the template is a contiguous span of the program");
+            bytes[start + CustodyRequestLayoutV1::SOURCE_COMPARTMENT] = substitute.tag();
+            let patched = EffectProgramV3::decode(&bytes).expect("patched program");
+            assert_eq!(
+                validate_routes(action, patched),
+                Err(GeneralArtifactErrorV3::Effect),
+                "{action:?} admitted a transfer out of {substitute:?}",
+            );
+        }
     }
 
     #[test]

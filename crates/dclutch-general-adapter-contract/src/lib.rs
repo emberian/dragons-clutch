@@ -30,6 +30,8 @@ pub mod child_packets;
 pub mod collection_v1;
 /// Generated exact-child EffectProgram artifacts for every General action.
 pub mod effect_artifacts_v3;
+/// The escrow's compartment authority and its physical balance discipline.
+pub mod escrow_v1;
 /// Complete General Hot38 candidate register ABI for exact child packets.
 pub mod hot_candidate_v3;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
@@ -210,6 +212,20 @@ impl GeneralChildEffectV1 {
                 | Self::EscrowCollateral
                 | Self::ReleaseClaims
                 | Self::ReleaseCollateral
+        )
+    }
+
+    /// Whether this effect moves collateral through a Custody vault.
+    ///
+    /// The complement is the Claims legs, which move Positions. Every effect
+    /// for which this is true has exactly one row in
+    /// [`escrow_v1::general_child_custody_movement_v1`], and that is the one
+    /// place its compartments and vault contexts are named.
+    #[must_use]
+    pub const fn moves_collateral(self) -> bool {
+        !matches!(
+            self,
+            Self::CollectClaims | Self::DistributeClaims | Self::EscrowClaims | Self::ReleaseClaims
         )
     }
 

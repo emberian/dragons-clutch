@@ -16,6 +16,7 @@ use dclutch_custody_contract::{
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_sha256_adapter::digest;
 
+use crate::escrow_v1::{MovementIdentitiesV1, authenticate_custody_route_v1};
 use crate::{
     AggregateReplayContextV1, Error as GeneralError, GeneralChildEffectV1, GeneralChildPlanV2,
     MAX_OUTCOMES, QuoteSurplusRouteV2, RowReplayContextV1,
@@ -343,21 +344,15 @@ fn build_escrow_custody_packets_v1(
     {
         return Err(ChildPacketError::Coordinate);
     }
-    let deposit = effect == GeneralChildEffectV1::EscrowCollateral;
-    let route_valid = if deposit {
-        resources.source_owner == context.owner_id
-            && is_zero(&resources.source_vault_context)
-            && is_zero(&resources.destination_owner)
-            && resources.destination_vault_context == context.order_id
-    } else {
-        is_zero(&resources.source_owner)
-            && resources.source_vault_context == context.order_id
-            && resources.destination_owner == context.owner_id
-            && is_zero(&resources.destination_vault_context)
-    };
-    if !route_valid {
-        return Err(ChildPacketError::Coordinate);
-    }
+    let movement = authenticate_custody_route_v1(
+        effect,
+        row_movement_identities(context),
+        resources.source_vault_context,
+        resources.source_owner,
+        resources.destination_vault_context,
+        resources.destination_owner,
+    )
+    .map_err(|_| ChildPacketError::Coordinate)?;
     let quantity = quantities[0].to_le_bytes();
     let parent = GeneralChildPlanV2::new_row(effect, context, 1, &quantity)?.digest()?;
     let custody = build_custody_packet(
@@ -370,16 +365,8 @@ fn build_escrow_custody_packets_v1(
         u32::from(context.execution_index),
         quantities[0],
         resources,
-        if deposit {
-            CompartmentV1::External
-        } else {
-            CompartmentV1::Settlement
-        },
-        if deposit {
-            CompartmentV1::Settlement
-        } else {
-            CompartmentV1::External
-        },
+        movement.source_compartment,
+        movement.destination_compartment,
         parent,
     )?;
     Ok(GeneralChildPacketsV2 {
@@ -458,23 +445,22 @@ fn build_row_custody_packets_v2(
     // external account. Decision 0009 §2 named the external debit a live credit
     // regression: between placement and settlement the collateral sat where the
     // maker could spend it, and a maker who did stranded the whole candidate at
-    // its first `Collect`. The escrow vault is keyed by the order's content
-    // identity, so this route can reach exactly one order's collateral and the
-    // amount available is a balance the protocol already holds.
-    let route_valid = if effect == GeneralChildEffectV1::CollectCollateral {
-        is_zero(&resources.source_owner)
-            && resources.source_vault_context == context.order_id
-            && is_zero(&resources.destination_owner)
-            && resources.destination_vault_context == context.candidate_id
-    } else {
-        is_zero(&resources.source_owner)
-            && resources.source_vault_context == context.candidate_id
-            && resources.destination_owner == context.owner_id
-            && is_zero(&resources.destination_vault_context)
-    };
-    if !route_valid {
-        return Err(ChildPacketError::Coordinate);
-    }
+    // its first `Collect`.
+    //
+    // Which sides are vaults, which identity keys each one, and which
+    // compartments the atoms move between are all read from `escrow_v1` rather
+    // than restated here. This function used to carry its own reading of the
+    // ruling and the authored EffectProgram carried a different one; see that
+    // module's header.
+    let movement = authenticate_custody_route_v1(
+        effect,
+        row_movement_identities(context),
+        resources.source_vault_context,
+        resources.source_owner,
+        resources.destination_vault_context,
+        resources.destination_owner,
+    )
+    .map_err(|_| ChildPacketError::Coordinate)?;
     let quantity = quantities[0].to_le_bytes();
     let parent = GeneralChildPlanV2::new_row(effect, context, 1, &quantity)?.digest()?;
     let custody = build_custody_packet(
@@ -487,17 +473,8 @@ fn build_row_custody_packets_v2(
         u32::from(context.execution_index),
         quantities[0],
         resources,
-        // Both sides of a Collect are `Settlement`: an order's escrow and a
-        // candidate's inventory are the SAME economic pool, and what separates
-        // them is the vault context, which is a PDA seed. A distinct compartment
-        // tag would separate pools that must be interconvertible and would put a
-        // General-shaped row in a taxonomy every family reads.
-        CompartmentV1::Settlement,
-        if effect == GeneralChildEffectV1::CollectCollateral {
-            CompartmentV1::Settlement
-        } else {
-            CompartmentV1::External
-        },
+        movement.source_compartment,
+        movement.destination_compartment,
         parent,
     )?;
     Ok(GeneralChildPacketsV2 {
@@ -517,29 +494,27 @@ pub fn build_materialize_packets_v2(
     claims: ClaimsResourcesV2,
     custody: CustodyResourcesV2,
 ) -> ChildPacketResult<GeneralChildPacketsV2> {
-    let custody_route_valid = if mint {
-        is_zero(&custody.source_owner)
-            && custody.source_vault_context == context.candidate_id
-            && is_zero(&custody.destination_owner)
-            && custody.destination_vault_context == context.execution.market_id
+    let effect = if mint {
+        GeneralChildEffectV1::MintCompleteSet
     } else {
-        is_zero(&custody.source_owner)
-            && custody.source_vault_context == context.execution.market_id
-            && is_zero(&custody.destination_owner)
-            && custody.destination_vault_context == context.candidate_id
+        GeneralChildEffectV1::MergeCompleteSet
     };
-    if quantity == 0 || !custody_route_valid {
+    let movement = authenticate_custody_route_v1(
+        effect,
+        aggregate_movement_identities(context, [0; 32]),
+        custody.source_vault_context,
+        custody.source_owner,
+        custody.destination_vault_context,
+        custody.destination_owner,
+    )
+    .map_err(|_| ChildPacketError::Coordinate)?;
+    if quantity == 0 {
         return Err(ChildPacketError::Coordinate);
     }
     let mut quantities = [0; MAX_OUTCOMES];
     quantities[..usize::from(outcome_count)].fill(quantity);
     let tail = encode_quantities(outcome_count, &quantities)?;
     let active_tail = &tail[..usize::from(outcome_count) * 8];
-    let effect = if mint {
-        GeneralChildEffectV1::MintCompleteSet
-    } else {
-        GeneralChildEffectV1::MergeCompleteSet
-    };
     let parent =
         GeneralChildPlanV2::new_aggregate(effect, context, u32::from(outcome_count), active_tail)?
             .digest()?;
@@ -595,16 +570,8 @@ pub fn build_materialize_packets_v2(
         0,
         quantity,
         custody,
-        if mint {
-            CompartmentV1::Settlement
-        } else {
-            CompartmentV1::HoardPrincipal
-        },
-        if mint {
-            CompartmentV1::HoardPrincipal
-        } else {
-            CompartmentV1::Settlement
-        },
+        movement.source_compartment,
+        movement.destination_compartment,
         parent,
     )?;
     Ok(GeneralChildPacketsV2 {
@@ -621,13 +588,16 @@ pub fn build_surplus_packet_v2(
     route: QuoteSurplusRouteV2,
     custody: CustodyResourcesV2,
 ) -> ChildPacketResult<GeneralChildPacketsV2> {
-    if quantity == 0
-        || custody.destination != route.destination_account
-        || !is_zero(&custody.source_owner)
-        || custody.source_vault_context != context.candidate_id
-        || custody.destination_owner != route.beneficiary
-        || !is_zero(&custody.destination_vault_context)
-    {
+    let movement = authenticate_custody_route_v1(
+        GeneralChildEffectV1::PaySurplus,
+        aggregate_movement_identities(context, route.beneficiary),
+        custody.source_vault_context,
+        custody.source_owner,
+        custody.destination_vault_context,
+        custody.destination_owner,
+    )
+    .map_err(|_| ChildPacketError::Coordinate)?;
+    if quantity == 0 || custody.destination != route.destination_account {
         return Err(ChildPacketError::Coordinate);
     }
     let tail = quantity.to_le_bytes();
@@ -642,8 +612,8 @@ pub fn build_surplus_packet_v2(
         0,
         quantity,
         custody,
-        CompartmentV1::Settlement,
-        CompartmentV1::External,
+        movement.source_compartment,
+        movement.destination_compartment,
         parent,
     )?;
     Ok(GeneralChildPacketsV2 {
@@ -835,6 +805,34 @@ fn encode_quantities(
 
 fn is_zero(value: &[u8; 32]) -> bool {
     value.iter().all(|byte| *byte == 0)
+}
+
+/// The identities a row-scoped movement may key either of its sides by.
+///
+/// For the escrow effects `context.candidate_id` carries the BATCH identity --
+/// an admission has no candidate -- and no escrow movement names a candidate
+/// side, so passing it here is harmless and passing it anywhere a candidate is
+/// expected would be refused by identity comparison rather than by convention.
+const fn row_movement_identities(context: RowReplayContextV1) -> MovementIdentitiesV1 {
+    MovementIdentitiesV1 {
+        order_id: context.order_id,
+        candidate_id: context.candidate_id,
+        market_id: context.execution.market_id,
+        owner_id: context.owner_id,
+    }
+}
+
+/// The identities a candidate-wide movement may key either of its sides by.
+const fn aggregate_movement_identities(
+    context: AggregateReplayContextV1,
+    owner_id: [u8; 32],
+) -> MovementIdentitiesV1 {
+    MovementIdentitiesV1 {
+        order_id: [0; 32],
+        candidate_id: context.candidate_id,
+        market_id: context.execution.market_id,
+        owner_id,
+    }
 }
 
 #[cfg(test)]

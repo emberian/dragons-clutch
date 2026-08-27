@@ -54,9 +54,13 @@ pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, 
         Action::Consider => (15, 1, 0),
         Action::Freeze => (17, 1, 0),
         Action::InitializeSettlement => (21, 2, 0),
-        Action::Collect | Action::Distribute => (19, 4, 0),
+        // Two more than before this lane, on each of the three actions whose
+        // Custody direction is fixed at authoring time: the vault a transfer
+        // draws on must be keyed by the identity the row names. See
+        // `append_vault_context_binds`.
+        Action::Collect | Action::Distribute => (21, 4, 0),
         Action::Materialize => (16, 1, 0),
-        Action::Close => (25, 6, 0),
+        Action::Close => (27, 6, 0),
     }
 }
 
@@ -244,7 +248,10 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 push(output, cursor, instruction)?;
             }
         }
-        Action::Collect | Action::Distribute => append_row_action(output, cursor)?,
+        Action::Collect | Action::Distribute => {
+            append_row_action(output, cursor)?;
+            append_vault_context_binds(action, output, cursor)?;
+        }
         Action::Materialize => {
             for instruction in [
                 InstructionV3::nonzero(s(scalar::SETTLEMENT_POSITION_PRESENT)?),
@@ -305,7 +312,66 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
             ] {
                 push(output, cursor, instruction)?;
             }
+            append_vault_context_binds(action, output, cursor)?;
         }
+    }
+    Ok(())
+}
+
+/// Require the Custody vault a transfer touches to be the one the row names.
+///
+/// **This is the on-chain half of the escrow's addressing, and it did not
+/// exist.** Decision 0010 §2 argues that "a maker can never be paid more than
+/// they escrowed" is a property of the address, because the vault context is the
+/// order's own content identity. That argument holds only if something requires
+/// the vault in the frame to BE the one the row names, and nothing did: the
+/// vault context reaches the register bank from the AccountProfile's projection
+/// of whatever Custody accounts the caller supplied, while the order and
+/// candidate identities reach it from the authenticated manifest row. A
+/// `Collect` could name order A in its semantics and draw on order B's vault.
+///
+/// The comparison is only expressible where the direction is fixed at authoring
+/// time. `Materialize` patches its compartments at runtime from the
+/// authenticated complete-set move, so which side is the candidate and which the
+/// Hoard is not a constant of its artifact; it is named in the omission index
+/// rather than half-checked here.
+fn append_vault_context_binds(
+    action: Action,
+    output: &mut [InstructionV3],
+    cursor: &mut usize,
+) -> Result<()> {
+    let instructions = match action {
+        // The escrow leg: the source vault is the ORDER's, the destination the
+        // candidate's settlement inventory.
+        Action::Collect => [
+            InstructionV3::identity_eq(i(identity::SOURCE_VAULT_CONTEXT)?, i(identity::ORDER)?),
+            InstructionV3::identity_eq(
+                i(identity::DESTINATION_VAULT_CONTEXT)?,
+                i(identity::CANDIDATE)?,
+            ),
+        ],
+        // The payout leg: out of the candidate's inventory, to the row's own
+        // maker and to no other external owner.
+        Action::Distribute => [
+            InstructionV3::identity_eq(i(identity::SOURCE_VAULT_CONTEXT)?, i(identity::CANDIDATE)?),
+            InstructionV3::identity_eq(
+                i(identity::CUSTODY_DESTINATION_OWNER)?,
+                i(identity::OWNER)?,
+            ),
+        ],
+        // The terminal surplus: out of the candidate's inventory, to the
+        // immutable configured beneficiary.
+        Action::Close => [
+            InstructionV3::identity_eq(i(identity::SOURCE_VAULT_CONTEXT)?, i(identity::CANDIDATE)?),
+            InstructionV3::identity_eq(
+                i(identity::CUSTODY_DESTINATION_OWNER)?,
+                i(identity::BENEFICIARY)?,
+            ),
+        ],
+        _ => return Err(GeneralTransitionArtifactErrorV3::Geometry),
+    };
+    for instruction in instructions {
+        push(output, cursor, instruction)?;
     }
     Ok(())
 }
@@ -601,6 +667,71 @@ mod tests {
             );
             if action == Action::Consider {
                 assert!(active.is_ok(), "the Active Consider bank must accept");
+            }
+        }
+    }
+
+    /// One accepted `Collect` bank: every conjunct satisfied, at one width.
+    ///
+    /// Built by extending the Consider bank rather than by restating it, so a
+    /// change to the shared prelude reaches both.
+    fn collect_input_bank(count: u32) -> (std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>) {
+        let (mut scalars, mut identities) = consider_input_bank(count, ACTIVE_LIFECYCLE);
+        for (coordinate, value) in [
+            (scalar::SETTLEMENT_POSITION_PRESENT, 1),
+            (scalar::ORDER_COORDINATE, 1),
+            (scalar::CLAIMS_ROW_COUNT, u64::from(count)),
+        ] {
+            scalars[usize::try_from(coordinate).expect("scalar coordinate")] = value;
+        }
+        for item in 0..count {
+            let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            for coordinate in [
+                item_scalar::QUANTITY,
+                item_scalar::CLAIMS_SOURCE_MAGNITUDE,
+                item_scalar::CLAIMS_DESTINATION_MAGNITUDE,
+            ] {
+                scalars[usize::try_from(base + coordinate).expect("item coordinate")] = 5;
+            }
+        }
+        for (coordinate, value) in [
+            (identity::ORDER, [3_u8; 32]),
+            (identity::SOURCE_VAULT_CONTEXT, [3_u8; 32]),
+            (identity::CANDIDATE, [4_u8; 32]),
+            (identity::DESTINATION_VAULT_CONTEXT, [4_u8; 32]),
+        ] {
+            identities[usize::try_from(coordinate).expect("identity coordinate")] = value;
+        }
+        (scalars, identities)
+    }
+
+    /// **The escrow's addressing, checked on chain rather than argued.**
+    ///
+    /// Decision 0010 §2 rests "a maker can never be paid more than they
+    /// escrowed" on the vault being keyed by the order's own identity. Nothing
+    /// required the vault in the frame to be that one: the context arrives from
+    /// the AccountProfile's projection of caller-supplied Custody accounts, and
+    /// the order identity from the authenticated manifest row. A `Collect` could
+    /// name one order and draw on another's vault.
+    #[test]
+    fn collect_refuses_a_vault_that_is_not_the_one_its_row_names() {
+        let bytes = artifact(Action::Collect);
+        let program = ProgramV3::decode(&bytes).expect("decode");
+        for count in [1_u32, 258] {
+            let (scalars, identities) = collect_input_bank(count);
+            fold(program, count, &scalars, &identities).expect("the named vaults accept");
+            for coordinate in [
+                identity::SOURCE_VAULT_CONTEXT,
+                identity::DESTINATION_VAULT_CONTEXT,
+            ] {
+                let (scalars, mut identities) = collect_input_bank(count);
+                // A real neighbouring vault, not a zero: this is the substitution
+                // an adversary can actually present.
+                identities[usize::try_from(coordinate).expect("identity coordinate")] = [9; 32];
+                assert!(
+                    fold(program, count, &scalars, &identities).is_err(),
+                    "Collect at width {count} accepted a substituted vault at {coordinate}",
+                );
             }
         }
     }
