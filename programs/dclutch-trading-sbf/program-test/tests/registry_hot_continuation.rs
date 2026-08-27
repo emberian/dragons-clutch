@@ -6,12 +6,7 @@
 
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
-    hot_v3::{
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
-        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
-        HOT_REGISTRY_PROGRAM_ACCOUNT_V3, HOT_RENT_SYSVAR_ACCOUNT_V3,
-        HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HotExecutionEnvelopeV3,
-    },
+    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionEnvelopeV3},
 };
 use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_ACTION_OFFSET_V1, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1,
@@ -24,76 +19,124 @@ use dclutch_capability_seal_contract::{
 use dclutch_custody_contract::CustodyReplayV1;
 use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
 use dclutch_direct_codec::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
+use dclutch_registry_sbf::RegistryError;
 use dclutch_token_svm::TokenAccount;
+use dclutch_trading_sbf::TradingSbfError;
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
     hash::hash,
-    instruction::{AccountMeta, Instruction},
+    instruction::{AccountMeta, Instruction, InstructionError},
     pubkey::Pubkey,
     rent::Rent,
 };
-use solana_program_test::{ProgramTest, ProgramTestContext};
+use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk::transaction::TransactionError;
+use solana_sdk_ids::system_program;
 
 use dclutch_direct_hot_program_test_support::waist::{
-    CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, DirectCase,
-    REGISTRY_PROGRAM_ID, RefusedExecution, Releases, TRADING_PROGRAM_ID, add_lookup_table,
-    add_release_waist, canonical_lookup_addresses, direct_case, direct_case_v2,
-    direct_registry_instructions, elves, legacy_registry_hot_instruction, program_test,
-    registry_hot_instruction, submit_v0,
+    CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, DirectCase, Elves, RefusedExecution,
+    Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses,
+    direct_case, direct_case_v2, direct_registry_instructions, elves,
+    legacy_registry_hot_instruction, program_test, registry_hot_instruction, submit_v0,
 };
 
-fn registry_boundary_hot(releases: Releases) -> Instruction {
-    let mut accounts = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
-        .map(|index| {
-            let coordinate = u8::try_from(index + 1).expect("fixed Hot account coordinate");
-            AccountMeta::new_readonly(Pubkey::new_from_array([coordinate; 32]), false)
-        })
-        .collect::<Vec<_>>();
-    for (index, meta) in [
-        (
-            HOT_ACTIVATION_CACHE_ACCOUNT_V3,
-            AccountMeta::new_readonly(releases.activation, false),
-        ),
-        (
-            HOT_CORE_PROGRAM_ACCOUNT_V3,
-            AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
-        ),
-        (
-            HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-            AccountMeta::new_readonly(releases.core_programdata, false),
-        ),
-        (
-            HOT_TRADING_PROGRAM_ACCOUNT_V3,
-            AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
-        ),
-        (
-            HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
-            AccountMeta::new_readonly(releases.trading_programdata, false),
-        ),
-        (
-            HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
-            AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
-        ),
-        (
-            HOT_RENT_SYSVAR_ACCOUNT_V3,
-            AccountMeta::new_readonly(sysvar::rent::ID, false),
-        ),
-    ] {
-        *accounts.get_mut(index).expect("fixed Hot account") = meta;
+// --- Named refusals ----------------------------------------------------------
+//
+// Every refusal assertion in this file names the code it requires, and every
+// code is derived from the declaring program's own enum -- never written as a
+// bare number (AGENTS.md "Refusal codes", decision 0007).
+//
+// A bare `is_err()` here was never a shortcut, it was a hole. For the whole
+// heap-wall era every submission of the Direct bundle refused on the heap
+// before it read anything the test cared about, so `is_err()` held for the
+// hostile and the canonical submission alike. W2p took the wall down. Each
+// case below now states the code it raises and, in a comment, the control that
+// separates that code from one any submission of the same bundle would produce.
+
+/// `RegistryError::Deployment`: Loader Program, ProgramData, linkage, slot, ELF,
+/// or authority refused inside the Registry's release-batch authentication.
+const REGISTRY_DEPLOYMENT_REFUSAL_CODE: u32 = RegistryError::Deployment as u32;
+/// `RegistryError::Continuation`: the transparent Hot continuation refused its
+/// header, its admission PDA, or the Hot coordinate frame it was handed.
+const REGISTRY_CONTINUATION_REFUSAL_CODE: u32 = RegistryError::Continuation as u32;
+/// `TradingSbfError::Content`: the validated-artifact seal, the seal key, or a
+/// sealed record refused.
+const TRADING_CONTENT_REFUSAL_CODE: u32 = TradingSbfError::Content as u32;
+/// `TradingSbfError::Transition`: the checked data-defined transition refused.
+const TRADING_TRANSITION_REFUSAL_CODE: u32 = TradingSbfError::Transition as u32;
+/// `TradingSbfError::NativeSignature`: instructions-sysvar or native-signature
+/// evidence was absent or not exact.
+const TRADING_NATIVE_SIGNATURE_REFUSAL_CODE: u32 = TradingSbfError::NativeSignature as u32;
+
+/// The custom program code the refusal carried, so a test can name it.
+fn refusal_code(error: &BanksClientError) -> Option<u32> {
+    let transaction = match error {
+        BanksClientError::TransactionError(value) => value,
+        BanksClientError::SimulationError { err, .. } => err,
+        _ => return None,
+    };
+    match transaction {
+        TransactionError::InstructionError(_, InstructionError::Custom(code)) => Some(*code),
+        _ => None,
     }
+}
+
+/// Require one refusal to be exactly the named custom code.
+fn assert_refusal(refusal: &RefusedExecution, expected: u32) {
+    assert_eq!(
+        refusal_code(&refusal.error).expect("custom refusal code"),
+        expected,
+        "refused as {:?} rather than the named code: {:#?}",
+        refusal.error,
+        refusal.logs
+    );
+}
+
+/// One Hot frame the Registry boundary accepts, carrying a request Trading will
+/// not run.
+///
+/// The coordinates are the live Direct case's own: the same activation cache,
+/// the same Core and Trading deployment pair, the same Market and the same root
+/// at the same prestate digest. Only the request body is a stub, so the Registry
+/// boundary authenticates the frame all the way through
+/// `authenticate_hot_coordinates` and the admission PDA, invokes Trading, and
+/// Trading refuses the stub.
+///
+/// The coordinates were NOT always live. This fixture used to fabricate all
+/// thirty-eight accounts as `[coordinate; 32]` placeholders, which meant the
+/// nested root was an address with no account behind it -- so
+/// `authenticate_hot_coordinates` refused every submission of this bundle on
+/// `root.owner != trading` with `RegistryError::Continuation`, hostile or not.
+/// Two of the four cases below claim a refusal that is exactly
+/// `RegistryError::Continuation`, so under the old fixture their `is_err()` (and
+/// even a named-code assertion) was satisfied by a refusal the untouched bundle
+/// produced on its own. Live coordinates make the canonical submission reach
+/// Trading, which is what
+/// `the_registry_boundary_fixture_reaches_trading_when_nothing_is_hostile` pins,
+/// and that is the control every hostile case below is measured against.
+fn registry_boundary_hot(direct: &DirectCase) -> Instruction {
+    let mut accounts = direct
+        .chain
+        .hot_instruction
+        .accounts
+        .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
+        .expect("hot fixed prefix")
+        .to_vec();
+    for meta in accounts.iter_mut() {
+        meta.is_signer = false;
+        meta.is_writable = false;
+    }
+    let (canonical, _) =
+        HotExecutionEnvelopeV3::split_instruction(&direct.chain.hot_instruction.data)
+            .expect("canonical Direct Hot envelope");
     let request = b"registry-boundary-fixture";
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(request.len()).expect("boundary request width"),
-        releases.release_set,
-        accounts
-            .first()
-            .expect("boundary Market account")
-            .pubkey
-            .to_bytes(),
-        1,
-        [0x71; 32],
+        canonical.release_set(),
+        canonical.market(),
+        canonical.generation(),
+        canonical.root_prestate_digest(),
     )
     .expect("canonical boundary envelope");
     let mut data = Vec::with_capacity(128 + request.len());
@@ -102,10 +145,15 @@ fn registry_boundary_hot(releases: Releases) -> Instruction {
     Instruction {
         program_id: TRADING_PROGRAM_ID,
         accounts,
-        // Hostile cases below refuse at the Registry boundary before the
-        // intentionally incomplete child fixture can execute.
         data,
     }
+}
+
+/// Build the release waist and one canonical Direct case for a boundary test.
+fn boundary_case(test: &mut ProgramTest, artifacts: &Elves) -> (Releases, DirectCase) {
+    let releases = add_release_waist(test, artifacts);
+    let direct = direct_case(test, releases, artifacts, false);
+    (releases, direct)
 }
 
 async fn activation_snapshot(context: &mut ProgramTestContext, activation: Pubkey) -> Account {
@@ -157,24 +205,32 @@ async fn corrupt_account_byte(
     value
 }
 
+/// Submit one boundary container, require the named refusal, and require the
+/// release evidence to be byte-identical afterwards.
+///
+/// `expected` is not decoration. The four hostile containers below do not share
+/// one refusal -- two are caught by the release-batch deployment check and two
+/// by the transparent continuation -- and flattening them onto a single
+/// `is_err()` would let any of them drift onto another's refusal, or onto the
+/// canonical container's, without the test noticing.
 async fn assert_registry_refusal(
     mut test: ProgramTest,
     releases: Releases,
     instruction: Instruction,
-) {
+    expected: u32,
+) -> RefusedExecution {
     let addresses =
         canonical_lookup_addresses(core::slice::from_ref(&instruction), Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = test.start_with_context().await;
     let before = activation_snapshot(&mut context, releases.activation).await;
-    assert!(
-        submit_v0(&mut context, &[instruction], addresses, None, &[])
-            .await
-            .is_err(),
-        "hostile Registry continuation unexpectedly executed"
-    );
+    let refusal = submit_v0(&mut context, &[instruction], addresses, None, &[])
+        .await
+        .expect_err("hostile Registry continuation unexpectedly executed");
+    assert_refusal(&refusal, expected);
     let after = activation_snapshot(&mut context, releases.activation).await;
     assert_eq!(after, before, "Registry refusal mutated release evidence");
+    refusal
 }
 
 #[test]
@@ -209,15 +265,10 @@ fn release_fixture_uses_five_distinct_real_artifacts() {
 
 #[test]
 fn transparent_wrapper_preserves_exact_hot_bytes_and_places_one_admission_at_38() {
-    let releases = Releases {
-        release_set: [0x41; 32],
-        activation: Pubkey::new_from_array([0x42; 32]),
-        activation_digest: [0x43; 32],
-        core_programdata: Pubkey::new_from_array([0x44; 32]),
-        trading_programdata: Pubkey::new_from_array([0x45; 32]),
-        claims_programdata: Pubkey::new_from_array([0x46; 32]),
-    };
-    let hot = registry_boundary_hot(releases);
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let (releases, direct) = boundary_case(&mut test, &artifacts);
+    let hot = registry_boundary_hot(&direct);
     let exact_hot_bytes = hot.data.clone();
     let (outer, admission) = registry_hot_instruction(releases, hot);
     assert_eq!(outer.data, exact_hot_bytes);
@@ -234,76 +285,180 @@ fn transparent_wrapper_preserves_exact_hot_bytes_and_places_one_admission_at_38(
     );
 }
 
+/// The control every hostile boundary case below is measured against.
+///
+/// Nothing is tampered with, so the Registry authenticates the release batch,
+/// the Hot coordinate frame and the ephemeral admission, and forwards the exact
+/// bytes to Trading -- which refuses the stub request. A hostile case that
+/// refuses *at the Registry* therefore refuses on its own merit, because this
+/// container proves the boundary does not refuse the frame on its own.
+///
+/// This test exists because the boundary fixture used to fail this claim: with
+/// fabricated coordinates the canonical container was refused by the Registry
+/// with `RegistryError::Continuation`, the exact code two of the hostile cases
+/// assert. Every one of them was a `is_err()` satisfied by the container, not
+/// by the hostility.
 #[tokio::test]
-async fn real_registry_refuses_legacy_headered_hot_container_atomically() {
+async fn the_registry_boundary_fixture_reaches_trading_when_nothing_is_hostile() {
     let artifacts = elves();
     let mut test = program_test(&artifacts);
-    let releases = add_release_waist(&mut test, &artifacts);
-    let (instruction, _) =
-        legacy_registry_hot_instruction(releases, registry_boundary_hot(releases));
-    assert_registry_refusal(test, releases, instruction).await;
+    let (releases, direct) = boundary_case(&mut test, &artifacts);
+    let (instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(&direct));
+    let refusal =
+        assert_registry_refusal(test, releases, instruction, TRADING_CONTENT_REFUSAL_CODE).await;
+    assert!(
+        refusal.invoked(TRADING_PROGRAM_ID),
+        "the canonical boundary container never reached Trading: {:#?}",
+        refusal.logs
+    );
 }
 
+/// A legacy `RegistryContinuationRequestV1` header takes the V1 seam, and the
+/// bytes Trading is handed there are not the bytes the transparent seam hands
+/// it.
+///
+/// UNRESOLVED (W2q-VAC): this test used to be called
+/// `real_registry_refuses_legacy_headered_hot_container_atomically`, and that
+/// claim is FALSE. The legacy magic still routes to the live `continuation_v1`
+/// seam (`dclutch-registry-sbf/src/lib.rs` `process_instruction`), which ACCEPTS
+/// the container and forwards it to Trading. Nothing in the Registry refuses a
+/// legacy header, so the old `is_err()` was recording the stub request being
+/// refused downstream and nothing about the header at all.
+///
+/// What is true, and what this now asserts, is the seam split. The identical
+/// Hot frame reaches Trading through both seams and is refused with two
+/// DIFFERENT named Trading codes: `NativeSignature` here, because the V1 seam
+/// forwards the wrapper header as part of the request and the native evidence
+/// no longer covers it, against `Content` for the transparent seam in
+/// `the_registry_boundary_fixture_reaches_trading_when_nothing_is_hostile`. The
+/// header is therefore observable at the child, which is exactly what
+/// "transparent" is supposed to rule out for the V2 seam.
+///
+/// Whether `continuation_v1` should still admit a Core+Trading Hot container at
+/// all is a question for its owner. This test cannot settle it and does not
+/// pretend to.
+#[tokio::test]
+async fn a_legacy_headered_hot_container_takes_the_v1_seam_and_not_the_transparent_one() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let (releases, direct) = boundary_case(&mut test, &artifacts);
+    let (instruction, _) =
+        legacy_registry_hot_instruction(releases, registry_boundary_hot(&direct));
+    let refusal = assert_registry_refusal(
+        test,
+        releases,
+        instruction,
+        TRADING_NATIVE_SIGNATURE_REFUSAL_CODE,
+    )
+    .await;
+    assert!(
+        refusal.invoked(TRADING_PROGRAM_ID),
+        "the legacy headered container did not reach Trading: {:#?}",
+        refusal.logs
+    );
+}
+
+/// Swapping the Core and Trading program roles is caught by the release batch,
+/// which runs before the continuation ever looks at the Hot frame -- so this
+/// refusal is `Deployment`, not the `Continuation` the frame checks raise.
 #[tokio::test]
 async fn real_registry_refuses_reordered_core_and_trading_roles_atomically() {
     let artifacts = elves();
     let mut test = program_test(&artifacts);
-    let releases = add_release_waist(&mut test, &artifacts);
-    let (mut instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(releases));
+    let (releases, direct) = boundary_case(&mut test, &artifacts);
+    let (mut instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(&direct));
     instruction.accounts.swap(1, 3);
-    assert_registry_refusal(test, releases, instruction).await;
+    let refusal = assert_registry_refusal(
+        test,
+        releases,
+        instruction,
+        REGISTRY_DEPLOYMENT_REFUSAL_CODE,
+    )
+    .await;
+    assert!(
+        !refusal.invoked(TRADING_PROGRAM_ID),
+        "a reordered role batch was forwarded to Trading: {:#?}",
+        refusal.logs
+    );
 }
 
+/// Same seam as the reordered roles: the substituted ProgramData fails the
+/// Loader linkage inside the release batch, so `Deployment` is the merit here.
 #[tokio::test]
 async fn real_registry_refuses_substituted_core_programdata_atomically() {
     let artifacts = elves();
     let mut test = program_test(&artifacts);
-    let releases = add_release_waist(&mut test, &artifacts);
-    let (mut instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(releases));
+    let (releases, direct) = boundary_case(&mut test, &artifacts);
+    let (mut instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(&direct));
     *instruction
         .accounts
         .get_mut(2)
         .expect("Core ProgramData prefix") =
         AccountMeta::new_readonly(releases.trading_programdata, false);
-    let addresses =
-        canonical_lookup_addresses(core::slice::from_ref(&instruction), Pubkey::default());
-    add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
-    let before = activation_snapshot(&mut context, releases.activation).await;
+    let refusal = assert_registry_refusal(
+        test,
+        releases,
+        instruction,
+        REGISTRY_DEPLOYMENT_REFUSAL_CODE,
+    )
+    .await;
     assert!(
-        submit_v0(&mut context, &[instruction], addresses, None, &[])
-            .await
-            .is_err(),
-        "substituted Core ProgramData unexpectedly authenticated"
+        !refusal.invoked(TRADING_PROGRAM_ID),
+        "a substituted Core ProgramData was forwarded to Trading: {:#?}",
+        refusal.logs
     );
-    let after = activation_snapshot(&mut context, releases.activation).await;
-    assert_eq!(after, before, "deployment refusal mutated release evidence");
 }
 
+/// One flipped continuation byte changes the Hot instruction digest, so the
+/// admission PDA the Registry derives is not the one in the account list.
 #[tokio::test]
 async fn real_registry_refuses_altered_hot_bytes_atomically() {
     let artifacts = elves();
     let mut test = program_test(&artifacts);
-    let releases = add_release_waist(&mut test, &artifacts);
-    let (mut instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(releases));
+    let (releases, direct) = boundary_case(&mut test, &artifacts);
+    let (mut instruction, _) = registry_hot_instruction(releases, registry_boundary_hot(&direct));
     let byte = instruction.data.last_mut().expect("continuation byte");
     *byte ^= 1;
-    assert_registry_refusal(test, releases, instruction).await;
+    let refusal = assert_registry_refusal(
+        test,
+        releases,
+        instruction,
+        REGISTRY_CONTINUATION_REFUSAL_CODE,
+    )
+    .await;
+    assert!(
+        !refusal.invoked(TRADING_PROGRAM_ID),
+        "altered Hot bytes were forwarded to Trading: {:#?}",
+        refusal.logs
+    );
 }
 
+/// Aliasing the ephemeral admission over the Market coordinate breaks the Hot
+/// coordinate frame the envelope names, which is a `Continuation` refusal.
 #[tokio::test]
 async fn real_registry_refuses_aliased_ephemeral_admission_atomically() {
     let artifacts = elves();
     let mut test = program_test(&artifacts);
-    let releases = add_release_waist(&mut test, &artifacts);
+    let (releases, direct) = boundary_case(&mut test, &artifacts);
     let (mut instruction, admission) =
-        registry_hot_instruction(releases, registry_boundary_hot(releases));
+        registry_hot_instruction(releases, registry_boundary_hot(&direct));
     let child_start = 6;
     *instruction
         .accounts
         .get_mut(child_start)
         .expect("first Hot account") = AccountMeta::new_readonly(admission, false);
-    assert_registry_refusal(test, releases, instruction).await;
+    let refusal = assert_registry_refusal(
+        test,
+        releases,
+        instruction,
+        REGISTRY_CONTINUATION_REFUSAL_CODE,
+    )
+    .await;
+    assert!(
+        !refusal.invoked(TRADING_PROGRAM_ID),
+        "an aliased ephemeral admission was forwarded to Trading: {:#?}",
+        refusal.logs
+    );
 }
 
 #[tokio::test]
@@ -414,22 +569,71 @@ async fn corrupt_profile14_root_reserved_byte_refuses_without_mutation() {
     )
     .await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    let refusal = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("noncanonical Direct root unexpectedly accepted");
+    // The refusal is the Registry's, not Trading's: `authenticate_hot_coordinates`
+    // hashes the root and requires the envelope's `root_prestate_digest`, so one
+    // flipped reserved byte is caught before the child is ever invoked. The
+    // control is `real_registry_executes_profile14_direct_hot_under_protocol_limit`,
+    // which is this same bundle without the flip and executes.
+    assert_refusal(&refusal, REGISTRY_CONTINUATION_REFUSAL_CODE);
     assert!(
-        submit_v0(
-            &mut context,
-            &instructions,
-            addresses,
-            Some(&direct.payer),
-            &[],
-        )
-        .await
-        .is_err(),
-        "noncanonical Direct root unexpectedly accepted"
+        !refusal.invoked(TRADING_PROGRAM_ID),
+        "a noncanonical root reached Trading: {:#?}",
+        refusal.logs
     );
     let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     assert_eq!(after, before, "root refusal mutated Profile14 state");
 }
 
+/// Restore every rollback-tracked account except the maker replays.
+///
+/// A maker replay is only *live* after an execution has written it, and that
+/// same execution advances the root -- which the Registry's Hot coordinate
+/// check pins by prestate digest, so a second submission of the same bundle is
+/// refused at the boundary before Trading reads any replay at all. Rewinding
+/// everything but the replays is what puts a live replay in front of a bundle
+/// the Registry will still forward.
+async fn rewind_except_maker_replays(
+    context: &mut ProgramTestContext,
+    direct: &DirectCase,
+    prestate: &[(Pubkey, Option<Account>)],
+) {
+    for (key, value) in prestate {
+        if direct.chain.maker_replays.contains(key) {
+            continue;
+        }
+        let account = value.clone().unwrap_or(Account {
+            lamports: 0,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        });
+        context.set_account(key, &AccountSharedData::from(account));
+    }
+}
+
+/// A live maker replay whose reserved byte is not canonical is refused, and the
+/// refusal is the replay's own content -- not the fact that it is live.
+///
+/// The control is the first half of this test: the identical rewound bundle
+/// with the live replays left exactly as the execution wrote them refuses with
+/// `Transition`, because the replay revision has moved past the one the request
+/// names. Flipping one reserved byte moves the refusal to `Content`, which is
+/// the maker replay failing to decode. Two different named codes over the same
+/// bundle is the whole evidence: it is what a bare `is_err()` here could never
+/// have shown, and for as long as this test asserted only `is_err()` after a
+/// plain second submission it was showing nothing at all -- that submission is
+/// refused by the Registry at the root prestate digest, corrupt maker byte or
+/// not, and Trading never runs.
 #[tokio::test]
 async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     let artifacts = elves();
@@ -440,6 +644,7 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = test.start_with_context().await;
+    let prestate = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     submit_v0(
         &mut context,
         &instructions,
@@ -449,6 +654,25 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     )
     .await
     .expect("first-use execution creates live maker replay");
+
+    rewind_except_maker_replays(&mut context, &direct, &prestate).await;
+    let control = submit_v0(
+        &mut context,
+        &instructions,
+        addresses.clone(),
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("a spent maker replay was accepted a second time");
+    assert_refusal(&control, TRADING_TRANSITION_REFUSAL_CODE);
+    assert!(
+        control.invoked(TRADING_PROGRAM_ID),
+        "the live maker replay was never read: {:#?}",
+        control.logs
+    );
+
+    rewind_except_maker_replays(&mut context, &direct, &prestate).await;
     let hostile = corrupt_account_byte(
         &mut context,
         direct.chain.maker_replays[0],
@@ -457,18 +681,16 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     .await;
     assert_eq!(hostile.owner, TRADING_PROGRAM_ID);
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
-    assert!(
-        submit_v0(
-            &mut context,
-            &instructions,
-            addresses,
-            Some(&direct.payer),
-            &[],
-        )
-        .await
-        .is_err(),
-        "noncanonical live maker replay unexpectedly accepted"
-    );
+    let refusal = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("noncanonical live maker replay unexpectedly accepted");
+    assert_refusal(&refusal, TRADING_CONTENT_REFUSAL_CODE);
     let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     assert_eq!(after, before, "maker refusal mutated Profile14 state");
 }
@@ -566,9 +788,13 @@ async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
     assert!(sealed.lamports >= Rent::default().minimum_balance(sealed.data.len()));
 
     // Write-once: a second seal of the same closure refuses and leaves the
-    // recorded verdict byte-for-byte intact.
-    let refused = submit_seal(&mut context, &direct, canonical).await;
-    assert!(refused.is_err(), "an existing seal was rewritten");
+    // recorded verdict byte-for-byte intact. The control is two lines up -- the
+    // byte-identical first submission executed -- so the named refusal here is
+    // the seal already being there and nothing else.
+    let refused = submit_seal(&mut context, &direct, canonical)
+        .await
+        .expect_err("an existing seal was rewritten");
+    assert_refusal(&refused, TRADING_CONTENT_REFUSAL_CODE);
     let after = account(&mut context, direct.chain.capability_seal).await;
     assert_eq!(after.data, sealed.data);
 }
@@ -588,13 +814,15 @@ async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
     add_lookup_table(&mut test, &addresses);
     let mut context = test.start_with_context().await;
 
+    // The control is `the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects`:
+    // the same fixture and the same instruction builder, differing only in the
+    // action and the descriptor digest, and it executes. So `Content` here is
+    // the coordinates being wrong, not the seal outer refusing everything.
     for instruction in hostile {
-        assert!(
-            submit_seal(&mut context, &direct, instruction)
-                .await
-                .is_err(),
-            "a seal filed under other coordinates reached the canonical address"
-        );
+        let refused = submit_seal(&mut context, &direct, instruction)
+            .await
+            .expect_err("a seal filed under other coordinates reached the canonical address");
+        assert_refusal(&refused, TRADING_CONTENT_REFUSAL_CODE);
         assert!(
             maybe_account(&mut context, direct.chain.capability_seal)
                 .await
@@ -604,6 +832,19 @@ async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
     }
 }
 
+/// Two hostile prestates at the canonical seal address: nothing there at all,
+/// and a seal whose recorded Trading release is some other release.
+///
+/// The name used to claim both and the body exercised only the first. The
+/// second is built here by writing a Trading-owned, rent-exempt seal at the
+/// canonical address whose `trading_semantic_release` field is another
+/// identity -- which is exactly what a seal minted under another release is,
+/// since that field is one of the seeds the address is derived from, so such a
+/// seal can only ever arrive here by being planted.
+///
+/// The control for both is
+/// `real_registry_executes_profile14_direct_hot_under_protocol_limit`: the same
+/// bundle with the fixture's own seal installed, and it executes.
 #[tokio::test]
 async fn hot_refuses_a_missing_seal_and_a_seal_written_for_another_release() {
     let artifacts = elves();
@@ -617,15 +858,42 @@ async fn hot_refuses_a_missing_seal_and_a_seal_written_for_another_release() {
     let refused = submit_v0(
         &mut context,
         &instructions,
+        addresses.clone(),
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("a hot action executed with no validated-artifact seal");
+    assert_refusal(&refused, TRADING_CONTENT_REFUSAL_CODE);
+
+    let mut data = direct.chain.capability_seal_bytes.clone();
+    let release = data
+        .get_mut(
+            CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1
+                ..CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1 + 32,
+        )
+        .expect("sealed Trading release field");
+    release.copy_from_slice(&[0x6d; 32]);
+    context.set_account(
+        &direct.chain.capability_seal,
+        &AccountSharedData::from(Account {
+            lamports: Rent::default().minimum_balance(data.len()),
+            data,
+            owner: TRADING_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        }),
+    );
+    let refused = submit_v0(
+        &mut context,
+        &instructions,
         addresses,
         Some(&direct.payer),
         &[],
     )
-    .await;
-    assert!(
-        refused.is_err(),
-        "a hot action executed with no validated-artifact seal"
-    );
+    .await
+    .expect_err("a seal minted under another Trading release was honoured");
+    assert_refusal(&refused, TRADING_CONTENT_REFUSAL_CODE);
 }
 
 #[tokio::test]
@@ -666,17 +934,29 @@ async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
         let byte = account.data.get_mut(offset).expect("seal byte");
         *byte ^= 0xff;
         context.set_account(&seal, &AccountSharedData::from(account));
-        assert!(
-            submit_v0(
-                &mut context,
-                &instructions,
-                addresses,
-                Some(&direct.payer),
-                &[],
-            )
-            .await
-            .is_err(),
+        let refusal = submit_v0(
+            &mut context,
+            &instructions,
+            addresses,
+            Some(&direct.payer),
+            &[],
+        )
+        .await
+        .expect_err(&format!(
             "hot accepted a seal whose byte {offset} was altered"
+        ));
+        // Every offset is refused by Trading, inside the seal authentication
+        // itself, and carries the same named code: the seal is one authenticated
+        // object, so an altered magic, an altered verdict word and an altered row
+        // digest are all "this is not the seal for this closure". Requiring the
+        // code and the depth is what would catch an offset that starts being
+        // caught somewhere else -- by the Registry's own frame checks, say, which
+        // would mean this test had stopped exercising the seal at all.
+        assert_refusal(&refusal, TRADING_CONTENT_REFUSAL_CODE);
+        assert!(
+            refusal.invoked(TRADING_PROGRAM_ID),
+            "the altered seal at byte {offset} never reached Trading: {:#?}",
+            refusal.logs
         );
     }
 }
