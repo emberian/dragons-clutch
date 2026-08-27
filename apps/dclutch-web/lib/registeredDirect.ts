@@ -65,11 +65,9 @@ import {
   REGISTERED_TERMINAL_REGISTRATION_BUMP_OFFSET,
   REGISTERED_TERMINAL_RESERVED_OFFSET,
   REGISTERED_TERMINAL_VERSION_OFFSET,
-  REPLAY_STATE_BYTES,
 } from './generated/registeredDirect';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
-export { REPLAY_STATE_BYTES };
 export const REGISTERED_SEED = new TextEncoder().encode('dclutch/direct-registered/v1');
 export const LEGACY_TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const MAX_REGISTERED_STATES = 128;
@@ -252,22 +250,6 @@ function u32At(bytes: Uint8Array, offset: number): number {
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-/** Strictly project the compact claim-owned replay high-water mark used by the controller. */
-export function decodeMakerReplayObservationV1(
-  account: RpcAccount | null,
-  controller: PublicKey,
-): MakerReplayObservationV1 {
-  if (account === null) return Object.freeze({ exists: false, nextNonce: 0n });
-  if (account.owner !== CLAIM_PROGRAM_ID.toBase58() || account.executable || account.data.length !== REPLAY_STATE_BYTES) {
-    throw new Error('maker replay root has the wrong physical owner, executable flag, or exact width');
-  }
-  const magic = Uint8Array.of(0x44, 0x43, 0x52, 0x50, 1, 0, 0, 0);
-  if (!sameBytes(slice(account.data, 0, 8), magic) || !sameBytes(slice(account.data, 8, 32), controller.toBytes())) {
-    throw new Error('maker replay root does not bind the canonical controller authority');
-  }
-  return Object.freeze({ exists: true, nextNonce: u64(account.data, 40) });
 }
 
 /** Project only the legacy SPL-token fields needed to make delegation visible. */

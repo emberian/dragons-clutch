@@ -52,7 +52,6 @@ export const REGISTERED_RETIRE_VERSION_OFFSET = 8 as const;
 export const REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET = 10 as const;
 export const REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET = 11 as const;
 export const REGISTERED_RETIRE_RESERVED_OFFSET = 12 as const;
-export const REPLAY_STATE_BYTES = 48 as const;
 
 export const REGISTERED_STATE_MAGIC_BYTES = Uint8Array.from([
   0x44, 0x43, 0x4c, 0x54, 0x52, 0x47, 0x49, 0x31,
