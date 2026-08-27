@@ -48,7 +48,14 @@ do
   cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$sbf_out" \
     > "$log" 2>&1 || { tail -n 40 "$log" >&2; exit 1; }
   count="$(grep -c 'overwrites values in the frame' "$log" || true)"
-  printf '  %s (%s frame diagnostics)\n' "$link" "${count:-0}"
+  # Whether the crate was actually rebuilt, because a zero from a build that
+  # recompiled nothing is silence rather than evidence. Warm target directories
+  # produce exactly that, and it has already cost one lane three false zeros
+  # and a confident wrong bisect answer. Reported, not refused: on a re-run with
+  # no edits, not recompiling is the correct behaviour.
+  built="$(grep -c 'Compiling dclutch-trading-sbf' "$log" || true)"
+  fresh="reused"; [ "${built:-0}" != "0" ] && fresh="recompiled"
+  printf '  %s (%s frame diagnostics, trading-sbf %s)\n' "$link" "${count:-0}" "$fresh"
   if [ "${count:-0}" != "0" ]; then
     grep 'overwrites values in the frame' "$log" | sort -u >&2
   fi
@@ -60,6 +67,44 @@ if [ "$diagnostics" -ne 0 ]; then
        "cause undefined behavior during execution; fix the frame, do not" \
        "measure on top of it." >&2
   exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# The number, not the boolean.
+#
+# The diagnostic count above is a detector, not a measurement: it counts CALL
+# SITES inside an already-over-bound function, so it drifts (75, 78, 82 on one
+# defect) and it says nothing at all until the wall is hit. That is how
+# `hot_v3::execute_child_routes_v3` sat at 3,712 of 4,096 in the shipped
+# Trading link -- reporting zero, 384 bytes of headroom -- while the same
+# function was at 5,184 in the accelerator's.
+#
+# So print the frames themselves, every run, in the log the lane reads. This is
+# a MEASUREMENT build (`-Zemit-stack-sizes` adds a section; it does not change
+# codegen) and it is deliberately ADVISORY: an unstable flag on a pinned stable
+# toolchain must never become a new way for this seam to be blocked. If the
+# measurement cannot be taken the run says so loudly and continues -- the hard
+# refusal is the diagnostic count above, which needs no unstable anything.
+# ---------------------------------------------------------------------------
+frame_target="/private/tmp/dclutch-frame-measure"
+frame_log="$sbf_out/frame-measure.log"
+frame_object="$frame_target/sbpf-solana-solana/release/deps/dclutch_trading_sbf.o"
+echo "  frames (dealer-accelerator link, SBPF v0 bound 4,096):"
+if RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
+   CARGO_TARGET_DIR="$frame_target" \
+   cargo build-sbf --manifest-path programs/dclutch-dealer-accelerator-sbf/Cargo.toml \
+   > "$frame_log" 2>&1
+then
+  python3 tools/sbf-frame-sizes.py --top 5 "$frame_object" || {
+    echo "run-program-test.sh: refusing -- a measured frame is at or over the" \
+         "SBPF v0 bound on the accelerator link." >&2
+    exit 1
+  }
+else
+  echo "  FRAME MEASUREMENT UNAVAILABLE: the -Zemit-stack-sizes build failed." \
+       "The diagnostic gate above still ran and still refuses; only the" \
+       "headroom numbers are missing. Last lines of $frame_log:" >&2
+  tail -n 5 "$frame_log" >&2
 fi
 
 for manifest in \
