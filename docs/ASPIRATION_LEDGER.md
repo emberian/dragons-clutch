@@ -2779,6 +2779,56 @@ for doing them; the rest are genuinely optional.
    `N-5`'s two upstream fetches, `N-2`'s bounded outcome-cap sweep, and `N-9`'s
    Cert-F instrumentation against the wall that is standing right now.
 
+### DECOMP-r, 2026-08-27: three rows the sweep opened
+
+**M-45 — unexecuted code in a crate `hot_v3` links is a COMPUTE change, and
+nothing in the tree says so.** Measured while landing `7ead0716`: adding 662
+lines of preimage-builder code to `dclutch-execution-strategy-contract` took the
+20-seed sweep from 18/20 to **0/20**, every seed dying at 1,399,944 of 1,400,000.
+The new code was never called on the swept bundle -- proven, not assumed, by
+stubbing all three wrappers to return an error and watching the path *pass* at
+essentially the baseline rather than refuse. The cost was LLVM inlining the new
+bodies into `hot_v3`'s callers and spilling everything else worse: **43,887 CU
+from code that does not run.** `#[inline(never)]` on the six functions recovered
+it and then some (20/20, and the two seeds main fails now pass), with a
+byte-size-identical ELF. `hot_v3`'s own `hot_cu_checkpoint` doc already recorded
+one instance of this mechanism; this is the second, and the first from
+*unexecuted* code. **The row is the missing rule**: a lane that adds a helper to
+any contract crate Trading links and verifies only "my function is not called"
+has verified nothing. The gate is the sweep. `#[inline(never)]` is the cheap
+prophylactic for anything cold living beside something hot. Whoever owns
+`AGENTS.md`/`WAVE.md` lane guidance should carry this; DECOMP-r has only carried
+it in one commit message and on the board.
+
+**M-46 — main regressed from 20/20 to 18/20 on the compute gate and nobody
+boarded it.** At `211079f6` the board records the sweep at 20/20, min 1,328,933,
+max 1,372,433, worst margin 27,567. At `a4be9a83`, clean build, same sweep,
+same harness: **18/20**, seeds 0 and 3 failing, max 1,395,229 with **4,771 CU of
+margin** on seed 15. That is roughly +23,000 CU on the mean from lanes landing
+between those two commits, and it is nobody's declared result -- every lane in
+that window measured its own thing. `7ead0716` happens to take it back to 20/20,
+which means this row is *masked*, not closed: the +23,000 is still in the path
+and the next lane to add cold code beside the hot path will meet the ceiling
+again. Owner: whoever takes the next CU lane. Bisecting `211079f6..a4be9a83`
+against the sweep is the cheap version and it is one script that already exists.
+
+**M-47 — `hot_v3`'s five Shadow-digest call sites still take the allocating
+wrappers, and those heap-allocate what the streaming form did not.** The owed
+second half of `7ead0716`. `runtime_transcript_digest_v3`,
+`execute_admitted_candidate_v3`, `execute_shadow_candidate_v3` (twice) and
+`accelerator_runtime_observations_digest_v4` should size the two buffers from
+counts they already hold and take them from the scratch region the phase already
+opens, after which `trading-sbf` can drop the crate's `alloc` feature entirely.
+The cost of not doing it is exact: 37 + 80n bytes for n runtime observations
+(20,517 at the accelerator's 256-account maximum, 6,277 at a 78-account frame),
+13+8s scratch plus 32+16i slices for the candidate bank, and 17+8l+84r for the
+effect projection -- against zero for the `Sha256` stack value it replaced. All
+five are gated on a shadow caller, an admitted caller or the accelerator
+boundary, so none executes on the canonical Interpreted Direct bundle and the
+29,895-byte heap peak is untouched; on the paths that DO reach them this is
+strictly worse heap than what it replaced. Not a fail-closed, not polish: debt
+with a number.
+
 ---
 
 *Gen-1 did not fail to write things down. It wrote them down — in reviews, in a
