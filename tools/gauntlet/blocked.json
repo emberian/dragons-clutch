@@ -37,29 +37,9 @@
       "owner": "cycle-2 tranche A (WAVE.md)"
     },
     {
-      "route": "claims/affine_batch_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/affine-batch (tests/affine_batch_v2.rs).",
-      "owner": "cycle-2 tranche A, Claims"
-    },
-    {
-      "route": "claims/signed_delta_v3::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/fractional-signed-delta (tests/fractional_signed_delta.rs).",
-      "owner": "cycle-2 tranche A, Fractional"
-    },
-    {
       "route": "claims/liability_basis_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/tests/liability_basis_v2_program_test.rs.",
-      "owner": "LB liability-basis-v2 lane"
-    },
-    {
-      "route": "claims/rational_representation_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs.",
-      "owner": "cycle-2 tranche A, Rational"
-    },
-    {
-      "route": "claims/rational_lifecycle_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/rational-lifecycle (tests/lifecycle.rs).",
-      "owner": "cycle-2 tranche A, Rational"
+      "reason": "SN-REC (2026-08-27) tried to wire this route's ProgramTest into the census evidence path (record() calls landed, harmless when DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR is unset) and found the campaign is NOT currently green, for reasons unrelated to the wiring -- confirmed by rebuilding every real ELF fresh at HEAD and re-running: (a) `real_sbf_terminal_ramp_uses_exact_complement_and_custody` cannot pass: `LiabilityBasisActionV2::new` (programs/dclutch-claims-sbf/src/liability_basis_v2.rs:235) unconditionally refuses `LiabilityBasisActionKindV2::TerminalRedeem` since `3f7017a` moved terminal redemption to the new `rational_terminal_v3` route -- this is a deliberate supersession, not a bug, and the test was never updated to match; (b) `real_sbf_liability_basis_lifecycle_and_hostile_joins_are_atomic` fails on the 'late rollback' and (by the same request bytes) presumably the canonical Split submission too: the real Custody program refuses the CustodyRequestV1 the test-only wrapper forwards with `custom program error: 0x0` (CustodySbfError::Instruction) before Claims' own logic runs, meaning the test's hand-built account frame or request encoding no longer matches what current production `liability_basis_v2.rs` (rewritten in the same `3f7017a`) actually sends to Custody. Both are fixture-staleness bugs in the TEST, not new protocol work, and both need someone who owns the Split/Merge/Custody account frame to repair before evidence can be gathered. Do not weaken `LiabilityBasisActionV2::new`'s refusal to make this pass; TerminalRedeem is genuinely retired here.",
+      "owner": "LB liability-basis-v2 lane (fixture repair), then whoever finishes wiring the surviving Split/Merge coverage"
     },
     {
       "route": "claims/terminal_settlement_v3::process",
@@ -80,6 +60,11 @@
       "route": "resolution/*",
       "reason": "The Resolution ELF IS bound into the five-role release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. Resolution routes need a Source/provider tier. NEVER-EXECUTED here means never executed by a TIER: the four RelayedMainnetStateV1 transport routes (process_create_record, process_append, process_seal, process_retire) and the two provider-resolution campaigns run green under ProgramTest against the compiled ELF -- crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs and resolution_core_v3_lifecycle.rs. What no tier drives is the same code on a validator, in a transaction, against genesis Loader-v3 accounts.",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "trading/hot_v3::process_capability_seal_v1",
+      "reason": "RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. Three of those are already EXECUTED via tier1 as of `12347de` ('gauntlet: bind the founding transactions to the routes the census can now see'); this is the only one of the four that tier 1's local-validator bootstrap genuinely never drives -- grep confirms no `CapabilitySealRequestV1` construction anywhere under tools/local-validator. The route DOES have real-ELF green evidence: `the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects` and `a_seal_for_another_action_or_descriptor_never_lands_at_this_address` in programs/dclutch-trading-sbf/program-test/tests/registry_hot_continuation.rs submit a canonical CapabilitySealRequestV1 as its own self-contained transaction and it commits independently of the unrelated Hot-execution CU/emitter defects tracked below (DIRECT_FAMILY_CAMPAIGN_2026_08_27.md: 12/15 of that file's tests pass at HEAD, and the three failures are not the seal tests). SN-REC (2026-08-27) deliberately did NOT wire this: the only path to record()-instrumented evidence runs through `programs/dclutch-trading-sbf/program-test/direct-hot/src/waist.rs`'s `submit_v0`, whose narrow `Result<u64, RefusedExecution>` return carries no signature/slot and would need widening across every one of its many callers across multiple test files -- exactly the kind of shared-surface change the wave board says needs coordination, and `hot_v3.rs`/its direct-hot fixture are W2h/W2i/GEN-WIRE's live, actively-edited territory this evening. Wiring needs either a coordinated widening of that shared submit helper, or a standalone additive `submit_v0_with_evidence` beside it, plus a new bindings/witnesses/programs set and a run script -- none of which touches tier1, census, or any Claims file.",
+      "owner": "gauntlet owner (coordinate with whoever holds direct-hot/waist.rs and hot_v3.rs) for the wiring; the campaign itself already exists and passes"
     },
     {
       "route": "trading/hot_v3::process_hot_execution_v3",

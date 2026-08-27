@@ -37,6 +37,7 @@ use dclutch_product_contract::{
     capacity::CapacityProfileId,
     product::{InstanceV1, InstanceV1Input, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1},
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
@@ -1161,7 +1162,22 @@ fn u64_at(bytes: &[u8], offset: usize) -> u64 {
     )
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) -> u64 {
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The extent of a legacy or v0 message once signed, checked against Solana's
+/// packet maximum. `solana-program-test` submits no packet and cannot enforce
+/// this itself -- Found31 was ten bytes over and survived every fixture test --
+/// so the campaign measures it directly.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) -> u64 {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -1173,20 +1189,46 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed ALT transaction")
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
         .expect("ALT lifecycle processing");
-    assert!(processed.result.is_ok(), "ALT lifecycle must commit");
-    processed
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
         .metadata
-        .map_or(0, |metadata| metadata.compute_units_consumed)
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert!(accepted, "ALT lifecycle must commit");
+    units
 }
 
 async fn create_live_lookup_table(
     context: &mut ProgramTestContext,
     instructions: &[Instruction],
+    label_prefix: &str,
 ) -> (Pubkey, Vec<Pubkey>) {
     let payer = context.payer.pubkey();
     let fixture_signer = fixture_signer(instructions);
@@ -1213,11 +1255,17 @@ async fn create_live_lookup_table(
         .warp_to_slot(clock.slot + 1)
         .expect("recent ALT slot");
     let (create, table) = create_lookup_table(payer, payer, clock.slot);
-    process_legacy(context, create).await;
-    for chunk in addresses.chunks(20) {
+    process_legacy(
+        context,
+        create,
+        &format!("{label_prefix}: create lookup table"),
+    )
+    .await;
+    for (index, chunk) in addresses.chunks(20).enumerate() {
         process_legacy(
             context,
             extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+            &format!("{label_prefix}: extend lookup table {index}"),
         )
         .await;
     }
@@ -1246,6 +1294,7 @@ async fn submit_v0(
     instruction: Instruction,
     table: Pubkey,
     addresses: &[Pubkey],
+    label: &str,
 ) -> Result<(bool, Vec<String>), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
@@ -1262,15 +1311,42 @@ async fn submit_v0(
     );
     let transaction = VersionedTransaction::try_new(message, &[&context.payer, &fixture.owner])
         .expect("signed v0 transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
-    let logs = processed
+    let accepted = processed.result.is_ok();
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
         .metadata
-        .map(|metadata| metadata.log_messages)
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
         .unwrap_or_default();
-    Ok((processed.result.is_ok(), logs))
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Ok((accepted, logs))
 }
 
 async fn assert_model(context: &mut ProgramTestContext, fixture: &Fixture, state: StateModel) {
@@ -1331,10 +1407,24 @@ async fn real_sbf_liability_basis_lifecycle_and_hostile_joins_are_atomic() {
         wrong_product.direct.clone(),
         changed_payoff.direct.clone(),
     ];
-    let (table, addresses) = create_live_lookup_table(&mut context, &instructions).await;
+    let (table, addresses) = create_live_lookup_table(
+        &mut context,
+        &instructions,
+        "claims liability-basis: split",
+    )
+    .await;
     let before = snapshot(&mut context, &fixture).await;
-    for hostile in [wrong_product.direct, changed_payoff.direct] {
-        let (accepted, _) = submit_v0(&mut context, &fixture, hostile, table, &addresses)
+    for (hostile, label) in [
+        (
+            wrong_product.direct,
+            "claims liability-basis: split against a substituted Product basis",
+        ),
+        (
+            changed_payoff.direct,
+            "claims liability-basis: split against a changed payoff basis",
+        ),
+    ] {
+        let (accepted, _) = submit_v0(&mut context, &fixture, hostile, table, &addresses, label)
             .await
             .expect("hostile transaction");
         assert!(
@@ -1344,9 +1434,16 @@ async fn real_sbf_liability_basis_lifecycle_and_hostile_joins_are_atomic() {
         assert_eq!(snapshot(&mut context, &fixture).await, before);
     }
 
-    let (accepted, logs) = submit_v0(&mut context, &fixture, canonical.wrapper, table, &addresses)
-        .await
-        .expect("late rollback transaction");
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        &fixture,
+        canonical.wrapper,
+        table,
+        &addresses,
+        "claims liability-basis: caller refuses after a complete split",
+    )
+    .await
+    .expect("late rollback transaction");
     assert!(!accepted, "test wrapper must deliberately refuse late");
     assert!(
         logs.iter()
@@ -1360,9 +1457,16 @@ async fn real_sbf_liability_basis_lifecycle_and_hostile_joins_are_atomic() {
     );
     assert_eq!(snapshot(&mut context, &fixture).await, before);
 
-    let (accepted, _) = submit_v0(&mut context, &fixture, canonical.direct, table, &addresses)
-        .await
-        .expect("split transaction");
+    let (accepted, _) = submit_v0(
+        &mut context,
+        &fixture,
+        canonical.direct,
+        table,
+        &addresses,
+        "claims liability-basis: canonical split commits",
+    )
+    .await
+    .expect("split transaction");
     assert!(accepted, "real split composition must commit");
     assert_model(&mut context, &fixture, canonical.after).await;
 
@@ -1375,14 +1479,19 @@ async fn real_sbf_liability_basis_lifecycle_and_hostile_joins_are_atomic() {
         fixture.linked_basis_raw,
         fixture.linked_basis_staging,
     );
-    let (merge_table, merge_addresses) =
-        create_live_lookup_table(&mut context, std::slice::from_ref(&merge.direct)).await;
+    let (merge_table, merge_addresses) = create_live_lookup_table(
+        &mut context,
+        std::slice::from_ref(&merge.direct),
+        "claims liability-basis: merge",
+    )
+    .await;
     let (accepted, _) = submit_v0(
         &mut context,
         &fixture,
         merge.direct,
         merge_table,
         &merge_addresses,
+        "claims liability-basis: canonical merge commits",
     )
     .await
     .expect("merge transaction");
@@ -1404,11 +1513,22 @@ async fn real_sbf_terminal_ramp_uses_exact_complement_and_custody() {
         fixture.linked_basis_staging,
     );
     assert_eq!(terminal.request.amount, 10, "floor(10/2) times two claims");
-    let (table, addresses) =
-        create_live_lookup_table(&mut context, std::slice::from_ref(&terminal.direct)).await;
-    let (accepted, logs) = submit_v0(&mut context, &fixture, terminal.direct, table, &addresses)
-        .await
-        .expect("terminal transaction");
+    let (table, addresses) = create_live_lookup_table(
+        &mut context,
+        std::slice::from_ref(&terminal.direct),
+        "claims liability-basis: terminal redemption",
+    )
+    .await;
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        &fixture,
+        terminal.direct,
+        table,
+        &addresses,
+        "claims liability-basis: terminal redemption commits",
+    )
+    .await
+    .expect("terminal transaction");
     assert!(accepted, "real terminal composition must commit: {logs:#?}");
     assert_model(&mut context, &fixture, terminal.after).await;
     assert_eq!(terminal.after.supplies, [1, 3]);
@@ -1830,7 +1950,12 @@ async fn real_sbf_protocol_position_admission_is_zero_atomic_and_release_bound()
         wrong_market.clone(),
         wrong_owner.clone(),
     ];
-    let (table, addresses) = create_live_lookup_table(&mut context, &instructions).await;
+    let (table, addresses) = create_live_lookup_table(
+        &mut context,
+        &instructions,
+        "claims protocol-position admission",
+    )
+    .await;
     let before = protocol_snapshot(&mut context, &fixture).await;
 
     for hostile in [wrong_release, wrong_market, wrong_owner] {
