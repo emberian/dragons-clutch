@@ -22,7 +22,7 @@ use dclutch_general_codec::{
     PAGE_BYTES, PageViewV1, SELECTION_CURSOR_BYTES, SELECTION_POLICY_BYTES,
     SETTLEMENT_CURSOR_BYTES, SelectionCursorV1, SelectionPolicyV1,
 };
-use dclutch_general_config_contract::GeneralConfigV2;
+use dclutch_general_config_contract::{GeneralConfigV2, GeneralLifecycleV2, GeneralRootV2};
 use solana_program::{account_info::AccountInfo, program_error::ProgramError, pubkey::Pubkey};
 
 use crate::{
@@ -75,6 +75,11 @@ struct SelectionStageV2 {
 }
 
 /// Execute one exact decoded General-family suffix.
+///
+/// `root_state` is the mutable General tail the common layer split off the
+/// authenticated composite root account. The family owns its lifecycle
+/// refusal; the common header proves only identity, never that this capability
+/// is still accepting work.
 #[inline(never)]
 pub fn process_general_action_v2(
     program_id: &Pubkey,
@@ -82,13 +87,14 @@ pub fn process_general_action_v2(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
     config: GeneralConfigV2,
+    root_state: GeneralRootV2,
 ) -> Result<(), ProgramError> {
     if instruction_data.len() != CONTROLLER_REQUEST_BYTES {
         return Err(TradingSbfError::Content.into());
     }
     let request =
         ControllerRequestV1::decode(instruction_data).map_err(|_| TradingSbfError::Content)?;
-    authenticate_common(program_id, context, accounts, config)?;
+    authenticate_common(program_id, context, accounts, config, root_state)?;
     match request.action {
         Action::Consider => process_consider(program_id, context, accounts, request, config),
         Action::Freeze => process_freeze(program_id, context, accounts, request, config),
@@ -441,11 +447,16 @@ fn authenticate_common(
     context: TradingFamilyContextV1,
     accounts: &[AccountInfo<'_>],
     config: GeneralConfigV2,
+    root_state: GeneralRootV2,
 ) -> Result<(), ProgramError> {
     if accounts.len() <= TRADING_PROGRAM
         || context.program_id() != program_id.to_bytes()
         || context.market() != account(accounts, MARKET)?.key.to_bytes()
         || context.generation() != config.generation()
+        || root_state.lifecycle() != GeneralLifecycleV2::Active
+        || root_state.market() != context.market()
+        || root_state.generation() != context.generation()
+        || root_state.config_id() != context.selection().config().to_bytes()
         || account(accounts, MARKET)?.is_signer
         || account(accounts, MARKET)?.is_writable
         || account(accounts, MARKET)?.executable
@@ -646,4 +657,614 @@ fn account<'a, 'info>(
     accounts
         .get(index)
         .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use std::{boxed::Box, vec, vec::Vec};
+
+    use dclutch_capability_program_contract::{
+        CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    };
+    use dclutch_core_contract::ContentId;
+    use dclutch_general_adapter_contract::CandidateVerifierV1;
+    use dclutch_general_codec::{
+        ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_SELECTION_CRITERIA, PageV1, Phase,
+        SelectionCriterion, SettlementCursorV1,
+    };
+    use dclutch_general_config_contract::{
+        GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GeneralConfigV2Input,
+    };
+    use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
+    use dclutch_release_set_contract::{
+        ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1, ProgramIdentityV1,
+    };
+    use solana_program::hash::hash;
+
+    use super::*;
+
+    const GENERATION: u64 = 7;
+
+    fn id(low: u8) -> [u8; 32] {
+        let mut value = [0_u8; 32];
+        *value.get_mut(0).expect("identity byte") = low;
+        value
+    }
+
+    fn cid(bytes: [u8; 32]) -> ContentId {
+        ContentId::new(bytes).expect("nonzero content identity")
+    }
+
+    fn vector(first: u64, second: u64) -> [u64; MAX_OUTCOMES] {
+        let mut values = [0_u64; MAX_OUTCOMES];
+        *values.get_mut(0).expect("first outcome") = first;
+        *values.get_mut(1).expect("second outcome") = second;
+        values
+    }
+
+    fn at<'a>(frame: &'a [AccountInfo<'static>], index: usize) -> &'a AccountInfo<'static> {
+        frame.get(index).expect("frame account")
+    }
+
+    fn borrowed(account: &AccountInfo<'_>) -> Vec<u8> {
+        account.try_borrow_data().expect("account data").to_vec()
+    }
+
+    fn flip_byte(account: &AccountInfo<'_>, offset: usize) {
+        let mut data = account.try_borrow_mut_data().expect("account data");
+        let byte = data.get_mut(offset).expect("byte within the record");
+        *byte ^= 1;
+    }
+
+    fn account(
+        key: Pubkey,
+        writable: bool,
+        data: Vec<u8>,
+        owner: Pubkey,
+        executable: bool,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            false,
+            writable,
+            Box::leak(Box::new(1_u64)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(owner)),
+            executable,
+        )
+    }
+
+    fn readonly(owner: Pubkey, executable: bool) -> AccountInfo<'static> {
+        account(Pubkey::new_unique(), false, Vec::new(), owner, executable)
+    }
+
+    fn candidate() -> CandidateV1 {
+        CandidateV1 {
+            outcome_count: 2,
+            candidate_id: id(21),
+            product_id: id(31),
+            batch_id: id(41),
+            page_count: 1,
+            price_scale: 2,
+            prices: vector(1, 1),
+        }
+    }
+
+    fn policy() -> SelectionPolicyV1 {
+        let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
+        *criteria.get_mut(1).expect("second criterion") = SelectionCriterion::MinimizeQuoteSurplus;
+        *criteria.get_mut(2).expect("third criterion") = SelectionCriterion::MinimizeCandidateId;
+        SelectionPolicyV1 {
+            policy_id: id(51),
+            criterion_count: 3,
+            criteria,
+        }
+    }
+
+    fn config_with_policy(selection_policy_id: [u8; 32]) -> GeneralConfigV2 {
+        GeneralConfigV2::new(GeneralConfigV2Input {
+            capacity_profile_id: id(61),
+            claim_basis_id: id(62),
+            capability_program_id: id(64),
+            generation: GENERATION,
+            price_scale: 2,
+            collection_slots: 10,
+            selection_slots: 11,
+            settlement_slots: 12,
+            max_orders_per_candidate: 32,
+            max_pages_per_candidate: 1,
+            continuation_reward_lamports: 5,
+            selection_policy_id,
+            outcome_count: 2,
+            quote_surplus_beneficiary: id(63),
+        })
+        .expect("General config")
+    }
+
+    fn config() -> GeneralConfigV2 {
+        config_with_policy(policy().policy_id)
+    }
+
+    fn execution(order: u8, owner: u8, receive: [u64; MAX_OUTCOMES]) -> ExecutionV1 {
+        ExecutionV1 {
+            order_id: id(order),
+            owner_id: id(owner),
+            nonce: 1,
+            max_lots: 1,
+            max_quote_debit_per_lot: 1,
+            lots: 1,
+            quote_debit: 1,
+            quote_credit: 0,
+            receive_per_lot: receive,
+            deliver_per_lot: [0; MAX_OUTCOMES],
+        }
+    }
+
+    fn page() -> [u8; PAGE_BYTES] {
+        let mut rows = [ExecutionV1::EMPTY; MAX_EXECUTIONS_PER_PAGE];
+        *rows.get_mut(0).expect("first row") = execution(1, 11, vector(1, 0));
+        *rows.get_mut(1).expect("second row") = execution(2, 12, vector(0, 1));
+        PageV1 {
+            outcome_count: 2,
+            candidate_id: candidate().candidate_id,
+            page_index: 0,
+            page_count: 1,
+            execution_count: 2,
+            executions: rows,
+        }
+        .to_bytes()
+        .expect("page")
+    }
+
+    /// Build the composite root the common Trading layer authenticates, and
+    /// return both the context it derives and the General tail it splits off.
+    fn composite_root(
+        program_id: Pubkey,
+        market: Pubkey,
+        config: GeneralConfigV2,
+    ) -> (TradingFamilyContextV1, GeneralRootV2) {
+        let config_id = hash(&config.to_bytes()).to_bytes();
+        let release_set = cid(id(70));
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            cid(id(71)),
+            cid(GENERAL_CAPABILITY_KIND_ID_V1),
+            cid(id(64)),
+            cid(config_id),
+        )
+        .expect("selection");
+        let header =
+            CapabilityRootHeaderV1::new(release_set, market.to_bytes(), GENERATION, selection)
+                .expect("root header");
+        let root_key = Pubkey::find_program_address(&header.seeds().as_slices(), &program_id).0;
+        let root_state = GeneralRootV2::active(market.to_bytes(), config_id, GENERATION)
+            .expect("General root tail");
+        let mut root_account = Vec::with_capacity(CAPABILITY_ROOT_HEADER_BYTES_V1);
+        root_account.extend_from_slice(&header.to_bytes());
+        root_account.extend_from_slice(&root_state.to_bytes());
+        assert_eq!(
+            root_account.len(),
+            CAPABILITY_ROOT_HEADER_BYTES_V1 + GENERAL_ROOT_BYTES_V2
+        );
+        let receipt = AuthenticatedRoleReceiptV1::new(
+            ExecutionRoleV1::Trading,
+            release_set,
+            ProgramIdentityV1::new(program_id.to_bytes()).expect("Trading program"),
+            ArtifactReleaseIdV1::new(id(72)).expect("artifact release"),
+            cid(id(73)),
+        );
+        let context = TradingFamilyContextV1::authenticate(
+            &program_id,
+            &root_key,
+            &program_id,
+            &root_account,
+            receipt,
+        )
+        .expect("authenticated family context");
+        (context, root_state)
+    }
+
+    /// The five readonly accounts every General route starts with.
+    fn common(program_id: Pubkey, market: Pubkey) -> Vec<AccountInfo<'static>> {
+        vec![
+            account(market, false, Vec::new(), Pubkey::new_unique(), false),
+            readonly(Pubkey::new_unique(), false),
+            readonly(Pubkey::new_unique(), true),
+            account(program_id, false, Vec::new(), Pubkey::new_unique(), true),
+            readonly(Pubkey::new_unique(), false),
+        ]
+    }
+
+    fn family_pda(program_id: Pubkey, market: Pubkey, suffix: &[&[u8]]) -> Pubkey {
+        let mut seeds: Vec<&[u8]> = Vec::with_capacity(suffix.len().saturating_add(1));
+        seeds.push(suffix.first().copied().expect("seed domain"));
+        seeds.push(market.as_ref());
+        seeds.extend(suffix.iter().skip(1).copied());
+        Pubkey::find_program_address(&seeds, &program_id).0
+    }
+
+    fn owned(
+        program_id: Pubkey,
+        key: Pubkey,
+        writable: bool,
+        data: Vec<u8>,
+    ) -> AccountInfo<'static> {
+        account(key, writable, data, program_id, false)
+    }
+
+    fn consider_frame(program_id: Pubkey, market: Pubkey) -> Vec<AccountInfo<'static>> {
+        let candidate = candidate();
+        let policy = policy();
+        let mut frame = common(program_id, market);
+        let market_account = at(&frame, MARKET).clone();
+        let page_index = 0_u32.to_le_bytes();
+        frame.extend([
+            owned(
+                program_id,
+                family_pda(
+                    program_id,
+                    market,
+                    &[GENERAL_SELECTION_PDA_DOMAIN_V1, &candidate.batch_id],
+                ),
+                true,
+                vec![0; SELECTION_CURSOR_BYTES],
+            ),
+            owned(
+                program_id,
+                family_pda(
+                    program_id,
+                    market,
+                    &[GENERAL_VERIFICATION_PDA_DOMAIN_V1, &candidate.candidate_id],
+                ),
+                true,
+                vec![0; VERIFICATION_CURSOR_BYTES_V1],
+            ),
+            owned(
+                program_id,
+                family_pda(
+                    program_id,
+                    market,
+                    &[GENERAL_CERTIFICATE_PDA_DOMAIN_V1, &candidate.candidate_id],
+                ),
+                true,
+                vec![0; VERIFIED_CANDIDATE_BYTES_V1],
+            ),
+            owned(
+                program_id,
+                family_pda(
+                    program_id,
+                    market,
+                    &[GENERAL_CANDIDATE_PDA_DOMAIN_V1, &candidate.candidate_id],
+                ),
+                false,
+                candidate.to_bytes().expect("candidate").to_vec(),
+            ),
+            owned(
+                program_id,
+                family_pda(
+                    program_id,
+                    market,
+                    &[GENERAL_POLICY_PDA_DOMAIN_V1, &policy.policy_id],
+                ),
+                false,
+                policy.to_bytes().expect("policy").to_vec(),
+            ),
+            owned(
+                program_id,
+                family_pda(
+                    program_id,
+                    market,
+                    &[
+                        GENERAL_PAGE_PDA_DOMAIN_V1,
+                        &candidate.candidate_id,
+                        &page_index,
+                    ],
+                ),
+                false,
+                page().to_vec(),
+            ),
+            market_account,
+        ]);
+        frame
+    }
+
+    fn consider_request() -> ControllerRequestV1 {
+        ControllerRequestV1 {
+            action: Action::Consider,
+            expected_revision: 0,
+            candidate_id: Some(candidate().candidate_id),
+            page_index: 0,
+            execution_index: 0,
+        }
+    }
+
+    fn execute(
+        program_id: &Pubkey,
+        context: TradingFamilyContextV1,
+        accounts: &[AccountInfo<'_>],
+        request: ControllerRequestV1,
+        config: GeneralConfigV2,
+        root_state: GeneralRootV2,
+    ) -> Result<(), ProgramError> {
+        process_general_action_v2(
+            program_id,
+            context,
+            accounts,
+            &request.to_bytes().expect("request bytes"),
+            config,
+            root_state,
+        )
+    }
+
+    #[test]
+    fn authenticated_consider_streams_and_commits_exact_certificate() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let config = config();
+        let (context, root_state) = composite_root(program_id, market, config);
+        let frame = consider_frame(program_id, market);
+        execute(
+            &program_id,
+            context,
+            &frame,
+            consider_request(),
+            config,
+            root_state,
+        )
+        .expect("consider");
+        let selection =
+            SelectionCursorV1::decode(&borrowed(at(&frame, SELECTION))).expect("selection");
+        assert_eq!(selection.best_candidate_id, Some(candidate().candidate_id));
+        assert_eq!(selection.revision, 1);
+        let certificate =
+            VerifiedCandidateV1::decode(&borrowed(at(&frame, CERTIFICATE))).expect("certificate");
+        assert_eq!(certificate.complete_set_quantity, 1);
+        assert_eq!(certificate.quote_surplus, 1);
+        let verifier =
+            CandidateVerifierV1::decode(&borrowed(at(&frame, VERIFICATION))).expect("verification");
+        assert!(verifier.is_complete());
+    }
+
+    #[test]
+    fn substituted_config_policy_and_inactive_root_refuse_before_state_change() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let config = config();
+
+        // A capability whose immutable config names another selection policy:
+        // the authenticated policy record no longer joins and nothing is
+        // written. The substituted config is carried coherently through the
+        // composite root, so this is a real alternative capability rather than
+        // a torn one.
+        let substituted_config = config_with_policy(id(52));
+        let (substituted_context, substituted_root) =
+            composite_root(program_id, market, substituted_config);
+        let frame = consider_frame(program_id, market);
+        let selection_before = borrowed(at(&frame, SELECTION));
+        let verification_before = borrowed(at(&frame, VERIFICATION));
+        let certificate_before = borrowed(at(&frame, CERTIFICATE));
+        assert_eq!(
+            execute(
+                &program_id,
+                substituted_context,
+                &frame,
+                consider_request(),
+                substituted_config,
+                substituted_root,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(borrowed(at(&frame, SELECTION)), selection_before);
+        assert_eq!(borrowed(at(&frame, VERIFICATION)), verification_before);
+        assert_eq!(borrowed(at(&frame, CERTIFICATE)), certificate_before);
+
+        // A substituted policy record supplied at its own derived address.
+        let (context, root_state) = composite_root(program_id, market, config);
+        let mut policy_substitution = consider_frame(program_id, market);
+        let mut substituted_policy = policy();
+        substituted_policy.policy_id = id(52);
+        *policy_substitution
+            .get_mut(POLICY)
+            .expect("policy coordinate") = owned(
+            program_id,
+            family_pda(
+                program_id,
+                market,
+                &[GENERAL_POLICY_PDA_DOMAIN_V1, &substituted_policy.policy_id],
+            ),
+            false,
+            substituted_policy
+                .to_bytes()
+                .expect("substituted policy")
+                .to_vec(),
+        );
+        let policy_verification_before = borrowed(at(&policy_substitution, VERIFICATION));
+        assert_eq!(
+            execute(
+                &program_id,
+                context,
+                &policy_substitution,
+                consider_request(),
+                config,
+                root_state,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(
+            borrowed(at(&policy_substitution, VERIFICATION)),
+            policy_verification_before
+        );
+
+        // A capability whose General tail has left Active. The common root
+        // header is exactly right and proves only identity, so the family's own
+        // lifecycle is the sole refusal.
+        let inactive = consider_frame(program_id, market);
+        let mut retiring = root_state;
+        retiring.begin_retiring(1).expect("retiring root");
+        assert_eq!(
+            execute(
+                &program_id,
+                context,
+                &inactive,
+                consider_request(),
+                config,
+                retiring,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(
+            borrowed(at(&inactive, VERIFICATION)),
+            vec![0; VERIFICATION_CURSOR_BYTES_V1]
+        );
+    }
+
+    #[test]
+    fn hostile_page_and_stale_replay_preserve_all_general_state() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let config = config();
+        let (context, root_state) = composite_root(program_id, market, config);
+        let frame = consider_frame(program_id, market);
+        let selection_before = borrowed(at(&frame, SELECTION));
+        let verification_before = borrowed(at(&frame, VERIFICATION));
+        let certificate_before = borrowed(at(&frame, CERTIFICATE));
+        flip_byte(at(&frame, PAGE), 16);
+        assert_eq!(
+            execute(
+                &program_id,
+                context,
+                &frame,
+                consider_request(),
+                config,
+                root_state,
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+        assert_eq!(borrowed(at(&frame, SELECTION)), selection_before);
+        assert_eq!(borrowed(at(&frame, VERIFICATION)), verification_before);
+        assert_eq!(borrowed(at(&frame, CERTIFICATE)), certificate_before);
+
+        flip_byte(at(&frame, PAGE), 16);
+        execute(
+            &program_id,
+            context,
+            &frame,
+            consider_request(),
+            config,
+            root_state,
+        )
+        .expect("first consider");
+        let snapshot = borrowed(at(&frame, SELECTION));
+        assert_eq!(
+            execute(
+                &program_id,
+                context,
+                &frame,
+                consider_request(),
+                config,
+                root_state,
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(borrowed(at(&frame, SELECTION)), snapshot);
+    }
+
+    #[test]
+    fn freeze_then_initialize_enters_zero_inventory_collecting_phase() {
+        let program_id = Pubkey::new_unique();
+        let market = Pubkey::new_unique();
+        let config = config();
+        let (context, root_state) = composite_root(program_id, market, config);
+        let consider = consider_frame(program_id, market);
+        execute(
+            &program_id,
+            context,
+            &consider,
+            consider_request(),
+            config,
+            root_state,
+        )
+        .expect("consider");
+
+        let selection_key = *at(&consider, SELECTION).key;
+        let mut freeze = common(program_id, market);
+        freeze.push(owned(
+            program_id,
+            selection_key,
+            true,
+            borrowed(at(&consider, SELECTION)),
+        ));
+        execute(
+            &program_id,
+            context,
+            &freeze,
+            ControllerRequestV1 {
+                action: Action::Freeze,
+                expected_revision: 1,
+                candidate_id: None,
+                page_index: 0,
+                execution_index: 0,
+            },
+            config,
+            root_state,
+        )
+        .expect("freeze");
+
+        let candidate = candidate();
+        let mut initialize = common(program_id, market);
+        initialize.extend([
+            owned(
+                program_id,
+                selection_key,
+                false,
+                borrowed(at(&freeze, SELECTION)),
+            ),
+            owned(
+                program_id,
+                family_pda(
+                    program_id,
+                    market,
+                    &[GENERAL_SETTLEMENT_PDA_DOMAIN_V1, &candidate.candidate_id],
+                ),
+                true,
+                vec![0; SETTLEMENT_CURSOR_BYTES],
+            ),
+            owned(
+                program_id,
+                *at(&consider, CERTIFICATE).key,
+                false,
+                borrowed(at(&consider, CERTIFICATE)),
+            ),
+            owned(
+                program_id,
+                *at(&consider, CANDIDATE).key,
+                false,
+                borrowed(at(&consider, CANDIDATE)),
+            ),
+        ]);
+        execute(
+            &program_id,
+            context,
+            &initialize,
+            ControllerRequestV1 {
+                action: Action::InitializeSettlement,
+                expected_revision: 0,
+                candidate_id: Some(candidate.candidate_id),
+                page_index: 0,
+                execution_index: 0,
+            },
+            config,
+            root_state,
+        )
+        .expect("initialize");
+        let settlement = SettlementCursorV1::decode(&borrowed(at(&initialize, VERIFICATION)))
+            .expect("settlement cursor");
+        assert_eq!(settlement.phase, Phase::Collecting);
+        assert_eq!(settlement.next_page, 0);
+        assert_eq!(settlement.next_execution, 0);
+        assert_eq!(settlement.claim_inventory, [0; MAX_OUTCOMES]);
+        assert_eq!(settlement.quote_inventory, 0);
+    }
 }
