@@ -3944,8 +3944,7 @@ fn set_candidate_lamports_v3<'data>(
     let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
     *candidate_observations
         .get_mut(index)
-        .ok_or(TradingSbfError::Content)? =
-        candidate_observation_v3(*observation, account, value);
+        .ok_or(TradingSbfError::Content)? = candidate_observation_v3(*observation, account, value);
     Ok(())
 }
 
@@ -7173,10 +7172,11 @@ mod tests {
 
     use super::*;
 
-    use dclutch_account_profile_contract::lifecycle_v3::{AuthenticateStatePlanV3, CreateStatePlanV3};
+    use dclutch_account_profile_contract::lifecycle_v3::{
+        AuthenticateStatePlanV3, CreateStatePlanV3,
+    };
     use dclutch_account_profile_contract::v2::{
-        AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2,
-        DYNAMIC_FIXED_SPAN_HEADER_BYTES,
+        AUTHENTICATED_ROUTE_ALIAS_HEADER_BYTES, AccountPrestateV2, DYNAMIC_FIXED_SPAN_HEADER_BYTES,
         HEADER_BYTES as ACCOUNT_PROFILE_HEADER_BYTES,
         OPERATION_BYTES as ACCOUNT_PROFILE_OPERATION_BYTES,
         RULE_BYTES as ACCOUNT_PROFILE_RULE_BYTES, TrustedBuiltinIdentityV2, TrustedEnvironmentV2,
@@ -8465,10 +8465,7 @@ mod tests {
                 expected
             );
         }
-        assert_ne!(
-            *logical_projection_key_v3(1, &physical, &projected),
-            id(1)
-        );
+        assert_ne!(*logical_projection_key_v3(1, &physical, &projected), id(1));
         let canonical = CommonProjectionBindingsV3 {
             selected_config: id(1),
             selected_product_record: id(2),
