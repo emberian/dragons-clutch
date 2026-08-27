@@ -6468,7 +6468,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     let _ = shared;
     let mut execution = Box::new(ChildExecutionStateV3 {
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
-        receipt_bank: ChildReceiptBankV3::with_route_capacity(effect.route_count())?,
+        receipt_bank: ChildReceiptBankV3::new(),
         prior_receipt_bytes: Vec::new(),
         buffers: ChildInvocationBuffersV3::new(),
         route: 0,
@@ -6503,6 +6503,13 @@ fn execute_child_routes_v3<'accounts, 'info>(
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
+        // The bank buys this route's room from the count the walk has just
+        // resolved for its own loop bound, so the exact reservation costs no
+        // extra resolution at all -- and resolving one here is not free:
+        // re-deriving what both walks need was measured at 78,146 CU.
+        execution
+            .receipt_bank
+            .reserve_additional(usize::try_from(count).map_err(|_| TradingSbfError::Content)?)?;
         let mut invocation = 0_u32;
         while invocation < count {
             let resolved = effect
