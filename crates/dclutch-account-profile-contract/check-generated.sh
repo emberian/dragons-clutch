@@ -21,7 +21,7 @@ grep -q '^pub const ACCOUNT_PROFILE_OPERATION_BYTES_V1: usize = 16;$' "$generate
 grep -Fq 'pub const ACCOUNT_PROFILE_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] = &[' "$generated"
 grep -Fq 'pub const ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1: [u8; 32] = [' "$generated"
 grep -q '^pub const AGREEMENT_PROFILE_V1: \[u8; 336\]' "$generated"
-grep -Fq 'pub const GENERAL_ACTIVATION_ACCOUNT_PROFILE_ID_V1: [u8; 32] = [' "$generated"
+grep -Fq 'pub const TEST_AGREEMENT_PROFILE_CONTENT_ID_V1: [u8; 32] = [' "$generated"
 grep -q '^pub const ALIAS_AGREEMENT_PROFILE_V1: \[u8; 96\]' "$generated"
 grep -q '^pub const REFUSAL_CORPUS_V1: \[\[u8; 336\]; 7\]' "$generated"
 rustfmt --edition 2024 "$generated"
@@ -36,7 +36,7 @@ test "$schema_digest" = "$schema_id"
 profile_digest=$(sed -n '/^pub const AGREEMENT_PROFILE_V1:/,/^];/p' "$generated" |
   grep -o '0x[0-9a-f][0-9a-f]' | sed 's/0x//' | tr -d '\n' | xxd -r -p | shasum -a 256 |
   awk '{print $1}')
-profile_id=$(sed -n '/^pub const GENERAL_ACTIVATION_ACCOUNT_PROFILE_ID_V1:/,/^];/p' "$generated" |
+profile_id=$(sed -n '/^pub const TEST_AGREEMENT_PROFILE_CONTENT_ID_V1:/,/^];/p' "$generated" |
   grep -o '0x[0-9a-f][0-9a-f]' | sed 's/0x//' | tr -d '\n')
 test "$profile_digest" = "$profile_id"
 cmp "$generated" "$crate_dir/src/generated.rs"

@@ -57,7 +57,7 @@ def main : IO Unit := do
   IO.println s!"pub const OP_PROJECT_DATA_IDENTITY: u8 = {OperationKind.projectDataIdentity.tag.toNat};"
   IO.println "#[cfg(test)]"
   emitBytes "AGREEMENT_PROFILE_V1" (encodeProfile activationResourceProfile)
-  emitBytes "GENERAL_ACTIVATION_ACCOUNT_PROFILE_ID_V1" activationResourceProfileContentId
+  emitBytes "TEST_AGREEMENT_PROFILE_CONTENT_ID_V1" activationResourceProfileContentId
   IO.println "#[cfg(test)]"
   emitBytes "ALIAS_AGREEMENT_PROFILE_V1" (encodeProfile aliasAgreementProfile)
   IO.println "#[cfg(test)]"
