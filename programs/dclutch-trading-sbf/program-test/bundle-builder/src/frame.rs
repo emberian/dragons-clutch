@@ -230,15 +230,16 @@ pub fn pack_frame(
             // Width is a fact about what the chain holds at execution, so an
             // externally installed account validates its chain view, not the
             // inert install placeholder.
-            validate_width(geometry.data(), built.chain_view().data.len()).map_err(|error| {
-                std::eprintln!(
-                    "pack width refused at ordinal {ordinal} (representative {}): observed {} declared {:?}",
-                    geometry.logical_representative(),
-                    built.chain_view().data.len(),
-                    geometry.data(),
-                );
-                error
-            })?;
+            validate_width(geometry.data(), built.chain_view().data.len()).inspect_err(
+                |_| {
+                    std::eprintln!(
+                        "pack width refused at ordinal {ordinal} (representative {}): observed {} declared {:?}",
+                        geometry.logical_representative(),
+                        built.chain_view().data.len(),
+                        geometry.data(),
+                    );
+                },
+            )?;
             let privileges = geometry.privileges();
             let meta = AccountMeta {
                 pubkey: built.key,
