@@ -1,5 +1,11 @@
 # Aspiration ledger — ARCH-EOL, 2026-08-27
 
+> **Rulings (ember, 2026-08-27):** dark-FHE is NOT a near/medium-term ambition
+> for dragons-clutch — its Tier-0 rows are DROPPED-BY-DECISION for this
+> horizon. The monolith-vs-split benchmark is CLOSED — the five-role partition
+> stands, no benchmark owed. Weigh this ledger as evidence, not obligation: a
+> mention is not a commitment.
+
 Status: a close-out audit. Not release evidence, not a plan, not a scope proposal.
 It answers one question — **is the current close-out map the whole thing we ever
 intended?** — by reading every source that ever stated an intention and
