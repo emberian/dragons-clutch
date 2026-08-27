@@ -95,6 +95,7 @@ fn run() -> Result<()> {
     let _program = arguments.next();
     match arguments.next().as_deref() {
         Some("run") => run_journey(arguments.collect()),
+        Some("demo-market") => run_demo_market(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -135,6 +136,38 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
     )?;
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&transcript)?)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+/// Render the demo Market's run-spec input.
+///
+/// This is the producer's own `market::demo_market_input`, compiled into this
+/// binary along with the rest of it. The runner calls it here rather than
+/// building a second host binary to reach the same function.
+fn run_demo_market(arguments: Vec<String>) -> Result<()> {
+    let mut registry = None;
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        let slot = match argument.as_str() {
+            "--registry-program-id" => &mut registry,
+            _ => {
+                return Err(Error::new(format!(
+                    "unknown demo-market argument: {argument}"
+                )));
+            }
+        };
+        if slot.replace(value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let registry = plan::pubkey(&required(registry, "--registry-program-id")?)?;
+    let input = market::demo_market_input(registry)?;
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
     stdout.write_all(b"\n")?;
     Ok(())
 }
