@@ -112,15 +112,28 @@ discharge the packet clause for itself — and it is the exact defect class that
 put Found31 ten bytes over the limit after passing every fixture test.
 
 At N = 1 every packet is 745–866 bytes and the clause is satisfied, so a fast
-lane restricted to N = 1 is admissible on this clause. It would still need the
-other three clauses stated, a producer emitting the census evidence shape
-(`label`, `signature`, `slot`, `error`, `logs`, `compute_units_consumed`), and
-`bindings.json` / `witnesses.json`. None of that exists, so the row stays
-NEVER-EXECUTED with a named reason rather than being flipped by assertion.
+lane restricted to N = 1 is admissible on this clause.
 
-**What would flip the row properly**: the accelerator deployed by a tier and
-invoked through the real Trading Hot path on a validator. That is downstream of
-the Trading heap wall, which is not this family's to move.
+The machinery for such a lane now exists: `ea4954a` landed
+`tools/gauntlet/program-test-evidence`, deliberately general rather than
+Series-specific, whose `record` emits one file per transaction in the shape the
+census consumes. What a General N = 1 fast lane still needs is exactly four
+things: `record` called from the campaign's `submit`; a `bindings.json` binding
+each label to `general-accelerator/process_instruction`; a `witnesses.json`
+whose provenance is independent of the code under test; and a stage in
+`tools/gauntlet/run.sh`.
+
+**That last one is why this lane did not build it.** `run.sh`, `census/src/**`
+and `tier2/**` are all under live uncommitted edits by the Claims/Custody lane
+as of this writing, `tier3/` is already claimed, and `TIERS.md` says in as many
+words never to edit `run.sh` while a run is in flight. The correct handoff is
+this document plus the `blocked.json` entry, not a collision.
+
+**What would flip the row properly**, fast lane or not: the accelerator deployed
+by a tier and invoked through the real Trading Hot path on a validator. A fast
+lane is always *additional* evidence — a route whose only observation came from
+one is recorded with that campaign name, and the report shows it. The Hot path
+is downstream of the Trading heap wall, which is not this family's to move.
 
 ## Standing gap
 
