@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Run the four Claims-family ProgramTest campaigns SN-REC wired into the
-# census evidence path (2026-08-27) and fold them into the shared ledger.
+# Run the five Claims-family ProgramTest campaigns wired into the census
+# evidence path (2026-08-27) and fold them into the shared ledger.
 #
 # This is a ProgramTest FAST LANE. Read TIERS.md's fast-lane bar before
 # treating any row it produces as validator evidence -- none of these
 # campaigns deploy through Loader-v3, and ProgramTest has no finalized
 # commitment.
 #
-# Four independent campaigns, each in its own tools/gauntlet/claims-<name>/
+# Five independent campaigns, each in its own tools/gauntlet/claims-<name>/
 # directory (own bindings.json/witnesses.json/programs.json, since each pins
 # different fixture program addresses):
 #
@@ -18,11 +18,13 @@
 #   claims-rational-lifecycle          ActivateReceipt/ActivateCoordinate/
 #                                       RetireCoordinate/RetireReceipt against
 #                                       real Token-2022
+#   claims-liability-basis-v2          the DCLLBX02 route at the shape the tree
+#                                       has: two committing merges, a late
+#                                       rollback across two CPI boundaries, and
+#                                       the two refusals that used to be
+#                                       positive cases
 #
-# NOT included: claims-custody (owns its own run-claims-custody.sh already) and
-# liability_basis_v2_program_test.rs, whose campaign is NOT green at HEAD --
-# see the "claims/liability_basis_v2::process" entry in tools/gauntlet/blocked.json
-# for why, and do not add it here until that entry is retired.
+# NOT included: claims-custody, which owns its own run-claims-custody.sh already.
 #
 # Two of the four campaigns (rational-representation-v2, rational-lifecycle)
 # require the byte-for-byte CANONICAL spl-token-2022 11.0.0 ELF
@@ -84,7 +86,8 @@ for manifest in \
     programs/dclutch-claims-sbf/test-programs/affine-batch-caller/Cargo.toml \
     programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller/Cargo.toml \
     programs/dclutch-claims-sbf/test-programs/rational-v2-caller/Cargo.toml \
-    programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller/Cargo.toml
+    programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller/Cargo.toml \
+    programs/dclutch-claims-sbf/test-programs/liability-basis-caller/Cargo.toml
 do
     log="$work/build-$(basename "$(dirname "$manifest")").log"
     build "$manifest" > "$log" || { tail -n 40 "$log" >&2; exit 1; }
@@ -121,6 +124,7 @@ affine-batch:programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml:af
 fractional-signed-delta:programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml:fractional_signed_delta:claims-fractional-signed-delta:manifest
 rational-representation-v2:dclutch-claims-sbf:rational_representation_v2_program_test:claims-rational-representation-v2:package
 rational-lifecycle:programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml:lifecycle:claims-rational-lifecycle:manifest
+liability-basis-v2:dclutch-claims-sbf:liability_basis_v2_program_test:claims-liability-basis-v2:package
 "
 
 for entry in $campaigns; do
