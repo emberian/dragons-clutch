@@ -309,6 +309,23 @@ theorem apportionFrom_within_one_atom
         omega
       · exact induction _ _ rfl member
 
+/-- The one-atom bound at a single boundary step, which is the head case of the
+theorem above and the induction step of the control-polygon bound below. -/
+theorem boundary_step_within_one_atom
+    (scale denominator cumulative carried weight : Nat)
+    (positive : 0 < denominator)
+    (carriedExact : cumulativeFloorBoundaryV2 scale cumulative denominator = carried) :
+    (cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator - carried)
+        * denominator < scale * weight + denominator ∧
+      scale * weight
+        < ((cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator - carried)
+          + 1) * denominator := by
+  have step := apportionFrom_within_one_atom scale denominator cumulative carried
+    [weight] positive carriedExact
+    (cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator - carried,
+      weight) (by simp [apportionFrom])
+  simpa using step
+
 /-- **No claim is apportioned more than one atom from its exact share.** The
 integer payout `p` of a claim whose exact rational share is `Q * w / D`
 satisfies `|p - Q*w/D| < 1`, stated over integers to avoid a rational. This is
@@ -340,6 +357,111 @@ theorem apportion_zero_weight
     exact bound
   have below : pair.1 < 1 := Nat.lt_of_mul_lt_mul_right scaled
   omega
+
+/-! ### The supply vector is a control polygon
+
+`liability T w` over the *exact rational* weights `w/D` is, by definition, the
+spline curve whose control points are the outstanding supplies. The theorem
+below bounds how far the integer-apportioned liability can sit from `Q` times
+that curve, and the answer is at most one atom per outstanding claim — which
+is the aggregate form of the per-claim bound above.
+-/
+
+/-- The arithmetic of one control point, over abstract variables so that the
+products stay transparent: one claim's supply lifts the per-claim one-atom
+bound into a per-claim `supply`-atom bound, and the tail bounds add. -/
+theorem control_polygon_step
+    (scale denominator supply payout weight tailPayout tailWeight tailSum : Nat)
+    (lowerHead : payout * denominator < scale * weight + denominator)
+    (upperHead : scale * weight < (payout + 1) * denominator)
+    (lowerTail : tailPayout * denominator ≤ scale * tailWeight + tailSum * denominator)
+    (upperTail : scale * tailWeight ≤ (tailPayout + tailSum) * denominator) :
+    (supply * payout + tailPayout) * denominator
+        ≤ scale * (supply * weight + tailWeight) + (supply + tailSum) * denominator ∧
+      scale * (supply * weight + tailWeight)
+        ≤ (supply * payout + tailPayout + (supply + tailSum)) * denominator := by
+  have liftLower : supply * (payout * denominator)
+      ≤ supply * (scale * weight + denominator) :=
+    Nat.mul_le_mul_left supply (by omega)
+  have liftUpper : supply * (scale * weight) ≤ supply * ((payout + 1) * denominator) :=
+    Nat.mul_le_mul_left supply (by omega)
+  have leftLower : supply * (payout * denominator) = supply * payout * denominator :=
+    (Nat.mul_assoc _ _ _).symm
+  have rightLower : supply * (scale * weight + denominator)
+      = scale * (supply * weight) + supply * denominator := by
+    rw [Nat.mul_add, Nat.mul_comm supply denominator, ← Nat.mul_assoc,
+      Nat.mul_comm supply scale, Nat.mul_assoc]
+  have leftUpper : supply * (scale * weight) = scale * (supply * weight) := by
+    rw [← Nat.mul_assoc, Nat.mul_comm supply scale, Nat.mul_assoc]
+  have rightUpper : supply * ((payout + 1) * denominator)
+      = supply * payout * denominator + supply * denominator := by
+    rw [Nat.add_mul, Nat.one_mul, Nat.mul_add, ← Nat.mul_assoc]
+  have goalLeft : (supply * payout + tailPayout) * denominator
+      = supply * payout * denominator + tailPayout * denominator := Nat.add_mul _ _ _
+  have goalRight : scale * (supply * weight + tailWeight)
+      = scale * (supply * weight) + scale * tailWeight := Nat.mul_add _ _ _
+  have goalSum : (supply + tailSum) * denominator
+      = supply * denominator + tailSum * denominator := Nat.add_mul _ _ _
+  have goalUpper : (supply * payout + tailPayout + (supply + tailSum)) * denominator
+      = supply * payout * denominator + tailPayout * denominator
+        + supply * denominator + tailSum * denominator := by
+    rw [Nat.add_mul, Nat.add_mul, Nat.add_mul]
+    omega
+  have tailBound : (tailPayout + tailSum) * denominator
+      = tailPayout * denominator + tailSum * denominator := Nat.add_mul _ _ _
+  omega
+
+theorem liability_apportionFrom_control_polygon
+    (scale denominator cumulative carried : Nat) (supplies weights : List Nat)
+    (positive : 0 < denominator)
+    (carriedExact : cumulativeFloorBoundaryV2 scale cumulative denominator = carried)
+    (sameWidth : supplies.length = weights.length) :
+    liability supplies (apportionFrom scale denominator carried cumulative weights)
+          * denominator
+        ≤ scale * liability supplies weights + supplies.sum * denominator ∧
+      scale * liability supplies weights
+        ≤ (liability supplies
+            (apportionFrom scale denominator carried cumulative weights)
+          + supplies.sum) * denominator := by
+  induction supplies generalizing weights carried cumulative with
+  | nil =>
+      cases weights with
+      | nil => simp [liability]
+      | cons _ _ => simp at sameWidth
+  | cons supply supplies induction =>
+      cases weights with
+      | nil => simp at sameWidth
+      | cons weight weights =>
+          have tailWidth : supplies.length = weights.length := by simpa using sameWidth
+          obtain ⟨lowerTail, upperTail⟩ := induction weights
+            (carried := cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator)
+            (cumulative := cumulative + weight) rfl tailWidth
+          obtain ⟨lowerHead, upperHead⟩ := boundary_step_within_one_atom scale denominator
+            cumulative carried weight positive carriedExact
+          simp only [apportionFrom, liability, List.sum_cons]
+          exact control_polygon_step scale denominator supply _ weight _ _ _
+            lowerHead upperHead lowerTail upperTail
+
+/-- **The outstanding supply vector is the spline's control polygon.** Exact
+terminal liability over the rational basis weights is the spline curve at the
+resolved coordinate; the integer-apportioned liability is within one
+collateral atom *per outstanding claim* of `Q` times that curve, stated over
+integers to avoid a rational.
+
+This is what *"properly shaped dynamics"* means operationally: an issuer picks
+knots and a degree, a holder picks supplies, and the payoff is the spline
+those control points describe — rather than a choice among fixed bins. -/
+theorem liability_apportion_control_polygon
+    (scale denominator : Nat) (supplies weights : List Nat)
+    (positive : 0 < denominator)
+    (sameWidth : supplies.length = weights.length) :
+    liability supplies (apportion scale denominator weights) * denominator
+        ≤ scale * liability supplies weights + supplies.sum * denominator ∧
+      scale * liability supplies weights
+        ≤ (liability supplies (apportion scale denominator weights)
+          + supplies.sum) * denominator :=
+  liability_apportionFrom_control_polygon scale denominator 0 0 supplies weights
+    positive (by simp [cumulativeFloorBoundaryV2]) sameWidth
 
 /-! ### The ramp is the width-two instance
 
@@ -974,6 +1096,33 @@ theorem SplineProfile.evaluate_within_one_atom
         < (pair.1 + 1) * profile.basisDenominator coordinate :=
   apportion_within_one_atom profile.scale (profile.basisDenominator coordinate) _
     (profile.basisDenominator_positive coordinate admitted) pair member
+
+/-- **The outstanding supply vector is this spline's control polygon.**
+`liability supplies (basisNumerators x)` over the exact rational weights *is*
+the spline curve at the resolved coordinate, with the supplies as control
+points. The integer payouts move terminal liability by at most one collateral
+atom per outstanding claim away from `Q` times that curve.
+
+This is what the ledger's *"properly shaped dynamics"* means operationally: an
+issuer picks knots and a degree, a holder picks supplies, and the payoff is
+the spline those control points describe — instead of a choice among fixed
+bins. -/
+theorem SplineProfile.liability_is_the_control_polygon_curve
+    (profile : SplineProfile) (coordinate : RationalCoordinate) (supplies : List Nat)
+    (admitted : profile.admits coordinate = true)
+    (sameWidth : supplies.length = profile.width) :
+    liability supplies (profile.evaluate coordinate)
+          * profile.basisDenominator coordinate
+        ≤ profile.scale * liability supplies (profile.basisNumerators coordinate)
+          + supplies.sum * profile.basisDenominator coordinate ∧
+      profile.scale * liability supplies (profile.basisNumerators coordinate)
+        ≤ (liability supplies (profile.evaluate coordinate) + supplies.sum)
+          * profile.basisDenominator coordinate := by
+  refine liability_apportion_control_polygon profile.scale
+    (profile.basisDenominator coordinate) supplies _
+    (profile.basisDenominator_positive coordinate admitted) ?_
+  rw [profile.basisNumerators_length coordinate admitted]
+  exact sameWidth
 
 /-- **Local support survives apportionment.** A claim whose exact B-spline
 weight is zero — every claim outside the `degree + 1` supported on the located
