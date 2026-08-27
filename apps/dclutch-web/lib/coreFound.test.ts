@@ -10,7 +10,12 @@ import {
   validateCoreFoundCapabilityManifestV1,
   validateCoreFoundSourceMaterialV2,
 } from './coreFound';
-import { CORE_FOUND_ACCOUNT_ROLES_V2 } from './generated/coreFound';
+import {
+  CORE_FOUND_ACCOUNT_COUNT_V2,
+  CORE_FOUND_ACCOUNT_ROLES_V2,
+  CORE_REQUEST_BYTES,
+  CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
+} from './generated/coreFound';
 import { type SolanaRpcClient } from './rpc';
 
 function put(bytes: Uint8Array, offset: number, value: Uint8Array): void { bytes.set(value, offset); }
@@ -89,7 +94,7 @@ describe('Core Found31 browser kernel', () => {
   });
 
   it('compiles the exact 31-account Found v0 packet with payer as the sole signer', () => {
-    const accounts = Object.freeze(Array.from({ length: 31 }, (_, index) => new PublicKey(id(index + 1)).toBase58()));
+    const accounts = Object.freeze(Array.from({ length: CORE_FOUND_ACCOUNT_COUNT_V2 }, (_, index) => new PublicKey(id(index + 1)).toBase58()));
     const compiled = compileCoreFoundTransactionV2({
       payer: accounts[0],
       market: accounts[1],
@@ -98,11 +103,11 @@ describe('Core Found31 browser kernel', () => {
       recentBlockhash: new PublicKey(id(99)).toBase58(),
       accountAddresses: accounts,
     });
-    expect(compiled.requestBytes).toHaveLength(72);
+    expect(compiled.requestBytes).toHaveLength(CORE_REQUEST_BYTES);
     expect(compiled.wireBytes.length).toBeLessThanOrEqual(1_232);
     expect(compiled.requiredSigners).toEqual([accounts[0]]);
     expect(compiled.transaction.message.compiledInstructions).toHaveLength(1);
-    expect(compiled.transaction.message.compiledInstructions[0].accountKeyIndexes).toHaveLength(31);
+    expect(compiled.transaction.message.compiledInstructions[0].accountKeyIndexes).toHaveLength(CORE_FOUND_ACCOUNT_COUNT_V2);
     // Privileges are the ones `found_metas` emits in
     // crates/dclutch-product-runtime-v2-operator/src/found.rs: payer writable
     // and signing, the Market destination writable, every other role readonly.
@@ -133,7 +138,7 @@ describe('Core Found31 browser kernel', () => {
       rentProgram,
       recentBlockhash: new PublicKey(id(99)).toBase58(),
     });
-    expect(compiled.requestBytes).toHaveLength(128);
+    expect(compiled.requestBytes).toHaveLength(CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2);
     expect(new TextDecoder().decode(compiled.requestBytes.slice(0, 8))).toBe('DCLRNCI2');
     expect(compiled.requestBytes.slice(16, 48)).toEqual(new PublicKey(refundWallet).toBytes());
     expect(compiled.requestBytes.slice(48, 80)).toEqual(new PublicKey(market).toBytes());
@@ -164,7 +169,7 @@ describe('Core Found31 browser kernel', () => {
   });
 
   it('refuses account-index drift and aliasing before transaction construction', () => {
-    const accounts = Array.from({ length: 31 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
+    const accounts = Array.from({ length: CORE_FOUND_ACCOUNT_COUNT_V2 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
     expect(() => compileCoreFoundTransactionV2({
       payer: accounts[0], market: accounts[1], coreProgram: accounts[18], generation: 1n,
       recentBlockhash: new PublicKey(id(99)).toBase58(), accountAddresses: accounts,

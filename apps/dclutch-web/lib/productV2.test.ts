@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import {
   PAYOFF_ADMISSION_REQUEST_BYTES_V1,
   PAYOFF_REQUEST_BYTES_V2,
+  PRODUCT_EVALUATOR_ACCOUNT_COUNT,
+  PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT,
   PRODUCT_V2_BYTES,
   compileProductV2,
   compileProductV2LiabilityTransaction,
@@ -77,8 +79,8 @@ describe('Product V2 exact signed-rational studio', () => {
 
   it('builds one unsigned packet-bounded 10-account evidence plus 28-account admission transaction', () => {
     const payer = key(1); const evaluatorProgram = key(2); const admissionProgram = key(3);
-    const evaluatorAccounts = [payer, ...Array.from({ length: 9 }, (_, index) => key(4 + index))];
-    const admissionAccounts = [payer, ...Array.from({ length: 27 }, (_, index) => key(20 + index))];
+    const evaluatorAccounts = [payer, ...Array.from({ length: PRODUCT_EVALUATOR_ACCOUNT_COUNT - 1 }, (_, index) => key(4 + index))];
+    const admissionAccounts = [payer, ...Array.from({ length: PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT - 1 }, (_, index) => key(20 + index))];
     const lookupTable = new AddressLookupTableAccount({
       key: new PublicKey(key(90)),
       state: {
@@ -103,14 +105,14 @@ describe('Product V2 exact signed-rational studio', () => {
     });
     expect(compiled.wireBytes.length).toBeLessThanOrEqual(1_232);
     expect(compiled.requiredSigners).toEqual([payer]);
-    expect(compiled.lookupAddressesUsed).toBe(36);
+    expect(compiled.lookupAddressesUsed).toBe((PRODUCT_EVALUATOR_ACCOUNT_COUNT - 1) + (PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT - 1));
     expect(compiled.transaction.message.compiledInstructions).toHaveLength(3);
-    expect(compiled.transaction.message.compiledInstructions[1].accountKeyIndexes).toHaveLength(10);
-    expect(compiled.transaction.message.compiledInstructions[2].accountKeyIndexes).toHaveLength(28);
+    expect(compiled.transaction.message.compiledInstructions[1].accountKeyIndexes).toHaveLength(PRODUCT_EVALUATOR_ACCOUNT_COUNT);
+    expect(compiled.transaction.message.compiledInstructions[2].accountKeyIndexes).toHaveLength(PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT);
   });
 
   it('refuses aliased or deactivated transaction authority', () => {
-    const payer = key(1); const evaluatorAccounts = [payer, ...Array.from({ length: 9 }, (_, index) => key(4 + index))]; const admissionAccounts = [payer, ...Array.from({ length: 27 }, (_, index) => key(20 + index))];
+    const payer = key(1); const evaluatorAccounts = [payer, ...Array.from({ length: PRODUCT_EVALUATOR_ACCOUNT_COUNT - 1 }, (_, index) => key(4 + index))]; const admissionAccounts = [payer, ...Array.from({ length: PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT - 1 }, (_, index) => key(20 + index))];
     const transaction = (deactivationSlot: bigint, accounts = evaluatorAccounts) => compileProductV2LiabilityTransaction({
       payer, recentBlockhash: key(92), computeUnitLimit: 1, evaluatorProgram: key(2), admissionProgram: key(3), evaluatorAccounts: accounts, admissionAccounts,
       request: new Uint8Array(PAYOFF_REQUEST_BYTES_V2), admissionRequest: new Uint8Array(PAYOFF_ADMISSION_REQUEST_BYTES_V1),

@@ -37,7 +37,7 @@ describe('Rational open Hot V3 / CapabilityV4 compiler', () => {
       expectedCustodyPositionRevision: 13n, assets: [asset(14)],
     };
     const compiled = await compileRationalOpenHotV3(input);
-    expect(compiled.familyBytes).toHaveLength(648);
+    expect(compiled.familyBytes).toHaveLength(Abi.RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3);
     expect(new TextDecoder().decode(compiled.familyBytes.slice(0, 8))).toBe('DCRROH03');
     expect(compiled.childRequest.slice(0, 8)).toEqual(Abi.REQUEST_MAGIC_V2);
     expect(compiled.childRequest.slice(Abi.REQUEST_PARENT_CONTEXT_OFFSET, Abi.REQUEST_PARENT_CONTEXT_OFFSET + 32)).toEqual(compiled.familyDigest);
@@ -54,13 +54,13 @@ describe('Rational open Hot V3 / CapabilityV4 compiler', () => {
       expectedCustodyPositionRevision: RATIONAL_OPEN_ABSENT_REVISION_V3,
       assets: [asset(11), asset(12), asset(13)],
     });
-    expect(compiled.familyBytes).toHaveLength(488 + 3 * 160);
+    expect(compiled.familyBytes).toHaveLength(Abi.REQUEST_HEADER_BYTES_V2 + 3 * Abi.ASSET_BYTES_V2);
     expect(compiled.assetCount).toBe(3);
     expect(compiled.claimsAccountCount).toBe(44);
     expect(compiled.rawReceiptDelta).toBe(2n);
     expect(compiled.rawShardDeltas).toEqual([22n, 24n, 26n]);
-    expect(new DataView(compiled.familyBytes.buffer).getUint32(480, true)).toBe(3);
-    expect(new DataView(compiled.familyBytes.buffer).getUint32(476, true)).toBe(0xffff_ffff);
+    expect(new DataView(compiled.familyBytes.buffer).getUint32(Abi.REQUEST_ASSET_COUNT_OFFSET, true)).toBe(3);
+    expect(new DataView(compiled.familyBytes.buffer).getUint32(Abi.REQUEST_SELECTED_OUTCOME_OFFSET, true)).toBe(0xffff_ffff);
   });
 
   it('keeps zero-coefficient Structured coordinates in exact Product-N order as zero raw deltas', async () => {
