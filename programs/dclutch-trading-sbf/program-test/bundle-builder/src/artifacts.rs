@@ -101,8 +101,7 @@ pub fn digest(bytes: &[u8]) -> [u8; 32] {
 /// Derive one finalized record's raw and staging-cursor addresses.
 pub fn derive_record(owner: Pubkey, schema: [u8; 32], bytes: &[u8]) -> DerivedRecordV1 {
     let content = digest(bytes);
-    let raw =
-        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &content], &owner).0;
+    let raw = Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &content], &owner).0;
     let staging =
         Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &content], &owner).0;
     DerivedRecordV1 {
@@ -131,9 +130,12 @@ pub fn derive_artifact_facts(
         CapabilityProgramV4::decode(set.descriptor).map_err(|_| BuilderError::Artifact)?;
 
     let program_set_digest = digest(set.program_set);
-    let program_set =
-        CapabilityProgramSetV2::decode_selected(program_set_digest, program_set_digest, set.program_set)
-            .map_err(|_| BuilderError::Artifact)?;
+    let program_set = CapabilityProgramSetV2::decode_selected(
+        program_set_digest,
+        program_set_digest,
+        set.program_set,
+    )
+    .map_err(|_| BuilderError::Artifact)?;
     let entry = program_set
         .select_entry(family_request)
         .map_err(|_| BuilderError::Artifact)?;
@@ -162,7 +164,11 @@ pub fn derive_artifact_facts(
             descriptor.transition().schema().to_bytes(),
             set.transition,
         ),
-        effect: derive_record(registry, descriptor.effect().schema().to_bytes(), set.effect),
+        effect: derive_record(
+            registry,
+            descriptor.effect().schema().to_bytes(),
+            set.effect,
+        ),
         lifecycle: derive_record(
             registry,
             descriptor.lifecycle().schema().to_bytes(),
@@ -240,7 +246,6 @@ fn derive_seal(
     let rows: [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1] =
         rows.try_into().map_err(|_| BuilderError::Artifact)?;
     let mut bytes = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
-    SealedDescriptorClosureV1::encode(key, rows, &mut bytes)
-        .map_err(|_| BuilderError::Artifact)?;
+    SealedDescriptorClosureV1::encode(key, rows, &mut bytes).map_err(|_| BuilderError::Artifact)?;
     Ok((seal, bytes))
 }
