@@ -731,7 +731,7 @@ means `genesis`, so every existing spec is byte-for-byte unchanged.
 The identity is the point: a record's address is a function of schema and
 content, so moving the writer moves nothing the protocol can observe.
 
-**On-chain result:** *(see §6.1)*
+**On-chain result: GREEN.** See [§6.1](#61-result).
 
 **Reproduce:**
 
@@ -747,7 +747,57 @@ shape — a rehearsal reporting on a substrate it did not use.
 
 ### 6.1 Result
 
-*Filled in from the run; see the lane report.*
+**GREEN.** 2026-08-27, commit `90d7688d`, run
+`/private/tmp/da2-gauntlet/runs/20260827T092241Z-90d7688dd984`.
+
+The validator was launched with **14 genesis accounts, every one of them
+`loader.*`** — the seven Loader V3 Program/ProgramData pairs — plus the real
+Pyth receiver and router passed as `--upgradeable-program`. No `ExecutionRelease
+Set`, no `ArtifactRelease`, no Pyth release body, no profile, no activation
+cache. Nothing about the protocol existed at genesis.
+
+From that, **128 transactions** and **33 completed steps**:
+
+| phase | result |
+|---|---|
+| publish 9 infrastructure records | 27 transactions, 510,387 CU, accounts read back at exactly 23,942,400 lamports |
+| wrong-authority infrastructure refusal | refused |
+| Core infrastructure profile init | 231,335 CU, profile body equals the predicted body |
+| activation refuses before Core revocation | refused, 538,927 CU |
+| Core Loader V3 revoke to `None` | poststate digest equals the predicted revoke poststate |
+| five-role activation, one per transaction | Core 549,984 / Claims 582,441 / Trading 730,945 / Resolution 299,713 / Custody 233,603 |
+| late-failure atomic rollback | rolled back |
+| Registry graph, RentV2, Found31 | Found31 Market created, 240,041 CU; both hostile cases refused to a fee-only debit |
+| `DCLTPCB1` projected-Custody prestate | 794,307 CU; both hostile cases refused |
+| five pre-fundings | 900 CU |
+| **`DCLTGMF1`** | **1,230,747 CU — the Market is OPEN**; substituted-Claims case rolled the whole founding back |
+| `DCLTPCA1` expiry abort | pre-expiry unwind refused (134,666 CU); post-expiry unwind executed (148,996 CU) |
+
+**24 witnesses checked, 0 failed** — including
+`every-transaction-fits-the-compute-maximum`,
+`activation-is-one-role-per-transaction`,
+`core-programdata-poststate-is-the-predicted-revoke-poststate`, and
+`the-golden-transactions-are-inside-their-cu-budgets`. Census: 119 routes, 30
+executed, 0 unclassified, 0 stale blocking entries.
+
+**What this licenses exactly one sentence of:** *the complete dClutch campaign,
+from an empty chain carrying only seven deployed programs and the real Pyth
+generation's ELFs, reaches an Open Market and unwinds an abandoned founding,
+with every infrastructure record produced by a transaction.*
+
+It is **local-validator execution evidence** and nothing more. It is not devnet
+evidence. It does not exercise a real Loader deploy (genesis still installs the
+seven programs), it does not exercise a nonzero deployment slot — see
+[§7 blocker A](#blocker-a-the-bootstrap-hardcodes-deployment_slot--0), which is
+precisely the thing this rehearsal *cannot* rehearse — and it uses the lab Pyth
+`Config` and guardian set rather than devnet's.
+
+**Control comparison.** The same campaign in `genesis` mode at `3b0c5883` ran
+101 transactions and 32 completed steps. Transaction publication adds exactly
+the 27 record transactions and one completed step, and moves nothing else:
+six of seven ELFs are byte-identical between the two runs, every stage is
+present in both, and the per-stage CU differ only by bump-seed noise
+(§3.5).
 
 ---
 
