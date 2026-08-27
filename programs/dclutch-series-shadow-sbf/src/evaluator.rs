@@ -526,8 +526,7 @@ fn project_effect(
         .map_err(|_| SeriesShadowAotErrorV4::Effect)?;
     let mut scratch_lamports = vec![0_u64; observations.len()];
     let mut output_lamports = vec![0_u64; observations.len()];
-    let mut scratch_requests = vec![0_u8; request_bytes];
-    let mut output_requests = vec![0_u8; request_bytes];
+    let mut requests = vec![0_u8; request_bytes];
     project_effect_atomic(
         effect.base(),
         shadow.shape.tail_count,
@@ -539,13 +538,12 @@ fn project_effect(
             permissions: &permissions,
             scratch_lamports: &mut scratch_lamports,
             output_lamports: &mut output_lamports,
-            scratch_requests: &mut scratch_requests,
-            output_requests: &mut output_requests,
+            requests: &mut requests,
         },
     )
     .map_err(|_| SeriesShadowAotErrorV4::Effect)?;
     let routes = shadow_routes(effect, shadow.shape.tail_count, scalars, identities)?;
-    Ok((output_lamports, output_requests, routes))
+    Ok((output_lamports, requests, routes))
 }
 
 fn shadow_routes(

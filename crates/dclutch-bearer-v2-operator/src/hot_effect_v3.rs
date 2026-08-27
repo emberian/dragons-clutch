@@ -307,8 +307,7 @@ mod tests {
             [AccountPermission::read_only(); RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
         let mut scratch_lamports = [0_u64; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
         let mut output_lamports = scratch_lamports;
-        let mut scratch_request = [0_u8; RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3];
-        let mut output_request = scratch_request;
+        let mut request = [0_u8; RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3];
         project_atomic(
             program,
             258,
@@ -320,12 +319,11 @@ mod tests {
                 permissions: &permissions,
                 scratch_lamports: &mut scratch_lamports,
                 output_lamports: &mut output_lamports,
-                scratch_requests: &mut scratch_request,
-                output_requests: &mut output_request,
+                requests: &mut request,
             },
         )
         .expect("project");
-        let request = RepresentationRequestV2::decode(&output_request).expect("Claims child");
+        let request = RepresentationRequestV2::decode(&request).expect("Claims child");
         assert_eq!(request.header().parent_context, identities[0]);
         assert_eq!(request.header().market, identities[2]);
         assert_eq!(request.header().outcome_count, 258);

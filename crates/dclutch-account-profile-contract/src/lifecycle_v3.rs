@@ -2308,6 +2308,78 @@ pub struct LifecycleRentQuoteBuffersV5<'a> {
     pub output_scalars: &'a mut [u64],
 }
 
+/// Expanded AccountProfile observations at the balances a batch has planned.
+///
+/// A lifecycle batch moves native balances and nothing else, so the candidate
+/// bank a later invocation reads differs from the authenticated observation
+/// bank in the lamport field alone. This is that difference expressed as a
+/// view: the authenticated bank, borrowed, plus an optional per-coordinate
+/// lamport overlay the caller rewrites as invocations are planned.
+///
+/// It is a view rather than a second bank because the SBF entrypoint allocator
+/// never frees: a parallel copy of a 90-coordinate observation bank is 4,320
+/// bytes charged for the whole instruction against a 32,768-byte heap, while
+/// the overlay that actually carries the new information is 720.
+///
+/// [`Self::observed`] carries no overlay and reads the authenticated balances
+/// unchanged; [`Self::planned`] reads `planned_lamports[i]` at every
+/// coordinate. Both are total and neither allocates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlannedObservationsV3<'a> {
+    observed: &'a [AccountObservationV1<'a>],
+    planned_lamports: Option<&'a [u64]>,
+}
+
+impl<'a> PlannedObservationsV3<'a> {
+    /// View the authenticated observations at their observed balances.
+    #[must_use]
+    pub const fn observed(observed: &'a [AccountObservationV1<'a>]) -> Self {
+        Self {
+            observed,
+            planned_lamports: None,
+        }
+    }
+
+    /// View the authenticated observations at one planned balance each.
+    ///
+    /// The overlay is exactly as wide as the bank it overlays; a mismatch is a
+    /// runtime-width refusal rather than a silently truncated candidate.
+    pub fn planned(
+        observed: &'a [AccountObservationV1<'a>],
+        planned_lamports: &'a [u64],
+    ) -> Result<Self> {
+        if observed.len() != planned_lamports.len() {
+            return Err(Error::RuntimeWidth);
+        }
+        Ok(Self {
+            observed,
+            planned_lamports: Some(planned_lamports),
+        })
+    }
+
+    /// Exact expanded coordinate count.
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.observed.len()
+    }
+
+    /// Whether the view covers no coordinate at all.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.observed.is_empty()
+    }
+
+    /// The observation at one coordinate, at its planned balance.
+    #[must_use]
+    pub fn get(self, index: usize) -> Option<AccountObservationV1<'a>> {
+        let observed = *self.observed.get(index)?;
+        match self.planned_lamports {
+            None => Some(observed),
+            Some(planned) => Some(observed.at_lamports(*planned.get(index)?)),
+        }
+    }
+}
+
 /// Runtime context supplied only after AccountProfile projection succeeds.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LifecycleContextV3<'a> {
@@ -2317,8 +2389,8 @@ pub struct LifecycleContextV3<'a> {
     pub tail_count: u32,
     /// Current item for an item-scoped plan; absent for fixed plans.
     pub item_index: Option<u32>,
-    /// Exact expanded AccountProfile observations.
-    pub accounts: &'a [AccountObservationV1<'a>],
+    /// Exact expanded AccountProfile observations at their planned balances.
+    pub accounts: PlannedObservationsV3<'a>,
     /// Exact projected output registers.
     pub registers: LifecycleRegistersV3<'a>,
     /// Current immutable Trading program identity.
@@ -2623,7 +2695,7 @@ fn plan_lifecycle_with_values(
     if context.accounts.len() != account_width(context.account_profile, context.tail_count)? {
         return Err(Error::RuntimeWidth);
     }
-    let state = *context
+    let state = context
         .accounts
         .get(state_index)
         .ok_or(Error::RuntimeWidth)?;
@@ -3006,11 +3078,7 @@ fn account_at(
         context.item_index,
         coordinate,
     )?;
-    context
-        .accounts
-        .get(index)
-        .copied()
-        .ok_or(Error::RuntimeWidth)
+    context.accounts.get(index).ok_or(Error::RuntimeWidth)
 }
 
 fn validate_runtime_width(
@@ -3736,7 +3804,7 @@ mod tests {
                     account_profile: profile,
                     tail_count: 0,
                     item_index: None,
-                    accounts: &accounts,
+                    accounts: PlannedObservationsV3::observed(&accounts),
                     registers,
                     trading_program: TRADING,
                     system_program: SYSTEM,
@@ -3788,7 +3856,7 @@ mod tests {
                     account_profile: profile,
                     tail_count: 0,
                     item_index: None,
-                    accounts: &accounts,
+                    accounts: PlannedObservationsV3::observed(&accounts),
                     registers,
                     trading_program: trading,
                     system_program: system,
@@ -4098,7 +4166,7 @@ mod tests {
                     account_profile: profile,
                     tail_count: 0,
                     item_index: None,
-                    accounts: &accounts,
+                    accounts: PlannedObservationsV3::observed(&accounts),
                     registers: LifecycleRegistersV3 {
                         scalars: &projected_scalars,
                         identities: &projected_identities,
@@ -4694,7 +4762,7 @@ mod tests {
                 account_profile: profile,
                 tail_count: 3,
                 item_index: Some(2),
-                accounts: &accounts,
+                accounts: PlannedObservationsV3::observed(&accounts),
                 registers: LifecycleRegistersV3 {
                     scalars: &scalars,
                     identities: &identities,
@@ -4757,7 +4825,7 @@ mod tests {
                 account_profile: profile,
                 tail_count: 3,
                 item_index: Some(2),
-                accounts: &accounts,
+                accounts: PlannedObservationsV3::observed(&accounts),
                 registers: LifecycleRegistersV3 {
                     scalars: &scalars,
                     identities: &identities,
@@ -5021,7 +5089,7 @@ mod tests {
             account_profile: profile,
             tail_count: 3,
             item_index: Some(2),
-            accounts: &accounts,
+            accounts: PlannedObservationsV3::observed(&accounts),
             registers: LifecycleRegistersV3 {
                 scalars: &canonical.0,
                 identities: &canonical.1,
@@ -5047,7 +5115,7 @@ mod tests {
         bad_accounts[6] =
             AccountObservationV1::new(&[0x52; 32], &SYSTEM, 20, &[], false, true, false);
         let bad_credit = LifecycleContextV3 {
-            accounts: &bad_accounts,
+            accounts: PlannedObservationsV3::observed(&bad_accounts),
             adapter_derived_pda: [0x52; 32],
             rent_credit: Some(AuthenticatedRentCreditV3 {
                 key: [0x43; 32],

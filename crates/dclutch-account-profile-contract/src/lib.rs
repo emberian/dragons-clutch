@@ -218,6 +218,29 @@ impl<'a> AccountObservationV1<'a> {
         self.lamports
     }
 
+    /// The same authenticated observation at a different native balance.
+    ///
+    /// A lifecycle batch moves balances and nothing else, so the candidate an
+    /// in-progress plan reads differs from the authenticated observation in
+    /// this one field. Every other fact — the borrowed key and owner, the exact
+    /// data bytes, the signer/writable/executable privileges, and the adapter
+    /// variable-data authentication bit — is carried through unchanged, so a
+    /// caller can express the candidate bank as a lamport overlay on the
+    /// authenticated bank rather than as a second copy of it.
+    #[must_use]
+    pub const fn at_lamports(self, lamports: u64) -> Self {
+        Self {
+            key: self.key,
+            owner: self.owner,
+            lamports,
+            data: self.data,
+            signer: self.signer,
+            writable: self.writable,
+            executable: self.executable,
+            adapter_authenticated_variable_data: self.adapter_authenticated_variable_data,
+        }
+    }
+
     /// Exact account data bytes.
     #[must_use]
     pub const fn data(self) -> &'a [u8] {

@@ -1791,10 +1791,17 @@ pub struct ProjectionV3<'a> {
     pub scratch_lamports: &'a mut [u64],
     /// Candidate lamports; changed only on success.
     pub output_lamports: &'a mut [u64],
-    /// Caller scratch request bank; may change on refusal.
-    pub scratch_requests: &'a mut [u8],
-    /// Candidate request bank; changed only on success.
-    pub output_requests: &'a mut [u8],
+    /// Caller request bank; may change on refusal.
+    ///
+    /// Unlike the lamport pair, this is one bank and not two. Every write a
+    /// projection makes lands here, and the routes are initialized here before
+    /// the first fallible effect runs, so a refusal can leave partial route
+    /// bytes behind. A caller that needs the previous contents to survive a
+    /// refusal must keep its own copy; every first-party caller allocates this
+    /// bank fresh per projection and discards it on refusal, and on SBF the
+    /// second bank was a verbatim end-of-projection copy charged in full
+    /// against a heap whose allocator never frees.
+    pub requests: &'a mut [u8],
 }
 
 /// Project all local effects and typed request routes atomically.
@@ -1811,8 +1818,7 @@ pub fn project_atomic(
         || projection.permissions.len() != accounts
         || projection.scratch_lamports.len() != accounts
         || projection.output_lamports.len() != accounts
-        || projection.scratch_requests.len() != request_bytes
-        || projection.output_requests.len() != request_bytes
+        || projection.requests.len() != request_bytes
     {
         return Err(Error::WidthMismatch);
     }
@@ -1829,7 +1835,7 @@ pub fn project_atomic(
         projection.identities,
         projection.aliases,
     )?;
-    initialize_requests(program, tail_count, projection.scratch_requests)?;
+    initialize_requests(program, tail_count, projection.requests)?;
     for (output, input) in projection
         .scratch_lamports
         .iter_mut()
@@ -1870,9 +1876,6 @@ pub fn project_atomic(
             .get(*projection.aliases.get(index).ok_or(Error::InvalidAlias)?)
             .ok_or(Error::InvalidAlias)?;
     }
-    projection
-        .output_requests
-        .copy_from_slice(projection.scratch_requests);
     Ok(())
 }
 
@@ -1996,7 +1999,7 @@ pub(super) fn project_effect(
             }
         }
         ResolvedEffectV3::WriteRequest { offset, value, .. } => {
-            write_request(projection.scratch_requests, offset, value)
+            write_request(projection.requests, offset, value)
         }
     }
 }
@@ -2560,8 +2563,7 @@ mod tests {
         let aliases = [0, 1, 2, 3, 4];
         let mut scratch_lamports = [0_u64; 5];
         let mut output_lamports = [99_u64; 5];
-        let mut scratch_requests = [0_u8; 40];
-        let mut output_requests = [0x55_u8; 40];
+        let mut requests = [0x55_u8; 40];
         project_atomic(
             program,
             2,
@@ -2573,18 +2575,20 @@ mod tests {
                 permissions: &permissions,
                 scratch_lamports: &mut scratch_lamports,
                 output_lamports: &mut output_lamports,
-                scratch_requests: &mut scratch_requests,
-                output_requests: &mut output_requests,
+                requests: &mut requests,
             },
         )
         .expect("projection");
         assert_eq!(output_lamports, [17, 0, 0, 0, 0]);
-        assert_eq!(&output_requests[0..4], &9_u32.to_le_bytes());
-        assert_eq!(&output_requests[4..8], b"MFIX");
-        assert_eq!(&output_requests[8..16], &3_u64.to_le_bytes());
-        assert_eq!(&output_requests[16..24], &4_u64.to_le_bytes());
-        assert_eq!(&output_requests[24..32], &3_u64.to_le_bytes());
-        assert_eq!(&output_requests[32..40], &4_u64.to_le_bytes());
+        // Seeded 0x55 and asserted in full: the single bank is initialized and
+        // written across its whole declared width, so no caller byte survives
+        // into a projected request.
+        assert_eq!(&requests[0..4], &9_u32.to_le_bytes());
+        assert_eq!(&requests[4..8], b"MFIX");
+        assert_eq!(&requests[8..16], &3_u64.to_le_bytes());
+        assert_eq!(&requests[16..24], &4_u64.to_le_bytes());
+        assert_eq!(&requests[24..32], &3_u64.to_le_bytes());
+        assert_eq!(&requests[32..40], &4_u64.to_le_bytes());
         assert_eq!(
             program
                 .resolved_invocation(0, 0, 2, &scalars, &identities)
@@ -2851,13 +2855,12 @@ mod tests {
             let mut scratch_lamports = [0_u64; 5];
             let mut output_lamports = [99_u64; 5];
             let before_lamports = output_lamports;
-            let mut scratch_requests = [0_u8; 40];
-            let mut output_requests = [0x55_u8; 40];
-            let before_requests = output_requests;
-            let request_output = if hostile == 0 {
-                &mut output_requests[..39]
+            let mut requests = [0x55_u8; 40];
+            let before_requests = requests;
+            let request_bank = if hostile == 0 {
+                &mut requests[..39]
             } else {
-                &mut output_requests[..]
+                &mut requests[..]
             };
             assert!(
                 project_atomic(
@@ -2871,15 +2874,101 @@ mod tests {
                         permissions: &permissions,
                         scratch_lamports: &mut scratch_lamports,
                         output_lamports: &mut output_lamports,
-                        scratch_requests: &mut scratch_requests,
-                        output_requests: request_output,
+                        requests: request_bank,
                     },
                 )
                 .is_err()
             );
             assert_eq!(output_lamports, before_lamports);
-            assert_eq!(output_requests, before_requests);
+            // The candidate lamport bank is still written only on success.
+            //
+            // The request bank is now single, so it is no longer atomic in
+            // general: `initialize_requests` writes it before the first
+            // fallible effect runs. It survives these three refusals for a
+            // reason worth stating exactly — a declared-width mismatch, an
+            // out-of-range register and a cross-item alias are all raised
+            // *before* that first write. A refusal from inside the effect loop
+            // may leave partial route bytes behind, which
+            // `partial_request_bank_survives_a_refusal_inside_the_effect_loop`
+            // pins.
+            assert_eq!(requests, before_requests);
         }
+    }
+
+    /// The single request bank is NOT failure-atomic once projection begins.
+    ///
+    /// This pins the exact cost of collapsing the old scratch/output request
+    /// pair into one bank. The lamport candidate is still written only on
+    /// success; the request bank is initialized with the declared route
+    /// templates before the first fallible effect runs, so a refusal raised
+    /// inside the effect loop leaves those template bytes behind and the
+    /// caller's previous contents are gone. Every first-party caller allocates
+    /// this bank per projection and discards it on refusal, which is why the
+    /// weaker contract is affordable — a caller that needs the old bytes must
+    /// keep its own copy.
+    #[test]
+    fn partial_request_bank_survives_a_refusal_inside_the_effect_loop() {
+        let bytes = canonical();
+        let program = ProgramV3::decode(&bytes).expect("program");
+        let scalars = [9_u64, 0, 3, 1, 4];
+        let identities = [[0_u8; 32]; 3];
+        let accounts = [
+            AccountInput {
+                lamports: 10,
+                data_len: 0,
+            },
+            AccountInput {
+                lamports: 3,
+                data_len: 0,
+            },
+            AccountInput {
+                lamports: 0,
+                data_len: 0,
+            },
+            AccountInput {
+                lamports: 4,
+                data_len: 0,
+            },
+            AccountInput {
+                lamports: 0,
+                data_len: 0,
+            },
+        ];
+        // The one difference from `affine_and_each_requests_project_atomically`:
+        // coordinate 1 may no longer be debited, so the projection refuses from
+        // inside `project_effect` rather than from any width or alias check.
+        let permissions = [
+            AccountPermission::lamport_receiver(),
+            AccountPermission::read_only(),
+            AccountPermission::read_only(),
+            AccountPermission::new(true, false, false),
+            AccountPermission::read_only(),
+        ];
+        let aliases = [0, 1, 2, 3, 4];
+        let mut scratch_lamports = [0_u64; 5];
+        let mut output_lamports = [99_u64; 5];
+        let before_lamports = output_lamports;
+        let mut requests = [0x55_u8; 40];
+        assert!(
+            project_atomic(
+                program,
+                2,
+                ProjectionV3 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    requests: &mut requests,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(output_lamports, before_lamports);
+        assert_ne!(requests, [0x55_u8; 40]);
+        assert_eq!(&requests[4..8], b"MFIX");
     }
 
     #[test]
@@ -2940,8 +3029,7 @@ mod tests {
         let aliases = [0_usize];
         let mut scratch_lamports = [0_u64];
         let mut output_lamports = [99_u64];
-        let mut scratch_requests = [];
-        let mut output_requests = [];
+        let mut requests = [];
         project_atomic(
             program,
             2,
@@ -2953,8 +3041,7 @@ mod tests {
                 permissions: &permissions,
                 scratch_lamports: &mut scratch_lamports,
                 output_lamports: &mut output_lamports,
-                scratch_requests: &mut scratch_requests,
-                output_requests: &mut output_requests,
+                requests: &mut requests,
             },
         )
         .expect("exact affine account bounds");
@@ -2994,8 +3081,7 @@ mod tests {
             let mut scratch_lamports = [55_u64];
             let mut output_lamports = [99_u64];
             let before_output = output_lamports;
-            let mut scratch_requests = [];
-            let mut output_requests = [];
+            let mut requests = [];
             assert_eq!(
                 project_atomic(
                     program,
@@ -3008,8 +3094,7 @@ mod tests {
                         permissions: &permissions,
                         scratch_lamports: &mut scratch_lamports,
                         output_lamports: &mut output_lamports,
-                        scratch_requests: &mut scratch_requests,
-                        output_requests: &mut output_requests,
+                        requests: &mut requests,
                     },
                 ),
                 Err(expected)
@@ -3030,8 +3115,7 @@ mod tests {
         let mut scratch_lamports = [55_u64];
         let mut output_lamports = [99_u64];
         let before_output = output_lamports;
-        let mut scratch_requests = [];
-        let mut output_requests = [];
+        let mut requests = [];
         assert_eq!(
             project_atomic(
                 program,
@@ -3044,8 +3128,7 @@ mod tests {
                     permissions: &permissions,
                     scratch_lamports: &mut scratch_lamports,
                     output_lamports: &mut output_lamports,
-                    scratch_requests: &mut scratch_requests,
-                    output_requests: &mut output_requests,
+                    requests: &mut requests,
                 },
             ),
             Err(Error::DataOutOfBounds)
@@ -3127,8 +3210,7 @@ mod tests {
                 permissions: &permissions,
                 scratch_lamports: &mut scratch_lamports,
                 output_lamports: &mut output_lamports,
-                scratch_requests: &mut [],
-                output_requests: &mut [],
+                requests: &mut [],
             },
         )
         .expect("typed writes preflight");
@@ -3191,8 +3273,7 @@ mod tests {
                     permissions: &writable,
                     scratch_lamports: &mut scratch,
                     output_lamports: &mut output,
-                    scratch_requests: &mut [],
-                    output_requests: &mut [],
+                    requests: &mut [],
                 },
             ),
             Err(Error::OverlappingWrites)
@@ -3229,8 +3310,7 @@ mod tests {
                         permissions: &permissions,
                         scratch_lamports: &mut scratch,
                         output_lamports: &mut output,
-                        scratch_requests: &mut [],
-                        output_requests: &mut [],
+                        requests: &mut [],
                     },
                 ),
                 Err(expected)

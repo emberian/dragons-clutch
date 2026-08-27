@@ -18,8 +18,8 @@ use dclutch_account_profile_contract::{
         CoordinateScopeV3, LifecycleContextV3, LifecycleOperationV3,
         LifecycleProtectedRegisterBuffersV3, LifecycleRegisterKindV3, LifecycleRegisterTargetV3,
         LifecycleRegistersV3, LifecycleRentQuoteBuffersV5, LifecycleSeedInputValueV3,
-        StateLifecyclePlanV3, StateLifecyclePolicyV5, ValidatedProfileJoinV3,
-        plan_lifecycle_with_protected_outputs_atomic,
+        PlannedObservationsV3, StateLifecyclePlanV3, StateLifecyclePolicyV5,
+        ValidatedProfileJoinV3, plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
         AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2, RouteAccountPrivilegesV2,
@@ -162,7 +162,8 @@ use crate::{
         authenticate_activated_current_deployment, authenticate_execution_strategy_v2,
     },
     native_signature::{
-        load_current_top_level_instruction, seed_native_signatures_at_authenticated_instruction,
+        SysvarInstructionV1, borrow_authenticated_instructions_v1,
+        seed_native_signatures_at_authenticated_instruction,
     },
     shadow_composition_v3::{ShadowCpiFrameV3, execute_shadow_aot_v3},
 };
@@ -945,13 +946,14 @@ fn authenticate_accelerator_top_level_v4(
     caller_authority: &AccountInfo<'_>,
     request: AcceleratorRequestV2<'_>,
 ) -> Result<Vec<u8>, ProgramError> {
-    let (_, observed) = load_current_top_level_instruction(frame.instructions)?;
+    let (current_index, sysvar) = borrow_authenticated_instructions_v1(frame.instructions)?;
+    let observed = SysvarInstructionV1::read(current_index, &sysvar)?;
     let (hot_instruction, fixed_start, strategy_start, caller_start, registry_mode) = if observed
-        .program_id
-        == *frame.trading_program.key
+        .program_id()
+        == frame.trading_program.key.as_array()
     {
         (
-            observed.data.clone(),
+            observed.data().to_vec(),
             0_usize,
             HOT_FIXED_ACCOUNT_COUNT_V3,
             HOT_FIXED_ACCOUNT_COUNT_V3
@@ -959,8 +961,8 @@ fn authenticate_accelerator_top_level_v4(
                 .ok_or(TradingSbfError::Content)?,
             false,
         )
-    } else if observed.program_id == *frame.registry.key {
-        let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&observed.data)
+    } else if observed.program_id() == frame.registry.key.as_array() {
+        let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(observed.data())
             .map_err(|_| TradingSbfError::NativeSignature)?;
         let activation_digest = {
             let data = frame
@@ -972,15 +974,12 @@ fn authenticate_accelerator_top_level_v4(
         let continuation = RegistryContinuationRequestV1::new_core_trading_hot(
             ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::NativeSignature)?,
             activation_digest,
-            ContentId::new(hash(&observed.data).to_bytes())
+            ContentId::new(hash(observed.data()).to_bytes())
                 .map_err(|_| TradingSbfError::NativeSignature)?,
-            u32::try_from(observed.data.len()).map_err(|_| TradingSbfError::NativeSignature)?,
+            u32::try_from(observed.data().len()).map_err(|_| TradingSbfError::NativeSignature)?,
         )
         .map_err(|_| TradingSbfError::NativeSignature)?;
-        let outer = observed
-            .accounts
-            .get(..REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)
-            .ok_or(TradingSbfError::NativeSignature)?;
+        let outer = observed.metas_range(0, REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
         let expected_outer = [
             frame.activation_cache.key,
             frame.core_program.key,
@@ -992,7 +991,7 @@ fn authenticate_accelerator_top_level_v4(
             .iter()
             .take(expected_outer.len())
             .zip(expected_outer)
-            .any(|(meta, key)| meta.pubkey != *key || meta.is_signer || meta.is_writable)
+            .any(|(meta, key)| meta.pubkey != key.as_array() || meta.is_signer || meta.is_writable)
         {
             return Err(TradingSbfError::NativeSignature.into());
         }
@@ -1027,7 +1026,7 @@ fn authenticate_accelerator_top_level_v4(
         )
         .0;
         let admission_meta = outer.get(5).ok_or(TradingSbfError::NativeSignature)?;
-        if admission_meta.pubkey != expected_admission
+        if admission_meta.pubkey != expected_admission.as_array()
             || admission_meta.is_signer
             || admission_meta.is_writable
         {
@@ -1042,7 +1041,7 @@ fn authenticate_accelerator_top_level_v4(
             .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
             .ok_or(TradingSbfError::Content)?;
         (
-            observed.data.clone(),
+            observed.data().to_vec(),
             fixed_start,
             strategy_start,
             caller_start,
@@ -1053,10 +1052,7 @@ fn authenticate_accelerator_top_level_v4(
     };
     let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
         .map_err(|_| TradingSbfError::NativeSignature)?;
-    let fixed_metas = observed
-        .accounts
-        .get(fixed_start..fixed_start + HOT_FIXED_ACCOUNT_COUNT_V3)
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let fixed_metas = observed.metas_range(fixed_start, HOT_FIXED_ACCOUNT_COUNT_V3)?;
     let fixed_accounts = [
         frame.market,
         frame.root,
@@ -1100,23 +1096,23 @@ fn authenticate_accelerator_top_level_v4(
     for (index, (meta, info)) in fixed_metas.iter().zip(fixed_accounts).enumerate() {
         let expected_writable =
             index == HOT_ROOT_ACCOUNT_V3 || (registry_mode && index == HOT_MARKET_ACCOUNT_V3);
-        if meta.pubkey != *info.key || meta.is_signer || meta.is_writable != expected_writable {
+        if meta.pubkey != info.key.as_array()
+            || meta.is_signer
+            || meta.is_writable != expected_writable
+        {
             return Err(TradingSbfError::NativeSignature.into());
         }
     }
-    let strategy_metas = observed
-        .accounts
-        .get(
-            strategy_start
-                ..strategy_start
-                    .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
-                    .ok_or(TradingSbfError::Content)?,
-        )
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let strategy_metas = observed.metas_range(
+        strategy_start,
+        ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
+    )?;
     if strategy_metas
         .iter()
         .zip(strategy_evidence)
-        .any(|(meta, info)| meta.pubkey != *info.key || meta.is_signer || meta.is_writable)
+        .any(|(meta, info)| {
+            meta.pubkey != info.key.as_array() || meta.is_signer || meta.is_writable
+        })
     {
         return Err(TradingSbfError::NativeSignature.into());
     }
@@ -1131,16 +1127,16 @@ fn authenticate_accelerator_top_level_v4(
         .checked_add(usize::try_from(request.chunk_index()).map_err(|_| TradingSbfError::Content)?)
         .ok_or(TradingSbfError::Content)?;
     let caller_meta = observed
-        .accounts
+        .metas()
         .get(caller_index)
         .ok_or(TradingSbfError::NativeSignature)?;
-    if caller_meta.pubkey != *caller_authority.key
+    if caller_meta.pubkey != caller_authority.key.as_array()
         || caller_meta.is_signer
         || caller_meta.is_writable
         || caller_start
             .checked_add(caller_count)
             .ok_or(TradingSbfError::Content)?
-            > observed.accounts.len()
+            > observed.account_count()
         || envelope.market() == [0; 32]
     {
         return Err(TradingSbfError::NativeSignature.into());
@@ -1433,12 +1429,27 @@ fn authenticate_hot_invocation_v3(
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<AuthenticatedHotInvocationV3, ProgramError> {
     let instructions = account(accounts, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)?;
-    let (current_instruction, observed) = load_current_top_level_instruction(instructions)?;
-    if observed.program_id == *program_id {
-        if observed.data.as_slice() != instruction_data
-            || observed.accounts.len() != accounts.len()
-            || observed.accounts.iter().zip(accounts).any(|(meta, info)| {
-                meta.pubkey != *info.key
+    // The sysvar is compared in place under one borrow guard. Nothing read here
+    // outlives the guard, and the whole comparison is complete before it is
+    // dropped, so the bytes authenticated are exactly the bytes observed. A
+    // nested self-CPI presents different data and metas than the top-level
+    // record and is refused by the same two comparisons that authenticate the
+    // direct case.
+    // The sysvar record is compared in place, under one borrow guard held for
+    // as long as any view read from it is alive. Nothing below performs a CPI,
+    // so no reentrant invocation can run between the comparison that
+    // authenticates these bytes and the admission they authorize; the guard
+    // makes that structural rather than a comment. A nested self-CPI is refused
+    // by the same two comparisons that authenticate the direct case, because
+    // the sysvar record describes the top-level instruction and a nested
+    // invocation presents different data and metas.
+    let (current_instruction, sysvar) = borrow_authenticated_instructions_v1(instructions)?;
+    let observed = SysvarInstructionV1::read(current_instruction, &sysvar)?;
+    if observed.program_id() == program_id.as_array() {
+        if observed.data() != instruction_data
+            || observed.account_count() != accounts.len()
+            || observed.metas().iter().zip(accounts).any(|(meta, info)| {
+                meta.pubkey != info.key.as_array()
                     || meta.is_signer != info.is_signer
                     || meta.is_writable != info.is_writable
             })
@@ -1455,10 +1466,10 @@ fn authenticate_hot_invocation_v3(
     }
 
     let registry = account(accounts, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?;
-    if observed.program_id != *registry.key {
+    if observed.program_id() != registry.key.as_array() {
         return Err(TradingSbfError::NativeSignature.into());
     }
-    if observed.data.as_slice() != instruction_data {
+    if observed.data() != instruction_data {
         return Err(TradingSbfError::NativeSignature.into());
     }
     let activation = account(accounts, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?;
@@ -1524,10 +1535,7 @@ fn authenticate_hot_invocation_v3(
         return Err(TradingSbfError::Release.into());
     }
 
-    let outer = observed
-        .accounts
-        .get(..REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let outer = observed.metas_range(0, REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
     let expected_outer = [
         account(accounts, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.key,
         account(accounts, HOT_CORE_PROGRAM_ACCOUNT_V3)?.key,
@@ -1539,21 +1547,18 @@ fn authenticate_hot_invocation_v3(
     if outer
         .iter()
         .zip(expected_outer)
-        .any(|(meta, key)| meta.pubkey != *key || meta.is_signer || meta.is_writable)
+        .any(|(meta, key)| meta.pubkey != key.as_array() || meta.is_signer || meta.is_writable)
     {
         return Err(TradingSbfError::NativeSignature.into());
     }
-    let observed_nested = observed
-        .accounts
-        .get(REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1..)
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let observed_nested = observed.metas_from(REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
     if observed_nested.len() != accounts.len()
         || observed_nested
             .iter()
             .zip(accounts)
             .enumerate()
             .any(|(index, (meta, info))| {
-                meta.pubkey != *info.key
+                meta.pubkey != info.key.as_array()
                     || meta.is_writable != info.is_writable
                     || if index == HOT_FIXED_ACCOUNT_COUNT_V3 {
                         meta.is_signer
@@ -2929,8 +2934,11 @@ fn project_hot_effects_v3(
     }
     let mut scratch_lamports = vec![0_u64; effect_account_count];
     let mut effect_output_lamports = vec![0_u64; effect_account_count];
-    let mut scratch_requests = vec![0_u8; request_bytes];
-    let mut output_requests = vec![0_u8; request_bytes];
+    // One bank, not two. The projection's second request bank was written once,
+    // at the end, as a verbatim copy of the first; on an allocator that never
+    // frees that copy cost the full declared request width for the whole
+    // instruction. The single bank carries the same bytes into preflight/CPI.
+    let mut requests = vec![0_u8; request_bytes];
     project_effects_v4_atomic(
         effect.successor,
         tail_count,
@@ -2948,8 +2956,7 @@ fn project_hot_effects_v3(
                 .ok_or(TradingSbfError::Content)?,
             scratch_lamports: &mut scratch_lamports,
             output_lamports: &mut effect_output_lamports,
-            scratch_requests: &mut scratch_requests,
-            output_requests: &mut output_requests,
+            requests: &mut requests,
         },
     )
     .map_err(|_| TradingSbfError::Transition)?;
@@ -2963,7 +2970,7 @@ fn project_hot_effects_v3(
         .copy_from_slice(&effect_output_lamports);
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
-        requests: output_requests,
+        requests,
     })
 }
 
@@ -4057,54 +4064,23 @@ struct PreparedLifecycleBatchV4 {
     identities: Vec<[u8; 32]>,
 }
 
-/// Rewrite one candidate observation's lamport balance in place.
+/// Rewrite one coordinate's planned lamport balance.
 ///
 /// Only the balance moves while a lifecycle batch is planned, so the candidate
-/// bank is built once and its two touched entries are rewritten, rather than
-/// materialising a whole new 90-coordinate bank per invocation on an allocator
-/// that never frees.
-fn set_candidate_lamports_v3<'data>(
+/// the next invocation reads is the authenticated observation bank under a
+/// lamport overlay, and one planned invocation rewrites the two entries it
+/// touches. Materialising a whole 90-coordinate observation bank per batch cost
+/// 4,320 bytes of a 32,768-byte heap on an allocator that never frees, to carry
+/// 720 bytes of balance and 3,600 bytes of exact duplicate.
+fn set_candidate_lamports_v3(
     index: usize,
     value: u64,
-    observations: &[AccountObservationV1<'data>],
-    accounts: &[&AccountInfo<'_>],
-    candidate_observations: &mut [AccountObservationV1<'data>],
+    planned_lamports: &mut [u64],
 ) -> Result<(), ProgramError> {
-    let observation = observations.get(index).ok_or(TradingSbfError::Content)?;
-    let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
-    *candidate_observations
+    *planned_lamports
         .get_mut(index)
-        .ok_or(TradingSbfError::Content)? = candidate_observation_v3(*observation, account, value);
+        .ok_or(TradingSbfError::Content)? = value;
     Ok(())
-}
-
-/// One candidate observation: the authenticated observation at a planned balance.
-fn candidate_observation_v3<'data>(
-    observation: AccountObservationV1<'data>,
-    account: &AccountInfo<'_>,
-    lamports: u64,
-) -> AccountObservationV1<'data> {
-    if observation.adapter_authenticated_variable_data() {
-        AccountObservationV1::new_adapter_authenticated_variable_data(
-            observation.key_bytes(),
-            observation.owner_bytes(),
-            lamports,
-            observation.data(),
-            account.is_signer,
-            account.is_writable,
-            account.executable,
-        )
-    } else {
-        AccountObservationV1::new(
-            observation.key_bytes(),
-            observation.owner_bytes(),
-            lamports,
-            observation.data(),
-            account.is_signer,
-            account.is_writable,
-            account.executable,
-        )
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4114,11 +4090,11 @@ fn candidate_observation_v3<'data>(
 /// request-projected registers to give the transition its plan, and once from
 /// the transition's outputs to prove the plan it saw is the plan its outputs
 /// produce. The SBF allocator never frees, so a second pass otherwise charged a
-/// fresh 90-coordinate candidate bank, four register banks and a state
+/// fresh 90-coordinate planned-balance overlay, four register banks and a state
 /// reservation bank against total-ever-allocated for a pass whose only purpose
 /// is to agree with the first.
-struct LifecyclePreplanScratchV4<'a> {
-    candidate_observations: Vec<AccountObservationV1<'a>>,
+struct LifecyclePreplanScratchV4 {
+    planned_lamports: Vec<u64>,
     scalar_scratch: Vec<u64>,
     identity_scratch: Vec<[u8; 32]>,
     next_scalars: Vec<u64>,
@@ -4126,16 +4102,19 @@ struct LifecyclePreplanScratchV4<'a> {
     used_states: Vec<bool>,
 }
 
-impl<'a> LifecyclePreplanScratchV4<'a> {
+impl LifecyclePreplanScratchV4 {
     /// Build the arena, renting the two register-bank pairs the request
     /// projection finished with instead of allocating two fresh ones.
+    ///
+    /// The planned-balance overlay starts at the authenticated balances, which
+    /// is exactly the candidate state before any invocation is planned.
     ///
     /// The rented banks arrive holding whatever the projection rotation left in
     /// them, so they are zeroed here: this is the same initial state
     /// `vec![0; n]` produced, reached without asking an allocator that never
     /// frees for a second copy of a buffer that already exists.
     fn new(
-        observations: &[AccountObservationV1<'a>],
+        observations: &[AccountObservationV1<'_>],
         accounts: &[&AccountInfo<'_>],
         scalar_count: usize,
         identity_count: usize,
@@ -4158,16 +4137,12 @@ impl<'a> LifecyclePreplanScratchV4<'a> {
         next_scalars.fill(0);
         identity_scratch.fill([0_u8; 32]);
         next_identities.fill([0_u8; 32]);
-        let mut candidate_observations = Vec::new();
-        candidate_observations
+        let mut planned_lamports = Vec::new();
+        planned_lamports
             .try_reserve_exact(observations.len())
             .map_err(|_| TradingSbfError::Content)?;
-        for (observation, account) in observations.iter().zip(accounts) {
-            candidate_observations.push(candidate_observation_v3(
-                *observation,
-                account,
-                observation.lamports(),
-            ));
+        for observation in observations {
+            planned_lamports.push(observation.lamports());
         }
         // Boxed, and boxed here rather than at the call site: seven register
         // and observation banks are 168 bytes of `Vec` headers, and
@@ -4176,7 +4151,7 @@ impl<'a> LifecyclePreplanScratchV4<'a> {
         // frame. Behind one pointer the caller pays 8 bytes and the headers
         // live in this constructor's frame instead.
         Ok(Box::new(Self {
-            candidate_observations,
+            planned_lamports,
             scalar_scratch,
             identity_scratch,
             next_scalars,
@@ -4204,7 +4179,7 @@ fn prepare_lifecycle_v4<'a>(
     rent: &Rent,
     aliases: &[usize],
     profile_join: ValidatedProfileJoinV3<'_>,
-    scratch: &mut LifecyclePreplanScratchV4<'a>,
+    scratch: &mut LifecyclePreplanScratchV4,
     // Rented, never allocated. Both preplan passes want a working copy of the
     // register banks they were handed, and on an allocator that never frees a
     // `to_vec()` per pass charges the heap two whole pairs for two copies that
@@ -4214,7 +4189,7 @@ fn prepare_lifecycle_v4<'a>(
 ) -> Result<PreparedLifecycleBatchV4, ProgramError> {
     if observations.len() != accounts.len()
         || aliases.len() != accounts.len()
-        || scratch.candidate_observations.len() != accounts.len()
+        || scratch.planned_lamports.len() != accounts.len()
         || scratch.used_states.len() != accounts.len()
         || scratch.scalar_scratch.len() != scalars.len()
         || scratch.next_scalars.len() != scalars.len()
@@ -4234,7 +4209,7 @@ fn prepare_lifecycle_v4<'a>(
     // reservation bank against total-ever-allocated purely to agree with the
     // first. They are reset here rather than reallocated.
     let LifecyclePreplanScratchV4 {
-        candidate_observations,
+        planned_lamports,
         scalar_scratch,
         identity_scratch,
         next_scalars,
@@ -4242,12 +4217,8 @@ fn prepare_lifecycle_v4<'a>(
         used_states,
     } = scratch;
     used_states.fill(false);
-    for ((slot, observation), account) in candidate_observations
-        .iter_mut()
-        .zip(observations)
-        .zip(accounts.iter())
-    {
-        *slot = candidate_observation_v3(*observation, account, observation.lamports());
+    for (slot, observation) in planned_lamports.iter_mut().zip(observations) {
+        *slot = observation.lamports();
     }
     let plan_count = policy
         .action_plan_count(action)
@@ -4359,10 +4330,9 @@ fn prepare_lifecycle_v4<'a>(
                     authenticate_lifecycle_credit_v3(
                         accounts,
                         index,
-                        candidate_observations
+                        *planned_lamports
                             .get(index)
-                            .ok_or(TradingSbfError::Content)?
-                            .lamports(),
+                            .ok_or(TradingSbfError::Content)?,
                         rent,
                         expected_market,
                         expected_release_set,
@@ -4396,7 +4366,8 @@ fn prepare_lifecycle_v4<'a>(
                     account_profile,
                     tail_count,
                     item_index: item,
-                    accounts: candidate_observations,
+                    accounts: PlannedObservationsV3::planned(observations, planned_lamports)
+                        .map_err(|_| TradingSbfError::Content)?,
                     registers: LifecycleRegistersV3 {
                         scalars: &output_scalars,
                         identities: &output_identities,
@@ -4429,13 +4400,7 @@ fn prepare_lifecycle_v4<'a>(
                         (state, value.state_after),
                         (payer.ok_or(TradingSbfError::Content)?, value.payer_after),
                     ] {
-                        set_candidate_lamports_v3(
-                            index,
-                            balance,
-                            observations,
-                            accounts,
-                            candidate_observations,
-                        )?;
+                        set_candidate_lamports_v3(index, balance, planned_lamports)?;
                     }
                 }
                 StateLifecyclePlanV3::Close(value) => {
@@ -4446,13 +4411,7 @@ fn prepare_lifecycle_v4<'a>(
                             value.rent_credit_after,
                         ),
                     ] {
-                        set_candidate_lamports_v3(
-                            index,
-                            balance,
-                            observations,
-                            accounts,
-                            candidate_observations,
-                        )?;
+                        set_candidate_lamports_v3(index, balance, planned_lamports)?;
                     }
                 }
             }
