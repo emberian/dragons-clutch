@@ -798,3 +798,10 @@ principal) and the journey runner externalized onto the driver's persisted
 per-role forge. Then: the three-market exchange per the DEVNET-SMOKE
 charter (SMOKE-1), web pointed at devnet, the ledger against the public
 chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
+
+- RECORDS-MIGRATE rows (KAPPA-ENFORCE's mapped finding, ruled 18:55): (a)
+  CoreState gains the principal cap (zero reserved bytes today — the cap is
+  part of the wire break); (b) SourceCapacityProfileV1 gains floor_content_id
+  (32 bytes; profile has 16 free) — closing the REAL hole that two floors
+  with identical bindings both validate, letting a caller pick the biggest.
+  The Found-frame +6 accounts rides the same migration.
