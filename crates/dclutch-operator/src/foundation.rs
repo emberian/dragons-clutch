@@ -52,7 +52,7 @@ use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    sysvar::{SysvarSerialize, rent::Rent},
+    sysvar::{SysvarSerialize, clock::Clock, rent::Rent},
 };
 use solana_sdk_ids::{bpf_loader, bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
@@ -325,6 +325,8 @@ pub enum FoundationError {
     DestinationNotVacant,
     /// Rent sysvar bytes or identity were invalid.
     InvalidRent,
+    /// Clock sysvar bytes or identity were invalid.
+    InvalidClock,
     /// An existing immutable or Mint account was not rent exempt.
     AccountNotRentExempt,
     /// The token program was not one exact supported production profile.
@@ -1206,6 +1208,33 @@ pub(crate) fn decode_rent(account: &ObservedAccount) -> Result<Rent, FoundationE
         account.executable,
     );
     Rent::from_account_info(&info).map_err(|_| FoundationError::InvalidRent)
+}
+
+/// Authenticate and decode the canonical Clock sysvar from one observation.
+///
+/// The account identity, owner, executable bit, and exact length are all
+/// checked before the bytes are deserialized, so a caller cannot substitute a
+/// hand-built account for the runtime's own clock.
+pub(crate) fn decode_clock(account: &ObservedAccount) -> Result<Clock, FoundationError> {
+    if account.key != sysvar::clock::ID
+        || account.owner != sysvar::ID
+        || account.executable
+        || account.data.len() != Clock::size_of()
+    {
+        return Err(FoundationError::InvalidClock);
+    }
+    let mut lamports = account.lamports;
+    let mut data = account.data.clone();
+    let info = AccountInfo::new(
+        &account.key,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &account.owner,
+        account.executable,
+    );
+    Clock::from_account_info(&info).map_err(|_| FoundationError::InvalidClock)
 }
 
 fn require_rent_exempt(rent: &Rent, account: &ObservedAccount) -> Result<(), FoundationError> {

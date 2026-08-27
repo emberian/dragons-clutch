@@ -91,8 +91,7 @@ pub fn build_immutable_record_publication_step_v1(
     authenticate_system_program(&state.system_program)?;
     authenticate_sponsor(&state.sponsor)?;
     let rent = decode_rent(&state.rent_sysvar)?;
-    let clock = super::super::verticals::decode_clock(&state.clock_sysvar)
-        .map_err(|_| FoundationError::InvalidRecord)?;
+    let clock = super::decode_clock(&state.clock_sysvar)?;
     validate_obligation(program_id, obligation)?;
     if state.raw_record.key != obligation.raw_record
         || state.staging_cursor.key != obligation.staging_cursor
