@@ -42,6 +42,11 @@ usage: tools/gauntlet/journey/run-journey.sh [options]
                         (default: /private/tmp/dclutch-gauntlet)
   --commit REV          source revision to archive and build (default: HEAD)
   --holders N           synthetic holder count, the load knob (default: 4)
+  --keypair-seed HEX    64 lowercase hex passed to the producer's TEST-ONLY,
+                        LOOPBACK-ONLY determinism switch. Defaults to a fixed
+                        campaign seed, because a conservation ledger whose
+                        numbers cannot be compared between runs is a diary.
+                        Pass `none` to take fresh unreproducible keys instead.
   --allow-stale-fixture-pins
                         pass through to tier1/launcher.sh; see that file for
                         what the recorded override gives up
@@ -58,6 +63,12 @@ GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
 COMMIT="HEAD"
 HOLDERS="4"
 ALLOW_STALE_PINS="false"
+# A fixed, checked-in campaign seed. It is safe here and ONLY here: the producer
+# refuses the flag outright unless the RPC endpoint is loopback, and this tier is
+# pinned to 127.0.0.1:20890. Its value is the SHA-256 of the ASCII string
+# "dclutch/gauntlet/journey/campaign-seed/v1", so it is a stated derivation
+# rather than a number somebody typed.
+KEYPAIR_SEED="$(printf '%s' 'dclutch/gauntlet/journey/campaign-seed/v1' | shasum -a 256 | cut -d' ' -f1)"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
@@ -65,6 +76,7 @@ while [ "$#" -gt 0 ]; do
         --gauntlet-work) GAUNTLET_WORK="${2:?--gauntlet-work needs a value}"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --holders) HOLDERS="${2:?--holders needs a value}"; shift 2 ;;
+        --keypair-seed) KEYPAIR_SEED="${2:?--keypair-seed needs a value}"; shift 2 ;;
         --allow-stale-fixture-pins) ALLOW_STALE_PINS="true"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -108,7 +120,7 @@ run_build() { if [ -n "$WRAP" ]; then "$WRAP" "$@"; else "$@"; fi; }
 
 SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
 SOURCE_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" | sha256_stdin)"
-say "journey at $SOURCE_REVISION (holders=$HOLDERS)"
+say "journey at $SOURCE_REVISION (holders=$HOLDERS, keypairs=$([ "$KEYPAIR_SEED" = none ] && echo fresh || echo deterministic))"
 
 # ------------------------------------------------------------------ 1. archive
 if [ ! -f "$WORK/stamps.archive" ] || [ "$(cat "$WORK/stamps.archive")" != "$SOURCE_DIGEST" ]; then
@@ -331,7 +343,11 @@ jq . "$SPEC.raw" > "$SPEC" || die "assembled run spec is not valid JSON"
 
 say "campaign: living one Market's whole life on a fresh localhost ledger"
 echo "run directory: $RUN"
-if ! "$JOURNEY_BIN" run --spec "$SPEC" --transcript "$RUN/transcript.json" --holders "$HOLDERS" \
+JOURNEY_ARGS=(run --spec "$SPEC" --transcript "$RUN/transcript.json" --holders "$HOLDERS")
+if [ "$KEYPAIR_SEED" != "none" ]; then
+    JOURNEY_ARGS+=(--keypair-seed "$KEYPAIR_SEED")
+fi
+if ! "$JOURNEY_BIN" "${JOURNEY_ARGS[@]}" \
         > "$RUN/campaign.stdout" 2> "$RUN/campaign.stderr"; then
     tail -n 60 "$RUN/campaign.stderr" >&2
     echo "journey: campaign FAILED; evidence, transcript and logs are under $RUN" >&2

@@ -51,6 +51,11 @@ pub(crate) struct MarketPhaseV1 {
 pub(crate) struct JourneyTranscriptV1 {
     pub(crate) schema: String,
     pub(crate) holder_count: u32,
+    /// Whether the producer derived its signing keys deterministically. Without
+    /// it the bump-search noise makes two runs' compute numbers incomparable,
+    /// so a transcript that does not say which it was is a transcript whose
+    /// numbers cannot be used.
+    pub(crate) deterministic_keypairs: bool,
     pub(crate) evidence: String,
     /// `conserved` when no law was violated at any boundary.
     pub(crate) conservation_verdict: String,
@@ -69,15 +74,16 @@ pub(crate) fn execute(
     spec_path: &Path,
     transcript_path: &Path,
     holder_count: u32,
+    keypair_seed: Option<&str>,
 ) -> Result<JourneyTranscriptV1> {
     validate_new_path(transcript_path, "--transcript")?;
-    let mut session = crate::runtime::found_through_open(spec_path)?;
+    let mut session = crate::runtime::found_through_open(spec_path, keypair_seed)?;
     let addresses = MarketAddressesV1::from_evidence(&session.accounts)?;
 
     let mut ledger = ConservationLedgerV1::new(addresses.mint);
     let (claim_unit_atoms, decimals) =
         stages::admit_open_market(&mut session.rpc, &addresses, &session.accounts, &mut ledger)?;
-    ledger.observe(&mut session.rpc, "founding through Open", 0)?;
+    ledger.observe(&mut session.rpc, "founding through Open", 0, 0)?;
 
     let mut stages = vec![StageReportV1 {
         stage: "founding through Open".into(),
@@ -112,6 +118,7 @@ pub(crate) fn execute(
         &mut session.rpc,
         "post-open life: collateral distribution",
         0,
+        0,
     )?;
 
     stages.push(stages::holder_to_holder(
@@ -126,6 +133,7 @@ pub(crate) fn execute(
         &mut session.rpc,
         "post-open life: holder-to-holder collateral",
         0,
+        0,
     )?;
 
     stages.push(stages::recover_rent(
@@ -135,7 +143,7 @@ pub(crate) fn execute(
         &session.authority,
         &mut session.transactions,
     )?);
-    ledger.observe(&mut session.rpc, "rent recovery", 0)?;
+    ledger.observe(&mut session.rpc, "rent recovery", 0, 0)?;
 
     let markets = vec![
         market_phase(&mut session.rpc, "founding_market", addresses.founding_market)?,
@@ -160,6 +168,7 @@ pub(crate) fn execute(
     let transcript = JourneyTranscriptV1 {
         schema: TRANSCRIPT_SCHEMA_V1.into(),
         holder_count,
+        deterministic_keypairs: keypair_seed.is_some(),
         evidence: evidence_path.display().to_string(),
         conservation_verdict: if violations.is_empty() {
             "conserved".into()

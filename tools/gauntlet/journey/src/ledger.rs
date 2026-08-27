@@ -13,11 +13,14 @@
 //! catches an escape: an atom that moved to an account nobody registered makes
 //! the tracked sum fall short of a supply that did not change.
 //!
-//! **L2 principal custody.** The Hoard holds exactly the atoms that the
-//! outstanding liability requires, and the remainder is in named wallets.
-//! Stated as `hoard + Σ wallets == supply`, which is L1 re-partitioned by role
-//! — the point is not the arithmetic but that the partition is exhaustive, so
-//! naming a new account is the only way to make the two agree.
+//! **L2 Hoard movement is declared.** Between boundaries the Hoard's balance may
+//! change only by the amount the stage DECLARED it would change. This is the
+//! law L1 cannot state: collateral moving from the Hoard into a wallet the
+//! ledger already tracks leaves L1 perfectly balanced, and that movement is
+//! exactly what an undetected leak of principal looks like. Stating it as
+//! `hoard + Σ wallets == supply` instead — the obvious phrasing — would have
+//! been L1's arithmetic rewritten, unable to fail on its own, and a law that
+//! cannot fail independently is decoration.
 //!
 //! **L3 supply-vector agreement.** For every outcome `i`, the sum over all
 //! tracked Positions of `balance(i)` equals the Claims aggregate's `supply(i)`.
@@ -27,8 +30,10 @@
 //!
 //! **L4 full collateralisation.** `hoard >= max_i supply(i) * unit`. dClutch's
 //! whole premise is that no outcome can be under-funded, so the worst outcome
-//! is the one that has to be covered. `unit` is the collateral atoms one claim
-//! is worth, taken from the founding, not from a belief.
+//! is the one that has to be covered. `unit` is read from the Registry's own
+//! published `ProductBasisV3.payout_scale`, not from the Hoard divided by the
+//! outstanding supply — that phrasing would make L4 assert that the founding
+//! equals itself.
 //!
 //! **L5 stage delta.** Between consecutive observations the change in tracked
 //! collateral must equal the change the stage DECLARED. A stage that moves
@@ -114,8 +119,12 @@ pub(crate) struct ObservationV1 {
     pub(crate) stage: String,
     /// The finalized slot the census was read at.
     pub(crate) slot: u64,
-    /// Collateral atoms the stage said it would move, signed.
+    /// Collateral atoms the stage said it would move in or out of the tracked
+    /// set, signed.
     pub(crate) declared_collateral_delta: i128,
+    /// Collateral atoms the stage said it would move in or out of the Hoard,
+    /// signed. Zero is the strong claim, not the absent one.
+    pub(crate) declared_hoard_delta: i128,
     pub(crate) mint_supply: u64,
     /// label -> raw atoms, for every tracked collateral token account.
     pub(crate) token_atoms: BTreeMap<String, u64>,
@@ -208,6 +217,7 @@ impl ConservationLedgerV1 {
         rpc: &mut Rpc,
         stage: &str,
         declared_collateral_delta: i128,
+        declared_hoard_delta: i128,
     ) -> Result<()> {
         let slot = rpc.finalized_slot()?;
         let mint_account = rpc.required_account(self.mint, "collateral Mint")?;
@@ -321,6 +331,7 @@ impl ConservationLedgerV1 {
             stage: stage.into(),
             slot,
             declared_collateral_delta,
+            declared_hoard_delta,
             mint_supply: mint.supply,
             token_atoms,
             tracked_collateral,
@@ -364,31 +375,32 @@ impl ConservationLedgerV1 {
             )
         });
 
-        // L2 principal custody.
-        verdicts.push(match self.hoard {
-            None => VerdictV1::inapplicable("L2", "no Hoard exists before the founding commits"),
-            Some(_) => {
-                let wallets: u64 = now
-                    .token_atoms
-                    .iter()
-                    .filter(|(label, _)| label.as_str() != "hoard")
-                    .map(|(_, atoms)| *atoms)
-                    .sum();
-                let total = now.hoard_atoms.saturating_add(wallets);
-                if total == now.mint_supply {
+        // L2 Hoard movement is declared.
+        verdicts.push(match (self.hoard, self.observations.last()) {
+            (None, _) => {
+                VerdictV1::inapplicable("L2", "no Hoard exists before the founding commits")
+            }
+            (Some(_), None) => {
+                VerdictV1::inapplicable("L2", "the first census has no predecessor to move from")
+            }
+            (Some(_), Some(previous)) => {
+                let observed = i128::from(now.hoard_atoms) - i128::from(previous.hoard_atoms);
+                if observed == now.declared_hoard_delta {
                     VerdictV1::holds(
                         "L2",
                         format!(
-                            "Hoard {} + wallets {} == supply {}",
-                            now.hoard_atoms, wallets, now.mint_supply
+                            "the Hoard moved {observed} atoms since `{}`, exactly as declared; it holds {}",
+                            previous.stage, now.hoard_atoms
                         ),
                     )
                 } else {
                     VerdictV1::violated(
                         "L2",
                         format!(
-                            "Hoard {} + wallets {} == {} != supply {}",
-                            now.hoard_atoms, wallets, total, now.mint_supply
+                            "the Hoard moved {observed} atoms since `{}` and the stage declared {}. \
+                             L1 cannot see this: principal moving from the Hoard into a wallet this \
+                             ledger already tracks leaves the total untouched.",
+                            previous.stage, now.declared_hoard_delta
                         ),
                     )
                 }

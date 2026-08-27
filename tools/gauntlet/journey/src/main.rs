@@ -40,6 +40,9 @@ mod rpc;
 #[path = "../../../local-validator/bootstrap/successor/src/runtime.rs"]
 #[allow(dead_code)]
 mod runtime;
+#[path = "../../../local-validator/bootstrap/successor/src/seed.rs"]
+#[allow(dead_code)]
+mod seed;
 
 // ------------------------------------------------------------- this campaign
 mod journey;
@@ -108,6 +111,7 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
     let mut spec = None;
     let mut transcript = None;
     let mut holders = None;
+    let mut keypair_seed = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -117,6 +121,7 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
             "--spec" => &mut spec,
             "--transcript" => &mut transcript,
             "--holders" => &mut holders,
+            "--keypair-seed" => &mut keypair_seed,
             _ => return Err(Error::new(format!("unknown run argument: {argument}"))),
         };
         if slot.replace(value).is_some() {
@@ -133,6 +138,7 @@ fn run_journey(arguments: Vec<String>) -> Result<()> {
         &absolute(spec, "--spec")?,
         &absolute(transcript, "--transcript")?,
         holders,
+        keypair_seed.as_deref(),
     )?;
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&transcript)?)?;
@@ -186,7 +192,7 @@ fn absolute(value: Option<String>, label: &str) -> Result<PathBuf> {
 
 fn usage() {
     println!(
-        "Usage:\n  dclutch-journey-campaign run --spec ABSOLUTE_JSON --transcript ABSOLUTE_NEW_JSON [--holders N]\n\nThe spec is a `dclutch-local-successor-run-spec-v2` document, exactly the one\nthe tier-1 bootstrap consumes: the journey reaches Open through that producer's\nown code, then keeps going on the same validator as the same in-memory founder.\nThe run-evidence document the census consumes is written to the spec's own\n`output` path and covers the WHOLE journey, founding transactions included.\n--transcript is the journey's own document: stages, gaps, and every\nconservation-ledger census.\n--holders is the load knob; it is the number of synthetic holders the founder\ndistributes collateral to. Default {default}.\n\nNothing here signs with a persisted key, funds an external account, publishes,\nor deploys anywhere but a fresh localhost ledger on 127.0.0.1:20890.",
+        "Usage:\n  dclutch-journey-campaign run --spec ABSOLUTE_JSON --transcript ABSOLUTE_NEW_JSON [--holders N] [--keypair-seed 64_LOWERCASE_HEX]\n\nThe spec is a `dclutch-local-successor-run-spec-v2` document, exactly the one\nthe tier-1 bootstrap consumes: the journey reaches Open through that producer's\nown code, then keeps going on the same validator as the same in-memory founder.\nThe run-evidence document the census consumes is written to the spec's own\n`output` path and covers the WHOLE journey, founding transactions included.\n--transcript is the journey's own document: stages, gaps, and every\nconservation-ledger census.\n--holders is the load knob; it is the number of synthetic holders the founder\ndistributes collateral to. Default {default}.\n--keypair-seed is the producer's TEST-ONLY, LOOPBACK-ONLY determinism switch,\npassed straight through: it collapses the find_program_address bump-search\nnoise, which is what lets a conservation ledger's numbers be compared between\nruns at all. Read seed.rs before using it anywhere but here.\n\nNothing here signs with a persisted key, funds an external account, publishes,\nor deploys anywhere but a fresh localhost ledger on 127.0.0.1:20890.",
         default = journey::DEFAULT_HOLDER_COUNT
     );
 }
