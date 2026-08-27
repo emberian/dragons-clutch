@@ -691,6 +691,23 @@ QUEUED with owners:
   one-shot hashv only, never the incremental Hasher). GIT-SCAN item 8 row
   CLOSED (69ea61fe, verified by SHASEAM).
 
+## DEVNET-SMOKE charter — AMENDED by SMOKE-0 + decision 0012 (2026-08-27 evening)
+
+SMOKE-0 ran (docs/evidence/DEVNET_SMOKE_0.md): preflight + mutable
+deploy/recycle rehearsal on devnet, 0.0096 SOL total cost, wallet 65 →
+64.99. Four walls found pre-spend; ember ruled W1 LIVE: **the devnet
+substrate is mutable and iterated** (decision 0012 — the slot pin replaces
+revocation in the fast path's soundness; iteration by Upgrade at fee-cost;
+~31.7 SOL parked, never burned; the immutable ceremony is reserved for the
+final public demo substrate). The devnet PythReleaseV1 row is MINTED
+(11f249ff + the 9b08090d nibble fix). In flight at this writing: the 0012
+core (registry-contract/activation-auth — un-named lane, boarded via SMOKE-0
+cession), the 0012 producer shape (plan.rs, DEVNET-DRIVER), run-external
+(DRIVER), the dealer-accelerator 82-diagnostic regression (ACCEL-FRAME).
+Still unowned from 0012's site map: core-sbf init gate, the five family
+mirrors, three host mirrors. The charter below otherwise stands, with
+"recycled at the end" now meaning: closeable because never revoked.
+
 ## DEVNET-SMOKE charter (expanded scope, awaiting ember's go)
 
 The smoke is a small public exchange, not a market. Deploy the seven roles
