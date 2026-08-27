@@ -637,3 +637,20 @@ QUEUED with owners:
   anywhere (`registered_bundle_v4.rs` digests every artifact at runtime) and
   `apps/dclutch-web/lib/generated/registeredDirect.ts` carries layout offsets and
   magics only. Nothing regenerated; no stale window existed to close.
+
+- DLR-HOT (charters at wave convergence), top-of-lane checks per GEN-HOT's
+  executed patterns: (i) does Dealer's descriptor name effect_kernel v4
+  SCHEMA_RELEASE_ID_V4? (ii) does its profile's span selector get written by
+  the family RequestProfile — if not the family is forced to AdmittedAot and
+  inherits the whole extras frame. Plus the known CoreState-decode defect
+  (v3_accelerator_accounts.rs:499). The spans machinery is landed and free.
+- RECORDS-MIGRATE (charters at wave convergence, batched with the combined
+  identity regen): the layout audit's wire-breaking migrations — FundingStateV1
+  63.8% (drop `released`, totals, allocation pads), seal stored-PDA→bumps
+  (372 B; the release-set pattern), profile-family width narrowing, manifest
+  entry 101 B, the derivable-identity records; genref derives all limits
+  (retire the copied-1312 class). Kernel-side caps (QNT item 9) ride the same
+  lane as one-liners.
+- Mystery for hygiene: target/deploy/dclutch_sbf.so is 9.0MB, rebuilt TODAY,
+  referenced by nothing — find what rebuilds a deleted program's ELF and stop
+  it (63 SOL if a deploy glob ever eats it).
