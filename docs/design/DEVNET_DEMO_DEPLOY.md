@@ -822,9 +822,10 @@ authorization naming that act. Nothing below has been done.
 | 11 | **Deploy the three accelerators**, if in scope | items 3–5 again for them | 3.60 SOL |
 | 12 | **Recycle** anything still inside its window | — | recovers |
 
-Items 5 and 8 are the only two that spend money permanently, and together they
-are **32.88 of the 45 SOL**. Everything before them is reversible; nothing after
-them is.
+Items 5, 6, 7 and 8 all spend permanently — finalized Registry records and the
+Core-owned infrastructure profile have no closure route either — but 6 and 7
+together are 0.026 SOL, while **5 and 8 are 32.88 of the 45**. Items 1–4 are the
+reversible ones, and item 5 is where reversibility ends.
 
 **Before authorizing item 5**, all of these should be true, and none of them is
 a formality:
