@@ -70,8 +70,8 @@ use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3},
     v4::{
-        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
-        project_atomic as project_effects_v4_atomic,
+        ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
+        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4, project_atomic as project_effects_v4_atomic,
     },
 };
 use dclutch_execution_strategy_contract::{
@@ -3170,6 +3170,7 @@ fn project_hot_effects_v3(
             .map_err(|_| TradingSbfError::Content)?;
     }
     require_common_projection_permissions_v3(&permissions)?;
+    hot_cu_checkpoint!("p7e-permissions");
     let effect_account_count = effect
         .successor
         .account_count(tail_count, scalars)
@@ -3212,6 +3213,19 @@ fn project_hot_effects_v3(
     // instruction. The single bank carries the same bytes into preflight/CPI.
     let mut requests = try_projection_bank_v3(&0_u8, request_bytes)?;
     hot_heap_mark!("effects-request-bank");
+    // The kernel allocates nothing, so the runtime-write overlap refusal's
+    // scratch is one of this function's banks. It is what lets that refusal
+    // resolve each local-effect ordinal once instead of once per PAIR of them;
+    // twelve bytes per ordinal is the whole price.
+    let mut write_ranges = try_projection_bank_v3(
+        &ResolvedWriteRangeV4::vacant(),
+        effect
+            .successor
+            .resolved_operation_count(tail_count)
+            .map_err(|_| TradingSbfError::Content)?,
+    )?;
+    hot_heap_mark!("effects-write-ranges");
+    hot_cu_checkpoint!("p7e-banks");
     project_effects_v4_atomic(
         effect.successor,
         tail_count,
@@ -3233,6 +3247,7 @@ fn project_hot_effects_v3(
                 .ok_or(TradingSbfError::Content)?,
             requests: &mut requests,
         },
+        &mut write_ranges,
     )
     .map_err(|_| TradingSbfError::Transition)?;
     hot_heap_mark!("effects-projected");
@@ -7596,6 +7611,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         project_accounts_atomic(account_profile, tail_count, observations, account_registers)
     }
     .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("p5r-account-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
     require_projected_tail_count_agreement_v3(
@@ -7618,6 +7634,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
             },
         )
         .map_err(|_| TradingSbfError::Content)?;
+    hot_cu_checkpoint!("p5r-rent-quote-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
 
     if let RequestProfileKindV3::Signed(profile) = request_profile {
@@ -7637,6 +7654,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
         )?;
         core::mem::swap(&mut current_identities, &mut next_identities);
     }
+    hot_cu_checkpoint!("p5r-native-signatures");
 
     request_profile.project_atomic(
         tail_count,
@@ -7650,6 +7668,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
             output_identities: &mut next_identities,
         },
     )?;
+    hot_cu_checkpoint!("p5r-request-projection");
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
     if account_profile.uses_dynamic_fixed_spans() {
