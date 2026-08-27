@@ -26,6 +26,15 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
+/// Chain-derived unsigned Core Found construction for Runtime V2 Products.
+pub mod found;
+/// Chain-derived Registry records for Product V3 graded-basis admission.
+pub mod graded_basis_v3;
+/// Chain-derived lifecycle RentCredit creation, sweeping, and close evidence.
+pub mod lifecycle_rent_v2;
+/// Generic immutable-record publication and Runtime V2 Product graph publication.
+pub mod publication;
+
 /// Compiler or chain-derived instruction refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -43,6 +52,12 @@ pub enum Error {
     RecordMismatch,
     /// A caller buffer had the wrong exact size.
     OutputLength,
+    /// A non-Product finalized record or canonical runtime value refused.
+    InvalidRecord,
+    /// Two independently decoded authorities did not join exactly.
+    CrossRecordMismatch,
+    /// Payer principal could not cover the exact current Market rent top-up.
+    InsufficientPayer,
 }
 
 /// Operator result alias.
@@ -329,7 +344,7 @@ pub fn build_admission_instruction_v2(
     })
 }
 
-fn validate_record(
+pub(crate) fn validate_record(
     registry: Pubkey,
     coordinate: FinalizedRecordCoordinateV2,
     observation: FinalizedRecordObservationV2<'_>,

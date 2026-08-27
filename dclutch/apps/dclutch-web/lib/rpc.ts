@@ -14,6 +14,7 @@ const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
 const MAX_MULTIPLE_ACCOUNTS = 32;
+const SOLANA_PACKET_BYTES = 1_232;
 const RPC_TIMEOUT_MS = 15_000;
 
 export type RpcAccount = Readonly<{
@@ -244,6 +245,29 @@ export class SolanaRpcClient {
     if (!Number.isSafeInteger(dataLength) || dataLength < 0 || dataLength > 10_485_760) throw new Error('rent data length is outside the bounded account profile');
     const lamports = exactUnsigned(await this.request('getMinimumBalanceForRentExemption', [dataLength, { commitment: 'finalized' }]), 'rent-exempt lamports');
     return Object.freeze({ dataLength, lamports: String(lamports) });
+  }
+
+  /**
+   * Submit one caller-signed packet after an explicit user action.
+   *
+   * This method never signs, mutates, retries in a loop, or skips preflight.
+   */
+  async sendRawTransaction(bytes: Uint8Array): Promise<string> {
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > SOLANA_PACKET_BYTES) {
+      throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
+    }
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    const result = exactText(await this.request('sendTransaction', [btoa(binary), {
+      encoding: 'base64',
+      skipPreflight: false,
+      preflightCommitment: 'confirmed',
+      maxRetries: 3,
+    }]), 'transaction signature', 96);
+    if (result.length < 64 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(result)) {
+      throw new Error('sendTransaction returned a noncanonical base58 signature');
+    }
+    return result;
   }
 }
 

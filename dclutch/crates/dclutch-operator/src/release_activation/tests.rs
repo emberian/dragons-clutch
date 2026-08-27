@@ -332,10 +332,16 @@ impl Fixture {
 fn exact_checked_evidence_builds_existing_activation_and_deterministic_projection() {
     let fixture = Fixture::new(41, 71);
     let plan = fixture.build().expect("checked activation");
-    assert_eq!(plan.activation.instruction.accounts.len(), 26);
-    assert_eq!(plan.packet.required_signatures, 1);
-    assert_eq!(plan.packet.wire_bytes, 1_021);
-    assert!(plan.packet.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+    assert_eq!(plan.activation.roles.len(), 5);
+    assert_eq!(plan.packets.len(), 5);
+    for (role_plan, packet) in plan.activation.roles.iter().zip(plan.packets.iter()) {
+        assert_eq!(
+            role_plan.instruction.accounts.len(),
+            dclutch_registry_svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
+        );
+        assert_eq!(packet.required_signatures, 1);
+        assert!(packet.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+    }
     assert_eq!(
         plan.activation.expected_cache.release_set_projection(),
         Ok(fixture.checked_release_set.release_set())
@@ -350,8 +356,12 @@ fn exact_checked_evidence_builds_existing_activation_and_deterministic_projectio
         .lines()
         .map(|line| line.split_once('=').expect("key/value").0)
         .collect::<Vec<_>>();
+    let head = keys
+        .iter()
+        .position(|key| *key == "activation_projection")
+        .expect("activation projection header");
     assert_eq!(
-        keys.get(keys.len() - 15..),
+        keys.get(head..head + 10),
         Some(
             [
                 "activation_projection",
@@ -362,18 +372,30 @@ fn exact_checked_evidence_builds_existing_activation_and_deterministic_projectio
                 "activation_cache",
                 "activation_mode",
                 "cache_rent_debit_lamports",
-                "elf_bytes_hashed",
-                "matching_measured_compute_units",
-                "unsigned_message_sha256",
-                "packet_wire_bytes",
-                "required_signatures",
-                "compute_unit_limit",
-                "measured_headroom",
+                "elf_bytes_hashed_total",
+                "activation_transactions",
             ]
             .as_slice()
         )
     );
-    assert!(evidence.ends_with("measured_headroom=none\n"));
+    assert!(keys.contains(&"matching_measured_compute_units"));
+    // One packet projection per activation transaction, in canonical role order.
+    for role in ["core", "claims", "trading", "resolution", "custody"] {
+        for key in [
+            "role_elf_bytes_hashed",
+            "unsigned_message_sha256",
+            "packet_wire_bytes",
+            "required_signatures",
+            "compute_unit_limit",
+            "measured_headroom",
+        ] {
+            assert!(
+                keys.contains(&format!("{key}_{role}").as_str()),
+                "missing {key}_{role}"
+            );
+        }
+    }
+    assert!(evidence.ends_with("measured_headroom_custody=none\n"));
 }
 
 #[test]

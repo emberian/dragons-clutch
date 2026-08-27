@@ -9,8 +9,14 @@
 //! native/materialized economic owner, and finalized representation records
 //! remain the sole recipe owner. No mutable representation ledger exists here.
 
+/// Checked atomic encoder for the immutable V3 execution descriptor.
+pub mod descriptor_v3;
 #[allow(missing_docs)]
 mod generated_descriptor;
+#[allow(missing_docs)]
+mod generated_product_v3;
+/// ProductRuntimeV3 admission and exact representation-custody solvency.
+pub mod product_v3;
 
 pub use generated_descriptor::{
     DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
@@ -56,6 +62,12 @@ pub const REPRESENTATION_GRAPH_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
     0xbe, 0x69, 0x36, 0xbb, 0xa2, 0x4e, 0xa0, 0xd2, 0xd1, 0x78, 0xfa, 0x65, 0x92, 0x74, 0x8e, 0xa5,
     0xf5, 0xdc, 0x95, 0xdf, 0x9a, 0x72, 0xbb, 0xa8, 0x58, 0x84, 0xa9, 0x27, 0xe2, 0x89, 0xd5, 0x97,
 ];
+/// Claims PDA seed for one descriptor's representation authority.
+///
+/// The immutable representation description owns this derivation namespace;
+/// SVM adapters combine it with the finalized descriptor digest under the
+/// deployed Claims program. It is not selectable by a request.
+pub const RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2: &[u8] = b"dclutch:rational-authority:v2";
 /// Implemented schema version.
 pub const SCHEMA_VERSION_V2: u16 = 2;
 
@@ -874,6 +886,24 @@ impl<'a> RepresentationDescriptorV2<'a> {
                 return Err(Error::DescriptorMismatch);
             }
             outcome = outcome.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(())
+    }
+
+    /// Join this descriptor to its exact finalized Product-to-Claims exposure.
+    ///
+    /// The exposure bundle supersedes the legacy graph as the selected live
+    /// record. Its admission binds the exact record identity and digest while
+    /// its ordered row count is the descriptor's Claims width `K`.
+    pub fn authenticate_exposure(
+        self,
+        exposure: dclutch_representation_composition_v3_kernel::CompositionExposureBundleV3<'_>,
+    ) -> Result<()> {
+        if self.graph_id != exposure.bundle_id()
+            || self.graph_digest != exposure.bundle_digest()
+            || self.outcome_count != exposure.representation_width()
+        {
+            return Err(Error::DescriptorMismatch);
         }
         Ok(())
     }

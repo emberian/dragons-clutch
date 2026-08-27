@@ -78,6 +78,8 @@ pub enum RootError {
     OutstandingBatches,
     /// Config bytes or immutable config coordinates refused.
     Config(crate::Error),
+    /// Runtime-width V3 config bytes or immutable coordinates refused.
+    ConfigV3(crate::v3::GeneralConfigErrorV3),
     /// The canonical Core Market contract refused.
     Core(dclutch_core_contract::Error),
     /// The canonical capability manifest or funding contract refused.
@@ -99,6 +101,12 @@ pub enum RootError {
 impl From<crate::Error> for RootError {
     fn from(value: crate::Error) -> Self {
         Self::Config(value)
+    }
+}
+
+impl From<crate::v3::GeneralConfigErrorV3> for RootError {
+    fn from(value: crate::v3::GeneralConfigErrorV3) -> Self {
+        Self::ConfigV3(value)
     }
 }
 

@@ -487,11 +487,9 @@ pub struct DirectCloseReplayRegistrationReport {
     pub observation: Observation,
 }
 
-mod bearer;
 mod series_lifecycle;
 mod source;
 
-pub use bearer::*;
 pub use series_lifecycle::*;
 pub use source::*;
 mod dealer;

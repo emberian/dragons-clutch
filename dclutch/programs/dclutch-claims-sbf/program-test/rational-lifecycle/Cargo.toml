@@ -1,0 +1,48 @@
+[package]
+name = "dclutch-rational-lifecycle-program-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.89"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
+dclutch-claims-sbf = { path = "../.." }
+dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
+dclutch-rational-representation-v2-contract = { path = "../../../../crates/dclutch-rational-representation-v2-contract" }
+dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
+dclutch-rational-representation-v2-lifecycle-contract = { path = "../../../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
+dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
+solana-account = "=4.3.2"
+solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
+solana-message = "=4.4.1"
+solana-program = { version = "=3.0.0" }
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-sdk-ids = "=3.1.0"
+solana-transaction = "=4.1.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

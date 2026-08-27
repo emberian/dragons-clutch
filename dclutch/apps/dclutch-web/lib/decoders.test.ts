@@ -60,4 +60,22 @@ describe('canonical Rust account fixtures', () => {
     const substituted = Object.freeze({ ...observation(market), owner: '11111111111111111111111111111111' });
     expect(decodeCoreAccount(substituted, fixture.programId).status).toBe('refused');
   });
+
+  it('refuses aliased lifecycle identities and detects cross-generation RentCredit reuse', async () => {
+    const rentCredit = fixture.accounts.find((account) => account.kind === 'RentCredit');
+    if (rentCredit === undefined) throw new Error('fixture omitted lifecycle RentCredit');
+
+    const aliased = bytes(rentCredit.dataHex);
+    aliased.set(aliased.slice(48, 80), 80);
+    expect(decodeCoreAccount(observation(rentCredit, aliased), fixture.programId).status).toBe('refused');
+
+    const differentGeneration = bytes(rentCredit.dataHex);
+    new DataView(differentGeneration.buffer).setBigUint64(112, 8n, true);
+    const decoded = decodeCoreAccount(observation(rentCredit, differentGeneration), fixture.programId);
+    expect(decoded.status).toBe('decoded');
+    if (decoded.status !== 'decoded') throw new Error(decoded.reason);
+    const verified = await verifyLocalBindings(decoded, fixture.programId);
+    expect(verified.bindings).toHaveLength(1);
+    expect(verified.bindings[0].ok).toBe(false);
+  });
 });

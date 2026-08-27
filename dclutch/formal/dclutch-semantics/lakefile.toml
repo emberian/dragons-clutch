@@ -60,3 +60,31 @@ root = "EmitLiabilityBasisV2Rust"
 [[lean_exe]]
 name = "emit-transition-vm-v2-rust"
 root = "EmitTransitionVMV2Rust"
+
+[[lean_exe]]
+name = "emit-source-material-v2-abi-rust"
+root = "EmitSourceMaterialV2AbiRust"
+
+[[lean_exe]]
+name = "emit-source-recovery-policy-v2-abi-rust"
+root = "EmitSourceRecoveryPolicyV2AbiRust"
+
+[[lean_exe]]
+name = "emit-source-resolution-state-v2-abi-rust"
+root = "EmitSourceResolutionStateV2AbiRust"
+
+[[lean_exe]]
+name = "emit-source-resolution-terminal-v2-abi-rust"
+root = "EmitSourceResolutionTerminalV2AbiRust"
+
+[[lean_exe]]
+name = "emit-request-profile-abi-rust"
+root = "EmitRequestProfileAbiRust"
+
+[[lean_exe]]
+name = "emit-request-profile-v4-abi-rust"
+root = "EmitRequestProfileV4AbiRust"
+
+[[lean_exe]]
+name = "emit-structured-v2-abi-rust"
+root = "EmitStructuredV2AbiRust"

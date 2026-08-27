@@ -1198,3 +1198,58 @@ fn valid_frame_accounts(tag: GeneralInstructionTagV1, count: u8) -> Vec<GeneralA
         })
         .collect()
 }
+
+#[test]
+fn every_general_seed_component_is_short_enough_to_derive_an_address() {
+    // `create_program_address` refuses any seed wider than thirty-two bytes, so
+    // an over-long component makes `find_program_address` reject every bump and
+    // the account it names unreachable. This asserts the real precondition on
+    // the real seed vectors rather than only on the domain constants.
+    let market = [9_u8; 32];
+    let key = [7_u8; 32];
+    let root_seeds = GeneralRootPdaSeedsV1::new(market, 7, id(4)).expect("root seeds");
+    let funding_seeds =
+        GeneralFundingPdaSeedsV1::new(market, 7, id(4), GENERAL_CAPABILITY_RELEASE_ID_V1)
+            .expect("funding seeds");
+    let batch_seeds = GeneralBatchPdaSeedsV1::new(key, 3).expect("batch seeds");
+    let order_state_seeds =
+        GeneralOrderStatePdaSeedsV1::new(market, order(10, 20, [1, 0], 50)).expect("order seeds");
+    let order_custody_seeds = GeneralOrderCustodyPdaSeedsV1::new(key).expect("custody seeds");
+    let quote_escrow_seeds = GeneralQuoteEscrowPdaSeedsV1::new(key).expect("escrow seeds");
+    let candidate_seeds = GeneralCandidatePdaSeedsV1::new(key, id(5)).expect("candidate seeds");
+    let page_seeds = GeneralCandidatePagePdaSeedsV1::new(key, id(6)).expect("page seeds");
+    let cursor_seeds = GeneralSettlementCursorPdaSeedsV1::new(key).expect("cursor seeds");
+    let settlement_escrow_seeds =
+        GeneralSettlementEscrowPdaSeedsV1::new(key).expect("settlement escrow seeds");
+
+    let vectors: [(&str, Vec<&[u8]>); 10] = [
+        ("root", root_seeds.seed_components().to_vec()),
+        ("funding", funding_seeds.seed_components().to_vec()),
+        ("batch", batch_seeds.seed_components().to_vec()),
+        ("order-state", order_state_seeds.seed_components().to_vec()),
+        (
+            "order-custody",
+            order_custody_seeds.seed_components().to_vec(),
+        ),
+        (
+            "quote-escrow",
+            quote_escrow_seeds.seed_components().to_vec(),
+        ),
+        ("candidate", candidate_seeds.seed_components().to_vec()),
+        ("candidate-page", page_seeds.seed_components().to_vec()),
+        ("settlement-cursor", cursor_seeds.seed_components().to_vec()),
+        (
+            "settlement-escrow",
+            settlement_escrow_seeds.seed_components().to_vec(),
+        ),
+    ];
+    for (label, seeds) in vectors {
+        for seed in seeds {
+            assert!(
+                seed.len() <= MAX_PDA_SEED_BYTES,
+                "{label} seed of {} bytes can never derive an address",
+                seed.len()
+            );
+        }
+    }
+}

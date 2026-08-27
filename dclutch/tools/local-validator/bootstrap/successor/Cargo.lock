@@ -335,6 +335,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-account-profile-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+ "dclutch-effect-kernel",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
@@ -342,12 +351,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-program-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+ "dclutch-transition-vm",
+]
+
+[[package]]
+name = "dclutch-capability-seal-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-kernel"
+name = "dclutch-custody-contract"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
+name = "dclutch-effect-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-local-successor-bootstrap"
@@ -357,31 +392,64 @@ dependencies = [
  "bincode",
  "dclutch-capability-contract",
  "dclutch-core-contract",
- "dclutch-market-contract",
- "dclutch-product-contract",
+ "dclutch-custody-contract",
+ "dclutch-market-core-codec",
+ "dclutch-market-founding-v1-operator",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-product-runtime-v2-operator",
  "dclutch-pyth-svm",
+ "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
+ "dclutch-rent-contract",
  "dclutch-resolution-codec",
  "dclutch-source-contract",
+ "dclutch-token-svm",
+ "dclutch-versioned-message-operator",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "solana-hash 4.6.0",
+ "solana-loader-v3-interface",
  "solana-program",
  "solana-sdk",
  "solana-sdk-ids",
+ "solana-system-interface",
 ]
 
 [[package]]
-name = "dclutch-market-contract"
+name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
+ "dclutch-release-set-contract",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-market-founding-v1-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
  "dclutch-core-contract",
- "dclutch-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-release-set-contract",
+ "solana-program",
+]
+
+[[package]]
+name = "dclutch-product-compiler"
+version = "0.1.0"
+dependencies = [
  "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -389,11 +457,55 @@ name = "dclutch-product-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-runtime-v2-admission"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-compiler",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-pyth-svm"
 version = "0.1.0"
 dependencies = [
  "dclutch-registry-svm",
 ]
+
+[[package]]
+name = "dclutch-realm-contract"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-record-contract"
@@ -423,14 +535,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-rent-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+]
+
+[[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-resolution-core-v3-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
 
 [[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-token-svm"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-transition-vm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
+
+[[package]]
+name = "dclutch-versioned-message-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-resolution-core-v3-operator",
+ "solana-address-lookup-table-interface",
+ "solana-hash 4.6.0",
+ "solana-message",
+ "solana-program",
 ]
 
 [[package]]
@@ -1816,7 +1976,13 @@ version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8dedafa11d25554279235dd0539d378adc144183eca65072a302c9592cc6a591"
 dependencies = [
+ "bincode",
+ "bytemuck",
+ "serde",
+ "serde_derive",
  "solana-clock",
+ "solana-instruction",
+ "solana-instruction-error",
  "solana-pubkey 4.3.0",
  "solana-sdk-ids",
  "solana-slot-hashes",
@@ -2180,6 +2346,21 @@ dependencies = [
  "solana-sdk-ids",
  "solana-sdk-macro",
  "solana-sysvar-id",
+]
+
+[[package]]
+name = "solana-loader-v3-interface"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dee44c9b1328c5c712c68966fb8de07b47f3e7bac006e74ddd1bb053d3e46e5d"
+dependencies = [
+ "serde",
+ "serde_bytes",
+ "serde_derive",
+ "solana-instruction",
+ "solana-pubkey 3.0.0",
+ "solana-sdk-ids",
+ "solana-system-interface",
 ]
 
 [[package]]
@@ -2619,6 +2800,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e1790547bfc3061f1ee68ea9d8dc6c973c02a163697b24263a8e9f2e6d4afa2"
 dependencies = [
  "num-traits",
+ "serde",
+ "serde_derive",
+ "solana-instruction",
  "solana-msg",
  "solana-program-error",
  "solana-pubkey 3.0.0",

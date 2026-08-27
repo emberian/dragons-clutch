@@ -13,19 +13,29 @@ use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     Identity as CoreIdentity, SeriesCoreAckV1, SeriesCoreActionV1, SeriesCoreRequestV1,
 };
+use dclutch_series_v3_kernel::plan::{
+    ReplayCandidateV3, SeriesReplayActionV3, SeriesReplayWitnessV3, evaluate_replay_v3,
+};
+pub use dclutch_series_v3_kernel::terminal::{
+    SeriesLifecycleRentSinkV3, SeriesRootClosurePlanV3 as ClosePlanV3, TicketNativeRemaindersV3,
+    TicketRetirementPlanV3 as RetirePlanV3,
+};
+use dclutch_series_v3_kernel::terminal::{
+    SeriesTerminalErrorV3, plan_series_root_closure_v3, plan_ticket_retirement_v3,
+};
 use solana_program::pubkey::Pubkey;
 
 use super::{
-    AdmittedOccurrenceV2, AdmittedTicketV2, OccurrenceV2, SeriesV2Error, TemplateV2, core_request,
-    funding_list_id, pubkey,
-    state::{SeriesStateError, SeriesStateV2, TicketPhaseV2, TicketStateV2},
+    AdmittedOccurrenceV3, AdmittedTicketV3, AuthenticatedProductProjectionV2, OccurrenceV3,
+    SeriesV3Error, TemplateV3, core_request, funding_list_id,
+    state::{SeriesStateError, SeriesStateV3, TicketStateV3},
 };
 
 const MAXIMUM_FUNDING_STATES: usize = 16;
 
 /// Refusal from an executable lifecycle plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LifecycleErrorV2 {
+pub enum LifecycleErrorV3 {
     /// Immutable Template, occurrence, Ticket, or Market admission refused.
     Content,
     /// Mutable phase, revision, or occurrence cursor refused.
@@ -40,21 +50,34 @@ pub enum LifecycleErrorV2 {
     Arithmetic,
 }
 
-impl From<SeriesV2Error> for LifecycleErrorV2 {
-    fn from(_: SeriesV2Error) -> Self {
+impl From<SeriesV3Error> for LifecycleErrorV3 {
+    fn from(_: SeriesV3Error) -> Self {
         Self::Content
     }
 }
 
-impl From<SeriesStateError> for LifecycleErrorV2 {
+impl From<SeriesStateError> for LifecycleErrorV3 {
     fn from(_: SeriesStateError) -> Self {
         Self::Replay
     }
 }
 
+impl From<SeriesTerminalErrorV3> for LifecycleErrorV3 {
+    fn from(value: SeriesTerminalErrorV3) -> Self {
+        match value {
+            SeriesTerminalErrorV3::RentEncoding | SeriesTerminalErrorV3::RentBinding => {
+                Self::Funding
+            }
+            SeriesTerminalErrorV3::Replay => Self::Replay,
+            SeriesTerminalErrorV3::Balance => Self::Funding,
+            SeriesTerminalErrorV3::Arithmetic => Self::Arithmetic,
+        }
+    }
+}
+
 /// One proposed Trading-owned FundingState creation destination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PendingFundingAccountV2 {
+pub struct PendingFundingAccountV3 {
     key: Pubkey,
     state: FundingStateV1,
     current_lamports: u64,
@@ -62,7 +85,7 @@ pub struct PendingFundingAccountV2 {
     realm_collateral: Option<RealmCollateralCustodyV1>,
 }
 
-impl PendingFundingAccountV2 {
+impl PendingFundingAccountV3 {
     /// Bind the exact planned FundingState bytes and observed physical custody.
     pub fn new(
         key: Pubkey,
@@ -70,9 +93,9 @@ impl PendingFundingAccountV2 {
         current_lamports: u64,
         exact_state_rent: u64,
         realm_collateral: Option<RealmCollateralCustodyV1>,
-    ) -> Result<Self, LifecycleErrorV2> {
+    ) -> Result<Self, LifecycleErrorV3> {
         if key == Pubkey::default() {
-            return Err(LifecycleErrorV2::Funding);
+            return Err(LifecycleErrorV3::Funding);
         }
         Ok(Self {
             key,
@@ -95,7 +118,7 @@ impl PendingFundingAccountV2 {
 
 /// Exact bounded native funding distribution for all occurrence capabilities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PendingFundingPlanV2 {
+pub struct PendingFundingPlanV3 {
     count: u8,
     top_up: [u64; MAXIMUM_FUNDING_STATES],
     preexisting_surplus_refund: [u64; MAXIMUM_FUNDING_STATES],
@@ -103,7 +126,7 @@ pub struct PendingFundingPlanV2 {
     required_native: u64,
 }
 
-impl PendingFundingPlanV2 {
+impl PendingFundingPlanV3 {
     /// Number of exact ordered FundingState destinations.
     pub const fn count(self) -> u8 {
         self.count
@@ -134,13 +157,13 @@ impl PendingFundingPlanV2 {
 
 /// Validate exact ordered pending FundingStates and plan dust-tolerant funding.
 pub fn plan_pending_funding(
-    occurrence: OccurrenceV2,
+    occurrence: OccurrenceV3,
     manifest_id: ContentId,
     manifest: CapabilityManifestV1<'_>,
-    accounts: &[PendingFundingAccountV2],
-) -> Result<PendingFundingPlanV2, LifecycleErrorV2> {
+    accounts: &[PendingFundingAccountV3],
+) -> Result<PendingFundingPlanV3, LifecycleErrorV3> {
     if accounts.is_empty() || accounts.len() > MAXIMUM_FUNDING_STATES {
-        return Err(LifecycleErrorV2::Funding);
+        return Err(LifecycleErrorV3::Funding);
     }
     let mut keys = [Pubkey::default(); MAXIMUM_FUNDING_STATES];
     let mut top_up = [0_u64; MAXIMUM_FUNDING_STATES];
@@ -150,18 +173,18 @@ pub fn plan_pending_funding(
     let mut previous_entry: Option<u16> = None;
 
     for (index, account) in accounts.iter().copied().enumerate() {
-        *keys.get_mut(index).ok_or(LifecycleErrorV2::Funding)? = account.key;
+        *keys.get_mut(index).ok_or(LifecycleErrorV3::Funding)? = account.key;
         let state = account.state;
         if state.status() != FundingStatus::Pending
             || state.manifest_content_id() != manifest_id
             || previous_entry.is_some_and(|previous| previous >= state.entry_index())
         {
-            return Err(LifecycleErrorV2::Funding);
+            return Err(LifecycleErrorV3::Funding);
         }
         let required = account
             .exact_state_rent
             .checked_add(state.remaining().native_lamports_total())
-            .ok_or(LifecycleErrorV2::Arithmetic)?;
+            .ok_or(LifecycleErrorV3::Arithmetic)?;
         let desired_custody = match account.realm_collateral {
             Some(realm) => FundingCustodyObservationV1::with_realm_collateral(
                 required,
@@ -170,75 +193,98 @@ pub fn plan_pending_funding(
             ),
             None => FundingCustodyObservationV1::native_only(required, account.exact_state_rent),
         }
-        .map_err(|_| LifecycleErrorV2::Funding)?;
+        .map_err(|_| LifecycleErrorV3::Funding)?;
         state
             .validate_against(manifest_id, manifest, desired_custody)
-            .map_err(|_| LifecycleErrorV2::Funding)?;
+            .map_err(|_| LifecycleErrorV3::Funding)?;
         let (top_up_value, surplus_value) = if account.current_lamports <= required {
             (required - account.current_lamports, 0)
         } else {
             (0, account.current_lamports - required)
         };
-        *top_up.get_mut(index).ok_or(LifecycleErrorV2::Funding)? = top_up_value;
-        *surplus.get_mut(index).ok_or(LifecycleErrorV2::Funding)? = surplus_value;
+        *top_up.get_mut(index).ok_or(LifecycleErrorV3::Funding)? = top_up_value;
+        *surplus.get_mut(index).ok_or(LifecycleErrorV3::Funding)? = surplus_value;
         required_native = required_native
             .checked_add(required)
-            .ok_or(LifecycleErrorV2::Arithmetic)?;
+            .ok_or(LifecycleErrorV3::Arithmetic)?;
         transferred = transferred
             .checked_add(top_up_value)
-            .ok_or(LifecycleErrorV2::Arithmetic)?;
+            .ok_or(LifecycleErrorV3::Arithmetic)?;
         previous_entry = Some(state.entry_index());
     }
     if funding_list_id(
         keys.get(..accounts.len())
-            .ok_or(LifecycleErrorV2::Funding)?,
+            .ok_or(LifecycleErrorV3::Funding)?,
     )? != occurrence.funding_list()
         || required_native != occurrence.funds().capability_native()
     {
-        return Err(LifecycleErrorV2::Funding);
+        return Err(LifecycleErrorV3::Funding);
     }
-    Ok(PendingFundingPlanV2 {
-        count: u8::try_from(accounts.len()).map_err(|_| LifecycleErrorV2::Funding)?,
+    Ok(PendingFundingPlanV3 {
+        count: u8::try_from(accounts.len()).map_err(|_| LifecycleErrorV3::Funding)?,
         top_up,
         preexisting_surplus_refund: surplus,
         ticket_capability_refund: required_native
             .checked_sub(transferred)
-            .ok_or(LifecycleErrorV2::Arithmetic)?,
+            .ok_or(LifecycleErrorV3::Arithmetic)?,
         required_native,
     })
 }
 
 /// Candidate bytes and Core request for one commit-last occurrence transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OccurrenceCommitPlanV2 {
+pub struct OccurrenceCommitPlanV3 {
     core_request: Option<SeriesCoreRequestV1>,
-    series_after: SeriesStateV2,
-    ticket_after: TicketStateV2,
+    series_after: SeriesStateV3,
+    ticket_after: TicketStateV3,
     occurrence_count: u32,
     native_from_ticket: u64,
-    funding: Option<PendingFundingPlanV2>,
+    native_remainders: TicketNativeRemaindersV3,
+    terminal_rent_sink: Option<SeriesLifecycleRentSinkV3>,
+    funding: Option<PendingFundingPlanV3>,
 }
 
-impl OccurrenceCommitPlanV2 {
+impl OccurrenceCommitPlanV3 {
     /// Exact 336-byte Core request, present only for atomic Consume/Found.
     pub const fn core_request(self) -> Option<SeriesCoreRequestV1> {
         self.core_request
     }
     /// Candidate Series state; not persisted before Core acknowledgement.
-    pub const fn series_after(self) -> SeriesStateV2 {
+    pub const fn series_after(self) -> SeriesStateV3 {
         self.series_after
     }
     /// Candidate Ticket state; not persisted before Core acknowledgement.
-    pub const fn ticket_after(self) -> TicketStateV2 {
+    pub const fn ticket_after(self) -> TicketStateV3 {
         self.ticket_after
     }
     /// Exact native lamports drained from Ticket custody on success.
     pub const fn native_from_ticket(self) -> u64 {
         self.native_from_ticket
     }
+    /// Exact native compartment classification; Hoard collateral is excluded.
+    pub const fn native_remainders(self) -> TicketNativeRemaindersV3 {
+        self.native_remainders
+    }
+    /// Lifecycle Rent V2 destination for unused native funds on Expire.
+    pub const fn terminal_rent_sink(self) -> Option<SeriesLifecycleRentSinkV3> {
+        self.terminal_rent_sink
+    }
     /// Exact FundingState distribution, present only for consumption.
-    pub const fn funding(self) -> Option<PendingFundingPlanV2> {
+    pub const fn funding(self) -> Option<PendingFundingPlanV3> {
         self.funding
+    }
+
+    /// Canonical candidate root tail and Ticket bytes without write authority.
+    ///
+    /// This view lets a physical adapter authenticate a child acknowledgement
+    /// against the exact proposed poststate. It neither validates an
+    /// acknowledgement nor authorizes persistence; Consume remains writable
+    /// only through [`Self::commit_after_ack`].
+    pub fn candidate_bytes(self) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV3> {
+        Ok((
+            self.series_after.encode(self.occurrence_count)?,
+            self.ticket_after.encode(),
+        ))
     }
 
     /// Validate immediate Core return data and expose the only permitted writes.
@@ -248,19 +294,16 @@ impl OccurrenceCommitPlanV2 {
         expected_core_program: CoreIdentity,
         request_digest: CoreIdentity,
         observed_post_resource_digest: CoreIdentity,
-    ) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV2> {
-        let request = self.core_request.ok_or(LifecycleErrorV2::CoreAck)?;
+    ) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV3> {
+        let request = self.core_request.ok_or(LifecycleErrorV3::CoreAck)?;
         ack.validate_for(
             request,
             expected_core_program,
             request_digest,
             observed_post_resource_digest,
         )
-        .map_err(|_| LifecycleErrorV2::CoreAck)?;
-        Ok((
-            self.series_after.encode(self.occurrence_count)?,
-            self.ticket_after.encode(),
-        ))
+        .map_err(|_| LifecycleErrorV3::CoreAck)?;
+        self.candidate_bytes()
     }
 
     /// Expose controller-owned candidate bytes for Prepare or Expire.
@@ -268,28 +311,25 @@ impl OccurrenceCommitPlanV2 {
     /// The physical outer calls this only after every direct Trading-owned
     /// account operation and any current-Custody receipt have authenticated.
     /// Consume cannot bypass its Core acknowledgement through this route.
-    pub fn commit_controller(self) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV2> {
+    pub fn commit_controller(self) -> Result<([u8; 64], [u8; 64]), LifecycleErrorV3> {
         if self.core_request.is_some() {
-            return Err(LifecycleErrorV2::CoreAck);
+            return Err(LifecycleErrorV3::CoreAck);
         }
-        Ok((
-            self.series_after.encode(self.occurrence_count)?,
-            self.ticket_after.encode(),
-        ))
+        self.candidate_bytes()
     }
 }
 
 /// Plan ticket preparation after immutable occurrence admission.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_prepare(
-    admitted: AdmittedOccurrenceV2,
-    admitted_ticket: AdmittedTicketV2,
-    series: SeriesStateV2,
+    admitted: AdmittedOccurrenceV3,
+    admitted_ticket: AdmittedTicketV3,
+    series: SeriesStateV3,
     expected_series_revision: u64,
     now_slot: u64,
     current_ticket_lamports: u64,
     ticket_state_rent: u64,
-) -> Result<(OccurrenceCommitPlanV2, u64, u64), LifecycleErrorV2> {
+) -> Result<(OccurrenceCommitPlanV3, u64, u64), LifecycleErrorV3> {
     let ticket = admitted_ticket.ticket();
     let ticket_record_id = admitted_ticket.content_id();
     admitted.require_ticket(ticket)?;
@@ -298,20 +338,32 @@ pub fn plan_prepare(
     if series.next_occurrence() != occurrence.occurrence()
         || now_slot > template.retry_through(occurrence.occurrence())?
     {
-        return Err(LifecycleErrorV2::Schedule);
+        return Err(LifecycleErrorV3::Schedule);
     }
     let native = occurrence.funds().checked_native_total()?;
     let required = ticket_state_rent
         .checked_add(native)
-        .ok_or(LifecycleErrorV2::Arithmetic)?;
+        .ok_or(LifecycleErrorV3::Arithmetic)?;
     let (top_up, dust_refund) = dust_tolerant_exact(current_ticket_lamports, required);
+    let witness = evaluate_joint_replay(
+        SeriesReplayActionV3::Prepare {
+            ticket_record: ticket_record_id,
+        },
+        template.occurrence_count(),
+        expected_series_revision,
+        series,
+        None,
+    )?;
+    let (series_after, ticket_after) = replacement_pair(witness, template.occurrence_count())?;
     Ok((
-        OccurrenceCommitPlanV2 {
+        OccurrenceCommitPlanV3 {
             core_request: None,
-            series_after: series.prepare_ticket(expected_series_revision)?,
-            ticket_after: TicketStateV2::prepared(ticket_record_id),
+            series_after,
+            ticket_after,
             occurrence_count: template.occurrence_count(),
             native_from_ticket: 0,
+            native_remainders: TicketNativeRemaindersV3::from_founding_funds(occurrence.funds()),
+            terminal_rent_sink: None,
             funding: None,
         },
         top_up,
@@ -322,19 +374,21 @@ pub fn plan_prepare(
 /// Plan atomic Ticket-to-Found consumption through Core/Claims/Custody.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_consume(
-    admitted: AdmittedOccurrenceV2,
-    admitted_ticket: AdmittedTicketV2,
+    admitted: AdmittedOccurrenceV3,
+    admitted_ticket: AdmittedTicketV3,
+    product: AuthenticatedProductProjectionV2,
     ticket_state_key: Pubkey,
-    series: SeriesStateV2,
-    ticket_state: TicketStateV2,
+    series: SeriesStateV3,
+    ticket_state: TicketStateV3,
     expected_series_revision: u64,
     expected_ticket_revision: u64,
     now_slot: u64,
-    funding: PendingFundingPlanV2,
-) -> Result<OccurrenceCommitPlanV2, LifecycleErrorV2> {
+    funding: PendingFundingPlanV3,
+) -> Result<OccurrenceCommitPlanV3, LifecycleErrorV3> {
     common_terminal_plan(
         admitted,
         admitted_ticket,
+        Some(product),
         ticket_state_key,
         series,
         ticket_state,
@@ -342,26 +396,31 @@ pub fn plan_consume(
         expected_ticket_revision,
         now_slot,
         SeriesCoreActionV1::Consume,
-        TicketPhaseV2::Consumed,
         Some(funding),
+        None,
     )
 }
 
 /// Plan exact expiry refund after the immutable retry window.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_expire(
-    admitted: AdmittedOccurrenceV2,
-    admitted_ticket: AdmittedTicketV2,
+    admitted: AdmittedOccurrenceV3,
+    admitted_ticket: AdmittedTicketV3,
     ticket_state_key: Pubkey,
-    series: SeriesStateV2,
-    ticket_state: TicketStateV2,
+    series: SeriesStateV3,
+    ticket_state: TicketStateV3,
     expected_series_revision: u64,
     expected_ticket_revision: u64,
     now_slot: u64,
-) -> Result<OccurrenceCommitPlanV2, LifecycleErrorV2> {
+    rent_sink: SeriesLifecycleRentSinkV3,
+) -> Result<OccurrenceCommitPlanV3, LifecycleErrorV3> {
+    rent_sink
+        .admit_refund_owner(admitted_ticket.ticket().refund_owner())
+        .map_err(LifecycleErrorV3::from)?;
     common_terminal_plan(
         admitted,
         admitted_ticket,
+        None,
         ticket_state_key,
         series,
         ticket_state,
@@ -369,25 +428,26 @@ pub fn plan_expire(
         expected_ticket_revision,
         now_slot,
         SeriesCoreActionV1::Expire,
-        TicketPhaseV2::Expired,
         None,
+        Some(rent_sink),
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn common_terminal_plan(
-    admitted: AdmittedOccurrenceV2,
-    admitted_ticket: AdmittedTicketV2,
+    admitted: AdmittedOccurrenceV3,
+    admitted_ticket: AdmittedTicketV3,
+    product: Option<AuthenticatedProductProjectionV2>,
     ticket_state_key: Pubkey,
-    series: SeriesStateV2,
-    ticket_state: TicketStateV2,
+    series: SeriesStateV3,
+    ticket_state: TicketStateV3,
     expected_series_revision: u64,
     expected_ticket_revision: u64,
     now_slot: u64,
     action: SeriesCoreActionV1,
-    terminal: TicketPhaseV2,
-    funding: Option<PendingFundingPlanV2>,
-) -> Result<OccurrenceCommitPlanV2, LifecycleErrorV2> {
+    funding: Option<PendingFundingPlanV3>,
+    terminal_rent_sink: Option<SeriesLifecycleRentSinkV3>,
+) -> Result<OccurrenceCommitPlanV3, LifecycleErrorV3> {
     let ticket = admitted_ticket.ticket();
     let ticket_record_id = admitted_ticket.content_id();
     admitted.require_ticket(ticket)?;
@@ -396,33 +456,34 @@ fn common_terminal_plan(
     if series.next_occurrence() != occurrence.occurrence()
         || ticket_state.ticket_record_id() != ticket_record_id
     {
-        return Err(LifecycleErrorV2::Replay);
+        return Err(LifecycleErrorV3::Replay);
     }
     let retry_through = template.retry_through(occurrence.occurrence())?;
     match action {
         SeriesCoreActionV1::Consume
             if now_slot < occurrence.scheduled_slot() || now_slot > retry_through =>
         {
-            return Err(LifecycleErrorV2::Schedule);
+            return Err(LifecycleErrorV3::Schedule);
         }
         SeriesCoreActionV1::Expire if now_slot <= retry_through => {
-            return Err(LifecycleErrorV2::Schedule);
+            return Err(LifecycleErrorV3::Schedule);
         }
         SeriesCoreActionV1::Consume => {
             if funding
                 .is_none_or(|plan| plan.required_native() != occurrence.funds().capability_native())
             {
-                return Err(LifecycleErrorV2::Funding);
+                return Err(LifecycleErrorV3::Funding);
             }
         }
         SeriesCoreActionV1::Expire => {}
-        _ => return Err(LifecycleErrorV2::Content),
+        _ => return Err(LifecycleErrorV3::Content),
     }
     let core_request = if action == SeriesCoreActionV1::Consume {
         Some(core_request(
             admitted,
+            product.ok_or(LifecycleErrorV3::Content)?,
             action,
-            ticket,
+            admitted_ticket,
             ticket_state_key,
             expected_series_revision,
             expected_ticket_revision,
@@ -430,109 +491,120 @@ fn common_terminal_plan(
     } else {
         None
     };
-    Ok(OccurrenceCommitPlanV2 {
+    let replay_action = match action {
+        SeriesCoreActionV1::Consume => SeriesReplayActionV3::Consume {
+            ticket_record: ticket_record_id,
+            expected_ticket_revision,
+        },
+        SeriesCoreActionV1::Expire => SeriesReplayActionV3::Expire {
+            ticket_record: ticket_record_id,
+            expected_ticket_revision,
+        },
+        _ => return Err(LifecycleErrorV3::Content),
+    };
+    let witness = evaluate_joint_replay(
+        replay_action,
+        template.occurrence_count(),
+        expected_series_revision,
+        series,
+        Some(ticket_state),
+    )?;
+    let (series_after, ticket_after) = replacement_pair(witness, template.occurrence_count())?;
+    Ok(OccurrenceCommitPlanV3 {
         core_request,
-        series_after: series
-            .settle_current(expected_series_revision, template.occurrence_count())?,
-        ticket_after: ticket_state.settle(expected_ticket_revision, terminal)?,
+        series_after,
+        ticket_after,
         occurrence_count: template.occurrence_count(),
         native_from_ticket: occurrence.funds().checked_native_total()?,
+        native_remainders: TicketNativeRemaindersV3::from_founding_funds(occurrence.funds()),
+        terminal_rent_sink,
         funding,
     })
 }
 
-/// Pure ticket-retirement result after a terminal occurrence.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RetirePlanV2 {
-    series_after: SeriesStateV2,
-    refund_owner: Pubkey,
-    lamports_to_refund_owner: u64,
-}
-
-impl RetirePlanV2 {
-    /// Candidate root state written only after the ticket account closes.
-    pub const fn series_after(self) -> SeriesStateV2 {
-        self.series_after
-    }
-    /// Immutable Ticket-record beneficiary.
-    pub const fn refund_owner(self) -> Pubkey {
-        self.refund_owner
-    }
-    /// Ticket Rent and explicitly classified unsolicited lamport donation.
-    pub const fn lamports_to_refund_owner(self) -> u64 {
-        self.lamports_to_refund_owner
-    }
-}
-
 /// Plan deletion of one non-replayable ticket account.
+#[allow(clippy::too_many_arguments)]
 pub fn plan_retire(
-    series: SeriesStateV2,
-    ticket_state: TicketStateV2,
-    admitted_ticket: AdmittedTicketV2,
+    occurrence_count: u32,
+    series: SeriesStateV3,
+    ticket_state: TicketStateV3,
+    admitted_ticket: AdmittedTicketV3,
     expected_series_revision: u64,
+    expected_ticket_revision: u64,
     observed_ticket_lamports: u64,
-) -> Result<RetirePlanV2, LifecycleErrorV2> {
-    if !ticket_state.phase().terminal()
-        || ticket_state.ticket_record_id() != admitted_ticket.content_id()
-    {
-        return Err(LifecycleErrorV2::Replay);
-    }
-    Ok(RetirePlanV2 {
-        series_after: series.retire_ticket(expected_series_revision)?,
-        refund_owner: pubkey(admitted_ticket.ticket().refund_owner()),
-        lamports_to_refund_owner: observed_ticket_lamports,
-    })
-}
-
-/// Root-close classification; Hoard principal is never in these lamport fields.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ClosePlanV2 {
-    beneficiary: Pubkey,
-    close_rent: u64,
-    root_rent: u64,
-    donation: u64,
-}
-
-impl ClosePlanV2 {
-    /// Finalized Template beneficiary receiving classified native refunds.
-    pub const fn beneficiary(self) -> Pubkey {
-        self.beneficiary
-    }
-    /// Separately classified close-rent principal returned to the Template owner.
-    pub const fn close_rent(self) -> u64 {
-        self.close_rent
-    }
-    /// Exact composite-root Rent reserve returned on deletion.
-    pub const fn root_rent(self) -> u64 {
-        self.root_rent
-    }
-    /// Unsolicited root lamports, classified only as a refund gift.
-    pub const fn donation(self) -> u64 {
-        self.donation
-    }
+    exact_ticket_rent: u64,
+    rent_sink: SeriesLifecycleRentSinkV3,
+) -> Result<RetirePlanV3, LifecycleErrorV3> {
+    plan_ticket_retirement_v3(
+        occurrence_count,
+        series,
+        ticket_state,
+        admitted_ticket,
+        expected_series_revision,
+        expected_ticket_revision,
+        observed_ticket_lamports,
+        exact_ticket_rent,
+        rent_sink,
+    )
+    .map_err(Into::into)
 }
 
 /// Plan terminal close after every replay account has been retired.
 pub fn plan_close(
-    template: TemplateV2,
-    series: SeriesStateV2,
+    template: TemplateV3,
+    series: SeriesStateV3,
     expected_series_revision: u64,
     observed_root_lamports: u64,
     exact_root_rent: u64,
-) -> Result<ClosePlanV2, LifecycleErrorV2> {
-    series.admit_close(expected_series_revision)?;
-    let classified = exact_root_rent
-        .checked_add(series.close_rent_remaining())
-        .ok_or(LifecycleErrorV2::Arithmetic)?;
-    let donation = observed_root_lamports
-        .checked_sub(classified)
-        .ok_or(LifecycleErrorV2::Funding)?;
-    Ok(ClosePlanV2 {
-        beneficiary: pubkey(template.refund_owner()),
-        close_rent: series.close_rent_remaining(),
-        root_rent: exact_root_rent,
-        donation,
-    })
+    rent_sink: SeriesLifecycleRentSinkV3,
+) -> Result<ClosePlanV3, LifecycleErrorV3> {
+    plan_series_root_closure_v3(
+        template,
+        series,
+        expected_series_revision,
+        observed_root_lamports,
+        exact_root_rent,
+        rent_sink,
+    )
+    .map_err(Into::into)
+}
+
+fn evaluate_joint_replay(
+    action: SeriesReplayActionV3,
+    occurrence_count: u32,
+    expected_series_revision: u64,
+    series: SeriesStateV3,
+    ticket: Option<TicketStateV3>,
+) -> Result<SeriesReplayWitnessV3, LifecycleErrorV3> {
+    let series_bytes = series.encode(occurrence_count)?;
+    let ticket_bytes = ticket.map(TicketStateV3::encode);
+    evaluate_replay_v3(
+        action,
+        occurrence_count,
+        expected_series_revision,
+        &series_bytes,
+        ticket_bytes.as_ref().map(<[u8; 64]>::as_slice),
+    )
+    .map_err(|_| LifecycleErrorV3::Replay)
+}
+
+fn replacement_pair(
+    witness: SeriesReplayWitnessV3,
+    occurrence_count: u32,
+) -> Result<(SeriesStateV3, TicketStateV3), LifecycleErrorV3> {
+    let series = match witness.series() {
+        ReplayCandidateV3::Replace(bytes) => SeriesStateV3::decode(&bytes, occurrence_count)?,
+        ReplayCandidateV3::Unchanged | ReplayCandidateV3::Delete => {
+            return Err(LifecycleErrorV3::Replay);
+        }
+    };
+    let ticket = match witness.ticket() {
+        ReplayCandidateV3::Replace(bytes) => TicketStateV3::decode(&bytes)?,
+        ReplayCandidateV3::Unchanged | ReplayCandidateV3::Delete => {
+            return Err(LifecycleErrorV3::Replay);
+        }
+    };
+    Ok((series, ticket))
 }
 
 fn dust_tolerant_exact(observed: u64, required: u64) -> (u64, u64) {

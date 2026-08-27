@@ -233,7 +233,7 @@ export async function decodeCheckedReleaseV1(bytes: Uint8Array): Promise<Checked
   });
 }
 
-async function decodeExecutionReleaseSetV1(bytes: Uint8Array): Promise<ExecutionReleaseSetV1> {
+export async function decodeExecutionReleaseSetV1(bytes: Uint8Array): Promise<ExecutionReleaseSetV1> {
   if (bytes.length !== EXECUTION_RELEASE_SET_BYTES || ascii(bytes, 0, 8) !== 'DCLTRLS1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('execution release set has the wrong exact header');
   requireZero(bytes, 12, 4, 'execution release set header');
   const bindings = REGISTRY_ROLES.map((role, index) => {

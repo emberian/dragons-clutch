@@ -1,5 +1,5 @@
-import TradingPreview from '@/components/TradingPreview';
+import MarketWorkbench from '@/components/MarketWorkbench';
 
 export default function Home() {
-  return <TradingPreview />;
+  return <MarketWorkbench />;
 }

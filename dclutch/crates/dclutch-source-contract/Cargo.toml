@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dclutch-product-contract = { path = "../dclutch-product-contract" }
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 
 [lints]
 workspace = true

@@ -1,5 +1,5 @@
-import MarketWorkbench from '@/components/MarketWorkbench';
+import DealerLiquidityWorkspace from '@/components/DealerLiquidityWorkspace';
 
 export default function LiquidityPage() {
-  return <MarketWorkbench initialStage="trade" />;
+  return <DealerLiquidityWorkspace />;
 }

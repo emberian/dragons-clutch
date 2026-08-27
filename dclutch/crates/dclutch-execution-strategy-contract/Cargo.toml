@@ -10,6 +10,7 @@ description = "Execution-strategy certificates and comparison wire for Trading"
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]
 workspace = true

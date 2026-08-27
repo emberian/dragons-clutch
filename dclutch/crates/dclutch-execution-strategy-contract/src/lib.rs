@@ -2,11 +2,12 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Strategy-independent AOT certificate and shadow-comparison wire.
+//! Strategy-independent execution selection and stateless AOT transport.
 //!
-//! This crate performs no hashing, finalized-record authentication, Registry
-//! CPI, Loader inspection, account projection, or state/effect mutation. An
-//! adapter supplies already authenticated identities and hashes. Trading runs
+//! This crate performs no finalized-record authentication, Registry CPI,
+//! Loader inspection, account projection, or state/effect mutation. Its V3
+//! Shadow module owns the domain-separated transcript digests shared by
+//! Trading and stateless accelerators. Trading runs
 //! the canonical interpreter and a stateless AOT accelerator over one exact
 //! runtime-width input register bank, requires identical acceptance/refusal and
 //! accepted output-bank bytes, projects the one canonical effect itself, and
@@ -20,6 +21,15 @@
 use dclutch_capability_program_contract::CapabilityProgramV1;
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
+
+/// Canonical admitted-AOT transcript and read-only CPI frame.
+pub mod admitted_v3;
+/// Canonical domain-separated transcripts for V3 Shadow comparison.
+pub mod shadow_digest_v3;
+/// Fixed family-neutral transport for stateless Shadow-AOT comparison.
+pub mod shadow_v3;
+/// V3 semantic-waist strategy records, certificates, admission, and transport.
+pub mod v2;
 
 /// Schema label for [`ExecutionStrategyCertificateV1`].
 pub const EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_PREIMAGE_V1: &[u8] =

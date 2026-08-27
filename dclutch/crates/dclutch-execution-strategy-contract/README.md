@@ -1,30 +1,38 @@
 # dClutch execution-strategy contract
 
 This SDK-free, `no_std`, `no_alloc` crate defines the fixed semantic contract
-for executing one content-addressed `CapabilityProgramV1` through more than one
-implementation strategy without creating another state or effect authority.
+for executing one content-addressed `CapabilityProgramV3` through interpreted,
+shadow-AOT, or admitted-AOT strategies without creating another state or effect
+authority. The V1 comparison wire remains exported only for migration.
 
-The descriptor remains the sole transition/effect meaning. A strategy
-certificate binds a checked artifact to that exact descriptor, account
-projection, and effect schema. Program, ProgramData, ELF, deployment slot, and
-upgrade policy remain solely in the referenced `ArtifactReleaseV1`. The
-accelerator receives the same canonical runtime-width input register bank as
-the interpreter and returns a candidate output bank or refusal. Trading
-compares both results, runs the one common effect projector, and is the only
-component allowed to apply the effect or write the capability root.
+The V2 identity graph is deliberately acyclic:
 
-The first profile is deliberately comparison-only. A finalized certificate and
-an authenticated deployment prove identity, not semantic correctness: either
-can be published for an incorrect accelerator. AOT-only execution therefore
-remains unavailable until Registry owns an immutable
-`descriptor -> certificate -> ArtifactRelease` admission and reauthentication
-route, or an onchain verifier checks the named equivalence proof. This refusal
-is part of the public contract, not an operator convention.
+```text
+CapabilityProgramV3 -> ExecutionStrategyProgramV2
+                       |-> underlying TransitionVM
+                       |-> optional Certificate -> ArtifactRelease
+                       `-> optional Admission -> exact Certificate
+```
 
-The wire is runtime-width. It carries register counts, not an outcome-count enum
-or an `N = 2..16` branch. The first SVM return-data transport can carry at most
-864 register bytes because the pinned local Solana SDK exposes a 1,024-byte
-return-data ceiling and the acknowledgement header is 160 bytes. That is a
-chain-derived physical transport profile, not a semantic Product-width limit. A later
-authenticated scratch-page transport can lift it without changing descriptor
-meaning or strategy certificates.
+The descriptor binds AccountProfile, RequestProfile, EffectProgram, and the
+Strategy. The Strategy binds the underlying TransitionVM and presence-tagged
+Certificate/Admission identities. The Certificate binds the exact equivalence
+tuple (AccountProfile, RequestProfile schema/program, Transition schema/program,
+EffectProgram, ArtifactRelease, compiler, toolchain, and translation-validation
+digest), but never points back to its descriptor or Strategy. The minimal
+Registry admission authorizes only one exact Certificate for admitted AOT.
+Finalized Certificate bytes alone remain insufficient.
+
+Program, ProgramData, ELF, deployment slot, and upgrade policy remain solely in
+the referenced `ArtifactReleaseV1`. An accelerator is stateless: it receives an
+authenticated runtime-width bank and returns candidate bytes or refusal.
+Trading still interprets or validates the selected result, projects the one
+common EffectProgram, and is the sole root, FundingState, effect, and scratch
+page writer.
+
+The transport carries `u32` register and semantic tail counts; it has no Product
+outcome cap. A 144-byte acknowledgement header leaves exactly 880 bytes under
+the 1,024-byte SVM return-data bound. Larger banks use Trading-owned,
+authenticated scratch pages. Every request, acknowledgement, and page binds the
+whole-bank digest and length, invocation context, canonical chunk count, index,
+and offset so mixed or reordered pages refuse without changing semantic width.

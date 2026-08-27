@@ -11,6 +11,13 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::convert::{TryFrom, TryInto};
 
+use dclutch_claims_svm::{
+    liability_basis_state_v2::{
+        encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
+        liability_basis_vector_width_v2, read_claim_v2,
+    },
+    protocol_position_v2::ProtocolPositionSeedsV2,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1, ContextV1,
@@ -18,8 +25,8 @@ use dclutch_custody_contract::{
     CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_liability_basis_v2_kernel::product_claims::{
-    AdmittedBasisV2, BasisKindV2, ClaimsCandidateV2, ContentIdV2, LinkedBasisRecordV2,
-    ProductClaimsErrorV2, TerminalResultV2,
+    AdmittedBasisV2, BASIS_SEMANTIC_ID_DOMAIN_V2, ClaimsCandidateV2, ContentIdV2,
+    LinkedBasisRecordV2, ProductClaimsErrorV2, semantic_basis_preimage_v2,
 };
 use dclutch_market_core_codec::{CoreState, Phase as CorePhase, STATE_BYTES};
 use dclutch_product_contract::product::{InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1};
@@ -44,39 +51,29 @@ use super::reauthenticate;
 pub const LIABILITY_BASIS_ACTION_MAGIC_V2: [u8; 8] = *b"DCLLBX02";
 /// Exact fixed LiabilityBasisV2 action width before an optional Custody request.
 pub const LIABILITY_BASIS_ACTION_BYTES_V2: usize = 80;
-/// LiabilityBasisV2 Claims aggregate fixed header width.
-pub const LIABILITY_BASIS_MARKET_HEADER_BYTES_V2: usize = 256;
-/// LiabilityBasisV2 Claims Position fixed header width.
-pub const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2: usize = 128;
-/// Exact rational terminal-coordinate record width.
-pub const TERMINAL_COORDINATE_BYTES_V2: usize = 32;
-/// Canonical rational terminal-coordinate magic.
-pub const TERMINAL_COORDINATE_MAGIC_V2: [u8; 8] = *b"DCLTRC02";
-/// LiabilityBasisV2 aggregate PDA seed domain.
-pub const LIABILITY_BASIS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
-/// LiabilityBasisV2 Position PDA seed domain.
-pub const LIABILITY_BASIS_POSITION_SEED_V2: &[u8] = b"dclutch:lbv2:position";
+pub use dclutch_claims_svm::liability_basis_state_v2::{
+    LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
+    LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
+    LiabilityBasisPositionInputV2,
+};
+pub(crate) use dclutch_claims_svm::liability_basis_state_v2::{
+    LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
+};
+pub use dclutch_claims_svm::product_basis_terminal_v3::{
+    TERMINAL_COORDINATE_BYTES_V2, TERMINAL_COORDINATE_MAGIC_V2,
+    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
+};
 /// LiabilityBasisV2 schema-release identity used by finalized raw records.
 pub const LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
     0x5c, 0x84, 0x2a, 0xe9, 0xe9, 0x15, 0x51, 0xd1, 0xaf, 0x99, 0xcf, 0x99, 0xfd, 0x53, 0x7f, 0x64,
     0xfb, 0x8d, 0xbf, 0x6a, 0x4e, 0x88, 0x3f, 0x22, 0xd9, 0x0b, 0xd5, 0xf3, 0x24, 0x5f, 0x6e, 0x2e,
 ];
-/// Rational terminal-coordinate schema identity used by finalized raw records.
-pub const TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0xa8, 0x66, 0x06, 0x2a, 0xe7, 0x6d, 0x3d, 0xc3, 0xa7, 0xc7, 0xce, 0xe5, 0x34, 0x0a, 0xc9, 0xe4,
-    0x1f, 0x20, 0x22, 0x69, 0xcb, 0x23, 0xe9, 0xb7, 0x04, 0x61, 0xb0, 0x16, 0xf1, 0x8d, 0x5f, 0x61,
-];
-
 const ABI_VERSION_V2: u16 = 2;
-const MARKET_MAGIC_V2: [u8; 8] = *b"DCLLBM02";
-const POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
 const RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLLBR02";
 const RECEIPT_BYTES_V2: usize = 168;
-const CANDIDATE_DIGEST_DOMAIN_V2: [u8; 27] = *b"dclutch/lbv2/candidate/v2\0\0";
-const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
-const BASIS_PRODUCT_LINK_OFFSET_V2: usize = 32;
-const BASIS_PRODUCT_LINK_END_V2: usize = 64;
-
+/// Physical candidate commitment used by operator construction and typed
+/// Custody composition: domain || exact post-aggregate || exact post-Position.
+pub const LIABILITY_BASIS_CANDIDATE_DIGEST_DOMAIN_V2: [u8; 27] = *b"dclutch/lbv2/candidate/v2\0\0";
 const OWNER_ACCOUNT: usize = 0;
 const MARKET_ACCOUNT: usize = 1;
 const POSITION_ACCOUNT: usize = 2;
@@ -98,14 +95,15 @@ const CORE_PROGRAM_ACCOUNT: usize = 17;
 const CORE_PROGRAMDATA_ACCOUNT: usize = 18;
 const CUSTODY_CALLER_AUTHORITY_ACCOUNT: usize = 19;
 const REALM_ACCOUNT: usize = 20;
-const CUSTODY_REPLAY_ACCOUNT: usize = 21;
-const COLLATERAL_MINT_ACCOUNT: usize = 22;
-const SOURCE_TOKEN_ACCOUNT: usize = 23;
-const DESTINATION_TOKEN_ACCOUNT: usize = 24;
-const CUSTODY_AUTHORITY_ACCOUNT: usize = 25;
-const COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 26;
+const REALM_STAGING_ACCOUNT: usize = 21;
+const CUSTODY_REPLAY_ACCOUNT: usize = 22;
+const COLLATERAL_MINT_ACCOUNT: usize = 23;
+const SOURCE_TOKEN_ACCOUNT: usize = 24;
+const DESTINATION_TOKEN_ACCOUNT: usize = 25;
+const CUSTODY_AUTHORITY_ACCOUNT: usize = 26;
+const COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 27;
 /// Exact LiabilityBasisV2 account count.
-pub const LIABILITY_BASIS_ACCOUNT_COUNT_V2: usize = 27;
+pub const LIABILITY_BASIS_ACCOUNT_COUNT_V2: usize = 28;
 
 const ACTION_KIND_OFFSET: usize = 10;
 const ACTION_CUSTODY_PRESENT_OFFSET: usize = 11;
@@ -115,23 +113,6 @@ const ACTION_QUANTITY_OFFSET: usize = 32;
 const ACTION_CLAIM_INDEX_OFFSET: usize = 40;
 const ACTION_CUSTODY_REVISION_OFFSET: usize = 48;
 const ACTION_NONCE_OFFSET: usize = 56;
-
-const MARKET_CLAIM_COUNT_OFFSET: usize = 12;
-const MARKET_REVISION_OFFSET: usize = 16;
-const MARKET_LOGICAL_ID_OFFSET: usize = 24;
-const MARKET_RELEASE_SET_OFFSET: usize = 56;
-const MARKET_REGISTRY_OFFSET: usize = 88;
-const MARKET_PRODUCT_OFFSET: usize = 120;
-const MARKET_BASIS_OFFSET: usize = 152;
-const MARKET_REALM_OFFSET: usize = 184;
-const MARKET_CUSTODY_CONTEXT_OFFSET: usize = 216;
-const MARKET_GENERATION_OFFSET: usize = 248;
-
-const POSITION_CLAIM_COUNT_OFFSET: usize = 12;
-const POSITION_REVISION_OFFSET: usize = 16;
-const POSITION_MARKET_OFFSET: usize = 24;
-const POSITION_OWNER_OFFSET: usize = 56;
-const POSITION_BASIS_OFFSET: usize = 88;
 
 /// Stable LiabilityBasisV2 SBF refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,7 +156,8 @@ pub enum LiabilityBasisActionKindV2 {
     Split = 0,
     /// Burn every elementary claim and withdraw `qQ` collateral.
     Merge = 1,
-    /// Burn one terminal claim and withdraw its evaluated payout.
+    /// Retired legacy tag. Product V3 terminal settlement is composed through
+    /// RationalRepresentationV2 and canonical SignedDeltaV3 instead.
     TerminalRedeem = 2,
 }
 
@@ -184,7 +166,7 @@ impl LiabilityBasisActionKindV2 {
         match value {
             0 => Ok(Self::Split),
             1 => Ok(Self::Merge),
-            2 => Ok(Self::TerminalRedeem),
+            2 => Err(LiabilityBasisSbfErrorV2::Instruction),
             _ => Err(LiabilityBasisSbfErrorV2::Instruction),
         }
     }
@@ -219,6 +201,7 @@ impl LiabilityBasisActionV2 {
     /// Construct and validate one canonical action.
     pub fn new(input: LiabilityBasisActionInputV2) -> Result<Self, LiabilityBasisSbfErrorV2> {
         if input.quantity == 0
+            || input.kind == LiabilityBasisActionKindV2::TerminalRedeem
             || matches!(
                 input.kind,
                 LiabilityBasisActionKindV2::Split | LiabilityBasisActionKindV2::Merge
@@ -317,96 +300,17 @@ impl LiabilityBasisActionV2 {
     }
 }
 
-/// Immutable LiabilityBasisV2 aggregate construction input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LiabilityBasisMarketInputV2 {
-    /// Claims aggregate revision.
-    pub revision: u64,
-    /// Canonical Core Market PDA.
-    pub logical_market: [u8; 32],
-    /// Immutable selected release set.
-    pub release_set: [u8; 32],
-    /// Immutable selected Registry program.
-    pub registry_program: [u8; 32],
-    /// Finalized Product-instance digest.
-    pub product_instance_id: [u8; 32],
-    /// Finalized LiabilityBasisV2 digest.
-    pub basis_id: [u8; 32],
-    /// Immutable Realm digest.
-    pub realm_id: [u8; 32],
-    /// Custody replay namespace.
-    pub custody_context: [u8; 32],
-    /// Immutable Market generation.
-    pub generation: u64,
-}
-
-/// Immutable LiabilityBasisV2 Position construction input.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct LiabilityBasisPositionInputV2 {
-    /// Position revision.
-    pub revision: u64,
-    /// Claims aggregate account.
-    pub market_account: [u8; 32],
-    /// Sole Position owner.
-    pub owner: [u8; 32],
-    /// Finalized LiabilityBasisV2 digest.
-    pub basis_id: [u8; 32],
-}
-
 /// Encode canonical runtime-width aggregate state for initialization tooling.
 pub fn encode_liability_basis_market_v2(
     input: LiabilityBasisMarketInputV2,
     supplies: &[u64],
 ) -> Result<Vec<u8>, LiabilityBasisSbfErrorV2> {
-    require_nonzero_ids(&[
-        input.logical_market,
-        input.release_set,
-        input.registry_program,
-        input.product_instance_id,
-        input.basis_id,
-        input.realm_id,
-        input.custody_context,
-    ])?;
     let claim_count =
         u32::try_from(supplies.len()).map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
-    if claim_count == 0 {
-        return Err(LiabilityBasisSbfErrorV2::ClaimsState);
-    }
     let width = vector_width(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, claim_count)?;
     let mut output = alloc::vec![0_u8; width];
-    put(&mut output, 0, &MARKET_MAGIC_V2)?;
-    put(&mut output, 8, &ABI_VERSION_V2.to_le_bytes())?;
-    put(
-        &mut output,
-        MARKET_CLAIM_COUNT_OFFSET,
-        &claim_count.to_le_bytes(),
-    )?;
-    put(
-        &mut output,
-        MARKET_REVISION_OFFSET,
-        &input.revision.to_le_bytes(),
-    )?;
-    for (offset, value) in [
-        (MARKET_LOGICAL_ID_OFFSET, input.logical_market),
-        (MARKET_RELEASE_SET_OFFSET, input.release_set),
-        (MARKET_REGISTRY_OFFSET, input.registry_program),
-        (MARKET_PRODUCT_OFFSET, input.product_instance_id),
-        (MARKET_BASIS_OFFSET, input.basis_id),
-        (MARKET_REALM_OFFSET, input.realm_id),
-        (MARKET_CUSTODY_CONTEXT_OFFSET, input.custody_context),
-    ] {
-        put(&mut output, offset, &value)?;
-    }
-    put(
-        &mut output,
-        MARKET_GENERATION_OFFSET,
-        &input.generation.to_le_bytes(),
-    )?;
-    write_vector(
-        &mut output,
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
-        supplies,
-    )?;
+    encode_liability_basis_market_into_v2(input, supplies, &mut output)
+        .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     Ok(output)
 }
 
@@ -415,34 +319,12 @@ pub fn encode_liability_basis_position_v2(
     input: LiabilityBasisPositionInputV2,
     balances: &[u64],
 ) -> Result<Vec<u8>, LiabilityBasisSbfErrorV2> {
-    require_nonzero_ids(&[input.market_account, input.owner, input.basis_id])?;
     let claim_count =
         u32::try_from(balances.len()).map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
-    if claim_count == 0 {
-        return Err(LiabilityBasisSbfErrorV2::ClaimsState);
-    }
     let width = vector_width(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, claim_count)?;
     let mut output = alloc::vec![0_u8; width];
-    put(&mut output, 0, &POSITION_MAGIC_V2)?;
-    put(&mut output, 8, &ABI_VERSION_V2.to_le_bytes())?;
-    put(
-        &mut output,
-        POSITION_CLAIM_COUNT_OFFSET,
-        &claim_count.to_le_bytes(),
-    )?;
-    put(
-        &mut output,
-        POSITION_REVISION_OFFSET,
-        &input.revision.to_le_bytes(),
-    )?;
-    put(&mut output, POSITION_MARKET_OFFSET, &input.market_account)?;
-    put(&mut output, POSITION_OWNER_OFFSET, &input.owner)?;
-    put(&mut output, POSITION_BASIS_OFFSET, &input.basis_id)?;
-    write_vector(
-        &mut output,
-        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-        balances,
-    )?;
+    encode_liability_basis_position_into_v2(input, balances, &mut output)
+        .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     Ok(output)
 }
 
@@ -475,13 +357,95 @@ pub(super) fn process(
     let (action_bytes, custody_bytes) = split_instruction(instruction_data)?;
     let action = LiabilityBasisActionV2::decode(action_bytes)?;
     let accounts = LiabilityBasisAccountsV2::parse(account_infos)?;
-    authenticate_privileges(program_id, &accounts, action)?;
+    authenticate_privileges(program_id, &accounts)?;
+    let executed = execute_authenticated_transition_v2(
+        program_id,
+        &accounts,
+        action,
+        custody_bytes,
+        hash(action_bytes).to_bytes(),
+        accounts.owner.key.to_bytes(),
+    )?;
+    let receipt = LiabilityBasisReceiptV2 {
+        action: action.0.kind,
+        market_revision_before: action.0.expected_market_revision,
+        market_revision_after: executed.market_revision_after,
+        position_revision_before: action.0.expected_position_revision,
+        position_revision_after: executed.position_revision_after,
+        collateral_amount: executed.collateral_amount,
+        custody_revision_before: action.0.expected_custody_revision,
+        custody_revision_after: if action.0.custody_present {
+            action
+                .0
+                .expected_custody_revision
+                .checked_add(1)
+                .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?
+        } else {
+            0
+        },
+        basis_id: executed.basis_id,
+        candidate_digest: executed.candidate_digest,
+        custody_receipt_digest: executed.custody_receipt_digest,
+    };
+    let receipt_bytes = receipt.to_bytes();
+    set_return_data(&receipt_bytes);
+    Ok(())
+}
 
+struct ExecutedTransitionV2 {
+    market_revision_after: u64,
+    position_revision_after: u64,
+    collateral_amount: u64,
+    basis_id: [u8; 32],
+    candidate_digest: [u8; 32],
+    custody_receipt_digest: [u8; 32],
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn execute_authenticated_transition_v2<'info>(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, 'info>,
+    action: LiabilityBasisActionV2,
+    custody_bytes: Option<&[u8]>,
+    custody_parent_request_digest: [u8; 32],
+    position_owner: [u8; 32],
+) -> Result<ExecutedTransitionV2, ProgramError> {
+    let planned = plan_authenticated_transition_v2(program_id, accounts, action, position_owner)?;
+    complete_authenticated_transition_v2(
+        program_id,
+        accounts,
+        planned.as_ref(),
+        custody_bytes,
+        custody_parent_request_digest,
+    )
+}
+
+struct PlannedTransitionV2 {
+    market: MarketViewV2,
+    action: LiabilityBasisActionV2,
+    token_before: TokenAmounts,
+    candidate: ClaimsCandidateV2,
+    market_revision_after: u64,
+    position_revision_after: u64,
+    market_candidate: Vec<u8>,
+    position_candidate: Vec<u8>,
+    candidate_digest: [u8; 32],
+}
+
+#[inline(never)]
+fn plan_authenticated_transition_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    action: LiabilityBasisActionV2,
+    position_owner: [u8; 32],
+) -> Result<Box<PlannedTransitionV2>, ProgramError> {
     let market_data = accounts
         .market
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
-    let market = MarketViewV2::decode(&market_data)?;
+    let market =
+        MarketViewV2::decode(&market_data).map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     let aggregate_before = read_vector(
         &market_data,
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
@@ -492,32 +456,37 @@ pub(super) fn process(
         .position
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
-    let position = PositionViewV2::decode(&position_data)?;
+    let position = PositionViewV2::decode(&position_data)
+        .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     let position_before = read_vector(
         &position_data,
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         position.claim_count,
     )?;
     drop(position_data);
-    authenticate_claims_state(program_id, &accounts, action, market, position)?;
-
-    authenticate_releases(&accounts, market)?;
-    let basis = authenticate_product_and_basis(&accounts, market)?;
-    let terminal = authenticate_core_and_terminal(&accounts, market, basis, action)?;
-    let token_before = token_amounts(&accounts)?;
+    authenticate_claims_state(
+        program_id,
+        accounts,
+        action,
+        market,
+        position,
+        position_owner,
+    )?;
+    authenticate_releases(accounts, market)?;
+    let basis = authenticate_product_and_basis(accounts, market)?;
+    authenticate_open_core(accounts, market, action)?;
+    let token_before = token_amounts(accounts)?;
     let hoard_before = match action.0.kind {
         LiabilityBasisActionKindV2::Split => token_before.destination,
         LiabilityBasisActionKindV2::Merge | LiabilityBasisActionKindV2::TerminalRedeem => {
             token_before.source
         }
     };
-
     let mut aggregate_after = alloc::vec![0_u64; aggregate_before.len()];
     let mut position_after = alloc::vec![0_u64; position_before.len()];
     let candidate = plan_candidate(
         basis,
         action,
-        terminal,
         &aggregate_before,
         &position_before,
         hoard_before,
@@ -539,69 +508,99 @@ pub(super) fn process(
     let position_candidate =
         candidate_position_bytes(accounts.position, position_revision_after, &position_after)?;
     let candidate_digest = hashv(&[
-        &CANDIDATE_DIGEST_DOMAIN_V2,
+        &LIABILITY_BASIS_CANDIDATE_DIGEST_DOMAIN_V2,
         &market_candidate,
         &position_candidate,
     ])
     .to_bytes();
-
-    let custody_receipt_digest = if action.0.custody_present {
-        let request_bytes = custody_bytes.ok_or(LiabilityBasisSbfErrorV2::Instruction)?;
-        let request = authenticate_custody_request(
-            program_id,
-            &accounts,
-            market,
-            action,
-            candidate,
-            candidate_digest,
-            action_bytes,
-            request_bytes,
-        )?;
-        invoke_custody(program_id, &accounts, request, request_bytes)?
-    } else {
-        if custody_bytes.is_some()
-            || candidate.collateral_in() != 0
-            || candidate.collateral_out() != 0
-        {
-            return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
-        }
-        [0_u8; 32]
-    };
-
-    authenticate_physical_postconditions(&accounts, action, candidate, token_before)?;
-    let receipt = LiabilityBasisReceiptV2 {
-        action: action.0.kind,
-        market_revision_before: action.0.expected_market_revision,
+    Ok(Box::new(PlannedTransitionV2 {
+        market,
+        action,
+        token_before,
+        candidate,
         market_revision_after,
-        position_revision_before: action.0.expected_position_revision,
         position_revision_after,
-        collateral_amount: candidate
-            .collateral_in()
-            .checked_add(candidate.collateral_out())
-            .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?,
-        custody_revision_before: action.0.expected_custody_revision,
-        custody_revision_after: if action.0.custody_present {
-            action
-                .0
-                .expected_custody_revision
-                .checked_add(1)
-                .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?
-        } else {
-            0
-        },
-        basis_id: market.basis_id,
+        market_candidate,
+        position_candidate,
         candidate_digest,
-        custody_receipt_digest,
-    };
-    let receipt_bytes = receipt.to_bytes();
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn complete_authenticated_transition_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    planned: &PlannedTransitionV2,
+    custody_bytes: Option<&[u8]>,
+    custody_parent_request_digest: [u8; 32],
+) -> Result<ExecutedTransitionV2, ProgramError> {
+    let custody_evidence = execute_custody_phase_v2(
+        program_id,
+        accounts,
+        planned,
+        custody_bytes,
+        custody_parent_request_digest,
+    )?;
+    authenticate_physical_postconditions(
+        accounts,
+        planned.action,
+        planned.candidate,
+        planned.token_before,
+    )?;
+    let collateral_amount = planned
+        .candidate
+        .collateral_in()
+        .checked_add(planned.candidate.collateral_out())
+        .ok_or(LiabilityBasisSbfErrorV2::Postcondition)?;
     commit_candidates(
         accounts.market,
         accounts.position,
-        &market_candidate,
-        &position_candidate,
+        &planned.market_candidate,
+        &planned.position_candidate,
     )?;
-    set_return_data(&receipt_bytes);
-    Ok(())
+    Ok(ExecutedTransitionV2 {
+        market_revision_after: planned.market_revision_after,
+        position_revision_after: planned.position_revision_after,
+        collateral_amount,
+        basis_id: planned.market.basis_id,
+        candidate_digest: planned.candidate_digest,
+        custody_receipt_digest: custody_evidence.receipt_digest,
+    })
+}
+
+#[inline(never)]
+fn execute_custody_phase_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    planned: &PlannedTransitionV2,
+    custody_bytes: Option<&[u8]>,
+    parent_request_digest: [u8; 32],
+) -> Result<Box<CustodyExecutionEvidenceV2>, ProgramError> {
+    if planned.action.0.custody_present {
+        let request_bytes = custody_bytes.ok_or(LiabilityBasisSbfErrorV2::Instruction)?;
+        let request = authenticate_custody_request(
+            program_id,
+            accounts,
+            planned.market,
+            planned.action,
+            planned.candidate,
+            planned.candidate_digest,
+            parent_request_digest,
+            accounts.owner.key.to_bytes(),
+            request_bytes,
+        )?;
+        return invoke_custody(program_id, accounts, request, request_bytes).map(Box::new);
+    }
+    if custody_bytes.is_some()
+        || planned.candidate.collateral_in() != 0
+        || planned.candidate.collateral_out() != 0
+    {
+        return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
+    }
+    Ok(Box::new(CustodyExecutionEvidenceV2 {
+        receipt_digest: [0; 32],
+    }))
 }
 
 fn split_instruction(
@@ -656,6 +655,7 @@ struct LiabilityBasisAccountsV2<'accounts, 'info> {
     core_programdata: &'accounts AccountInfo<'info>,
     custody_caller_authority: &'accounts AccountInfo<'info>,
     realm: &'accounts AccountInfo<'info>,
+    realm_staging: &'accounts AccountInfo<'info>,
     custody_replay: &'accounts AccountInfo<'info>,
     collateral_mint: &'accounts AccountInfo<'info>,
     source_token: &'accounts AccountInfo<'info>,
@@ -688,6 +688,7 @@ impl<'accounts, 'info> LiabilityBasisAccountsV2<'accounts, 'info> {
             core_programdata: account(accounts, CORE_PROGRAMDATA_ACCOUNT)?,
             custody_caller_authority: account(accounts, CUSTODY_CALLER_AUTHORITY_ACCOUNT)?,
             realm: account(accounts, REALM_ACCOUNT)?,
+            realm_staging: account(accounts, REALM_STAGING_ACCOUNT)?,
             custody_replay: account(accounts, CUSTODY_REPLAY_ACCOUNT)?,
             collateral_mint: account(accounts, COLLATERAL_MINT_ACCOUNT)?,
             source_token: account(accounts, SOURCE_TOKEN_ACCOUNT)?,
@@ -698,96 +699,9 @@ impl<'accounts, 'info> LiabilityBasisAccountsV2<'accounts, 'info> {
     }
 }
 
-#[derive(Clone, Copy)]
-struct MarketViewV2 {
-    claim_count: u32,
-    revision: u64,
-    logical_market: [u8; 32],
-    release_set: [u8; 32],
-    registry_program: [u8; 32],
-    product_instance_id: [u8; 32],
-    basis_id: [u8; 32],
-    realm_id: [u8; 32],
-    custody_context: [u8; 32],
-    generation: u64,
-}
-
-impl MarketViewV2 {
-    fn decode(bytes: &[u8]) -> Result<Self, LiabilityBasisSbfErrorV2> {
-        if read_array::<8>(bytes, 0)? != MARKET_MAGIC_V2 || read_u16(bytes, 8)? != ABI_VERSION_V2 {
-            return Err(LiabilityBasisSbfErrorV2::ClaimsState);
-        }
-        require_zero(bytes, 10, 2, LiabilityBasisSbfErrorV2::ClaimsState)?;
-        let value = Self {
-            claim_count: read_u32(bytes, MARKET_CLAIM_COUNT_OFFSET)?,
-            revision: read_u64(bytes, MARKET_REVISION_OFFSET)?,
-            logical_market: read_array(bytes, MARKET_LOGICAL_ID_OFFSET)?,
-            release_set: read_array(bytes, MARKET_RELEASE_SET_OFFSET)?,
-            registry_program: read_array(bytes, MARKET_REGISTRY_OFFSET)?,
-            product_instance_id: read_array(bytes, MARKET_PRODUCT_OFFSET)?,
-            basis_id: read_array(bytes, MARKET_BASIS_OFFSET)?,
-            realm_id: read_array(bytes, MARKET_REALM_OFFSET)?,
-            custody_context: read_array(bytes, MARKET_CUSTODY_CONTEXT_OFFSET)?,
-            generation: read_u64(bytes, MARKET_GENERATION_OFFSET)?,
-        };
-        require_nonzero_ids(&[
-            value.logical_market,
-            value.release_set,
-            value.registry_program,
-            value.product_instance_id,
-            value.basis_id,
-            value.realm_id,
-            value.custody_context,
-        ])?;
-        if value.claim_count == 0
-            || bytes.len()
-                != vector_width(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, value.claim_count)?
-        {
-            return Err(LiabilityBasisSbfErrorV2::ClaimsState);
-        }
-        Ok(value)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PositionViewV2 {
-    claim_count: u32,
-    revision: u64,
-    market_account: [u8; 32],
-    owner: [u8; 32],
-    basis_id: [u8; 32],
-}
-
-impl PositionViewV2 {
-    fn decode(bytes: &[u8]) -> Result<Self, LiabilityBasisSbfErrorV2> {
-        if read_array::<8>(bytes, 0)? != POSITION_MAGIC_V2 || read_u16(bytes, 8)? != ABI_VERSION_V2
-        {
-            return Err(LiabilityBasisSbfErrorV2::ClaimsState);
-        }
-        require_zero(bytes, 10, 2, LiabilityBasisSbfErrorV2::ClaimsState)?;
-        require_zero(bytes, 120, 8, LiabilityBasisSbfErrorV2::ClaimsState)?;
-        let value = Self {
-            claim_count: read_u32(bytes, POSITION_CLAIM_COUNT_OFFSET)?,
-            revision: read_u64(bytes, POSITION_REVISION_OFFSET)?,
-            market_account: read_array(bytes, POSITION_MARKET_OFFSET)?,
-            owner: read_array(bytes, POSITION_OWNER_OFFSET)?,
-            basis_id: read_array(bytes, POSITION_BASIS_OFFSET)?,
-        };
-        require_nonzero_ids(&[value.market_account, value.owner, value.basis_id])?;
-        if value.claim_count == 0
-            || bytes.len()
-                != vector_width(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, value.claim_count)?
-        {
-            return Err(LiabilityBasisSbfErrorV2::ClaimsState);
-        }
-        Ok(value)
-    }
-}
-
 fn authenticate_privileges(
     program_id: &Pubkey,
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
-    _action: LiabilityBasisActionV2,
 ) -> Result<(), ProgramError> {
     if !accounts.owner.is_signer
         || accounts.owner.is_writable
@@ -847,6 +761,7 @@ fn authenticate_privileges(
         accounts.custody_programdata,
         accounts.core_programdata,
         accounts.realm,
+        accounts.realm_staging,
         accounts.custody_authority,
     ] {
         if account.is_signer || account.is_writable {
@@ -856,30 +771,30 @@ fn authenticate_privileges(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_claims_state(
     program_id: &Pubkey,
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     action: LiabilityBasisActionV2,
     market: MarketViewV2,
     position: PositionViewV2,
+    expected_position_owner: [u8; 32],
 ) -> Result<(), ProgramError> {
     let market_seeds = [
         LIABILITY_BASIS_MARKET_SEED_V2,
         market.logical_market.as_slice(),
     ];
     let expected_market = Pubkey::find_program_address(&market_seeds, program_id).0;
-    let position_seeds = [
-        LIABILITY_BASIS_POSITION_SEED_V2,
-        accounts.market.key.as_ref(),
-        accounts.owner.key.as_ref(),
-    ];
-    let expected_position = Pubkey::find_program_address(&position_seeds, program_id).0;
+    let position_seeds =
+        ProtocolPositionSeedsV2::new(accounts.market.key.to_bytes(), expected_position_owner)
+            .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
+    let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
     if accounts.market.owner != program_id
         || accounts.position.owner != program_id
         || accounts.market.key != &expected_market
         || accounts.position.key != &expected_position
         || position.market_account != accounts.market.key.to_bytes()
-        || position.owner != accounts.owner.key.to_bytes()
+        || position.owner != expected_position_owner
         || position.basis_id != market.basis_id
         || position.claim_count != market.claim_count
         || market.registry_program != accounts.registry.key.to_bytes()
@@ -891,6 +806,7 @@ fn authenticate_claims_state(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_releases(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
@@ -927,18 +843,40 @@ fn authenticate_releases(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_product_and_basis(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
 ) -> Result<AdmittedBasisV2, ProgramError> {
-    authenticate_self_finalized_record(
-        accounts,
+    authenticate_product_and_basis_records(
         accounts.basis_record,
         accounts.basis_staging,
+        accounts.product_record,
+        accounts.product_staging,
+        accounts.rent,
+        accounts.core_program,
+        market,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_product_and_basis_records(
+    basis_record: &AccountInfo<'_>,
+    basis_staging: &AccountInfo<'_>,
+    product_record: &AccountInfo<'_>,
+    product_staging: &AccountInfo<'_>,
+    rent: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    market: MarketViewV2,
+) -> Result<AdmittedBasisV2, ProgramError> {
+    authenticate_self_finalized_record(
+        core_program,
+        rent,
+        basis_record,
+        basis_staging,
         LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
     )?;
-    let basis_data = accounts
-        .basis_record
+    let basis_data = basis_record
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
     let linked = LinkedBasisRecordV2::decode(&basis_data)
@@ -949,26 +887,26 @@ fn authenticate_product_and_basis(
         return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
     }
     let embedded_basis = linked.basis_record();
-    let basis_prefix = embedded_basis
-        .get(..BASIS_PRODUCT_LINK_OFFSET_V2)
-        .ok_or(LiabilityBasisSbfErrorV2::ProductLink)?;
-    let basis_suffix = embedded_basis
-        .get(BASIS_PRODUCT_LINK_END_V2..)
-        .ok_or(LiabilityBasisSbfErrorV2::ProductLink)?;
-    let basis_semantic_id =
-        hashv(&[BASIS_SEMANTIC_ID_DOMAIN_V2, basis_prefix, basis_suffix]).to_bytes();
+    let semantic_preimage = semantic_basis_preimage_v2(embedded_basis)
+        .map_err(|_| LiabilityBasisSbfErrorV2::ProductLink)?;
+    let basis_semantic_id = hashv(&[
+        BASIS_SEMANTIC_ID_DOMAIN_V2,
+        semantic_preimage.prefix(),
+        semantic_preimage.suffix(),
+    ])
+    .to_bytes();
     if basis_semantic_id != market.basis_id {
         return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
     }
     authenticate_finalized_record(
-        accounts,
-        accounts.product_record,
-        accounts.product_staging,
+        core_program,
+        rent,
+        product_record,
+        product_staging,
         PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
         market.product_instance_id,
     )?;
-    let product_data = accounts
-        .product_record
+    let product_data = product_record
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
     let product =
@@ -984,8 +922,9 @@ fn authenticate_product_and_basis(
         .map_err(|_| LiabilityBasisSbfErrorV2::ProductLink.into())
 }
 
-fn authenticate_self_finalized_record(
-    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+pub(crate) fn authenticate_self_finalized_record(
+    core_program: &AccountInfo<'_>,
+    rent: &AccountInfo<'_>,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema_release: [u8; 32],
@@ -995,23 +934,24 @@ fn authenticate_self_finalized_record(
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
     let digest = hash(&data).to_bytes();
     drop(data);
-    authenticate_finalized_record(accounts, raw, staging, schema_release, digest)
+    authenticate_finalized_record(core_program, rent, raw, staging, schema_release, digest)
 }
 
 fn authenticate_finalized_record(
-    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    core_program: &AccountInfo<'_>,
+    rent_account: &AccountInfo<'_>,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     schema_release: [u8; 32],
     expected_digest: [u8; 32],
 ) -> Result<(), ProgramError> {
-    if raw.owner != accounts.core_program.key
+    if raw.owner != core_program.key
         || raw.executable
         || staging.owner != &system_program::ID
         || staging.data_len() != 0
         || staging.executable
-        || accounts.rent.key != &sysvar::rent::ID
-        || accounts.rent.executable
+        || rent_account.key != &sysvar::rent::ID
+        || rent_account.executable
         || hash(
             &raw.try_borrow_data()
                 .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?,
@@ -1031,12 +971,12 @@ fn authenticate_finalized_record(
         schema_release.as_slice(),
         expected_digest.as_slice(),
     ];
-    if raw.key != &Pubkey::find_program_address(&raw_seeds, accounts.core_program.key).0
-        || staging.key != &Pubkey::find_program_address(&staging_seeds, accounts.core_program.key).0
+    if raw.key != &Pubkey::find_program_address(&raw_seeds, core_program.key).0
+        || staging.key != &Pubkey::find_program_address(&staging_seeds, core_program.key).0
     {
         return Err(LiabilityBasisSbfErrorV2::FinalizedRecord.into());
     }
-    let rent = Rent::from_account_info(accounts.rent)
+    let rent = Rent::from_account_info(rent_account)
         .map_err(|_| LiabilityBasisSbfErrorV2::FinalizedRecord)?;
     if raw.lamports() < rent.minimum_balance(raw.data_len()) {
         return Err(LiabilityBasisSbfErrorV2::FinalizedRecord.into());
@@ -1044,12 +984,12 @@ fn authenticate_finalized_record(
     Ok(())
 }
 
-fn authenticate_core_and_terminal(
+#[inline(never)]
+fn authenticate_open_core(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     market: MarketViewV2,
-    basis: AdmittedBasisV2,
     action: LiabilityBasisActionV2,
-) -> Result<Option<TerminalResultV2>, ProgramError> {
+) -> Result<(), ProgramError> {
     if accounts.core_market.owner != accounts.core_program.key
         || accounts.core_market.key.to_bytes() != market.logical_market
         || accounts.core_market.data_len() != STATE_BYTES
@@ -1079,58 +1019,10 @@ fn authenticate_core_and_terminal(
             {
                 return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
             }
-            Ok(None)
+            Ok(())
         }
         LiabilityBasisActionKindV2::TerminalRedeem => {
-            if core.phase != CorePhase::Terminal {
-                return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
-            }
-            match basis.kind() {
-                BasisKindV2::CategoricalQ1 => {
-                    if accounts.terminal_coordinate.key != accounts.core_program.key
-                        || accounts.terminal_coordinate_staging.key != accounts.core_program.key
-                    {
-                        return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
-                    }
-                    Ok(Some(TerminalResultV2::Categorical {
-                        winner: core.terminal_winner,
-                    }))
-                }
-                BasisKindV2::CappedRampComplement => {
-                    let terminal_digest = core
-                        .terminal_receipt
-                        .ok_or(LiabilityBasisSbfErrorV2::ProductLink)?
-                        .to_bytes();
-                    authenticate_finalized_record(
-                        accounts,
-                        accounts.terminal_coordinate,
-                        accounts.terminal_coordinate_staging,
-                        TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-                        terminal_digest,
-                    )?;
-                    let coordinate = accounts
-                        .terminal_coordinate
-                        .try_borrow_data()
-                        .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
-                    if coordinate.len() != TERMINAL_COORDINATE_BYTES_V2
-                        || read_array::<8>(&coordinate, 0)? != TERMINAL_COORDINATE_MAGIC_V2
-                        || read_u16(&coordinate, 8)? != ABI_VERSION_V2
-                    {
-                        return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
-                    }
-                    require_zero(&coordinate, 10, 6, LiabilityBasisSbfErrorV2::ProductLink)?;
-                    require_zero(&coordinate, 28, 4, LiabilityBasisSbfErrorV2::ProductLink)?;
-                    let numerator = read_i64(&coordinate, 16)?;
-                    let denominator = read_u32(&coordinate, 24)?;
-                    if denominator == 0 {
-                        return Err(LiabilityBasisSbfErrorV2::ProductLink.into());
-                    }
-                    Ok(Some(TerminalResultV2::RationalCoordinate {
-                        numerator,
-                        denominator,
-                    }))
-                }
-            }
+            Err(LiabilityBasisSbfErrorV2::Instruction.into())
         }
     }
 }
@@ -1139,7 +1031,6 @@ fn authenticate_core_and_terminal(
 fn plan_candidate(
     basis: AdmittedBasisV2,
     action: LiabilityBasisActionV2,
-    terminal: Option<TerminalResultV2>,
     aggregate_before: &[u64],
     position_before: &[u64],
     hoard_before: u64,
@@ -1163,16 +1054,9 @@ fn plan_candidate(
             aggregate_after,
             position_after,
         ),
-        LiabilityBasisActionKindV2::TerminalRedeem => basis.plan_terminal_redeem_into(
-            terminal.ok_or(LiabilityBasisSbfErrorV2::ProductLink)?,
-            action.0.claim_index,
-            aggregate_before,
-            position_before,
-            action.0.quantity,
-            hoard_before,
-            aggregate_after,
-            position_after,
-        ),
+        LiabilityBasisActionKindV2::TerminalRedeem => {
+            return Err(LiabilityBasisSbfErrorV2::Instruction.into());
+        }
     };
     result.map_err(map_candidate_error)
 }
@@ -1181,6 +1065,7 @@ fn map_candidate_error(_error: ProductClaimsErrorV2) -> ProgramError {
     LiabilityBasisSbfErrorV2::Candidate.into()
 }
 
+#[inline(never)]
 fn candidate_market_bytes(
     account: &AccountInfo<'_>,
     revision: u64,
@@ -1189,21 +1074,29 @@ fn candidate_market_bytes(
     let data = account
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
-    let mut candidate = data.to_vec();
+    let view = MarketViewV2::decode(&data).map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
+    let mut candidate = alloc::vec![0_u8; data.len()];
     drop(data);
-    put(
-        &mut candidate,
-        MARKET_REVISION_OFFSET,
-        &revision.to_le_bytes(),
-    )?;
-    write_vector(
-        &mut candidate,
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+    encode_liability_basis_market_into_v2(
+        LiabilityBasisMarketInputV2 {
+            revision,
+            logical_market: view.logical_market,
+            release_set: view.release_set,
+            registry_program: view.registry_program,
+            product_instance_id: view.product_instance_id,
+            basis_id: view.basis_id,
+            realm_id: view.realm_id,
+            custody_context: view.custody_context,
+            generation: view.generation,
+        },
         supplies,
-    )?;
+        &mut candidate,
+    )
+    .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     Ok(candidate)
 }
 
+#[inline(never)]
 fn candidate_position_bytes(
     account: &AccountInfo<'_>,
     revision: u64,
@@ -1212,18 +1105,20 @@ fn candidate_position_bytes(
     let data = account
         .try_borrow_data()
         .map_err(|_| LiabilityBasisSbfErrorV2::Accounts)?;
-    let mut candidate = data.to_vec();
+    let view = PositionViewV2::decode(&data).map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
+    let mut candidate = alloc::vec![0_u8; data.len()];
     drop(data);
-    put(
-        &mut candidate,
-        POSITION_REVISION_OFFSET,
-        &revision.to_le_bytes(),
-    )?;
-    write_vector(
-        &mut candidate,
-        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+    encode_liability_basis_position_into_v2(
+        LiabilityBasisPositionInputV2 {
+            revision,
+            market_account: view.market_account,
+            owner: view.owner,
+            basis_id: view.basis_id,
+        },
         balances,
-    )?;
+        &mut candidate,
+    )
+    .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     Ok(candidate)
 }
 
@@ -1233,6 +1128,7 @@ struct TokenAmounts {
     destination: u64,
 }
 
+#[inline(never)]
 fn token_amounts(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
 ) -> Result<TokenAmounts, ProgramError> {
@@ -1268,6 +1164,7 @@ fn token_amounts(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn authenticate_custody_request(
     program_id: &Pubkey,
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
@@ -1275,11 +1172,41 @@ fn authenticate_custody_request(
     action: LiabilityBasisActionV2,
     candidate: ClaimsCandidateV2,
     candidate_digest: [u8; 32],
-    action_bytes: &[u8],
+    parent_request_digest: [u8; 32],
+    beneficiary: [u8; 32],
     request_bytes: &[u8],
 ) -> Result<CustodyRequestV1, ProgramError> {
     let request = CustodyRequestV1::decode(request_bytes)
         .map_err(|_| LiabilityBasisSbfErrorV2::CustodyRequest)?;
+    let expected = expected_custody_request_v2(
+        program_id,
+        accounts,
+        market,
+        action,
+        candidate,
+        candidate_digest,
+        parent_request_digest,
+        beneficiary,
+    )?;
+    if request != expected {
+        return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
+    }
+    authenticate_custody_request_accounts_v2(program_id, accounts, action, request, request_bytes)?;
+    Ok(request)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn expected_custody_request_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    market: MarketViewV2,
+    action: LiabilityBasisActionV2,
+    candidate: ClaimsCandidateV2,
+    candidate_digest: [u8; 32],
+    parent_request_digest: [u8; 32],
+    beneficiary: [u8; 32],
+) -> Result<CustodyRequestV1, ProgramError> {
     let amount = candidate
         .collateral_in()
         .checked_add(candidate.collateral_out())
@@ -1288,7 +1215,7 @@ fn authenticate_custody_request(
         return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
     }
     let split = action.0.kind == LiabilityBasisActionKindV2::Split;
-    let expected = CustodyRequestV1 {
+    Ok(CustodyRequestV1 {
         operation: OperationV1::Transfer,
         caller_role: CallerRoleV1::Claims,
         source_compartment: if split {
@@ -1308,18 +1235,10 @@ fn authenticate_custody_request(
         caller_program: program_id.to_bytes(),
         semantic: ContextV1 {
             candidate: candidate_digest,
-            source_owner: if split {
-                accounts.owner.key.to_bytes()
-            } else {
-                [0; 32]
-            },
-            destination_owner: if split {
-                [0; 32]
-            } else {
-                accounts.owner.key.to_bytes()
-            },
+            source_owner: if split { beneficiary } else { [0; 32] },
+            destination_owner: if split { [0; 32] } else { beneficiary },
             order: [0; 32],
-            parent_request_digest: hash(action_bytes).to_bytes(),
+            parent_request_digest,
             order_nonce: action.0.request_nonce,
             generation: market.generation,
             page_index: 0,
@@ -1350,10 +1269,17 @@ fn authenticate_custody_request(
             .ok_or(LiabilityBasisSbfErrorV2::CustodyRequest)?,
         amount,
         rent_lamports: 0,
-    };
-    if request != expected {
-        return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
-    }
+    })
+}
+
+fn authenticate_custody_request_accounts_v2(
+    program_id: &Pubkey,
+    accounts: &LiabilityBasisAccountsV2<'_, '_>,
+    action: LiabilityBasisActionV2,
+    request: CustodyRequestV1,
+    request_bytes: &[u8],
+) -> Result<(), ProgramError> {
+    let split = action.0.kind == LiabilityBasisActionKindV2::Split;
     let request_digest = hash(request_bytes).to_bytes();
     let caller_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set)
@@ -1413,7 +1339,11 @@ fn authenticate_custody_request(
     {
         return Err(LiabilityBasisSbfErrorV2::CustodyRequest.into());
     }
-    Ok(request)
+    Ok(())
+}
+
+struct CustodyExecutionEvidenceV2 {
+    receipt_digest: [u8; 32],
 }
 
 fn invoke_custody<'info>(
@@ -1421,16 +1351,18 @@ fn invoke_custody<'info>(
     accounts: &LiabilityBasisAccountsV2<'_, 'info>,
     request: CustodyRequestV1,
     request_bytes: &[u8],
-) -> Result<[u8; 32], ProgramError> {
+) -> Result<CustodyExecutionEvidenceV2, ProgramError> {
     let instruction = Instruction {
         program_id: *accounts.custody_program.key,
         accounts: Vec::from([
             AccountMeta::new_readonly(*accounts.custody_caller_authority.key, true),
+            AccountMeta::new_readonly(*accounts.core_market.key, false),
             AccountMeta::new_readonly(*accounts.cache.key, false),
             AccountMeta::new_readonly(*accounts.registry.key, false),
             AccountMeta::new_readonly(*accounts.claims_program.key, false),
             AccountMeta::new_readonly(*accounts.claims_programdata.key, false),
             AccountMeta::new_readonly(*accounts.realm.key, false),
+            AccountMeta::new_readonly(*accounts.realm_staging.key, false),
             AccountMeta::new(*accounts.custody_replay.key, false),
             AccountMeta::new_readonly(*accounts.collateral_mint.key, false),
             AccountMeta::new(*accounts.source_token.key, false),
@@ -1457,11 +1389,13 @@ fn invoke_custody<'info>(
         &instruction,
         &[
             accounts.custody_caller_authority.clone(),
+            accounts.core_market.clone(),
             accounts.cache.clone(),
             accounts.registry.clone(),
             accounts.claims_program.clone(),
             accounts.claims_programdata.clone(),
             accounts.realm.clone(),
+            accounts.realm_staging.clone(),
             accounts.custody_replay.clone(),
             accounts.collateral_mint.clone(),
             accounts.source_token.clone(),
@@ -1490,9 +1424,12 @@ fn invoke_custody<'info>(
     receipt
         .verify_for(request, request_digest, replay_digest)
         .map_err(|_| LiabilityBasisSbfErrorV2::Postcondition)?;
-    Ok(hash(&receipt_bytes).to_bytes())
+    Ok(CustodyExecutionEvidenceV2 {
+        receipt_digest: hash(&receipt_bytes).to_bytes(),
+    })
 }
 
+#[inline(never)]
 fn authenticate_physical_postconditions(
     accounts: &LiabilityBasisAccountsV2<'_, '_>,
     action: LiabilityBasisActionV2,
@@ -1542,6 +1479,7 @@ fn authenticate_physical_postconditions(
     Ok(())
 }
 
+#[inline(never)]
 fn commit_candidates(
     market: &AccountInfo<'_>,
     position: &AccountInfo<'_>,
@@ -1612,29 +1550,74 @@ fn account<'accounts, 'info>(
         .ok_or_else(|| LiabilityBasisSbfErrorV2::Accounts.into())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_terminal_tag_refuses_at_construction_and_decode() {
+        let input = LiabilityBasisActionInputV2 {
+            kind: LiabilityBasisActionKindV2::TerminalRedeem,
+            custody_present: true,
+            expected_market_revision: 2,
+            expected_position_revision: 3,
+            quantity: 1,
+            claim_index: 1,
+            expected_custody_revision: 4,
+            request_nonce: 5,
+        };
+        assert_eq!(
+            LiabilityBasisActionV2::new(input),
+            Err(LiabilityBasisSbfErrorV2::Instruction)
+        );
+
+        let mut bytes = [0_u8; LIABILITY_BASIS_ACTION_BYTES_V2];
+        put_infallible(&mut bytes, 0, &LIABILITY_BASIS_ACTION_MAGIC_V2);
+        put_infallible(&mut bytes, 8, &ABI_VERSION_V2.to_le_bytes());
+        put_infallible(
+            &mut bytes,
+            ACTION_KIND_OFFSET,
+            &[LiabilityBasisActionKindV2::TerminalRedeem as u8],
+        );
+        put_infallible(&mut bytes, ACTION_CUSTODY_PRESENT_OFFSET, &[1]);
+        put_infallible(
+            &mut bytes,
+            ACTION_MARKET_REVISION_OFFSET,
+            &2_u64.to_le_bytes(),
+        );
+        put_infallible(
+            &mut bytes,
+            ACTION_POSITION_REVISION_OFFSET,
+            &3_u64.to_le_bytes(),
+        );
+        put_infallible(&mut bytes, ACTION_QUANTITY_OFFSET, &1_u64.to_le_bytes());
+        put_infallible(&mut bytes, ACTION_CLAIM_INDEX_OFFSET, &1_u32.to_le_bytes());
+        put_infallible(
+            &mut bytes,
+            ACTION_CUSTODY_REVISION_OFFSET,
+            &4_u64.to_le_bytes(),
+        );
+        put_infallible(&mut bytes, ACTION_NONCE_OFFSET, &5_u64.to_le_bytes());
+        assert_eq!(
+            LiabilityBasisActionV2::decode(&bytes),
+            Err(LiabilityBasisSbfErrorV2::Instruction)
+        );
+    }
+}
+
 fn content_id_v2(value: [u8; 32]) -> Result<ContentIdV2, ProgramError> {
     ContentIdV2::new(value).map_err(|_| LiabilityBasisSbfErrorV2::ProductLink.into())
 }
 
-fn require_nonzero_ids(values: &[[u8; 32]]) -> Result<(), LiabilityBasisSbfErrorV2> {
-    if values
-        .iter()
-        .any(|value| value.iter().all(|byte| *byte == 0))
-    {
-        return Err(LiabilityBasisSbfErrorV2::ClaimsState);
-    }
-    Ok(())
+pub(crate) fn vector_width(
+    header: usize,
+    claim_count: u32,
+) -> Result<usize, LiabilityBasisSbfErrorV2> {
+    liability_basis_vector_width_v2(header, claim_count)
+        .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)
 }
 
-fn vector_width(header: usize, claim_count: u32) -> Result<usize, LiabilityBasisSbfErrorV2> {
-    usize::try_from(claim_count)
-        .ok()
-        .and_then(|count| count.checked_mul(8))
-        .and_then(|tail| header.checked_add(tail))
-        .ok_or(LiabilityBasisSbfErrorV2::ClaimsState)
-}
-
-fn read_vector(
+pub(crate) fn read_vector(
     bytes: &[u8],
     offset: usize,
     claim_count: u32,
@@ -1642,28 +1625,17 @@ fn read_vector(
     let count = usize::try_from(claim_count).map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?;
     let mut output = Vec::with_capacity(count);
     for index in 0..count {
-        let relative = index
-            .checked_mul(8)
-            .and_then(|value| offset.checked_add(value))
-            .ok_or(LiabilityBasisSbfErrorV2::ClaimsState)?;
-        output.push(read_u64(bytes, relative)?);
+        output.push(
+            read_claim_v2(
+                bytes,
+                offset,
+                claim_count,
+                u32::try_from(index).map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?,
+            )
+            .map_err(|_| LiabilityBasisSbfErrorV2::ClaimsState)?,
+        );
     }
     Ok(output)
-}
-
-fn write_vector(
-    bytes: &mut [u8],
-    offset: usize,
-    values: &[u64],
-) -> Result<(), LiabilityBasisSbfErrorV2> {
-    for (index, value) in values.iter().copied().enumerate() {
-        let relative = index
-            .checked_mul(8)
-            .and_then(|value| offset.checked_add(value))
-            .ok_or(LiabilityBasisSbfErrorV2::ClaimsState)?;
-        put(bytes, relative, &value.to_le_bytes())?;
-    }
-    Ok(())
 }
 
 fn read_byte(bytes: &[u8], offset: usize) -> Result<u8, LiabilityBasisSbfErrorV2> {
@@ -1683,10 +1655,6 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, LiabilityBasisSbfErrorV2
 
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, LiabilityBasisSbfErrorV2> {
     Ok(u64::from_le_bytes(read_array(bytes, offset)?))
-}
-
-fn read_i64(bytes: &[u8], offset: usize) -> Result<i64, LiabilityBasisSbfErrorV2> {
-    Ok(i64::from_le_bytes(read_array(bytes, offset)?))
 }
 
 fn read_array<const N: usize>(
@@ -1718,17 +1686,6 @@ fn require_zero(
     {
         return Err(error);
     }
-    Ok(())
-}
-
-fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<(), LiabilityBasisSbfErrorV2> {
-    let end = offset
-        .checked_add(value.len())
-        .ok_or(LiabilityBasisSbfErrorV2::ClaimsState)?;
-    output
-        .get_mut(offset..end)
-        .ok_or(LiabilityBasisSbfErrorV2::ClaimsState)?
-        .copy_from_slice(value);
     Ok(())
 }
 

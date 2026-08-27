@@ -3,7 +3,7 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_market_core_codec::{
-    Admission, CoreEffectAckV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV1,
+    Admission, CoreEffectAckV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
     Request, Role, STATE_BYTES,
 };
 use solana_program::{
@@ -17,7 +17,7 @@ use solana_program::{
 
 use crate::{
     CoreSbfError,
-    release::{authenticate_role, identity},
+    release::{RoleDeploymentAccounts, authenticate_roles, identity},
 };
 
 /// Exact common account prefix shared by fixed-role child effects.
@@ -181,24 +181,22 @@ pub(crate) fn authenticate_fixed_role(
     {
         return Err(CoreSbfError::CallerAuthority);
     }
-    let core_admission = Box::new(authenticate_role(
+    let admissions = authenticate_roles(
         frame.cache(),
         frame.registry(),
-        frame.core_program(),
-        frame.core_programdata(),
         state.identity.registry_program,
         state.identity.selected_release_set.to_bytes(),
-        Role::Core,
-    )?);
-    let target_admission = Box::new(authenticate_role(
-        frame.cache(),
-        frame.registry(),
-        frame.target_program(),
-        frame.target_programdata(),
-        state.identity.registry_program,
-        state.identity.selected_release_set.to_bytes(),
-        target_role,
-    )?);
+        &[
+            RoleDeploymentAccounts::new(Role::Core, frame.core_program(), frame.core_programdata()),
+            RoleDeploymentAccounts::new(
+                target_role,
+                frame.target_program(),
+                frame.target_programdata(),
+            ),
+        ],
+    )?;
+    let core_admission = Box::new(admissions.admission(Role::Core)?);
+    let target_admission = Box::new(admissions.admission(target_role)?);
     if core_admission.selected != target_admission.selected {
         return Err(CoreSbfError::Release);
     }
@@ -352,7 +350,7 @@ pub(crate) fn authenticate_market(
     {
         return Err(CoreSbfError::Market);
     }
-    let seeds = MarketCoreStateSeedsV1::new(state.identity);
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
     if Pubkey::find_program_address(&seeds.as_slices(), program_id).0 != *market.key {
         return Err(CoreSbfError::Market);
     }

@@ -4,13 +4,11 @@
 
 //! Authenticated SBF adapter for the one canonical Claims economic owner.
 
-use dclutch_claims_representation_codec::{ACTION_WIRE_BYTES_V1, ActionV1};
 use dclutch_claims_svm::{
     CallerRole, ClaimsAction, ClaimsAggregateSeedsV1, ClaimsPlanV1, ClaimsPositionSeedsV1,
     ClaimsReceiptV1, NO_POSITION_REVISION,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
 use dclutch_economic_slice_kernel::{
     BasketAction, BasketFrame, MARKET_HEADER_BYTES, POSITION_HEADER_BYTES, Phase as EconomicPhase,
     SCALAR_BYTES, execute_basket, initialize_market, initialize_position, market_identity,
@@ -20,7 +18,7 @@ use dclutch_economic_slice_kernel::{
 use dclutch_market_core_codec::{
     CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CORE_EFFECT_MAGIC_V1,
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity,
-    MarketCoreStateSeedsV1, Phase as CorePhase, Role, STATE_BYTES,
+    MarketCoreStateSeedsV2, Phase as CorePhase, Role, STATE_BYTES,
 };
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -39,9 +37,19 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
+pub mod affine_batch_v2;
+pub mod founding_v5;
 pub mod liability_basis_v2;
+pub mod market_closure_v1;
+mod product_runtime_v2;
 pub mod protocol_position_v2;
-mod representation;
+pub mod rational_lifecycle_v2;
+mod rational_product_v3;
+pub mod rational_representation_v2;
+mod rational_terminal_v3;
+pub mod signed_delta_v3;
+pub mod sparse_native_transfer_v1;
+mod terminal_settlement_v3;
 
 entrypoint!(process_instruction);
 
@@ -79,67 +87,6 @@ pub const FOUNDATIONAL_RENT_ACCOUNT: usize = 13;
 pub const FOUNDATIONAL_SYSTEM_ACCOUNT: usize = 14;
 /// Exact foundational Split Claims child account count.
 pub const FOUNDATIONAL_ACCOUNT_COUNT: usize = 15;
-
-/// Unified representation state PDA seed prefix.
-pub const REPRESENTATION_STATE_SEED_V1: &[u8] = b"dclutch:representation:v1";
-/// Exact permissioned-burn representation Mint width.
-pub const REPRESENTATION_MINT_BYTES_V1: usize = 238;
-/// Unified representation account index: claimant signer.
-pub const REPRESENTATION_CLAIMANT_ACCOUNT: usize = 0;
-/// Unified representation account index: immutable descriptor.
-pub const REPRESENTATION_DESCRIPTOR_ACCOUNT: usize = 1;
-/// Unified representation account index: wrapper state/controller.
-pub const REPRESENTATION_STATE_ACCOUNT: usize = 2;
-/// Unified representation account index: aggregate Claims Market.
-pub const REPRESENTATION_MARKET_ACCOUNT: usize = 3;
-/// Unified representation account index: claimant Position.
-pub const REPRESENTATION_CLAIMANT_POSITION_ACCOUNT: usize = 4;
-/// Unified representation account index: wrapper Position.
-pub const REPRESENTATION_WRAPPER_POSITION_ACCOUNT: usize = 5;
-/// Unified representation account index: Registry activation cache.
-pub const REPRESENTATION_ACTIVATION_CACHE_ACCOUNT: usize = 6;
-/// Unified representation account index: current Claims program.
-pub const REPRESENTATION_CLAIMS_PROGRAM_ACCOUNT: usize = 7;
-/// Unified representation account index: Claims ProgramData.
-pub const REPRESENTATION_CLAIMS_PROGRAMDATA_ACCOUNT: usize = 8;
-/// Unified representation account index: Market-selected Registry program.
-pub const REPRESENTATION_REGISTRY_PROGRAM_ACCOUNT: usize = 9;
-/// Unified representation account index: permissioned-burn Token-2022 Mint.
-pub const REPRESENTATION_MINT_ACCOUNT: usize = 10;
-/// Unified representation account index: claimant holder Token-2022 account.
-pub const REPRESENTATION_HOLDER_TOKEN_ACCOUNT: usize = 11;
-/// Unified representation account index: Token-2022 program.
-pub const REPRESENTATION_TOKEN_PROGRAM_ACCOUNT: usize = 12;
-/// Unified representation account index: canonical Core Market state.
-pub const REPRESENTATION_CORE_MARKET_ACCOUNT: usize = 13;
-/// Unified representation account index: current Core program.
-pub const REPRESENTATION_CORE_PROGRAM_ACCOUNT: usize = 14;
-/// Unified representation account index: current Core ProgramData.
-pub const REPRESENTATION_CORE_PROGRAMDATA_ACCOUNT: usize = 15;
-/// Exact unified representation account count before terminal Custody composition.
-pub const REPRESENTATION_ACCOUNT_COUNT: usize = 16;
-/// Terminal representation account index: Claims release-pinned Custody caller authority.
-pub const REPRESENTATION_CUSTODY_CALLER_AUTHORITY_ACCOUNT: usize = 16;
-/// Terminal representation account index: current Custody program.
-pub const REPRESENTATION_CUSTODY_PROGRAM_ACCOUNT: usize = 17;
-/// Terminal representation account index: current Custody ProgramData.
-pub const REPRESENTATION_CUSTODY_PROGRAMDATA_ACCOUNT: usize = 18;
-/// Terminal representation account index: finalized immutable Realm record.
-pub const REPRESENTATION_REALM_ACCOUNT: usize = 19;
-/// Terminal representation account index: canonical per-descriptor Custody replay.
-pub const REPRESENTATION_CUSTODY_REPLAY_ACCOUNT: usize = 20;
-/// Terminal representation account index: Realm-selected collateral Mint.
-pub const REPRESENTATION_COLLATERAL_MINT_ACCOUNT: usize = 21;
-/// Terminal representation account index: canonical Market Hoard vault.
-pub const REPRESENTATION_HOARD_VAULT_ACCOUNT: usize = 22;
-/// Terminal representation account index: claimant's external collateral account.
-pub const REPRESENTATION_COLLATERAL_RECIPIENT_ACCOUNT: usize = 23;
-/// Terminal representation account index: canonical Custody transfer authority.
-pub const REPRESENTATION_CUSTODY_TRANSFER_AUTHORITY_ACCOUNT: usize = 24;
-/// Terminal representation account index: Realm-selected collateral token program.
-pub const REPRESENTATION_COLLATERAL_TOKEN_PROGRAM_ACCOUNT: usize = 25;
-/// Exact unified representation account count with terminal Custody composition.
-pub const REPRESENTATION_TERMINAL_ACCOUNT_COUNT: usize = 26;
 
 struct GenericAccounts<'accounts, 'info> {
     authority: &'accounts AccountInfo<'info>,
@@ -206,72 +153,6 @@ impl<'accounts, 'info> GenericAccounts<'accounts, 'info> {
     }
 }
 
-struct RepresentationAccounts<'accounts, 'info> {
-    claimant: &'accounts AccountInfo<'info>,
-    descriptor: &'accounts AccountInfo<'info>,
-    state: &'accounts AccountInfo<'info>,
-    market: &'accounts AccountInfo<'info>,
-    claimant_position: &'accounts AccountInfo<'info>,
-    wrapper_position: &'accounts AccountInfo<'info>,
-    cache: &'accounts AccountInfo<'info>,
-    claims_program: &'accounts AccountInfo<'info>,
-    claims_programdata: &'accounts AccountInfo<'info>,
-    registry: &'accounts AccountInfo<'info>,
-    mint: &'accounts AccountInfo<'info>,
-    holder_token: &'accounts AccountInfo<'info>,
-    token_program: &'accounts AccountInfo<'info>,
-    core_market: &'accounts AccountInfo<'info>,
-    core_program: &'accounts AccountInfo<'info>,
-    core_programdata: &'accounts AccountInfo<'info>,
-}
-
-impl<'accounts, 'info> RepresentationAccounts<'accounts, 'info> {
-    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        let accounts = accounts
-            .get(..REPRESENTATION_ACCOUNT_COUNT)
-            .ok_or(ClaimsSbfError::Accounts)?;
-        let [
-            claimant,
-            descriptor,
-            state,
-            market,
-            claimant_position,
-            wrapper_position,
-            cache,
-            claims_program,
-            claims_programdata,
-            registry,
-            mint,
-            holder_token,
-            token_program,
-            core_market,
-            core_program,
-            core_programdata,
-        ] = accounts
-        else {
-            return Err(ClaimsSbfError::Accounts.into());
-        };
-        Ok(Self {
-            claimant,
-            descriptor,
-            state,
-            market,
-            claimant_position,
-            wrapper_position,
-            cache,
-            claims_program,
-            claims_programdata,
-            registry,
-            mint,
-            holder_token,
-            token_program,
-            core_market,
-            core_program,
-            core_programdata,
-        })
-    }
-}
-
 /// Stable adapter refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -318,33 +199,75 @@ pub fn process_instruction(
     {
         return liability_basis_v2::process(program_id, accounts, instruction_data);
     }
+    if instruction_data
+        .get(..dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
+        == Some(
+            dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1
+                .as_slice(),
+        )
+    {
+        return market_closure_v1::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.len())
+        == Some(dclutch_claims_svm::affine_batch_v2::AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
+    {
+        return affine_batch_v2::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(..dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.len())
+        == Some(dclutch_claims_svm::signed_delta_v3::SIGNED_DELTA_PLAN_MAGIC_V3.as_slice())
+    {
+        return signed_delta_v3::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(
+        ..dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.len(),
+    ) == Some(
+        dclutch_claims_svm::terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_MAGIC_V3.as_slice(),
+    ) {
+        return terminal_settlement_v3::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data
+        .get(..dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1.len())
+        == Some(
+            dclutch_claims_svm::sparse_native_transfer_v1::SPARSE_NATIVE_TRANSFER_MAGIC_V1
+                .as_slice(),
+        )
+    {
+        return sparse_native_transfer_v1::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data
+        .get(..dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.len())
+        == Some(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
+    {
+        return founding_v5::process(program_id, accounts, instruction_data);
+    }
     if instruction_data.get(..protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.len())
         == Some(protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice())
     {
         return protocol_position_v2::process(program_id, accounts, instruction_data);
     }
+    if instruction_data.get(..dclutch_rational_representation_v2_contract::REQUEST_MAGIC_V2.len())
+        == Some(dclutch_rational_representation_v2_contract::REQUEST_MAGIC_V2.as_slice())
+    {
+        return rational_representation_v2::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.get(
+        ..dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_REQUEST_MAGIC_V2.len(),
+    ) == Some(
+        dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_REQUEST_MAGIC_V2
+            .as_slice(),
+    ) {
+        return rational_lifecycle_v2::process(program_id, accounts, instruction_data);
+    }
+    // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
+    // reachable solely for the current Trading General child-packet builder
+    // (`dclutch-general-adapter-contract/src/child_packets.rs`) and Dealer
+    // physical composers (`dclutch-trading-sbf/src/dealer/physical.rs` and
+    // `dclutch-dealer-sbf/src/lib.rs`). New families use LBV2 affine/signed
+    // plans; deleting those three consumers permits deleting this route.
     if let Ok(plan) = ClaimsPlanV1::decode(instruction_data) {
         return process_generic_plan(program_id, accounts, instruction_data, plan);
     }
-    if instruction_data.len() == ACTION_WIRE_BYTES_V1 {
-        let action = ActionV1::decode(instruction_data).map_err(|_| ClaimsSbfError::Instruction)?;
-        return representation::process(program_id, accounts, action, instruction_data, None);
-    }
-    let terminal_wire_bytes = ACTION_WIRE_BYTES_V1
-        .checked_add(CUSTODY_REQUEST_BYTES_V1)
-        .ok_or(ClaimsSbfError::Instruction)?;
-    if instruction_data.len() != terminal_wire_bytes {
-        return Err(ClaimsSbfError::Instruction.into());
-    }
-    let (action_bytes, custody_bytes) = instruction_data.split_at(ACTION_WIRE_BYTES_V1);
-    let action = ActionV1::decode(action_bytes).map_err(|_| ClaimsSbfError::Instruction)?;
-    representation::process(
-        program_id,
-        accounts,
-        action,
-        action_bytes,
-        Some(custody_bytes),
-    )
+    Err(ClaimsSbfError::Instruction.into())
 }
 
 fn process_generic_plan(
@@ -1127,7 +1050,7 @@ pub(crate) fn authenticate_core_market(
         return Err(ClaimsSbfError::Identity.into());
     }
     let state = CoreState::decode(&data).map_err(|_| ClaimsSbfError::Identity)?;
-    let seeds = MarketCoreStateSeedsV1::new(state.identity);
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
     let expected = Pubkey::find_program_address(&seeds.as_slices(), core_program.key).0;
     let aggregate_seeds =
         ClaimsAggregateSeedsV1::new(logical_market).map_err(|_| ClaimsSbfError::Identity)?;
@@ -1437,6 +1360,37 @@ mod tests {
         Identity::new([byte; 32]).map_err(|_| ClaimsSbfError::Identity.into())
     }
 
+    #[test]
+    fn obsolete_action_v1_and_terminal_extension_refuse_at_dispatch() {
+        const OBSOLETE_ACTION_BYTES_V1: usize = 136;
+        const OBSOLETE_TERMINAL_BYTES_V1: usize = 808;
+
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let mut action = [0_u8; OBSOLETE_ACTION_BYTES_V1];
+        action
+            .get_mut(..8)
+            .expect("old action magic")
+            .copy_from_slice(b"DCLWRPA1");
+        action
+            .get_mut(8..10)
+            .expect("old action version")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        assert_eq!(
+            process_instruction(&program_id, &[], &action),
+            Err(ClaimsSbfError::Instruction.into())
+        );
+
+        let mut terminal = [0_u8; OBSOLETE_TERMINAL_BYTES_V1];
+        terminal
+            .get_mut(..OBSOLETE_ACTION_BYTES_V1)
+            .expect("old action prefix")
+            .copy_from_slice(&action);
+        assert_eq!(
+            process_instruction(&program_id, &[], &terminal),
+            Err(ClaimsSbfError::Instruction.into())
+        );
+    }
+
     fn core_state(market: Identity) -> Result<CoreState, ProgramError> {
         Ok(CoreState {
             phase: CorePhase::Open,
@@ -1445,8 +1399,8 @@ mod tests {
             identity: MarketIdentity {
                 market_id: market,
                 realm_id: semantic_id(11)?,
+                product_record: semantic_id(13)?,
                 product_id: semantic_id(12)?,
-                result_domain: semantic_id(13)?,
                 resolution_policy: semantic_id(14)?,
                 capability_manifest: semantic_id(15)?,
                 selected_release_set: semantic_id(1)?,
@@ -1460,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_runtime_basket_advances_once() -> Result<(), ProgramError> {
+    fn migration_only_general_dealer_claims_plan_advances_once() -> Result<(), ProgramError> {
         let (accounts, release) = fixture()?;
         let view = GenericAccounts::parse(&accounts)?;
         let quantities = quantities(&[3, 0, 2]);
@@ -1551,10 +1505,10 @@ mod tests {
         let core_program = Pubkey::new_from_array([10; 32]);
         let provisional_market = semantic_id(2)?;
         let provisional_state = core_state(provisional_market)?;
-        let state_seeds = MarketCoreStateSeedsV1::new(provisional_state.identity);
+        let state_seeds = MarketCoreStateSeedsV2::new(provisional_state.identity);
         let market = Pubkey::find_program_address(&state_seeds.as_slices(), &core_program).0;
         let state = core_state(identity(market.to_bytes())?)?;
-        let final_seeds = MarketCoreStateSeedsV1::new(state.identity);
+        let final_seeds = MarketCoreStateSeedsV2::new(state.identity);
         let final_market = Pubkey::find_program_address(&final_seeds.as_slices(), &core_program).0;
         if final_market != market {
             return Err(ClaimsSbfError::Identity.into());

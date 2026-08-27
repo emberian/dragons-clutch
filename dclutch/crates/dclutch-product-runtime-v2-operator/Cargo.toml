@@ -9,23 +9,24 @@ rust-version = "1.89"
 path = "src/lib.rs"
 
 [dependencies]
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-product-compiler = { path = "../dclutch-product-compiler" }
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-registry-contract = { path = "../dclutch-registry-contract" }
+dclutch-registry-svm = { path = "../dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-rent-contract = { path = "../dclutch-rent-contract" }
+dclutch-source-contract = { path = "../dclutch-source-contract" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
-[workspace]
+[dev-dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
 
-[lints.rust]
-missing_docs = "deny"
-unsafe_code = "forbid"
-
-[lints.clippy]
-cast_possible_truncation = "deny"
-cast_sign_loss = "deny"
-checked_conversions = "deny"
-float_arithmetic = "deny"
-indexing_slicing = "deny"
-panic = "deny"
-unwrap_used = "deny"
+[lints]
+workspace = true

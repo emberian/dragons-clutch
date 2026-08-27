@@ -5,10 +5,10 @@ use std::{env, fs, path::PathBuf, vec::Vec};
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, DelegatedCustodyRequestV2, OperationV1,
 };
 use dclutch_market_core_codec::{
-    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV1, MarketIdentity, Phase, Readiness,
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -25,7 +25,8 @@ use dclutch_release_set_contract::{
     ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_token_svm::{
-    LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount,
+    COption as TokenCOption, LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES,
+    TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use solana_account::Account;
 use solana_program::{
@@ -50,6 +51,7 @@ const ACTOR: [u8; 32] = [0x42; 32];
 const RECIPIENT: [u8; 32] = [0x43; 32];
 const GENERATION: u64 = 7;
 const DEPOSIT: u64 = 100;
+const TOTAL_EXTERNAL_DEBIT: u64 = 105;
 
 #[derive(Clone, Copy, Debug)]
 enum Profile {
@@ -364,8 +366,8 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
     let mut identity = MarketIdentity {
         market_id: CoreIdentity::new([0xff; 32]).expect("placeholder Market"),
         realm_id: CoreIdentity::new(realm).expect("Realm identity"),
-        product_id: CoreIdentity::new([0x62; 32]).expect("Product identity"),
-        result_domain: CoreIdentity::new([0x63; 32]).expect("domain identity"),
+        product_record: CoreIdentity::new([0x62; 32]).expect("Product record identity"),
+        product_id: CoreIdentity::new([0x63; 32]).expect("Product identity"),
         resolution_policy: CoreIdentity::new([0x64; 32]).expect("resolution identity"),
         capability_manifest: CoreIdentity::new([0x65; 32]).expect("manifest identity"),
         selected_release_set: CoreIdentity::new(release_set).expect("release set"),
@@ -373,7 +375,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
         generation: GENERATION,
     };
     let market = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV1::new(identity).as_slices(),
+        &MarketCoreStateSeedsV2::new(identity).as_slices(),
         &CALLER_PROGRAM_ID,
     )
     .0;
@@ -424,7 +426,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
             Pubkey::new_from_array(ACTOR),
             1_000,
             Some(custody_authority),
-            1_000,
+            TOTAL_EXTERNAL_DEBIT,
         ),
     );
     add_protocol_account(
@@ -632,6 +634,14 @@ fn close_replay_request(
 
 fn common_metas(fixture: &Fixture, request: CustodyRequestV1) -> Vec<AccountMeta> {
     let request_bytes = request.to_bytes().expect("canonical request");
+    common_metas_for_bytes(fixture, request, &request_bytes)
+}
+
+fn common_metas_for_bytes(
+    fixture: &Fixture,
+    request: CustodyRequestV1,
+    request_bytes: &[u8],
+) -> Vec<AccountMeta> {
     let digest = hash(&request_bytes).to_bytes();
     let authority = Pubkey::find_program_address(
         &CallerAuthoritySeedsV1::new(
@@ -657,6 +667,32 @@ fn common_metas(fixture: &Fixture, request: CustodyRequestV1) -> Vec<AccountMeta
         AccountMeta::new_readonly(fixture.realm_staging, false),
         AccountMeta::new(fixture.replay, false),
     ]
+}
+
+fn delegated_request(
+    fixture: &Fixture,
+    custody: CustodyRequestV1,
+    total_debit: u64,
+    allowance_before: u64,
+) -> DelegatedCustodyRequestV2 {
+    let allowance_after = allowance_before
+        .checked_sub(custody.amount)
+        .expect("exact allowance decrement");
+    let terminal = allowance_after == 0;
+    DelegatedCustodyRequestV2 {
+        custody,
+        starts_atomic_debit: allowance_before == total_debit,
+        terminal,
+        delegate_before: fixture.custody_authority.to_bytes(),
+        delegate_after: if terminal {
+            [0; 32]
+        } else {
+            fixture.custody_authority.to_bytes()
+        },
+        total_debit,
+        allowance_before,
+        allowance_after,
+    }
 }
 
 fn wrapper_instruction(
@@ -701,6 +737,32 @@ fn wrapper_instruction(
     let mut data = Vec::with_capacity(dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 + 1);
     data.push(u8::from(fail_after));
     data.extend_from_slice(&request.to_bytes().expect("request bytes"));
+    Instruction {
+        program_id: CALLER_PROGRAM_ID,
+        accounts,
+        data,
+    }
+}
+
+fn delegated_wrapper_instruction(
+    fixture: &Fixture,
+    request: DelegatedCustodyRequestV2,
+    fail_after: bool,
+) -> Instruction {
+    let request_bytes = request.encode().expect("delegated request bytes");
+    let custody = request.custody;
+    let mut accounts = vec![AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false)];
+    accounts.extend(common_metas_for_bytes(fixture, custody, &request_bytes));
+    accounts.extend([
+        AccountMeta::new_readonly(fixture.mint, false),
+        AccountMeta::new(Pubkey::new_from_array(custody.source), false),
+        AccountMeta::new(Pubkey::new_from_array(custody.destination), false),
+        AccountMeta::new_readonly(fixture.custody_authority, false),
+        AccountMeta::new_readonly(fixture.profile.token_program(), false),
+    ]);
+    let mut data = Vec::with_capacity(request_bytes.len() + 1);
+    data.push(u8::from(fail_after));
+    data.extend_from_slice(&request_bytes);
     Instruction {
         program_id: CALLER_PROGRAM_ID,
         accounts,
@@ -796,12 +858,30 @@ async fn campaign(profile: Profile) {
     assert!(!accepted, "live Vault must block replay close");
     assert_eq!(snapshot(&mut context, &fixture).await, after_open);
 
-    let (accepted, external_cu) = submit(
+    let (accepted, legacy_external_cu) = submit(
         &mut context,
         wrapper_instruction(
             &fixture,
             external_transfer_request(&fixture, 2),
             payer,
+            false,
+        ),
+    )
+    .await
+    .expect("legacy external-debit transaction");
+    assert!(!accepted, "V1 external debit must fail closed");
+    assert_eq!(snapshot(&mut context, &fixture).await, after_open);
+
+    let (accepted, external_cu) = submit(
+        &mut context,
+        delegated_wrapper_instruction(
+            &fixture,
+            delegated_request(
+                &fixture,
+                external_transfer_request(&fixture, 2),
+                TOTAL_EXTERNAL_DEBIT,
+                TOTAL_EXTERNAL_DEBIT,
+            ),
             false,
         ),
     )
@@ -820,7 +900,11 @@ async fn campaign(profile: Profile) {
     wrong_delegate.amount = 1;
     let (accepted, delegate_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, wrong_delegate, payer, false),
+        delegated_wrapper_instruction(
+            &fixture,
+            delegated_request(&fixture, wrong_delegate, 1, 1),
+            false,
+        ),
     )
     .await
     .expect("delegate-substitution transaction");
@@ -830,32 +914,16 @@ async fn campaign(profile: Profile) {
     );
     assert_eq!(snapshot(&mut context, &fixture).await, after_external);
 
-    let (accepted, deposit_cu) = submit(
-        &mut context,
-        wrapper_instruction(
-            &fixture,
-            deposit_request(&fixture, 3, DEPOSIT),
-            payer,
-            false,
-        ),
-    )
-    .await
-    .expect("deposit transaction");
-    assert!(accepted, "deposit");
-    let after_deposit = snapshot(&mut context, &fixture).await;
-    assert_eq!(token_amount(&after_deposit.source), 895);
-    assert_eq!(token_amount(&after_deposit.vault), DEPOSIT);
-    assert_eq!(
-        CustodyReplayV1::decode(&after_deposit.replay.data)
-            .expect("replay")
-            .next_revision,
-        4
+    let terminal_deposit = delegated_request(
+        &fixture,
+        deposit_request(&fixture, 3, DEPOSIT),
+        TOTAL_EXTERNAL_DEBIT,
+        DEPOSIT,
     );
-
-    let before_late_failure = after_deposit.clone();
+    let before_late_failure = after_external.clone();
     let (accepted, late_failure_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, deposit_request(&fixture, 4, 7), payer, true),
+        delegated_wrapper_instruction(&fixture, terminal_deposit, true),
     )
     .await
     .expect("late-failure transaction");
@@ -863,35 +931,63 @@ async fn campaign(profile: Profile) {
     assert_eq!(
         snapshot(&mut context, &fixture).await,
         before_late_failure,
-        "token CPI and replay commit must roll back together"
+        "token CPI, delegate exhaustion, and replay must roll back together"
+    );
+
+    let (accepted, deposit_cu) = submit(
+        &mut context,
+        delegated_wrapper_instruction(&fixture, terminal_deposit, false),
+    )
+    .await
+    .expect("terminal deposit transaction");
+    assert!(accepted, "deposit");
+    let after_deposit = snapshot(&mut context, &fixture).await;
+    assert_eq!(token_amount(&after_deposit.source), 895);
+    assert_eq!(token_amount(&after_deposit.vault), DEPOSIT);
+    let exhausted_source = TokenAccount::parse(&after_deposit.source.data).expect("source state");
+    assert_eq!(exhausted_source.delegate, TokenCOption::None);
+    assert_eq!(exhausted_source.delegated_amount, 0);
+    assert_eq!(
+        CustodyReplayV1::decode(&after_deposit.replay.data)
+            .expect("replay")
+            .next_revision,
+        4
     );
 
     let stale = deposit_request(&fixture, 3, 1);
     let (accepted, stale_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, stale, payer, false),
+        delegated_wrapper_instruction(&fixture, delegated_request(&fixture, stale, 1, 1), false),
     )
     .await
     .expect("stale replay transaction");
     assert!(!accepted, "stale replay must refuse");
-    assert_eq!(snapshot(&mut context, &fixture).await, before_late_failure);
+    assert_eq!(snapshot(&mut context, &fixture).await, after_deposit);
 
     let mut substituted_source_owner = deposit_request(&fixture, 4, 1);
     substituted_source_owner.semantic.source_owner = [0x99; 32];
     let (accepted, source_owner_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, substituted_source_owner, payer, false),
+        delegated_wrapper_instruction(
+            &fixture,
+            delegated_request(&fixture, substituted_source_owner, 1, 1),
+            false,
+        ),
     )
     .await
     .expect("source-owner-substitution transaction");
     assert!(!accepted, "external source-owner substitution must refuse");
-    assert_eq!(snapshot(&mut context, &fixture).await, before_late_failure);
+    assert_eq!(snapshot(&mut context, &fixture).await, after_deposit);
 
     let mut substituted_destination_owner = external_transfer_request(&fixture, 4);
     substituted_destination_owner.semantic.destination_owner = [0x99; 32];
     let (accepted, destination_owner_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, substituted_destination_owner, payer, false),
+        delegated_wrapper_instruction(
+            &fixture,
+            delegated_request(&fixture, substituted_destination_owner, 5, 5),
+            false,
+        ),
     )
     .await
     .expect("destination-owner-substitution transaction");
@@ -899,7 +995,7 @@ async fn campaign(profile: Profile) {
         !accepted,
         "external destination-owner substitution must refuse"
     );
-    assert_eq!(snapshot(&mut context, &fixture).await, before_late_failure);
+    assert_eq!(snapshot(&mut context, &fixture).await, after_deposit);
 
     let (accepted, withdraw_cu) = submit(
         &mut context,
@@ -1002,7 +1098,7 @@ async fn campaign(profile: Profile) {
     assert!(!accepted, "a closed replay cannot authorize Vault reopen");
 
     eprintln!(
-        "Custody {profile:?} CU: initialize={initialize_cu}, open={open_cu}, early-close={early_close_cu}, external={external_cu}, delegate-refusal={delegate_cu}, deposit={deposit_cu}, late-rollback={late_failure_cu}, stale={stale_cu}, source-owner={source_owner_cu}, destination-owner={destination_owner_cu}, withdraw={withdraw_cu}, close-vault={close_cu}, close-stale={close_stale_cu}, close-foreign={foreign_close_cu}, close-replay={close_replay_cu}, reopen={reopen_cu}"
+        "Custody {profile:?} CU: initialize={initialize_cu}, open={open_cu}, early-close={early_close_cu}, v1-external-refusal={legacy_external_cu}, external={external_cu}, delegate-refusal={delegate_cu}, deposit={deposit_cu}, late-rollback={late_failure_cu}, stale={stale_cu}, source-owner={source_owner_cu}, destination-owner={destination_owner_cu}, withdraw={withdraw_cu}, close-vault={close_cu}, close-stale={close_stale_cu}, close-foreign={foreign_close_cu}, close-replay={close_replay_cu}, reopen={reopen_cu}"
     );
 }
 

@@ -54,6 +54,27 @@ Program account was executable, and that ProgramData was not executable. Those
 observations cannot be recovered from account data bytes and therefore remain
 explicit reproducible inputs.
 
+## Constructed accounts and unowned preimages
+
+Two boundaries in this crate exist because the seven-program reality is ahead of
+its contracts, and both are recorded rather than smoothed over.
+
+`loader-accounts` constructs Loader V3 `Program` and `ProgramData` bytes from an
+ELF. That is unavoidable before a first deployment exists to observe, but it
+makes the account evidence a *prediction*: verifying constructed accounts
+against the ELF they were constructed from proves layout, not deployment. The
+construction lives here so exactly one implementation of the layout exists, and
+its text projection is labeled `predicted-loader-state-not-observed`. A release
+that uses it owns saying so in its assumptions.
+
+`SemanticPreimageKindV1::Unowned` exists because no first-party contract decodes
+a role-program semantic release preimage, while `ArtifactReleaseV1` still
+persists one per role. The alternatives were to mislabel those preimages
+`capability`—asserting a decoder that does not exist—or to mint a role-release
+DTO in host tooling, which would create a second semantic owner. Naming the
+absence is the only option that neither lies nor takes ownership it should not
+have. Lifting it means a contract, not a tool change.
+
 ## Honest boundary
 
 A checked manifest is neither a deployment transaction nor mainnet evidence.

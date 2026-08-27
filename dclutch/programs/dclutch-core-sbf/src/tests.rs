@@ -7,7 +7,7 @@ use std::{boxed::Box, vec, vec::Vec};
 use dclutch_market_core_codec::{
     Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
     CapabilityFundingHeaderV1, CoreEffectActionV1, CoreEffectEnvelopeV1, Identity, REQUEST_BYTES,
-    Request, Role,
+    Request, Role, SeriesCoreRequestV1,
 };
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
@@ -95,6 +95,18 @@ fn account(key: Pubkey) -> AccountInfo<'static> {
 fn truncated_instruction_refuses_before_account_access() {
     assert_eq!(
         process_instruction(&Pubkey::new_unique(), &[], &[0; 71]),
+        Err(ProgramError::Custom(CoreSbfError::Instruction as u32))
+    );
+}
+
+#[test]
+fn non_consume_series_action_refuses_before_account_access() {
+    let request = SeriesCoreRequestV1::close(identity(1), identity(2), identity(3), 4, 5)
+        .expect("canonical historical Close")
+        .encode()
+        .expect("Series request");
+    assert_eq!(
+        process_instruction(&Pubkey::new_unique(), &[], &request),
         Err(ProgramError::Custom(CoreSbfError::Instruction as u32))
     );
 }

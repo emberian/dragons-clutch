@@ -306,6 +306,75 @@ impl ActivatedExecutionReleaseSetV1 {
     }
 }
 
+/// How much of one observed activation cache has been admitted so far.
+///
+/// Activation admits one role per transaction, so between transactions the
+/// Registry-owned cache legitimately holds a strict subset of its five roles.
+/// A partially written cache cannot [`ActivatedExecutionReleaseSetViewV1::decode`],
+/// so it is inert for every reader; this value exists so an *operator* walking
+/// the release set up can tell "not yet admitted" apart from "admitted
+/// something else", which is a refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivationCacheProgressV1 {
+    written: [bool; 5],
+}
+
+impl ActivationCacheProgressV1 {
+    /// Whether this exact role has already been admitted.
+    pub fn is_written(self, role: ExecutionRoleV1) -> bool {
+        self.written
+            .get(role_index(role))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Number of roles already admitted, from zero to five.
+    pub fn written_count(self) -> usize {
+        self.written.iter().filter(|written| **written).count()
+    }
+
+    /// Whether every role has been admitted and the cache is now readable.
+    pub fn is_complete(self) -> bool {
+        self.written_count() == ALL_ROLES.len()
+    }
+}
+
+/// Compare one observed activation cache against the complete expected cache.
+///
+/// Returns which roles have been admitted so far. Refuses when the header does
+/// not match, or when any *already written* role slot is not byte-identical to
+/// the expected slot — an unwritten slot is exactly all zero and anything else
+/// is a different release set masquerading as progress. This never admits
+/// anything: it reports what a Registry-owned account already contains.
+pub fn activation_cache_progress_v1(
+    observed: &[u8],
+    expected: ActivatedExecutionReleaseSetV1,
+) -> Result<ActivationCacheProgressV1> {
+    if observed.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1 {
+        return Err(Error::InvalidLength);
+    }
+    validate_activation_header(observed)?;
+    let complete = expected.to_bytes();
+    if subslice(observed, 0, ROLES_OFFSET)? != subslice(&complete, 0, ROLES_OFFSET)? {
+        return Err(Error::ReleaseSetSelectionMismatch);
+    }
+    let mut written = [false; 5];
+    for role in ALL_ROLES {
+        let offset = role_offset(role);
+        let observed_role = subslice(observed, offset, ACTIVATED_ROLE_BYTES_V1)?;
+        if observed_role.iter().all(|byte| *byte == 0) {
+            continue;
+        }
+        if observed_role != subslice(&complete, offset, ACTIVATED_ROLE_BYTES_V1)? {
+            return Err(Error::AliasedRoleActivationMismatch);
+        }
+        if let Some(slot) = written.get_mut(role_index(role)) {
+            *slot = true;
+        }
+    }
+    Ok(ActivationCacheProgressV1 { written })
+}
+
 /// Initialize one transaction-local activation-cache buffer.
 ///
 /// The buffer must be the exact zero-filled account allocation. Call
@@ -452,15 +521,18 @@ fn projection_binding(activated: ActivatedRoleV1) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(activated.release.program(), activated.artifact_release_id)
 }
 
-fn role_offset(role: ExecutionRoleV1) -> usize {
-    let index = match role {
+const fn role_index(role: ExecutionRoleV1) -> usize {
+    match role {
         ExecutionRoleV1::Core => 0,
         ExecutionRoleV1::Claims => 1,
         ExecutionRoleV1::Trading => 2,
         ExecutionRoleV1::Resolution => 3,
         ExecutionRoleV1::Custody => 4,
-    };
-    ROLES_OFFSET + index * ACTIVATED_ROLE_BYTES_V1
+    }
+}
+
+fn role_offset(role: ExecutionRoleV1) -> usize {
+    ROLES_OFFSET + role_index(role) * ACTIVATED_ROLE_BYTES_V1
 }
 
 fn decode_role(bytes: &[u8], role: ExecutionRoleV1) -> Result<ActivatedRoleV1> {

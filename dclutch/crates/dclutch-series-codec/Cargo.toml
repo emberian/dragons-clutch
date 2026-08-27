@@ -9,4 +9,3 @@ description = "Lean-generated fixed Series ABI and bounded transition interprete
 [lib]
 path = "src/lib.rs"
 
-[workspace]

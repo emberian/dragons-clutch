@@ -8,8 +8,6 @@ description = "Generated allocation-free interpreter for unified dClutch claim r
 
 [dependencies]
 
-[workspace]
-
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

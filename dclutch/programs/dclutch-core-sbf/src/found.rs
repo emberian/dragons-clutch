@@ -1,33 +1,30 @@
 //! Exact finalized-record Found transition and prepaid Market creation.
 
+use alloc::boxed::Box;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_market_core_codec::{
-    Action, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote, MarketCoreStateSeedsV1,
-    MarketIdentity, Product, Realm, Request, Role, STATE_BYTES, VacantAccount, found,
+    Action, Admission, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote,
+    MarketCoreStateSeedsV2, MarketIdentity, Product, ProjectFoundReceiptV1, Realm, Request, Role,
+    STATE_BYTES, VacantAccount, found,
 };
-use dclutch_product_contract::{
-    product::{
-        INSTANCE_BYTES, InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
-        PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1, TERMS_BYTES, TermsV1,
-    },
-    result_domain::{
-        FINITE_RESULT_DOMAIN_BYTES, FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
-        FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1, FiniteResultDomainV1,
-    },
-};
+use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
+use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_release_set_contract::{
     EXECUTION_RELEASE_SET_BYTES_V1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
     ExecutionReleaseSetV1, ExecutionRoleV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RentCreditV1};
+use dclutch_rent_contract::lifecycle_v2::{
+    LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
+};
 use dclutch_source_contract::{
-    SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SourceMaterialViewV1,
+    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_V2_BYTES,
+    SourceMaterialV2,
 };
 use solana_program::{
     account_info::AccountInfo,
-    hash::hashv,
-    program::{invoke, invoke_signed},
+    hash::hash,
+    program::{invoke, invoke_signed, set_return_data},
     pubkey::Pubkey,
     rent::Rent,
     sysvar::SysvarSerialize,
@@ -38,6 +35,8 @@ use solana_system_interface::instruction::{allocate, assign, transfer};
 use crate::{
     CoreSbfError,
     frame::FoundAccounts,
+    infrastructure::{authenticate_found, authenticate_immutable_core_release},
+    product_runtime_v2::{authenticate_product_runtime_v2, project_core_product_v2},
     records::{authenticate_content_addressed_record, authenticate_finalized_record},
     release::{authenticate_role, identity},
 };
@@ -45,19 +44,98 @@ use crate::{
 struct References {
     realm_id: [u8; 32],
     realm: RealmV1,
+    product_record_id: [u8; 32],
     product_id: [u8; 32],
     product: Product,
-    result_domain_id: [u8; 32],
     resolution_policy_id: [u8; 32],
     manifest_id: [u8; 32],
     release_set_id: [u8; 32],
 }
 
 struct CreationPlan {
-    state_seeds: MarketCoreStateSeedsV1,
+    state_seeds: MarketCoreStateSeedsV2,
     bump: u8,
     state: CoreState,
     rent_top_up: u64,
+}
+
+/// One fully authenticated Found31 projection and its unapplied creation plan.
+///
+/// Series may join additional immutable child facts against these coordinates
+/// without reauthenticating the Product graph or Registry records. The Market
+/// remains vacant until [`apply_prepared`] is called.
+pub(crate) struct PreparedFound {
+    creation: CreationPlan,
+    pub(crate) realm_id: [u8; 32],
+    pub(crate) collateral_mint: [u8; 32],
+    pub(crate) token_program: [u8; 32],
+    pub(crate) collateral_release: [u8; 32],
+    pub(crate) product_record_id: [u8; 32],
+    pub(crate) product_id: [u8; 32],
+    pub(crate) product: Product,
+    pub(crate) runtime: Box<AuthenticatedProductRuntimeV2>,
+    pub(crate) resolution_policy_id: [u8; 32],
+    pub(crate) manifest_id: [u8; 32],
+    pub(crate) release_set_id: [u8; 32],
+}
+
+impl PreparedFound {
+    /// Candidate Core state authenticated by [`prepare`] but not yet written.
+    pub(crate) const fn candidate_state(&self) -> CoreState {
+        self.creation.state
+    }
+
+    /// Borrow the authenticated candidate without copying its fixed-layout
+    /// state through an SBF caller frame.
+    pub(crate) const fn candidate_state_ref(&self) -> &CoreState {
+        &self.creation.state
+    }
+}
+
+/// Authenticate the exact Found31 authority graph and return its future
+/// Market projection without acquiring any writable account or applying the
+/// prepared creation plan.
+#[inline(never)]
+pub(crate) fn project(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: Request,
+    exact_found_request: &[u8],
+) -> Result<(), solana_program::program_error::ProgramError> {
+    if request.action != Action::Found {
+        return Err(CoreSbfError::Instruction.into());
+    }
+    let frame = FoundAccounts::parse_project(program_id, accounts)?;
+    let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
+    let prepared = prepare_boxed(program_id, &frame, request, &rent)?;
+    let receipt = ProjectFoundReceiptV1::new(
+        request.market,
+        request.generation,
+        identity(prepared.realm_id)?,
+        identity(prepared.collateral_mint)?,
+        identity(prepared.token_program)?,
+        identity(prepared.collateral_release)?,
+        identity(prepared.product_record_id)?,
+        identity(prepared.product_id)?,
+        identity(prepared.resolution_policy_id)?,
+        identity(prepared.release_set_id)?,
+        identity(frame.rent_program.key.to_bytes())?,
+        hash(exact_found_request).to_bytes(),
+    )
+    .map_err(|_| CoreSbfError::Transition)?;
+    let bytes = receipt.encode().map_err(|_| CoreSbfError::Transition)?;
+    set_return_data(&bytes);
+    Ok(())
+}
+
+#[inline(never)]
+fn prepare_boxed(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+) -> Result<Box<PreparedFound>, solana_program::program_error::ProgramError> {
+    Ok(Box::new(prepare(program_id, frame, request, rent)?))
 }
 
 #[inline(never)]
@@ -69,10 +147,42 @@ pub(crate) fn process(
     if request.action != Action::Found {
         return Err(CoreSbfError::Instruction.into());
     }
+    process_frame(program_id, accounts, request)
+}
+
+#[inline(never)]
+fn process_frame(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: Request,
+) -> Result<(), solana_program::program_error::ProgramError> {
     let frame = FoundAccounts::parse(program_id, accounts)?;
     let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Creation)?;
-    let references = authenticate_references(&frame, &rent)?;
-    authenticate_rent_credit(&frame)?;
+    authenticate_plan_and_apply(program_id, &frame, request, &rent)
+}
+
+#[inline(never)]
+fn authenticate_plan_and_apply(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+) -> Result<(), solana_program::program_error::ProgramError> {
+    let prepared = prepare(program_id, frame, request, rent)?;
+    apply_prepared(program_id, frame, prepared)
+}
+
+/// Authenticate the complete Found31 authority graph and plan the unique
+/// Market creation without mutating the vacant Market.
+#[inline(never)]
+pub(crate) fn prepare(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
+    let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
+    authenticate_rent_credit(frame, request.generation, references.release_set_id)?;
     let admission = authenticate_role(
         frame.activation_cache,
         frame.registry_program,
@@ -82,11 +192,86 @@ pub(crate) fn process(
         references.release_set_id,
         Role::Core,
     )?;
-    authenticate_release_record(&frame, &rent, references.release_set_id, admission.selected)?;
-    let plan = plan_found(program_id, &frame, request, references, admission, &rent)?;
+    finish_prepare(
+        program_id, frame, request, rent, references, runtime, admission,
+    )
+}
+
+/// Prepare Series Found from the same authority graph while consuming the
+/// Core Admission produced by its single canonical Registry role batch.
+#[inline(never)]
+pub(crate) fn prepare_with_admission(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+    admission: Admission,
+) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
+    let (references, runtime) = authenticate_prepare_context(program_id, frame, rent)?;
+    authenticate_rent_credit(frame, request.generation, references.release_set_id)?;
+    finish_prepare(
+        program_id, frame, request, rent, references, runtime, admission,
+    )
+}
+
+#[inline(never)]
+fn authenticate_prepare_context(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    rent: &Rent,
+) -> Result<
+    (References, Box<AuthenticatedProductRuntimeV2>),
+    solana_program::program_error::ProgramError,
+> {
+    authenticate_found(program_id, frame, rent)?;
+    // The release-set bytes are observed only to address the immutable Registry cache.
+    // They are not accepted as a finalized record until after the current Core release
+    // has been authenticated directly from that now-immutable Registry observation.
+    let release_set_id = observe_release_set_id(frame)?;
+    authenticate_immutable_core_release(frame, release_set_id)?;
+    let (references, runtime) = authenticate_references(frame, rent, release_set_id)?;
+    Ok((references, runtime))
+}
+
+#[inline(never)]
+fn finish_prepare(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    request: Request,
+    rent: &Rent,
+    references: References,
+    runtime: Box<AuthenticatedProductRuntimeV2>,
+    admission: Admission,
+) -> Result<PreparedFound, solana_program::program_error::ProgramError> {
+    authenticate_release_record(frame, rent, references.release_set_id, admission.selected)?;
+    let projection = PreparedFound {
+        realm_id: references.realm_id,
+        collateral_mint: *references.realm.collateral_mint(),
+        token_program: *references.realm.token_program(),
+        collateral_release: *references.realm.collateral_adapter_release_id(),
+        product_record_id: references.product_record_id,
+        product_id: references.product_id,
+        product: references.product,
+        runtime,
+        resolution_policy_id: references.resolution_policy_id,
+        manifest_id: references.manifest_id,
+        release_set_id: references.release_set_id,
+        creation: plan_found(program_id, frame, request, references, admission, rent)?,
+    };
+    Ok(projection)
+}
+
+/// Apply one already-authenticated Market creation plan exactly once.
+#[inline(never)]
+pub(crate) fn apply_prepared(
+    program_id: &Pubkey,
+    frame: &FoundAccounts<'_, '_>,
+    prepared: PreparedFound,
+) -> Result<(), solana_program::program_error::ProgramError> {
+    let plan = prepared.creation;
     apply_creation(
         program_id,
-        &frame,
+        frame,
         plan.state_seeds,
         plan.bump,
         plan.state,
@@ -107,8 +292,8 @@ fn plan_found(
     let market_identity = MarketIdentity {
         market_id: identity(frame.market.key.to_bytes())?,
         realm_id: identity(references.realm_id)?,
+        product_record: identity(references.product_record_id)?,
         product_id: identity(references.product_id)?,
-        result_domain: identity(references.result_domain_id)?,
         resolution_policy: identity(references.resolution_policy_id)?,
         capability_manifest: identity(references.manifest_id)?,
         selected_release_set: identity(references.release_set_id)?,
@@ -118,7 +303,7 @@ fn plan_found(
     if request.market != market_identity.market_id {
         return Err(CoreSbfError::Reference.into());
     }
-    let state_seeds = MarketCoreStateSeedsV1::new(market_identity);
+    let state_seeds = MarketCoreStateSeedsV2::new(market_identity);
     let (expected_market, bump) =
         Pubkey::find_program_address(&state_seeds.as_slices(), program_id);
     if frame.market.key != &expected_market
@@ -165,7 +350,8 @@ fn plan_found(
 fn authenticate_references(
     frame: &FoundAccounts<'_, '_>,
     rent: &Rent,
-) -> Result<References, CoreSbfError> {
+    expected_release_set_id: [u8; 32],
+) -> Result<(References, Box<AuthenticatedProductRuntimeV2>), CoreSbfError> {
     let registry = frame.registry_program.key;
     let realm_data = frame
         .realm_raw
@@ -184,75 +370,33 @@ fn authenticate_references(
     )?;
     let realm = RealmV1::decode(realm_bytes).map_err(|_| CoreSbfError::Reference)?;
 
-    let instance_data = frame
-        .instance_raw
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if instance_data.len() != INSTANCE_BYTES {
-        return Err(CoreSbfError::Reference);
-    }
-    let (product_id, instance_bytes) = authenticate_content_addressed_record(
+    let runtime = Box::new(authenticate_product_runtime_v2(
         registry,
-        frame.instance_raw,
-        frame.instance_staging,
         rent,
-        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
-        &instance_data,
-    )?;
-    let instance = InstanceV1::decode(instance_bytes).map_err(|_| CoreSbfError::Reference)?;
-
-    let terms_data = frame
-        .terms_raw
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if terms_data.len() != TERMS_BYTES {
-        return Err(CoreSbfError::Reference);
-    }
-    authenticate_finalized_record(
-        registry,
-        frame.terms_raw,
-        frame.terms_staging,
-        rent,
-        PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1,
-        instance.terms_id().to_bytes(),
-        &terms_data,
-    )?;
-    let terms = TermsV1::decode(&terms_data).map_err(|_| CoreSbfError::Reference)?;
-    if instance.capacity_profile_id() != terms.capacity_profile_id()
-        || instance.partition_cell_count() != terms.partition_cell_count()
-    {
-        return Err(CoreSbfError::Reference);
-    }
-
-    let domain_data = frame
-        .domain_raw
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if domain_data.len() != FINITE_RESULT_DOMAIN_BYTES {
-        return Err(CoreSbfError::Reference);
-    }
-    let (_, domain_bytes) = authenticate_content_addressed_record(
-        registry,
-        frame.domain_raw,
-        frame.domain_staging,
-        rent,
-        FINITE_RESULT_DOMAIN_SCHEMA_RELEASE_ID_V1,
-        &domain_data,
-    )?;
-    let domain = FiniteResultDomainV1::decode(domain_bytes).map_err(|_| CoreSbfError::Reference)?;
-    let result_domain_id =
-        hashv(&[FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &[0], domain_bytes]).to_bytes();
-    if instance.result_domain_id().to_bytes() != result_domain_id
-        || instance.partition_cell_count() != u32::from(domain.outcome_count())
-    {
-        return Err(CoreSbfError::Reference);
-    }
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: frame.product_raw,
+                staging: frame.product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: frame.result_domain_raw,
+                staging: frame.result_domain_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: frame.portfolio_raw,
+                staging: frame.portfolio_staging,
+            },
+        },
+    )?);
+    let product_record_id = runtime.product_record.content_digest.to_bytes();
+    let product_id = runtime.product_id.to_bytes();
+    let product = project_core_product_v2(*runtime)?;
 
     let resolution_data = frame
         .resolution_raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if resolution_data.len() != SOURCE_MATERIAL_BYTES {
+    if resolution_data.len() != SOURCE_MATERIAL_V2_BYTES {
         return Err(CoreSbfError::Reference);
     }
     let (resolution_policy_id, resolution_bytes) = authenticate_content_addressed_record(
@@ -260,23 +404,14 @@ fn authenticate_references(
         frame.resolution_raw,
         frame.resolution_staging,
         rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
         &resolution_data,
     )?;
-    let material =
-        SourceMaterialViewV1::decode(resolution_bytes).map_err(|_| CoreSbfError::Reference)?;
-    if material
-        .product_instance_id()
-        .map_err(|_| CoreSbfError::Reference)?
-        .to_bytes()
-        != product_id
-        || material
-            .result_domain()
-            .map_err(|_| CoreSbfError::Reference)?
-            != domain
-    {
-        return Err(CoreSbfError::Reference);
-    }
+    SourceMaterialV2::decode(resolution_bytes)
+        .and_then(|material| {
+            material.authenticate_product_record(SourceContentId::new(product_record_id)?)
+        })
+        .map_err(|_| CoreSbfError::Reference)?;
 
     let manifest_data = frame
         .manifest_raw
@@ -307,27 +442,39 @@ fn authenticate_references(
         EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
         &release_data,
     )?;
+    if release_set_id != expected_release_set_id {
+        return Err(CoreSbfError::Release);
+    }
     ExecutionReleaseSetV1::decode(release_bytes).map_err(|_| CoreSbfError::Reference)?;
 
-    Ok(References {
-        realm_id,
-        realm,
-        product_id,
-        product: Product {
-            product_id: identity(product_id)?,
-            result_domain: identity(result_domain_id)?,
-            claim_basis: identity(instance.claim_basis_id().to_bytes())?,
-            capacity_profile: identity(instance.capacity_profile_id().content_id().to_bytes())?,
-            compiler_release: identity(terms.semantic_release_id().to_bytes())?,
-            outcome_count: u32::from(domain.outcome_count()),
+    Ok((
+        References {
+            realm_id,
+            realm,
+            product_record_id,
+            product_id,
+            product,
+            resolution_policy_id,
+            manifest_id,
+            release_set_id,
         },
-        result_domain_id,
-        resolution_policy_id,
-        manifest_id,
-        release_set_id,
-    })
+        runtime,
+    ))
 }
 
+#[inline(never)]
+fn observe_release_set_id(frame: &FoundAccounts<'_, '_>) -> Result<[u8; 32], CoreSbfError> {
+    let data = frame
+        .release_raw
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::FinalizedRecord)?;
+    if data.len() != EXECUTION_RELEASE_SET_BYTES_V1 {
+        return Err(CoreSbfError::Reference);
+    }
+    Ok(hash(&data).to_bytes())
+}
+
+#[inline(never)]
 fn authenticate_release_record(
     frame: &FoundAccounts<'_, '_>,
     rent: &Rent,
@@ -373,7 +520,12 @@ fn authenticate_release_record(
     Ok(())
 }
 
-fn authenticate_rent_credit(frame: &FoundAccounts<'_, '_>) -> Result<(), CoreSbfError> {
+#[inline(never)]
+fn authenticate_rent_credit(
+    frame: &FoundAccounts<'_, '_>,
+    generation: u64,
+    release_set: [u8; 32],
+) -> Result<(), CoreSbfError> {
     if frame.rent_credit.owner != frame.rent_program.key {
         return Err(CoreSbfError::RentCredit);
     }
@@ -381,11 +533,23 @@ fn authenticate_rent_credit(frame: &FoundAccounts<'_, '_>) -> Result<(), CoreSbf
         .rent_credit
         .try_borrow_data()
         .map_err(|_| CoreSbfError::RentCredit)?;
-    let credit = RentCreditV1::decode(&bytes).map_err(|_| CoreSbfError::RentCredit)?;
-    let authority = credit.refund_authority().to_bytes();
+    let credit = LifecycleRentCreditV2::decode(&bytes).map_err(|_| CoreSbfError::RentCredit)?;
+    if credit.market().to_bytes() != frame.market.key.to_bytes()
+        || credit.release_set().to_bytes() != release_set
+        || credit.generation() != generation
+    {
+        return Err(CoreSbfError::RentCredit);
+    }
+    let market = credit.market().to_bytes();
+    let generation_bytes = credit.generation().to_le_bytes();
     let bump = [credit.pda_bump()];
     let expected = Pubkey::create_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &authority, &bump],
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            &market,
+            &generation_bytes,
+            &bump,
+        ],
         frame.rent_program.key,
     )
     .map_err(|_| CoreSbfError::RentCredit)?;
@@ -399,7 +563,7 @@ fn authenticate_rent_credit(frame: &FoundAccounts<'_, '_>) -> Result<(), CoreSbf
 fn apply_creation(
     program_id: &Pubkey,
     frame: &FoundAccounts<'_, '_>,
-    state_seeds: MarketCoreStateSeedsV1,
+    state_seeds: MarketCoreStateSeedsV2,
     bump: u8,
     state: CoreState,
     rent_top_up: u64,
@@ -419,8 +583,8 @@ fn apply_creation(
     let [
         domain,
         realm,
-        product,
-        result_domain,
+        product_record,
+        product_id,
         resolution,
         manifest,
         release,
@@ -431,8 +595,8 @@ fn apply_creation(
     let signer: [&[u8]; 10] = [
         domain,
         realm,
-        product,
-        result_domain,
+        product_record,
+        product_id,
         resolution,
         manifest,
         release,

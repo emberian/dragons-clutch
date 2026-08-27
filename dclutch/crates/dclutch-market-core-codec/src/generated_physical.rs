@@ -4,6 +4,9 @@ pub const CORE_EFFECT_ENVELOPE_BYTES_V1: usize = 280;
 pub const CORE_EFFECT_ACK_BYTES_V1: usize = 240;
 pub const SERIES_CORE_REQUEST_BYTES_V1: usize = 336;
 pub const SERIES_CORE_ACK_BYTES_V1: usize = 264;
+pub const SERIES_FOUNDING_PERMIT_BYTES_V1: usize = 608;
+pub const FOUNDING_INTENT_BYTES_V5: usize = 544;
+pub const SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1: usize = 640;
 pub const CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1: usize = 16;
 pub const CAPABILITY_FUNDING_MAX_ENTRIES_V1: usize = 16;
 pub const CORE_EFFECT_INITIALIZE_CLAIMS_ACTION_TAG_V1: u8 = 12;
@@ -19,6 +22,12 @@ pub const SERIES_CORE_REQUEST_MAGIC_V1: [u8; 8] = [
 pub const SERIES_CORE_ACK_MAGIC_V1: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31,
 ];
+pub const SERIES_FOUNDING_PERMIT_MAGIC_V1: [u8; 8] = [
+    0x44, 0x43, 0x4c, 0x54, 0x53, 0x46, 0x50, 0x31,
+];
+pub const SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1: [u8; 8] = [
+    0x44, 0x43, 0x4c, 0x54, 0x53, 0x46, 0x58, 0x31,
+];
 pub const CAPABILITY_FUNDING_LIST_MAGIC_V1: [u8; 8] = [
     0x44, 0x43, 0x4c, 0x54, 0x43, 0x46, 0x4c, 0x31,
 ];
@@ -28,8 +37,11 @@ pub const CORE_EFFECT_DIGEST_DOMAIN_V1: [u8; 22] = [
 pub const SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1: [u8; 29] = [
     0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x73, 0x65, 0x72, 0x69, 0x65, 0x73, 0x2d, 0x63, 0x6f, 0x72, 0x65, 0x2d, 0x63, 0x61, 0x6c, 0x6c, 0x65, 0x72, 0x2f, 0x76, 0x31,
 ];
-pub const MARKET_CORE_STATE_PDA_DOMAIN_V1: [u8; 28] = [
-    0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x2d, 0x63, 0x6f, 0x72, 0x65, 0x2f, 0x73, 0x74, 0x61, 0x74, 0x65, 0x2f, 0x76, 0x31,
+pub const SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1: [u8; 24] = [
+    0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x73, 0x65, 0x72, 0x69, 0x65, 0x73, 0x2d, 0x70, 0x65, 0x72, 0x6d, 0x69, 0x74, 0x2f, 0x76, 0x31,
+];
+pub const MARKET_CORE_STATE_PDA_DOMAIN_V2: [u8; 28] = [
+    0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x2d, 0x63, 0x6f, 0x72, 0x65, 0x2f, 0x73, 0x74, 0x61, 0x74, 0x65, 0x2f, 0x76, 0x32,
 ];
 pub(crate) const EFFECT_MAGIC_OFFSET: usize = 0;
 pub(crate) const EFFECT_VERSION_OFFSET: usize = 8;
@@ -98,6 +110,62 @@ pub(crate) const SERIES_ACK_POST_RESOURCE_DIGEST_OFFSET: usize = 208;
 pub(crate) const SERIES_ACK_MARKET_GENERATION_OFFSET: usize = 240;
 pub(crate) const SERIES_ACK_EXPECTED_SERIES_REVISION_OFFSET: usize = 248;
 pub(crate) const SERIES_ACK_EXPECTED_TICKET_REVISION_OFFSET: usize = 256;
+pub(crate) const SERIES_PERMIT_MAGIC_OFFSET: usize = 0;
+pub(crate) const SERIES_PERMIT_VERSION_OFFSET: usize = 8;
+pub(crate) const SERIES_PERMIT_BUMP_OFFSET: usize = 10;
+pub(crate) const SERIES_PERMIT_RESERVED_OFFSET: usize = 11;
+pub(crate) const SERIES_PERMIT_RELEASE_SET_OFFSET: usize = 16;
+pub(crate) const SERIES_PERMIT_MARKET_OFFSET: usize = 48;
+pub(crate) const SERIES_PERMIT_PRODUCT_RECORD_OFFSET: usize = 80;
+pub(crate) const SERIES_PERMIT_SOURCE_OFFSET: usize = 112;
+pub(crate) const SERIES_PERMIT_FOUNDER_OFFSET: usize = 144;
+pub(crate) const SERIES_PERMIT_TICKET_CONTEXT_OFFSET: usize = 176;
+pub(crate) const SERIES_PERMIT_PARENT_ROOT_OFFSET: usize = 208;
+pub(crate) const SERIES_PERMIT_PROJECTED_REPLAY_OFFSET: usize = 240;
+pub(crate) const SERIES_PERMIT_FUNDING_SOURCE_OFFSET: usize = 272;
+pub(crate) const SERIES_PERMIT_HOARD_OFFSET: usize = 304;
+pub(crate) const SERIES_PERMIT_PROJECTED_REQUEST_DIGEST_OFFSET: usize = 336;
+pub(crate) const SERIES_PERMIT_PROJECTED_RECEIPT_DIGEST_OFFSET: usize = 368;
+pub(crate) const SERIES_PERMIT_CLAIMS_INTENT_DIGEST_OFFSET: usize = 400;
+pub(crate) const SERIES_PERMIT_CLAIMS_REQUEST_DIGEST_OFFSET: usize = 432;
+pub(crate) const SERIES_PERMIT_TRADING_PROGRAM_OFFSET: usize = 464;
+pub(crate) const SERIES_PERMIT_CLAIMS_PROGRAM_OFFSET: usize = 496;
+pub(crate) const SERIES_PERMIT_RENT_CREDIT_OFFSET: usize = 528;
+pub(crate) const SERIES_PERMIT_GENERATION_OFFSET: usize = 560;
+pub(crate) const SERIES_PERMIT_QUANTITY_OFFSET: usize = 568;
+pub(crate) const SERIES_PERMIT_BASIS_SCALE_OFFSET: usize = 576;
+pub(crate) const SERIES_PERMIT_EXPIRY_SLOT_OFFSET: usize = 584;
+pub(crate) const SERIES_PERMIT_PROJECTED_RESULTING_REVISION_OFFSET: usize = 592;
+pub(crate) const SERIES_PERMIT_NORMAL_REPLAY_REVISION_OFFSET: usize = 600;
+pub(crate) const SERIES_FOUNDING_INTENT_MAGIC_OFFSET: usize = 0;
+pub(crate) const SERIES_FOUNDING_INTENT_VERSION_OFFSET: usize = 8;
+pub(crate) const SERIES_FOUNDING_INTENT_BUMP_OFFSET: usize = 10;
+pub(crate) const SERIES_FOUNDING_INTENT_RESERVED_OFFSET: usize = 11;
+pub(crate) const SERIES_FOUNDING_INTENT_RELEASE_SET_OFFSET: usize = 16;
+pub(crate) const SERIES_FOUNDING_INTENT_MARKET_OFFSET: usize = 48;
+pub(crate) const SERIES_FOUNDING_INTENT_PRODUCT_RECORD_OFFSET: usize = 80;
+pub(crate) const SERIES_FOUNDING_INTENT_SOURCE_OFFSET: usize = 112;
+pub(crate) const SERIES_FOUNDING_INTENT_FOUNDER_OFFSET: usize = 144;
+pub(crate) const SERIES_FOUNDING_INTENT_TICKET_CONTEXT_OFFSET: usize = 176;
+pub(crate) const SERIES_FOUNDING_INTENT_PARENT_ROOT_OFFSET: usize = 208;
+pub(crate) const SERIES_FOUNDING_INTENT_PROJECTED_REPLAY_OFFSET: usize = 240;
+pub(crate) const SERIES_FOUNDING_INTENT_FUNDING_SOURCE_OFFSET: usize = 272;
+pub(crate) const SERIES_FOUNDING_INTENT_HOARD_OFFSET: usize = 304;
+pub(crate) const SERIES_FOUNDING_INTENT_PROJECTED_REQUEST_DIGEST_OFFSET: usize = 336;
+pub(crate) const SERIES_FOUNDING_INTENT_PROJECTED_RECEIPT_DIGEST_OFFSET: usize = 368;
+pub(crate) const SERIES_FOUNDING_INTENT_TRADING_PROGRAM_OFFSET: usize = 400;
+pub(crate) const SERIES_FOUNDING_INTENT_CLAIMS_PROGRAM_OFFSET: usize = 432;
+pub(crate) const SERIES_FOUNDING_INTENT_RENT_CREDIT_OFFSET: usize = 464;
+pub(crate) const SERIES_FOUNDING_INTENT_GENERATION_OFFSET: usize = 496;
+pub(crate) const SERIES_FOUNDING_INTENT_QUANTITY_OFFSET: usize = 504;
+pub(crate) const SERIES_FOUNDING_INTENT_BASIS_SCALE_OFFSET: usize = 512;
+pub(crate) const SERIES_FOUNDING_INTENT_EXPIRY_SLOT_OFFSET: usize = 520;
+pub(crate) const SERIES_FOUNDING_INTENT_PROJECTED_RESULTING_REVISION_OFFSET: usize = 528;
+pub(crate) const SERIES_FOUNDING_INTENT_NORMAL_REPLAY_REVISION_OFFSET: usize = 536;
+pub(crate) const SERIES_PERMIT_EXPIRY_MAGIC_OFFSET: usize = 0;
+pub(crate) const SERIES_PERMIT_EXPIRY_VERSION_OFFSET: usize = 8;
+pub(crate) const SERIES_PERMIT_EXPIRY_RESERVED_OFFSET: usize = 10;
+pub(crate) const SERIES_PERMIT_EXPIRY_PERMIT_OFFSET: usize = 32;
 pub(crate) const CAPABILITY_FUNDING_MAGIC_OFFSET: usize = 0;
 pub(crate) const CAPABILITY_FUNDING_VERSION_OFFSET: usize = 8;
 pub(crate) const CAPABILITY_FUNDING_COUNT_OFFSET: usize = 10;

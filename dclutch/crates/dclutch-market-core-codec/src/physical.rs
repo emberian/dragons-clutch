@@ -11,6 +11,13 @@
 //! execution-release role and calls Core through the separate
 //! `SeriesCoreRequestV1` boundary.
 
+#[rustfmt::skip]
+#[allow(missing_docs)]
+#[path = "generated_series_found_ack_v2.rs"]
+mod generated_series_found_ack_v2;
+
+pub use generated_series_found_ack_v2::*;
+
 use crate::{
     CoreState, Error, Identity, MarketIdentity, Phase, Product, Realm, ReleaseSet, Role,
     generated_physical::{
@@ -49,6 +56,22 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 
 const IDENTITY_BYTES: usize = 32;
 const ZERO_IDENTITY: [u8; IDENTITY_BYTES] = [0; IDENTITY_BYTES];
+
+/// Domain for the atomic Series Found post-resource commitment.
+///
+/// Core hashes this domain followed by the exact live Market bytes and exact
+/// founding-permit bytes. The caller independently recomputes the same value
+/// before accepting a [`SeriesCoreFoundAckV2`].
+pub const SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] =
+    b"dclutch/core-series-found-permit/v1";
+
+/// Domain for the final atomic Series Open post-resource commitment.
+///
+/// Core hashes this domain followed by the exact Open Market bytes, the exact
+/// Claims Founding receipt, and the canonical next Series-root and Ticket
+/// replay bytes. Trading recomputes the same value before its commit-last
+/// replay write accepts a [`SeriesCoreAckV1`].
+pub const SERIES_OPEN_POST_RESOURCE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/core-series-open-post/v1";
 
 /// Canonical cross-program effect selected by Market Core.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -594,10 +617,10 @@ impl SeriesCoreActionV1 {
 /// resulting PDA is itself the canonical `market_id` stored in [`CoreState`];
 /// adapters must derive it first and then require exact equality to that field.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct MarketCoreStateSeedsV1 {
+pub struct MarketCoreStateSeedsV2 {
     realm: [u8; IDENTITY_BYTES],
-    product: [u8; IDENTITY_BYTES],
-    result_domain: [u8; IDENTITY_BYTES],
+    product_record: [u8; IDENTITY_BYTES],
+    product_id: [u8; IDENTITY_BYTES],
     resolution_policy: [u8; IDENTITY_BYTES],
     capability_manifest: [u8; IDENTITY_BYTES],
     release_set: [u8; IDENTITY_BYTES],
@@ -605,14 +628,14 @@ pub struct MarketCoreStateSeedsV1 {
     generation: [u8; 8],
 }
 
-impl MarketCoreStateSeedsV1 {
+impl MarketCoreStateSeedsV2 {
     /// Project the unique state coordinates, excluding the derived address.
     #[must_use]
     pub const fn new(identity: MarketIdentity) -> Self {
         Self {
             realm: identity.realm_id.to_bytes(),
-            product: identity.product_id.to_bytes(),
-            result_domain: identity.result_domain.to_bytes(),
+            product_record: identity.product_record.to_bytes(),
+            product_id: identity.product_id.to_bytes(),
             resolution_policy: identity.resolution_policy.to_bytes(),
             capability_manifest: identity.capability_manifest.to_bytes(),
             release_set: identity.selected_release_set.to_bytes(),
@@ -625,10 +648,10 @@ impl MarketCoreStateSeedsV1 {
     #[must_use]
     pub fn as_slices(&self) -> [&[u8]; 9] {
         [
-            crate::MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
+            crate::MARKET_CORE_STATE_PDA_DOMAIN_V2.as_slice(),
             &self.realm,
-            &self.product,
-            &self.result_domain,
+            &self.product_record,
+            &self.product_id,
             &self.resolution_policy,
             &self.capability_manifest,
             &self.release_set,
@@ -651,8 +674,9 @@ pub struct CoreReferenceObservationV1 {
     pub release_set: ReleaseSet,
     /// Exact Realm record and content identity were authenticated.
     pub realm_record_authenticated: bool,
-    /// Exact Product record and content identity were authenticated.
-    pub product_record_authenticated: bool,
+    /// Exact Product graph root, selected domain, and selected portfolio were
+    /// independently authenticated and composed.
+    pub product_graph_authenticated: bool,
     /// Exact release-set record and Registry activation were authenticated.
     pub release_set_record_authenticated: bool,
     /// Claims aggregate was derived under the selected Claims program from the
@@ -687,7 +711,7 @@ impl CoreMarketViewV1 {
         references: CoreReferenceObservationV1,
     ) -> Result<Self, Error> {
         if !references.realm_record_authenticated
-            || !references.product_record_authenticated
+            || !references.product_graph_authenticated
             || !references.release_set_record_authenticated
             || !references.claims_aggregate_derivation_authenticated
             || !references.product.valid()
@@ -696,8 +720,8 @@ impl CoreMarketViewV1 {
             || observed_claims_aggregate == observed_market
             || observed_claims_aggregate == state.rent_beneficiary
             || references.realm.realm_id != state.identity.realm_id
+            || references.product.product_record != state.identity.product_record
             || references.product.product_id != state.identity.product_id
-            || references.product.result_domain != state.identity.result_domain
             || references.release_set.release_set_id != state.identity.selected_release_set
         {
             return Err(Error::InvalidCoordinates);
@@ -1309,6 +1333,268 @@ impl SeriesCoreAckV1 {
         self.expected_series_revision
     }
     /// Expected ticket revision echoed from the request, zero only for Close.
+    #[must_use]
+    pub const fn expected_ticket_revision(self) -> u64 {
+        self.expected_ticket_revision
+    }
+}
+
+/// Core-produced acknowledgment of the Series Found stage.
+///
+/// V2 is Found-only and cannot cross-pair with the V1 final-Open receipt. The
+/// nonzero funding count and canonical ordered funding-list identity are facts
+/// Core derives only after authenticating the exact FundingState prefix. A Hot
+/// continuation must still authenticate its outer DCE5/artifact/global-plan
+/// facts; Core does not copy authority it cannot observe into this receipt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesCoreFoundAckV2 {
+    funding_count: u8,
+    core_program: Identity,
+    release_set: Identity,
+    template: Identity,
+    ticket: Identity,
+    market: Identity,
+    permit: Identity,
+    request_digest: Identity,
+    funding_list_id: Identity,
+    post_resource_digest: Identity,
+    market_generation: u64,
+    expected_series_revision: u64,
+    expected_ticket_revision: u64,
+}
+
+impl SeriesCoreFoundAckV2 {
+    /// Construct one exact Found acknowledgment from Core-authenticated facts.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        request: SeriesCoreRequestV1,
+        core_program: Identity,
+        permit: Identity,
+        request_digest: Identity,
+        funding_count: u8,
+        funding_list_id: Identity,
+        post_resource_digest: Identity,
+    ) -> Result<Self, Error> {
+        if request.action() != SeriesCoreActionV1::Consume || funding_count == 0 {
+            return Err(Error::InvalidCoordinates);
+        }
+        Ok(Self {
+            funding_count,
+            core_program,
+            release_set: request.release_set(),
+            template: request.template(),
+            ticket: request.ticket().ok_or(Error::InvalidCoordinates)?,
+            market: request.market().ok_or(Error::InvalidCoordinates)?,
+            permit,
+            request_digest,
+            funding_list_id,
+            post_resource_digest,
+            market_generation: request
+                .market_generation()
+                .ok_or(Error::InvalidCoordinates)?,
+            expected_series_revision: request.expected_series_revision(),
+            expected_ticket_revision: request.expected_ticket_revision(),
+        })
+    }
+
+    /// Hostile-decode one exact 328-byte Found acknowledgment.
+    pub fn decode(input: &[u8]) -> Result<Self, Error> {
+        exact_len(input, SERIES_CORE_FOUND_ACK_BYTES_V2)?;
+        exact_magic(
+            input,
+            SERIES_CORE_FOUND_ACK_MAGIC_OFFSET_V2,
+            &SERIES_CORE_FOUND_ACK_MAGIC_V2,
+        )?;
+        if read_u16(input, SERIES_CORE_FOUND_ACK_VERSION_OFFSET_V2)?
+            != SERIES_CORE_FOUND_ACK_VERSION_V2
+        {
+            return Err(Error::UnsupportedVersion);
+        }
+        require_zero(input, SERIES_CORE_FOUND_ACK_RESERVED_OFFSET_V2, 5)?;
+        let funding_count = read_u8(input, SERIES_CORE_FOUND_ACK_FUNDING_COUNT_OFFSET_V2)?;
+        let market_generation = read_u64(input, SERIES_CORE_FOUND_ACK_MARKET_GENERATION_OFFSET_V2)?;
+        if funding_count == 0 || market_generation == 0 {
+            return Err(Error::InvalidCoordinates);
+        }
+        Ok(Self {
+            funding_count,
+            core_program: read_identity(input, SERIES_CORE_FOUND_ACK_CORE_PROGRAM_OFFSET_V2)?,
+            release_set: read_identity(input, SERIES_CORE_FOUND_ACK_RELEASE_SET_OFFSET_V2)?,
+            template: read_identity(input, SERIES_CORE_FOUND_ACK_TEMPLATE_OFFSET_V2)?,
+            ticket: read_identity(input, SERIES_CORE_FOUND_ACK_TICKET_OFFSET_V2)?,
+            market: read_identity(input, SERIES_CORE_FOUND_ACK_MARKET_OFFSET_V2)?,
+            permit: read_identity(input, SERIES_CORE_FOUND_ACK_PERMIT_OFFSET_V2)?,
+            request_digest: read_identity(input, SERIES_CORE_FOUND_ACK_REQUEST_DIGEST_OFFSET_V2)?,
+            funding_list_id: read_identity(input, SERIES_CORE_FOUND_ACK_FUNDING_LIST_ID_OFFSET_V2)?,
+            post_resource_digest: read_identity(
+                input,
+                SERIES_CORE_FOUND_ACK_POST_RESOURCE_DIGEST_OFFSET_V2,
+            )?,
+            market_generation,
+            expected_series_revision: read_u64(
+                input,
+                SERIES_CORE_FOUND_ACK_EXPECTED_SERIES_REVISION_OFFSET_V2,
+            )?,
+            expected_ticket_revision: read_u64(
+                input,
+                SERIES_CORE_FOUND_ACK_EXPECTED_TICKET_REVISION_OFFSET_V2,
+            )?,
+        })
+    }
+
+    /// Encode the exact fixed Found acknowledgment.
+    pub fn encode(self) -> Result<[u8; SERIES_CORE_FOUND_ACK_BYTES_V2], Error> {
+        let mut output = [0; SERIES_CORE_FOUND_ACK_BYTES_V2];
+        put(
+            &mut output,
+            SERIES_CORE_FOUND_ACK_MAGIC_OFFSET_V2,
+            &SERIES_CORE_FOUND_ACK_MAGIC_V2,
+        )?;
+        put_u16(
+            &mut output,
+            SERIES_CORE_FOUND_ACK_VERSION_OFFSET_V2,
+            SERIES_CORE_FOUND_ACK_VERSION_V2,
+        )?;
+        put_u8(
+            &mut output,
+            SERIES_CORE_FOUND_ACK_FUNDING_COUNT_OFFSET_V2,
+            self.funding_count,
+        )?;
+        for (offset, identity) in [
+            (
+                SERIES_CORE_FOUND_ACK_CORE_PROGRAM_OFFSET_V2,
+                self.core_program,
+            ),
+            (
+                SERIES_CORE_FOUND_ACK_RELEASE_SET_OFFSET_V2,
+                self.release_set,
+            ),
+            (SERIES_CORE_FOUND_ACK_TEMPLATE_OFFSET_V2, self.template),
+            (SERIES_CORE_FOUND_ACK_TICKET_OFFSET_V2, self.ticket),
+            (SERIES_CORE_FOUND_ACK_MARKET_OFFSET_V2, self.market),
+            (SERIES_CORE_FOUND_ACK_PERMIT_OFFSET_V2, self.permit),
+            (
+                SERIES_CORE_FOUND_ACK_REQUEST_DIGEST_OFFSET_V2,
+                self.request_digest,
+            ),
+            (
+                SERIES_CORE_FOUND_ACK_FUNDING_LIST_ID_OFFSET_V2,
+                self.funding_list_id,
+            ),
+            (
+                SERIES_CORE_FOUND_ACK_POST_RESOURCE_DIGEST_OFFSET_V2,
+                self.post_resource_digest,
+            ),
+        ] {
+            put_identity(&mut output, offset, identity)?;
+        }
+        put_u64(
+            &mut output,
+            SERIES_CORE_FOUND_ACK_MARKET_GENERATION_OFFSET_V2,
+            self.market_generation,
+        )?;
+        put_u64(
+            &mut output,
+            SERIES_CORE_FOUND_ACK_EXPECTED_SERIES_REVISION_OFFSET_V2,
+            self.expected_series_revision,
+        )?;
+        put_u64(
+            &mut output,
+            SERIES_CORE_FOUND_ACK_EXPECTED_TICKET_REVISION_OFFSET_V2,
+            self.expected_ticket_revision,
+        )?;
+        Ok(output)
+    }
+
+    /// Authenticate every request echo and Core-observed Found fact.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_for(
+        self,
+        request: SeriesCoreRequestV1,
+        expected_core_program: Identity,
+        expected_permit: Identity,
+        request_digest: Identity,
+        funding_count: u8,
+        funding_list_id: Identity,
+        observed_post_resource_digest: Identity,
+    ) -> Result<(), Error> {
+        if self
+            != Self::new(
+                request,
+                expected_core_program,
+                expected_permit,
+                request_digest,
+                funding_count,
+                funding_list_id,
+                observed_post_resource_digest,
+            )?
+        {
+            return Err(Error::InvalidRelease);
+        }
+        Ok(())
+    }
+
+    /// Authenticated nonzero ordered FundingState count.
+    #[must_use]
+    pub const fn funding_count(self) -> u8 {
+        self.funding_count
+    }
+    /// Registry-selected Core program.
+    #[must_use]
+    pub const fn core_program(self) -> Identity {
+        self.core_program
+    }
+    /// Immutable release set.
+    #[must_use]
+    pub const fn release_set(self) -> Identity {
+        self.release_set
+    }
+    /// Exact Series template.
+    #[must_use]
+    pub const fn template(self) -> Identity {
+        self.template
+    }
+    /// Exact consumed Ticket.
+    #[must_use]
+    pub const fn ticket(self) -> Identity {
+        self.ticket
+    }
+    /// Exact future Market.
+    #[must_use]
+    pub const fn market(self) -> Identity {
+        self.market
+    }
+    /// Exact one-shot Core Founding permit account.
+    #[must_use]
+    pub const fn permit(self) -> Identity {
+        self.permit
+    }
+    /// SHA-256 of the exact 336-byte Series Core request.
+    #[must_use]
+    pub const fn request_digest(self) -> Identity {
+        self.request_digest
+    }
+    /// Canonical identity of the exact ordered FundingState key span.
+    #[must_use]
+    pub const fn funding_list_id(self) -> Identity {
+        self.funding_list_id
+    }
+    /// Digest of exact Core-owned Market and permit bytes after Found.
+    #[must_use]
+    pub const fn post_resource_digest(self) -> Identity {
+        self.post_resource_digest
+    }
+    /// Nonzero occurrence-derived Market generation.
+    #[must_use]
+    pub const fn market_generation(self) -> u64 {
+        self.market_generation
+    }
+    /// Expected Series revision echoed from the request.
+    #[must_use]
+    pub const fn expected_series_revision(self) -> u64 {
+        self.expected_series_revision
+    }
+    /// Expected Ticket revision echoed from the request.
     #[must_use]
     pub const fn expected_ticket_revision(self) -> u64 {
         self.expected_ticket_revision

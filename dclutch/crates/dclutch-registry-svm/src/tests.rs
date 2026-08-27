@@ -30,12 +30,16 @@ fn flip(output: &mut [u8], offset: usize) {
 #[test]
 fn instructions_are_exact_and_hostile_decoded() {
     let cases = [
-        RegistryInstructionV1::Activate,
         RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core),
         RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Claims),
         RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Trading),
         RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Resolution),
         RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Custody),
+        RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core),
+        RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Claims),
+        RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Trading),
+        RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Resolution),
+        RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Custody),
     ];
     for value in cases {
         let encoded = value.to_bytes();
@@ -43,7 +47,7 @@ fn instructions_are_exact_and_hostile_decoded() {
         assert_eq!(RegistryInstructionV1::decode(&encoded), Ok(value));
     }
 
-    let valid = RegistryInstructionV1::Activate.to_bytes();
+    let valid = RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes();
     assert_eq!(
         RegistryInstructionV1::decode(&valid[..15]),
         Err(Error::InvalidLength)
@@ -58,18 +62,31 @@ fn instructions_are_exact_and_hostile_decoded() {
         flip(&mut hostile, offset);
         assert_eq!(RegistryInstructionV1::decode(&hostile), Err(expected));
     }
-    let mut inactive_role = valid;
-    inactive_role[11] = 1;
+    for action in [2_u8, 3, 4, 0xff] {
+        let mut hostile = valid;
+        hostile[10] = action;
+        assert_eq!(
+            RegistryInstructionV1::decode(&hostile),
+            Err(Error::UnknownAction),
+            "action {action} belongs to the record family or nothing at all"
+        );
+    }
+    // The retired five-role wire was action 0 with role 0. It now names exactly
+    // one role, which is strictly less authority; the ten-account activation
+    // route refuses its 26-account frame.
     assert_eq!(
-        RegistryInstructionV1::decode(&inactive_role),
-        Err(Error::NonCanonicalReservedBytes)
+        RegistryInstructionV1::decode(&valid),
+        Ok(RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core))
     );
-    let mut unknown_role = RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core).to_bytes();
-    unknown_role[11] = 5;
-    assert_eq!(
-        RegistryInstructionV1::decode(&unknown_role),
-        Err(Error::UnknownRole)
-    );
+    for action in [0_u8, 1] {
+        let mut unknown_role = valid;
+        unknown_role[10] = action;
+        unknown_role[11] = 5;
+        assert_eq!(
+            RegistryInstructionV1::decode(&unknown_role),
+            Err(Error::UnknownRole)
+        );
+    }
 }
 
 #[test]
@@ -126,7 +143,7 @@ fn loader_program_requires_exact_variant_two_and_link() {
 }
 
 #[test]
-fn loader_programdata_uses_fixed_offset_and_canonical_immutable_padding() {
+fn loader_programdata_uses_fixed_offset_and_tag_owned_authority_semantics() {
     let elf = [0xa5_u8; 64];
     let mut immutable = [0_u8; LOADER_V3_PROGRAMDATA_METADATA_BYTES + 64];
     put(&mut immutable, 0, &3_u32.to_le_bytes());
@@ -152,12 +169,14 @@ fn loader_programdata_uses_fixed_offset_and_canonical_immutable_padding() {
     assert_eq!(view.upgrade_authority(), Some([0; 32]));
     assert_eq!(view.elf(), elf);
 
-    let mut bad_padding = immutable;
-    bad_padding[13] = 1;
-    assert_eq!(
-        ProgramDataV3View::parse(&bad_padding),
-        Err(Error::NonCanonicalProgramDataPadding)
-    );
+    let mut retained_prior_authority = immutable;
+    put(&mut retained_prior_authority, 13, &bytes(44));
+    let view = ProgramDataV3View::parse(&retained_prior_authority)
+        .expect("Loader None tag owns retained bytes as inactive storage");
+    assert_eq!(view.deployment_slot(), 77);
+    assert_eq!(view.upgrade_authority(), None);
+    assert_eq!(view.elf(), elf);
+    assert_ne!(&retained_prior_authority[13..45], &immutable[13..45]);
     let mut bad_tag = immutable;
     bad_tag[12] = 2;
     assert_eq!(

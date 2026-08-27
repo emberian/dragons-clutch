@@ -8,6 +8,7 @@ description = "Safe fixed-memory interpreter for content-selected account projec
 publish = false
 
 [dependencies]
+dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 

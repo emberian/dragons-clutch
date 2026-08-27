@@ -217,10 +217,19 @@ impl Fixture {
 }
 
 #[test]
-fn activation_derives_exact_frame_cache_rent_and_packet_geometry() {
+fn activation_derives_exact_per_role_frames_cache_rent_and_packet_geometry() {
     let fixture = Fixture::new();
     let report = fixture.activation();
-    assert_eq!(report.instruction.accounts.len(), 26);
+    assert_eq!(report.roles.len(), 5);
+    assert_eq!(
+        report
+            .roles
+            .iter()
+            .map(|plan| plan.role)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        REGISTRY_ACTIVATION_ROLE_ORDER_V1.as_slice()
+    );
     assert_eq!(report.cache, fixture.state.cache.key);
     assert_eq!(report.mode, RegistryActivationModeV1::Create);
     assert_eq!(
@@ -229,34 +238,50 @@ fn activation_derives_exact_frame_cache_rent_and_packet_geometry() {
             .rent
             .minimum_balance(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
     );
+    // The walk-up total is five ELFs; each *transaction* hashes exactly one.
     assert_eq!(report.compute.elf_bytes_hashed, 5 * 96);
     assert_eq!(report.compute.matching_measured_compute_units, None);
-    assert!(
-        report
-            .instruction
-            .accounts
-            .first()
-            .expect("payer")
-            .is_signer
-    );
-    assert!(
-        report
-            .instruction
-            .accounts
-            .get(1)
-            .expect("cache")
-            .is_writable
-    );
-    let packet = compile_registry_activation_packet_v0(
-        &report,
-        fixture.state.payer.key,
-        Hash::new_from_array(bytes(55)),
-        400_000,
-    )
-    .expect("packet-safe activation");
-    assert_eq!(packet.required_signatures, 1);
-    assert_eq!(packet.wire_bytes, 509);
-    assert_eq!(packet.compute_unit_limit, 400_000);
+
+    for plan in &report.roles {
+        assert_eq!(
+            plan.instruction.accounts.len(),
+            REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
+        );
+        assert_eq!(plan.compute.elf_bytes_hashed, 96);
+        assert!(!plan.already_activated);
+        assert!(
+            plan.instruction
+                .accounts
+                .first()
+                .expect("payer")
+                .is_signer
+        );
+        assert!(
+            plan.instruction
+                .accounts
+                .get(1)
+                .expect("cache")
+                .is_writable
+        );
+        assert!(
+            plan.instruction
+                .accounts
+                .iter()
+                .skip(2)
+                .all(|meta| !meta.is_signer && !meta.is_writable),
+            "only the payer signs and only the cache is written"
+        );
+        let packet = compile_registry_role_activation_packet_v0(
+            plan,
+            fixture.state.payer.key,
+            Hash::new_from_array(bytes(55)),
+            400_000,
+        )
+        .expect("packet-safe role activation");
+        assert_eq!(packet.required_signatures, 1);
+        assert_eq!(packet.compute_unit_limit, 400_000);
+        assert!(packet.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+    }
 }
 
 #[test]
@@ -414,19 +439,21 @@ fn packet_refuses_known_underbudget_and_chain_profile_overflow() {
     let mut fixture = Fixture::new();
     fixture.make_cache_existing();
     let mut report = fixture.activation();
-    report.compute.matching_measured_compute_units = Some(MEASURED_REPEAT_ACTIVATION_CU_V1);
+    const MEASURED: u32 = 300_000;
+    let plan = report.roles.get_mut(0).expect("Core role plan");
+    plan.compute.matching_measured_compute_units = Some(MEASURED);
     assert_eq!(
-        compile_registry_activation_packet_v0(
-            &report,
+        compile_registry_role_activation_packet_v0(
+            plan,
             fixture.state.payer.key,
             Hash::new_from_array(bytes(57)),
-            MEASURED_REPEAT_ACTIVATION_CU_V1 - 1,
+            MEASURED - 1,
         ),
         Err(Error::InvalidComputeLimit)
     );
     assert_eq!(
-        compile_registry_activation_packet_v0(
-            &report,
+        compile_registry_role_activation_packet_v0(
+            plan,
             fixture.state.payer.key,
             Hash::new_from_array(bytes(57)),
             TRANSACTION_COMPUTE_UNIT_LIMIT_V1 + 1,

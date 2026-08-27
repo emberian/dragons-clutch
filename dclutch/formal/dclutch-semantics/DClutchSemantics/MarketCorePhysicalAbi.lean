@@ -19,16 +19,20 @@ def effectMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x45, 0x46, 0x31]
 def ackMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x41, 0x4b, 0x31]
 def seriesMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x52, 0x31]
 def seriesAckMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x53, 0x41, 0x31]
+def seriesPermitMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x53, 0x46, 0x50, 0x31]
+def seriesPermitExpiryMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x53, 0x46, 0x58, 0x31]
 def capabilityFundingMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x46, 0x4c, 0x31]
 def effectDigestDomain : List UInt8 := "dclutch/core-effect/v1".toUTF8.toList
 def seriesCallerAuthorityDomain : List UInt8 := "dclutch/series-core-caller/v1".toUTF8.toList
-def marketStateDomain : List UInt8 := "dclutch/market-core/state/v1".toUTF8.toList
+def seriesPermitDomain : List UInt8 := "dclutch/series-permit/v1".toUTF8.toList
+def marketStateDomainV2 : List UInt8 := "dclutch/market-core/state/v2".toUTF8.toList
 def version : Nat := 1
 
 theorem effect_digest_domain_fits_sha_seed : effectDigestDomain.length ≤ 32 := by native_decide
 theorem series_caller_authority_domain_fits_pda_seed :
     seriesCallerAuthorityDomain.length ≤ 32 := by native_decide
-theorem market_state_domain_fits_pda_seed : marketStateDomain.length ≤ 32 := by native_decide
+theorem series_permit_domain_fits_pda_seed : seriesPermitDomain.length ≤ 32 := by native_decide
+theorem market_state_domain_v2_fits_pda_seed : marketStateDomainV2.length ≤ 32 := by native_decide
 
 /-! The profile-1 funding list uses the same semantic maximum as the canonical
 capability-manifest profile. Lifting the bound requires a new manifest and
@@ -232,5 +236,177 @@ theorem series_ack_schema_width : seriesAckBytes = 264 := by native_decide
 theorem series_ack_schema_unique : (seriesAckSchema.map fun field => field.name).Nodup := by native_decide
 theorem series_ack_fields_disjoint : seriesAckLayout.Pairwise Before :=
   specializeFrom_pairwise 0 seriesAckSchema
+
+/-! A Series Founding permit is an immutable, Core-owned, one-shot data
+capability. Its PDA omits the Claims intent/request digests so the address and
+body have no hash cycle. Exact Claims V5 bytes are instead bound inside the
+body and rechecked by Claims before it writes state. -/
+inductive SeriesPermitField where
+  | magic | version | bump | reserved
+  | releaseSet | market | productRecord | source | founder | ticketContext
+  | parentRoot | projectedReplay | fundingSource | hoard
+  | projectedRequestDigest | projectedReceiptDigest
+  | claimsIntentDigest | claimsRequestDigest
+  | tradingProgram | claimsProgram | rentCredit
+  | generation | quantity | basisScale | expirySlot
+  | projectedResultingRevision | normalReplayRevision
+  deriving DecidableEq, Repr
+
+def seriesPermitSchema : List (FieldSpec SeriesPermitField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.bump, .u8⟩, ⟨.reserved, .reserved 5⟩,
+  ⟨.releaseSet, .bytes 32⟩, ⟨.market, .bytes 32⟩, ⟨.productRecord, .bytes 32⟩,
+  ⟨.source, .bytes 32⟩, ⟨.founder, .bytes 32⟩, ⟨.ticketContext, .bytes 32⟩,
+  ⟨.parentRoot, .bytes 32⟩, ⟨.projectedReplay, .bytes 32⟩,
+  ⟨.fundingSource, .bytes 32⟩, ⟨.hoard, .bytes 32⟩,
+  ⟨.projectedRequestDigest, .bytes 32⟩, ⟨.projectedReceiptDigest, .bytes 32⟩,
+  ⟨.claimsIntentDigest, .bytes 32⟩, ⟨.claimsRequestDigest, .bytes 32⟩,
+  ⟨.tradingProgram, .bytes 32⟩, ⟨.claimsProgram, .bytes 32⟩,
+  ⟨.rentCredit, .bytes 32⟩,
+  ⟨.generation, .u64⟩, ⟨.quantity, .u64⟩, ⟨.basisScale, .u64⟩,
+  ⟨.expirySlot, .u64⟩, ⟨.projectedResultingRevision, .u64⟩,
+  ⟨.normalReplayRevision, .u64⟩
+]
+
+def seriesPermitLayout : List (PlacedField SeriesPermitField) := specialize seriesPermitSchema
+def seriesPermitBytes : Nat := schemaWidth seriesPermitSchema
+
+namespace SeriesPermitField
+
+def rustName : SeriesPermitField → String
+  | .magic => "SERIES_PERMIT_MAGIC_OFFSET" | .version => "SERIES_PERMIT_VERSION_OFFSET"
+  | .bump => "SERIES_PERMIT_BUMP_OFFSET" | .reserved => "SERIES_PERMIT_RESERVED_OFFSET"
+  | .releaseSet => "SERIES_PERMIT_RELEASE_SET_OFFSET"
+  | .market => "SERIES_PERMIT_MARKET_OFFSET"
+  | .productRecord => "SERIES_PERMIT_PRODUCT_RECORD_OFFSET"
+  | .source => "SERIES_PERMIT_SOURCE_OFFSET" | .founder => "SERIES_PERMIT_FOUNDER_OFFSET"
+  | .ticketContext => "SERIES_PERMIT_TICKET_CONTEXT_OFFSET"
+  | .parentRoot => "SERIES_PERMIT_PARENT_ROOT_OFFSET"
+  | .projectedReplay => "SERIES_PERMIT_PROJECTED_REPLAY_OFFSET"
+  | .fundingSource => "SERIES_PERMIT_FUNDING_SOURCE_OFFSET"
+  | .hoard => "SERIES_PERMIT_HOARD_OFFSET"
+  | .projectedRequestDigest => "SERIES_PERMIT_PROJECTED_REQUEST_DIGEST_OFFSET"
+  | .projectedReceiptDigest => "SERIES_PERMIT_PROJECTED_RECEIPT_DIGEST_OFFSET"
+  | .claimsIntentDigest => "SERIES_PERMIT_CLAIMS_INTENT_DIGEST_OFFSET"
+  | .claimsRequestDigest => "SERIES_PERMIT_CLAIMS_REQUEST_DIGEST_OFFSET"
+  | .tradingProgram => "SERIES_PERMIT_TRADING_PROGRAM_OFFSET"
+  | .claimsProgram => "SERIES_PERMIT_CLAIMS_PROGRAM_OFFSET"
+  | .rentCredit => "SERIES_PERMIT_RENT_CREDIT_OFFSET"
+  | .generation => "SERIES_PERMIT_GENERATION_OFFSET"
+  | .quantity => "SERIES_PERMIT_QUANTITY_OFFSET"
+  | .basisScale => "SERIES_PERMIT_BASIS_SCALE_OFFSET"
+  | .expirySlot => "SERIES_PERMIT_EXPIRY_SLOT_OFFSET"
+  | .projectedResultingRevision => "SERIES_PERMIT_PROJECTED_RESULTING_REVISION_OFFSET"
+  | .normalReplayRevision => "SERIES_PERMIT_NORMAL_REPLAY_REVISION_OFFSET"
+
+end SeriesPermitField
+
+theorem series_permit_schema_width : seriesPermitBytes = 608 := by native_decide
+theorem series_permit_schema_unique :
+    (seriesPermitSchema.map fun field => field.name).Nodup := by native_decide
+theorem series_permit_fields_disjoint : seriesPermitLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 seriesPermitSchema
+
+/-! The Claims V5 founding intent is the permit projection with the two
+self-referential digest fields omitted. It deliberately retains the exact
+permit header so Core, Claims, and tooling hash one byte string without a
+parallel semantic DTO. -/
+inductive SeriesFoundingIntentField where
+  | magic | version | bump | reserved
+  | releaseSet | market | productRecord | source | founder | ticketContext
+  | parentRoot | projectedReplay | fundingSource | hoard
+  | projectedRequestDigest | projectedReceiptDigest
+  | tradingProgram | claimsProgram | rentCredit
+  | generation | quantity | basisScale | expirySlot
+  | projectedResultingRevision | normalReplayRevision
+  deriving DecidableEq, Repr
+
+def seriesFoundingIntentSchema : List (FieldSpec SeriesFoundingIntentField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.bump, .u8⟩, ⟨.reserved, .reserved 5⟩,
+  ⟨.releaseSet, .bytes 32⟩, ⟨.market, .bytes 32⟩, ⟨.productRecord, .bytes 32⟩,
+  ⟨.source, .bytes 32⟩, ⟨.founder, .bytes 32⟩, ⟨.ticketContext, .bytes 32⟩,
+  ⟨.parentRoot, .bytes 32⟩, ⟨.projectedReplay, .bytes 32⟩,
+  ⟨.fundingSource, .bytes 32⟩, ⟨.hoard, .bytes 32⟩,
+  ⟨.projectedRequestDigest, .bytes 32⟩, ⟨.projectedReceiptDigest, .bytes 32⟩,
+  ⟨.tradingProgram, .bytes 32⟩, ⟨.claimsProgram, .bytes 32⟩,
+  ⟨.rentCredit, .bytes 32⟩,
+  ⟨.generation, .u64⟩, ⟨.quantity, .u64⟩, ⟨.basisScale, .u64⟩,
+  ⟨.expirySlot, .u64⟩, ⟨.projectedResultingRevision, .u64⟩,
+  ⟨.normalReplayRevision, .u64⟩
+]
+
+def seriesFoundingIntentLayout : List (PlacedField SeriesFoundingIntentField) :=
+  specialize seriesFoundingIntentSchema
+def seriesFoundingIntentBytes : Nat := schemaWidth seriesFoundingIntentSchema
+
+namespace SeriesFoundingIntentField
+
+def rustName : SeriesFoundingIntentField → String
+  | .magic => "SERIES_FOUNDING_INTENT_MAGIC_OFFSET"
+  | .version => "SERIES_FOUNDING_INTENT_VERSION_OFFSET"
+  | .bump => "SERIES_FOUNDING_INTENT_BUMP_OFFSET"
+  | .reserved => "SERIES_FOUNDING_INTENT_RESERVED_OFFSET"
+  | .releaseSet => "SERIES_FOUNDING_INTENT_RELEASE_SET_OFFSET"
+  | .market => "SERIES_FOUNDING_INTENT_MARKET_OFFSET"
+  | .productRecord => "SERIES_FOUNDING_INTENT_PRODUCT_RECORD_OFFSET"
+  | .source => "SERIES_FOUNDING_INTENT_SOURCE_OFFSET"
+  | .founder => "SERIES_FOUNDING_INTENT_FOUNDER_OFFSET"
+  | .ticketContext => "SERIES_FOUNDING_INTENT_TICKET_CONTEXT_OFFSET"
+  | .parentRoot => "SERIES_FOUNDING_INTENT_PARENT_ROOT_OFFSET"
+  | .projectedReplay => "SERIES_FOUNDING_INTENT_PROJECTED_REPLAY_OFFSET"
+  | .fundingSource => "SERIES_FOUNDING_INTENT_FUNDING_SOURCE_OFFSET"
+  | .hoard => "SERIES_FOUNDING_INTENT_HOARD_OFFSET"
+  | .projectedRequestDigest => "SERIES_FOUNDING_INTENT_PROJECTED_REQUEST_DIGEST_OFFSET"
+  | .projectedReceiptDigest => "SERIES_FOUNDING_INTENT_PROJECTED_RECEIPT_DIGEST_OFFSET"
+  | .tradingProgram => "SERIES_FOUNDING_INTENT_TRADING_PROGRAM_OFFSET"
+  | .claimsProgram => "SERIES_FOUNDING_INTENT_CLAIMS_PROGRAM_OFFSET"
+  | .rentCredit => "SERIES_FOUNDING_INTENT_RENT_CREDIT_OFFSET"
+  | .generation => "SERIES_FOUNDING_INTENT_GENERATION_OFFSET"
+  | .quantity => "SERIES_FOUNDING_INTENT_QUANTITY_OFFSET"
+  | .basisScale => "SERIES_FOUNDING_INTENT_BASIS_SCALE_OFFSET"
+  | .expirySlot => "SERIES_FOUNDING_INTENT_EXPIRY_SLOT_OFFSET"
+  | .projectedResultingRevision =>
+      "SERIES_FOUNDING_INTENT_PROJECTED_RESULTING_REVISION_OFFSET"
+  | .normalReplayRevision => "SERIES_FOUNDING_INTENT_NORMAL_REPLAY_REVISION_OFFSET"
+
+end SeriesFoundingIntentField
+
+theorem series_founding_intent_schema_width : seriesFoundingIntentBytes = 544 := by native_decide
+theorem series_founding_intent_schema_unique :
+    (seriesFoundingIntentSchema.map fun field => field.name).Nodup := by native_decide
+theorem series_founding_intent_fields_disjoint : seriesFoundingIntentLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 seriesFoundingIntentSchema
+
+/-! Permissionless expiry supplies the deterministic permit candidate because
+the prefunded PDA is still System-owned with zero data. Core derives the PDA
+from the nested permit and authenticates expired Ticket state before signing
+the refund. -/
+inductive SeriesPermitExpiryField where
+  | magic | version | reserved | permit
+  deriving DecidableEq, Repr
+
+def seriesPermitExpirySchema : List (FieldSpec SeriesPermitExpiryField) := [
+  ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.reserved, .reserved 22⟩,
+  ⟨.permit, .bytes seriesPermitBytes⟩
+]
+
+def seriesPermitExpiryLayout : List (PlacedField SeriesPermitExpiryField) :=
+  specialize seriesPermitExpirySchema
+def seriesPermitExpiryBytes : Nat := schemaWidth seriesPermitExpirySchema
+
+namespace SeriesPermitExpiryField
+
+def rustName : SeriesPermitExpiryField → String
+  | .magic => "SERIES_PERMIT_EXPIRY_MAGIC_OFFSET"
+  | .version => "SERIES_PERMIT_EXPIRY_VERSION_OFFSET"
+  | .reserved => "SERIES_PERMIT_EXPIRY_RESERVED_OFFSET"
+  | .permit => "SERIES_PERMIT_EXPIRY_PERMIT_OFFSET"
+
+end SeriesPermitExpiryField
+
+theorem series_permit_expiry_schema_width : seriesPermitExpiryBytes = 640 := by native_decide
+theorem series_permit_expiry_schema_unique :
+    (seriesPermitExpirySchema.map fun field => field.name).Nodup := by native_decide
+theorem series_permit_expiry_fields_disjoint : seriesPermitExpiryLayout.Pairwise Before :=
+  specializeFrom_pairwise 0 seriesPermitExpirySchema
 
 end DClutch.MarketCorePhysicalAbi

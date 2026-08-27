@@ -8,6 +8,10 @@ Direct boundary:
 - Safe Rust independently encodes/decodes the semantic values, classifies every
   single-byte mutation in the corpus, and executes the exact emitted transition
   program with `dclutch-transition-vm`.
+- The separately implemented safe-Rust Direct AOT evaluator executes every
+  full Direct state in that same Lean-emitted corpus and must agree on exact
+  acceptance/refusal and every accepted scalar/identity output. Refusal must
+  leave its caller-owned output bank byte-for-byte unchanged.
 
 The corpus also executes isolated Lean-encoded microprograms for GTC lifecycle
 admission, checked subtraction, equality selection, and zero selection. This
@@ -57,11 +61,16 @@ Run:
 tools/direct-translation-validator/check.sh
 ```
 
-The checked relation is executable differential agreement over the emitted
-corpus, not universal source refinement and not a proof about SBF, LLVM, Agave,
-CPI, account authentication, or transaction rollback. Rust interpreter
-refusals are additionally checked to leave the supplied register frame
-unchanged.
+The checked relation is executable three-way differential agreement over the
+emitted corpus: Lean semantics, the bytecode interpreter, and the separately
+implemented Direct AOT evaluator. It is not universal source refinement and
+not a proof about SBF, LLVM, Agave, CPI, account authentication, or transaction
+rollback. Interpreter and AOT refusals are additionally checked to leave their
+respective caller-owned output banks unchanged.
+
+The check output identifies the exact Lean semantics, emitted interpreter
+program, Rust interpreter, AOT evaluator, and generated AOT register layout by
+SHA-256. A result cannot be transferred to differently digested sources.
 
 The terminal physical projection in `src/terminal.rs` is validator code, not
 the on-chain implementation. The shipping safe-Rust claim API currently

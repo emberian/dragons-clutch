@@ -1,0 +1,38 @@
+[package]
+name = "dclutch-dealer-sbf"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Reusable Dealer family handler and standalone SBF measurement adapter"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+no-entrypoint = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
+dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec" }
+dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
+dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
+dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+all = "deny"

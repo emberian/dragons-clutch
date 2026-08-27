@@ -13,8 +13,12 @@ use dclutch_registry_contract::{
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1,
     ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     DeploymentObservationV1, ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
+    activation_cache_progress_v1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View, RegistryInstructionV1};
+use dclutch_registry_svm::{
+    ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
+    RegistryInstructionV1,
+};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1,
@@ -34,8 +38,23 @@ use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysv
 
 use crate::{Finality, Observation, ObservedAccount, versioned::PACKET_DATA_BYTES};
 
-/// Exact number of accounts consumed by release-set activation.
-pub const REGISTRY_ACTIVATE_ACCOUNT_COUNT_V1: usize = 26;
+/// Chain-derived Core+Trading Registry continuation construction.
+pub mod hot_continuation_v1;
+/// Headerless chain-derived Core+Trading Registry continuation construction.
+pub mod hot_continuation_v2;
+/// Chain-derived Core+Custody market-open Registry continuation construction.
+pub mod open_market_continuation_v1 {
+    pub use dclutch_market_open_v1_operator::*;
+}
+
+/// Canonical role order in which a release set is walked up.
+pub const REGISTRY_ACTIVATION_ROLE_ORDER_V1: [ExecutionRoleV1; 5] = [
+    ExecutionRoleV1::Core,
+    ExecutionRoleV1::Claims,
+    ExecutionRoleV1::Trading,
+    ExecutionRoleV1::Resolution,
+    ExecutionRoleV1::Custody,
+];
 /// Exact number of accounts consumed by one role reauthentication.
 pub const REGISTRY_REAUTHENTICATE_ACCOUNT_COUNT_V1: usize = 3;
 /// Current chain-profile transaction compute-unit ceiling.
@@ -47,10 +66,6 @@ pub const MEASURED_REGISTRY_ELF_DIGEST_V1: [u8; 32] = [
     0xfd, 0x7d, 0xdc, 0x66, 0x30, 0x93, 0x26, 0x53, 0x89, 0x3f, 0xa8, 0xcf, 0x9e, 0xd4, 0x92, 0xee,
     0x61, 0xc9, 0x16, 0x9a, 0x81, 0x06, 0x58, 0xbe, 0x64, 0xe5, 0xe8, 0x3a, 0xd0, 0x9e, 0xe5, 0xac,
 ];
-/// Measured first-activation cost for five roles aliased to the measured ELF.
-pub const MEASURED_CREATE_ACTIVATION_CU_V1: u32 = 371_988;
-/// Measured repeated-activation cost for five roles aliased to the measured ELF.
-pub const MEASURED_REPEAT_ACTIVATION_CU_V1: u32 = 351_337;
 /// Measured one-role reauthentication cost for the measured ELF.
 pub const MEASURED_REAUTHENTICATION_CU_V1: u32 = 65_390;
 
@@ -118,12 +133,23 @@ pub struct RegistryActivationState {
     pub rent_sysvar: ObservedAccount,
 }
 
-/// Whether activation creates the cache or byte-identically replays it.
+/// Where an observed activation cache sits in its per-role walk-up.
+///
+/// Activation admits one role per transaction, because hashing five real
+/// multi-hundred-kilobyte ELFs in one transaction cannot fit under the chain
+/// compute maximum. A cache mid-walk-up is therefore an ordinary, expected
+/// observation, not an error — but only when every slot it already holds is
+/// byte-identical to the derived cache.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistryActivationModeV1 {
-    /// The derived System-owned vacancy will be created and populated.
+    /// The derived System-owned vacancy will be created by the first role.
     Create,
-    /// The existing Registry-owned bytes already equal the derived cache.
+    /// The cache exists and holds a strict, exact subset of the derived roles.
+    Partial {
+        /// How many of the five roles have already been admitted.
+        activated_roles: usize,
+    },
+    /// The existing Registry-owned bytes already equal the complete cache.
     Repeat,
 }
 
@@ -139,11 +165,31 @@ pub struct RegistryComputeEvidenceV1 {
     pub matching_measured_compute_units: Option<u32>,
 }
 
-/// Fully checked unsigned activation instruction and derived facts.
+/// One role's unsigned activation instruction and its exact hash load.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryRoleActivationPlanV1 {
+    /// Semantic role admitted by this one transaction.
+    pub role: ExecutionRoleV1,
+    /// Exact unsigned ten-account Registry instruction.
+    pub instruction: Instruction,
+    /// Whether this role was already admitted by an earlier transaction.
+    ///
+    /// A repeat is idempotent on chain and still costs its full ELF hash, so a
+    /// caller that wants the cheapest walk-up skips it.
+    pub already_activated: bool,
+    /// Compute-relevant evidence for this one transaction.
+    pub compute: RegistryComputeEvidenceV1,
+}
+
+/// Fully checked unsigned activation plan and derived facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegistryActivationReport {
-    /// Exact unsigned 26-account Registry instruction.
-    pub instruction: Instruction,
+    /// Five ordered per-role instructions, one transaction each.
+    ///
+    /// This is deliberately not one instruction. Whole-ELF hashing costs about
+    /// one compute unit per two bytes, so admitting the real seven-artifact
+    /// release set in one transaction exceeds the chain maximum outright.
+    pub roles: [RegistryRoleActivationPlanV1; 5],
     /// Shared finalized observation selecting every input.
     pub observation: Observation,
     /// Canonical content identity of the release-set record.
@@ -156,7 +202,11 @@ pub struct RegistryActivationReport {
     pub cache_rent_debit_lamports: u64,
     /// Complete semantic cache derived from the sole finalized authorities.
     pub expected_cache: ActivatedExecutionReleaseSetV1,
-    /// Compute-relevant chain evidence and, when available, matching measurement.
+    /// Total ELF bytes hashed across all five transactions.
+    ///
+    /// This is a walk-up total, never one transaction's cost. The per-role
+    /// figures in [`RegistryActivationReport::roles`] are what a single
+    /// transaction must fit under the compute maximum.
     pub compute: RegistryComputeEvidenceV1,
 }
 
@@ -316,60 +366,71 @@ pub fn build_registry_activation_v1(
         expected_cache,
     )?;
 
-    let mut accounts = Vec::with_capacity(REGISTRY_ACTIVATE_ACCOUNT_COUNT_V1);
-    accounts.extend([
-        AccountMeta::new(state.payer.key, true),
-        AccountMeta::new(cache, false),
-        AccountMeta::new_readonly(state.execution_release_set.record.key, false),
-        AccountMeta::new_readonly(state.execution_release_set.staging_cursor.key, false),
-    ]);
-    for role in state.roles.all() {
-        accounts.extend([
-            AccountMeta::new_readonly(role.artifact_release.record.key, false),
-            AccountMeta::new_readonly(role.artifact_release.staging_cursor.key, false),
-            AccountMeta::new_readonly(role.program.key, false),
-            AccountMeta::new_readonly(role.programdata.key, false),
-        ]);
+    let progress = match mode {
+        RegistryActivationModeV1::Create => None,
+        RegistryActivationModeV1::Partial { .. } | RegistryActivationModeV1::Repeat => Some(
+            activation_cache_progress_v1(&state.cache.data, expected_cache)
+                .map_err(|_| Error::InvalidActivationCache)?,
+        ),
+    };
+
+    let authenticated = [core, claims, trading, resolution, custody];
+    let mut roles = Vec::with_capacity(REGISTRY_ACTIVATION_ROLE_ORDER_V1.len());
+    for (role, role_state) in REGISTRY_ACTIVATION_ROLE_ORDER_V1
+        .into_iter()
+        .zip(state.roles.all())
+    {
+        let accounts = vec![
+            AccountMeta::new(state.payer.key, true),
+            AccountMeta::new(cache, false),
+            AccountMeta::new_readonly(state.execution_release_set.record.key, false),
+            AccountMeta::new_readonly(state.execution_release_set.staging_cursor.key, false),
+            AccountMeta::new_readonly(role_state.artifact_release.record.key, false),
+            AccountMeta::new_readonly(role_state.artifact_release.staging_cursor.key, false),
+            AccountMeta::new_readonly(role_state.program.key, false),
+            AccountMeta::new_readonly(role_state.programdata.key, false),
+            AccountMeta::new_readonly(state.system_program.key, false),
+            AccountMeta::new_readonly(state.rent_sysvar.key, false),
+        ];
+        if accounts.len() != REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1 {
+            return Err(Error::Encoding);
+        }
+        let index = REGISTRY_ACTIVATION_ROLE_ORDER_V1
+            .iter()
+            .position(|candidate| *candidate == role)
+            .ok_or(Error::Encoding)?;
+        let elf_bytes = authenticated
+            .get(index)
+            .ok_or(Error::Encoding)?
+            .elf_bytes;
+        roles.push(RegistryRoleActivationPlanV1 {
+            role,
+            instruction: Instruction {
+                program_id: registry_program,
+                accounts,
+                data: RegistryInstructionV1::ActivateRole(role).to_bytes().to_vec(),
+            },
+            already_activated: progress.is_some_and(|progress| progress.is_written(role)),
+            compute: RegistryComputeEvidenceV1 {
+                elf_bytes_hashed: elf_bytes,
+                // Five-role activation measurements do not transfer to a
+                // per-role transaction, and no per-role measurement has been
+                // taken for this profile yet. `None` is an honest absence.
+                matching_measured_compute_units: None,
+            },
+        });
     }
-    accounts.extend([
-        AccountMeta::new_readonly(state.system_program.key, false),
-        AccountMeta::new_readonly(state.rent_sysvar.key, false),
-    ]);
-    if accounts.len() != REGISTRY_ACTIVATE_ACCOUNT_COUNT_V1 {
-        return Err(Error::Encoding);
-    }
-    let elf_bytes_hashed = [core, claims, trading, resolution, custody]
+    let roles: [RegistryRoleActivationPlanV1; 5] =
+        roles.try_into().map_err(|_| Error::Encoding)?;
+
+    let elf_bytes_hashed = authenticated
         .iter()
         .try_fold(0_usize, |total, authenticated| {
             total.checked_add(authenticated.elf_bytes)
         })
         .ok_or(Error::Encoding)?;
-    let core_binding = release_set.binding(ExecutionRoleV1::Core);
-    let measured_profile = [core, claims, trading, resolution, custody]
-        .iter()
-        .all(|authenticated| authenticated.release.elf_digest() == MEASURED_REGISTRY_ELF_DIGEST_V1)
-        && [
-            ExecutionRoleV1::Claims,
-            ExecutionRoleV1::Trading,
-            ExecutionRoleV1::Resolution,
-            ExecutionRoleV1::Custody,
-        ]
-        .into_iter()
-        .all(|role| release_set.binding(role) == core_binding);
-    let matching_measured_compute_units = if measured_profile {
-        Some(match mode {
-            RegistryActivationModeV1::Create => MEASURED_CREATE_ACTIVATION_CU_V1,
-            RegistryActivationModeV1::Repeat => MEASURED_REPEAT_ACTIVATION_CU_V1,
-        })
-    } else {
-        None
-    };
     Ok(RegistryActivationReport {
-        instruction: Instruction {
-            program_id: registry_program,
-            accounts,
-            data: RegistryInstructionV1::Activate.to_bytes().to_vec(),
-        },
+        roles,
         observation,
         execution_release_set_id: release_set_id,
         cache,
@@ -378,7 +439,7 @@ pub fn build_registry_activation_v1(
         expected_cache,
         compute: RegistryComputeEvidenceV1 {
             elf_bytes_hashed,
-            matching_measured_compute_units,
+            matching_measured_compute_units: None,
         },
     })
 }
@@ -446,20 +507,20 @@ pub fn build_registry_reauthentication_v1(
     })
 }
 
-/// Compile activation plus an explicit Compute Budget instruction into an
-/// unsigned packet-safe v0 message.
-pub fn compile_registry_activation_packet_v0(
-    report: &RegistryActivationReport,
+/// Compile one role's activation plus an explicit Compute Budget instruction
+/// into an unsigned packet-safe v0 message.
+pub fn compile_registry_role_activation_packet_v0(
+    plan: &RegistryRoleActivationPlanV1,
     fee_payer: Pubkey,
     recent_blockhash: Hash,
     compute_unit_limit: u32,
 ) -> Result<RegistryPacketPlanV0, Error> {
     compile_registry_packet_v0(
         fee_payer,
-        &report.instruction,
+        &plan.instruction,
         recent_blockhash,
         compute_unit_limit,
-        report.compute.matching_measured_compute_units,
+        plan.compute.matching_measured_compute_units,
     )
 }
 
@@ -483,7 +544,6 @@ pub fn compile_registry_reauthentication_packet_v0(
 #[derive(Clone, Copy)]
 struct AuthenticatedRoleInput {
     input: ArtifactActivationInputV1,
-    release: ArtifactReleaseV1,
     elf_bytes: usize,
 }
 
@@ -534,7 +594,6 @@ fn authenticate_role(
         .len();
     Ok(AuthenticatedRoleInput {
         input: ArtifactActivationInputV1::new(expected.artifact_release(), release, deployment),
-        release,
         elf_bytes,
     })
 }
@@ -670,10 +729,7 @@ fn authenticate_cache_identity<'a>(
         &registry_program,
     )
     .0;
-    let core = activated
-        .role(ExecutionRoleV1::Core)
-        .map_err(|_| Error::InvalidActivationCache)?;
-    if cache.key != expected || core.release().program().to_bytes() != registry_program.to_bytes() {
+    if cache.key != expected {
         return Err(Error::InvalidActivationCache);
     }
     Ok(activated)
@@ -733,7 +789,7 @@ fn activation_observation(state: &RegistryActivationState) -> Result<Observation
 }
 
 fn activation_accounts(state: &RegistryActivationState) -> Vec<&ObservedAccount> {
-    let mut accounts = Vec::with_capacity(REGISTRY_ACTIVATE_ACCOUNT_COUNT_V1);
+    let mut accounts = Vec::with_capacity(4 + 4 * REGISTRY_ACTIVATION_ROLE_ORDER_V1.len() + 2);
     accounts.extend([
         &state.payer,
         &state.cache,

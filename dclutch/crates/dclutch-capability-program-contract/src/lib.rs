@@ -7,9 +7,10 @@
 //! This crate performs no hashing, finalized-record authentication, Solana
 //! account access, PDA derivation, CPI, or effect application. Adapters must
 //! establish those facts before constructing an admitted invocation.
-//! In particular, the adapter proves
-//! `entry.release_id == selection.capability_release == SHA256(descriptor)`;
-//! no hard-coded family release constant may replace that descriptor identity.
+//! In particular, V3 hot execution proves that the manifest-selected release
+//! is the exact [`set_v1::CapabilityProgramSetV1`] identity and that the set's
+//! request selector names the exact authenticated [`v3::CapabilityProgramV3`].
+//! No hard-coded family release constant may replace either content identity.
 
 use dclutch_capability_contract::CapabilityEntryV1;
 use dclutch_core_contract::ContentId;
@@ -24,8 +25,16 @@ mod generated;
 
 pub use generated::*;
 
+/// Family-neutral Trading V3 hot instruction, frame, and acknowledgment ABI.
+pub mod hot_v3;
+/// Action-selected sets of exact Capability Program V3 bundles.
+pub mod set_v1;
+/// Schema-bound action selection for exact capability descriptors.
+pub mod set_v2;
 /// Fixed descriptor selecting independently finalized runtime-tail artifacts.
 pub mod v3;
+/// Successor descriptor with explicit schema/content pairs for every executable artifact.
+pub mod v4;
 
 /// Schema label for finalized [`CapabilityProgramV1`] raw records.
 pub const CAPABILITY_PROGRAM_SCHEMA_RELEASE_PREIMAGE_V1: &[u8] =

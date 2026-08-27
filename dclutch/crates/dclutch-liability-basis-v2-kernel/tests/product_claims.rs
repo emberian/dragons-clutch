@@ -3,11 +3,11 @@
 use core::convert::TryInto;
 
 use dclutch_liability_basis_v2_kernel::product_claims::{
-    AdmittedBasisV2, BASIS_MAGIC_V2, BasisKindV2, CAPPED_RAMP_BASIS_BYTES_V2,
-    CATEGORICAL_BASIS_BYTES_V2, CappedRampBasisInputV2, CategoricalBasisInputV2, ClaimsOperationV2,
-    ContentIdV2, LINKED_CAPPED_RAMP_BASIS_BYTES_V2, LinkedBasisRecordV2,
-    ProductClaimsErrorV2, TerminalResultV2, encode_capped_ramp_basis_v2,
-    encode_categorical_basis_v2, encode_linked_basis_record_v2,
+    AdmittedBasisV2, BASIS_MAGIC_V2, BASIS_PRODUCT_LINK_END_V2, BASIS_PRODUCT_LINK_OFFSET_V2,
+    BasisKindV2, CAPPED_RAMP_BASIS_BYTES_V2, CATEGORICAL_BASIS_BYTES_V2, CappedRampBasisInputV2,
+    CategoricalBasisInputV2, ClaimsOperationV2, ContentIdV2, LINKED_CAPPED_RAMP_BASIS_BYTES_V2,
+    LinkedBasisRecordV2, ProductClaimsErrorV2, TerminalResultV2, encode_capped_ramp_basis_v2,
+    encode_categorical_basis_v2, encode_linked_basis_record_v2, semantic_basis_preimage_v2,
 };
 use dclutch_liability_basis_v2_kernel::{
     AGREEMENT_CASES_V2, RAMP_COORDINATE_DENOMINATOR_OFFSET_V2, RAMP_COORDINATE_NUMERATOR_OFFSET_V2,
@@ -487,7 +487,24 @@ fn semantic_basis_identity_and_finalized_product_link_are_distinct_authorities()
         )
         .expect("canonical embedded basis");
     }
-    assert_ne!(first_basis, second_basis, "Product link is present in raw bytes");
+    assert_ne!(
+        first_basis, second_basis,
+        "Product link is present in raw bytes"
+    );
+    let first_semantic = semantic_basis_preimage_v2(&first_basis).expect("first semantic preimage");
+    let second_semantic =
+        semantic_basis_preimage_v2(&second_basis).expect("second semantic preimage");
+    assert_eq!(BASIS_PRODUCT_LINK_OFFSET_V2, 32);
+    assert_eq!(BASIS_PRODUCT_LINK_END_V2, 64);
+    assert_eq!(first_semantic.prefix(), second_semantic.prefix());
+    assert_eq!(first_semantic.suffix(), second_semantic.suffix());
+
+    let mut noncanonical = first_basis;
+    noncanonical[14] = 1;
+    assert_eq!(
+        semantic_basis_preimage_v2(&noncanonical),
+        Err(ProductClaimsErrorV2::NonCanonicalRecord)
+    );
 
     let mut first_link = [0_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
     let mut second_link = [0_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
@@ -499,7 +516,10 @@ fn semantic_basis_identity_and_finalized_product_link_are_distinct_authorities()
     let second = LinkedBasisRecordV2::decode(&second_link).expect("second link");
     assert_eq!(first.semantic_basis_id(), second.semantic_basis_id());
     assert_ne!(first.product_instance_id(), second.product_instance_id());
-    assert_ne!(first_link, second_link, "linked raw-record identities differ");
+    assert_ne!(
+        first_link, second_link,
+        "linked raw-record identities differ"
+    );
 
     let mut refused = [0xa5_u8; LINKED_CAPPED_RAMP_BASIS_BYTES_V2];
     assert_eq!(

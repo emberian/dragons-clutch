@@ -15,7 +15,8 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::registry::{
     Error as RegistryError, RegistryActivationReport, RegistryActivationState,
-    RegistryPacketPlanV0, build_registry_activation_v1, compile_registry_activation_packet_v0,
+    RegistryPacketPlanV0, build_registry_activation_v1,
+    compile_registry_role_activation_packet_v0,
 };
 
 const ROLES: [ExecutionRoleV1; EXECUTION_ROLE_COUNT_V1] = [
@@ -37,8 +38,11 @@ pub struct CheckedRegistryActivationPlanV1 {
     pub checked_release_set: CheckedExecutionReleaseSetV1,
     /// Existing chain-derived Registry activation report.
     pub activation: RegistryActivationReport,
-    /// Existing packet-safe unsigned v0 message plan.
-    pub packet: RegistryPacketPlanV0,
+    /// Five ordered packet-safe unsigned v0 message plans, one per role.
+    ///
+    /// Activation admits one role per transaction; see
+    /// [`RegistryActivationReport::roles`].
+    pub packets: [RegistryPacketPlanV0; EXECUTION_ROLE_COUNT_V1],
 }
 
 impl CheckedRegistryActivationPlanV1 {
@@ -67,7 +71,14 @@ impl CheckedRegistryActivationPlanV1 {
         push_line(
             &mut output,
             "registry_program_id",
-            &self.activation.instruction.program_id.to_string(),
+            &self
+                .activation
+                .roles
+                .first()
+                .ok_or(Error::IdentityMismatch)?
+                .instruction
+                .program_id
+                .to_string(),
         );
         push_line(
             &mut output,
@@ -77,9 +88,12 @@ impl CheckedRegistryActivationPlanV1 {
         push_line(
             &mut output,
             "activation_mode",
-            match self.activation.mode {
-                crate::registry::RegistryActivationModeV1::Create => "create",
-                crate::registry::RegistryActivationModeV1::Repeat => "repeat",
+            &match self.activation.mode {
+                crate::registry::RegistryActivationModeV1::Create => String::from("create"),
+                crate::registry::RegistryActivationModeV1::Partial { activated_roles } => {
+                    format!("partial:{activated_roles}")
+                }
+                crate::registry::RegistryActivationModeV1::Repeat => String::from("repeat"),
             },
         );
         push_line(
@@ -89,39 +103,54 @@ impl CheckedRegistryActivationPlanV1 {
         );
         push_line(
             &mut output,
-            "elf_bytes_hashed",
+            "elf_bytes_hashed_total",
             &self.activation.compute.elf_bytes_hashed.to_string(),
         );
+        push_line(
+            &mut output,
+            "activation_transactions",
+            &self.activation.roles.len().to_string(),
+        );
+        for plan in &self.activation.roles {
+            push_line(
+                &mut output,
+                &format!("role_elf_bytes_hashed_{}", role_label(plan.role)),
+                &plan.compute.elf_bytes_hashed.to_string(),
+            );
+        }
         push_optional_u32(
             &mut output,
             "matching_measured_compute_units",
             self.activation.compute.matching_measured_compute_units,
         );
-        push_line(
-            &mut output,
-            "unsigned_message_sha256",
-            &hex(&hash(&self.packet.message.serialize()).to_bytes()),
-        );
-        push_line(
-            &mut output,
-            "packet_wire_bytes",
-            &self.packet.wire_bytes.to_string(),
-        );
-        push_line(
-            &mut output,
-            "required_signatures",
-            &self.packet.required_signatures.to_string(),
-        );
-        push_line(
-            &mut output,
-            "compute_unit_limit",
-            &self.packet.compute_unit_limit.to_string(),
-        );
-        push_optional_u32(
-            &mut output,
-            "measured_headroom",
-            self.packet.measured_headroom,
-        );
+        for (plan, packet) in self.activation.roles.iter().zip(self.packets.iter()) {
+            let label = role_label(plan.role);
+            push_line(
+                &mut output,
+                &format!("unsigned_message_sha256_{label}"),
+                &hex(&hash(&packet.message.serialize()).to_bytes()),
+            );
+            push_line(
+                &mut output,
+                &format!("packet_wire_bytes_{label}"),
+                &packet.wire_bytes.to_string(),
+            );
+            push_line(
+                &mut output,
+                &format!("required_signatures_{label}"),
+                &packet.required_signatures.to_string(),
+            );
+            push_line(
+                &mut output,
+                &format!("compute_unit_limit_{label}"),
+                &packet.compute_unit_limit.to_string(),
+            );
+            push_optional_u32(
+                &mut output,
+                &format!("measured_headroom_{label}"),
+                packet.measured_headroom,
+            );
+        }
         Ok(output)
     }
 }
@@ -193,18 +222,35 @@ pub fn build_checked_registry_activation_packet_v1(
         }
     }
 
-    let packet = compile_registry_activation_packet_v0(
-        &activation,
-        fee_payer,
-        recent_blockhash,
-        compute_unit_limit,
-    )
-    .map_err(Error::Registry)?;
+    let mut compiled = Vec::with_capacity(EXECUTION_ROLE_COUNT_V1);
+    for plan in &activation.roles {
+        compiled.push(
+            compile_registry_role_activation_packet_v0(
+                plan,
+                fee_payer,
+                recent_blockhash,
+                compute_unit_limit,
+            )
+            .map_err(Error::Registry)?,
+        );
+    }
+    let packets: [RegistryPacketPlanV0; EXECUTION_ROLE_COUNT_V1] =
+        compiled.try_into().map_err(|_| Error::IdentityMismatch)?;
     Ok(CheckedRegistryActivationPlanV1 {
         checked_release_set,
         activation,
-        packet,
+        packets,
     })
+}
+
+const fn role_label(role: ExecutionRoleV1) -> &'static str {
+    match role {
+        ExecutionRoleV1::Core => "core",
+        ExecutionRoleV1::Claims => "claims",
+        ExecutionRoleV1::Trading => "trading",
+        ExecutionRoleV1::Resolution => "resolution",
+        ExecutionRoleV1::Custody => "custody",
+    }
 }
 
 fn push_line(output: &mut String, key: &str, value: &str) {

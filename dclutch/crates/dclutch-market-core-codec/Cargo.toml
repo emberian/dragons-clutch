@@ -8,6 +8,7 @@ description = "Generated fixed-memory interpreter for the Lean-owned dClutch Mar
 
 [dependencies]
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+sha2 = { version = "=0.10.9", default-features = false }
 
 [lints.rust]
 missing_docs = "deny"

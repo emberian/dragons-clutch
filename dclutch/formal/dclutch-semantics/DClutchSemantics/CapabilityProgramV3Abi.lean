@@ -3,10 +3,10 @@ import DClutchSemantics.AbiSchema
 /-!
 # Capability Program V3 descriptor ABI
 
-The fixed descriptor selects independently finalized AccountProfile, Effect,
-and Transition artifacts. Its manifest release identity is the SHA-256 digest
-of these exact 344 bytes; no embedded VM body or family tag participates in
-physical authority.
+The fixed descriptor selects independently finalized AccountProfile,
+RequestProfile, EffectProgram, and Transition artifacts. Its manifest release
+identity is the SHA-256 digest of these exact 408 bytes; no embedded VM body or
+family tag participates in physical authority.
 -/
 
 namespace DClutch.CapabilityProgramV3Abi
@@ -22,7 +22,7 @@ def requestProfileSchemaVersion : Nat := 1
 inductive Field where
   | magic | schemaVersion | artifactProfile | transitionSchemaVersion | requestProfileSchemaVersion
   | kind | configSchema | requestSchema | rootSchema | accountProfile
-  | derivationPolicy | capacityProfile | effectSchema | requestProfileSchema | requestProfileProgram
+  | derivationPolicy | capacityProfile | effectProgram | requestProfileSchema | requestProfileProgram
   | transitionSchema | transitionProgram | rootStateBytes | tailReserved
   deriving DecidableEq, Repr
 
@@ -39,7 +39,7 @@ def schema : List (FieldSpec Field) := [
   ⟨.accountProfile, .bytes 32⟩,
   ⟨.derivationPolicy, .bytes 32⟩,
   ⟨.capacityProfile, .bytes 32⟩,
-  ⟨.effectSchema, .bytes 32⟩,
+  ⟨.effectProgram, .bytes 32⟩,
   ⟨.requestProfileSchema, .bytes 32⟩,
   ⟨.requestProfileProgram, .bytes 32⟩,
   ⟨.transitionSchema, .bytes 32⟩,
@@ -66,7 +66,7 @@ def rustName : Field → String
   | .accountProfile => "CAPABILITY_PROGRAM_V3_ACCOUNT_PROFILE_OFFSET"
   | .derivationPolicy => "CAPABILITY_PROGRAM_V3_DERIVATION_POLICY_OFFSET"
   | .capacityProfile => "CAPABILITY_PROGRAM_V3_CAPACITY_PROFILE_OFFSET"
-  | .effectSchema => "CAPABILITY_PROGRAM_V3_EFFECT_SCHEMA_OFFSET"
+  | .effectProgram => "CAPABILITY_PROGRAM_V3_EFFECT_PROGRAM_OFFSET"
   | .requestProfileSchema => "CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_OFFSET"
   | .requestProfileProgram => "CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_PROGRAM_OFFSET"
   | .transitionSchema => "CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_OFFSET"

@@ -15,15 +15,36 @@ default = ["families"]
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
-families = [
+# Link only the public read-only Shadow callback authenticator when Trading is
+# consumed by an external accelerator. The canonical Trading executable never
+# enables this feature.
+shadow-accelerator-auth-only = []
+# Diagnostic-only phase checkpoints for measured SBF compute profiling.
+hot-cu-profile = []
+series-family = [
+    "dep:dclutch-claims-svm",
+    "dep:dclutch-custody-contract",
+    "dep:dclutch-rational-representation-v2-lifecycle-contract",
+    "dep:dclutch-rational-representation-v2-contract",
+    "dep:dclutch-token-svm",
+]
+dealer-family = [
     "dep:dclutch-claims-svm",
     "dep:dclutch-custody-contract",
     "dep:dclutch-dealer-codec",
     "dep:dclutch-economic-slice-kernel",
+    "dep:dclutch-rational-representation-v2-lifecycle-contract",
+    "dep:dclutch-rational-representation-v2-contract",
+    "dep:dclutch-realm-contract",
+    "dep:dclutch-token-svm",
+]
+families = [
+    "series-family",
+    "dealer-family",
+    "dep:dclutch-direct-codec",
     "dep:dclutch-general-adapter-contract",
     "dep:dclutch-general-codec",
     "dep:dclutch-general-config-contract",
-    "dep:dclutch-token-svm",
 ]
 # Test-only real-SBF profile that measures the common outer without linking
 # family modules whose separate physical adapters are still under review.
@@ -33,28 +54,41 @@ outer-only = []
 dclutch-account-profile-contract = { path = "../../crates/dclutch-account-profile-contract" }
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
+dclutch-capability-seal-contract = { path = "../../crates/dclutch-capability-seal-contract" }
 dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm", optional = true }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract", optional = true }
 dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec", optional = true }
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec", optional = true }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel", optional = true }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
 dclutch-general-adapter-contract = { path = "../../crates/dclutch-general-adapter-contract", optional = true }
 dclutch-general-codec = { path = "../../crates/dclutch-general-codec", optional = true }
 dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract", optional = true }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
+dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract", optional = true }
+dclutch-rational-representation-v2-contract = { path = "../../crates/dclutch-rational-representation-v2-contract", optional = true }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-request-profile-contract = { path = "../../crates/dclutch-request-profile-contract" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
-dclutch-series-v2-kernel = { path = "../../crates/dclutch-series-v2-kernel" }
+dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
+dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract", optional = true }
+dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm", optional = true }
 solana-program = { version = "=3.0.0", default-features = false }
+solana-instructions-sysvar = "=3.0.1"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [dev-dependencies]
+dclutch-rational-representation-v2-request-contract = { path = "../../crates/dclutch-rational-representation-v2-request-contract" }
 solana-hash = "=4.6.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
 

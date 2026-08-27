@@ -6,7 +6,7 @@ import Std.Tactic
 # Universal Market Core and funded founding lifecycle
 
 This module is the small lifecycle shared by every dClutch Market.  It owns an
-immutable Realm, canonical Product/result-domain identities, one immutable
+immutable Realm, canonical Product-record/stable-Product identities, one immutable
 execution-release set, exact prepaid creation, universal lifecycle,
 terminal admission, redemption routing, and retirement.  The Claims child is
 the sole owner of mutable claim supply and Hoard principal; Core stores only
@@ -41,28 +41,38 @@ def Realm.valid (realm : Realm) : Bool :=
   realm.realmId != 0 && realm.collateralMintId != 0 &&
   realm.tokenProgramId != 0 && realm.collateralReleaseId != 0
 
-/-- Canonical Product and result-domain coordinates selected before Found. -/
+/-- Canonical runtime-width Product projection selected before Found. The
+Product record digest is the authority root; all child coordinates are
+authenticated derivations rather than parallel persisted Core facts. -/
 structure Product where
+  productRecordId : Identity
   productId : Identity
   resultDomainId : Identity
+  portfolioId : Identity
+  coordinateDomainId : Identity
+  resultUnitId : Identity
   claimBasisId : Identity
-  capacityProfileId : Identity
-  compilerReleaseId : Identity
+  liabilityBasisId : Identity
+  representationReleaseId : Identity
+  mappingReleaseId : Identity
   outcomeCount : Nat
   deriving DecidableEq, Repr
 
 def Product.valid (product : Product) : Bool :=
-  product.productId != 0 && product.resultDomainId != 0 &&
-  product.claimBasisId != 0 && product.capacityProfileId != 0 &&
-  product.compilerReleaseId != 0 && 1 < product.outcomeCount
+  product.productRecordId != 0 && product.productId != 0 &&
+  product.resultDomainId != 0 && product.portfolioId != 0 &&
+  product.coordinateDomainId != 0 && product.resultUnitId != 0 &&
+  product.claimBasisId != 0 && product.liabilityBasisId != 0 &&
+  product.representationReleaseId != 0 && product.mappingReleaseId != 0 &&
+  1 < product.outcomeCount
 
 /-- Exact immutable Market identity.  `marketId` is the adapter-checked
 canonical content/address identity for these coordinates. -/
 structure MarketIdentity where
   marketId : Identity
   realmId : Identity
+  productRecordId : Identity
   productId : Identity
-  resultDomainId : Identity
   resolutionPolicyId : Identity
   capabilityManifestId : Identity
   executionReleaseSetId : Identity
@@ -72,7 +82,7 @@ structure MarketIdentity where
 
 def MarketIdentity.valid (identity : MarketIdentity) : Bool :=
   identity.marketId != 0 && identity.realmId != 0 &&
-  identity.productId != 0 && identity.resultDomainId != 0 &&
+  identity.productRecordId != 0 && identity.productId != 0 &&
   identity.resolutionPolicyId != 0 && identity.capabilityManifestId != 0 &&
   identity.executionReleaseSetId != 0 && identity.registryProgramId != 0
 
@@ -178,8 +188,8 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   let plan := foundingCreationPlan frame
   frame.realm.valid && frame.product.valid && frame.identity.valid &&
   frame.identity.realmId == frame.realm.realmId &&
+  frame.identity.productRecordId == frame.product.productRecordId &&
   frame.identity.productId == frame.product.productId &&
-  frame.identity.resultDomainId == frame.product.resultDomainId &&
   frame.identity.executionReleaseSetId == frame.coreAdmission.selected.releaseSetId &&
   frame.identity.registryProgramId == frame.coreAdmission.marketRegistryProgram &&
   frame.coreAdmission.marketReleaseSetId == frame.identity.executionReleaseSetId &&
@@ -189,6 +199,176 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   frame.accounts.market.address == frame.identity.marketId &&
   frame.accounts.market.address != frame.accounts.rentCreditId &&
   plan.payerDebit <= frame.accounts.payerLamports
+
+/-! ## Recurring-Series one-shot founding capability -/
+
+/-- Immutable semantic body of the Core-owned permit consumed by Claims V5.
+The two Claims digests are stored in the body rather than the PDA seeds, which
+keeps the address acyclic while binding the exact future request. -/
+structure SeriesFoundingPermit where
+  releaseSetId : Identity
+  marketId : Identity
+  productRecordId : Identity
+  sourceId : Identity
+  founderId : Identity
+  ticketContextId : Identity
+  parentRootId : Identity
+  projectedReplayId : Identity
+  fundingSourceId : Identity
+  hoardId : Identity
+  projectedRequestDigest : Identity
+  projectedReceiptDigest : Identity
+  claimsIntentDigest : Identity
+  claimsRequestDigest : Identity
+  tradingProgramId : Identity
+  claimsProgramId : Identity
+  rentCreditId : Identity
+  generation : Nat
+  quantity : Nat
+  basisScale : Nat
+  expirySlot : Nat
+  projectedResultingRevision : Nat
+  normalReplayRevision : Nat
+  deriving DecidableEq, Repr
+
+def SeriesFoundingPermit.valid (permit : SeriesFoundingPermit) : Bool :=
+  [permit.releaseSetId, permit.marketId, permit.productRecordId, permit.sourceId,
+    permit.founderId, permit.ticketContextId, permit.parentRootId,
+    permit.projectedReplayId, permit.fundingSourceId, permit.hoardId,
+    permit.projectedRequestDigest, permit.projectedReceiptDigest,
+    permit.claimsIntentDigest, permit.claimsRequestDigest,
+    permit.tradingProgramId, permit.claimsProgramId, permit.rentCreditId].all (· != 0) &&
+  permit.marketId != permit.fundingSourceId && permit.marketId != permit.hoardId &&
+  permit.marketId != permit.projectedReplayId &&
+  permit.fundingSourceId != permit.hoardId && permit.projectedReplayId != permit.hoardId &&
+  permit.tradingProgramId != permit.claimsProgramId &&
+  permit.claimsIntentDigest != permit.claimsRequestDigest &&
+  0 < permit.generation && 0 < permit.quantity && 0 < permit.basisScale &&
+  0 < permit.expirySlot && 0 < permit.projectedResultingRevision &&
+  permit.normalReplayRevision = 1
+
+/-- Chain observations for the exact permit PDA prepaid during Trading Prepare.
+The current Rent minimum is debited from one selected `capability_native`
+FundingState. Pre-existing lamports remain an explicit donation and never
+become semantic capability funding. -/
+structure SeriesPermitFundingObservation where
+  account : VacantAccount
+  canonicalPdaAuthenticated : Bool
+  typedCapabilityNativeEntryAuthenticated : Bool
+  tradingPreparedCommitAuthenticated : Bool
+  preexistingLamports : Nat
+  fundingDebit : Nat
+  currentRentMinimum : Nat
+  currentSlot : Nat
+  deriving DecidableEq, Repr
+
+def seriesPermitFundingAccepts
+    (permit : SeriesFoundingPermit) (funding : SeriesPermitFundingObservation) : Bool :=
+  permit.valid && funding.account.valid && funding.canonicalPdaAuthenticated &&
+  funding.typedCapabilityNativeEntryAuthenticated &&
+  funding.tradingPreparedCommitAuthenticated &&
+  0 < funding.currentRentMinimum && funding.fundingDebit = funding.currentRentMinimum &&
+  funding.account.lamports = funding.preexistingLamports + funding.fundingDebit &&
+  funding.currentRentMinimum ≤ funding.account.lamports &&
+  funding.currentSlot ≤ permit.expirySlot
+
+/-- Allocation/assignment never debits Core or Trading during Consume: Prepare
+has already prefunded the canonical still-System-owned zero-data PDA. -/
+def seriesPermitCreationPlan
+    (funding : SeriesPermitFundingObservation) : AccountCreation :=
+  planAccountCreation funding.account funding.currentRentMinimum 0
+
+theorem accepted_series_permit_needs_no_consume_topup
+    (permit : SeriesFoundingPermit) (funding : SeriesPermitFundingObservation)
+    (_accepted : seriesPermitFundingAccepts permit funding = true)
+    (prefunded : funding.currentRentMinimum ≤ funding.account.lamports) :
+    (seriesPermitCreationPlan funding).rentTopUp = 0 := by
+  simp [seriesPermitCreationPlan, planAccountCreation, rentTopUp,
+    Nat.sub_eq_zero_of_le prefunded]
+
+/-- Exact Found-time join. Core allocates and writes the permit only after the
+ordinary Market Found plan and the immediate projected Lock receipt both
+authenticate. -/
+structure SeriesPermitIssueFrame where
+  found : FoundingFrame
+  permit : SeriesFoundingPermit
+  funding : SeriesPermitFundingObservation
+  lockReceiptAuthenticated : Bool
+  intentDigestAuthenticated : Bool
+  claimsRequestDigestAuthenticated : Bool
+  deriving DecidableEq, Repr
+
+def seriesPermitIssueAccepts (frame : SeriesPermitIssueFrame) : Bool :=
+  foundingAccepts frame.found && seriesPermitFundingAccepts frame.permit frame.funding &&
+  frame.permit.releaseSetId == frame.found.identity.executionReleaseSetId &&
+  frame.permit.marketId == frame.found.identity.marketId &&
+  frame.permit.productRecordId == frame.found.identity.productRecordId &&
+  frame.permit.sourceId == frame.found.identity.resolutionPolicyId &&
+  frame.permit.generation == frame.found.identity.generation &&
+  frame.permit.rentCreditId == frame.found.accounts.rentCreditId &&
+  frame.permit.tradingProgramId == frame.found.coreAdmission.selected.trading.program &&
+  frame.permit.claimsProgramId == frame.found.coreAdmission.selected.claims.program &&
+  frame.funding.account.address != frame.found.identity.marketId &&
+  frame.funding.account.address != frame.found.accounts.rentCreditId &&
+  frame.lockReceiptAuthenticated && frame.intentDigestAuthenticated &&
+  frame.claimsRequestDigestAuthenticated
+
+theorem substituted_series_claims_program_refuses
+    (frame : SeriesPermitIssueFrame)
+    (substituted : frame.permit.claimsProgramId ≠ frame.found.coreAdmission.selected.claims.program) :
+    seriesPermitIssueAccepts frame = false := by
+  simp [seriesPermitIssueAccepts, substituted]
+
+/-- Final Open evidence consumes the live Claims state and permit exactly once,
+then returns every permit lamport (including donation) to immutable RentCredit. -/
+structure SeriesPermitConsumeObservation where
+  ownerCoreAuthenticated : Bool
+  exactBodyAuthenticated : Bool
+  claimsIntentAuthenticated : Bool
+  claimsRequestAuthenticated : Bool
+  claimsReceiptAuthenticated : Bool
+  claimsPoststateAuthenticated : Bool
+  normalReplayAuthenticated : Bool
+  permitLamports : Nat
+  rentCreditAuthenticated : Bool
+  currentSlot : Nat
+  deriving DecidableEq, Repr
+
+def seriesPermitConsumeAccepts
+    (permit : SeriesFoundingPermit) (observation : SeriesPermitConsumeObservation) : Bool :=
+  permit.valid && observation.ownerCoreAuthenticated && observation.exactBodyAuthenticated &&
+  observation.claimsIntentAuthenticated && observation.claimsRequestAuthenticated &&
+  observation.claimsReceiptAuthenticated && observation.claimsPoststateAuthenticated &&
+  observation.normalReplayAuthenticated && observation.rentCreditAuthenticated &&
+  0 < observation.permitLamports && observation.currentSlot ≤ permit.expirySlot
+
+def seriesPermitCloseRefund (observation : SeriesPermitConsumeObservation) : Nat :=
+  observation.permitLamports
+
+/-- Permissionless expiry cleans up only the still-unallocated canonical PDA
+after an authenticated expired Ticket candidate. -/
+structure SeriesPermitExpiryObservation where
+  account : VacantAccount
+  canonicalPdaAuthenticated : Bool
+  expiredTicketCandidateAuthenticated : Bool
+  rentCreditAuthenticated : Bool
+  currentSlot : Nat
+  deriving DecidableEq, Repr
+
+def seriesPermitExpiryAccepts
+    (permit : SeriesFoundingPermit) (observation : SeriesPermitExpiryObservation) : Bool :=
+  permit.valid && observation.account.valid && observation.canonicalPdaAuthenticated &&
+  observation.expiredTicketCandidateAuthenticated && observation.rentCreditAuthenticated &&
+  permit.expirySlot < observation.currentSlot
+
+def seriesPermitExpiryRefund (observation : SeriesPermitExpiryObservation) : Nat :=
+  observation.account.lamports
+
+theorem unexpired_series_permit_refund_refuses
+    (permit : SeriesFoundingPermit) (observation : SeriesPermitExpiryObservation)
+    (unexpired : observation.currentSlot ≤ permit.expirySlot) :
+    seriesPermitExpiryAccepts permit observation = false := by
+  simp [seriesPermitExpiryAccepts, Nat.not_lt_of_ge unexpired]
 
 /-! ## Persistent Core state -/
 
@@ -357,6 +537,27 @@ Core does not persist a mirror of the resulting account balance. -/
 def openCreationPlan (frame : OpenFrame) : AccountCreation :=
   planAccountCreation frame.custody frame.custodyRentMinimum 0
 
+/-- Atomic recurring-Series opening consumes a Core Founding/Prepaid Market,
+an already-funded projected Hoard that Custody has realized into the normal
+replay, an exact Claims founding receipt, and the Trading-owned Prepared to
+Consumed replay candidate. The adapter derives every Boolean observation from
+producer-bound receipts and independently authenticated post-accounts. -/
+structure SeriesOpenFrame where
+  claimsAdmission : ExecutionRelease.Admission
+  custodyAdmission : ExecutionRelease.Admission
+  quantity : Nat
+  basisScale : Nat
+  sourceDebit : Nat
+  hoardCredit : Nat
+  hoardFundingAuthenticated : Bool
+  foundStateBoundByCustody : Bool
+  claimsCustodyJoinAuthenticated : Bool
+  ticketPreparedAuthenticated : Bool
+  ticketConsumedCandidateAuthenticated : Bool
+  claimsEffect : ChildEffectObservation
+  custodyEffect : ChildEffectObservation
+  deriving DecidableEq, Repr
+
 structure TerminalFrame where
   resolutionAdmission : ExecutionRelease.Admission
   product : Product
@@ -383,11 +584,27 @@ structure RedemptionFrame where
   custody : Option ChildEffectObservation
   deriving DecidableEq, Repr
 
-structure RetirementFrame where
+/-! Retirement uses one coherent release-set observation.  Physical adapters
+may authenticate its four required roles serially, but they cannot substitute
+role-specific copies of the selected ReleaseSet. -/
+structure RetirementAdmissions where
   coreAdmission : ExecutionRelease.Admission
   claimsAdmission : ExecutionRelease.Admission
   resolutionAdmission : ExecutionRelease.Admission
   custodyAdmission : ExecutionRelease.Admission
+  deriving DecidableEq, Repr
+
+def RetirementAdmissions.valid (state : State) (admissions : RetirementAdmissions) : Bool :=
+  admissionMatches state admissions.coreAdmission .core &&
+  admissionMatches state admissions.claimsAdmission .claims &&
+  admissionMatches state admissions.resolutionAdmission .resolution &&
+  admissionMatches state admissions.custodyAdmission .custody &&
+  admissions.coreAdmission.selected == admissions.claimsAdmission.selected &&
+  admissions.coreAdmission.selected == admissions.resolutionAdmission.selected &&
+  admissions.coreAdmission.selected == admissions.custodyAdmission.selected
+
+structure RetirementFrame where
+  admissions : RetirementAdmissions
   claims : ClaimsEffectObservation
   source : ChildEffectObservation
   custody : ChildEffectObservation
@@ -399,6 +616,7 @@ structure RetirementFrame where
 inductive Command where
   | verifyReadiness (frame : ReadinessVerification)
   | openMarket (frame : OpenFrame)
+  | openSeriesMarket (frame : SeriesOpenFrame)
   | split (frame : SplitFrame)
   | redeem (frame : RedemptionFrame)
   | admitTerminal (frame : TerminalFrame)
@@ -446,6 +664,25 @@ def openCandidate (state : State) (frame : OpenFrame) : Except Refusal (Candidat
     rentBeneficiaryPreserved := rfl
   }
 
+def seriesOpenCandidate
+    (state : State) (frame : SeriesOpenFrame) : Except Refusal (Candidate state) := do
+  if state.phase != .founding || state.readiness != .prepaid then throw .wrongPhase
+  if !admissionMatches state frame.claimsAdmission .claims ||
+      !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
+  let collateral := frame.quantity * frame.basisScale
+  if frame.quantity = 0 || frame.basisScale = 0 || collateral = 0 ||
+      frame.sourceDebit != collateral || frame.hoardCredit != collateral ||
+      !frame.hoardFundingAuthenticated || !frame.foundStateBoundByCustody ||
+      !frame.claimsCustodyJoinAuthenticated || !frame.ticketPreparedAuthenticated ||
+      !frame.ticketConsumedCandidateAuthenticated || !frame.claimsEffect.complete ||
+      !frame.custodyEffect.complete then throw .childEffectRefusal
+  pure {
+    post := { state with phase := .open, readiness := .consumed }
+    payout := 0
+    identityPreserved := rfl
+    rentBeneficiaryPreserved := rfl
+  }
+
 def splitCandidate
     (state : State) (frame : SplitFrame) : Except Refusal (Candidate state) := do
   if state.phase != .open then throw .wrongPhase
@@ -472,8 +709,8 @@ def redemptionCandidate
   if !admissionMatches state frame.claimsAdmission .claims ||
       !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
   if !frame.productRecordAuthenticated || !frame.product.valid ||
+      frame.product.productRecordId != state.identity.productRecordId ||
       frame.product.productId != state.identity.productId ||
-      frame.product.resultDomainId != state.identity.resultDomainId ||
       frame.quantity = 0 || frame.product.outcomeCount ≤ frame.outcome ||
       !frame.claims.toChildEffectObservation.complete then
     throw .childEffectRefusal
@@ -503,8 +740,8 @@ def terminalCertificateMatches
     (state : State) (product : Product) (productRecordAuthenticated : Bool)
     (certificate : SourceResolution.Certificate) : Bool :=
   productRecordAuthenticated && product.valid &&
+  product.productRecordId == state.identity.productRecordId &&
   product.productId == state.identity.productId &&
-  product.resultDomainId == state.identity.resultDomainId &&
   certificateValid certificate &&
   (certificate.kind == .resolutionSuccess || certificate.kind == .resolutionFailure) &&
   certificate.marketId == state.identity.marketId &&
@@ -574,10 +811,7 @@ def closeCapabilityCandidate
 
 def retireCandidate
     (state : State) (frame : RetirementFrame) : Except Refusal (Candidate state) := do
-  if !admissionMatches state frame.coreAdmission .core ||
-      !admissionMatches state frame.claimsAdmission .claims ||
-      !admissionMatches state frame.resolutionAdmission .resolution ||
-      !admissionMatches state frame.custodyAdmission .custody then throw .wrongRelease
+  if !frame.admissions.valid state then throw .wrongRelease
   match state.phase with
   | .retiring _ => pure ()
   | _ => throw .wrongPhase
@@ -597,6 +831,7 @@ def retireCandidate
 def candidateFor (state : State) : Command → Except Refusal (Candidate state)
   | .verifyReadiness frame => verifyReadinessCandidate state frame
   | .openMarket frame => openCandidate state frame
+  | .openSeriesMarket frame => seriesOpenCandidate state frame
   | .split frame => splitCandidate state frame
   | .redeem frame => redemptionCandidate state frame
   | .admitTerminal frame => terminalCandidate state frame

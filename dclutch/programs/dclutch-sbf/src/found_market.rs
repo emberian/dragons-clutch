@@ -854,9 +854,9 @@ mod tests {
     use dclutch_source_contract::{
         CapacityEnvelope as SourceCapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
         ProviderReleaseV1, PythAdapterConfigV1, ResolutionPolicyV1, RoundingBoundary,
-        SOURCE_MATERIAL_BYTES, SourceAccessProfile, SourceCapacityProfileV1,
-        SourceMaterialInputV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind,
-        WindowSpecV1, encode_source_material_into_v1,
+        SOURCE_MATERIAL_BYTES, SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1,
+        SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+        encode_source_material_into_v1,
     };
     use std::{boxed::Box, vec, vec::Vec};
 
@@ -933,12 +933,8 @@ mod tests {
             .expect("valid Product instance");
             let instance_bytes = instance.to_bytes();
 
-            let material_bytes = source_material(
-                instance,
-                hash(&instance_bytes).to_bytes(),
-                domain,
-                [31; 32],
-            );
+            let material_bytes =
+                source_material(instance, hash(&instance_bytes).to_bytes(), domain, [31; 32]);
             let policy_id = core_id(hash(&material_bytes).to_bytes());
             let fund_rent = Rent::default().minimum_balance(FUNDING_BYTES);
             let manifest_bytes = manifest_bytes(manifest_case, policy_id, fund_rent);

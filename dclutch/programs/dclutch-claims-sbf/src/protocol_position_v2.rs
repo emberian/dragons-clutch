@@ -1,31 +1,38 @@
-//! Canonical protocol-owned Claims Position admission.
+//! Claims-owned admission and reclamation for canonical LBV2 Positions.
 //!
-//! The current Registry-selected Trading program authorizes one exact request.
-//! Claims derives the ordinary Position PDA from the logical Market and the
-//! authenticated Trading-owned child root, admits width from finalized Product
-//! and LiabilityBasisV2 truth, and creates zero inventory without touching the
-//! aggregate. A separate Claims-owned admission record persists finality and
-//! prepaid-rent coordinates that do not belong in the exact Position ABI.
+//! This adapter creates exactly the Position representation consumed by the
+//! affine Claims batch. It never mutates claim balances: registration, fill,
+//! cancellation, and expiry compose this lifecycle with the affine batch in
+//! the outer Trading transaction. Closing is admitted only for an exact zero
+//! vector and credits both prepaid accounts to one authenticated RentCredit.
 
 extern crate alloc;
 
-use alloc::{boxed::Box, vec::Vec};
-use core::convert::{TryFrom, TryInto};
+use alloc::{vec, vec::Vec};
+use core::convert::TryFrom;
 
-use dclutch_claims_svm::{ClaimsAggregateSeedsV1, ClaimsPositionSeedsV1};
-use dclutch_core_contract::ContentId;
-use dclutch_economic_slice_kernel::{
-    POSITION_HEADER_BYTES, Phase as EconomicPhase, SCALAR_BYTES, initialize_position,
-    market_identity, market_outcome_count, market_phase, market_registry_program,
-    market_release_set_id, market_revision,
+use dclutch_claims_svm::frame_spec_v1::ClaimsFrameSpecV1;
+pub use dclutch_claims_svm::protocol_position_v2::{
+    PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_ADMISSION_MAGIC_V2,
+    PROTOCOL_POSITION_ADMISSION_SEED_V2, PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2,
+    PROTOCOL_POSITION_CLOSE_RECEIPT_MAGIC_V2, PROTOCOL_POSITION_RECEIPT_MAGIC_V2,
+    PROTOCOL_POSITION_REQUEST_BYTES_V2, PROTOCOL_POSITION_REQUEST_MAGIC_V2,
+    PROTOCOL_POSITION_STATE_SEED_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2,
+    ProtocolPositionAdmissionSeedsV2, ProtocolPositionAdmissionV2,
+    ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionCloseEvidenceV2,
+    ProtocolPositionCloseReceiptV2, ProtocolPositionOwnerKindV2, ProtocolPositionPresenceV2,
+    ProtocolPositionRequestV2, ProtocolPositionSeedsV2,
 };
-use dclutch_liability_basis_v2_kernel::product_claims::{
-    AdmittedBasisV2, ContentIdV2, LinkedBasisRecordV2,
+use dclutch_claims_svm::{
+    composition_v3::validate_sparse_close_receipt_v3,
+    sparse_native_transfer_v1::{
+        SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferReceiptV1,
+    },
 };
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase, STATE_BYTES};
-use dclutch_product_contract::product::{InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_market_core_codec::Phase as CorePhase;
+use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -39,98 +46,88 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
-use super::{liability_basis_v2::LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, reauthenticate};
+use super::{affine_batch_v2::authenticate_runtime_product_basis_core_v2, reauthenticate};
+use crate::liability_basis_v2::{
+    LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+    LiabilityBasisPositionInputV2, MarketViewV2, PositionViewV2,
+    encode_liability_basis_position_v2, read_vector, vector_width,
+};
 
-/// Protocol Position admission request magic.
-pub const PROTOCOL_POSITION_REQUEST_MAGIC_V2: [u8; 8] = *b"DCLPPR02";
-/// Exact protocol Position admission request width.
-pub const PROTOCOL_POSITION_REQUEST_BYTES_V2: usize = 224;
-/// Claims-owned protocol Position admission state width.
-pub const PROTOCOL_POSITION_ADMISSION_BYTES_V2: usize = 512;
-/// Exact admission receipt width.
-pub const PROTOCOL_POSITION_RECEIPT_BYTES_V2: usize = 512;
-/// Claims admission-record PDA seed domain.
-pub const PROTOCOL_POSITION_ADMISSION_SEED_V2: &[u8] = b"dclutch:protocol-position:v2";
-/// Exact account count for protocol Position admission.
-pub const PROTOCOL_POSITION_ACCOUNT_COUNT_V2: usize = 20;
+/// Exact admission account count.
+pub const PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2: usize =
+    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V1 as usize;
+/// Exact close account count.
+pub const PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2: usize =
+    dclutch_claims_svm::frame_spec_v1::PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V1 as usize;
 
-const ABI_VERSION_V2: u16 = 2;
-const ADMISSION_MAGIC_V2: [u8; 8] = *b"DCLPPS02";
-const RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLPPC02";
-const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
+const AUTHORITY: usize = 0;
+const MARKET: usize = 1;
+const POSITION: usize = 2;
+const ADMISSION: usize = 3;
 
-const REQUEST_RELEASE_OFFSET: usize = 16;
-const REQUEST_MARKET_OFFSET: usize = 48;
-const REQUEST_CHILD_ROOT_OFFSET: usize = 80;
-const REQUEST_PARENT_DIGEST_OFFSET: usize = 112;
-const REQUEST_REFUND_OFFSET: usize = 144;
-const REQUEST_GENERATION_OFFSET: usize = 176;
-const REQUEST_MARKET_REVISION_OFFSET: usize = 184;
-const REQUEST_POSITION_RENT_OFFSET: usize = 192;
-const REQUEST_ADMISSION_RENT_OFFSET: usize = 200;
+const ADMIT_BASIS_RECORD: usize = 4;
+const ADMIT_BASIS_STAGING: usize = 5;
+const ADMIT_PRODUCT_RECORD: usize = 6;
+const ADMIT_PRODUCT_STAGING: usize = 7;
+const ADMIT_RESULT_RECORD: usize = 8;
+const ADMIT_RESULT_STAGING: usize = 9;
+const ADMIT_PORTFOLIO_RECORD: usize = 10;
+const ADMIT_PORTFOLIO_STAGING: usize = 11;
+const ADMIT_RENT: usize = 12;
+const ADMIT_SYSTEM: usize = 13;
+const ADMIT_CORE_MARKET: usize = 14;
+const ADMIT_CACHE: usize = 15;
+const ADMIT_REGISTRY: usize = 16;
+const ADMIT_TRADING_PROGRAM: usize = 17;
+const ADMIT_TRADING_PROGRAMDATA: usize = 18;
+const ADMIT_CLAIMS_PROGRAM: usize = 19;
+const ADMIT_CLAIMS_PROGRAMDATA: usize = 20;
+const ADMIT_CORE_PROGRAM: usize = 21;
+const ADMIT_CORE_PROGRAMDATA: usize = 22;
+const ADMIT_OWNER_IDENTITY: usize = 23;
+const ADMIT_RENT_CREDIT: usize = 24;
+const ADMIT_RENT_PROGRAM: usize = 25;
 
-const EVIDENCE_RELEASE_OFFSET: usize = 16;
-const EVIDENCE_MARKET_OFFSET: usize = 48;
-const EVIDENCE_CHILD_ROOT_OFFSET: usize = 80;
-const EVIDENCE_POSITION_OFFSET: usize = 112;
-const EVIDENCE_ADMISSION_OFFSET: usize = 144;
-const EVIDENCE_PRODUCT_OFFSET: usize = 176;
-const EVIDENCE_BASIS_OFFSET: usize = 208;
-const EVIDENCE_LINKED_DIGEST_OFFSET: usize = 240;
-const EVIDENCE_PARENT_DIGEST_OFFSET: usize = 272;
-const EVIDENCE_REQUEST_DIGEST_OFFSET: usize = 304;
-const EVIDENCE_REFUND_OFFSET: usize = 336;
-const EVIDENCE_CLAIMS_PROGRAM_OFFSET: usize = 368;
-const EVIDENCE_TRADING_PROGRAM_OFFSET: usize = 400;
-const EVIDENCE_POSITION_DIGEST_OFFSET: usize = 432;
-const EVIDENCE_GENERATION_OFFSET: usize = 464;
-const EVIDENCE_OUTCOME_COUNT_OFFSET: usize = 472;
-const EVIDENCE_POSITION_RENT_OFFSET: usize = 480;
-const EVIDENCE_ADMISSION_RENT_OFFSET: usize = 488;
-const EVIDENCE_MARKET_REVISION_BEFORE_OFFSET: usize = 496;
-const EVIDENCE_MARKET_REVISION_AFTER_OFFSET: usize = 504;
+const CLOSE_RENT: usize = 4;
+const CLOSE_SYSTEM: usize = 5;
+const CLOSE_CACHE: usize = 6;
+const CLOSE_REGISTRY: usize = 7;
+const CLOSE_TRADING_PROGRAM: usize = 8;
+const CLOSE_TRADING_PROGRAMDATA: usize = 9;
+const CLOSE_CLAIMS_PROGRAM: usize = 10;
+const CLOSE_CLAIMS_PROGRAMDATA: usize = 11;
+const CLOSE_OWNER_IDENTITY: usize = 12;
+const CLOSE_RENT_CREDIT: usize = 13;
+const CLOSE_RENT_PROGRAM: usize = 14;
 
-const AUTHORITY_ACCOUNT: usize = 0;
-const MARKET_ACCOUNT: usize = 1;
-const POSITION_ACCOUNT: usize = 2;
-const ADMISSION_ACCOUNT: usize = 3;
-const BASIS_RECORD_ACCOUNT: usize = 4;
-const BASIS_STAGING_ACCOUNT: usize = 5;
-const PRODUCT_RECORD_ACCOUNT: usize = 6;
-const PRODUCT_STAGING_ACCOUNT: usize = 7;
-const RENT_ACCOUNT: usize = 8;
-const SYSTEM_ACCOUNT: usize = 9;
-const CORE_MARKET_ACCOUNT: usize = 10;
-const CACHE_ACCOUNT: usize = 11;
-const REGISTRY_ACCOUNT: usize = 12;
-const TRADING_PROGRAM_ACCOUNT: usize = 13;
-const TRADING_PROGRAMDATA_ACCOUNT: usize = 14;
-const CLAIMS_PROGRAM_ACCOUNT: usize = 15;
-const CLAIMS_PROGRAMDATA_ACCOUNT: usize = 16;
-const CORE_PROGRAM_ACCOUNT: usize = 17;
-const CORE_PROGRAMDATA_ACCOUNT: usize = 18;
-const CHILD_ROOT_ACCOUNT: usize = 19;
+const CLOSE_RESOURCE_DOMAIN_V2: &[u8] = b"dclutch/claims/protocol-position-close/v2";
 
-/// Stable protocol Position admission refusal.
+/// Stable protocol Position adapter refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ProtocolPositionSbfErrorV2 {
-    /// Request bytes were not the sole canonical V2 request.
+    /// Instruction bytes did not decode as the canonical lifecycle ABI.
     Instruction = 140,
-    /// Account count, order, privilege, owner, or alias checks refused.
+    /// Account count, privilege, executable, or alias facts refused.
     Accounts = 141,
-    /// Registry-selected current deployments or caller authority refused.
+    /// Current release selection or caller authority refused.
     Release = 142,
-    /// Claims aggregate, Core Market, or immutable request join refused.
+    /// Claims aggregate identity, revision, release, or generation refused.
     Market = 143,
-    /// Product, linked basis, width, or finalized-record evidence refused.
+    /// Product graph, linked basis, Core, or runtime width refused.
     ProductBasis = 144,
-    /// Position/admission PDA vacancy or prepaid-rent facts refused.
-    Vacancy = 145,
-    /// System allocation/assignment refused.
-    Allocation = 146,
-    /// Candidate state could not be committed atomically.
-    Commit = 147,
+    /// Position/admission PDA vacancy, shape, owner, or balance refused.
+    Position = 145,
+    /// Prepaid rent or authenticated RentCredit facts refused.
+    Rent = 146,
+    /// System allocation or assignment refused.
+    Allocation = 147,
+    /// Persisted admission did not join the requested terminal close.
+    Admission = 148,
+    /// Complete candidate state or rent-credit reclamation did not commit.
+    Commit = 149,
+    /// Immediate receipt construction or poststate commitment refused.
+    Receipt = 150,
 }
 
 impl From<ProtocolPositionSbfErrorV2> for ProgramError {
@@ -139,227 +136,25 @@ impl From<ProtocolPositionSbfErrorV2> for ProgramError {
     }
 }
 
-/// Exact immutable protocol Position admission request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProtocolPositionRequestV2 {
-    /// Immutable selected execution release set.
-    pub release_set: [u8; 32],
-    /// Logical Core Market identity.
-    pub market: [u8; 32],
-    /// Canonical Trading-owned child root that will own inventory.
-    pub child_root: [u8; 32],
-    /// Exact parent activation request digest.
-    pub parent_request_digest: [u8; 32],
-    /// Immutable beneficiary of both prepaid-rent principals.
-    pub rent_refund: [u8; 32],
-    /// Exact Market generation.
-    pub generation: u64,
-    /// Claims aggregate revision that must remain unchanged.
-    pub expected_market_revision: u64,
-    /// Exact prepaid Position lamports.
-    pub position_rent_lamports: u64,
-    /// Exact prepaid admission-record lamports.
-    pub admission_rent_lamports: u64,
-}
-
-impl ProtocolPositionRequestV2 {
-    /// Decode one exact canonical request.
-    pub fn decode(input: &[u8]) -> Result<Self, ProtocolPositionSbfErrorV2> {
-        if input.len() != PROTOCOL_POSITION_REQUEST_BYTES_V2
-            || read_array::<8>(input, 0)? != PROTOCOL_POSITION_REQUEST_MAGIC_V2
-            || read_u16(input, 8)? != ABI_VERSION_V2
-        {
-            return Err(ProtocolPositionSbfErrorV2::Instruction);
-        }
-        require_zero(input, 10, 6)?;
-        require_zero(input, 208, 16)?;
-        let value = Self {
-            release_set: read_array(input, REQUEST_RELEASE_OFFSET)?,
-            market: read_array(input, REQUEST_MARKET_OFFSET)?,
-            child_root: read_array(input, REQUEST_CHILD_ROOT_OFFSET)?,
-            parent_request_digest: read_array(input, REQUEST_PARENT_DIGEST_OFFSET)?,
-            rent_refund: read_array(input, REQUEST_REFUND_OFFSET)?,
-            generation: read_u64(input, REQUEST_GENERATION_OFFSET)?,
-            expected_market_revision: read_u64(input, REQUEST_MARKET_REVISION_OFFSET)?,
-            position_rent_lamports: read_u64(input, REQUEST_POSITION_RENT_OFFSET)?,
-            admission_rent_lamports: read_u64(input, REQUEST_ADMISSION_RENT_OFFSET)?,
-        };
-        if [
-            value.release_set,
-            value.market,
-            value.child_root,
-            value.parent_request_digest,
-            value.rent_refund,
-        ]
-        .iter()
-        .any(is_zero)
-            || value.child_root == value.rent_refund
-            || value.position_rent_lamports == 0
-            || value.admission_rent_lamports == 0
-        {
-            return Err(ProtocolPositionSbfErrorV2::Instruction);
-        }
-        Ok(value)
-    }
-
-    /// Encode one exact canonical request.
-    pub fn to_bytes(
-        self,
-    ) -> Result<[u8; PROTOCOL_POSITION_REQUEST_BYTES_V2], ProtocolPositionSbfErrorV2> {
-        let mut output = [0_u8; PROTOCOL_POSITION_REQUEST_BYTES_V2];
-        put(&mut output, 0, &PROTOCOL_POSITION_REQUEST_MAGIC_V2)?;
-        put(&mut output, 8, &ABI_VERSION_V2.to_le_bytes())?;
-        for (offset, value) in [
-            (REQUEST_RELEASE_OFFSET, self.release_set),
-            (REQUEST_MARKET_OFFSET, self.market),
-            (REQUEST_CHILD_ROOT_OFFSET, self.child_root),
-            (REQUEST_PARENT_DIGEST_OFFSET, self.parent_request_digest),
-            (REQUEST_REFUND_OFFSET, self.rent_refund),
-        ] {
-            put(&mut output, offset, &value)?;
-        }
-        for (offset, value) in [
-            (REQUEST_GENERATION_OFFSET, self.generation),
-            (
-                REQUEST_MARKET_REVISION_OFFSET,
-                self.expected_market_revision,
-            ),
-            (REQUEST_POSITION_RENT_OFFSET, self.position_rent_lamports),
-            (REQUEST_ADMISSION_RENT_OFFSET, self.admission_rent_lamports),
-        ] {
-            put(&mut output, offset, &value.to_le_bytes())?;
-        }
-        Self::decode(&output)?;
-        Ok(output)
-    }
-}
-
-/// Exact evidence returned after a protocol Position admission commits.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProtocolPositionAdmissionReceiptV2 {
-    /// Immutable selected execution release set.
-    pub release_set: [u8; 32],
-    /// Logical Core Market identity.
-    pub market: [u8; 32],
-    /// Trading-owned protocol inventory owner.
-    pub child_root: [u8; 32],
-    /// Canonical Claims Position PDA.
-    pub position: [u8; 32],
-    /// Canonical Claims admission-record PDA.
-    pub admission: [u8; 32],
-    /// Authenticated Product Instance digest.
-    pub product_instance_id: [u8; 32],
-    /// Product-owned semantic liability-basis ID.
-    pub semantic_basis_id: [u8; 32],
-    /// Independently authenticated full linked-record digest.
-    pub linked_basis_record_digest: [u8; 32],
-    /// Exact parent activation request digest.
-    pub parent_request_digest: [u8; 32],
-    /// Digest of the exact Claims admission request.
-    pub request_digest: [u8; 32],
-    /// Immutable prepaid-rent refund beneficiary.
-    pub rent_refund: [u8; 32],
-    /// Registry-selected current Claims program.
-    pub claims_program: [u8; 32],
-    /// Registry-selected current Trading program.
-    pub trading_program: [u8; 32],
-    /// Digest of the exact initialized zero Position bytes.
-    pub position_state_digest: [u8; 32],
-    /// Exact Market generation.
-    pub generation: u64,
-    /// Runtime admitted outcome width.
-    pub outcome_count: u32,
-    /// Exact prepaid Position lamports.
-    pub position_rent_lamports: u64,
-    /// Exact prepaid admission-record lamports.
-    pub admission_rent_lamports: u64,
-    /// Claims aggregate revision observed before admission.
-    pub market_revision_before: u64,
-    /// Claims aggregate revision rechecked after admission.
-    pub market_revision_after: u64,
-}
-
-impl ProtocolPositionAdmissionReceiptV2 {
-    /// Decode the Claims-owned persisted admission record.
-    pub fn decode_admission(input: &[u8]) -> Result<Self, ProtocolPositionSbfErrorV2> {
-        decode_evidence(input, ADMISSION_MAGIC_V2)
-    }
-
-    /// Decode one exact admission receipt.
-    pub fn decode(input: &[u8]) -> Result<Self, ProtocolPositionSbfErrorV2> {
-        decode_evidence(input, RECEIPT_MAGIC_V2)
-    }
-
-    fn encode_with_magic_into(
-        &self,
-        magic: [u8; 8],
-        output: &mut [u8],
-    ) -> Result<(), ProtocolPositionSbfErrorV2> {
-        if output.len() != PROTOCOL_POSITION_RECEIPT_BYTES_V2 {
-            return Err(ProtocolPositionSbfErrorV2::Instruction);
-        }
-        output.fill(0);
-        put(output, 0, &magic)?;
-        put(output, 8, &ABI_VERSION_V2.to_le_bytes())?;
-        for (offset, value) in [
-            (EVIDENCE_RELEASE_OFFSET, self.release_set),
-            (EVIDENCE_MARKET_OFFSET, self.market),
-            (EVIDENCE_CHILD_ROOT_OFFSET, self.child_root),
-            (EVIDENCE_POSITION_OFFSET, self.position),
-            (EVIDENCE_ADMISSION_OFFSET, self.admission),
-            (EVIDENCE_PRODUCT_OFFSET, self.product_instance_id),
-            (EVIDENCE_BASIS_OFFSET, self.semantic_basis_id),
-            (
-                EVIDENCE_LINKED_DIGEST_OFFSET,
-                self.linked_basis_record_digest,
-            ),
-            (EVIDENCE_PARENT_DIGEST_OFFSET, self.parent_request_digest),
-            (EVIDENCE_REQUEST_DIGEST_OFFSET, self.request_digest),
-            (EVIDENCE_REFUND_OFFSET, self.rent_refund),
-            (EVIDENCE_CLAIMS_PROGRAM_OFFSET, self.claims_program),
-            (EVIDENCE_TRADING_PROGRAM_OFFSET, self.trading_program),
-            (EVIDENCE_POSITION_DIGEST_OFFSET, self.position_state_digest),
-        ] {
-            put(output, offset, &value)?;
-        }
-        put(
-            output,
-            EVIDENCE_GENERATION_OFFSET,
-            &self.generation.to_le_bytes(),
-        )?;
-        put(
-            output,
-            EVIDENCE_OUTCOME_COUNT_OFFSET,
-            &self.outcome_count.to_le_bytes(),
-        )?;
-        for (offset, value) in [
-            (EVIDENCE_POSITION_RENT_OFFSET, self.position_rent_lamports),
-            (EVIDENCE_ADMISSION_RENT_OFFSET, self.admission_rent_lamports),
-            (
-                EVIDENCE_MARKET_REVISION_BEFORE_OFFSET,
-                self.market_revision_before,
-            ),
-            (
-                EVIDENCE_MARKET_REVISION_AFTER_OFFSET,
-                self.market_revision_after,
-            ),
-        ] {
-            put(output, offset, &value.to_le_bytes())?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Copy)]
-struct Accounts<'accounts, 'info> {
+struct CommonAccounts<'accounts, 'info> {
     authority: &'accounts AccountInfo<'info>,
     market: &'accounts AccountInfo<'info>,
     position: &'accounts AccountInfo<'info>,
     admission: &'accounts AccountInfo<'info>,
+}
+
+#[derive(Clone, Copy)]
+struct AdmitAccounts<'accounts, 'info> {
+    common: CommonAccounts<'accounts, 'info>,
     basis_record: &'accounts AccountInfo<'info>,
     basis_staging: &'accounts AccountInfo<'info>,
     product_record: &'accounts AccountInfo<'info>,
     product_staging: &'accounts AccountInfo<'info>,
+    result_record: &'accounts AccountInfo<'info>,
+    result_staging: &'accounts AccountInfo<'info>,
+    portfolio_record: &'accounts AccountInfo<'info>,
+    portfolio_staging: &'accounts AccountInfo<'info>,
     rent: &'accounts AccountInfo<'info>,
     system: &'accounts AccountInfo<'info>,
     core_market: &'accounts AccountInfo<'info>,
@@ -371,140 +166,510 @@ struct Accounts<'accounts, 'info> {
     claims_programdata: &'accounts AccountInfo<'info>,
     core_program: &'accounts AccountInfo<'info>,
     core_programdata: &'accounts AccountInfo<'info>,
-    child_root: &'accounts AccountInfo<'info>,
+    owner_identity: &'accounts AccountInfo<'info>,
+    rent_credit: &'accounts AccountInfo<'info>,
+    rent_program: &'accounts AccountInfo<'info>,
 }
 
-impl<'accounts, 'info> Accounts<'accounts, 'info> {
-    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        Ok(Self {
-            authority: account(accounts, AUTHORITY_ACCOUNT)?,
-            market: account(accounts, MARKET_ACCOUNT)?,
-            position: account(accounts, POSITION_ACCOUNT)?,
-            admission: account(accounts, ADMISSION_ACCOUNT)?,
-            basis_record: account(accounts, BASIS_RECORD_ACCOUNT)?,
-            basis_staging: account(accounts, BASIS_STAGING_ACCOUNT)?,
-            product_record: account(accounts, PRODUCT_RECORD_ACCOUNT)?,
-            product_staging: account(accounts, PRODUCT_STAGING_ACCOUNT)?,
-            rent: account(accounts, RENT_ACCOUNT)?,
-            system: account(accounts, SYSTEM_ACCOUNT)?,
-            core_market: account(accounts, CORE_MARKET_ACCOUNT)?,
-            cache: account(accounts, CACHE_ACCOUNT)?,
-            registry: account(accounts, REGISTRY_ACCOUNT)?,
-            trading_program: account(accounts, TRADING_PROGRAM_ACCOUNT)?,
-            trading_programdata: account(accounts, TRADING_PROGRAMDATA_ACCOUNT)?,
-            claims_program: account(accounts, CLAIMS_PROGRAM_ACCOUNT)?,
-            claims_programdata: account(accounts, CLAIMS_PROGRAMDATA_ACCOUNT)?,
-            core_program: account(accounts, CORE_PROGRAM_ACCOUNT)?,
-            core_programdata: account(accounts, CORE_PROGRAMDATA_ACCOUNT)?,
-            child_root: account(accounts, CHILD_ROOT_ACCOUNT)?,
-        })
-    }
+#[derive(Clone, Copy)]
+struct CloseAccounts<'accounts, 'info> {
+    common: CommonAccounts<'accounts, 'info>,
+    rent: &'accounts AccountInfo<'info>,
+    system: &'accounts AccountInfo<'info>,
+    cache: &'accounts AccountInfo<'info>,
+    registry: &'accounts AccountInfo<'info>,
+    trading_program: &'accounts AccountInfo<'info>,
+    trading_programdata: &'accounts AccountInfo<'info>,
+    claims_program: &'accounts AccountInfo<'info>,
+    claims_programdata: &'accounts AccountInfo<'info>,
+    owner_identity: &'accounts AccountInfo<'info>,
+    rent_credit: &'accounts AccountInfo<'info>,
+    rent_program: &'accounts AccountInfo<'info>,
 }
 
-struct Admission {
-    position_width: usize,
-    evidence: Box<ProtocolPositionAdmissionReceiptV2>,
-    position_candidate: Vec<u8>,
-    admission_candidate: Vec<u8>,
-}
-
-/// Execute one canonical protocol Position admission.
+/// Execute one exact admission or close.
 #[inline(never)]
-pub(super) fn process(
+pub fn process(
     program_id: &Pubkey,
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    if account_infos.len() != PROTOCOL_POSITION_ACCOUNT_COUNT_V2 {
-        return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+    let request_bytes = instruction_data
+        .get(..PROTOCOL_POSITION_REQUEST_BYTES_V2)
+        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?;
+    let request = ProtocolPositionRequestV2::decode(request_bytes)
+        .map_err(|_| ProtocolPositionSbfErrorV2::Instruction)?;
+    let sparse_receipt = split_sparse_receipt(request.action, instruction_data)?;
+    authenticate_frame_spec(
+        ClaimsFrameSpecV1::protocol_position(request.action),
+        account_infos,
+    )?;
+    match request.action {
+        ProtocolPositionActionV2::Admit => process_admit(
+            program_id,
+            AdmitAccounts::parse(account_infos)?,
+            request_bytes,
+            request,
+        ),
+        ProtocolPositionActionV2::Close => process_close(
+            program_id,
+            CloseAccounts::parse(account_infos)?,
+            request_bytes,
+            request,
+            sparse_receipt,
+        ),
     }
-    let request = ProtocolPositionRequestV2::decode(instruction_data)?;
+}
+
+fn split_sparse_receipt(
+    action: ProtocolPositionActionV2,
+    instruction_data: &[u8],
+) -> Result<Option<SparseNativeTransferReceiptV1>, ProgramError> {
+    let suffix = instruction_data
+        .get(PROTOCOL_POSITION_REQUEST_BYTES_V2..)
+        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?;
+    match (action, suffix.is_empty()) {
+        (_, true) => Ok(None),
+        (ProtocolPositionActionV2::Admit, false) => {
+            Err(ProtocolPositionSbfErrorV2::Instruction.into())
+        }
+        (ProtocolPositionActionV2::Close, false)
+            if suffix.len() == SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1 =>
+        {
+            SparseNativeTransferReceiptV1::decode(suffix)
+                .map(Some)
+                .map_err(|_| ProtocolPositionSbfErrorV2::Instruction.into())
+        }
+        (ProtocolPositionActionV2::Close, false) => {
+            Err(ProtocolPositionSbfErrorV2::Instruction.into())
+        }
+    }
+}
+
+impl<'accounts, 'info> AdmitAccounts<'accounts, 'info> {
+    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+        if accounts.len() != PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2 {
+            return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+        }
+        Ok(Self {
+            common: common(accounts)?,
+            basis_record: account(accounts, ADMIT_BASIS_RECORD)?,
+            basis_staging: account(accounts, ADMIT_BASIS_STAGING)?,
+            product_record: account(accounts, ADMIT_PRODUCT_RECORD)?,
+            product_staging: account(accounts, ADMIT_PRODUCT_STAGING)?,
+            result_record: account(accounts, ADMIT_RESULT_RECORD)?,
+            result_staging: account(accounts, ADMIT_RESULT_STAGING)?,
+            portfolio_record: account(accounts, ADMIT_PORTFOLIO_RECORD)?,
+            portfolio_staging: account(accounts, ADMIT_PORTFOLIO_STAGING)?,
+            rent: account(accounts, ADMIT_RENT)?,
+            system: account(accounts, ADMIT_SYSTEM)?,
+            core_market: account(accounts, ADMIT_CORE_MARKET)?,
+            cache: account(accounts, ADMIT_CACHE)?,
+            registry: account(accounts, ADMIT_REGISTRY)?,
+            trading_program: account(accounts, ADMIT_TRADING_PROGRAM)?,
+            trading_programdata: account(accounts, ADMIT_TRADING_PROGRAMDATA)?,
+            claims_program: account(accounts, ADMIT_CLAIMS_PROGRAM)?,
+            claims_programdata: account(accounts, ADMIT_CLAIMS_PROGRAMDATA)?,
+            core_program: account(accounts, ADMIT_CORE_PROGRAM)?,
+            core_programdata: account(accounts, ADMIT_CORE_PROGRAMDATA)?,
+            owner_identity: account(accounts, ADMIT_OWNER_IDENTITY)?,
+            rent_credit: account(accounts, ADMIT_RENT_CREDIT)?,
+            rent_program: account(accounts, ADMIT_RENT_PROGRAM)?,
+        })
+    }
+}
+
+impl<'accounts, 'info> CloseAccounts<'accounts, 'info> {
+    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+        if accounts.len() != PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2 {
+            return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+        }
+        Ok(Self {
+            common: common(accounts)?,
+            rent: account(accounts, CLOSE_RENT)?,
+            system: account(accounts, CLOSE_SYSTEM)?,
+            cache: account(accounts, CLOSE_CACHE)?,
+            registry: account(accounts, CLOSE_REGISTRY)?,
+            trading_program: account(accounts, CLOSE_TRADING_PROGRAM)?,
+            trading_programdata: account(accounts, CLOSE_TRADING_PROGRAMDATA)?,
+            claims_program: account(accounts, CLOSE_CLAIMS_PROGRAM)?,
+            claims_programdata: account(accounts, CLOSE_CLAIMS_PROGRAMDATA)?,
+            owner_identity: account(accounts, CLOSE_OWNER_IDENTITY)?,
+            rent_credit: account(accounts, CLOSE_RENT_CREDIT)?,
+            rent_program: account(accounts, CLOSE_RENT_PROGRAM)?,
+        })
+    }
+}
+
+fn common<'accounts, 'info>(
+    accounts: &'accounts [AccountInfo<'info>],
+) -> Result<CommonAccounts<'accounts, 'info>, ProgramError> {
+    Ok(CommonAccounts {
+        authority: account(accounts, AUTHORITY)?,
+        market: account(accounts, MARKET)?,
+        position: account(accounts, POSITION)?,
+        admission: account(accounts, ADMISSION)?,
+    })
+}
+
+#[inline(never)]
+fn process_admit(
+    program_id: &Pubkey,
+    accounts: AdmitAccounts<'_, '_>,
+    instruction_data: &[u8],
+    request: ProtocolPositionRequestV2,
+) -> Result<(), ProgramError> {
+    authenticate_admit_privileges(program_id, accounts)?;
     let request_digest = hash(instruction_data).to_bytes();
-    let accounts = Accounts::parse(account_infos)?;
-    authenticate_privileges(program_id, &accounts, request)?;
-    authenticate_releases(program_id, &accounts, request, request_digest)?;
-    let mut admission = prepare_admission(program_id, &accounts, request, request_digest)?;
-    allocate_accounts(program_id, &accounts, request, &admission)?;
-    let market_revision_after = read_market_revision(accounts.market)?;
-    if market_revision_after != request.expected_market_revision {
+    authenticate_authority(
+        accounts.common.authority,
+        accounts.trading_program,
+        request,
+        request_digest,
+    )?;
+    authenticate_releases_admit(accounts, request)?;
+    let (market, market_digest) = authenticate_market(
+        program_id,
+        accounts.common.market,
+        accounts.registry,
+        request,
+    )?;
+    authenticate_owner(
+        accounts.owner_identity,
+        accounts.trading_program,
+        accounts.claims_program,
+        request,
+    )?;
+    authenticate_rent_credit(accounts.rent_credit, accounts.rent_program, request)?;
+
+    let product_digest = account_digest(accounts.product_record)?;
+    let linked_digest = account_digest(accounts.basis_record)?;
+    authenticate_runtime_product_basis_core_v2(
+        accounts.registry,
+        accounts.rent,
+        accounts.core_market,
+        accounts.core_program,
+        accounts.basis_record,
+        accounts.basis_staging,
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: accounts.product_record,
+                staging: accounts.product_staging,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: accounts.result_record,
+                staging: accounts.result_staging,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: accounts.portfolio_record,
+                staging: accounts.portfolio_staging,
+            },
+        },
+        market,
+        product_digest,
+        linked_digest,
+        CorePhase::Open,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
+
+    let rent =
+        Rent::from_account_info(accounts.rent).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
+    let position_width = vector_width(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, market.claim_count)
+        .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    if rent.minimum_balance(position_width) != request.position_rent_principal
+        || rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+            != request.admission_rent_principal
+    {
+        return Err(ProtocolPositionSbfErrorV2::Rent.into());
+    }
+    authenticate_vacancy(program_id, accounts.common, request, position_width)?;
+    let zero_balances = vec![
+        0_u64;
+        usize::try_from(market.claim_count)
+            .map_err(|_| ProtocolPositionSbfErrorV2::Position)?
+    ];
+    let position_candidate = encode_liability_basis_position_v2(
+        LiabilityBasisPositionInputV2 {
+            revision: 0,
+            market_account: accounts.common.market.key.to_bytes(),
+            owner: request.position_owner,
+            basis_id: market.basis_id,
+        },
+        &zero_balances,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    let admission = ProtocolPositionAdmissionV2::new(
+        request,
+        ProtocolPositionAdmissionEvidenceV2 {
+            product_record_digest: product_digest,
+            semantic_basis_id: market.basis_id,
+            linked_basis_record_digest: linked_digest,
+            request_digest,
+            claims_program: program_id.to_bytes(),
+            trading_program: accounts.trading_program.key.to_bytes(),
+            capability_descriptor: request.capability_descriptor,
+            capability_outcome: request.capability_outcome,
+            outcome_count: market.claim_count,
+        },
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
+    let admission_candidate = admission
+        .to_state_bytes()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
+    let receipt = admission
+        .to_receipt_bytes()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
+
+    allocate_pair(program_id, accounts, request, position_width)?;
+    commit_admission(accounts.common, &position_candidate, &admission_candidate)?;
+    if account_digest(accounts.common.market)? != market_digest {
         return Err(ProtocolPositionSbfErrorV2::Commit.into());
     }
-    admission.evidence.market_revision_after = market_revision_after;
-    let mut receipt_bytes = alloc::vec![0_u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2];
-    admission
-        .evidence
-        .encode_with_magic_into(RECEIPT_MAGIC_V2, &mut receipt_bytes)?;
-    commit_candidates(&accounts, &admission)?;
-    set_return_data(&receipt_bytes);
+    set_return_data(&receipt);
     Ok(())
 }
 
-fn authenticate_privileges(
+#[inline(never)]
+fn process_close(
     program_id: &Pubkey,
-    accounts: &Accounts<'_, '_>,
+    accounts: CloseAccounts<'_, '_>,
+    instruction_data: &[u8],
     request: ProtocolPositionRequestV2,
+    sparse_receipt: Option<SparseNativeTransferReceiptV1>,
 ) -> Result<(), ProgramError> {
-    if !accounts.authority.is_signer
-        || accounts.authority.is_writable
-        || accounts.authority.executable
-        || accounts.market.is_signer
-        || accounts.market.is_writable
-        || accounts.market.executable
-        || accounts.position.is_signer
-        || !accounts.position.is_writable
-        || accounts.position.executable
-        || accounts.admission.is_signer
-        || !accounts.admission.is_writable
-        || accounts.admission.executable
-        || accounts.position.key == accounts.admission.key
-        || accounts.rent.key != &sysvar::rent::ID
-        || accounts.rent.is_signer
-        || accounts.rent.is_writable
-        || accounts.rent.executable
+    authenticate_close_privileges(program_id, accounts)?;
+    let request_digest = hash(instruction_data).to_bytes();
+    authenticate_authority(
+        accounts.common.authority,
+        accounts.trading_program,
+        request,
+        request_digest,
+    )?;
+    authenticate_releases_close(accounts, request)?;
+    let (market, market_digest) = authenticate_market(
+        program_id,
+        accounts.common.market,
+        accounts.registry,
+        request,
+    )?;
+    authenticate_owner(
+        accounts.owner_identity,
+        accounts.trading_program,
+        accounts.claims_program,
+        request,
+    )?;
+    let rent_credit_data =
+        authenticate_rent_credit(accounts.rent_credit, accounts.rent_program, request)?;
+
+    let admission_data = accounts
+        .common
+        .admission
+        .try_borrow_data()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+    let admission_digest = hash(&admission_data).to_bytes();
+    let admission = ProtocolPositionAdmissionV2::decode(&admission_data)
+        .map_err(|_| ProtocolPositionSbfErrorV2::Admission)?;
+    authenticate_admission(program_id, accounts, request, market, admission)?;
+    if let Some(receipt) = sparse_receipt {
+        validate_sparse_close_receipt_v3(receipt, request, admission, program_id.to_bytes())
+            .map_err(|_| ProtocolPositionSbfErrorV2::Admission)?;
+        let packet = receipt.request().to_bytes();
+        if receipt.packet_digest() != hash(&packet).to_bytes() {
+            return Err(ProtocolPositionSbfErrorV2::Admission.into());
+        }
+    }
+    drop(admission_data);
+
+    let position_data = accounts
+        .common
+        .position
+        .try_borrow_data()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+    let position =
+        PositionViewV2::decode(&position_data).map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    let balances = read_vector(
+        &position_data,
+        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        position.claim_count,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    if position.market_account != accounts.common.market.key.to_bytes()
+        || position.owner != request.position_owner
+        || position.basis_id != market.basis_id
+        || position.claim_count != market.claim_count
+        || position.revision != request.expected_position_revision
+        || balances.iter().any(|value| *value != 0)
+    {
+        return Err(ProtocolPositionSbfErrorV2::Position.into());
+    }
+    drop(position_data);
+
+    let rent =
+        Rent::from_account_info(accounts.rent).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
+    if rent.minimum_balance(accounts.common.position.data_len()) != request.position_rent_principal
+        || rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
+            != request.admission_rent_principal
+        || accounts.common.position.lamports() != request.observed_position_lamports
+        || accounts.common.admission.lamports() != request.observed_admission_lamports
+    {
+        return Err(ProtocolPositionSbfErrorV2::Rent.into());
+    }
+    let rent_before = accounts.rent_credit.lamports();
+    let total = request
+        .observed_position_lamports
+        .checked_add(request.observed_admission_lamports)
+        .ok_or(ProtocolPositionSbfErrorV2::Rent)?;
+    let rent_after = rent_before
+        .checked_add(total)
+        .ok_or(ProtocolPositionSbfErrorV2::Rent)?;
+    let rent_after_bytes = rent_after.to_le_bytes();
+    let rent_data_digest = hash(&rent_credit_data).to_bytes();
+    let post_resource_digest = hashv(&[
+        CLOSE_RESOURCE_DOMAIN_V2,
+        accounts.common.position.key.as_ref(),
+        accounts.common.admission.key.as_ref(),
+        accounts.rent_credit.key.as_ref(),
+        &rent_after_bytes,
+        &rent_data_digest,
+    ])
+    .to_bytes();
+    let receipt = ProtocolPositionCloseReceiptV2::new(
+        request,
+        ProtocolPositionCloseEvidenceV2 {
+            request_digest,
+            admission_digest,
+            claims_program: program_id.to_bytes(),
+            post_resource_digest,
+            rent_credit_before: rent_before,
+            rent_credit_after: rent_after,
+        },
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?
+    .to_bytes()
+    .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
+
+    close_pair(accounts, rent_after)?;
+    if account_digest(accounts.common.market)? != market_digest {
+        return Err(ProtocolPositionSbfErrorV2::Commit.into());
+    }
+    set_return_data(&receipt);
+    Ok(())
+}
+
+fn authenticate_admit_privileges(
+    program_id: &Pubkey,
+    accounts: AdmitAccounts<'_, '_>,
+) -> Result<(), ProgramError> {
+    authenticate_common(program_id, accounts.common)?;
+    if accounts.rent.key != &sysvar::rent::ID
         || accounts.system.key != &system_program::ID
-        || accounts.system.is_signer
-        || accounts.system.is_writable
-        || !accounts.system.executable
         || accounts.claims_program.key != program_id
-        || !accounts.claims_program.executable
-        || !accounts.trading_program.executable
-        || !accounts.registry.executable
-        || !accounts.core_program.executable
-        || accounts.child_root.key.to_bytes() != request.child_root
-        || accounts.child_root.owner != accounts.trading_program.key
-        || accounts.child_root.is_signer
-        || accounts.child_root.is_writable
-        || accounts.child_root.executable
     {
         return Err(ProtocolPositionSbfErrorV2::Accounts.into());
     }
-    for account in [
-        accounts.basis_record,
-        accounts.basis_staging,
-        accounts.product_record,
-        accounts.product_staging,
-        accounts.core_market,
-        accounts.cache,
-        accounts.registry,
+    require_distinct(&[
+        accounts.common.authority,
+        accounts.common.market,
+        accounts.common.position,
+        accounts.common.admission,
+        accounts.owner_identity,
+        accounts.rent_credit,
+        accounts.rent_program,
         accounts.trading_program,
-        accounts.trading_programdata,
         accounts.claims_program,
-        accounts.claims_programdata,
         accounts.core_program,
-        accounts.core_programdata,
-    ] {
-        if account.is_signer || account.is_writable {
+    ])
+}
+
+fn authenticate_close_privileges(
+    program_id: &Pubkey,
+    accounts: CloseAccounts<'_, '_>,
+) -> Result<(), ProgramError> {
+    authenticate_common(program_id, accounts.common)?;
+    if accounts.rent.key != &sysvar::rent::ID
+        || accounts.system.key != &system_program::ID
+        || accounts.claims_program.key != program_id
+    {
+        return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+    }
+    require_distinct(&[
+        accounts.common.authority,
+        accounts.common.market,
+        accounts.common.position,
+        accounts.common.admission,
+        accounts.owner_identity,
+        accounts.rent_credit,
+        accounts.rent_program,
+        accounts.trading_program,
+        accounts.claims_program,
+    ])
+}
+
+fn authenticate_common(
+    program_id: &Pubkey,
+    accounts: CommonAccounts<'_, '_>,
+) -> Result<(), ProgramError> {
+    if accounts.position.key == accounts.admission.key
+        || accounts.market.key == accounts.position.key
+        || accounts.market.key == accounts.admission.key
+        || accounts.market.owner != program_id
+    {
+        return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+    }
+    Ok(())
+}
+
+fn authenticate_frame_spec(
+    spec: ClaimsFrameSpecV1,
+    accounts: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    let count = usize::from(
+        spec.account_count()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?,
+    );
+    if accounts.len() != count {
+        return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+    }
+    for (index, observed) in accounts.iter().enumerate() {
+        let coordinate = u16::try_from(index).map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+        let expected = spec
+            .account(coordinate)
+            .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?
+            .privileges();
+        if observed.is_signer != expected.signer()
+            || observed.is_writable != expected.writable()
+            || observed.executable != expected.executable()
+        {
             return Err(ProtocolPositionSbfErrorV2::Accounts.into());
         }
     }
     Ok(())
 }
 
-fn authenticate_releases(
-    program_id: &Pubkey,
-    accounts: &Accounts<'_, '_>,
+fn authenticate_authority(
+    authority: &AccountInfo<'_>,
+    trading_program: &AccountInfo<'_>,
     request: ProtocolPositionRequestV2,
     request_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let seeds = CallerAuthoritySeedsV1::from_bytes(
+        request.release_set,
+        request.market,
+        ExecutionRoleV1::Trading,
+        request.position_owner,
+        request_digest,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
+    let expected = Pubkey::find_program_address(&seeds.as_slices(), trading_program.key).0;
+    if authority.key != &expected {
+        return Err(ProtocolPositionSbfErrorV2::Release.into());
+    }
+    Ok(())
+}
+
+fn authenticate_releases_admit(
+    accounts: AdmitAccounts<'_, '_>,
+    request: ProtocolPositionRequestV2,
 ) -> Result<(), ProgramError> {
     for (role, program, programdata) in [
         (
@@ -535,233 +700,265 @@ fn authenticate_releases(
             return Err(ProtocolPositionSbfErrorV2::Release.into());
         }
     }
-    let seeds = CallerAuthoritySeedsV1::new(
-        ContentId::new(request.release_set).map_err(|_| ProtocolPositionSbfErrorV2::Release)?,
-        request.market,
-        ExecutionRoleV1::Trading,
-        request.child_root,
-        request_digest,
-    )
-    .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
-    if accounts.authority.key
-        != &Pubkey::find_program_address(&seeds.as_slices(), accounts.trading_program.key).0
-        || accounts.claims_program.key != program_id
-    {
-        return Err(ProtocolPositionSbfErrorV2::Release.into());
+    Ok(())
+}
+
+fn authenticate_releases_close(
+    accounts: CloseAccounts<'_, '_>,
+    request: ProtocolPositionRequestV2,
+) -> Result<(), ProgramError> {
+    for (role, program, programdata) in [
+        (
+            ExecutionRoleV1::Trading,
+            accounts.trading_program,
+            accounts.trading_programdata,
+        ),
+        (
+            ExecutionRoleV1::Claims,
+            accounts.claims_program,
+            accounts.claims_programdata,
+        ),
+    ] {
+        let receipt = reauthenticate(
+            accounts.registry,
+            accounts.cache,
+            role,
+            program,
+            programdata,
+        )
+        .map_err(|_| ProtocolPositionSbfErrorV2::Release)?;
+        if receipt.execution_release_set_id().as_bytes() != &request.release_set {
+            return Err(ProtocolPositionSbfErrorV2::Release.into());
+        }
     }
     Ok(())
 }
 
-fn prepare_admission(
+fn authenticate_market(
     program_id: &Pubkey,
-    accounts: &Accounts<'_, '_>,
+    market_account: &AccountInfo<'_>,
+    registry: &AccountInfo<'_>,
     request: ProtocolPositionRequestV2,
-    request_digest: [u8; 32],
-) -> Result<Admission, ProgramError> {
-    let market_data = accounts
-        .market
-        .try_borrow_data()
-        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
-    let outcome_count =
-        market_outcome_count(&market_data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?;
-    let revision = market_revision(&market_data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?;
-    if accounts.market.owner != program_id
-        || market_identity(&market_data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?
-            != request.market
-        || market_release_set_id(&market_data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?
-            != request.release_set
-        || market_registry_program(&market_data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?
-            != accounts.registry.key.to_bytes()
-        || market_phase(&market_data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?
-            != EconomicPhase::Open
-        || revision != request.expected_market_revision
-    {
-        return Err(ProtocolPositionSbfErrorV2::Market.into());
-    }
-    let aggregate_seeds = ClaimsAggregateSeedsV1::new(request.market)
-        .map_err(|_| ProtocolPositionSbfErrorV2::Market)?;
-    if accounts.market.key
-        != &Pubkey::find_program_address(&aggregate_seeds.as_slices(), program_id).0
-    {
-        return Err(ProtocolPositionSbfErrorV2::Market.into());
-    }
-    drop(market_data);
-
-    if accounts.core_market.owner != accounts.core_program.key
-        || accounts.core_market.key.to_bytes() != request.market
-        || accounts.core_market.data_len() != STATE_BYTES
-    {
-        return Err(ProtocolPositionSbfErrorV2::Market.into());
-    }
-    let core_data = accounts
-        .core_market
-        .try_borrow_data()
-        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
-    let core = CoreState::decode(&core_data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?;
-    drop(core_data);
-    if core.phase != CorePhase::Open
-        || core.identity.market_id.to_bytes() != request.market
-        || core.identity.selected_release_set.to_bytes() != request.release_set
-        || core.identity.registry_program.to_bytes() != accounts.registry.key.to_bytes()
-        || core.identity.generation != request.generation
-    {
-        return Err(ProtocolPositionSbfErrorV2::Market.into());
-    }
-
-    let linked_digest = authenticate_self_finalized_record(
-        accounts,
-        accounts.basis_record,
-        accounts.basis_staging,
-        LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
-    )?;
-    let basis_data = accounts
-        .basis_record
-        .try_borrow_data()
-        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
-    let linked = LinkedBasisRecordV2::decode(&basis_data)
-        .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
-    let embedded = linked.basis_record();
-    let semantic_id = hashv(&[
-        BASIS_SEMANTIC_ID_DOMAIN_V2,
-        embedded
-            .get(..32)
-            .ok_or(ProtocolPositionSbfErrorV2::ProductBasis)?,
-        embedded
-            .get(64..)
-            .ok_or(ProtocolPositionSbfErrorV2::ProductBasis)?,
-    ])
-    .to_bytes();
-    if linked.product_instance_id().to_bytes() != core.identity.product_id.to_bytes()
-        || linked.semantic_basis_id().to_bytes() != semantic_id
-    {
-        return Err(ProtocolPositionSbfErrorV2::ProductBasis.into());
-    }
-    authenticate_finalized_record(
-        accounts,
-        accounts.product_record,
-        accounts.product_staging,
-        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
-        core.identity.product_id.to_bytes(),
-    )?;
-    let product_data = accounts
-        .product_record
-        .try_borrow_data()
-        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
-    let product =
-        InstanceV1::decode(&product_data).map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
-    if product.claim_basis_id().to_bytes() != semantic_id
-        || product.partition_cell_count() != outcome_count
-    {
-        return Err(ProtocolPositionSbfErrorV2::ProductBasis.into());
-    }
-    let semantic =
-        ContentIdV2::new(semantic_id).map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
-    let product_id = ContentIdV2::new(core.identity.product_id.to_bytes())
-        .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
-    let admitted = AdmittedBasisV2::admit(embedded, semantic, semantic, product_id)
-        .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
-    if admitted.claim_count() != outcome_count {
-        return Err(ProtocolPositionSbfErrorV2::ProductBasis.into());
-    }
-    drop(product_data);
-    drop(basis_data);
-
-    let position_seeds = ClaimsPositionSeedsV1::new(request.market, request.child_root)
-        .map_err(|_| ProtocolPositionSbfErrorV2::Vacancy)?;
-    let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
-    let admission_seeds = [
-        PROTOCOL_POSITION_ADMISSION_SEED_V2,
-        request.market.as_slice(),
-        request.child_root.as_slice(),
-    ];
-    let expected_admission = Pubkey::find_program_address(&admission_seeds, program_id).0;
-    let position_width = position_width(outcome_count)?;
-    let rent =
-        Rent::from_account_info(accounts.rent).map_err(|_| ProtocolPositionSbfErrorV2::Vacancy)?;
-    if accounts.position.key != &expected_position
-        || accounts.admission.key != &expected_admission
-        || request.position_rent_lamports != rent.minimum_balance(position_width)
-        || request.admission_rent_lamports
-            != rent.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
-    {
-        return Err(ProtocolPositionSbfErrorV2::Vacancy.into());
-    }
-    authenticate_vacant(accounts.position, request.position_rent_lamports)?;
-    authenticate_vacant(accounts.admission, request.admission_rent_lamports)?;
-
-    let mut position_candidate = alloc::vec![0_u8; position_width];
-    initialize_position(
-        &mut position_candidate,
-        request.market,
-        request.child_root,
-        outcome_count,
+) -> Result<(MarketViewV2, [u8; 32]), ProgramError> {
+    let expected = Pubkey::find_program_address(
+        &[LIABILITY_BASIS_MARKET_SEED_V2, request.market.as_slice()],
+        program_id,
     )
-    .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
-    let position_state_digest = hash(&position_candidate).to_bytes();
-    let evidence = Box::new(ProtocolPositionAdmissionReceiptV2 {
-        release_set: request.release_set,
-        market: request.market,
-        child_root: request.child_root,
-        position: expected_position.to_bytes(),
-        admission: expected_admission.to_bytes(),
-        product_instance_id: core.identity.product_id.to_bytes(),
-        semantic_basis_id: semantic_id,
-        linked_basis_record_digest: linked_digest,
-        parent_request_digest: request.parent_request_digest,
-        request_digest,
-        rent_refund: request.rent_refund,
-        claims_program: program_id.to_bytes(),
-        trading_program: accounts.trading_program.key.to_bytes(),
-        position_state_digest,
-        generation: request.generation,
-        outcome_count,
-        position_rent_lamports: request.position_rent_lamports,
-        admission_rent_lamports: request.admission_rent_lamports,
-        market_revision_before: revision,
-        market_revision_after: revision,
-    });
-    let mut admission_candidate = alloc::vec![0_u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2];
-    evidence.encode_with_magic_into(ADMISSION_MAGIC_V2, &mut admission_candidate)?;
-    Ok(Admission {
-        position_width,
-        evidence,
-        position_candidate,
-        admission_candidate,
-    })
+    .0;
+    let data = market_account
+        .try_borrow_data()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+    let digest = hash(&data).to_bytes();
+    let market = MarketViewV2::decode(&data).map_err(|_| ProtocolPositionSbfErrorV2::Market)?;
+    if market_account.key != &expected
+        || market.logical_market != request.market
+        || market.release_set != request.release_set
+        || market.registry_program != registry.key.to_bytes()
+        || market.generation != request.generation
+        || market.revision != request.expected_market_revision
+    {
+        return Err(ProtocolPositionSbfErrorV2::Market.into());
+    }
+    Ok((market, digest))
 }
 
-fn allocate_accounts<'info>(
-    program_id: &Pubkey,
-    accounts: &Accounts<'_, 'info>,
+fn authenticate_owner(
+    owner: &AccountInfo<'_>,
+    trading_program: &AccountInfo<'_>,
+    claims_program: &AccountInfo<'_>,
     request: ProtocolPositionRequestV2,
-    admission: &Admission,
 ) -> Result<(), ProgramError> {
-    let position_seeds = ClaimsPositionSeedsV1::new(request.market, request.child_root)
-        .map_err(|_| ProtocolPositionSbfErrorV2::Allocation)?;
-    let [position_domain, market, owner] = position_seeds.as_slices();
+    if owner.key.to_bytes() != request.position_owner
+        || owner.is_signer
+        || owner.is_writable
+        || owner.executable
+    {
+        return Err(ProtocolPositionSbfErrorV2::Position.into());
+    }
+    match request.owner_kind {
+        ProtocolPositionOwnerKindV2::TradingRecord => {
+            if owner.owner != trading_program.key || owner.data_is_empty() {
+                return Err(ProtocolPositionSbfErrorV2::Position.into());
+            }
+        }
+        ProtocolPositionOwnerKindV2::User => {}
+        ProtocolPositionOwnerKindV2::ClaimsCapability => {
+            let seeds = ProtocolPositionClaimsCapabilitySeedsV2::new(
+                request.capability_descriptor,
+                request.capability_outcome,
+            )
+            .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+            let expected = Pubkey::find_program_address(&seeds.as_slices(), claims_program.key).0;
+            if expected != *owner.key {
+                return Err(ProtocolPositionSbfErrorV2::Position.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn authenticate_rent_credit(
+    rent_credit: &AccountInfo<'_>,
+    rent_program: &AccountInfo<'_>,
+    request: ProtocolPositionRequestV2,
+) -> Result<Vec<u8>, ProgramError> {
+    if rent_credit.key.to_bytes() != request.rent_credit
+        || rent_program.key.to_bytes() != request.rent_program
+        || rent_credit.owner != rent_program.key
+        || rent_credit.executable
+        || !rent_program.executable
+    {
+        return Err(ProtocolPositionSbfErrorV2::Rent.into());
+    }
+    let data = rent_credit
+        .try_borrow_data()
+        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
+    let credit =
+        LifecycleRentCreditV2::decode(&data).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
+    if credit.market().to_bytes() != request.market
+        || credit.release_set().to_bytes() != request.release_set
+        || credit.generation() != request.generation
+    {
+        return Err(ProtocolPositionSbfErrorV2::Rent.into());
+    }
+    let seeds = credit.pda_seeds();
+    let bump = [seeds.bump()];
+    let market = seeds.market().to_bytes();
+    let generation = seeds.generation();
+    let expected = Pubkey::create_program_address(
+        &[
+            seeds.domain(),
+            market.as_slice(),
+            generation.as_slice(),
+            &bump,
+        ],
+        rent_program.key,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
+    if expected != *rent_credit.key {
+        return Err(ProtocolPositionSbfErrorV2::Rent.into());
+    }
+    Ok(data.to_vec())
+}
+
+fn authenticate_vacancy(
+    program_id: &Pubkey,
+    accounts: CommonAccounts<'_, '_>,
+    request: ProtocolPositionRequestV2,
+    position_width: usize,
+) -> Result<(), ProgramError> {
+    let position_seeds =
+        ProtocolPositionSeedsV2::new(accounts.market.key.to_bytes(), request.position_owner)
+            .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(
+        accounts.market.key.to_bytes(),
+        request.position_owner,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
+    let expected_admission =
+        Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).0;
+    if accounts.position.key != &expected_position
+        || accounts.admission.key != &expected_admission
+        || accounts.position.owner != &system_program::ID
+        || accounts.admission.owner != &system_program::ID
+        || !accounts.position.data_is_empty()
+        || !accounts.admission.data_is_empty()
+        || accounts.position.lamports() != request.observed_position_lamports
+        || accounts.admission.lamports() != request.observed_admission_lamports
+        || position_width == 0
+    {
+        return Err(ProtocolPositionSbfErrorV2::Position.into());
+    }
+    Ok(())
+}
+
+fn authenticate_admission(
+    program_id: &Pubkey,
+    accounts: CloseAccounts<'_, '_>,
+    request: ProtocolPositionRequestV2,
+    market: MarketViewV2,
+    admission: ProtocolPositionAdmissionV2,
+) -> Result<(), ProgramError> {
+    let position_seeds = ProtocolPositionSeedsV2::new(
+        accounts.common.market.key.to_bytes(),
+        request.position_owner,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(
+        accounts.common.market.key.to_bytes(),
+        request.position_owner,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
+    let expected_position = Pubkey::find_program_address(&position_seeds.as_slices(), program_id).0;
+    let expected_admission =
+        Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).0;
+    if accounts.common.position.key != &expected_position
+        || accounts.common.admission.key != &expected_admission
+        || accounts.common.position.owner != program_id
+        || accounts.common.admission.owner != program_id
+        || admission.owner_kind() != request.owner_kind
+        || admission.release_set() != request.release_set
+        || admission.market() != request.market
+        || admission.position_owner() != request.position_owner
+        || admission.rent_credit() != request.rent_credit
+        || admission.rent_program() != request.rent_program
+        || admission.claims_program() != program_id.to_bytes()
+        || admission.trading_program() != accounts.trading_program.key.to_bytes()
+        || admission.semantic_basis_id() != market.basis_id
+        || admission.outcome_count() != market.claim_count
+        || admission.generation() != request.generation
+        || admission.position_rent_principal() != request.position_rent_principal
+        || admission.admission_rent_principal() != request.admission_rent_principal
+        || admission.capability_descriptor() != request.capability_descriptor
+        || admission.capability_outcome() != request.capability_outcome
+    {
+        return Err(ProtocolPositionSbfErrorV2::Admission.into());
+    }
+    Ok(())
+}
+
+fn allocate_pair(
+    program_id: &Pubkey,
+    accounts: AdmitAccounts<'_, '_>,
+    request: ProtocolPositionRequestV2,
+    position_width: usize,
+) -> Result<(), ProgramError> {
+    let position_seeds = ProtocolPositionSeedsV2::new(
+        accounts.common.market.key.to_bytes(),
+        request.position_owner,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Allocation)?;
     let position_bump = [Pubkey::find_program_address(&position_seeds.as_slices(), program_id).1];
+    let [position_domain, position_market, position_owner] = position_seeds.as_slices();
     allocate_and_assign(
         program_id,
-        accounts.position,
+        accounts.common.position,
         accounts.system,
-        admission.position_width,
-        &[position_domain, market, owner, &position_bump],
+        position_width,
+        &[
+            position_domain,
+            position_market,
+            position_owner,
+            &position_bump,
+        ],
     )?;
-    let admission_seeds = [
-        PROTOCOL_POSITION_ADMISSION_SEED_V2,
-        request.market.as_slice(),
-        request.child_root.as_slice(),
-    ];
-    let admission_bump = [Pubkey::find_program_address(&admission_seeds, program_id).1];
+    let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(
+        accounts.common.market.key.to_bytes(),
+        request.position_owner,
+    )
+    .map_err(|_| ProtocolPositionSbfErrorV2::Allocation)?;
+    let admission_bump = [Pubkey::find_program_address(&admission_seeds.as_slices(), program_id).1];
+    let [admission_domain, admission_market, admission_owner] = admission_seeds.as_slices();
     allocate_and_assign(
         program_id,
-        accounts.admission,
+        accounts.common.admission,
         accounts.system,
         PROTOCOL_POSITION_ADMISSION_BYTES_V2,
         &[
-            PROTOCOL_POSITION_ADMISSION_SEED_V2,
-            request.market.as_slice(),
-            request.child_root.as_slice(),
+            admission_domain,
+            admission_market,
+            admission_owner,
             &admission_bump,
         ],
     )
@@ -769,15 +966,15 @@ fn allocate_accounts<'info>(
 
 fn allocate_and_assign<'info>(
     program_id: &Pubkey,
-    account: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     width: usize,
     seeds: &[&[u8]],
 ) -> Result<(), ProgramError> {
     let space = u64::try_from(width).map_err(|_| ProtocolPositionSbfErrorV2::Allocation)?;
     for instruction in [
-        allocate(account.key, space),
-        assign(account.key, program_id),
+        allocate(destination.key, space),
+        assign(destination.key, program_id),
     ] {
         invoke_signed(
             &Instruction {
@@ -785,185 +982,114 @@ fn allocate_and_assign<'info>(
                 accounts: instruction.accounts,
                 data: instruction.data,
             },
-            &[account.clone(), system.clone()],
+            &[destination.clone(), system.clone()],
             &[seeds],
         )
         .map_err(|_| ProtocolPositionSbfErrorV2::Allocation)?;
     }
-    if account.owner != program_id || account.data_len() != width {
+    if destination.owner != program_id || destination.data_len() != width {
         return Err(ProtocolPositionSbfErrorV2::Allocation.into());
     }
     Ok(())
 }
 
-fn commit_candidates(
-    accounts: &Accounts<'_, '_>,
-    admission: &Admission,
+fn commit_admission(
+    accounts: CommonAccounts<'_, '_>,
+    position_candidate: &[u8],
+    admission_candidate: &[u8],
 ) -> Result<(), ProgramError> {
     let mut position = accounts
         .position
         .try_borrow_mut_data()
         .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
-    let mut record = accounts
+    let mut admission = accounts
         .admission
         .try_borrow_mut_data()
         .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
-    if position.len() != admission.position_width
-        || record.len() != PROTOCOL_POSITION_ADMISSION_BYTES_V2
+    if position.len() != position_candidate.len()
+        || admission.len() != admission_candidate.len()
         || position.iter().any(|byte| *byte != 0)
-        || record.iter().any(|byte| *byte != 0)
+        || admission.iter().any(|byte| *byte != 0)
     {
         return Err(ProtocolPositionSbfErrorV2::Commit.into());
     }
-    position.copy_from_slice(&admission.position_candidate);
-    record.copy_from_slice(&admission.admission_candidate);
+    position.copy_from_slice(position_candidate);
+    admission.copy_from_slice(admission_candidate);
     Ok(())
 }
 
-fn authenticate_self_finalized_record(
-    accounts: &Accounts<'_, '_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-    schema: [u8; 32],
-) -> Result<[u8; 32], ProgramError> {
-    let data = raw
-        .try_borrow_data()
-        .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
-    let digest = hash(&data).to_bytes();
-    drop(data);
-    authenticate_finalized_record(accounts, raw, staging, schema, digest)?;
-    Ok(digest)
-}
-
-fn authenticate_finalized_record(
-    accounts: &Accounts<'_, '_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-    schema: [u8; 32],
-    digest: [u8; 32],
-) -> Result<(), ProgramError> {
-    if raw.owner != accounts.core_program.key
-        || raw.executable
-        || staging.owner != &system_program::ID
-        || staging.data_len() != 0
-        || staging.executable
-        || hash(
-            &raw.try_borrow_data()
-                .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?,
-        )
-        .to_bytes()
-            != digest
+fn close_pair(accounts: CloseAccounts<'_, '_>, rent_after: u64) -> Result<(), ProgramError> {
     {
-        return Err(ProtocolPositionSbfErrorV2::ProductBasis.into());
+        let mut position = accounts
+            .common
+            .position
+            .try_borrow_mut_data()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
+        let mut admission = accounts
+            .common
+            .admission
+            .try_borrow_mut_data()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
+        position.fill(0);
+        admission.fill(0);
     }
-    let raw_seeds = [RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()];
-    let staging_seeds = [
-        STAGING_CURSOR_PDA_SEED_V1,
-        schema.as_slice(),
-        digest.as_slice(),
-    ];
-    if raw.key != &Pubkey::find_program_address(&raw_seeds, accounts.core_program.key).0
-        || staging.key != &Pubkey::find_program_address(&staging_seeds, accounts.core_program.key).0
     {
-        return Err(ProtocolPositionSbfErrorV2::ProductBasis.into());
+        let mut position_lamports = accounts
+            .common
+            .position
+            .try_borrow_mut_lamports()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
+        let mut admission_lamports = accounts
+            .common
+            .admission
+            .try_borrow_mut_lamports()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
+        let mut rent_lamports = accounts
+            .rent_credit
+            .try_borrow_mut_lamports()
+            .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
+        **position_lamports = 0;
+        **admission_lamports = 0;
+        **rent_lamports = rent_after;
     }
-    let rent = Rent::from_account_info(accounts.rent)
-        .map_err(|_| ProtocolPositionSbfErrorV2::ProductBasis)?;
-    if raw.lamports() < rent.minimum_balance(raw.data_len()) {
-        return Err(ProtocolPositionSbfErrorV2::ProductBasis.into());
+    for closed in [accounts.common.position, accounts.common.admission] {
+        closed
+            .resize(0)
+            .map_err(|_| ProtocolPositionSbfErrorV2::Commit)?;
+        closed.assign(&system_program::ID);
     }
-    Ok(())
-}
-
-fn authenticate_vacant(account: &AccountInfo<'_>, lamports: u64) -> Result<(), ProgramError> {
-    if account.owner != &system_program::ID
-        || account.data_len() != 0
-        || account.lamports() != lamports
-        || account.is_signer
-        || !account.is_writable
-        || account.executable
+    if accounts.common.position.lamports() != 0
+        || accounts.common.admission.lamports() != 0
+        || !accounts.common.position.data_is_empty()
+        || !accounts.common.admission.data_is_empty()
+        || accounts.common.position.owner != &system_program::ID
+        || accounts.common.admission.owner != &system_program::ID
+        || accounts.rent_credit.lamports() != rent_after
     {
-        return Err(ProtocolPositionSbfErrorV2::Vacancy.into());
+        return Err(ProtocolPositionSbfErrorV2::Commit.into());
     }
     Ok(())
 }
 
-fn position_width(outcome_count: u32) -> Result<usize, ProgramError> {
-    usize::try_from(outcome_count)
-        .ok()
-        .and_then(|count| count.checked_mul(2))
-        .and_then(|count| count.checked_mul(SCALAR_BYTES))
-        .and_then(|tail| POSITION_HEADER_BYTES.checked_add(tail))
-        .ok_or_else(|| ProtocolPositionSbfErrorV2::ProductBasis.into())
+fn require_distinct(accounts: &[&AccountInfo<'_>]) -> Result<(), ProgramError> {
+    for (index, account) in accounts.iter().enumerate() {
+        if accounts
+            .get(index.saturating_add(1)..)
+            .ok_or(ProtocolPositionSbfErrorV2::Accounts)?
+            .iter()
+            .any(|other| other.key == account.key)
+        {
+            return Err(ProtocolPositionSbfErrorV2::Accounts.into());
+        }
+    }
+    Ok(())
 }
 
-fn read_market_revision(account: &AccountInfo<'_>) -> Result<u64, ProgramError> {
+fn account_digest(account: &AccountInfo<'_>) -> Result<[u8; 32], ProgramError> {
     let data = account
         .try_borrow_data()
         .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
-    market_revision(&data).map_err(|_| ProtocolPositionSbfErrorV2::Market.into())
-}
-
-fn decode_evidence(
-    input: &[u8],
-    magic: [u8; 8],
-) -> Result<ProtocolPositionAdmissionReceiptV2, ProtocolPositionSbfErrorV2> {
-    if input.len() != PROTOCOL_POSITION_RECEIPT_BYTES_V2
-        || read_array::<8>(input, 0)? != magic
-        || read_u16(input, 8)? != ABI_VERSION_V2
-    {
-        return Err(ProtocolPositionSbfErrorV2::Instruction);
-    }
-    require_zero(input, 10, 6)?;
-    require_zero(input, 476, 4)?;
-    let value = ProtocolPositionAdmissionReceiptV2 {
-        release_set: read_array(input, EVIDENCE_RELEASE_OFFSET)?,
-        market: read_array(input, EVIDENCE_MARKET_OFFSET)?,
-        child_root: read_array(input, EVIDENCE_CHILD_ROOT_OFFSET)?,
-        position: read_array(input, EVIDENCE_POSITION_OFFSET)?,
-        admission: read_array(input, EVIDENCE_ADMISSION_OFFSET)?,
-        product_instance_id: read_array(input, EVIDENCE_PRODUCT_OFFSET)?,
-        semantic_basis_id: read_array(input, EVIDENCE_BASIS_OFFSET)?,
-        linked_basis_record_digest: read_array(input, EVIDENCE_LINKED_DIGEST_OFFSET)?,
-        parent_request_digest: read_array(input, EVIDENCE_PARENT_DIGEST_OFFSET)?,
-        request_digest: read_array(input, EVIDENCE_REQUEST_DIGEST_OFFSET)?,
-        rent_refund: read_array(input, EVIDENCE_REFUND_OFFSET)?,
-        claims_program: read_array(input, EVIDENCE_CLAIMS_PROGRAM_OFFSET)?,
-        trading_program: read_array(input, EVIDENCE_TRADING_PROGRAM_OFFSET)?,
-        position_state_digest: read_array(input, EVIDENCE_POSITION_DIGEST_OFFSET)?,
-        generation: read_u64(input, EVIDENCE_GENERATION_OFFSET)?,
-        outcome_count: read_u32(input, EVIDENCE_OUTCOME_COUNT_OFFSET)?,
-        position_rent_lamports: read_u64(input, EVIDENCE_POSITION_RENT_OFFSET)?,
-        admission_rent_lamports: read_u64(input, EVIDENCE_ADMISSION_RENT_OFFSET)?,
-        market_revision_before: read_u64(input, EVIDENCE_MARKET_REVISION_BEFORE_OFFSET)?,
-        market_revision_after: read_u64(input, EVIDENCE_MARKET_REVISION_AFTER_OFFSET)?,
-    };
-    if [
-        value.release_set,
-        value.market,
-        value.child_root,
-        value.position,
-        value.admission,
-        value.product_instance_id,
-        value.semantic_basis_id,
-        value.linked_basis_record_digest,
-        value.parent_request_digest,
-        value.request_digest,
-        value.rent_refund,
-        value.claims_program,
-        value.trading_program,
-        value.position_state_digest,
-    ]
-    .iter()
-    .any(is_zero)
-        || value.outcome_count == 0
-        || value.position_rent_lamports == 0
-        || value.admission_rent_lamports == 0
-        || value.market_revision_before != value.market_revision_after
-    {
-        return Err(ProtocolPositionSbfErrorV2::Instruction);
-    }
-    Ok(value)
+    Ok(hash(&data).to_bytes())
 }
 
 fn account<'accounts, 'info>(
@@ -975,150 +1101,28 @@ fn account<'accounts, 'info>(
         .ok_or_else(|| ProtocolPositionSbfErrorV2::Accounts.into())
 }
 
-fn is_zero(value: &[u8; 32]) -> bool {
-    value.iter().all(|byte| *byte == 0)
-}
-
-fn read_u16(input: &[u8], offset: usize) -> Result<u16, ProtocolPositionSbfErrorV2> {
-    Ok(u16::from_le_bytes(read_array(input, offset)?))
-}
-
-fn read_u32(input: &[u8], offset: usize) -> Result<u32, ProtocolPositionSbfErrorV2> {
-    Ok(u32::from_le_bytes(read_array(input, offset)?))
-}
-
-fn read_u64(input: &[u8], offset: usize) -> Result<u64, ProtocolPositionSbfErrorV2> {
-    Ok(u64::from_le_bytes(read_array(input, offset)?))
-}
-
-fn read_array<const N: usize>(
-    input: &[u8],
-    offset: usize,
-) -> Result<[u8; N], ProtocolPositionSbfErrorV2> {
-    let end = offset
-        .checked_add(N)
-        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?;
-    input
-        .get(offset..end)
-        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?
-        .try_into()
-        .map_err(|_| ProtocolPositionSbfErrorV2::Instruction)
-}
-
-fn require_zero(
-    input: &[u8],
-    offset: usize,
-    width: usize,
-) -> Result<(), ProtocolPositionSbfErrorV2> {
-    let end = offset
-        .checked_add(width)
-        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?;
-    if input
-        .get(offset..end)
-        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?
-        .iter()
-        .any(|byte| *byte != 0)
-    {
-        return Err(ProtocolPositionSbfErrorV2::Instruction);
-    }
-    Ok(())
-}
-
-fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<(), ProtocolPositionSbfErrorV2> {
-    let end = offset
-        .checked_add(value.len())
-        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?;
-    output
-        .get_mut(offset..end)
-        .ok_or(ProtocolPositionSbfErrorV2::Instruction)?
-        .copy_from_slice(value);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn request() -> ProtocolPositionRequestV2 {
-        ProtocolPositionRequestV2 {
-            release_set: [1; 32],
-            market: [2; 32],
-            child_root: [3; 32],
-            parent_request_digest: [4; 32],
-            rent_refund: [5; 32],
-            generation: 6,
-            expected_market_revision: 7,
-            position_rent_lamports: 8,
-            admission_rent_lamports: 9,
-        }
-    }
-
-    fn receipt() -> ProtocolPositionAdmissionReceiptV2 {
-        ProtocolPositionAdmissionReceiptV2 {
-            release_set: [1; 32],
-            market: [2; 32],
-            child_root: [3; 32],
-            position: [4; 32],
-            admission: [5; 32],
-            product_instance_id: [6; 32],
-            semantic_basis_id: [7; 32],
-            linked_basis_record_digest: [8; 32],
-            parent_request_digest: [9; 32],
-            request_digest: [10; 32],
-            rent_refund: [11; 32],
-            claims_program: [12; 32],
-            trading_program: [13; 32],
-            position_state_digest: [14; 32],
-            generation: 15,
-            outcome_count: 16,
-            position_rent_lamports: 17,
-            admission_rent_lamports: 18,
-            market_revision_before: 19,
-            market_revision_after: 19,
-        }
+    #[test]
+    fn account_frames_are_action_specific_and_minimal() {
+        assert_eq!(PROTOCOL_POSITION_ADMIT_ACCOUNT_COUNT_V2, 26);
+        assert_eq!(PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2, 15);
+        assert_ne!(PROTOCOL_POSITION_REQUEST_MAGIC_V2, *b"DCLPPR01");
     }
 
     #[test]
-    fn request_and_receipt_are_exact_canonical_contracts() {
-        let request = request();
-        let bytes = request.to_bytes().expect("request");
-        assert_eq!(ProtocolPositionRequestV2::decode(&bytes), Ok(request));
-        let evidence = receipt();
-        let mut bytes = alloc::vec![0_u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2];
-        evidence
-            .encode_with_magic_into(RECEIPT_MAGIC_V2, &mut bytes)
-            .expect("receipt");
-        assert_eq!(
-            ProtocolPositionAdmissionReceiptV2::decode(&bytes),
-            Ok(evidence)
-        );
-    }
-
-    #[test]
-    fn reserved_alias_and_evidence_mutations_refuse() {
-        let mut bytes = request().to_bytes().expect("request");
-        *bytes.get_mut(10).expect("reserved") = 1;
-        assert_eq!(
-            ProtocolPositionRequestV2::decode(&bytes),
-            Err(ProtocolPositionSbfErrorV2::Instruction)
-        );
-
-        let mut aliased = request();
-        aliased.rent_refund = aliased.child_root;
-        assert_eq!(
-            aliased.to_bytes(),
-            Err(ProtocolPositionSbfErrorV2::Instruction)
-        );
-
-        let mut evidence = receipt();
-        evidence.market_revision_after += 1;
-        let mut bytes = alloc::vec![0_u8; PROTOCOL_POSITION_RECEIPT_BYTES_V2];
-        evidence
-            .encode_with_magic_into(RECEIPT_MAGIC_V2, &mut bytes)
-            .expect("structural bytes");
-        assert_eq!(
-            ProtocolPositionAdmissionReceiptV2::decode(&bytes),
-            Err(ProtocolPositionSbfErrorV2::Instruction)
-        );
+    fn position_and_admission_use_one_market_owner_coordinate() {
+        let program = Pubkey::new_from_array([7; 32]);
+        let market = Pubkey::new_from_array([8; 32]);
+        let owner = [9; 32];
+        let position_seeds =
+            ProtocolPositionSeedsV2::new(market.to_bytes(), owner).expect("position seeds");
+        let admission_seeds = ProtocolPositionAdmissionSeedsV2::new(market.to_bytes(), owner)
+            .expect("admission seeds");
+        let position = Pubkey::find_program_address(&position_seeds.as_slices(), &program).0;
+        let admission = Pubkey::find_program_address(&admission_seeds.as_slices(), &program).0;
+        assert_ne!(position, admission);
     }
 }

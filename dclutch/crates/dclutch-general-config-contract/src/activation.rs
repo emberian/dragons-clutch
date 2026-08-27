@@ -81,8 +81,8 @@ impl GeneralActivationRequestV2 {
             funding_state,
             rent_credit,
         ]
-            .iter()
-            .any(is_zero)
+        .iter()
+        .any(is_zero)
         {
             return Err(ActivationRequestError::ZeroIdentity);
         }
@@ -122,10 +122,7 @@ impl GeneralActivationRequestV2 {
         )?;
         require_zero(bytes, crate::generated::ACTIVATION_RESERVED_ENTRY_OFFSET, 6)?;
         require_zero(bytes, crate::generated::ACTIVATION_RESERVED_TAIL_OFFSET, 32)?;
-        if read_usize(
-            bytes,
-            crate::generated::ACTIVATION_ROOT_STATE_BYTES_OFFSET,
-        )?
+        if read_usize(bytes, crate::generated::ACTIVATION_ROOT_STATE_BYTES_OFFSET)?
             != GENERAL_ROOT_BYTES_V2
             || read_usize(bytes, crate::generated::ACTIVATION_CONFIG_BYTES_OFFSET)?
                 != GENERAL_CONFIG_BYTES_V2

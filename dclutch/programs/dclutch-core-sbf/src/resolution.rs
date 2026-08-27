@@ -10,24 +10,20 @@ use dclutch_market_core_codec::{
     CoreEffectEnvelopeV1, CoreState, Product, Readiness, Request, Role, TerminalReceipt,
     admit_terminal, verify_readiness,
 };
-use dclutch_product_contract::{
-    product::{
-        INSTANCE_BYTES, InstanceV1, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
-        PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1, TERMS_BYTES, TermsV1,
-    },
-    result_domain::FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
-};
+use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_resolution_codec::{
-    RESOLUTION_CERTIFICATE_BYTES, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CORE_ROLE_REQUEST_BYTES, RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1,
-    ResolutionCertificateKindV1, ResolutionCertificateV1, ResolutionCoreActionV1,
-    ResolutionCoreReceiptKindV1, ResolutionRoleRequestV1, SOURCE_CLOSURE_RECEIPT_BYTES,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1, SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1,
-    SourceClosureReceiptV1,
+    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V4, RESOLUTION_CORE_ROLE_REQUEST_BYTES,
+    RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV1,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V2, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
+    SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1, SourceClosureReceiptV2,
 };
 use dclutch_source_contract::{
-    SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1, SOURCE_RESOLUTION_STATE_BYTES,
-    SourceMaterialViewV1, SourceResolutionPhaseV1, SourceResolutionStateV1,
+    ContentId as SourceContentId, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_V2_BYTES,
+    SOURCE_RESOLUTION_STATE_BYTES_V2, SourceMaterialV2, SourceResolutionPhaseV1,
+    SourceResolutionStateV2,
 };
 use solana_program::{
     account_info::AccountInfo, hash::hashv, program_error::ProgramError, pubkey::Pubkey,
@@ -42,7 +38,8 @@ use crate::{
         invoke_fixed_role, nonzero_identity, persist_state, require_market_unchanged,
     },
     frame::require_distinct,
-    records::{authenticate_content_addressed_record, authenticate_finalized_record},
+    product_runtime_v2::{authenticate_selected_runtime_v2, project_core_product_v2},
+    records::authenticate_finalized_record,
 };
 
 /// Exact Resolution role request after the 280-byte Core envelope.
@@ -55,15 +52,17 @@ pub const RESOLUTION_CORE_INSTRUCTION_BYTES_V1: usize = dclutch_market_core_code
     + RESOLUTION_ROLE_REQUEST_BYTES_V1;
 
 /// Exact outer account count for Source/Funding creation.
-pub const RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1: usize = 18;
+pub const RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1: usize = 20;
 /// Exact outer account count for Source/Funding readiness.
-pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 19;
-/// Exact child account count for terminal admission.
-pub const RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1: usize = 18;
-/// Exact outer account count for terminal admission, including four Core-only Product records.
-pub const RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1: usize = 22;
+pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 21;
+/// Exact child and outer account count for terminal admission, including the
+/// three Product Runtime V2 finalized record pairs reauthenticated by both
+/// Resolution and Core.
+pub const RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1: usize = 24;
+/// Exact outer account count for terminal admission.
+pub const RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1: usize = 24;
 /// Exact outer and child account count for Source/Funding close.
-pub const RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1: usize = 22;
+pub const RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1: usize = 24;
 
 const SOURCE_MATERIAL: usize = 8;
 const SOURCE_MATERIAL_STAGING: usize = 9;
@@ -76,21 +75,29 @@ const FAILURE_FUNDING: usize = 15;
 
 const CREATE_RENT: usize = 16;
 const CREATE_SYSTEM: usize = 17;
+const CREATE_RECOVERY_POLICY: usize = 18;
+const CREATE_RECOVERY_POLICY_STAGING: usize = 19;
 const VERIFY_BENEFICIARY: usize = 16;
 const VERIFY_CLOCK: usize = 17;
 const VERIFY_RENT: usize = 18;
+const VERIFY_RECOVERY_POLICY: usize = 19;
+const VERIFY_RECOVERY_POLICY_STAGING: usize = 20;
 const ADMIT_CERTIFICATE: usize = 16;
 const ADMIT_RENT: usize = 17;
-const ADMIT_PRODUCT_INSTANCE: usize = 18;
-const ADMIT_PRODUCT_INSTANCE_STAGING: usize = 19;
-const ADMIT_PRODUCT_TERMS: usize = 20;
-const ADMIT_PRODUCT_TERMS_STAGING: usize = 21;
+const ADMIT_PRODUCT: usize = 18;
+const ADMIT_PRODUCT_STAGING: usize = 19;
+const ADMIT_RESULT_DOMAIN: usize = 20;
+const ADMIT_RESULT_DOMAIN_STAGING: usize = 21;
+const ADMIT_PORTFOLIO: usize = 22;
+const ADMIT_PORTFOLIO_STAGING: usize = 23;
 const CLOSE_CERTIFICATE: usize = 16;
 const CLOSE_CLOSURE: usize = 17;
 const CLOSE_BENEFICIARY: usize = 18;
 const CLOSE_CLOCK: usize = 19;
 const CLOSE_RENT: usize = 20;
 const CLOSE_SYSTEM: usize = 21;
+const CLOSE_RECOVERY_POLICY: usize = 22;
+const CLOSE_RECOVERY_POLICY_STAGING: usize = 23;
 
 /// Execute one exact Resolution child effect and commit any Core transition last.
 #[inline(never)]
@@ -132,6 +139,14 @@ pub(crate) fn process(
         Role::Resolution,
     )?;
     authenticate_request_coordinates(&frame, *authenticated.state, envelope, resolution_request)?;
+    if resolution_request.action != ResolutionCoreActionV1::AdmitTerminal {
+        authenticate_recovery_policy(
+            &frame,
+            accounts,
+            resolution_request,
+            resolution_request.action,
+        )?;
+    }
     let admit_projection = if resolution_request.action == ResolutionCoreActionV1::AdmitTerminal {
         Some(authenticate_admit_projection(
             &frame,
@@ -383,6 +398,11 @@ fn validate_outer_frame(
         ResolutionCoreActionV1::CreateFund => {
             require_sysvar(account(accounts, CREATE_RENT)?, sysvar::rent::ID)?;
             require_program(account(accounts, CREATE_SYSTEM)?, system_program::ID)?;
+            require_readonly_pair(
+                accounts,
+                CREATE_RECOVERY_POLICY,
+                CREATE_RECOVERY_POLICY_STAGING,
+            )?;
         }
         ResolutionCoreActionV1::VerifyFundReady => {
             let beneficiary = account(accounts, VERIFY_BENEFICIARY)?;
@@ -391,6 +411,11 @@ fn validate_outer_frame(
             }
             require_sysvar(account(accounts, VERIFY_CLOCK)?, sysvar::clock::ID)?;
             require_sysvar(account(accounts, VERIFY_RENT)?, sysvar::rent::ID)?;
+            require_readonly_pair(
+                accounts,
+                VERIFY_RECOVERY_POLICY,
+                VERIFY_RECOVERY_POLICY_STAGING,
+            )?;
         }
         ResolutionCoreActionV1::AdmitTerminal => {
             let certificate = account(accounts, ADMIT_CERTIFICATE)?;
@@ -399,10 +424,12 @@ fn validate_outer_frame(
             }
             require_sysvar(account(accounts, ADMIT_RENT)?, sysvar::rent::ID)?;
             for index in [
-                ADMIT_PRODUCT_INSTANCE,
-                ADMIT_PRODUCT_INSTANCE_STAGING,
-                ADMIT_PRODUCT_TERMS,
-                ADMIT_PRODUCT_TERMS_STAGING,
+                ADMIT_PRODUCT,
+                ADMIT_PRODUCT_STAGING,
+                ADMIT_RESULT_DOMAIN,
+                ADMIT_RESULT_DOMAIN_STAGING,
+                ADMIT_PORTFOLIO,
+                ADMIT_PORTFOLIO_STAGING,
             ] {
                 let value = account(accounts, index)?;
                 if value.is_writable || value.executable {
@@ -420,6 +447,123 @@ fn validate_outer_frame(
             require_sysvar(account(accounts, CLOSE_CLOCK)?, sysvar::clock::ID)?;
             require_sysvar(account(accounts, CLOSE_RENT)?, sysvar::rent::ID)?;
             require_program(account(accounts, CLOSE_SYSTEM)?, system_program::ID)?;
+            require_readonly_pair(
+                accounts,
+                CLOSE_RECOVERY_POLICY,
+                CLOSE_RECOVERY_POLICY_STAGING,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn authenticate_recovery_policy(
+    frame: &FixedRoleAccountsV1<'_, '_>,
+    accounts: &[AccountInfo<'_>],
+    request: ResolutionRoleRequestV1,
+    action: ResolutionCoreActionV1,
+) -> Result<(), CoreSbfError> {
+    let (policy_index, staging_index) = recovery_policy_indices(action)?;
+    let rent = read_rent(account(accounts, rent_index(action))?)?;
+    let material_account = account(accounts, SOURCE_MATERIAL)?;
+    let material_data = material_account
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::FinalizedRecord)?;
+    if material_data.len() != SOURCE_MATERIAL_V2_BYTES {
+        return Err(CoreSbfError::Reference);
+    }
+    authenticate_finalized_record(
+        frame.registry().key,
+        material_account,
+        account(accounts, SOURCE_MATERIAL_STAGING)?,
+        &rent,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        request.source_material,
+        &material_data,
+    )?;
+    let material = SourceMaterialV2::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
+    let recovery_id = material.recovery_policy().ok_or(CoreSbfError::Reference)?;
+    let policy_account = account(accounts, policy_index)?;
+    let policy_data = policy_account
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::FinalizedRecord)?;
+    if policy_data.len() != RECOVERY_POLICY_BYTES_V2 {
+        return Err(CoreSbfError::Reference);
+    }
+    authenticate_finalized_record(
+        frame.registry().key,
+        policy_account,
+        account(accounts, staging_index)?,
+        &rent,
+        RECOVERY_POLICY_SCHEMA_ID_V2,
+        recovery_id.to_bytes(),
+        &policy_data,
+    )?;
+    let policy = RecoveryPolicyV2::decode(&policy_data).map_err(|_| CoreSbfError::Reference)?;
+    if policy.attempt_count() != 1 {
+        return Err(CoreSbfError::Reference);
+    }
+    let manifest_data = account(accounts, CAPABILITY_MANIFEST)?
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        frame.registry().key,
+        account(accounts, CAPABILITY_MANIFEST)?,
+        account(accounts, CAPABILITY_MANIFEST_STAGING)?,
+        &rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        request.capability_manifest,
+        &manifest_data,
+    )?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
+    let recovery_allocation = policy
+        .attempt(0)
+        .map_err(|_| CoreSbfError::Reference)?
+        .funding_allocation_id()
+        .to_bytes();
+    for (entry_index, expected_config) in [
+        (request.recovery_entry_index, recovery_allocation),
+        (request.exhaustion_entry_index, recovery_id.to_bytes()),
+        (request.failure_entry_index, request.source_material),
+    ] {
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(|_| CoreSbfError::Funding)?;
+        if entry.config_id().to_bytes() != expected_config
+            || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
+        {
+            return Err(CoreSbfError::Funding);
+        }
+    }
+    Ok(())
+}
+
+fn recovery_policy_indices(action: ResolutionCoreActionV1) -> Result<(usize, usize), CoreSbfError> {
+    match action {
+        ResolutionCoreActionV1::CreateFund => {
+            Ok((CREATE_RECOVERY_POLICY, CREATE_RECOVERY_POLICY_STAGING))
+        }
+        ResolutionCoreActionV1::VerifyFundReady => {
+            Ok((VERIFY_RECOVERY_POLICY, VERIFY_RECOVERY_POLICY_STAGING))
+        }
+        ResolutionCoreActionV1::CloseFund => {
+            Ok((CLOSE_RECOVERY_POLICY, CLOSE_RECOVERY_POLICY_STAGING))
+        }
+        ResolutionCoreActionV1::AdmitTerminal => Err(CoreSbfError::Instruction),
+    }
+}
+
+fn require_readonly_pair(
+    accounts: &[AccountInfo<'_>],
+    raw_index: usize,
+    staging_index: usize,
+) -> Result<(), CoreSbfError> {
+    for index in [raw_index, staging_index] {
+        let value = account(accounts, index)?;
+        if value.is_writable || value.executable {
+            return Err(CoreSbfError::AccountFrame);
         }
     }
     Ok(())
@@ -462,21 +606,28 @@ fn authenticate_close_prestate(
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Reference)?;
     if certificate_account.owner != frame.target_program().key
-        || certificate_account.data_len() != RESOLUTION_CERTIFICATE_BYTES
+        || certificate_account.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2
         || certificate_account.key.to_bytes()
             != state
                 .terminal_receipt
                 .ok_or(CoreSbfError::Transition)?
                 .to_bytes()
-        || !rent.is_exempt(certificate_account.lamports(), RESOLUTION_CERTIFICATE_BYTES)
+        || !rent.is_exempt(
+            certificate_account.lamports(),
+            RESOLUTION_CERTIFICATE_BYTES_V2,
+        )
     {
         return Err(CoreSbfError::Reference);
     }
     let decoded =
-        ResolutionCertificateV1::decode(&certificate).map_err(|_| CoreSbfError::Reference)?;
-    if decoded.market != frame.market().key.to_bytes()
+        ResolutionCertificateV2::decode(&certificate).map_err(|_| CoreSbfError::Reference)?;
+    if !matches!(
+        decoded.kind,
+        ResolutionCertificateKindV2::ResolutionSuccess
+            | ResolutionCertificateKindV2::ResolutionFailure
+    ) || decoded.market != frame.market().key.to_bytes()
         || decoded.source_material != state.identity.resolution_policy.to_bytes()
-        || decoded.product != state.identity.product_id.to_bytes()
+        || decoded.product_record_digest != state.identity.product_record.to_bytes()
         || decoded.receipt_account != certificate_account.key.to_bytes()
         || decoded.generation != state.identity.generation
         || decoded.selector != state.terminal_winner
@@ -518,7 +669,7 @@ fn authenticate_admit_projection(
     let material_data = material_account
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if material_data.len() != SOURCE_MATERIAL_BYTES {
+    if material_data.len() != SOURCE_MATERIAL_V2_BYTES {
         return Err(CoreSbfError::Reference);
     }
     authenticate_finalized_record(
@@ -526,93 +677,65 @@ fn authenticate_admit_projection(
         material_account,
         account(accounts, SOURCE_MATERIAL_STAGING)?,
         &rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V1,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
         request.source_material,
         &material_data,
     )?;
-    let material =
-        SourceMaterialViewV1::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
-    let domain = material
-        .result_domain()
-        .map_err(|_| CoreSbfError::Reference)?;
-    let domain_bytes = domain.to_bytes();
-    let result_domain_id =
-        hashv(&[FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, &[0], &domain_bytes]).to_bytes();
+    let material = SourceMaterialV2::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
 
-    let instance_account = account(accounts, ADMIT_PRODUCT_INSTANCE)?;
-    let instance_data = instance_account
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if instance_data.len() != INSTANCE_BYTES {
-        return Err(CoreSbfError::Reference);
-    }
-    let (product_id, instance_bytes) = authenticate_content_addressed_record(
+    let runtime = authenticate_selected_runtime_v2(
         registry,
-        instance_account,
-        account(accounts, ADMIT_PRODUCT_INSTANCE_STAGING)?,
         &rent,
-        PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1,
-        &instance_data,
+        state.identity.product_record.to_bytes(),
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: account(accounts, ADMIT_PRODUCT)?,
+                staging: account(accounts, ADMIT_PRODUCT_STAGING)?,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: account(accounts, ADMIT_RESULT_DOMAIN)?,
+                staging: account(accounts, ADMIT_RESULT_DOMAIN_STAGING)?,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: account(accounts, ADMIT_PORTFOLIO)?,
+                staging: account(accounts, ADMIT_PORTFOLIO_STAGING)?,
+            },
+        },
     )?;
-    let instance = InstanceV1::decode(instance_bytes).map_err(|_| CoreSbfError::Reference)?;
-    let terms_account = account(accounts, ADMIT_PRODUCT_TERMS)?;
-    let terms_data = terms_account
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if terms_data.len() != TERMS_BYTES {
-        return Err(CoreSbfError::Reference);
-    }
-    authenticate_finalized_record(
-        registry,
-        terms_account,
-        account(accounts, ADMIT_PRODUCT_TERMS_STAGING)?,
-        &rent,
-        PRODUCT_TERMS_SCHEMA_RELEASE_ID_V1,
-        instance.terms_id().to_bytes(),
-        &terms_data,
-    )?;
-    let terms = TermsV1::decode(&terms_data).map_err(|_| CoreSbfError::Reference)?;
-    if product_id != state.identity.product_id.to_bytes()
-        || material
-            .product_instance_id()
-            .map_err(|_| CoreSbfError::Reference)?
-            .to_bytes()
-            != product_id
-        || instance.result_domain_id().to_bytes() != result_domain_id
-        || state.identity.result_domain.to_bytes() != result_domain_id
-        || instance.capacity_profile_id() != terms.capacity_profile_id()
-        || instance.partition_cell_count() != u32::from(domain.outcome_count())
-        || instance.partition_cell_count() != terms.partition_cell_count()
+    let product = project_core_product_v2(runtime)?;
+    material
+        .authenticate_product_record(
+            SourceContentId::new(runtime.product_record.content_digest.to_bytes())
+                .map_err(|_| CoreSbfError::Reference)?,
+        )
+        .map_err(|_| CoreSbfError::Reference)?;
+    if runtime.product_record.content_digest.to_bytes() != state.identity.product_record.to_bytes()
+        || runtime.product_id.to_bytes() != state.identity.product_id.to_bytes()
     {
         return Err(CoreSbfError::Reference);
     }
-    let product = Product {
-        product_id: nonzero_identity(product_id)?,
-        result_domain: nonzero_identity(result_domain_id)?,
-        claim_basis: nonzero_identity(instance.claim_basis_id().to_bytes())?,
-        capacity_profile: nonzero_identity(instance.capacity_profile_id().content_id().to_bytes())?,
-        compiler_release: nonzero_identity(terms.semantic_release_id().to_bytes())?,
-        outcome_count: u32::from(domain.outcome_count()),
-    };
 
     let source_account = account(accounts, SOURCE_STATE)?;
     let source_data = source_account
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Reference)?;
     let source =
-        SourceResolutionStateV1::decode(&source_data).map_err(|_| CoreSbfError::Reference)?;
+        SourceResolutionStateV2::decode(&source_data).map_err(|_| CoreSbfError::Reference)?;
     authenticate_source_state(frame.target_program().key, source_account, source)?;
-    if !matches!(
-        source.phase(),
-        SourceResolutionPhaseV1::Resolved | SourceResolutionPhaseV1::FailureCommitted
-    ) || source.market() != frame.market().key.to_bytes()
+    let expected_receipt_kind = match source.phase() {
+        SourceResolutionPhaseV1::Resolved => ResolutionCoreReceiptKindV1::TerminalSuccess,
+        SourceResolutionPhaseV1::FailureCommitted => ResolutionCoreReceiptKindV1::TerminalFailure,
+        _ => return Err(CoreSbfError::Reference),
+    };
+    if request.receipt_kind != expected_receipt_kind
+        || source.market() != frame.market().key.to_bytes()
         || source.generation() != state.identity.generation
         || source.material_id().to_bytes() != request.source_material
     {
         return Err(CoreSbfError::Reference);
     }
     let decision = source
-        .decision(domain.outcome_count())
+        .decision(product.outcome_count)
         .map_err(|_| CoreSbfError::Transition)?;
     if decision.terminal_sequence() != request.receipt_sequence {
         return Err(CoreSbfError::Transition);
@@ -628,6 +751,7 @@ fn authenticate_admit_projection(
         request,
         state,
         decision.selector(),
+        product.outcome_count,
         &certificate_data,
         &rent,
     )?;
@@ -652,16 +776,17 @@ fn authenticate_terminal_certificate(
     certificate_account: &AccountInfo<'_>,
     request: ResolutionRoleRequestV1,
     state: CoreState,
-    selector: u8,
+    selector: u32,
+    outcome_count: u32,
     bytes: &[u8],
     rent: &Rent,
-) -> Result<ResolutionCertificateV1, CoreSbfError> {
+) -> Result<ResolutionCertificateV2, CoreSbfError> {
     let (expected_kind, kind_tag) = match request.receipt_kind {
         ResolutionCoreReceiptKindV1::TerminalSuccess => {
-            (ResolutionCertificateKindV1::ResolutionSuccess, 1_u8)
+            (ResolutionCertificateKindV2::ResolutionSuccess, 1_u8)
         }
         ResolutionCoreReceiptKindV1::TerminalFailure => {
-            (ResolutionCertificateKindV1::ResolutionFailure, 4_u8)
+            (ResolutionCertificateKindV2::ResolutionFailure, 4_u8)
         }
         ResolutionCoreReceiptKindV1::None | ResolutionCoreReceiptKindV1::Closure => {
             return Err(CoreSbfError::Reference);
@@ -669,23 +794,29 @@ fn authenticate_terminal_certificate(
     };
     if certificate_account.key.to_bytes() != request.receipt
         || certificate_account.owner != resolution_program
-        || certificate_account.data_len() != RESOLUTION_CERTIFICATE_BYTES
-        || !rent.is_exempt(certificate_account.lamports(), RESOLUTION_CERTIFICATE_BYTES)
+        || certificate_account.data_len() != RESOLUTION_CERTIFICATE_BYTES_V2
+        || !rent.is_exempt(
+            certificate_account.lamports(),
+            RESOLUTION_CERTIFICATE_BYTES_V2,
+        )
     {
         return Err(CoreSbfError::Reference);
     }
     let certificate =
-        ResolutionCertificateV1::decode(bytes).map_err(|_| CoreSbfError::Reference)?;
+        ResolutionCertificateV2::decode(bytes).map_err(|_| CoreSbfError::Reference)?;
     if certificate.kind != expected_kind
         || certificate.market != state.identity.market_id.to_bytes()
         || certificate.source_material != request.source_material
-        || certificate.product != state.identity.product_id.to_bytes()
+        || certificate.product_record_digest != state.identity.product_record.to_bytes()
         || certificate.receipt_account != certificate_account.key.to_bytes()
         || certificate.generation != state.identity.generation
-        || certificate.selector != u32::from(selector)
+        || certificate.selector != selector
     {
         return Err(CoreSbfError::Reference);
     }
+    certificate
+        .validate_terminal_product(state.identity.product_record.to_bytes(), outcome_count)
+        .map_err(|_| CoreSbfError::Reference)?;
     let kind = [kind_tag];
     let sequence = request.receipt_sequence.to_le_bytes();
     let expected = Pubkey::find_program_address(
@@ -780,7 +911,7 @@ fn authenticate_live_poststate(
 ) -> Result<(), CoreSbfError> {
     let source_account = account(accounts, SOURCE_STATE)?;
     if source_account.owner != frame.target_program().key
-        || source_account.data_len() != SOURCE_RESOLUTION_STATE_BYTES
+        || source_account.data_len() != SOURCE_RESOLUTION_STATE_BYTES_V2
     {
         return Err(CoreSbfError::ChildAck);
     }
@@ -788,7 +919,7 @@ fn authenticate_live_poststate(
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
     let source =
-        SourceResolutionStateV1::decode(&source_data).map_err(|_| CoreSbfError::ChildAck)?;
+        SourceResolutionStateV2::decode(&source_data).map_err(|_| CoreSbfError::ChildAck)?;
     authenticate_source_state(frame.target_program().key, source_account, source)?;
     if source.market() != frame.market().key.to_bytes()
         || source.generation() != state.identity.generation
@@ -902,13 +1033,13 @@ fn authenticate_close_poststate(
         .map_err(|_| CoreSbfError::ChildAck)?;
     if closure_account.owner != frame.target_program().key
         || closure_account.key.to_bytes() != request.receipt
-        || closure_account.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES
-        || !rent.is_exempt(closure_account.lamports(), SOURCE_CLOSURE_RECEIPT_BYTES)
+        || closure_account.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES_V2
+        || !rent.is_exempt(closure_account.lamports(), SOURCE_CLOSURE_RECEIPT_BYTES_V2)
     {
         return Err(CoreSbfError::ChildAck);
     }
     let closure =
-        SourceClosureReceiptV1::decode(&closure_data).map_err(|_| CoreSbfError::ChildAck)?;
+        SourceClosureReceiptV2::decode(&closure_data).map_err(|_| CoreSbfError::ChildAck)?;
     let terminal_receipt = state
         .terminal_receipt
         .ok_or(CoreSbfError::Transition)?
@@ -936,7 +1067,7 @@ fn authenticate_close_poststate(
     let sequence = request.receipt_sequence.to_le_bytes();
     if Pubkey::find_program_address(
         &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V1,
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
             account(accounts, SOURCE_STATE)?.key.as_ref(),
             &sequence,
         ],
@@ -952,7 +1083,7 @@ fn authenticate_close_poststate(
 fn authenticate_source_state(
     resolution_program: &Pubkey,
     account: &AccountInfo<'_>,
-    state: SourceResolutionStateV1,
+    state: SourceResolutionStateV2,
 ) -> Result<(), CoreSbfError> {
     let seeds = state.pda_seeds();
     let bump = [seeds.bump()];
@@ -1093,4 +1224,4 @@ fn account<'accounts, 'info>(
     accounts.get(index).ok_or(CoreSbfError::AccountFrame)
 }
 
-const _: usize = SOURCE_MATERIAL_BYTES;
+const _: usize = SOURCE_MATERIAL_V2_BYTES;

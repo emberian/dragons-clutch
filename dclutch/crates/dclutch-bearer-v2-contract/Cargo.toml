@@ -9,11 +9,10 @@ description = "Basis-vector specialization of dClutch Rational Representation V2
 [dependencies]
 dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 
 [dev-dependencies]
 dclutch-token-svm = { path = "../dclutch-token-svm" }
-
-[workspace]
 
 [lints.rust]
 missing_docs = "deny"

@@ -11,21 +11,29 @@ use core::convert::TryInto;
 
 use super::v2::{AccountInput, AccountPermission, FixedRole};
 
-/// Canonical runtime-tail effect-program magic.
-pub const MAGIC: [u8; 4] = *b"DCE3";
-/// Finalized-record schema label for runtime-tail effect programs.
-pub const SCHEMA_RELEASE_PREIMAGE: &[u8] = b"dclutch/schema/effect-program-v3";
+/// Safe, allocation-free typed EffectProgram V3 artifact encoder.
+pub mod encode;
+
+/// Canonical runtime-tail effect-program successor magic.
+pub const MAGIC: [u8; 4] = *b"DCE4";
+/// Finalized-record schema label for the variable ordered receipt-dependency
+/// table. The distinct release prevents a singular-dependency artifact from
+/// being accepted under plural semantics.
+pub const SCHEMA_RELEASE_PREIMAGE: &[u8] =
+    b"dclutch/schema/effect-program-v4-ordered-receipt-dependencies-v1";
 /// SHA-256 of [`SCHEMA_RELEASE_PREIMAGE`].
 pub const SCHEMA_RELEASE_ID: [u8; 32] = [
-    0x94, 0x74, 0xe6, 0x61, 0xc4, 0xa0, 0x03, 0x2e, 0xd4, 0x5c, 0x36, 0xd0, 0x08, 0x7e, 0xb0, 0x7a,
-    0xb4, 0x30, 0xa9, 0xc4, 0xc9, 0xa2, 0xd2, 0x2f, 0xba, 0xcd, 0xd0, 0x99, 0x5e, 0x58, 0x96, 0x03,
+    0x0b, 0x58, 0x3a, 0xe2, 0xe3, 0x07, 0x35, 0xbf, 0xcd, 0x83, 0x79, 0xe8, 0xf4, 0x42, 0x66, 0x85,
+    0x9e, 0xdb, 0x7b, 0xb7, 0x12, 0xe6, 0x80, 0x34, 0x7d, 0x94, 0xc5, 0x79, 0x87, 0xe7, 0x1f, 0x18,
 ];
 /// Canonical runtime-tail effect-program version.
-pub const VERSION: u8 = 3;
+pub const VERSION: u8 = 4;
 /// Exact V3 header width.
 pub const HEADER_BYTES: usize = 32;
 /// Exact fixed-role route width.
-pub const ROUTE_BYTES: usize = 24;
+pub const ROUTE_BYTES: usize = 32;
+/// Exact width of one ordered prior-child receipt dependency entry.
+pub const RECEIPT_DEPENDENCY_BYTES: usize = 8;
 /// Exact effect-operation width.
 pub const OPERATION_BYTES: usize = 24;
 
@@ -38,6 +46,14 @@ const OP_WRITE_REQUEST_U16: u8 = 5;
 const OP_WRITE_REQUEST_U32: u8 = 6;
 const OP_WRITE_REQUEST_U64: u8 = 7;
 const OP_WRITE_REQUEST_IDENTITY: u8 = 8;
+const OP_WRITE_SCALAR_AFFINE: u8 = 9;
+const OP_WRITE_IDENTITY_AFFINE: u8 = 10;
+const OP_WRITE_DATA_U8: u8 = 11;
+const OP_WRITE_DATA_U16: u8 = 12;
+const OP_WRITE_DATA_U32: u8 = 13;
+const OP_WRITE_DATA_U8_AFFINE: u8 = 14;
+const OP_WRITE_DATA_U16_AFFINE: u8 = 15;
+const OP_WRITE_DATA_U32_AFFINE: u8 = 16;
 
 const MODE_ACCOUNT_A_ITEM: u8 = 1 << 0;
 const MODE_ACCOUNT_B_ITEM: u8 = 1 << 1;
@@ -65,6 +81,8 @@ pub enum Error {
     EmptyProgram,
     /// A route role, kind, enable mode, or geometry was noncanonical.
     InvalidRoute,
+    /// A receipt dependency was forward, cross-item, disabled, or noncanonical.
+    InvalidReceiptDependency,
     /// An opcode or fixed/item mode was unsupported.
     UnknownOperation,
     /// Active and inactive operation fields were noncanonical.
@@ -113,13 +131,61 @@ pub struct RouteV3 {
     role: FixedRole,
     kind: RouteKindV3,
     enabled_if_nonzero: bool,
+    borrows_witness: bool,
     enable_common_scalar: u16,
     fixed_account_start: u16,
     fixed_account_count: u16,
     item_account_start: u16,
     item_account_count: u16,
+    witness_range_common_scalar: u16,
     fixed_request_bytes: u32,
     item_request_bytes: u32,
+    receipt_dependency_start: u16,
+    receipt_dependency_count: u16,
+    compatibility_receipt_dependency: Option<RouteReceiptDependencyV3>,
+}
+
+/// One descriptor-authenticated dependency on an exact earlier child receipt.
+///
+/// Runtime resolution additionally binds the exact producer invocation,
+/// selected program, execution context, request kind/digest, and receipt
+/// kind/width retained by the common Trading receipt bank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RouteReceiptDependencyV3 {
+    producer_role: FixedRole,
+    producer_route: u16,
+    expected_receipt_bytes: u16,
+}
+
+impl RouteReceiptDependencyV3 {
+    /// Construct one dependency. Full backward/geometry checks occur when the
+    /// complete EffectProgram is hostile-decoded.
+    pub const fn new(
+        producer_role: FixedRole,
+        producer_route: u16,
+        expected_receipt_bytes: u16,
+    ) -> Self {
+        Self {
+            producer_role,
+            producer_route,
+            expected_receipt_bytes,
+        }
+    }
+
+    /// Expected producer role; the adapter resolves its current release-selected program.
+    pub const fn producer_role(self) -> FixedRole {
+        self.producer_role
+    }
+
+    /// Strictly earlier route ordinal.
+    pub const fn producer_route(self) -> u16 {
+        self.producer_route
+    }
+
+    /// Exact producer return-data width appended to the consumer request.
+    pub const fn expected_receipt_bytes(self) -> u16 {
+        self.expected_receipt_bytes
+    }
 }
 
 impl RouteV3 {
@@ -163,6 +229,22 @@ impl RouteV3 {
         self.item_request_bytes
     }
 
+    /// Whether the invocation appends an authenticated slice of the family request.
+    pub const fn borrows_witness(self) -> bool {
+        self.borrows_witness
+    }
+
+    /// Number of exact prior receipts appended in declared table order.
+    pub const fn receipt_dependency_count(self) -> u16 {
+        self.receipt_dependency_count
+    }
+
+    /// Compatibility view for capabilities with zero or one dependency.
+    /// Plural consumers must use [`ProgramV3::route_receipt_dependency`].
+    pub const fn receipt_dependency(self) -> Option<RouteReceiptDependencyV3> {
+        self.compatibility_receipt_dependency
+    }
+
     fn enabled(self, scalars: &[u64]) -> Result<bool> {
         if self.enabled_if_nonzero {
             Ok(*scalars
@@ -200,6 +282,107 @@ pub struct ResolvedInvocationV3 {
     pub request_offset: usize,
     /// Exact request width for this invocation.
     pub request_len: usize,
+    /// Optional exact top-level family-request suffix appended after the IR-owned request.
+    pub borrowed_witness: Option<BorrowedWitnessV3>,
+    /// Exact ordered prior receipts selected in this invocation's item scope.
+    pub receipt_dependencies: ResolvedReceiptDependenciesV3,
+    /// Compatibility view for a route with exactly one dependency.
+    pub receipt_dependency: Option<ResolvedReceiptDependencyV3>,
+}
+
+/// Coordinates of one route's ordered dependency subtable after invocation
+/// scope has been resolved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedReceiptDependenciesV3 {
+    first: u16,
+    count: u16,
+    producer_invocation: u32,
+    expected_receipt_bytes: u32,
+}
+
+impl ResolvedReceiptDependenciesV3 {
+    /// Empty dependency view for tests and adapters constructing a route that
+    /// is known not to append prior receipts.
+    pub const fn empty() -> Self {
+        Self {
+            first: 0,
+            count: 0,
+            producer_invocation: 0,
+            expected_receipt_bytes: 0,
+        }
+    }
+
+    /// Number of ordered dependency entries.
+    pub const fn len(self) -> u16 {
+        self.count
+    }
+
+    /// Whether this route appends no prior receipt.
+    pub const fn is_empty(self) -> bool {
+        self.count == 0
+    }
+
+    /// Exact sum of all receipt widths in declared append order.
+    pub const fn expected_receipt_bytes(self) -> u32 {
+        self.expected_receipt_bytes
+    }
+}
+
+/// Runtime-resolved receipt dependency for one child invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolvedReceiptDependencyV3 {
+    /// Expected producer role.
+    pub producer_role: FixedRole,
+    /// Strictly earlier producer route.
+    pub producer_route: u16,
+    /// Producer invocation: zero for once/affine, same item for each-item.
+    pub producer_invocation: u32,
+    /// Exact raw return-data width.
+    pub expected_receipt_bytes: u16,
+}
+
+/// Exact borrowed witness range in the authenticated top-level family request.
+///
+/// The EffectProgram owns whether a route may borrow a witness and which two
+/// common scalar registers provide `(offset, length)`. RequestProfile and the
+/// transition own those scalar values. This lets a typed child request append
+/// a variable proof without making Product tail width a second proof-count
+/// authority or letting the family adapter fabricate child instruction data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BorrowedWitnessV3 {
+    source_offset: usize,
+    len: usize,
+}
+
+impl BorrowedWitnessV3 {
+    /// Absolute offset within the family request (after the common hot envelope).
+    pub const fn source_offset(self) -> usize {
+        self.source_offset
+    }
+
+    /// Exact borrowed byte width, which may be zero for an empty proof.
+    pub const fn len(self) -> usize {
+        self.len
+    }
+
+    /// Whether the authenticated suffix is empty, as for a single-leaf proof.
+    pub const fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Borrow the exact trailing range, refusing overflow, truncation, or padding.
+    pub fn slice(self, family_request: &[u8]) -> Result<&[u8]> {
+        let end = self
+            .source_offset
+            .checked_add(self.len)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if end != family_request.len() {
+            return Err(Error::InvalidCoordinate);
+        }
+        family_request
+            .get(self.source_offset..end)
+            .ok_or(Error::InvalidCoordinate)
+    }
 }
 
 /// One fully register- and item-resolved local effect.
@@ -231,6 +414,33 @@ pub enum ResolvedEffectV3 {
         offset: u32,
         /// Exact identity.
         value: [u8; 32],
+    },
+    /// Write one scalar narrowed to an exact byte into authenticated account data.
+    WriteU8 {
+        /// Expanded account coordinate.
+        account: usize,
+        /// Byte offset.
+        offset: u32,
+        /// Exact narrowed value.
+        value: u8,
+    },
+    /// Write one scalar narrowed to an exact little-endian `u16`.
+    WriteU16 {
+        /// Expanded account coordinate.
+        account: usize,
+        /// Byte offset.
+        offset: u32,
+        /// Exact narrowed value.
+        value: u16,
+    },
+    /// Write one scalar narrowed to an exact little-endian `u32`.
+    WriteU32 {
+        /// Expanded account coordinate.
+        account: usize,
+        /// Byte offset.
+        offset: u32,
+        /// Exact narrowed value.
+        value: u32,
     },
     /// Require one projected lamport balance exactly.
     RequireLamportsEq {
@@ -281,6 +491,7 @@ impl RequestValueV3 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProgramV3<'a> {
     route_count: u16,
+    receipt_dependency_count: u16,
     fixed_operations: u16,
     item_operations: u16,
     fixed_accounts: u16,
@@ -289,6 +500,7 @@ pub struct ProgramV3<'a> {
     item_scalar_stride: u16,
     common_identities: u16,
     item_identity_stride: u16,
+    dependency_start: usize,
     template_start: usize,
     bytes: &'a [u8],
 }
@@ -311,6 +523,19 @@ impl<'a> ProgramV3<'a> {
 
     /// Hostile-decode and prevalidate one exact V3 program.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let program = Self::decode_shape(bytes)?;
+        program.validate_shape()?;
+        Ok(program)
+    }
+
+    /// Parse only the fixed header and the derived section offsets.
+    ///
+    /// Every counter this view exposes is read here, from these bytes, on every
+    /// path. `decode` runs this and then `validate_shape`; the sealed path runs
+    /// this alone, because `validate_shape` is a pure function of bytes that a
+    /// seal has already pinned by their own digest. Nothing that shapes the
+    /// view is ever taken from a seal.
+    pub(crate) fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -320,7 +545,7 @@ impl<'a> ProgramV3<'a> {
         if byte(bytes, 4)? != VERSION || byte(bytes, 5)? != 0 {
             return Err(Error::UnsupportedProfile);
         }
-        if bytes.get(24..32) != Some([0_u8; 8].as_slice()) {
+        if bytes.get(26..32) != Some([0_u8; 6].as_slice()) {
             return Err(Error::NonCanonicalReserved);
         }
         let route_count = read_u16(bytes, 6)?;
@@ -332,6 +557,7 @@ impl<'a> ProgramV3<'a> {
         let item_scalar_stride = read_u16(bytes, 18)?;
         let common_identities = read_u16(bytes, 20)?;
         let item_identity_stride = read_u16(bytes, 22)?;
+        let receipt_dependency_count = read_u16(bytes, 24)?;
         if fixed_accounts == 0
             || (common_scalars == 0
                 && item_scalar_stride == 0
@@ -343,10 +569,17 @@ impl<'a> ProgramV3<'a> {
         let operations = usize::from(fixed_operations)
             .checked_add(usize::from(item_operations))
             .ok_or(Error::InvalidLength)?;
-        let template_start = HEADER_BYTES
+        let dependency_start = HEADER_BYTES
             .checked_add(
                 usize::from(route_count)
                     .checked_mul(ROUTE_BYTES)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .ok_or(Error::InvalidLength)?;
+        let template_start = dependency_start
+            .checked_add(
+                usize::from(receipt_dependency_count)
+                    .checked_mul(RECEIPT_DEPENDENCY_BYTES)
                     .ok_or(Error::InvalidLength)?,
             )
             .and_then(|value| value.checked_add(operations.checked_mul(OPERATION_BYTES)?))
@@ -356,6 +589,7 @@ impl<'a> ProgramV3<'a> {
         }
         let program = Self {
             route_count,
+            receipt_dependency_count,
             fixed_operations,
             item_operations,
             fixed_accounts,
@@ -364,14 +598,38 @@ impl<'a> ProgramV3<'a> {
             item_scalar_stride,
             common_identities,
             item_identity_stride,
+            dependency_start,
             template_start,
             bytes,
         };
+        Ok(program)
+    }
+
+    /// Sweep every route, receipt dependency and operation of this program.
+    ///
+    /// This is the expensive half of `decode` and the only half a sealed view
+    /// skips. It reads nothing but `self.bytes`, so "it accepted these bytes
+    /// once" and "it accepts these bytes now" are the same proposition.
+    pub(crate) fn validate_shape(self) -> Result<()> {
+        let program = self;
+        let bytes = self.bytes;
+        let route_count = self.route_count;
+        let receipt_dependency_count = self.receipt_dependency_count;
+        let fixed_operations = self.fixed_operations;
+        let item_operations = self.item_operations;
+        let template_start = self.template_start;
         let mut template_bytes = 0_usize;
+        let mut dependency_cursor = 0_u16;
         let mut route = 0_u16;
         while route < route_count {
             let decoded = program.route(route)?;
-            decoded.validate(program)?;
+            if decoded.receipt_dependency_start != dependency_cursor {
+                return Err(Error::InvalidReceiptDependency);
+            }
+            decoded.validate(program, route)?;
+            dependency_cursor = dependency_cursor
+                .checked_add(decoded.receipt_dependency_count)
+                .ok_or(Error::InvalidReceiptDependency)?;
             template_bytes = template_bytes
                 .checked_add(usize_from_u32(decoded.fixed_request_bytes)?)
                 .and_then(|value| {
@@ -379,6 +637,9 @@ impl<'a> ProgramV3<'a> {
                 })
                 .ok_or(Error::InvalidLength)?;
             route = route.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        if dependency_cursor != receipt_dependency_count {
+            return Err(Error::InvalidReceiptDependency);
         }
         if template_start.checked_add(template_bytes) != Some(bytes.len()) {
             return Err(Error::InvalidLength);
@@ -397,7 +658,7 @@ impl<'a> ProgramV3<'a> {
             program.require_nonoverlap(true, operation, decoded)?;
             operation = operation.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        Ok(program)
+        Ok(())
     }
 
     /// Fixed account-prefix width.
@@ -435,6 +696,11 @@ impl<'a> ProgramV3<'a> {
         self.route_count
     }
 
+    /// Total descriptor-authenticated dependency entries across all routes.
+    pub const fn receipt_dependency_count(self) -> u16 {
+        self.receipt_dependency_count
+    }
+
     /// Fixed operation count.
     pub const fn fixed_operation_count(self) -> u16 {
         self.fixed_operations
@@ -462,7 +728,77 @@ impl<'a> ProgramV3<'a> {
                     .ok_or(Error::InvalidLength)?,
             )
             .ok_or(Error::InvalidLength)?;
-        RouteV3::decode(self.bytes, offset)
+        let mut route = RouteV3::decode(self.bytes, offset)?;
+        route.compatibility_receipt_dependency = if route.receipt_dependency_count == 1 {
+            Some(self.receipt_dependency(route.receipt_dependency_start)?)
+        } else {
+            None
+        };
+        Ok(route)
+    }
+
+    /// Decode one dependency in one route's declared append order.
+    pub fn route_receipt_dependency(
+        self,
+        route_index: u16,
+        dependency_index: u16,
+    ) -> Result<RouteReceiptDependencyV3> {
+        let route = self.route(route_index)?;
+        if dependency_index >= route.receipt_dependency_count {
+            return Err(Error::InvalidCoordinate);
+        }
+        let absolute = route
+            .receipt_dependency_start
+            .checked_add(dependency_index)
+            .ok_or(Error::InvalidReceiptDependency)?;
+        self.receipt_dependency(absolute)
+    }
+
+    /// Resolve one dependency of an already resolved invocation.
+    pub fn resolved_receipt_dependency(
+        self,
+        dependencies: ResolvedReceiptDependenciesV3,
+        dependency_index: u16,
+    ) -> Result<ResolvedReceiptDependencyV3> {
+        if dependency_index >= dependencies.count {
+            return Err(Error::InvalidCoordinate);
+        }
+        let absolute = dependencies
+            .first
+            .checked_add(dependency_index)
+            .ok_or(Error::InvalidReceiptDependency)?;
+        let dependency = self.receipt_dependency(absolute)?;
+        Ok(ResolvedReceiptDependencyV3 {
+            producer_role: dependency.producer_role,
+            producer_route: dependency.producer_route,
+            producer_invocation: dependencies.producer_invocation,
+            expected_receipt_bytes: dependency.expected_receipt_bytes,
+        })
+    }
+
+    /// Borrow the exact fixed and repeated-item request templates owned by one route.
+    ///
+    /// These are authenticated program bytes, before register projection.  The
+    /// accessor deliberately exposes no mutable view: admission layers may
+    /// hostile-decode the child ABI skeleton while [`project_atomic`] remains
+    /// the sole operation which patches runtime fields.
+    pub fn route_template(self, index: u16) -> Result<(&'a [u8], &'a [u8])> {
+        let route = self.route(index)?;
+        let start = self.route_template_start(index)?;
+        let fixed_len = usize_from_u32(route.fixed_request_bytes)?;
+        let item_len = usize_from_u32(route.item_request_bytes)?;
+        let fixed_end = start.checked_add(fixed_len).ok_or(Error::InvalidLength)?;
+        let item_end = fixed_end
+            .checked_add(item_len)
+            .ok_or(Error::InvalidLength)?;
+        Ok((
+            self.bytes
+                .get(start..fixed_end)
+                .ok_or(Error::InvalidLength)?,
+            self.bytes
+                .get(fixed_end..item_end)
+                .ok_or(Error::InvalidLength)?,
+        ))
     }
 
     /// Exact expanded account-vector width.
@@ -535,6 +871,19 @@ impl<'a> ProgramV3<'a> {
         let route = self.route(route_index)?;
         let route_request_start = self.route_request_start(route_index, tail_count)?;
         let tail_accounts_start = usize::from(self.fixed_accounts);
+        let borrowed_witness = route.resolve_borrowed_witness(scalars)?;
+        let receipt_dependencies = self.resolve_receipt_dependencies(
+            route_index,
+            invocation_index,
+            tail_count,
+            scalars,
+            identities,
+        )?;
+        let receipt_dependency = if receipt_dependencies.count == 1 {
+            Some(self.resolved_receipt_dependency(receipt_dependencies, 0)?)
+        } else {
+            None
+        };
         match route.kind {
             RouteKindV3::Once => Ok(ResolvedInvocationV3 {
                 role: route.role,
@@ -548,6 +897,9 @@ impl<'a> ProgramV3<'a> {
                 repeated_item_count: 0,
                 request_offset: route_request_start,
                 request_len: usize_from_u32(route.fixed_request_bytes)?,
+                borrowed_witness,
+                receipt_dependencies,
+                receipt_dependency,
             }),
             RouteKindV3::AffineOnce => Ok(ResolvedInvocationV3 {
                 role: route.role,
@@ -563,6 +915,9 @@ impl<'a> ProgramV3<'a> {
                 repeated_item_count: tail_count,
                 request_offset: route_request_start,
                 request_len: route_expanded_request_bytes(route, tail_count)?,
+                borrowed_witness,
+                receipt_dependencies,
+                receipt_dependency,
             }),
             RouteKindV3::Each => {
                 let item_account_start = item_index(
@@ -592,9 +947,49 @@ impl<'a> ProgramV3<'a> {
                     repeated_item_count: 1,
                     request_offset,
                     request_len,
+                    borrowed_witness,
+                    receipt_dependencies,
+                    receipt_dependency,
                 })
             }
         }
+    }
+
+    fn resolve_receipt_dependencies(
+        self,
+        route_index: u16,
+        invocation_index: u32,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+    ) -> Result<ResolvedReceiptDependenciesV3> {
+        let route = self.route(route_index)?;
+        let producer_invocation = match route.kind {
+            RouteKindV3::Once | RouteKindV3::AffineOnce => 0,
+            RouteKindV3::Each => invocation_index,
+        };
+        let mut dependency_index = 0_u16;
+        let mut expected_receipt_bytes = 0_u32;
+        while dependency_index < route.receipt_dependency_count {
+            let dependency = self.route_receipt_dependency(route_index, dependency_index)?;
+            let producer_count =
+                self.invocation_count(dependency.producer_route, tail_count, scalars, identities)?;
+            if producer_invocation >= producer_count {
+                return Err(Error::InvalidReceiptDependency);
+            }
+            expected_receipt_bytes = expected_receipt_bytes
+                .checked_add(u32::from(dependency.expected_receipt_bytes))
+                .ok_or(Error::ArithmeticOverflow)?;
+            dependency_index = dependency_index
+                .checked_add(1)
+                .ok_or(Error::InvalidReceiptDependency)?;
+        }
+        Ok(ResolvedReceiptDependenciesV3 {
+            first: route.receipt_dependency_start,
+            count: route.receipt_dependency_count,
+            producer_invocation,
+            expected_receipt_bytes,
+        })
     }
 
     /// Resolve one fixed effect after exact expanded-bank validation.
@@ -643,15 +1038,35 @@ impl<'a> ProgramV3<'a> {
         } else {
             usize::from(index)
         };
-        let offset = HEADER_BYTES
+        Operation::decode(self.bytes, self.operation_offset(ordinal)?)
+    }
+
+    /// Byte offset of the operation table.
+    fn operations_start(self) -> Result<usize> {
+        HEADER_BYTES
             .checked_add(
                 usize::from(self.route_count)
                     .checked_mul(ROUTE_BYTES)
                     .ok_or(Error::InvalidLength)?,
             )
-            .and_then(|value| value.checked_add(ordinal.checked_mul(OPERATION_BYTES)?))
-            .ok_or(Error::InvalidLength)?;
-        Operation::decode(self.bytes, offset)
+            .and_then(|value| {
+                value.checked_add(
+                    usize::from(self.receipt_dependency_count)
+                        .checked_mul(RECEIPT_DEPENDENCY_BYTES)?,
+                )
+            })
+            .ok_or(Error::InvalidLength)
+    }
+
+    /// Byte offset of one operation by its table ordinal.
+    fn operation_offset(self, ordinal: usize) -> Result<usize> {
+        self.operations_start()?
+            .checked_add(
+                ordinal
+                    .checked_mul(OPERATION_BYTES)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .ok_or(Error::InvalidLength)
     }
 
     fn require_register_widths(
@@ -704,28 +1119,118 @@ impl<'a> ProgramV3<'a> {
         Ok(start)
     }
 
+    /// Refuse any static write range that overlaps an earlier operation's.
+    ///
+    /// The pairwise test is inherently quadratic, but re-decoding and
+    /// re-validating every earlier operation for each pair made it quadratic in
+    /// *full decodes*. Each earlier operation was already decoded and validated
+    /// by this same loop before it became a left operand, so a comparison needs
+    /// only the opcode plus the one or two fields its ranges are built from.
+    /// An operation with no static range cannot overlap anything, so a right
+    /// operand without one skips the sweep entirely.
     fn require_nonoverlap(self, item_body: bool, right_index: u16, right: Operation) -> Result<()> {
+        let right_data = right.static_data_range();
+        let right_request = right.static_request_range();
+        if right_data.is_none() && right_request.is_none() {
+            return Ok(());
+        }
+        let base = self.operations_start()?;
+        let ordinal_base = if item_body {
+            usize::from(self.fixed_operations)
+        } else {
+            0
+        };
         let mut left_index = 0_u16;
         while left_index < right_index {
-            let left = self.operation(item_body, left_index)?;
-            let data_overlap = match (right.static_data_range(), left.static_data_range()) {
-                (Some((ra, rs, rw)), Some((la, ls, lw))) => ra == la && overlaps(rs, rw, ls, lw)?,
-                _ => false,
-            };
-            if data_overlap {
+            let offset = base
+                .checked_add(
+                    ordinal_base
+                        .checked_add(usize::from(left_index))
+                        .and_then(|ordinal| ordinal.checked_mul(OPERATION_BYTES))
+                        .ok_or(Error::InvalidLength)?,
+                )
+                .ok_or(Error::InvalidLength)?;
+            let opcode = byte(self.bytes, offset)?;
+            if let Some((right_account, right_start, right_width)) = right_data
+                && is_static_data_write(opcode)
+                && read_u16(self.bytes, add(offset, 2)?)? == right_account
+                && overlaps(
+                    right_start,
+                    right_width,
+                    read_u32(self.bytes, add(offset, 8)?)?,
+                    write_width_of(opcode),
+                )?
+            {
                 return Err(Error::OverlappingWrites);
             }
-            let request_overlap = match (right.static_request_range(), left.static_request_range())
+            if let Some((right_route, right_start, right_width)) = right_request
+                && is_request_write(opcode)
+                && read_u16(self.bytes, add(offset, 16)?)? == right_route
+                && overlaps(
+                    right_start,
+                    right_width,
+                    read_u32(self.bytes, add(offset, 8)?)?,
+                    write_width_of(opcode),
+                )?
             {
-                (Some((rr, rs, rw)), Some((lr, ls, lw))) => rr == lr && overlaps(rs, rw, ls, lw)?,
-                _ => false,
-            };
-            if request_overlap {
                 return Err(Error::OverlappingWrites);
             }
             left_index = left_index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         Ok(())
+    }
+}
+
+const fn is_data_write(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        OP_WRITE_SCALAR
+            | OP_WRITE_IDENTITY
+            | OP_WRITE_SCALAR_AFFINE
+            | OP_WRITE_IDENTITY_AFFINE
+            | OP_WRITE_DATA_U8
+            | OP_WRITE_DATA_U16
+            | OP_WRITE_DATA_U32
+            | OP_WRITE_DATA_U8_AFFINE
+            | OP_WRITE_DATA_U16_AFFINE
+            | OP_WRITE_DATA_U32_AFFINE
+    )
+}
+
+const fn is_affine_data_write(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        OP_WRITE_SCALAR_AFFINE
+            | OP_WRITE_IDENTITY_AFFINE
+            | OP_WRITE_DATA_U8_AFFINE
+            | OP_WRITE_DATA_U16_AFFINE
+            | OP_WRITE_DATA_U32_AFFINE
+    )
+}
+
+const fn is_static_data_write(opcode: u8) -> bool {
+    is_data_write(opcode) && !is_affine_data_write(opcode)
+}
+
+const fn is_request_write(opcode: u8) -> bool {
+    matches!(
+        opcode,
+        OP_WRITE_REQUEST_U8
+            | OP_WRITE_REQUEST_U16
+            | OP_WRITE_REQUEST_U32
+            | OP_WRITE_REQUEST_U64
+            | OP_WRITE_REQUEST_IDENTITY
+    )
+}
+
+const fn write_width_of(opcode: u8) -> u32 {
+    match opcode {
+        OP_WRITE_REQUEST_U8 | OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => 1,
+        OP_WRITE_REQUEST_U16 | OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => 2,
+        OP_WRITE_REQUEST_U32 | OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => 4,
+        OP_WRITE_SCALAR | OP_WRITE_SCALAR_AFFINE | OP_WRITE_REQUEST_U64 => 8,
+        OP_WRITE_IDENTITY | OP_WRITE_IDENTITY_AFFINE | OP_WRITE_REQUEST_IDENTITY => 32,
+        _ => 0,
     }
 }
 
@@ -749,24 +1254,34 @@ impl RouteV3 {
             1 => true,
             _ => return Err(Error::InvalidRoute),
         };
-        if byte(bytes, add(offset, 3)?)? != 0 || read_u16(bytes, add(offset, 14)?)? != 0 {
+        let borrows_witness = match byte(bytes, add(offset, 3)?)? {
+            0 => false,
+            1 => true,
+            _ => return Err(Error::InvalidRoute),
+        };
+        if bytes.get(add(offset, 28)?..add(offset, 32)?) != Some([0_u8; 4].as_slice()) {
             return Err(Error::NonCanonicalReserved);
         }
         Ok(Self {
             role,
             kind,
             enabled_if_nonzero,
+            borrows_witness,
             enable_common_scalar: read_u16(bytes, add(offset, 4)?)?,
             fixed_account_start: read_u16(bytes, add(offset, 6)?)?,
             fixed_account_count: read_u16(bytes, add(offset, 8)?)?,
             item_account_start: read_u16(bytes, add(offset, 10)?)?,
             item_account_count: read_u16(bytes, add(offset, 12)?)?,
+            witness_range_common_scalar: read_u16(bytes, add(offset, 14)?)?,
             fixed_request_bytes: read_u32(bytes, add(offset, 16)?)?,
             item_request_bytes: read_u32(bytes, add(offset, 20)?)?,
+            receipt_dependency_start: read_u16(bytes, add(offset, 24)?)?,
+            receipt_dependency_count: read_u16(bytes, add(offset, 26)?)?,
+            compatibility_receipt_dependency: None,
         })
     }
 
-    fn validate(self, program: ProgramV3<'_>) -> Result<()> {
+    fn validate(self, program: ProgramV3<'_>, route_index: u16) -> Result<()> {
         let fixed_end = self
             .fixed_account_start
             .checked_add(self.fixed_account_count)
@@ -775,12 +1290,54 @@ impl RouteV3 {
             .item_account_start
             .checked_add(self.item_account_count)
             .ok_or(Error::InvalidRoute)?;
+        let witness_registers_valid = if self.borrows_witness {
+            self.witness_range_common_scalar
+                .checked_add(1)
+                .is_some_and(|last| last < program.common_scalars)
+                && self.kind != RouteKindV3::Each
+        } else {
+            self.witness_range_common_scalar == 0
+        };
+        let dependency_end = self
+            .receipt_dependency_start
+            .checked_add(self.receipt_dependency_count)
+            .ok_or(Error::InvalidReceiptDependency)?;
+        let mut dependency_valid = dependency_end <= program.receipt_dependency_count;
+        let mut dependency_index = 0_u16;
+        while dependency_valid && dependency_index < self.receipt_dependency_count {
+            let dependency = program.route_receipt_dependency(route_index, dependency_index)?;
+            dependency_valid = dependency.expected_receipt_bytes != 0
+                && dependency.producer_route < route_index
+                && program
+                    .route(dependency.producer_route)
+                    .is_ok_and(|producer| {
+                        producer.role == dependency.producer_role && producer.kind == self.kind
+                    });
+            let mut prior = 0_u16;
+            while dependency_valid && prior < dependency_index {
+                dependency_valid = program
+                    .route_receipt_dependency(route_index, prior)
+                    .is_ok_and(|existing| existing.producer_route != dependency.producer_route);
+                prior = prior
+                    .checked_add(1)
+                    .ok_or(Error::InvalidReceiptDependency)?;
+            }
+            dependency_index = dependency_index
+                .checked_add(1)
+                .ok_or(Error::InvalidReceiptDependency)?;
+        }
         if fixed_end > program.fixed_accounts
             || item_end > program.item_account_stride
             || (!self.enabled_if_nonzero && self.enable_common_scalar != 0)
             || (self.enabled_if_nonzero && self.enable_common_scalar >= program.common_scalars)
+            || !witness_registers_valid
+            || !dependency_valid
         {
-            return Err(Error::InvalidRoute);
+            return Err(if dependency_valid {
+                Error::InvalidRoute
+            } else {
+                Error::InvalidReceiptDependency
+            });
         }
         match self.kind {
             RouteKindV3::Once
@@ -796,6 +1353,65 @@ impl RouteV3 {
             }
             _ => Err(Error::InvalidRoute),
         }
+    }
+
+    fn resolve_borrowed_witness(self, scalars: &[u64]) -> Result<Option<BorrowedWitnessV3>> {
+        if !self.borrows_witness {
+            return Ok(None);
+        }
+        let offset_register = usize::from(self.witness_range_common_scalar);
+        let length_register = offset_register
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let source_offset = usize::try_from(
+            *scalars
+                .get(offset_register)
+                .ok_or(Error::InvalidCoordinate)?,
+        )
+        .map_err(|_| Error::ArithmeticOverflow)?;
+        let len = usize::try_from(
+            *scalars
+                .get(length_register)
+                .ok_or(Error::InvalidCoordinate)?,
+        )
+        .map_err(|_| Error::ArithmeticOverflow)?;
+        source_offset
+            .checked_add(len)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(Some(BorrowedWitnessV3 { source_offset, len }))
+    }
+}
+
+impl ProgramV3<'_> {
+    fn receipt_dependency(self, index: u16) -> Result<RouteReceiptDependencyV3> {
+        if index >= self.receipt_dependency_count {
+            return Err(Error::InvalidCoordinate);
+        }
+        let offset = self
+            .dependency_start
+            .checked_add(
+                usize::from(index)
+                    .checked_mul(RECEIPT_DEPENDENCY_BYTES)
+                    .ok_or(Error::InvalidLength)?,
+            )
+            .ok_or(Error::InvalidLength)?;
+        if byte(self.bytes, add(offset, 1)?)? != 0
+            || self.bytes.get(add(offset, 6)?..add(offset, 8)?) != Some([0_u8; 2].as_slice())
+        {
+            return Err(Error::NonCanonicalReserved);
+        }
+        let producer_role = match byte(self.bytes, offset)? {
+            0 => FixedRole::Core,
+            1 => FixedRole::Claims,
+            3 => FixedRole::Resolution,
+            4 => FixedRole::Custody,
+            _ => return Err(Error::InvalidReceiptDependency),
+        };
+        Ok(RouteReceiptDependencyV3 {
+            producer_role,
+            producer_route: read_u16(self.bytes, add(offset, 2)?)?,
+            expected_receipt_bytes: read_u16(self.bytes, add(offset, 4)?)?,
+        })
     }
 }
 
@@ -836,7 +1452,12 @@ impl Operation {
         let account_b_item = self.mode & MODE_ACCOUNT_B_ITEM != 0;
         let register_item = self.mode & MODE_REGISTER_ITEM != 0;
         let request_item = self.mode & MODE_REQUEST_ITEM != 0;
-        if item_body && self.is_data_write() && !account_a_item {
+        if item_body && self.is_data_write() && !self.is_affine_data_write() && !account_a_item {
+            return Err(Error::NonCanonicalOperation);
+        }
+        if self.is_affine_data_write()
+            && (!item_body || account_a_item || !register_item || request_item)
+        {
             return Err(Error::NonCanonicalOperation);
         }
         if item_body && self.is_request_write() != request_item {
@@ -845,11 +1466,21 @@ impl Operation {
         if !item_body && request_item {
             return Err(Error::NonCanonicalOperation);
         }
-        let identity = matches!(self.opcode, OP_WRITE_IDENTITY | OP_WRITE_REQUEST_IDENTITY);
+        let identity = matches!(
+            self.opcode,
+            OP_WRITE_IDENTITY | OP_WRITE_REQUEST_IDENTITY | OP_WRITE_IDENTITY_AFFINE
+        );
         let scalar = matches!(
             self.opcode,
             OP_TRANSFER_LAMPORTS
                 | OP_WRITE_SCALAR
+                | OP_WRITE_SCALAR_AFFINE
+                | OP_WRITE_DATA_U8
+                | OP_WRITE_DATA_U16
+                | OP_WRITE_DATA_U32
+                | OP_WRITE_DATA_U8_AFFINE
+                | OP_WRITE_DATA_U16_AFFINE
+                | OP_WRITE_DATA_U32_AFFINE
                 | OP_REQUIRE_LAMPORTS_EQ
                 | OP_WRITE_REQUEST_U8
                 | OP_WRITE_REQUEST_U16
@@ -908,8 +1539,17 @@ impl Operation {
             {
                 return Err(Error::InvalidCoordinate);
             }
-        } else if self.route != 0 || self.extra != 0 {
-            return Err(Error::NonCanonicalOperation);
+        } else {
+            if self.route != 0 {
+                return Err(Error::NonCanonicalOperation);
+            }
+            if self.is_affine_data_write() {
+                if self.extra < self.write_width() {
+                    return Err(Error::NonCanonicalOperation);
+                }
+            } else if self.extra != 0 {
+                return Err(Error::NonCanonicalOperation);
+            }
         }
         if matches!(self.opcode, OP_TRANSFER_LAMPORTS | OP_REQUIRE_LAMPORTS_EQ)
             && self.data_offset != 0
@@ -919,35 +1559,28 @@ impl Operation {
         Ok(())
     }
 
-    fn is_data_write(self) -> bool {
-        matches!(self.opcode, OP_WRITE_SCALAR | OP_WRITE_IDENTITY)
+    const fn is_data_write(self) -> bool {
+        is_data_write(self.opcode)
     }
 
-    fn is_request_write(self) -> bool {
-        matches!(
-            self.opcode,
-            OP_WRITE_REQUEST_U8
-                | OP_WRITE_REQUEST_U16
-                | OP_WRITE_REQUEST_U32
-                | OP_WRITE_REQUEST_U64
-                | OP_WRITE_REQUEST_IDENTITY
-        )
+    const fn is_affine_data_write(self) -> bool {
+        is_affine_data_write(self.opcode)
+    }
+
+    const fn is_request_write(self) -> bool {
+        is_request_write(self.opcode)
     }
 
     const fn write_width(self) -> u32 {
-        match self.opcode {
-            OP_WRITE_REQUEST_U8 => 1,
-            OP_WRITE_REQUEST_U16 => 2,
-            OP_WRITE_REQUEST_U32 => 4,
-            OP_WRITE_SCALAR | OP_WRITE_REQUEST_U64 => 8,
-            OP_WRITE_IDENTITY | OP_WRITE_REQUEST_IDENTITY => 32,
-            _ => 0,
-        }
+        write_width_of(self.opcode)
     }
 
     fn static_data_range(self) -> Option<(u16, u32, u32)> {
-        self.is_data_write()
-            .then_some((self.account_a, self.data_offset, self.write_width()))
+        (self.is_data_write() && !self.is_affine_data_write()).then_some((
+            self.account_a,
+            self.data_offset,
+            self.write_width(),
+        ))
     }
 
     fn static_request_range(self) -> Option<(u16, u32, u32)> {
@@ -1018,6 +1651,43 @@ impl Operation {
                 offset: self.data_offset,
                 value: identity()?,
             }),
+            OP_WRITE_SCALAR_AFFINE => Ok(ResolvedEffectV3::WriteScalar {
+                account: account_a,
+                offset: self.affine_data_offset(item)?,
+                value: scalar()?,
+            }),
+            OP_WRITE_IDENTITY_AFFINE => Ok(ResolvedEffectV3::WriteIdentity {
+                account: account_a,
+                offset: self.affine_data_offset(item)?,
+                value: identity()?,
+            }),
+            OP_WRITE_DATA_U8 | OP_WRITE_DATA_U8_AFFINE => Ok(ResolvedEffectV3::WriteU8 {
+                account: account_a,
+                offset: if self.is_affine_data_write() {
+                    self.affine_data_offset(item)?
+                } else {
+                    self.data_offset
+                },
+                value: u8::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+            }),
+            OP_WRITE_DATA_U16 | OP_WRITE_DATA_U16_AFFINE => Ok(ResolvedEffectV3::WriteU16 {
+                account: account_a,
+                offset: if self.is_affine_data_write() {
+                    self.affine_data_offset(item)?
+                } else {
+                    self.data_offset
+                },
+                value: u16::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+            }),
+            OP_WRITE_DATA_U32 | OP_WRITE_DATA_U32_AFFINE => Ok(ResolvedEffectV3::WriteU32 {
+                account: account_a,
+                offset: if self.is_affine_data_write() {
+                    self.affine_data_offset(item)?
+                } else {
+                    self.data_offset
+                },
+                value: u32::try_from(scalar()?).map_err(|_| Error::NarrowingOverflow)?,
+            }),
             OP_REQUIRE_LAMPORTS_EQ => Ok(ResolvedEffectV3::RequireLamportsEq {
                 account: account_a,
                 value: scalar()?,
@@ -1057,6 +1727,18 @@ impl Operation {
             }
             _ => Err(Error::UnknownOperation),
         }
+    }
+
+    fn affine_data_offset(self, item: Option<u32>) -> Result<u32> {
+        let item = item.ok_or(Error::InvalidCoordinate)?;
+        let offset = item
+            .checked_mul(self.extra)
+            .and_then(|relative| self.data_offset.checked_add(relative))
+            .ok_or(Error::ArithmeticOverflow)?;
+        offset
+            .checked_add(self.write_width())
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(offset)
     }
 }
 
@@ -1194,7 +1876,11 @@ pub fn project_atomic(
     Ok(())
 }
 
-fn initialize_requests(program: ProgramV3<'_>, tail_count: u32, output: &mut [u8]) -> Result<()> {
+pub(super) fn initialize_requests(
+    program: ProgramV3<'_>,
+    tail_count: u32,
+    output: &mut [u8],
+) -> Result<()> {
     let mut route_index = 0_u16;
     while route_index < program.route_count {
         let route = program.route(route_index)?;
@@ -1234,7 +1920,10 @@ fn initialize_requests(program: ProgramV3<'_>, tail_count: u32, output: &mut [u8
     Ok(())
 }
 
-fn project_effect(effect: ResolvedEffectV3, projection: &mut ProjectionV3<'_>) -> Result<()> {
+pub(super) fn project_effect(
+    effect: ResolvedEffectV3,
+    projection: &mut ProjectionV3<'_>,
+) -> Result<()> {
     match effect {
         ResolvedEffectV3::TransferLamports {
             source,
@@ -1289,6 +1978,15 @@ fn project_effect(effect: ResolvedEffectV3, projection: &mut ProjectionV3<'_>) -
         ResolvedEffectV3::WriteIdentity {
             account, offset, ..
         } => validate_data_write(account, offset, 32, projection),
+        ResolvedEffectV3::WriteU8 {
+            account, offset, ..
+        } => validate_data_write(account, offset, 1, projection),
+        ResolvedEffectV3::WriteU16 {
+            account, offset, ..
+        } => validate_data_write(account, offset, 2, projection),
+        ResolvedEffectV3::WriteU32 {
+            account, offset, ..
+        } => validate_data_write(account, offset, 4, projection),
         ResolvedEffectV3::RequireLamportsEq { account, value } => {
             let account = representative(projection.aliases, account)?;
             if projection.scratch_lamports.get(account).copied() == Some(value) {
@@ -1393,7 +2091,7 @@ fn alias_region_accepts(
     Ok(item == representative_item)
 }
 
-fn representative(aliases: &[usize], coordinate: usize) -> Result<usize> {
+pub(super) fn representative(aliases: &[usize], coordinate: usize) -> Result<usize> {
     let resolved = *aliases.get(coordinate).ok_or(Error::InvalidAlias)?;
     if resolved <= coordinate && resolved < aliases.len() {
         Ok(resolved)
@@ -1474,7 +2172,7 @@ fn resolved_by_ordinal(
     )
 }
 
-fn resolved_data_range(
+pub(super) fn resolved_data_range(
     effect: ResolvedEffectV3,
     aliases: &[usize],
 ) -> Result<Option<(usize, u32, u32)>> {
@@ -1485,6 +2183,15 @@ fn resolved_data_range(
         ResolvedEffectV3::WriteIdentity {
             account, offset, ..
         } => Ok(Some((representative(aliases, account)?, offset, 32))),
+        ResolvedEffectV3::WriteU8 {
+            account, offset, ..
+        } => Ok(Some((representative(aliases, account)?, offset, 1))),
+        ResolvedEffectV3::WriteU16 {
+            account, offset, ..
+        } => Ok(Some((representative(aliases, account)?, offset, 2))),
+        ResolvedEffectV3::WriteU32 {
+            account, offset, ..
+        } => Ok(Some((representative(aliases, account)?, offset, 4))),
         _ => Ok(None),
     }
 }
@@ -1544,7 +2251,7 @@ fn validate_coordinate(coordinate: u16, item_space: bool, common: u16, stride: u
     }
 }
 
-fn overlaps(left: u32, left_width: u32, right: u32, right_width: u32) -> Result<bool> {
+pub(super) fn overlaps(left: u32, left_width: u32, right: u32, right_width: u32) -> Result<bool> {
     let left_end = left
         .checked_add(left_width)
         .ok_or(Error::ArithmeticOverflow)?;
@@ -1661,6 +2368,29 @@ mod tests {
         data_offset: u32,
         route: u16,
     ) -> [u8; OPERATION_BYTES] {
+        operation_with_extra(
+            opcode,
+            mode,
+            account_a,
+            account_b,
+            register,
+            data_offset,
+            0,
+            route,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn operation_with_extra(
+        opcode: u8,
+        mode: u8,
+        account_a: u16,
+        account_b: u16,
+        register: u16,
+        data_offset: u32,
+        extra: u32,
+        route: u16,
+    ) -> [u8; OPERATION_BYTES] {
         let mut output = [0_u8; OPERATION_BYTES];
         output[0] = opcode;
         output[1] = mode;
@@ -1668,7 +2398,45 @@ mod tests {
         put(&mut output, 4, &account_b.to_le_bytes());
         put(&mut output, 6, &register.to_le_bytes());
         put(&mut output, 8, &data_offset.to_le_bytes());
+        put(&mut output, 12, &extra.to_le_bytes());
         put(&mut output, 16, &route.to_le_bytes());
+        output
+    }
+
+    fn affine_data_program(scalar_stride: u32, identity_base: u32) -> Vec<u8> {
+        let operations = [
+            operation_with_extra(
+                OP_WRITE_SCALAR_AFFINE,
+                MODE_REGISTER_ITEM,
+                0,
+                0,
+                0,
+                4,
+                scalar_stride,
+                0,
+            ),
+            operation_with_extra(
+                OP_WRITE_IDENTITY_AFFINE,
+                MODE_REGISTER_ITEM,
+                0,
+                0,
+                0,
+                identity_base,
+                40,
+                0,
+            ),
+        ];
+        let mut output = vec![0_u8; HEADER_BYTES + operations.len() * OPERATION_BYTES];
+        put(&mut output, 0, &MAGIC);
+        *output.get_mut(4).expect("version") = VERSION;
+        for (offset, value) in [(10, 2_u16), (12, 1), (18, 1), (22, 1)] {
+            put(&mut output, offset, &value.to_le_bytes());
+        }
+        let mut cursor = HEADER_BYTES;
+        for value in operations {
+            put(&mut output, cursor, &value);
+            cursor += OPERATION_BYTES;
+        }
         output
     }
 
@@ -1749,6 +2517,15 @@ mod tests {
     fn affine_and_each_requests_project_atomically() {
         let bytes = canonical();
         let program = ProgramV3::decode(&bytes).expect("program");
+        assert_eq!(
+            program.route_template(0),
+            Ok((b"CLAIMFIX".as_slice(), b"CLAIMITM".as_slice()))
+        );
+        assert_eq!(
+            program.route_template(1),
+            Ok((&[][..], b"CUSTITEM".as_slice()))
+        );
+        assert_eq!(program.route_template(2), Err(Error::InvalidCoordinate));
         let scalars = [9_u64, 0, 3, 1, 4];
         let identities = [[0_u8; 32]; 3];
         let accounts = [
@@ -1822,6 +2599,207 @@ mod tests {
                 .expect("custody")
                 .request_offset,
             32
+        );
+    }
+
+    #[test]
+    fn borrowed_witness_is_an_exact_authenticated_suffix() {
+        let mut core = route(0, 0, 0, 1, 0, 0, 8, 0);
+        core[3] = 1;
+        put(&mut core, 14, &0_u16.to_le_bytes());
+        let mut bytes = vec![0_u8; HEADER_BYTES + ROUTE_BYTES + 8];
+        put(&mut bytes, 0, &MAGIC);
+        *bytes.get_mut(4).expect("version") = VERSION;
+        for (offset, value) in [(6, 1_u16), (12, 1), (16, 2)] {
+            put(&mut bytes, offset, &value.to_le_bytes());
+        }
+        put(&mut bytes, HEADER_BYTES, &core);
+        put(&mut bytes, HEADER_BYTES + ROUTE_BYTES, b"CORE_REQ");
+
+        let program = ProgramV3::decode(&bytes).expect("borrowed-witness program");
+        let invocation = program
+            .resolved_invocation(0, 0, 0, &[8, 4], &[])
+            .expect("invocation");
+        let witness = invocation.borrowed_witness.expect("borrowed witness");
+        assert_eq!(invocation.request_len, 8);
+        assert_eq!(program.request_bytes(0), Ok(8));
+        assert_eq!(witness.source_offset(), 8);
+        assert_eq!(witness.len(), 4);
+        assert_eq!(witness.slice(b"12345678PROO"), Ok(b"PROO".as_slice()));
+        assert_eq!(
+            witness.slice(b"12345678PROOF"),
+            Err(Error::InvalidCoordinate)
+        );
+
+        let mut invalid_register_pair = bytes.clone();
+        put(
+            &mut invalid_register_pair,
+            HEADER_BYTES + 14,
+            &1_u16.to_le_bytes(),
+        );
+        assert_eq!(
+            ProgramV3::decode(&invalid_register_pair),
+            Err(Error::InvalidRoute)
+        );
+        let mut invalid_each = bytes;
+        *invalid_each.get_mut(HEADER_BYTES + 1).expect("route kind") = 2;
+        assert_eq!(ProgramV3::decode(&invalid_each), Err(Error::InvalidRoute));
+    }
+
+    fn receipt_dependency_program(kind: u8) -> Vec<u8> {
+        let producer = route(
+            4,
+            kind,
+            0,
+            1,
+            0,
+            u16::from(kind == 2),
+            u32::from(kind != 2) * 8,
+            u32::from(kind == 2) * 8,
+        );
+        let mut consumer = route(
+            0,
+            kind,
+            0,
+            1,
+            0,
+            u16::from(kind == 2),
+            u32::from(kind != 2) * 8,
+            u32::from(kind == 2) * 8,
+        );
+        put(&mut consumer, 24, &0_u16.to_le_bytes());
+        put(&mut consumer, 26, &1_u16.to_le_bytes());
+        let dependency = HEADER_BYTES + 2 * ROUTE_BYTES;
+        let mut bytes = vec![0_u8; HEADER_BYTES + 2 * ROUTE_BYTES + RECEIPT_DEPENDENCY_BYTES + 16];
+        put(&mut bytes, 0, &MAGIC);
+        *bytes.get_mut(4).expect("version") = VERSION;
+        for (offset, value) in [
+            (6, 2_u16),
+            (12, 1),
+            (14, u16::from(kind == 2)),
+            (16, 1),
+            (24, 1),
+        ] {
+            put(&mut bytes, offset, &value.to_le_bytes());
+        }
+        put(&mut bytes, HEADER_BYTES, &producer);
+        put(&mut bytes, HEADER_BYTES + ROUTE_BYTES, &consumer);
+        *bytes.get_mut(dependency).expect("producer role") = 4;
+        put(&mut bytes, dependency + 2, &0_u16.to_le_bytes());
+        put(&mut bytes, dependency + 4, &384_u16.to_le_bytes());
+        put(
+            &mut bytes,
+            dependency + RECEIPT_DEPENDENCY_BYTES,
+            b"PRODUCERCONSUMER",
+        );
+        bytes
+    }
+
+    #[test]
+    fn receipt_dependency_is_exact_backward_and_same_item() {
+        let bytes = receipt_dependency_program(0);
+        let program = ProgramV3::decode(&bytes).expect("dependency program");
+        assert_eq!(
+            program
+                .resolved_invocation(1, 0, 0, &[1], &[])
+                .expect("consumer")
+                .receipt_dependency,
+            Some(ResolvedReceiptDependencyV3 {
+                producer_role: FixedRole::Custody,
+                producer_route: 0,
+                producer_invocation: 0,
+                expected_receipt_bytes: 384,
+            })
+        );
+
+        let each = receipt_dependency_program(2);
+        let program = ProgramV3::decode(&each).expect("each dependency");
+        assert_eq!(
+            program
+                .resolved_invocation(1, 1, 2, &[1], &[])
+                .expect("item one")
+                .receipt_dependency
+                .expect("dependency")
+                .producer_invocation,
+            1
+        );
+    }
+
+    #[test]
+    fn legacy_24_byte_route_profile_is_not_accepted() {
+        const LEGACY_ROUTE_BYTES: usize = 24;
+
+        let legacy_route = route(0, 0, 0, 1, 0, 0, 8, 0);
+        let mut bytes = vec![0_u8; HEADER_BYTES + LEGACY_ROUTE_BYTES + 8];
+        put(&mut bytes, 0, &MAGIC);
+        *bytes.get_mut(4).expect("version") = VERSION;
+        for (offset, value) in [(6, 1_u16), (12, 1), (16, 1)] {
+            put(&mut bytes, offset, &value.to_le_bytes());
+        }
+        put(
+            &mut bytes,
+            HEADER_BYTES,
+            legacy_route
+                .get(..LEGACY_ROUTE_BYTES)
+                .expect("legacy route"),
+        );
+        put(&mut bytes, HEADER_BYTES + LEGACY_ROUTE_BYTES, b"CORE_REQ");
+
+        assert!(ProgramV3::decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn receipt_dependency_refuses_forward_role_width_geometry_and_disabled_source() {
+        let canonical = receipt_dependency_program(0);
+        let consumer = HEADER_BYTES + ROUTE_BYTES;
+        let dependency = HEADER_BYTES + 2 * ROUTE_BYTES;
+
+        let mut forward = canonical.clone();
+        put(&mut forward, dependency + 2, &1_u16.to_le_bytes());
+        assert_eq!(
+            ProgramV3::decode(&forward),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut wrong_role = canonical.clone();
+        *wrong_role.get_mut(dependency).expect("producer role") = 1;
+        assert_eq!(
+            ProgramV3::decode(&wrong_role),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut zero_width = canonical.clone();
+        put(&mut zero_width, dependency + 4, &0_u16.to_le_bytes());
+        assert_eq!(
+            ProgramV3::decode(&zero_width),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut cross_geometry = canonical.clone();
+        *cross_geometry.get_mut(consumer + 1).expect("consumer kind") = 2;
+        assert_eq!(
+            ProgramV3::decode(&cross_geometry),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut noncanonical_absent = canonical.clone();
+        put(
+            &mut noncanonical_absent,
+            consumer + 26,
+            &0_u16.to_le_bytes(),
+        );
+        assert_eq!(
+            ProgramV3::decode(&noncanonical_absent),
+            Err(Error::InvalidReceiptDependency)
+        );
+
+        let mut disabled = canonical;
+        *disabled.get_mut(HEADER_BYTES + 2).expect("producer enable") = 1;
+        put(&mut disabled, HEADER_BYTES + 4, &0_u16.to_le_bytes());
+        let program = ProgramV3::decode(&disabled).expect("statically valid disabled producer");
+        assert_eq!(
+            program.resolved_invocation(1, 0, 0, &[0], &[]),
+            Err(Error::InvalidReceiptDependency)
         );
     }
 
@@ -1921,5 +2899,343 @@ mod tests {
             ProgramV3::decode_selected([1; 32], [2; 32], &canonical),
             Err(Error::ProgramIdentityMismatch)
         );
+    }
+
+    #[test]
+    fn affine_fixed_account_writes_resolve_runtime_offsets() {
+        let bytes = affine_data_program(40, 12);
+        let program = ProgramV3::decode(&bytes).expect("affine program");
+        let scalars = [11_u64, 22];
+        let identities = [[3_u8; 32], [4_u8; 32]];
+        assert_eq!(
+            program.resolved_item_effect(0, 0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 4,
+                value: 11,
+            })
+        );
+        assert_eq!(
+            program.resolved_item_effect(1, 0, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteScalar {
+                account: 0,
+                offset: 44,
+                value: 22,
+            })
+        );
+        assert_eq!(
+            program.resolved_item_effect(1, 1, 2, &scalars, &identities),
+            Ok(ResolvedEffectV3::WriteIdentity {
+                account: 0,
+                offset: 52,
+                value: [4; 32],
+            })
+        );
+
+        let accounts = [AccountInput {
+            lamports: 7,
+            data_len: 84,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let aliases = [0_usize];
+        let mut scratch_lamports = [0_u64];
+        let mut output_lamports = [99_u64];
+        let mut scratch_requests = [];
+        let mut output_requests = [];
+        project_atomic(
+            program,
+            2,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &identities,
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                scratch_requests: &mut scratch_requests,
+                output_requests: &mut output_requests,
+            },
+        )
+        .expect("exact affine account bounds");
+        assert_eq!(output_lamports, [7]);
+    }
+
+    #[test]
+    fn affine_writes_refuse_bad_stride_overlap_and_bounds_atomically() {
+        assert_eq!(
+            ProgramV3::decode(&affine_data_program(7, 12)),
+            Err(Error::NonCanonicalOperation)
+        );
+        assert_eq!(
+            ProgramV3::decode(&affine_data_program(40, 8))
+                .expect("cross-operation overlap is runtime-resolved")
+                .resolved_item_effect(0, 1, 2, &[11, 22], &[[3; 32], [4; 32]]),
+            Ok(ResolvedEffectV3::WriteIdentity {
+                account: 0,
+                offset: 8,
+                value: [3; 32],
+            })
+        );
+
+        for (bytes, tail_count, expected) in [
+            (affine_data_program(40, 8), 2, Error::OverlappingWrites),
+            (affine_data_program(40, 12), 3, Error::WidthMismatch),
+        ] {
+            let program = ProgramV3::decode(&bytes).expect("structural program");
+            let scalars = [11_u64, 22];
+            let identities = [[3_u8; 32], [4_u8; 32]];
+            let accounts = [AccountInput {
+                lamports: 7,
+                data_len: 84,
+            }];
+            let permissions = [AccountPermission::new(false, false, true)];
+            let aliases = [0_usize];
+            let mut scratch_lamports = [55_u64];
+            let mut output_lamports = [99_u64];
+            let before_output = output_lamports;
+            let mut scratch_requests = [];
+            let mut output_requests = [];
+            assert_eq!(
+                project_atomic(
+                    program,
+                    tail_count,
+                    ProjectionV3 {
+                        scalars: &scalars,
+                        identities: &identities,
+                        aliases: &aliases,
+                        accounts: &accounts,
+                        permissions: &permissions,
+                        scratch_lamports: &mut scratch_lamports,
+                        output_lamports: &mut output_lamports,
+                        scratch_requests: &mut scratch_requests,
+                        output_requests: &mut output_requests,
+                    },
+                ),
+                Err(expected)
+            );
+            assert_eq!(output_lamports, before_output);
+        }
+
+        let bytes = affine_data_program(40, 12);
+        let program = ProgramV3::decode(&bytes).expect("program");
+        let scalars = [11_u64, 22, 33];
+        let identities = [[3_u8; 32], [4_u8; 32], [5_u8; 32]];
+        let accounts = [AccountInput {
+            lamports: 7,
+            data_len: 84,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let aliases = [0_usize];
+        let mut scratch_lamports = [55_u64];
+        let mut output_lamports = [99_u64];
+        let before_output = output_lamports;
+        let mut scratch_requests = [];
+        let mut output_requests = [];
+        assert_eq!(
+            project_atomic(
+                program,
+                3,
+                ProjectionV3 {
+                    scalars: &scalars,
+                    identities: &identities,
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &permissions,
+                    scratch_lamports: &mut scratch_lamports,
+                    output_lamports: &mut output_lamports,
+                    scratch_requests: &mut scratch_requests,
+                    output_requests: &mut output_requests,
+                },
+            ),
+            Err(Error::DataOutOfBounds)
+        );
+        assert_eq!(output_lamports, before_output);
+    }
+
+    fn typed_data_program(operations: &[[u8; OPERATION_BYTES]], accounts: u16) -> Vec<u8> {
+        let mut output = vec![0_u8; HEADER_BYTES + operations.len() * OPERATION_BYTES];
+        put(&mut output, 0, &MAGIC);
+        *output.get_mut(4).expect("version") = VERSION;
+        put(
+            &mut output,
+            8,
+            &u16::try_from(operations.len())
+                .expect("operation count")
+                .to_le_bytes(),
+        );
+        put(&mut output, 12, &accounts.to_le_bytes());
+        put(&mut output, 16, &3_u16.to_le_bytes());
+        let mut cursor = HEADER_BYTES;
+        for operation in operations {
+            put(&mut output, cursor, operation);
+            cursor += OPERATION_BYTES;
+        }
+        output
+    }
+
+    #[test]
+    fn typed_account_writes_narrow_and_resolve_exact_widths() {
+        let operations = [
+            operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 1, 0),
+            operation(OP_WRITE_DATA_U16, 0, 0, 0, 1, 2, 0),
+            operation(OP_WRITE_DATA_U32, 0, 0, 0, 2, 4, 0),
+        ];
+        let bytes = typed_data_program(&operations, 1);
+        let program = ProgramV3::decode(&bytes).expect("typed data program");
+        let scalars = [u64::from(u8::MAX), u64::from(u16::MAX), u64::from(u32::MAX)];
+        assert_eq!(
+            program.resolved_fixed_effect(0, 0, &scalars, &[]),
+            Ok(ResolvedEffectV3::WriteU8 {
+                account: 0,
+                offset: 1,
+                value: u8::MAX,
+            })
+        );
+        assert_eq!(
+            program.resolved_fixed_effect(1, 0, &scalars, &[]),
+            Ok(ResolvedEffectV3::WriteU16 {
+                account: 0,
+                offset: 2,
+                value: u16::MAX,
+            })
+        );
+        assert_eq!(
+            program.resolved_fixed_effect(2, 0, &scalars, &[]),
+            Ok(ResolvedEffectV3::WriteU32 {
+                account: 0,
+                offset: 4,
+                value: u32::MAX,
+            })
+        );
+        let accounts = [AccountInput {
+            lamports: 17,
+            data_len: 8,
+        }];
+        let permissions = [AccountPermission::new(false, false, true)];
+        let aliases = [0_usize];
+        let mut scratch_lamports = [0_u64];
+        let mut output_lamports = [99_u64];
+        project_atomic(
+            program,
+            0,
+            ProjectionV3 {
+                scalars: &scalars,
+                identities: &[],
+                aliases: &aliases,
+                accounts: &accounts,
+                permissions: &permissions,
+                scratch_lamports: &mut scratch_lamports,
+                output_lamports: &mut output_lamports,
+                scratch_requests: &mut [],
+                output_requests: &mut [],
+            },
+        )
+        .expect("typed writes preflight");
+        assert_eq!(output_lamports, [17]);
+    }
+
+    #[test]
+    fn typed_account_writes_refuse_narrowing_overlap_permissions_and_bounds_atomically() {
+        let narrowing = typed_data_program(&[operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 0, 0)], 1);
+        let program = ProgramV3::decode(&narrowing).expect("narrowing program");
+        assert_eq!(
+            program.resolved_fixed_effect(0, 0, &[u64::from(u8::MAX) + 1, 0, 0], &[]),
+            Err(Error::NarrowingOverflow)
+        );
+
+        let overlap = typed_data_program(
+            &[
+                operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 0, 0),
+                operation(OP_WRITE_DATA_U16, 0, 0, 0, 1, 0, 0),
+            ],
+            1,
+        );
+        assert_eq!(ProgramV3::decode(&overlap), Err(Error::OverlappingWrites));
+
+        let aliased = typed_data_program(
+            &[
+                operation(OP_WRITE_DATA_U8, 0, 0, 0, 0, 0, 0),
+                operation(OP_WRITE_DATA_U16, 0, 1, 0, 1, 0, 0),
+            ],
+            2,
+        );
+        let program = ProgramV3::decode(&aliased).expect("structurally disjoint accounts");
+        let accounts = [
+            AccountInput {
+                lamports: 7,
+                data_len: 4,
+            },
+            AccountInput {
+                lamports: 7,
+                data_len: 4,
+            },
+        ];
+        let writable = [
+            AccountPermission::new(false, false, true),
+            AccountPermission::new(false, false, true),
+        ];
+        let aliases = [0_usize, 0];
+        let mut scratch = [0_u64; 2];
+        let mut output = [91_u64; 2];
+        let before = output;
+        assert_eq!(
+            project_atomic(
+                program,
+                0,
+                ProjectionV3 {
+                    scalars: &[1, 2, 0],
+                    identities: &[],
+                    aliases: &aliases,
+                    accounts: &accounts,
+                    permissions: &writable,
+                    scratch_lamports: &mut scratch,
+                    output_lamports: &mut output,
+                    scratch_requests: &mut [],
+                    output_requests: &mut [],
+                },
+            ),
+            Err(Error::OverlappingWrites)
+        );
+        assert_eq!(output, before);
+
+        for (permission, data_len, expected) in [
+            (AccountPermission::read_only(), 4, Error::PermissionDenied),
+            (
+                AccountPermission::new(false, false, true),
+                0,
+                Error::DataOutOfBounds,
+            ),
+        ] {
+            let program = ProgramV3::decode(&narrowing).expect("typed program");
+            let accounts = [AccountInput {
+                lamports: 7,
+                data_len,
+            }];
+            let permissions = [permission];
+            let aliases = [0_usize];
+            let mut scratch = [0_u64];
+            let mut output = [99_u64];
+            let before = output;
+            assert_eq!(
+                project_atomic(
+                    program,
+                    0,
+                    ProjectionV3 {
+                        scalars: &[1, 0, 0],
+                        identities: &[],
+                        aliases: &aliases,
+                        accounts: &accounts,
+                        permissions: &permissions,
+                        scratch_lamports: &mut scratch,
+                        output_lamports: &mut output,
+                        scratch_requests: &mut [],
+                        output_requests: &mut [],
+                    },
+                ),
+                Err(expected)
+            );
+            assert_eq!(output, before);
+        }
     }
 }

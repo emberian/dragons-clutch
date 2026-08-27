@@ -16,6 +16,12 @@ use dclutch_core_contract::ContentId;
 #[allow(missing_docs)]
 mod generated_capability_execution;
 
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated_protocol_infrastructure;
+
+mod protocol_infrastructure;
+
 pub use generated_capability_execution::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET,
@@ -25,6 +31,12 @@ pub use generated_capability_execution::{
     CAPABILITY_EXECUTION_SELECTION_RESERVED_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_OFFSET,
     CAPABILITY_EXECUTION_SELECTION_SCHEMA_VERSION_V1,
+};
+pub use generated_protocol_infrastructure::*;
+pub use protocol_infrastructure::{
+    InitializeProtocolInfrastructureV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_PREIMAGE_V1, ProtocolInfrastructureProfileV1,
 };
 
 /// Bytes in one program-identity or content-identity coordinate.
@@ -84,6 +96,8 @@ pub enum Error {
     ZeroArtifactReleaseId,
     /// Equal program or release identities did not identify the same pair.
     InconsistentAliasedRoleBinding,
+    /// Registry and Rent named an aliased program or artifact release.
+    AliasedInfrastructureBinding,
     /// A release set, Market, context, or role-request digest was zero.
     ZeroCallerAuthorityCoordinate,
     /// A manifest, capability kind, capability release, or config identity was zero.

@@ -238,6 +238,34 @@ pub fn build_checked_execution_release_set(
     })
 }
 
+/// Derive the one canonical Registry execution release set that five checked
+/// artifact manifests already determine.
+///
+/// The release set is not free evidence: every binding is a pure function of the
+/// role's `ArtifactReleaseV1`, which is itself a pure function of that role's
+/// checked manifest. Without this derivation a caller has to hand-assemble the
+/// 336-byte preimage that [`build_checked_execution_release_set`] will then
+/// insist on, which is a transcription step with no independent authority and a
+/// real chance of silent divergence. Deriving it adds no new authority: the
+/// onchain Registry activation cache remains the sole runtime authority.
+pub fn derive_execution_release_set(
+    checked: [&CheckedReleaseV1; EXECUTION_ROLE_COUNT_V1],
+) -> Result<ExecutionReleaseSetV1> {
+    let mut bindings = Vec::with_capacity(EXECUTION_ROLE_COUNT_V1);
+    for release in checked {
+        let artifact = artifact_release_from_checked(release)?;
+        let artifact_id = ArtifactReleaseIdV1::new(sha256(&artifact.to_bytes()))
+            .map_err(|_| Error::InvalidArtifactRelease)?;
+        bindings.push(ExecutionRoleBindingV1::new(artifact.program(), artifact_id));
+    }
+    let bindings: [ExecutionRoleBindingV1; EXECUTION_ROLE_COUNT_V1] = bindings
+        .try_into()
+        .map_err(|_: Vec<ExecutionRoleBindingV1>| Error::InvalidExecutionReleaseSet)?;
+    let [core, claims, trading, resolution, custody] = bindings;
+    ExecutionReleaseSetV1::new(core, claims, trading, resolution, custody)
+        .map_err(|_| Error::InvalidExecutionReleaseSet)
+}
+
 /// Decode a multiprogram manifest and require exact identity with all five
 /// supplied checked-release manifests.
 pub fn verify_checked_execution_release_set(
@@ -443,6 +471,30 @@ mod tests {
             verify_checked_execution_release_set(&bytes, manifests.each_ref().map(Vec::as_slice))
                 .expect("verify");
         assert_eq!(verified, built);
+    }
+
+    #[test]
+    fn the_release_set_is_derivable_and_derivation_is_not_a_second_authority() {
+        let (release_set, checked_releases) = fixture();
+        let derived =
+            derive_execution_release_set(checked_releases.each_ref()).expect("derived release set");
+        assert_eq!(derived, release_set);
+        // The derived preimage must be exactly what construction then demands.
+        let built = build_checked_execution_release_set(derived, checked_releases.each_ref())
+            .expect("checked set");
+        assert_eq!(built.release_set(), derived);
+
+        // Substituting one role's checked manifest must move the derived set,
+        // so a stale set can never be silently reused across a rebuild.
+        let mut substituted = checked_releases.clone();
+        *substituted.get_mut(2).expect("trading slot") = checked(61);
+        let moved =
+            derive_execution_release_set(substituted.each_ref()).expect("derived substitute");
+        assert_ne!(moved, derived);
+        assert_eq!(
+            build_checked_execution_release_set(derived, substituted.each_ref()),
+            Err(Error::InvalidExecutionReleaseSet)
+        );
     }
 
     #[test]

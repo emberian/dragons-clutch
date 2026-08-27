@@ -14,6 +14,10 @@
 
 use core::convert::TryInto;
 
+mod realm_layout;
+
+pub use realm_layout::RealmLayoutV1;
+
 /// Exact byte width of one immutable [`RealmV1`] record.
 pub const REALM_BYTES: usize = 112;
 /// Fixed Position bytes before its `N` eight-byte outcome balances.

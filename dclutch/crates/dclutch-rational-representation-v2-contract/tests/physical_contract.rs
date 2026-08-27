@@ -1,20 +1,30 @@
 //! Hostile and positive physical Claims/Token/Custody composition corpus.
 
-use dclutch_claims_svm::{ClaimsReceiptV1, NO_POSITION_REVISION};
-use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1, CustodyRequestV1, OperationV1,
-    ReceiptEvidenceV1,
+use dclutch_claims_svm::affine_batch_v2::{AffineBatchReceiptV2, DeltaDirectionV2};
+use dclutch_claims_svm::{
+    CallerRole,
+    signed_delta_v3::{
+        DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SignedDeltaPlanInputV3,
+        SignedDeltaPlanV3, SignedDeltaPositionV3, SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes,
+    },
 };
 use dclutch_rational_representation_v2_contract::{
-    ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, CompletionEvidenceV2, Error,
-    REQUEST_HEADER_BYTES_V2, RepresentationActionV2, RepresentationReceiptV2,
-    RepresentationRequestHeaderV2, RepresentationRequestV2, TokenEffectStyleV2, finalize, prepare,
+    ABSENT_REVISION, ASSET_BYTES_V2, AffineBatchContextV2, AssetV2, CallerRoleV2,
+    CompletionEvidenceV2, Error, RATIONAL_ASSET_ACCOUNT_COUNT_V2, RATIONAL_BASE_ACCOUNT_COUNT_V2,
+    RATIONAL_TERMINAL_ACCOUNT_COUNT_V2, REQUEST_HEADER_BYTES_V2, RepresentationActionV2,
+    RepresentationReceiptV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
+    SignedDeltaTerminalEvidenceV3, TokenEffectStyleV2, finalize, prepare,
+    validate_signed_delta_terminal_v3,
 };
 use dclutch_rational_representation_v2_kernel::{
-    ContentAdmissionV2, DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
-    DescriptorAdmissionV2, GRAPH_EDGE_BYTES, GRAPH_HEADER_BYTES, GRAPH_MAGIC_V2, GRAPH_NODE_BYTES,
-    RepresentationDescriptorV2, RepresentationGraphV2, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES,
+    DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_HEADER_BYTES, DESCRIPTOR_MAGIC_V3,
+    DescriptorAdmissionV2, RepresentationDescriptorV2, SCHEMA_VERSION_V2, STRUCTURED_HEADER_BYTES,
     STRUCTURED_MAGIC_V2, StructuredProjectionV2,
+};
+use dclutch_representation_composition_v3_kernel::{
+    CompositionExposureBundleV3, CompositionExposureInputV3, CompositionExposureRowInputV3,
+    CompositionExposureTermV3, RecordAdmissionV3, composition_exposure_bytes_v3,
+    encode_composition_exposure_v3_atomic,
 };
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -93,144 +103,56 @@ fn descriptor<'a>(bytes: &'a [u8]) -> RepresentationDescriptorV2<'a> {
     .expect("descriptor")
 }
 
-#[derive(Clone, Copy)]
-struct GraphNode {
-    id: u8,
-    rank: u32,
-    first_edge: u32,
-    edge_count: u32,
-    kind: u8,
-    parameter: u64,
-    exposure: [u64; 2],
-}
-
-#[derive(Clone, Copy)]
-struct GraphEdge {
-    child_id: u8,
-    child_index: u32,
-    multiplicity: u64,
-}
-
 fn graph_fixture() -> Vec<u8> {
-    let nodes = [
-        GraphNode {
-            id: 10,
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 0,
-            exposure: [100, 0],
+    let terms = [
+        [CompositionExposureTermV3 {
+            product_coordinate: 0,
+            numerator: 1,
+        }],
+        [CompositionExposureTermV3 {
+            product_coordinate: 1,
+            numerator: 1,
+        }],
+    ];
+    let rows = [
+        CompositionExposureRowInputV3 {
+            node_id: id(10),
+            denominator: 1,
+            terms: &terms[0],
         },
-        GraphNode {
-            id: 11,
-            rank: 0,
-            first_edge: 0,
-            edge_count: 0,
-            kind: 0,
-            parameter: 1,
-            exposure: [0, 100],
-        },
-        GraphNode {
-            id: 12,
-            rank: 1,
-            first_edge: 0,
-            edge_count: 1,
-            kind: 1,
-            parameter: 10,
-            exposure: [10, 0],
-        },
-        GraphNode {
-            id: 13,
-            rank: 1,
-            first_edge: 1,
-            edge_count: 1,
-            kind: 1,
-            parameter: 10,
-            exposure: [0, 10],
-        },
-        GraphNode {
-            id: 14,
-            rank: 2,
-            first_edge: 2,
-            edge_count: 2,
-            kind: 2,
-            parameter: 0,
-            exposure: [30, 70],
+        CompositionExposureRowInputV3 {
+            node_id: id(11),
+            denominator: 1,
+            terms: &terms[1],
         },
     ];
-    let edges = [
-        GraphEdge {
-            child_id: 10,
-            child_index: 0,
-            multiplicity: 1,
+    let length = composition_exposure_bytes_v3(2, 2).expect("exposure width");
+    let mut scratch = vec![0_u8; length];
+    let mut output = vec![0_u8; length];
+    encode_composition_exposure_v3_atomic(
+        CompositionExposureInputV3 {
+            market: id(2),
+            result_domain: id(60),
+            release_set: id(1),
+            product_basis: id(61),
+            representation_basis: id(62),
+            graph_id: id(3),
+            product_width: 2,
+            rows: &rows,
         },
-        GraphEdge {
-            child_id: 11,
-            child_index: 1,
-            multiplicity: 1,
-        },
-        GraphEdge {
-            child_id: 12,
-            child_index: 2,
-            multiplicity: 3,
-        },
-        GraphEdge {
-            child_id: 13,
-            child_index: 3,
-            multiplicity: 7,
-        },
-    ];
-    let mut bytes = vec![
-        0_u8;
-        GRAPH_HEADER_BYTES
-            + nodes.len() * GRAPH_NODE_BYTES
-            + edges.len() * GRAPH_EDGE_BYTES
-            + nodes.len() * 2 * 8
-    ];
-    put(&mut bytes, 0, &GRAPH_MAGIC_V2);
-    put(&mut bytes, 8, &SCHEMA_VERSION_V2.to_le_bytes());
-    put(&mut bytes, 16, &id(3));
-    put(&mut bytes, 48, &id(14));
-    put_u32(&mut bytes, 80, 2);
-    put_u32(&mut bytes, 84, 5);
-    put_u32(&mut bytes, 88, 4);
-    put_u64(&mut bytes, 96, 100);
-    for (index, node) in nodes.iter().enumerate() {
-        let offset = GRAPH_HEADER_BYTES + index * GRAPH_NODE_BYTES;
-        put(&mut bytes, offset, &id(node.id));
-        put_u32(&mut bytes, offset + 32, node.rank);
-        put_u32(&mut bytes, offset + 36, node.first_edge);
-        put_u32(&mut bytes, offset + 40, node.edge_count);
-        *bytes.get_mut(offset + 44).expect("node kind") = node.kind;
-        put_u64(&mut bytes, offset + 48, node.parameter);
-    }
-    let edge_start = GRAPH_HEADER_BYTES + nodes.len() * GRAPH_NODE_BYTES;
-    for (index, edge) in edges.iter().enumerate() {
-        let offset = edge_start + index * GRAPH_EDGE_BYTES;
-        put(&mut bytes, offset, &id(edge.child_id));
-        put_u32(&mut bytes, offset + 32, edge.child_index);
-        put_u64(&mut bytes, offset + 40, edge.multiplicity);
-    }
-    let exposure_start = edge_start + edges.len() * GRAPH_EDGE_BYTES;
-    for (node_index, node) in nodes.iter().enumerate() {
-        for (outcome, value) in node.exposure.iter().enumerate() {
-            put_u64(
-                &mut bytes,
-                exposure_start + (node_index * 2 + outcome) * 8,
-                *value,
-            );
-        }
-    }
-    bytes
+        &mut scratch,
+        &mut output,
+    )
+    .expect("canonical exposure");
+    output
 }
 
-fn admission() -> ContentAdmissionV2 {
-    ContentAdmissionV2 {
-        selected_graph_id: id(3),
-        finalized_graph_id: id(3),
-        recomputed_graph_digest: id(40),
-        finalized_graph_digest: id(40),
+fn admission() -> RecordAdmissionV3 {
+    RecordAdmissionV3 {
+        selected_id: id(3),
+        finalized_id: id(3),
+        recomputed_digest: id(40),
+        finalized_digest: id(40),
         record_authenticated: true,
     }
 }
@@ -318,8 +240,8 @@ fn header(
     }
 }
 
-fn graph<'a>(bytes: &'a [u8]) -> RepresentationGraphV2<'a> {
-    RepresentationGraphV2::decode(bytes, admission()).expect("graph")
+fn graph<'a>(bytes: &'a [u8]) -> CompositionExposureBundleV3<'a> {
+    CompositionExposureBundleV3::decode(bytes, admission()).expect("exposure")
 }
 
 fn post_assets(rows: &[(u64, u64, u64)]) -> Vec<u8> {
@@ -406,7 +328,19 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
             .style,
         TokenEffectStyleV2::MintReceipt
     );
-    assert_eq!(prepared.claims_plan(id(30), &[]), Ok(None));
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    assert_eq!(
+        prepared.write_affine_packet(id(30), None, &mut []),
+        Ok(None)
+    );
+    assert_eq!(
+        prepared.write_affine_packet(id(30), Some(context), &mut []),
+        Err(Error::InvalidActionShape)
+    );
     let posts = post_assets(&[(30, 6, 24), (60, 4, 56)]);
     let receipt = finalize(
         prepared,
@@ -414,8 +348,12 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: [0; 32],
-            claims_receipt: None,
+            claims_packet_digest: [0; 32],
+            affine_packet: None,
+            affine_context: None,
+            affine_receipt: None,
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
             token_effect_digest: id(32),
             post_receipt_supply: 8,
             post_asset_observations: &posts,
@@ -435,7 +373,7 @@ fn structured_issue_is_token_only_and_exactly_conserved() {
 }
 
 #[test]
-fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
+fn denomination_emits_one_canonical_affine_packet_and_shard_mint() {
     let projection_bytes = projection_fixture(3, 30, 9);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
     let descriptor_bytes = descriptor_fixture();
@@ -460,18 +398,47 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
         .expect("exact");
     assert_eq!(effect.style, TokenEffectStyleV2::MintShard);
     assert_eq!(effect.amount, 20);
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("one-hot");
-    let plan = prepared
-        .claims_plan(id(30), &quantities)
-        .expect("claims plan")
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    let mut hostile_context_bytes =
+        vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    assert_eq!(
+        prepared.write_affine_packet(
+            id(30),
+            Some(AffineBatchContextV2 {
+                product_record_digest: [0; 32],
+                ..context
+            }),
+            &mut hostile_context_bytes,
+        ),
+        Err(Error::ClaimsMismatch)
+    );
+    let mut packet_bytes = vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let packet = prepared
+        .write_affine_packet(id(30), Some(context), &mut packet_bytes)
+        .expect("affine packet")
         .expect("present");
-    assert_eq!(plan.quantity(0), Ok(2));
-    assert_eq!(plan.quantity(1), Ok(0));
-    let claims_receipt =
-        ClaimsReceiptV1::new(plan, id(34), id(31), 11, 21, 31, 0, id(35)).expect("claims receipt");
+    assert_eq!(packet.position_count(), 2);
+    assert_eq!(packet.row_count(), 1);
+    assert_eq!(packet.position(0).expect("actor").owner(), id(7));
+    assert_eq!(packet.position(1).expect("custody").owner(), id(53));
+    let row = packet.row(0).expect("row");
+    assert_eq!(row.outcome(), 0);
+    assert_eq!(row.source_position_index(), 0);
+    assert_eq!(row.destination_position_index(), 1);
+    assert_eq!(row.aggregate_delta().direction(), DeltaDirectionV2::Neutral);
+    assert_eq!(row.source_delta().direction(), DeltaDirectionV2::Debit);
+    assert_eq!(row.source_delta().magnitude(), 2);
+    assert_eq!(
+        row.destination_delta().direction(),
+        DeltaDirectionV2::Credit
+    );
+    assert_eq!(row.destination_delta().magnitude(), 2);
+    let affine_receipt = AffineBatchReceiptV2::new(packet, id(34), id(35), id(31), id(36), 11)
+        .expect("affine receipt");
     let posts = post_assets(&[(50, 29, 21)]);
     let receipt = finalize(
         prepared,
@@ -479,9 +446,13 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: id(34),
-            claims_receipt: Some(claims_receipt),
-            token_effect_digest: id(36),
+            claims_packet_digest: id(34),
+            affine_packet: Some(packet),
+            affine_context: Some(context),
+            affine_receipt: Some(affine_receipt),
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
+            token_effect_digest: id(37),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
             custody_request: None,
@@ -489,11 +460,12 @@ fn denomination_emits_one_canonical_claims_plan_and_shard_mint() {
             custody_receipt: None,
             custody_receipt_digest: [0; 32],
             custody_replay_digest: [0; 32],
-            post_resource_digest: id(37),
+            post_resource_digest: id(38),
         },
     )
     .expect("finalize");
     assert_eq!(receipt.payout(), 0);
+    assert_eq!(receipt.claims_packet_digest(), id(34));
     receipt.verify_for(request, id(30)).expect("exact receipt");
 }
 
@@ -526,17 +498,27 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
         .expect("burn")
         .expect("exact burn");
     assert_eq!(effect.style, TokenEffectStyleV2::BurnShard);
+    assert_eq!(
+        effect.authority,
+        id(7),
+        "shard burn authority is the observed Token holder, not the mint authority"
+    );
     assert_eq!(effect.amount, 10);
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("quantities");
-    let plan = prepared
-        .claims_plan(id(30), &quantities)
-        .expect("plan")
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    let mut packet_bytes = vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let packet = prepared
+        .write_affine_packet(id(30), Some(context), &mut packet_bytes)
+        .expect("affine packet")
         .expect("present");
-    let claims_receipt =
-        ClaimsReceiptV1::new(plan, id(34), id(31), 11, 31, 21, 0, id(35)).expect("claims receipt");
+    let row = packet.row(0).expect("row");
+    assert_eq!(row.source_position_index(), 1);
+    assert_eq!(row.destination_position_index(), 0);
+    let affine_receipt = AffineBatchReceiptV2::new(packet, id(34), id(35), id(31), id(36), 11)
+        .expect("affine receipt");
     let posts = post_assets(&[(30, 9, 21)]);
     finalize(
         prepared,
@@ -544,9 +526,13 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: id(34),
-            claims_receipt: Some(claims_receipt),
-            token_effect_digest: id(36),
+            claims_packet_digest: id(34),
+            affine_packet: Some(packet),
+            affine_context: Some(context),
+            affine_receipt: Some(affine_receipt),
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
+            token_effect_digest: id(37),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
             custody_request: None,
@@ -554,7 +540,7 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             custody_receipt: None,
             custody_receipt_digest: [0; 32],
             custody_replay_digest: [0; 32],
-            post_resource_digest: id(37),
+            post_resource_digest: id(38),
         },
     )
     .expect("reconstitution finalize");
@@ -587,6 +573,16 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
     );
     assert_eq!(
         effects
+            .first()
+            .expect("receipt burn")
+            .as_ref()
+            .expect("effect")
+            .authority,
+        id(7),
+        "receipt burn authority is the observed Token holder, not the mint authority"
+    );
+    assert_eq!(
+        effects
             .get(1)
             .expect("first release")
             .as_ref()
@@ -601,8 +597,12 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: [0; 32],
-            claims_receipt: None,
+            claims_packet_digest: [0; 32],
+            affine_packet: None,
+            affine_context: None,
+            affine_receipt: None,
+            signed_delta_packet: None,
+            signed_delta_receipt: None,
             token_effect_digest: id(36),
             post_receipt_supply: 6,
             post_asset_observations: &posts,
@@ -619,7 +619,7 @@ fn reconstitution_and_unwrap_are_exact_inverse_effect_shapes() {
 }
 
 #[test]
-fn terminal_winner_burn_claims_and_custody_join_is_exact() {
+fn terminal_finalize_consumes_signed_delta_and_accepts_exact_zero_payout() {
     let projection_bytes = projection_fixture(4, 40, 19);
     let projection = StructuredProjectionV2::decode(&projection_bytes).expect("projection");
     let descriptor_bytes = descriptor_fixture();
@@ -627,10 +627,11 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
     let mut selected = assets()[0];
     selected.expected_shard_supply = 40;
     selected.expected_actor_shards = 19;
-    let rows = asset_bytes(&[selected]);
+    let asset_rows = asset_bytes(&[selected]);
+    let mut request_header = header(RepresentationActionV2::RedeemTerminal, 0, 1);
+    request_header.expected_custody_replay_revision = ABSENT_REVISION;
     let request =
-        RepresentationRequestV2::new(header(RepresentationActionV2::RedeemTerminal, 0, 1), &rows)
-            .expect("request");
+        RepresentationRequestV2::new(request_header, &asset_rows).expect("terminal request");
     let prepared = prepare(
         request,
         descriptor(&descriptor_bytes),
@@ -638,92 +639,162 @@ fn terminal_winner_burn_claims_and_custody_join_is_exact() {
         graph(&graph_bytes),
     )
     .expect("prepare");
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("quantities");
-    let plan = prepared
-        .claims_plan(id(30), &quantities)
-        .expect("plan")
-        .expect("present");
-    let claims_receipt = ClaimsReceiptV1::new(
-        plan,
-        id(34),
-        id(31),
-        11,
-        31,
-        NO_POSITION_REVISION,
-        1,
-        id(35),
-    )
-    .expect("claims receipt");
-    let custody_request = CustodyRequestV1 {
-        operation: OperationV1::Transfer,
-        caller_role: CallerRoleV1::Claims,
-        source_compartment: CompartmentV1::HoardPrincipal,
-        destination_compartment: CompartmentV1::External,
-        release_set: id(1),
-        market: id(2),
-        realm: id(10),
-        context: id(6),
-        caller_program: id(31),
-        semantic: ContextV1 {
-            candidate: [0; 32],
-            source_owner: [0; 32],
-            destination_owner: id(7),
-            order: [0; 32],
-            parent_request_digest: id(30),
-            order_nonce: 0,
-            generation: 9,
-            page_index: 0,
-            execution_index: 0,
-            transfer_index: 0,
-        },
-        source: id(70),
-        destination: id(11),
-        source_vault_context: id(6),
-        destination_vault_context: [0; 32],
-        mint: id(71),
-        token_program: TOKEN_2022_PROGRAM_ID,
-        payer: [0; 32],
-        rent_refund: [0; 32],
-        expected_revision: 5,
-        resulting_revision: 6,
-        amount: 1,
-        rent_lamports: 0,
-    };
-    let custody_evidence = ReceiptEvidenceV1 {
-        source_before: 10,
-        source_after: 9,
-        destination_before: 0,
-        destination_after: 1,
-        poststate_commitment: id(72),
-        replay_state_digest: id(73),
-    };
-    let custody_receipt =
-        CustodyReceiptV1::new(custody_request, id(74), custody_evidence).expect("custody receipt");
     let posts = post_assets(&[(30, 9, 21)]);
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral");
+    let debit = SignedDeltaV3::new(DeltaDirectionV3::Debit, 1).expect("debit");
+    let positions = [SignedDeltaPositionV3::new(id(53), 30).expect("position")];
+    let aggregate = [debit, neutral];
+    let delta_rows = [PositionDeltaV3::new(
+        PositionDeltaInputV3 {
+            position_index: 0,
+            outcome: 0,
+            delta: debit,
+        },
+        1,
+        2,
+    )
+    .expect("row")];
+    let mut packet_bytes = vec![0; plan_bytes(2, 1, 1).expect("packet width")];
+    SignedDeltaPlanV3::encode_into(
+        SignedDeltaPlanInputV3 {
+            caller_role: CallerRole::Trading,
+            release_set: id(1),
+            market: id(2),
+            request_id: id(30),
+            product_record_digest: id(80),
+            semantic_basis_id: id(81),
+            linked_basis_record_digest: id(82),
+            expected_market_revision: 10,
+            claim_count: 2,
+        },
+        &positions,
+        &aggregate,
+        &delta_rows,
+        &mut packet_bytes,
+    )
+    .expect("terminal packet");
+    let packet = SignedDeltaPlanV3::decode(&packet_bytes).expect("terminal packet decode");
+    let packet_digest = id(83);
+    let signed_receipt =
+        SignedDeltaReceiptV3::new(packet, packet_digest, id(84), id(31), id(85), 11)
+            .expect("terminal receipt");
     let receipt = finalize(
         prepared,
         CompletionEvidenceV2 {
             request_digest: id(30),
             representation_program: id(31),
             claims_program: id(31),
-            claims_plan_digest: id(34),
-            claims_receipt: Some(claims_receipt),
+            claims_packet_digest: packet_digest,
+            affine_packet: None,
+            affine_context: None,
+            affine_receipt: None,
+            signed_delta_packet: Some(packet),
+            signed_delta_receipt: Some(signed_receipt),
             token_effect_digest: id(36),
             post_receipt_supply: 7,
             post_asset_observations: &posts,
-            custody_request: Some(custody_request),
-            custody_request_digest: id(74),
-            custody_receipt: Some(custody_receipt),
-            custody_receipt_digest: id(75),
-            custody_replay_digest: id(73),
-            post_resource_digest: id(76),
+            custody_request: None,
+            custody_request_digest: [0; 32],
+            custody_receipt: None,
+            custody_receipt_digest: [0; 32],
+            custody_replay_digest: [0; 32],
+            post_resource_digest: id(37),
         },
     )
-    .expect("terminal finalize");
-    assert_eq!(receipt.payout(), 1);
+    .expect("signed terminal completion");
+    assert_eq!(receipt.payout(), 0);
+    assert_eq!(receipt.post_claims_market_revision(), 11);
+    assert_eq!(receipt.post_custody_position_revision(), 31);
+}
+
+#[test]
+fn product_v3_terminal_accepts_only_one_exact_signed_delta_debit() {
+    let selected = assets()[0];
+    let rows = asset_bytes(&[selected]);
+    let request =
+        RepresentationRequestV2::new(header(RepresentationActionV2::RedeemTerminal, 0, 1), &rows)
+            .expect("terminal request");
+    let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral");
+    let debit = SignedDeltaV3::new(DeltaDirectionV3::Debit, 1).expect("debit");
+    let positions = [SignedDeltaPositionV3::new(id(53), 30).expect("position")];
+    let aggregate = [debit, neutral];
+    let rows = [PositionDeltaV3::new(
+        PositionDeltaInputV3 {
+            position_index: 0,
+            outcome: 0,
+            delta: debit,
+        },
+        1,
+        2,
+    )
+    .expect("row")];
+    let mut packet_bytes = vec![0; plan_bytes(2, 1, 1).expect("packet width")];
+    SignedDeltaPlanV3::encode_into(
+        SignedDeltaPlanInputV3 {
+            caller_role: CallerRole::Trading,
+            release_set: id(1),
+            market: id(2),
+            request_id: id(30),
+            product_record_digest: id(80),
+            semantic_basis_id: id(81),
+            linked_basis_record_digest: id(82),
+            expected_market_revision: 10,
+            claim_count: 2,
+        },
+        &positions,
+        &aggregate,
+        &rows,
+        &mut packet_bytes,
+    )
+    .expect("terminal packet");
+    let packet = SignedDeltaPlanV3::decode(&packet_bytes).expect("decode terminal packet");
+    let packet_digest = id(83);
+    let receipt = SignedDeltaReceiptV3::new(packet, packet_digest, id(84), id(31), id(85), 11)
+        .expect("terminal receipt");
+    let completion = validate_signed_delta_terminal_v3(
+        request,
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(30),
+            claims_program: id(31),
+            packet_digest,
+            packet,
+            receipt,
+        },
+    )
+    .expect("exact terminal completion");
+    assert_eq!(completion.effect_digest, packet_digest);
+    assert_eq!(completion.resource_digest, id(85));
+    assert_eq!(completion.market_revision, 11);
+    assert_eq!(completion.custody_position_revision, 31);
+
+    for hostile in [
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(99),
+            claims_program: id(31),
+            packet_digest,
+            packet,
+            receipt,
+        },
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(30),
+            claims_program: id(99),
+            packet_digest,
+            packet,
+            receipt,
+        },
+        SignedDeltaTerminalEvidenceV3 {
+            request_digest: id(30),
+            claims_program: id(31),
+            packet_digest: id(99),
+            packet,
+            receipt,
+        },
+    ] {
+        assert_eq!(
+            validate_signed_delta_terminal_v3(request, hostile),
+            Err(Error::ClaimsMismatch)
+        );
+    }
 }
 
 #[test]
@@ -789,8 +860,12 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 request_digest: id(30),
                 representation_program: id(31),
                 claims_program: id(31),
-                claims_plan_digest: [0; 32],
-                claims_receipt: None,
+                claims_packet_digest: [0; 32],
+                affine_packet: None,
+                affine_context: None,
+                affine_receipt: None,
+                signed_delta_packet: None,
+                signed_delta_receipt: None,
                 token_effect_digest: id(32),
                 post_receipt_supply: 8,
                 post_asset_observations: &hostile_posts,
@@ -820,16 +895,18 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
         graph(&graph_bytes),
     )
     .expect("prepare");
-    let mut quantities = vec![0_u8; prepared.claims_quantity_bytes().expect("width")];
-    prepared
-        .write_claims_quantities(&mut quantities)
-        .expect("quantities");
-    let substituted_plan = prepared
-        .claims_plan(id(99), &quantities)
-        .expect("substituted plan")
-        .expect("claims active");
+    let context = AffineBatchContextV2 {
+        product_record_digest: id(80),
+        semantic_basis_id: id(81),
+        linked_basis_record_digest: id(82),
+    };
+    let mut packet_bytes = vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let substituted_packet = prepared
+        .write_affine_packet(id(99), Some(context), &mut packet_bytes)
+        .expect("substituted packet")
+        .expect("affine active");
     let substituted_receipt =
-        ClaimsReceiptV1::new(substituted_plan, id(34), id(31), 11, 21, 31, 0, id(35))
+        AffineBatchReceiptV2::new(substituted_packet, id(34), id(35), id(31), id(36), 11)
             .expect("well-formed substituted receipt");
     let denomination_posts = post_assets(&[(40, 19, 21)]);
     assert_eq!(
@@ -839,9 +916,13 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 request_digest: id(30),
                 representation_program: id(31),
                 claims_program: id(31),
-                claims_plan_digest: id(34),
-                claims_receipt: Some(substituted_receipt),
-                token_effect_digest: id(36),
+                claims_packet_digest: id(34),
+                affine_packet: Some(substituted_packet),
+                affine_context: Some(context),
+                affine_receipt: Some(substituted_receipt),
+                signed_delta_packet: None,
+                signed_delta_receipt: None,
+                token_effect_digest: id(37),
                 post_receipt_supply: 7,
                 post_asset_observations: &denomination_posts,
                 custody_request: None,
@@ -849,9 +930,86 @@ fn hostile_partial_reconstitution_replay_and_late_token_post_refuse() {
                 custody_receipt: None,
                 custody_receipt_digest: [0; 32],
                 custody_replay_digest: [0; 32],
-                post_resource_digest: id(37),
+                post_resource_digest: id(38),
             },
         ),
         Err(Error::ClaimsMismatch)
+    );
+
+    let mut canonical_packet_bytes =
+        vec![0_u8; prepared.affine_packet_bytes().expect("packet width")];
+    let canonical_packet = prepared
+        .write_affine_packet(id(30), Some(context), &mut canonical_packet_bytes)
+        .expect("canonical packet")
+        .expect("affine active");
+    let canonical_receipt =
+        AffineBatchReceiptV2::new(canonical_packet, id(34), id(35), id(31), id(36), 11)
+            .expect("canonical receipt");
+    let substituted_context = AffineBatchContextV2 {
+        product_record_digest: id(83),
+        ..context
+    };
+    assert_eq!(
+        finalize(
+            prepared,
+            CompletionEvidenceV2 {
+                request_digest: id(30),
+                representation_program: id(31),
+                claims_program: id(31),
+                claims_packet_digest: id(34),
+                affine_packet: Some(canonical_packet),
+                affine_context: Some(substituted_context),
+                affine_receipt: Some(canonical_receipt),
+                signed_delta_packet: None,
+                signed_delta_receipt: None,
+                token_effect_digest: id(37),
+                post_receipt_supply: 7,
+                post_asset_observations: &denomination_posts,
+                custody_request: None,
+                custody_request_digest: [0; 32],
+                custody_receipt: None,
+                custody_receipt_digest: [0; 32],
+                custody_replay_digest: [0; 32],
+                post_resource_digest: id(38),
+            },
+        ),
+        Err(Error::ClaimsMismatch)
+    );
+}
+
+#[test]
+fn physical_account_width_is_sparse_for_selected_actions() {
+    let selected_rows = asset_bytes(&[assets()[0]]);
+    let denominate = RepresentationRequestV2::new(
+        header(RepresentationActionV2::Denominate, 0, 1),
+        &selected_rows,
+    )
+    .expect("denominate");
+    assert_eq!(
+        denominate.physical_account_count(),
+        Ok(RATIONAL_BASE_ACCOUNT_COUNT_V2 + RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+    );
+
+    let terminal = RepresentationRequestV2::new(
+        header(RepresentationActionV2::RedeemTerminal, 0, 1),
+        &selected_rows,
+    )
+    .expect("terminal");
+    assert_eq!(
+        terminal.physical_account_count(),
+        Ok(RATIONAL_BASE_ACCOUNT_COUNT_V2
+            + RATIONAL_ASSET_ACCOUNT_COUNT_V2
+            + RATIONAL_TERMINAL_ACCOUNT_COUNT_V2)
+    );
+
+    let all_rows = asset_bytes(&assets());
+    let issue = RepresentationRequestV2::new(
+        header(RepresentationActionV2::IssueStructured, u32::MAX, 2),
+        &all_rows,
+    )
+    .expect("issue");
+    assert_eq!(
+        issue.physical_account_count(),
+        Ok(RATIONAL_BASE_ACCOUNT_COUNT_V2 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2)
     );
 }

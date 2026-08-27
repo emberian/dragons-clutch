@@ -9,9 +9,9 @@ describe('operator surface presentation', () => {
     expect(html).toContain('Operate what exists.');
     expect(html).toContain('Reacquire the multiprogram deployment');
     expect(html).toContain('Create registered order');
-    expect(html).toContain('Collect / materialize / distribute');
+    expect(html).toContain('Initialize / collect / materialize / distribute');
     expect(html).toContain('Inventory-bounded immediate trade');
-    expect(html).toContain('Bearer mint / unwrap / redeem / retire');
+    expect(html).toContain('Redeem terminal Rational / Bearer representation');
     expect(html).toContain('Inspect and export an unsigned transaction');
     expect(html).toContain('No chain state has been read.');
     expect(html).not.toContain('Illustrative');

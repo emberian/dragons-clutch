@@ -1,9 +1,9 @@
 //! Fixed Capability Program V3 descriptor.
 //!
-//! V3 carries content identities for three independently finalized physical
-//! artifacts: AccountProfile, Effect, and Transition. It does not embed VM
-//! bytes, select a family tag, or treat any schema identity as arbitrary byte
-//! authority.
+//! V3 carries content identities for four independently finalized physical
+//! artifacts: AccountProfile, RequestProfile, EffectProgram, and Transition.
+//! It does not embed VM bytes, select a family tag, or treat any schema
+//! identity as arbitrary byte authority.
 
 use core::convert::TryInto;
 
@@ -38,7 +38,7 @@ pub struct CapabilityProgramV3 {
     account_profile: ContentId,
     derivation_policy: ContentId,
     capacity_profile: ContentId,
-    effect_schema: ContentId,
+    effect_program: ContentId,
     request_profile_schema: ContentId,
     request_profile_program: ContentId,
     transition_schema: ContentId,
@@ -57,7 +57,7 @@ impl CapabilityProgramV3 {
         account_profile: ContentId,
         derivation_policy: ContentId,
         capacity_profile: ContentId,
-        effect_schema: ContentId,
+        effect_program: ContentId,
         request_profile_schema: ContentId,
         request_profile_program: ContentId,
         transition_schema: ContentId,
@@ -78,7 +78,7 @@ impl CapabilityProgramV3 {
             account_profile,
             derivation_policy,
             capacity_profile,
-            effect_schema,
+            effect_program,
             request_profile_schema,
             request_profile_program,
             transition_schema,
@@ -126,7 +126,7 @@ impl CapabilityProgramV3 {
             content(bytes, CAPABILITY_PROGRAM_V3_ACCOUNT_PROFILE_OFFSET)?,
             content(bytes, CAPABILITY_PROGRAM_V3_DERIVATION_POLICY_OFFSET)?,
             content(bytes, CAPABILITY_PROGRAM_V3_CAPACITY_PROFILE_OFFSET)?,
-            content(bytes, CAPABILITY_PROGRAM_V3_EFFECT_SCHEMA_OFFSET)?,
+            content(bytes, CAPABILITY_PROGRAM_V3_EFFECT_PROGRAM_OFFSET)?,
             content(bytes, CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_OFFSET)?,
             content(bytes, CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_PROGRAM_OFFSET)?,
             content(bytes, CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_OFFSET)?,
@@ -221,9 +221,9 @@ impl CapabilityProgramV3 {
         self.capacity_profile
     }
 
-    /// Effect finalized content identity.
-    pub const fn effect_schema(self) -> ContentId {
-        self.effect_schema
+    /// SHA-256 identity of the exact finalized EffectProgram bytes.
+    pub const fn effect_program(self) -> ContentId {
+        self.effect_program
     }
 
     /// RequestProfile finalized-record schema identity.
@@ -322,8 +322,8 @@ impl CapabilityProgramV3 {
                 self.capacity_profile,
             ),
             (
-                CAPABILITY_PROGRAM_V3_EFFECT_SCHEMA_OFFSET,
-                self.effect_schema,
+                CAPABILITY_PROGRAM_V3_EFFECT_PROGRAM_OFFSET,
+                self.effect_program,
             ),
             (
                 CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_OFFSET,
@@ -535,7 +535,7 @@ mod tests {
             CAPABILITY_PROGRAM_V3_ACCOUNT_PROFILE_OFFSET,
             CAPABILITY_PROGRAM_V3_DERIVATION_POLICY_OFFSET,
             CAPABILITY_PROGRAM_V3_CAPACITY_PROFILE_OFFSET,
-            CAPABILITY_PROGRAM_V3_EFFECT_SCHEMA_OFFSET,
+            CAPABILITY_PROGRAM_V3_EFFECT_PROGRAM_OFFSET,
             CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_SCHEMA_OFFSET,
             CAPABILITY_PROGRAM_V3_REQUEST_PROFILE_PROGRAM_OFFSET,
             CAPABILITY_PROGRAM_V3_TRANSITION_SCHEMA_OFFSET,

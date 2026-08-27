@@ -123,26 +123,30 @@ execution. Regenerated Loader headers, deployment slots, and current wall clock
 remain outside captured-devnet release identity, and the evidence keeps that
 boundary machine-readable.
 
-## Registry + Resolution successor profile
+## Immutable multi-program successor profile
 
-`dclutch-successor-validator` is the current small-program composition profile.
-It uses a fresh ledger on RPC `20890`, installs exact complete immutable Loader
-V3 accounts for separately attested Registry and Resolution ELFs, and loads the
-committed real Pyth router and receiver ELFs. Unlike `--upgradeable-program`, the
-prepared ProgramData accounts preserve the canonical fixed 45-byte Loader V3
-metadata span: variant `3`, slot `0`, authority `None`, zero authority padding,
-then the exact ELF. The launcher and runtime both verify these facts.
+`dclutch-successor-validator` uses a fresh ledger on RPC `20890` and requires
+separately attested, actual Registry, Core, Claims, Trading, Resolution,
+Custody, and RentCredit ELFs under seven pairwise-distinct program IDs. It also
+loads the committed real Pyth router and receiver ELFs. Unlike
+`--upgradeable-program`, the prepared ProgramData accounts preserve the
+canonical fixed 45-byte Loader V3 metadata span: variant `3`, slot `0`,
+authority `None`, zero authority padding, then the exact ELF.
 
 The standalone [`successor`](bootstrap/successor/README.md) package prepares a
-hash-pinned genesis plan, activates and reauthenticates the Registry release set,
-consumes a real posted 134-byte Pyth PriceUpdate in Resolution, executes funded
-recovery/exhaustion/failure, and proves late-refusal rollback against exact
-account hashes. It is localhost-only and uses ephemeral in-memory client keys.
+hash-pinned infrastructure plan containing all seven distinct ArtifactRelease
+bodies, the five-role execution release set, the captured local-Pyth release,
+and the exact expected 144-byte Core-owned Registry/Rent infrastructure
+profile. Genesis contains six immutable Loader programs plus an explicitly
+pre-init authority-bearing Core ProgramData account; Core is not recognized as
+the immutable release until its authority is revoked to `None`. Finalized
+Registry record bodies are the only other genesis fixtures.
 
-This profile intentionally records that Registry records, Markets, Source
-states, and Funding were prepared as genesis inputs because the presently
-deployed small-program set does not create them. Resolution certificates are
-created by the real SBF program. No checked production release or captured Pyth
-deployment identity is claimed. See the successor README for the full launch
-sequence, artifact attestations, immutable Loader boundary, timing policy, and
-the exact validated checkpoint.
+Core `d6d5f2d` now provides verifier-clean infrastructure-init and Found31. The
+remaining gate is one same-process supervisor retaining an ephemeral Core
+upgrade authority only in memory across init, Loader revocation, immutable
+release activation, and Found. The bootstrap `run` command currently validates
+the complete plan and provider evidence, then fails before opening an RPC
+connection or signing. It does not retain the obsolete direct Resolution V1
+path or genesis-prepare Market/Source/Funding state. No checked production
+release or captured Pyth deployment identity is claimed.

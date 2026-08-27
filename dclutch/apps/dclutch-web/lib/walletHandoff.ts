@@ -168,20 +168,100 @@ export async function acquireUnsignedTransactionDependenciesV1(
   });
 }
 
-export type ReadonlyWalletIdentityV1 = Readonly<{ address: string; label: string }>;
-
-type InjectedWallet = Readonly<{
-  publicKey?: Readonly<{ toBase58(): string }>;
-  connect(input?: Readonly<{ onlyIfTrusted?: boolean }>): Promise<unknown>;
+export type WalletSignedTransactionV1 = Readonly<{
+  transaction: VersionedTransaction;
+  wireBytes: Uint8Array;
+  signer: string;
+  complete: boolean;
 }>;
 
-export async function requestReadonlyWalletIdentityV1(candidate: unknown): Promise<ReadonlyWalletIdentityV1> {
+/**
+ * The handoff a caller supplies for one explicit signature request.
+ *
+ * `walletStandard` builds this from a Wallet Standard wallet the user chose and
+ * connected; the checks below never trust it, they re-derive the signer and
+ * compare the exact message bytes the wallet was handed.
+ */
+type HandoffWallet = Readonly<{
+  publicKey?: Readonly<{ toBase58(): string }>;
+  connect(): Promise<unknown>;
+  signTransaction?(transaction: VersionedTransaction): Promise<VersionedTransaction>;
+  signMessage?(message: Uint8Array): Promise<Uint8Array>;
+}>;
+
+function handoff(candidate: unknown): HandoffWallet {
   if (candidate === null || typeof candidate !== 'object' || !('connect' in candidate) || typeof candidate.connect !== 'function') {
-    throw new Error('no compatible injected Solana wallet adapter is available');
+    throw new Error('no connected browser wallet handoff was supplied');
   }
-  const wallet = candidate as InjectedWallet;
-  await wallet.connect();
+  return candidate as HandoffWallet;
+}
+
+function walletAddress(wallet: HandoffWallet): string {
   const address = wallet.publicKey?.toBase58();
   if (address === undefined || new PublicKey(address).toBase58() !== address) throw new Error('wallet did not expose one canonical public identity');
-  return Object.freeze({ address, label: 'connected identity only · no signature requested' });
+  return address;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/** Request one detached maker signature after a user-triggered wallet action. */
+export async function requestWalletMessageSignatureV1(
+  candidate: unknown,
+  expectedMaker: string,
+  message: Uint8Array,
+): Promise<Uint8Array> {
+  const wallet = handoff(candidate);
+  if (typeof wallet.signMessage !== 'function') throw new Error('wallet does not expose signMessage');
+  const canonicalMaker = new PublicKey(expectedMaker).toBase58();
+  if (canonicalMaker !== expectedMaker || walletAddress(wallet) !== canonicalMaker) throw new Error('connected wallet is not the expected maker');
+  if (!(message instanceof Uint8Array) || message.length === 0 || message.length > 1_024) throw new Error('maker message has an unsupported exact width');
+  const signature = await wallet.signMessage(new Uint8Array(message));
+  if (!(signature instanceof Uint8Array) || signature.length !== 64 || signature.every((byte) => byte === 0)) throw new Error('wallet returned no exact Ed25519 signature');
+  return new Uint8Array(signature);
+}
+
+/** Request a wallet signature without allowing the wallet to rewrite the v0 message. */
+export async function requestWalletTransactionSignatureV1(
+  candidate: unknown,
+  transaction: VersionedTransaction,
+  expectedSigner: string,
+): Promise<WalletSignedTransactionV1> {
+  const wallet = handoff(candidate);
+  if (typeof wallet.signTransaction !== 'function') throw new Error('wallet does not expose signTransaction');
+  const canonicalSigner = new PublicKey(expectedSigner).toBase58();
+  if (canonicalSigner !== expectedSigner || walletAddress(wallet) !== canonicalSigner) throw new Error('connected wallet is not the expected transaction signer');
+  requireUnsigned(transaction);
+  const message = messageView(transaction);
+  const signerIndex = message.staticAccountKeys
+    .slice(0, message.header.numRequiredSignatures)
+    .findIndex((key) => key.toBase58() === canonicalSigner);
+  if (signerIndex < 0) throw new Error('connected wallet is not required by this transaction');
+  const before = transaction.message.serialize();
+  const candidateTransaction = VersionedTransaction.deserialize(transaction.serialize());
+  const signed = await wallet.signTransaction(candidateTransaction);
+  if (!(signed instanceof VersionedTransaction) || !sameBytes(signed.message.serialize(), before)) throw new Error('wallet rewrote the transaction message');
+  if (signed.signatures.length !== transaction.signatures.length
+      || signed.signatures[signerIndex]?.every((byte) => byte === 0)) {
+    throw new Error('wallet did not add the expected transaction signature');
+  }
+  for (let index = 0; index < signed.signatures.length; index += 1) {
+    if (index !== signerIndex && signed.signatures[index]?.some((byte) => byte !== 0)) {
+      throw new Error('wallet added an unauthorized transaction signature');
+    }
+  }
+  const complete = signed.signatures.every((signature) => signature.some((byte) => byte !== 0));
+  return Object.freeze({ transaction: signed, wireBytes: signed.serialize(), signer: canonicalSigner, complete });
+}
+
+/** Submit only an already complete signed packet after a separate user action. */
+export async function submitSignedTransactionV1(
+  client: Pick<SolanaRpcClient, 'sendRawTransaction'>,
+  transaction: VersionedTransaction,
+): Promise<string> {
+  if (transaction.signatures.length === 0 || transaction.signatures.some((signature) => signature.every((byte) => byte === 0))) {
+    throw new Error('transaction is not fully signed');
+  }
+  return client.sendRawTransaction(transaction.serialize());
 }

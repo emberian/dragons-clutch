@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Data-defined capability program and immutable Trading root contract"
 
 [dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }

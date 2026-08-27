@@ -14,7 +14,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
-use dclutch_custody_contract::{CUSTODY_REQUEST_BYTES_V1, CustodyRequestV1};
+use dclutch_custody_contract::{
+    CUSTODY_REQUEST_BYTES_V1, CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyRequestV2,
+};
 use dclutch_release_set_contract::CallerAuthoritySeedsV1;
 use solana_program::{
     account_info::AccountInfo,
@@ -28,6 +31,9 @@ use solana_program::{
 
 /// Exact test-wrapper instruction width: one fail-after-CPI byte plus request.
 pub const TEST_CALLER_INSTRUCTION_BYTES_V1: usize = CUSTODY_REQUEST_BYTES_V1 + 1;
+/// Exact delegated-successor test-wrapper width.
+pub const TEST_CALLER_DELEGATED_INSTRUCTION_BYTES_V2: usize =
+    DELEGATED_CUSTODY_REQUEST_BYTES_V2 + 1;
 
 /// Stable test-caller refusal.
 #[repr(u32)]
@@ -58,7 +64,10 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    if instruction_data.len() != TEST_CALLER_INSTRUCTION_BYTES_V1 {
+    if !matches!(
+        instruction_data.len(),
+        TEST_CALLER_INSTRUCTION_BYTES_V1 | TEST_CALLER_DELEGATED_INSTRUCTION_BYTES_V2
+    ) {
         return Err(TestCallerError::Instruction.into());
     }
     let fail_after = *instruction_data
@@ -70,8 +79,16 @@ pub fn process_instruction(
     let request_bytes = instruction_data
         .get(1..)
         .ok_or(TestCallerError::Instruction)?;
-    let request =
-        CustodyRequestV1::decode(request_bytes).map_err(|_| TestCallerError::Instruction)?;
+    let request = if request_bytes.len() == DELEGATED_CUSTODY_REQUEST_BYTES_V2
+        && request_bytes.get(..DELEGATED_CUSTODY_REQUEST_MAGIC_V2.len())
+            == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice())
+    {
+        DelegatedCustodyRequestV2::decode(request_bytes)
+            .map_err(|_| TestCallerError::Instruction)?
+            .custody
+    } else {
+        CustodyRequestV1::decode(request_bytes).map_err(|_| TestCallerError::Instruction)?
+    };
     if request.caller_program != program_id.to_bytes() || accounts.len() < 2 {
         return Err(TestCallerError::AccountFrame.into());
     }

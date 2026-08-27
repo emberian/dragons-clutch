@@ -15,10 +15,12 @@
 mod activation;
 mod artifact;
 mod authority;
+mod immutable_registry;
 
 pub use activation::*;
 pub use artifact::*;
 pub use authority::*;
+pub use immutable_registry::*;
 
 /// Bytes in every identity and digest coordinate.
 pub const IDENTITY_BYTES: usize = 32;
@@ -42,6 +44,22 @@ pub enum Error {
     AliasedLoaderIdentity,
     /// Upgrade policy and authority bytes were not canonical.
     NonCanonicalUpgradeAuthority,
+    /// The finalized Registry artifact differed from the infrastructure selection.
+    RegistryArtifactReleaseMismatch,
+    /// The selected Registry program differed from the finalized artifact release.
+    RegistryProgramMismatch,
+    /// The current Registry release retained an upgrade authority.
+    MutableRegistryRelease,
+    /// A raw or staging account differed from the adapter-derived content address.
+    NonCanonicalRecordCoordinate,
+    /// A finalized raw record was not owned by the authenticated Registry.
+    FinalizedRecordOwnerMismatch,
+    /// A finalized raw record no longer retained its current Rent reserve.
+    FinalizedRecordRentDeficit,
+    /// A finalized raw record had the wrong width or mutable privileges.
+    InvalidFinalizedRecordShape,
+    /// The canonical staging cursor was live, privileged, or non-System-owned.
+    StagingCursorPresent,
     /// The immutable Market selected a different authority-manifest identity.
     MarketAuthorityManifestMismatch,
     /// The authority manifest selected a different release-set identity.

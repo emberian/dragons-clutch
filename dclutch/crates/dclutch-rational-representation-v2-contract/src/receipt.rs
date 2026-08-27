@@ -1,21 +1,31 @@
 //! State-last completion and normalized composition receipt.
 
-use dclutch_claims_svm::{ClaimsAction, ClaimsReceiptV1, NO_POSITION_REVISION};
+use dclutch_claims_svm::affine_batch_v2::{
+    AffineBatchPlanV2, AffineBatchReceiptV2, DeltaDirectionV2,
+};
+use dclutch_claims_svm::signed_delta_v3::{
+    DeltaDirectionV3, SignedDeltaPlanV3, SignedDeltaReceiptV3,
+};
 use dclutch_custody_contract::{
-    CallerRoleV1 as CustodyCallerRole, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
-    OperationV1,
+    CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
 };
 
 use crate::request::{CallerRoleV2, RepresentationActionV2, RepresentationRequestV2};
 use crate::{
-    ABSENT_REVISION, Error, Result, array_at, byte_at, generated::*, is_zero,
-    plan::PreparedRepresentationV2, put, put_byte, require_nonzero, require_zero, subslice, u16_at,
-    u32_at, u64_at,
+    ABSENT_REVISION, Error, Result, array_at, byte_at,
+    generated::*,
+    is_zero,
+    plan::{AffineBatchContextV2, PreparedRepresentationV2},
+    put, put_byte, require_nonzero, require_zero, subslice, u16_at, u32_at, u64_at,
 };
 
 /// Bytes in one post-Token asset observation: Mint supply, actor balance, and
 /// Structured custody balance as three little-endian `u64` values.
 pub const POST_ASSET_OBSERVATION_BYTES_V2: usize = 24;
+
+// The normalized physical receipt width is unchanged. This field commits the
+// canonical affine or SignedDelta packet rather than a family-specific DTO.
+const RECEIPT_CLAIMS_PACKET_DIGEST_OFFSET: usize = RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET;
 
 /// Exact evidence observed after all child effects and before replay state is
 /// committed. Every digest is computed by the physical adapter over exact
@@ -26,12 +36,20 @@ pub struct CompletionEvidenceV2<'a> {
     pub request_digest: [u8; 32],
     /// Registry-authenticated current Claims program which owns this adapter.
     pub representation_program: [u8; 32],
-    /// Same current Claims program selected for the economic plan.
+    /// Same current Claims program selected for the affine batch.
     pub claims_program: [u8; 32],
-    /// SHA-256 of exact Claims plan bytes, zero only when Claims is inactive.
-    pub claims_plan_digest: [u8; 32],
-    /// Exact Claims return data, absent only for Structured-only actions.
-    pub claims_receipt: Option<ClaimsReceiptV1>,
+    /// SHA-256 of the exact active Claims packet, zero for Structured actions.
+    pub claims_packet_digest: [u8; 32],
+    /// Exact affine packet, absent for Structured actions.
+    pub affine_packet: Option<AffineBatchPlanV2<'a>>,
+    /// Finalized Product/LiabilityBasis identities authenticated before CPI.
+    pub affine_context: Option<AffineBatchContextV2>,
+    /// Exact affine-batch return data, absent for Structured actions.
+    pub affine_receipt: Option<AffineBatchReceiptV2>,
+    /// Canonical SignedDeltaV3 packet, present only for terminal redemption.
+    pub signed_delta_packet: Option<SignedDeltaPlanV3<'a>>,
+    /// Canonical SignedDeltaV3 receipt, present only for terminal redemption.
+    pub signed_delta_receipt: Option<SignedDeltaReceiptV3>,
     /// SHA-256 of the ordered exact Token effect transcript.
     pub token_effect_digest: [u8; 32],
     /// Exact post receipt Mint supply.
@@ -39,11 +57,11 @@ pub struct CompletionEvidenceV2<'a> {
     /// Repeated `(shard_supply, actor_shards, structured_shards)` observations.
     pub post_asset_observations: &'a [u8],
     /// Custody request for positive terminal payout only.
-    pub custody_request: Option<CustodyRequestV1>,
+    pub custody_request: Option<&'a CustodyRequestV1>,
     /// SHA-256 of Custody request bytes, zero when inactive.
     pub custody_request_digest: [u8; 32],
     /// Custody return receipt for positive terminal payout only.
-    pub custody_receipt: Option<CustodyReceiptV1>,
+    pub custody_receipt: Option<&'a CustodyReceiptV1>,
     /// SHA-256 of exact Custody receipt bytes, zero when inactive.
     pub custody_receipt_digest: [u8; 32],
     /// SHA-256 of exact post Custody replay bytes, zero when inactive.
@@ -67,7 +85,7 @@ pub struct RepresentationReceiptV2 {
     representation_program: [u8; 32],
     claims_program: [u8; 32],
     token_program: [u8; 32],
-    claims_plan_digest: [u8; 32],
+    claims_packet_digest: [u8; 32],
     claims_resource_digest: [u8; 32],
     token_effect_digest: [u8; 32],
     custody_request_digest: [u8; 32],
@@ -113,7 +131,7 @@ impl RepresentationReceiptV2 {
             )?)?,
             claims_program: require_nonzero(array_at(input, RECEIPT_CLAIMS_PROGRAM_OFFSET)?)?,
             token_program: require_nonzero(array_at(input, RECEIPT_TOKEN_PROGRAM_OFFSET)?)?,
-            claims_plan_digest: array_at(input, RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET)?,
+            claims_packet_digest: array_at(input, RECEIPT_CLAIMS_PACKET_DIGEST_OFFSET)?,
             claims_resource_digest: array_at(input, RECEIPT_CLAIMS_RESOURCE_DIGEST_OFFSET)?,
             token_effect_digest: require_nonzero(array_at(
                 input,
@@ -177,7 +195,10 @@ impl RepresentationReceiptV2 {
             ),
             (RECEIPT_CLAIMS_PROGRAM_OFFSET, self.claims_program),
             (RECEIPT_TOKEN_PROGRAM_OFFSET, self.token_program),
-            (RECEIPT_CLAIMS_PLAN_DIGEST_OFFSET, self.claims_plan_digest),
+            (
+                RECEIPT_CLAIMS_PACKET_DIGEST_OFFSET,
+                self.claims_packet_digest,
+            ),
             (
                 RECEIPT_CLAIMS_RESOURCE_DIGEST_OFFSET,
                 self.claims_resource_digest,
@@ -235,6 +256,36 @@ impl RepresentationReceiptV2 {
     /// SHA-256 of the exact parent request.
     pub const fn request_digest(self) -> [u8; 32] {
         self.request_digest
+    }
+
+    /// Registry-selected Claims program which executed the representation adapter.
+    pub const fn representation_program(self) -> [u8; 32] {
+        self.representation_program
+    }
+
+    /// Registry-selected Claims program which executed the economic child packet.
+    pub const fn claims_program(self) -> [u8; 32] {
+        self.claims_program
+    }
+
+    /// Exact Token or Token-2022 program used by every physical token effect.
+    pub const fn token_program(self) -> [u8; 32] {
+        self.token_program
+    }
+
+    /// SHA-256 of the exact canonical affine or SignedDelta Claims packet.
+    pub const fn claims_packet_digest(self) -> [u8; 32] {
+        self.claims_packet_digest
+    }
+
+    /// Resulting canonical Claims aggregate revision, or the absent sentinel.
+    pub const fn post_claims_market_revision(self) -> u64 {
+        self.post_claims_market_revision
+    }
+
+    /// Resulting custody ProtocolPosition revision, or the absent sentinel.
+    pub const fn post_custody_position_revision(self) -> u64 {
+        self.post_custody_position_revision
     }
 
     /// Exact payout derived by canonical Claims economics.
@@ -303,13 +354,20 @@ impl RepresentationReceiptV2 {
         {
             return Err(Error::ReceiptMismatch);
         }
-        let claims = self.action.uses_claims();
+        let affine = matches!(
+            self.action,
+            RepresentationActionV2::Denominate | RepresentationActionV2::Reconstitute
+        );
+        let claims = affine || self.action == RepresentationActionV2::RedeemTerminal;
         if claims
-            != (!is_zero(self.claims_plan_digest)
+            != (!is_zero(self.claims_packet_digest)
                 && !is_zero(self.claims_resource_digest)
                 && self.post_claims_market_revision != ABSENT_REVISION)
         {
             return Err(Error::ReceiptMismatch);
+        }
+        if !affine && self.action != RepresentationActionV2::RedeemTerminal && self.payout != 0 {
+            return Err(Error::InvalidActionShape);
         }
         let custody =
             !is_zero(self.custody_request_digest) || !is_zero(self.custody_receipt_digest);
@@ -363,14 +421,8 @@ pub fn finalize(
         return Err(Error::TokenMismatch);
     }
     validate_post_assets(prepared, evidence.post_asset_observations)?;
-    let (
-        claims_resource_digest,
-        post_claims_market_revision,
-        post_actor_position_revision,
-        post_custody_position_revision,
-        payout,
-    ) = validate_claims(prepared, evidence)?;
-    validate_custody(prepared, evidence, payout)?;
+    let claims = validate_claims(prepared, evidence)?;
+    validate_custody(prepared, evidence, claims.payout)?;
     let receipt = RepresentationReceiptV2 {
         action: header.action,
         caller_role: header.caller_role,
@@ -384,19 +436,19 @@ pub fn finalize(
         representation_program: evidence.representation_program,
         claims_program: evidence.claims_program,
         token_program: header.token_program,
-        claims_plan_digest: evidence.claims_plan_digest,
-        claims_resource_digest,
+        claims_packet_digest: claims.effect_digest,
+        claims_resource_digest: claims.resource_digest,
         token_effect_digest: evidence.token_effect_digest,
         custody_request_digest: evidence.custody_request_digest,
         custody_receipt_digest: evidence.custody_receipt_digest,
         post_resource_digest: evidence.post_resource_digest,
         pre_representation_revision: header.expected_representation_revision,
         post_representation_revision,
-        post_claims_market_revision,
-        post_actor_position_revision,
-        post_custody_position_revision,
+        post_claims_market_revision: claims.market_revision,
+        post_actor_position_revision: claims.actor_position_revision,
+        post_custody_position_revision: claims.custody_position_revision,
         post_receipt_supply: evidence.post_receipt_supply,
-        payout,
+        payout: claims.payout,
         outcome_count: header.outcome_count,
     };
     receipt.validate_shape()?;
@@ -497,43 +549,106 @@ fn validate_post_assets(prepared: PreparedRepresentationV2<'_>, observations: &[
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct ClaimsCompletionV2 {
+    effect_digest: [u8; 32],
+    resource_digest: [u8; 32],
+    market_revision: u64,
+    actor_position_revision: u64,
+    custody_position_revision: u64,
+    payout: u64,
+}
+
 fn validate_claims(
     prepared: PreparedRepresentationV2<'_>,
     evidence: CompletionEvidenceV2<'_>,
-) -> Result<([u8; 32], u64, u64, u64, u64)> {
+) -> Result<ClaimsCompletionV2> {
     let header = prepared.request().header();
-    if !header.action.uses_claims() {
-        if evidence.claims_receipt.is_some() || !is_zero(evidence.claims_plan_digest) {
+    if matches!(
+        header.action,
+        RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured
+    ) {
+        if evidence.affine_packet.is_some()
+            || evidence.affine_context.is_some()
+            || evidence.affine_receipt.is_some()
+            || evidence.signed_delta_packet.is_some()
+            || evidence.signed_delta_receipt.is_some()
+            || !is_zero(evidence.claims_packet_digest)
+        {
             return Err(Error::ClaimsMismatch);
         }
-        return Ok((
-            [0; 32],
-            ABSENT_REVISION,
-            ABSENT_REVISION,
-            ABSENT_REVISION,
-            0,
-        ));
+        return Ok(ClaimsCompletionV2 {
+            effect_digest: [0; 32],
+            resource_digest: [0; 32],
+            market_revision: ABSENT_REVISION,
+            actor_position_revision: ABSENT_REVISION,
+            custody_position_revision: ABSENT_REVISION,
+            payout: 0,
+        });
     }
-    require_nonzero(evidence.claims_plan_digest)?;
-    let receipt = evidence.claims_receipt.ok_or(Error::ClaimsMismatch)?;
-    let expected_action = match header.action {
-        RepresentationActionV2::Denominate => ClaimsAction::Materialize,
-        RepresentationActionV2::Reconstitute => ClaimsAction::Dematerialize,
-        RepresentationActionV2::RedeemTerminal => ClaimsAction::RedeemMaterializedTerminal,
-        RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
+    if header.action == RepresentationActionV2::RedeemTerminal {
+        if evidence.affine_packet.is_some()
+            || evidence.affine_context.is_some()
+            || evidence.affine_receipt.is_some()
+        {
             return Err(Error::ClaimsMismatch);
         }
-    };
+        let packet = evidence.signed_delta_packet.ok_or(Error::ClaimsMismatch)?;
+        let receipt = evidence.signed_delta_receipt.ok_or(Error::ClaimsMismatch)?;
+        let completion = validate_signed_delta_terminal_v3(
+            prepared.request(),
+            SignedDeltaTerminalEvidenceV3 {
+                request_digest: evidence.request_digest,
+                claims_program: evidence.claims_program,
+                packet_digest: evidence.claims_packet_digest,
+                packet,
+                receipt,
+            },
+        )?;
+        let payout = evidence.custody_request.map_or(0, |request| request.amount);
+        if (payout == 0 && header.expected_custody_replay_revision != ABSENT_REVISION)
+            || (payout != 0
+                && evidence.custody_request.is_none_or(|request| {
+                    request.expected_revision != header.expected_custody_replay_revision
+                }))
+        {
+            return Err(Error::ClaimsMismatch);
+        }
+        return Ok(ClaimsCompletionV2 {
+            effect_digest: completion.effect_digest,
+            resource_digest: completion.resource_digest,
+            market_revision: completion.market_revision,
+            actor_position_revision: ABSENT_REVISION,
+            custody_position_revision: completion.custody_position_revision,
+            payout,
+        });
+    }
+    if evidence.signed_delta_packet.is_some() || evidence.signed_delta_receipt.is_some() {
+        return Err(Error::ClaimsMismatch);
+    }
+    require_nonzero(evidence.claims_packet_digest)?;
+    let packet = evidence.affine_packet.ok_or(Error::ClaimsMismatch)?;
+    let context = evidence.affine_context.ok_or(Error::ClaimsMismatch)?;
+    let receipt = evidence.affine_receipt.ok_or(Error::ClaimsMismatch)?;
+    receipt
+        .validate_plan(packet)
+        .map_err(|_| Error::ClaimsMismatch)?;
     let expected_role = match header.caller_role {
         CallerRoleV2::Core => dclutch_claims_svm::CallerRole::Core,
         CallerRoleV2::Trading => dclutch_claims_svm::CallerRole::Trading,
     };
-    if receipt.action() != expected_action
-        || receipt.caller_role() != expected_role
-        || receipt.release_set_id() != header.release_set
-        || receipt.market() != header.market
-        || receipt.request_id() != evidence.request_digest
-        || receipt.packet_digest() != evidence.claims_plan_digest
+    if packet.caller_role() != expected_role
+        || packet.release_set() != header.release_set
+        || packet.market() != header.market
+        || packet.request_id() != evidence.request_digest
+        || packet.product_record_digest() != context.product_record_digest
+        || packet.semantic_basis_id() != context.semantic_basis_id
+        || packet.linked_basis_record_digest() != context.linked_basis_record_digest
+        || packet.expected_market_revision() != header.expected_claims_market_revision
+        || packet.outcome_count() != header.outcome_count
+        || packet.position_count() != 2
+        || packet.row_count() != 1
+        || receipt.packet_digest() != evidence.claims_packet_digest
         || receipt.claims_program() != evidence.claims_program
         || receipt.pre_market_revision() != header.expected_claims_market_revision
         || receipt.post_market_revision()
@@ -544,40 +659,53 @@ fn validate_claims(
     {
         return Err(Error::ClaimsMismatch);
     }
-    let (post_actor, post_custody) = match header.action {
-        RepresentationActionV2::Denominate => (
-            receipt.post_source_revision(),
-            receipt.post_destination_revision(),
-        ),
-        RepresentationActionV2::Reconstitute => (
-            receipt.post_destination_revision(),
-            receipt.post_source_revision(),
-        ),
-        RepresentationActionV2::RedeemTerminal => {
-            if receipt.post_destination_revision() != NO_POSITION_REVISION {
-                return Err(Error::ClaimsMismatch);
-            }
-            (NO_POSITION_REVISION, receipt.post_source_revision())
-        }
-        RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
-            return Err(Error::ClaimsMismatch);
-        }
-    };
-    let payout = receipt.payout();
-    if (header.action != RepresentationActionV2::RedeemTerminal && payout != 0)
-        || (header.action == RepresentationActionV2::RedeemTerminal
-            && payout != 0
-            && payout != header.quantity)
+    let asset = prepared.request().asset(0)?;
+    let actor = packet.position(0).map_err(|_| Error::ClaimsMismatch)?;
+    let custody = packet.position(1).map_err(|_| Error::ClaimsMismatch)?;
+    if actor.owner() != header.actor
+        || actor.expected_revision() != header.expected_actor_position_revision
+        || custody.owner() != asset.claims_custody_owner
+        || custody.expected_revision() != header.expected_custody_position_revision
     {
         return Err(Error::ClaimsMismatch);
     }
-    Ok((
-        receipt.post_resource_digest(),
-        receipt.post_market_revision(),
-        post_actor,
-        post_custody,
-        payout,
-    ))
+    let row = packet.row(0).map_err(|_| Error::ClaimsMismatch)?;
+    let (source_index, destination_index) = match header.action {
+        RepresentationActionV2::Denominate => (0, 1),
+        RepresentationActionV2::Reconstitute => (1, 0),
+        RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured => {
+            return Err(Error::ClaimsMismatch);
+        }
+        RepresentationActionV2::RedeemTerminal => return Err(Error::InvalidActionShape),
+    };
+    if !row.source_present()
+        || !row.destination_present()
+        || row.outcome() != header.selected_outcome
+        || row.source_position_index() != source_index
+        || row.destination_position_index() != destination_index
+        || row.aggregate_delta().direction() != DeltaDirectionV2::Neutral
+        || row.aggregate_delta().magnitude() != 0
+        || row.source_delta().direction() != DeltaDirectionV2::Debit
+        || row.source_delta().magnitude() != header.quantity
+        || row.destination_delta().direction() != DeltaDirectionV2::Credit
+        || row.destination_delta().magnitude() != header.quantity
+    {
+        return Err(Error::ClaimsMismatch);
+    }
+    Ok(ClaimsCompletionV2 {
+        effect_digest: evidence.claims_packet_digest,
+        resource_digest: receipt.post_resource_digest(),
+        market_revision: receipt.post_market_revision(),
+        actor_position_revision: header
+            .expected_actor_position_revision
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?,
+        custody_position_revision: header
+            .expected_custody_position_revision
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?,
+        payout: 0,
+    })
 }
 
 fn validate_custody(
@@ -585,7 +713,6 @@ fn validate_custody(
     evidence: CompletionEvidenceV2<'_>,
     payout: u64,
 ) -> Result<()> {
-    let header = prepared.request().header();
     if payout == 0 {
         if evidence.custody_request.is_some()
             || evidence.custody_receipt.is_some()
@@ -599,42 +726,160 @@ fn validate_custody(
     }
     let request = evidence.custody_request.ok_or(Error::CustodyMismatch)?;
     let receipt = evidence.custody_receipt.ok_or(Error::CustodyMismatch)?;
-    require_nonzero(evidence.custody_request_digest)?;
-    require_nonzero(evidence.custody_receipt_digest)?;
-    require_nonzero(evidence.custody_replay_digest)?;
-    if header.action != RepresentationActionV2::RedeemTerminal
-        || request.operation != OperationV1::Transfer
-        || request.caller_role != CustodyCallerRole::Claims
+    for digest in [
+        evidence.custody_request_digest,
+        evidence.custody_receipt_digest,
+        evidence.custody_replay_digest,
+    ] {
+        require_nonzero(digest)?;
+    }
+    let header = prepared.request().header();
+    if request.amount != payout
+        || request.caller_role != CustodyCallerRoleV1::Claims
         || request.source_compartment != CompartmentV1::HoardPrincipal
         || request.destination_compartment != CompartmentV1::External
         || request.release_set != header.release_set
         || request.market != header.market
         || request.realm != header.realm
-        || request.context != header.parent_context
         || request.caller_program != evidence.claims_program
+        || request.semantic.candidate == [0; 32]
         || request.semantic.source_owner != [0; 32]
         || request.semantic.destination_owner != header.actor
+        || request.semantic.order != [0; 32]
         || request.semantic.parent_request_digest != evidence.request_digest
+        || request.semantic.order_nonce != header.expected_representation_revision
         || request.semantic.generation != header.generation
+        || request.semantic.page_index != 0
+        || request.semantic.execution_index != 0
+        || request.semantic.transfer_index != 0
         || request.destination != header.collateral_recipient
+        || request.token_program != header.token_program
         || request.expected_revision != header.expected_custody_replay_revision
         || request.resulting_revision
             != header
                 .expected_custody_replay_revision
                 .checked_add(1)
                 .ok_or(Error::ArithmeticOverflow)?
-        || request.amount != payout
+        || request.payer != [0; 32]
+        || request.rent_refund != [0; 32]
         || request.rent_lamports != 0
     {
         return Err(Error::CustodyMismatch);
     }
     receipt
         .verify_for(
-            request,
+            *request,
             evidence.custody_request_digest,
             evidence.custody_replay_digest,
         )
         .map_err(|_| Error::CustodyMismatch)
+}
+
+/// Exact family-neutral terminal Claims evidence produced by the ProductBasisV3
+/// planner and canonical SignedDeltaV3 executor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignedDeltaTerminalEvidenceV3<'a> {
+    /// SHA-256 of the complete enclosing representation request.
+    pub request_digest: [u8; 32],
+    /// Current Registry-authenticated Claims program which wrote state.
+    pub claims_program: [u8; 32],
+    /// SHA-256 of the exact canonical SignedDeltaV3 packet.
+    pub packet_digest: [u8; 32],
+    /// Exact runtime-width terminal debit packet.
+    pub packet: SignedDeltaPlanV3<'a>,
+    /// Exact canonical receipt returned after Claims state committed.
+    pub receipt: SignedDeltaReceiptV3,
+}
+
+/// Checked terminal Claims postcondition projected for representation replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignedDeltaTerminalCompletionV3 {
+    /// SHA-256 of the exact canonical terminal packet.
+    pub effect_digest: [u8; 32],
+    /// SHA-256 of the post aggregate followed by the post Position.
+    pub resource_digest: [u8; 32],
+    /// Canonical aggregate post-revision.
+    pub market_revision: u64,
+    /// Canonical custody Position post-revision.
+    pub custody_position_revision: u64,
+}
+
+/// Validate the sole ProductBasisV3 terminal Claims shape.
+///
+/// The packet contains one already-netted debit at the selected native claim.
+/// Product evaluation and collateral payout remain outside this no-crypto
+/// receipt boundary; those facts are authenticated by the Product V3 reader
+/// and typed Custody request respectively.
+pub fn validate_signed_delta_terminal_v3(
+    request: RepresentationRequestV2<'_>,
+    evidence: SignedDeltaTerminalEvidenceV3<'_>,
+) -> Result<SignedDeltaTerminalCompletionV3> {
+    let header = request.header();
+    if header.action != RepresentationActionV2::RedeemTerminal
+        || is_zero(evidence.request_digest)
+        || is_zero(evidence.claims_program)
+        || is_zero(evidence.packet_digest)
+    {
+        return Err(Error::ClaimsMismatch);
+    }
+    evidence
+        .receipt
+        .validate_plan(evidence.packet)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let expected_role = match header.caller_role {
+        CallerRoleV2::Core => dclutch_claims_svm::CallerRole::Core,
+        CallerRoleV2::Trading => dclutch_claims_svm::CallerRole::Trading,
+    };
+    let asset = request.asset(0)?;
+    let position = evidence
+        .packet
+        .position(0)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let aggregate = evidence
+        .packet
+        .aggregate_delta(header.selected_outcome)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let row = evidence
+        .packet
+        .position_delta(0)
+        .map_err(|_| Error::ClaimsMismatch)?;
+    let post_market_revision = header
+        .expected_claims_market_revision
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    let post_position_revision = header
+        .expected_custody_position_revision
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if evidence.packet.caller_role() != expected_role
+        || evidence.packet.release_set() != header.release_set
+        || evidence.packet.market() != header.market
+        || evidence.packet.request_id() != evidence.request_digest
+        || evidence.packet.expected_market_revision() != header.expected_claims_market_revision
+        || evidence.packet.claim_count() != header.outcome_count
+        || evidence.packet.position_count() != 1
+        || evidence.packet.position_delta_count() != 1
+        || position.owner() != asset.claims_custody_owner
+        || position.expected_revision() != header.expected_custody_position_revision
+        || aggregate.direction() != DeltaDirectionV3::Debit
+        || aggregate.magnitude() != header.quantity
+        || row.position_index() != 0
+        || row.outcome() != header.selected_outcome
+        || row.delta().direction() != DeltaDirectionV3::Debit
+        || row.delta().magnitude() != header.quantity
+        || evidence.receipt.packet_digest() != evidence.packet_digest
+        || evidence.receipt.claims_program() != evidence.claims_program
+        || evidence.receipt.pre_market_revision() != header.expected_claims_market_revision
+        || evidence.receipt.post_market_revision() != post_market_revision
+    {
+        return Err(Error::ClaimsMismatch);
+    }
+    Ok(SignedDeltaTerminalCompletionV3 {
+        effect_digest: evidence.packet_digest,
+        resource_digest: evidence.receipt.post_resource_digest(),
+        market_revision: post_market_revision,
+        custody_position_revision: post_position_revision,
+    })
 }
 
 fn decode_action(value: u8) -> Result<RepresentationActionV2> {

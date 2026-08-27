@@ -3,10 +3,14 @@
 use dclutch_market_core_codec::{
     Binding, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, CoreEffectAckV1,
     CoreEffectActionV1, CoreEffectEnvelopeV1, CoreMarketViewV1, CoreReferenceObservationV1,
-    CoreState, Error, Identity, MARKET_CORE_STATE_PDA_DOMAIN_V1, MarketCoreStateSeedsV1,
-    MarketIdentity, Phase, Product, Readiness, Realm, ReleaseSet, Role, SERIES_CORE_ACK_BYTES_V1,
-    SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, SERIES_CORE_REQUEST_BYTES_V1, SeriesCoreAckV1,
-    SeriesCoreActionV1, SeriesCoreCallerSeedsV1, SeriesCoreRequestV1,
+    CoreState, Error, FOUNDING_INTENT_BYTES_V5, FoundingIntentV5, Identity,
+    MARKET_CORE_STATE_PDA_DOMAIN_V2, MarketCoreStateSeedsV2, MarketIdentity, Phase, Product,
+    Readiness, Realm, ReleaseSet, Role, SERIES_CORE_ACK_BYTES_V1,
+    SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1, SERIES_CORE_REQUEST_BYTES_V1,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1,
+    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreAckV1, SeriesCoreActionV1,
+    SeriesCoreCallerSeedsV1, SeriesCoreRequestV1, SeriesFoundingPermitV1,
+    SeriesPermitExpiryRequestV1,
 };
 use dclutch_release_set_contract::{CALLER_AUTHORITY_PDA_DOMAIN_V1, ExecutionRoleV1};
 
@@ -375,6 +379,177 @@ fn occurrence(action: SeriesCoreActionV1) -> SeriesCoreRequestV1 {
     .expect("valid occurrence fixture")
 }
 
+fn founding_intent() -> FoundingIntentV5 {
+    FoundingIntentV5::new(
+        254,
+        id(80),
+        id(81),
+        id(82),
+        id(83),
+        id(84),
+        id(85),
+        id(86),
+        id(87),
+        id(88),
+        id(89),
+        id(90),
+        id(91),
+        id(92),
+        id(93),
+        id(94),
+        95,
+        96,
+        97,
+        98,
+        4,
+        1,
+    )
+    .expect("valid founding intent")
+}
+
+fn founding_permit() -> SeriesFoundingPermitV1 {
+    SeriesFoundingPermitV1::new(founding_intent(), id(95), id(96)).expect("valid founding permit")
+}
+
+#[test]
+fn series_founding_permit_and_intent_are_exact_and_cycle_free() {
+    let intent = founding_intent();
+    let intent_bytes = intent.encode().expect("intent encodes");
+    assert_eq!(intent_bytes.len(), FOUNDING_INTENT_BYTES_V5);
+    assert_eq!(FoundingIntentV5::decode(&intent_bytes), Ok(intent));
+    assert_eq!(intent.bump(), 254);
+    assert_eq!(intent.release_set(), id(80));
+    assert_eq!(intent.market(), id(81));
+    assert_eq!(intent.product_record(), id(82));
+    assert_eq!(intent.source(), id(83));
+    assert_eq!(intent.founder(), id(84));
+    assert_eq!(intent.ticket_context(), id(85));
+    assert_eq!(intent.parent_root(), id(86));
+    assert_eq!(intent.projected_replay(), id(87));
+    assert_eq!(intent.funding_source(), id(88));
+    assert_eq!(intent.hoard(), id(89));
+    assert_eq!(intent.projected_request_digest(), id(90));
+    assert_eq!(intent.projected_receipt_digest(), id(91));
+    assert_eq!(intent.trading_program(), id(92));
+    assert_eq!(intent.claims_program(), id(93));
+    assert_eq!(intent.rent_credit(), id(94));
+    assert_eq!(intent.generation(), 95);
+    assert_eq!(intent.quantity(), 96);
+    assert_eq!(intent.basis_scale(), 97);
+    assert_eq!(intent.expiry_slot(), 98);
+    assert_eq!(intent.projected_resulting_revision(), 4);
+    assert_eq!(intent.normal_replay_revision(), 1);
+
+    let permit = founding_permit();
+    let permit_bytes = permit.encode().expect("permit encodes");
+    assert_eq!(permit_bytes.len(), SERIES_FOUNDING_PERMIT_BYTES_V1);
+    assert_eq!(SeriesFoundingPermitV1::decode(&permit_bytes), Ok(permit));
+    assert_eq!(permit.intent(), intent);
+    assert_eq!(permit.claims_intent_digest(), id(95));
+    assert_eq!(permit.claims_request_digest(), id(96));
+    assert_eq!(
+        permit.verify_for_intent_and_request(intent, id(95), id(96)),
+        Ok(())
+    );
+
+    let release = id(80).to_bytes();
+    let market = id(81).to_bytes();
+    let ticket = id(85).to_bytes();
+    let expected: [&[u8]; 4] = [
+        SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1.as_slice(),
+        release.as_slice(),
+        market.as_slice(),
+        ticket.as_slice(),
+    ];
+    assert_eq!(permit.seeds().as_slices(), expected);
+}
+
+#[test]
+fn series_founding_permit_refuses_hostile_aliases_and_substitutions() {
+    let permit = founding_permit();
+    let bytes = permit.encode().expect("permit encodes");
+    let short = bytes
+        .get(..bytes.len().saturating_sub(1))
+        .expect("permit has a shorter prefix");
+    assert_eq!(
+        SeriesFoundingPermitV1::decode(short),
+        Err(Error::InvalidLength)
+    );
+    let mut hostile = bytes;
+    hostile[0] ^= 1;
+    assert_eq!(
+        SeriesFoundingPermitV1::decode(&hostile),
+        Err(Error::InvalidMagic)
+    );
+    let mut hostile = bytes;
+    hostile[11] = 1;
+    assert_eq!(
+        SeriesFoundingPermitV1::decode(&hostile),
+        Err(Error::NonzeroReserved)
+    );
+    let mut hostile = bytes;
+    hostile[496..528].copy_from_slice(&id(92).to_bytes());
+    assert_eq!(
+        SeriesFoundingPermitV1::decode(&hostile),
+        Err(Error::InvalidCoordinates)
+    );
+    let mut hostile = bytes;
+    hostile[600..608].copy_from_slice(&2_u64.to_le_bytes());
+    assert_eq!(
+        SeriesFoundingPermitV1::decode(&hostile),
+        Err(Error::InvalidCoordinates)
+    );
+    let mut hostile = bytes;
+    hostile[272..304].copy_from_slice(&id(89).to_bytes());
+    assert_eq!(
+        SeriesFoundingPermitV1::decode(&hostile),
+        Err(Error::InvalidCoordinates)
+    );
+    assert_eq!(
+        permit.verify_for_intent_and_request(founding_intent(), id(97), id(96)),
+        Err(Error::InvalidCoordinates)
+    );
+    assert_eq!(
+        permit.verify_for_intent_and_request(founding_intent(), id(95), id(97)),
+        Err(Error::InvalidCoordinates)
+    );
+}
+
+#[test]
+fn permissionless_series_permit_expiry_wraps_one_exact_candidate() {
+    let request = SeriesPermitExpiryRequestV1::new(founding_permit());
+    let bytes = request.encode().expect("expiry request encodes");
+    assert_eq!(bytes.len(), SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1);
+    assert_eq!(SeriesPermitExpiryRequestV1::decode(&bytes), Ok(request));
+    assert_eq!(request.permit(), founding_permit());
+
+    let short = bytes
+        .get(..bytes.len().saturating_sub(1))
+        .expect("expiry request has a shorter prefix");
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(short),
+        Err(Error::InvalidLength)
+    );
+    let mut hostile = bytes;
+    hostile[0] ^= 1;
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(&hostile),
+        Err(Error::InvalidMagic)
+    );
+    let mut hostile = bytes;
+    hostile[10] = 1;
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(&hostile),
+        Err(Error::NonzeroReserved)
+    );
+    let mut hostile = bytes;
+    hostile[32] ^= 1;
+    assert_eq!(
+        SeriesPermitExpiryRequestV1::decode(&hostile),
+        Err(Error::InvalidMagic)
+    );
+}
+
 #[test]
 fn series_occurrence_request_is_exact_and_round_trips() {
     for action in [
@@ -492,8 +667,8 @@ fn market_state_pda_commits_every_immutable_coordinate() {
     let identity = MarketIdentity {
         market_id: id(40),
         realm_id: id(41),
-        product_id: id(42),
-        result_domain: id(43),
+        product_record: id(42),
+        product_id: id(43),
         resolution_policy: id(44),
         capability_manifest: id(48),
         selected_release_set: id(45),
@@ -501,43 +676,55 @@ fn market_state_pda_commits_every_immutable_coordinate() {
         generation: 46,
     };
     let realm = id(41).to_bytes();
-    let product = id(42).to_bytes();
-    let result_domain = id(43).to_bytes();
+    let product_record = id(42).to_bytes();
+    let product_id = id(43).to_bytes();
     let resolution = id(44).to_bytes();
     let capability_manifest = id(48).to_bytes();
     let release_set = id(45).to_bytes();
     let registry_program = id(49).to_bytes();
     let generation = 46_u64.to_le_bytes();
     let expected: [&[u8]; 9] = [
-        MARKET_CORE_STATE_PDA_DOMAIN_V1.as_slice(),
+        MARKET_CORE_STATE_PDA_DOMAIN_V2.as_slice(),
         realm.as_slice(),
-        product.as_slice(),
-        result_domain.as_slice(),
+        product_record.as_slice(),
+        product_id.as_slice(),
         resolution.as_slice(),
         capability_manifest.as_slice(),
         release_set.as_slice(),
         registry_program.as_slice(),
         generation.as_slice(),
     ];
-    assert_eq!(MarketCoreStateSeedsV1::new(identity).as_slices(), expected);
+    assert_eq!(MarketCoreStateSeedsV2::new(identity).as_slices(), expected);
 
     let mut substituted = identity;
     substituted.generation = 47;
     assert_ne!(
-        MarketCoreStateSeedsV1::new(identity),
-        MarketCoreStateSeedsV1::new(substituted),
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
+    );
+    substituted = identity;
+    substituted.product_record = id(51);
+    assert_ne!(
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
+    );
+    substituted = identity;
+    substituted.product_id = id(52);
+    assert_ne!(
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
     );
     substituted = identity;
     substituted.registry_program = id(50);
     assert_ne!(
-        MarketCoreStateSeedsV1::new(identity),
-        MarketCoreStateSeedsV1::new(substituted),
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
     );
     substituted = identity;
     substituted.resolution_policy = id(47);
     assert_ne!(
-        MarketCoreStateSeedsV1::new(identity),
-        MarketCoreStateSeedsV1::new(substituted),
+        MarketCoreStateSeedsV2::new(identity),
+        MarketCoreStateSeedsV2::new(substituted),
     );
 }
 
@@ -549,8 +736,8 @@ fn core_state_for_view() -> CoreState {
         identity: MarketIdentity {
             market_id: id(40),
             realm_id: id(41),
+            product_record: id(47),
             product_id: id(46),
-            result_domain: id(47),
             resolution_policy: id(56),
             capability_manifest: id(67),
             selected_release_set: id(45),
@@ -572,11 +759,16 @@ fn references_for_view() -> CoreReferenceObservationV1 {
             collateral_release: id(44),
         },
         product: Product {
+            product_record: id(47),
             product_id: id(46),
-            result_domain: id(47),
+            result_domain: id(57),
+            portfolio: id(58),
+            coordinate_domain: id(59),
+            result_unit: id(65),
             claim_basis: id(48),
-            capacity_profile: id(49),
-            compiler_release: id(55),
+            liability_basis: id(68),
+            representation_release: id(69),
+            mapping_release: id(75),
             outcome_count: 3,
         },
         release_set: ReleaseSet {
@@ -610,7 +802,7 @@ fn references_for_view() -> CoreReferenceObservationV1 {
             ],
         },
         realm_record_authenticated: true,
-        product_record_authenticated: true,
+        product_graph_authenticated: true,
         release_set_record_authenticated: true,
         claims_aggregate_derivation_authenticated: true,
     }
@@ -644,7 +836,7 @@ fn core_market_view_joins_logical_market_and_distinct_claims_aggregate() {
             id(40),
             id(57),
             CoreReferenceObservationV1 {
-                product_record_authenticated: false,
+                product_graph_authenticated: false,
                 ..references
             },
         ),

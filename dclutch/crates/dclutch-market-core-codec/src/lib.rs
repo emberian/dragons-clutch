@@ -12,6 +12,11 @@
 #[allow(missing_docs)]
 mod generated {
     include!("generated.rs");
+
+    /// Narrow public byte coordinate for the sparse Market Core state.
+    pub mod state_layout {
+        include!("state_layout.rs");
+    }
 }
 
 #[allow(missing_docs)]
@@ -19,18 +24,34 @@ mod generated_physical {
     include!("generated_physical.rs");
 }
 
+#[allow(missing_docs)]
+mod generated_retirement_v1 {
+    include!("generated_retirement_v1.rs");
+}
+
 mod capability;
+mod generic_founding_v1;
 mod physical;
+mod project_found;
+mod retirement_v1;
+mod series_permit;
 
 pub use capability::*;
+pub use generated::state_layout::CoreStateLayoutV2;
 pub use generated::*;
 pub use generated_physical::{
     CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CAPABILITY_FUNDING_LIST_MAGIC_V1,
     CAPABILITY_FUNDING_MAX_ENTRIES_V1, CORE_EFFECT_ACK_BYTES_V1, CORE_EFFECT_ACK_MAGIC_V1,
     CORE_EFFECT_DIGEST_DOMAIN_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
-    CORE_EFFECT_INITIALIZE_CLAIMS_ACTION_TAG_V1, CORE_EFFECT_MAGIC_V1,
-    MARKET_CORE_STATE_PDA_DOMAIN_V1, PHYSICAL_ABI_VERSION_V1, SERIES_CORE_ACK_BYTES_V1,
+    CORE_EFFECT_INITIALIZE_CLAIMS_ACTION_TAG_V1, CORE_EFFECT_MAGIC_V1, FOUNDING_INTENT_BYTES_V5,
+    MARKET_CORE_STATE_PDA_DOMAIN_V2, PHYSICAL_ABI_VERSION_V1, SERIES_CORE_ACK_BYTES_V1,
     SERIES_CORE_ACK_MAGIC_V1, SERIES_CORE_CALLER_AUTHORITY_PDA_DOMAIN_V1,
-    SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1,
+    SERIES_CORE_REQUEST_BYTES_V1, SERIES_CORE_REQUEST_MAGIC_V1, SERIES_FOUNDING_PERMIT_BYTES_V1,
+    SERIES_FOUNDING_PERMIT_MAGIC_V1, SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1,
+    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
 };
+pub use generic_founding_v1::*;
 pub use physical::*;
+pub use project_found::*;
+pub use retirement_v1::*;
+pub use series_permit::*;

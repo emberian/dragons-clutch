@@ -13,10 +13,23 @@
     "test": "vitest run --config vitest.config.ts",
     "abi:registered": "node scripts/generate-registered-direct.mjs",
     "abi:registered:verify": "node scripts/generate-registered-direct.mjs --check",
+    "abi:infrastructure": "node scripts/generate-protocol-infrastructure.mjs",
+    "abi:infrastructure:verify": "node scripts/generate-protocol-infrastructure.mjs --check",
+    "abi:found": "node scripts/generate-core-found.mjs",
+    "abi:found:verify": "node scripts/generate-core-found.mjs --check",
+    "abi:direct-v3": "node scripts/generate-direct-inline-v3.mjs",
+    "abi:direct-v3:verify": "node scripts/generate-direct-inline-v3.mjs --check",
+    "abi:dealer-v3": "node scripts/generate-dealer-equity-v3.mjs",
+    "abi:dealer-v3:verify": "node scripts/generate-dealer-equity-v3.mjs --check",
+    "abi:rational-terminal-v3": "node scripts/generate-rational-terminal-hot-v3.mjs",
+    "abi:rational-terminal-v3:verify": "node scripts/generate-rational-terminal-hot-v3.mjs --check",
     "fixtures:verify": "node scripts/verify-fixtures.mjs"
   },
   "dependencies": {
+    "@solana/wallet-standard-features": "1.4.0",
     "@solana/web3.js": "1.98.4",
+    "@wallet-standard/app": "1.1.1",
+    "@wallet-standard/features": "1.1.1",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"

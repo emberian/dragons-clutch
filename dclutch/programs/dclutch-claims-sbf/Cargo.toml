@@ -17,7 +17,6 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
-dclutch-claims-representation-codec = { path = "../../crates/dclutch-claims-representation-codec" }
 dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
@@ -25,30 +24,39 @@ dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-ke
 dclutch-liability-basis-v2-kernel = { path = "../../crates/dclutch-liability-basis-v2-kernel" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
+dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
+dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
+dclutch-rational-representation-v2-contract = { path = "../../crates/dclutch-rational-representation-v2-contract" }
+dclutch-rational-representation-v2-kernel = { path = "../../crates/dclutch-rational-representation-v2-kernel" }
+dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-representation-composition-v3-kernel" }
+dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
+spl-associated-token-account-interface = { version = "=2.0.0", default-features = false }
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }
 
 [dev-dependencies]
-dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
-dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
-solana-account = "=4.3.2"
-solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
-solana-message = "=4.4.1"
+dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
+solana-account = "=4.6.0"
+solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
+solana-message = "=4.5.0"
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
-solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
 solana-sdk = "=3.0.0"
-solana-transaction = "=4.1.6"
+solana-transaction = "=4.2.0"
 spl-token-interface = "=3.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-[workspace]
 
 [lints.rust]
 missing_docs = "deny"

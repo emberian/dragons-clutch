@@ -113,18 +113,6 @@ pub enum AdapterError {
     SeriesPostcondition = 51,
     /// An exhausted Series root or escrow could not close into its permanent RentCredit.
     SeriesClose = 52,
-    /// Bearer capability, Market, Position, Mint, claim, or account facts failed.
-    BearerAuthentication = 53,
-    /// The canonical bearer capability transition refused.
-    BearerTransition = 54,
-    /// A System Program CPI required by bearer execution refused.
-    BearerCreateCpi = 55,
-    /// A Token-2022 CPI required by bearer execution refused.
-    BearerTokenCpi = 56,
-    /// Bearer execution did not produce its exact account, supply, or balance post-state.
-    BearerPostcondition = 57,
-    /// An exhausted bearer account could not close to its immutable beneficiary.
-    BearerClose = 58,
 }
 
 impl From<AdapterError> for ProgramError {

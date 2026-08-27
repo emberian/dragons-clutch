@@ -1,0 +1,30 @@
+[package]
+name = "dclutch-request-profile-contract"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+publish = false
+description = "Total no-alloc request-byte projector for data-driven Trading"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
+
+[dev-dependencies]
+solana-ed25519-program = "=3.0.0"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

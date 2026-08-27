@@ -17,8 +17,8 @@ use dclutch_general_adapter_contract::child_packets::{
 };
 use dclutch_general_adapter_contract::{
     AggregateReplayContextV1, ChildExecutionError, ExecutionContextV1, GeneralChildEffectV1,
-    RowReplayContextV1, SettlementChildrenV1, VerifiedCandidateV1, close, collect_execution,
-    distribute_execution, materialize,
+    RowReplayContextV1, SettlementChildrenV1, SettlementRowInputV1, VerifiedCandidateV1, close,
+    collect_execution_row, distribute_execution_row, materialize,
 };
 use dclutch_general_codec::{MAX_OUTCOMES, SETTLEMENT_CURSOR_BYTES};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -63,20 +63,20 @@ pub struct SettlementCallerAuthoritiesV2 {
 impl PreparedSettlementStepV2 {
     /// Exact General cursor bytes to commit after every child postcondition.
     #[must_use]
-    pub const fn cursor_after(self) -> [u8; SETTLEMENT_CURSOR_BYTES] {
+    pub const fn cursor_after(&self) -> [u8; SETTLEMENT_CURSOR_BYTES] {
         self.cursor_after
     }
 
     /// Optional exact Claims request.
     #[must_use]
-    pub const fn claims(self) -> Option<ClaimsPacketV2> {
-        self.claims
+    pub const fn claims(&self) -> Option<&ClaimsPacketV2> {
+        self.claims.as_ref()
     }
 
     /// Optional exact Custody request.
     #[must_use]
-    pub const fn custody(self) -> Option<CustodyPacketV2> {
-        self.custody
+    pub const fn custody(&self) -> Option<&CustodyPacketV2> {
+        self.custody.as_ref()
     }
 }
 
@@ -87,7 +87,7 @@ impl PreparedSettlementStepV2 {
 /// General authority cannot authenticate both children and is deliberately
 /// not accepted here.
 pub fn derive_caller_authorities_v2(
-    prepared: PreparedSettlementStepV2,
+    prepared: &PreparedSettlementStepV2,
     trading_program: [u8; 32],
     release_set: [u8; 32],
     market: [u8; 32],
@@ -157,17 +157,19 @@ pub fn prepare_collect_v2(
     verified: &VerifiedCandidateV1,
     page_bytes: &[u8],
     expected_revision: u64,
-    claims: ClaimsResourcesV2,
-    custody: Option<CustodyResourcesV2>,
-) -> Result<PreparedSettlementStepV2, SettlementPreparationErrorV2> {
+    claims: &ClaimsResourcesV2,
+    custody: Option<&CustodyResourcesV2>,
+) -> Result<Box<PreparedSettlementStepV2>, SettlementPreparationErrorV2> {
     let mut cursor_after = exact_cursor_copy(cursor_before)?;
     let mut recorder = Box::new(PacketRecorderV2::new(claims, custody, None));
-    let result = collect_execution(
+    let result = collect_execution_row(
         &mut cursor_after,
-        context,
-        verified,
-        page_bytes,
-        expected_revision,
+        SettlementRowInputV1 {
+            context,
+            verified,
+            page_bytes,
+            expected_revision,
+        },
         recorder.as_mut(),
     );
     recorder.require_controller_success(result)?;
@@ -180,9 +182,9 @@ pub fn prepare_materialize_v2(
     context: ExecutionContextV1,
     verified: &VerifiedCandidateV1,
     expected_revision: u64,
-    claims: ClaimsResourcesV2,
-    custody: Option<CustodyResourcesV2>,
-) -> Result<PreparedSettlementStepV2, SettlementPreparationErrorV2> {
+    claims: &ClaimsResourcesV2,
+    custody: Option<&CustodyResourcesV2>,
+) -> Result<Box<PreparedSettlementStepV2>, SettlementPreparationErrorV2> {
     let mut cursor_after = exact_cursor_copy(cursor_before)?;
     let mut recorder = Box::new(PacketRecorderV2::new(claims, custody, None));
     let result = materialize(
@@ -203,17 +205,19 @@ pub fn prepare_distribute_v2(
     verified: &VerifiedCandidateV1,
     page_bytes: &[u8],
     expected_revision: u64,
-    claims: ClaimsResourcesV2,
-    custody: Option<CustodyResourcesV2>,
-) -> Result<PreparedSettlementStepV2, SettlementPreparationErrorV2> {
+    claims: &ClaimsResourcesV2,
+    custody: Option<&CustodyResourcesV2>,
+) -> Result<Box<PreparedSettlementStepV2>, SettlementPreparationErrorV2> {
     let mut cursor_after = exact_cursor_copy(cursor_before)?;
     let mut recorder = Box::new(PacketRecorderV2::new(claims, custody, None));
-    let result = distribute_execution(
+    let result = distribute_execution_row(
         &mut cursor_after,
-        context,
-        verified,
-        page_bytes,
-        expected_revision,
+        SettlementRowInputV1 {
+            context,
+            verified,
+            page_bytes,
+            expected_revision,
+        },
         recorder.as_mut(),
     );
     recorder.require_controller_success(result)?;
@@ -226,10 +230,10 @@ pub fn prepare_close_v2(
     context: ExecutionContextV1,
     verified: &VerifiedCandidateV1,
     expected_revision: u64,
-    claims: ClaimsResourcesV2,
-    custody: Option<CustodyResourcesV2>,
+    claims: &ClaimsResourcesV2,
+    custody: Option<&CustodyResourcesV2>,
     surplus_route: Option<dclutch_general_adapter_contract::QuoteSurplusRouteV2>,
-) -> Result<PreparedSettlementStepV2, SettlementPreparationErrorV2> {
+) -> Result<Box<PreparedSettlementStepV2>, SettlementPreparationErrorV2> {
     let mut cursor_after = exact_cursor_copy(cursor_before)?;
     let mut recorder = Box::new(PacketRecorderV2::new(claims, custody, surplus_route));
     let result = close(
@@ -243,19 +247,19 @@ pub fn prepare_close_v2(
     (*recorder).finish(cursor_after)
 }
 
-struct PacketRecorderV2 {
-    claims_resources: ClaimsResourcesV2,
-    custody_resources: Option<CustodyResourcesV2>,
+struct PacketRecorderV2<'a> {
+    claims_resources: &'a ClaimsResourcesV2,
+    custody_resources: Option<&'a CustodyResourcesV2>,
     surplus_route: Option<dclutch_general_adapter_contract::QuoteSurplusRouteV2>,
     claims: Option<ClaimsPacketV2>,
     custody: Option<CustodyPacketV2>,
     error: Option<SettlementPreparationErrorV2>,
 }
 
-impl PacketRecorderV2 {
+impl<'a> PacketRecorderV2<'a> {
     const fn new(
-        claims_resources: ClaimsResourcesV2,
-        custody_resources: Option<CustodyResourcesV2>,
+        claims_resources: &'a ClaimsResourcesV2,
+        custody_resources: Option<&'a CustodyResourcesV2>,
         surplus_route: Option<dclutch_general_adapter_contract::QuoteSurplusRouteV2>,
     ) -> Self {
         Self {
@@ -307,19 +311,19 @@ impl PacketRecorderV2 {
     fn finish(
         self,
         cursor_after: [u8; SETTLEMENT_CURSOR_BYTES],
-    ) -> Result<PreparedSettlementStepV2, SettlementPreparationErrorV2> {
+    ) -> Result<Box<PreparedSettlementStepV2>, SettlementPreparationErrorV2> {
         if let Some(error) = self.error {
             return Err(error);
         }
-        Ok(PreparedSettlementStepV2 {
+        Ok(Box::new(PreparedSettlementStepV2 {
             cursor_after,
             claims: self.claims,
             custody: self.custody,
-        })
+        }))
     }
 }
 
-impl SettlementChildrenV1 for PacketRecorderV2 {
+impl SettlementChildrenV1 for PacketRecorderV2<'_> {
     fn collect_claims(
         &mut self,
         context: RowReplayContextV1,
@@ -331,7 +335,7 @@ impl SettlementChildrenV1 for PacketRecorderV2 {
             context,
             outcome_count,
             quantities,
-            self.claims_resources,
+            *self.claims_resources,
             None,
         ))
     }
@@ -348,8 +352,8 @@ impl SettlementChildrenV1 for PacketRecorderV2 {
             context,
             1,
             &quantities,
-            self.claims_resources,
-            self.custody_resources,
+            *self.claims_resources,
+            self.custody_resources.copied(),
         ))
     }
 
@@ -371,8 +375,8 @@ impl SettlementChildrenV1 for PacketRecorderV2 {
             context,
             outcome_count,
             quantity,
-            self.claims_resources,
-            custody,
+            *self.claims_resources,
+            *custody,
         ))
     }
 
@@ -394,8 +398,8 @@ impl SettlementChildrenV1 for PacketRecorderV2 {
             context,
             outcome_count,
             quantity,
-            self.claims_resources,
-            custody,
+            *self.claims_resources,
+            *custody,
         ))
     }
 
@@ -410,7 +414,7 @@ impl SettlementChildrenV1 for PacketRecorderV2 {
             context,
             outcome_count,
             quantities,
-            self.claims_resources,
+            *self.claims_resources,
             None,
         ))
     }
@@ -427,8 +431,8 @@ impl SettlementChildrenV1 for PacketRecorderV2 {
             context,
             1,
             &quantities,
-            self.claims_resources,
-            self.custody_resources,
+            *self.claims_resources,
+            self.custody_resources.copied(),
         ))
     }
 
@@ -451,7 +455,7 @@ impl SettlementChildrenV1 for PacketRecorderV2 {
                 return Err(ChildExecutionError::Refused);
             }
         };
-        self.record(build_surplus_packet_v2(context, quantity, route, custody))
+        self.record(build_surplus_packet_v2(context, quantity, route, *custody))
     }
 }
 
@@ -589,14 +593,16 @@ mod tests {
         .to_bytes()
         .expect("cursor");
         let before = cursor;
+        let claims = claims();
+        let custody = custody(true);
         let prepared = prepare_collect_v2(
             &cursor,
             context,
             &verified,
             &page,
             0,
-            claims(),
-            Some(custody(true)),
+            &claims,
+            Some(&custody),
         )
         .expect("prepare");
         assert_eq!(cursor, before);
@@ -622,19 +628,15 @@ mod tests {
         }
         .to_bytes()
         .expect("cursor");
-        let prepared = prepare_materialize_v2(
-            &cursor,
-            context,
-            &verified,
-            2,
-            claims(),
-            Some(custody(false)),
-        )
-        .expect("prepare");
+        let claims = claims();
+        let custody = custody(false);
+        let prepared =
+            prepare_materialize_v2(&cursor, context, &verified, 2, &claims, Some(&custody))
+                .expect("prepare");
         assert!(prepared.claims().is_some());
         assert!(prepared.custody().is_some());
         let authorities = derive_caller_authorities_v2(
-            prepared,
+            prepared.as_ref(),
             id(12),
             context.release_set_id,
             context.market_id,
@@ -667,8 +669,9 @@ mod tests {
         }
         .to_bytes()
         .expect("cursor");
+        let claims = claims();
         assert_eq!(
-            prepare_materialize_v2(&cursor, context, &verified, 2, claims(), None),
+            prepare_materialize_v2(&cursor, context, &verified, 2, &claims, None),
             Err(SettlementPreparationErrorV2::MissingRoute)
         );
     }

@@ -13,9 +13,10 @@ default = []
 non-production-real-pyth-lab = ["dclutch-pyth-svm/synthetic-local-fixture"]
 
 [dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
-dclutch-bearer-contract = { path = "../dclutch-bearer-contract" }
+dclutch-bearer-v2-operator = { path = "../dclutch-bearer-v2-operator" }
 dclutch-collateral-contract = { path = "../dclutch-collateral-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
@@ -23,13 +24,21 @@ dclutch-dealer-contract = { path = "../dclutch-dealer-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
 dclutch-economic-slice-kernel = { path = "../dclutch-economic-slice-kernel" }
+dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-general-contract = { path = "../dclutch-general-contract" }
 dclutch-general-adapter-contract = { path = "../dclutch-general-adapter-contract" }
 dclutch-general-codec = { path = "../dclutch-general-codec" }
 dclutch-general-config-contract = { path = "../dclutch-general-config-contract" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" }
 dclutch-product-contract = { path = "../dclutch-product-contract" }
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
+dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator" }
 dclutch-pyth-contract = { path = "../dclutch-pyth-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-realm-contract = { path = "../dclutch-realm-contract" }
@@ -37,14 +46,19 @@ dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
+dclutch-resolution-core-v3-operator = { path = "../dclutch-resolution-core-v3-operator" }
 dclutch-release-tool = { path = "../dclutch-release-tool" }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
 dclutch-series-contract = { path = "../dclutch-series-contract" }
+dclutch-series-v3-kernel = { path = "../dclutch-series-v3-kernel" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
+dclutch-trading-sbf = { path = "../../programs/dclutch-trading-sbf", default-features = false, features = ["dealer-family", "no-entrypoint", "series-family"] }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
-solana-compute-budget-interface = "=3.0.0"
+solana-compute-budget-interface = "=3.1.0"
 solana-hash = "=4.6.0"
 solana-message = { version = "=3.1.0", features = ["bincode"] }
 solana-sdk-ids = "=3.1.0"

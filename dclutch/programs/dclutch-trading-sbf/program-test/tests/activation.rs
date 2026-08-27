@@ -26,7 +26,7 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_effect_kernel::v2::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA;
 use dclutch_market_core_codec::{
-    CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV1,
+    CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
     MarketIdentity, Phase, Readiness, Role,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -502,8 +502,8 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         identity: MarketIdentity {
             market_id: identity([0x21; 32]),
             realm_id: identity([0x22; 32]),
-            product_id: identity([0x23; 32]),
-            result_domain: identity([0x24; 32]),
+            product_record: identity([0x23; 32]),
+            product_id: identity([0x24; 32]),
             resolution_policy: identity([0x25; 32]),
             capability_manifest: identity(manifest_id.to_bytes()),
             selected_release_set: identity(release_set),
@@ -515,7 +515,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         terminal_receipt: None,
     };
     let market = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV1::new(state.identity).as_slices(),
+        &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
         &CORE_PROGRAM_ID,
     )
     .0;

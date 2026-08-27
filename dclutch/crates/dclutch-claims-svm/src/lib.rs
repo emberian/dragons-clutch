@@ -8,6 +8,23 @@
 //! supplied as `request_id`; this ABI carries only Claims-owned economic facts.
 //! The vector tail is borrowed, exact-width, and never allocated.
 
+pub mod affine_batch_v2;
+pub mod composition_v3;
+pub mod founding_v4;
+pub mod founding_v5;
+pub mod frame_spec_v1;
+pub mod lbv2_terminal_v2;
+pub mod liability_basis_state_v2;
+pub mod market_closure_v1;
+pub mod product_basis_terminal_v3;
+pub mod protocol_position_v2;
+mod request_layout;
+pub mod signed_delta_v3;
+pub mod sparse_native_transfer_v1;
+pub mod terminal_settlement_v3;
+
+pub use request_layout::ClaimsPlanLayoutV1;
+
 /// Bytes before the runtime-width `u64` quantity vector.
 pub const CLAIMS_PLAN_HEADER_BYTES_V1: usize = 208;
 /// Bytes in one exact claim quantity.

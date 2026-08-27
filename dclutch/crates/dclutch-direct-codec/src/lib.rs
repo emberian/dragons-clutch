@@ -12,7 +12,33 @@ mod generated_registered_controller;
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated_intent_v2;
+pub mod artifacts_v4;
+pub mod execution_v3;
 pub mod intent_v2;
+pub mod native_evidence_v3;
+#[cfg(not(target_os = "solana"))]
+pub mod ordinary_account_artifacts_v3;
+pub mod ordinary_artifacts_v3;
+#[cfg(not(target_os = "solana"))]
+pub mod ordinary_bundle_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod ordinary_effect_artifacts_v3;
+pub mod ordinary_v3;
+#[cfg(not(target_os = "solana"))]
+pub mod program_set_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod registered_account_artifacts_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod registered_bundle_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod registered_creation_artifacts_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod registered_effect_artifacts_v4;
+pub mod registered_fill_artifacts_v4;
+pub mod registered_requests_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod registered_state_artifacts_v4;
+pub mod state_artifacts_v3;
 pub mod successor;
 
 /// Bytes in one independently signed compact intent.

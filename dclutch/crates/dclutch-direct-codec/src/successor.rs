@@ -31,6 +31,153 @@ pub const DIRECT_REGISTERED_RECORD_BYTES_V2: usize = generated::DIRECT_REGISTERE
 /// Basis-point denominator and sole fee floor denominator.
 pub const DIRECT_FEE_DENOMINATOR_V1: u16 = 10_000;
 
+/// Canonical projection coordinates of [`DirectExecutionConfigV1`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectExecutionConfigLayoutV1;
+
+impl DirectExecutionConfigLayoutV1 {
+    /// Positive price scale (`u64`, little-endian).
+    pub const PRICE_SCALE: usize = generated::DIRECT_CONFIG_PRICE_SCALE_OFFSET_V1;
+    /// Venue fee rate (`u16`, little-endian).
+    pub const FEE_BASIS_POINTS: usize = generated::DIRECT_CONFIG_FEE_BPS_OFFSET_V1;
+    /// Immutable fee-recipient identity.
+    pub const FEE_RECIPIENT: usize = generated::DIRECT_CONFIG_FEE_RECIPIENT_OFFSET_V1;
+
+    /// Hostile-decode and atomically copy the complete typed config facts.
+    pub fn copy_facts_into(
+        selected_config_id: [u8; 32],
+        authenticated_config_id: [u8; 32],
+        input: &[u8],
+        price_scale: &mut u64,
+        fee_basis_points: &mut u16,
+        fee_recipient: &mut [u8; 32],
+    ) -> SuccessorResult<()> {
+        let value = DirectExecutionConfigV1::decode_selected(
+            selected_config_id,
+            authenticated_config_id,
+            input,
+        )?;
+        let scale_candidate = value.price_scale();
+        let fee_candidate = value.fee_basis_points();
+        let recipient_candidate = value.fee_recipient();
+        *price_scale = scale_candidate;
+        *fee_basis_points = fee_candidate;
+        *fee_recipient = recipient_candidate;
+        Ok(())
+    }
+}
+
+/// Canonical projection coordinates of the Direct root-state tail.
+///
+/// These offsets are relative to the family state following the common
+/// `CapabilityRootHeaderV1`; account-profile emitters add that public header
+/// width exactly once.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectRootStateLayoutV1;
+
+impl DirectRootStateLayoutV1 {
+    /// Domain-separated root-tail magic (`u64` bytes).
+    pub const MAGIC: usize = generated::DIRECT_ROOT_MAGIC_OFFSET_V1;
+    /// Root-tail ABI version (`u16`, little-endian).
+    pub const VERSION: usize = generated::DIRECT_ROOT_VERSION_OFFSET_V1;
+    /// Root phase (`u8`).
+    pub const PHASE: usize = generated::DIRECT_ROOT_PHASE_OFFSET_V1;
+    /// Canonical zero padding after phase (five bytes).
+    pub const RESERVED: usize = generated::DIRECT_ROOT_RESERVED_OFFSET_V1;
+    /// Exact width of the canonical-zero reserved range.
+    pub const RESERVED_BYTES: usize = 5;
+    /// Exact number of live maker replay roots (`u64`, little-endian).
+    pub const OPEN_MAKER_ROOT_COUNT: usize = generated::DIRECT_ROOT_OPEN_MAKER_COUNT_OFFSET_V1;
+
+    /// Exact encoded root-tail magic word used by typed profile validation.
+    pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_ROOT_MAGIC_V1);
+    /// Exact encoded root-tail ABI version used by typed profile validation.
+    pub const ABI_VERSION: u16 = generated::DIRECT_SUCCESSOR_ABI_VERSION_V1;
+}
+
+/// Canonical projection/write coordinates of [`MakerReplayRootV1`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectMakerReplayLayoutV1;
+
+impl DirectMakerReplayLayoutV1 {
+    /// Domain-separated state magic (`u64` bytes).
+    pub const MAGIC: usize = generated::DIRECT_MAKER_MAGIC_OFFSET_V1;
+    /// State ABI version (`u16`, little-endian).
+    pub const VERSION: usize = generated::DIRECT_MAKER_VERSION_OFFSET_V1;
+    /// Canonical PDA bump (`u8`).
+    pub const BUMP: usize = generated::DIRECT_MAKER_BUMP_OFFSET_V1;
+    /// Canonical zero padding after the bump (five bytes).
+    pub const RESERVED: usize = generated::DIRECT_MAKER_RESERVED_OFFSET_V1;
+    /// Exact width of the canonical-zero reserved range.
+    pub const RESERVED_BYTES: usize = 5;
+    /// Immutable Core Market identity.
+    pub const MARKET: usize = generated::DIRECT_MAKER_MARKET_OFFSET_V1;
+    /// Immutable Market generation (`u64`, little-endian).
+    pub const GENERATION: usize = generated::DIRECT_MAKER_GENERATION_OFFSET_V1;
+    /// Immutable maker identity.
+    pub const MAKER: usize = generated::DIRECT_MAKER_IDENTITY_OFFSET_V1;
+    /// Exact next replay nonce (`u64`, little-endian).
+    pub const NEXT_NONCE: usize = generated::DIRECT_MAKER_NEXT_NONCE_OFFSET_V1;
+    /// Number of live registered records (`u64`, little-endian).
+    pub const LIVE_COUNT: usize = generated::DIRECT_MAKER_LIVE_COUNT_OFFSET_V1;
+    /// Lowest still-live registered nonce (`u64`, little-endian).
+    pub const MINIMUM_LIVE_NONCE: usize = generated::DIRECT_MAKER_MINIMUM_LIVE_NONCE_OFFSET_V1;
+    /// Immutable rent beneficiary.
+    pub const RENT_OWNER: usize = generated::DIRECT_MAKER_RENT_OWNER_OFFSET_V1;
+    /// Historical rent principal (`u64`, little-endian).
+    pub const RENT_PRINCIPAL: usize = generated::DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1;
+
+    /// Exact encoded magic word used only by typed state initialization.
+    pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_MAKER_MAGIC_V1);
+    /// Exact encoded ABI version used only by typed state initialization.
+    pub const ABI_VERSION: u16 = generated::DIRECT_SUCCESSOR_ABI_VERSION_V1;
+}
+
+/// Canonical projection/write coordinates of [`DirectRegisteredIntentV2`].
+///
+/// Profile emitters use this semantic-owner surface rather than copying the
+/// generated ABI offsets. A live record must authenticate the magic, version,
+/// and complete reserved range before any Transition or Effect can write its
+/// mutable economic fields.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectRegisteredRecordLayoutV2;
+
+impl DirectRegisteredRecordLayoutV2 {
+    /// Domain-separated registered-record magic (`u64` bytes).
+    pub const MAGIC: usize = generated::DIRECT_RECORD_MAGIC_OFFSET_V2;
+    /// Registered-record ABI version (`u16`, little-endian).
+    pub const VERSION: usize = generated::DIRECT_RECORD_VERSION_OFFSET_V2;
+    /// Canonical PDA bump (`u8`).
+    pub const BUMP: usize = generated::DIRECT_RECORD_BUMP_OFFSET_V2;
+    /// Canonical-zero padding after the bump.
+    pub const RESERVED: usize = generated::DIRECT_RECORD_RESERVED_OFFSET_V2;
+    /// Exact width of the canonical-zero reserved range.
+    pub const RESERVED_BYTES: usize = 5;
+    /// Immutable maker identity.
+    pub const MAKER: usize = generated::DIRECT_RECORD_MAKER_OFFSET_V2;
+    /// Sole persisted [`CompactIntentV2`] bytes.
+    pub const INTENT: usize = generated::DIRECT_RECORD_INTENT_OFFSET_V2;
+    /// Aggregate filled quantity (`u64`, little-endian).
+    pub const FILLED: usize = generated::DIRECT_RECORD_FILLED_OFFSET_V2;
+    /// Remaining Sell claim reserve (`u64`, little-endian).
+    pub const RESERVED_CLAIMS: usize = generated::DIRECT_RECORD_RESERVED_CLAIMS_OFFSET_V2;
+    /// Remaining Buy collateral reserve (`u64`, little-endian).
+    pub const RESERVED_COLLATERAL: usize = generated::DIRECT_RECORD_RESERVED_COLLATERAL_OFFSET_V2;
+    /// Aggregate gross collateral (`u64`, little-endian).
+    pub const CUMULATIVE_GROSS: usize = generated::DIRECT_RECORD_CUMULATIVE_GROSS_OFFSET_V2;
+    /// Aggregate difference-of-floors fee (`u64`, little-endian).
+    pub const CUMULATIVE_FEE: usize = generated::DIRECT_RECORD_CUMULATIVE_FEE_OFFSET_V2;
+    /// Immutable RentCredit beneficiary identity.
+    pub const RENT_OWNER: usize = generated::DIRECT_RECORD_RENT_OWNER_OFFSET_V2;
+    /// Historical record-rent principal (`u64`, little-endian).
+    pub const RENT_PRINCIPAL: usize = generated::DIRECT_RECORD_RENT_PRINCIPAL_OFFSET_V2;
+
+    /// Exact encoded magic word used by typed profile validation and creation.
+    pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_RECORD_MAGIC_V2);
+    /// Exact registered-record ABI version.
+    pub const ABI_VERSION: u16 = generated::DIRECT_REGISTERED_RECORD_VERSION_V2;
+}
+
 /// Finalized-record schema label for [`DirectExecutionConfigV1`].
 pub const DIRECT_EXECUTION_CONFIG_SCHEMA_PREIMAGE_V1: &[u8] =
     b"dclutch/schema/direct-execution-config-v1";
@@ -704,6 +851,21 @@ impl MakerReplayRootV1 {
         self.next_nonce
     }
 
+    /// Exact Market bound by this replay root.
+    pub const fn market(self) -> [u8; 32] {
+        self.market
+    }
+
+    /// Immutable Market generation bound by this replay root.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    /// Verified maker identity bound by this replay root.
+    pub const fn maker(self) -> [u8; 32] {
+        self.maker
+    }
+
     /// Number of registered intent records not yet closed.
     pub const fn live_count(self) -> u64 {
         self.live_count
@@ -933,6 +1095,185 @@ pub fn consume_nonce_v2(
     })
 }
 
+/// One signature-authenticated inline participant and its replay observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineParticipantV2 {
+    /// Exact signer and compact intent authenticated by the native Ed25519 adapter.
+    pub authenticated: AuthenticatedCompactIntentV2,
+    /// Existing or authenticated-vacant maker replay PDA.
+    pub maker_replay: MakerReplayObservationV1,
+    /// Present exactly when the maker replay PDA is vacant.
+    pub first_use: Option<MakerReplayFirstUseV1>,
+}
+
+/// Common execution facts for one inline ordinary match.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineExecutionV2 {
+    /// Immutable descriptor-selected economics.
+    pub config: DirectExecutionConfigV1,
+    /// Authenticated Product result-domain width.
+    pub outcome_count: u32,
+    /// Trusted `Clock::get()` slot.
+    pub slot: u64,
+    /// Positive matcher-selected quantity.
+    pub fill: u64,
+    /// Exact scaled execution price.
+    pub execution_price: u64,
+}
+
+/// Complete inline ordinary observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineOrdinaryInputV2 {
+    /// Global Direct root before either nonce is consumed.
+    pub root: DirectRootStateV1,
+    /// Signature-authenticated seller and replay observation.
+    pub seller: InlineParticipantV2,
+    /// Signature-authenticated buyer and replay observation.
+    pub buyer: InlineParticipantV2,
+    /// Common fill, price, slot, Product, and config facts.
+    pub execution: InlineExecutionV2,
+}
+
+/// Exact ordinary Claims/Custody effect facts after both inline nonces validate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineOrdinaryEffectsV2 {
+    /// Claims debited from the seller Position and credited to the buyer Position.
+    pub claim_transfer: u64,
+    /// Signed seller collateral destination.
+    pub seller_collateral_destination: [u8; 32],
+    /// Signed buyer collateral source.
+    pub buyer_collateral_source: [u8; 32],
+    /// Gross quote before either signed-side fee.
+    pub gross_collateral: u64,
+    /// Gross less the seller-side fee, transferred first to the seller.
+    pub seller_net_collateral_credit: u64,
+    /// Gross plus the buyer-side fee, debited from the buyer.
+    pub buyer_collateral_debit: u64,
+    /// Immutable config recipient of the combined seller and buyer fees.
+    pub fee_recipient: [u8; 32],
+    /// Seller-withheld plus buyer-added fee, transferred second.
+    pub total_fee_transfer: u64,
+}
+
+/// Atomic candidates for one inline ordinary match.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InlineOrdinarySettlementV2 {
+    /// Global root after both optional maker first-use increments.
+    pub root: DirectRootStateV1,
+    /// Seller replay root after exact nonce consumption.
+    pub seller_maker_root: MakerReplayRootV1,
+    /// Buyer replay root after exact nonce consumption.
+    pub buyer_maker_root: MakerReplayRootV1,
+    /// Seller dust-tolerant first-use plan, if any.
+    pub seller_creation: Option<MakerReplayCreationPlanV1>,
+    /// Buyer dust-tolerant first-use plan, if any.
+    pub buyer_creation: Option<MakerReplayCreationPlanV1>,
+    /// Exact ordered Claims/Custody economic facts.
+    pub effects: InlineOrdinaryEffectsV2,
+}
+
+/// Preview one inline ordinary match. No account or output buffer is mutated.
+pub fn settle_inline_ordinary_v2(
+    input: InlineOrdinaryInputV2,
+) -> SuccessorResult<InlineOrdinarySettlementV2> {
+    let seller = input.seller.authenticated;
+    let buyer = input.buyer.authenticated;
+    let seller_intent = seller.intent;
+    let buyer_intent = buyer.intent;
+    let execution = input.execution;
+    validate_inline_intent_v2(
+        execution.config,
+        seller_intent,
+        execution.outcome_count,
+        execution.fill,
+    )?;
+    validate_inline_intent_v2(
+        execution.config,
+        buyer_intent,
+        execution.outcome_count,
+        execution.fill,
+    )?;
+    if execution.fill == 0
+        || DirectSideV2::decode(seller_intent.side)? != DirectSideV2::Sell
+        || DirectSideV2::decode(buyer_intent.side)? != DirectSideV2::Buy
+        || seller_intent.market != buyer_intent.market
+        || seller_intent.generation != buyer_intent.generation
+        || seller_intent.outcome != buyer_intent.outcome
+        || seller.maker == buyer.maker
+    {
+        return Err(SuccessorError::IncompatibleMatch);
+    }
+    if execution.slot < seller_intent.valid_from
+        || execution.slot > seller_intent.valid_through
+        || execution.slot < buyer_intent.valid_from
+        || execution.slot > buyer_intent.valid_through
+    {
+        return Err(SuccessorError::IntentExpired);
+    }
+    if execution.execution_price < seller_intent.limit_price
+        || execution.execution_price > buyer_intent.limit_price
+        || execution.execution_price > execution.config.price_scale
+    {
+        return Err(SuccessorError::IncompatibleMatch);
+    }
+
+    let gross_collateral = exact_quote_v2(
+        execution.fill,
+        execution.execution_price,
+        execution.config.price_scale,
+    )?;
+    let seller_fee = fee_floor_v2(gross_collateral, execution.config.fee_basis_points)?;
+    let buyer_fee = fee_floor_v2(gross_collateral, execution.config.fee_basis_points)?;
+    let seller_net_collateral_credit = gross_collateral
+        .checked_sub(seller_fee)
+        .ok_or(SuccessorError::ArithmeticOverflow)?;
+    let buyer_collateral_debit = gross_collateral
+        .checked_add(buyer_fee)
+        .ok_or(SuccessorError::ArithmeticOverflow)?;
+    let total_fee_transfer = seller_fee
+        .checked_add(buyer_fee)
+        .ok_or(SuccessorError::ArithmeticOverflow)?;
+    if seller_net_collateral_credit
+        .checked_add(total_fee_transfer)
+        .ok_or(SuccessorError::ArithmeticOverflow)?
+        != buyer_collateral_debit
+    {
+        return Err(SuccessorError::InvalidReservation);
+    }
+
+    let seller_consumed = consume_nonce_v2(
+        input.root,
+        input.seller.maker_replay,
+        seller.replay()?,
+        NonceConsumptionV2::Inline,
+        input.seller.first_use,
+    )?;
+    let buyer_consumed = consume_nonce_v2(
+        seller_consumed.root,
+        input.buyer.maker_replay,
+        buyer.replay()?,
+        NonceConsumptionV2::Inline,
+        input.buyer.first_use,
+    )?;
+    Ok(InlineOrdinarySettlementV2 {
+        root: buyer_consumed.root,
+        seller_maker_root: seller_consumed.maker_root,
+        buyer_maker_root: buyer_consumed.maker_root,
+        seller_creation: seller_consumed.creation,
+        buyer_creation: buyer_consumed.creation,
+        effects: InlineOrdinaryEffectsV2 {
+            claim_transfer: execution.fill,
+            seller_collateral_destination: seller_intent.collateral_account,
+            buyer_collateral_source: buyer_intent.collateral_account,
+            gross_collateral,
+            seller_net_collateral_credit,
+            buyer_collateral_debit,
+            fee_recipient: execution.config.fee_recipient,
+            total_fee_transfer,
+        },
+    })
+}
+
 /// Canonical PDA seeds for one live registered intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegisteredIntentSeedsV2 {
@@ -952,6 +1293,19 @@ impl RegisteredIntentSeedsV2 {
             maker: replay.maker,
             nonce: replay.nonce.to_le_bytes(),
         })
+    }
+
+    /// Project the same unique coordinate from an already authenticated live record.
+    ///
+    /// This is the physical adapter path after record decode; it does not mint a
+    /// second signature authority or reconstruct an authenticated intent wrapper.
+    pub const fn from_record(record: DirectRegisteredIntentV2) -> Self {
+        Self {
+            market: record.intent.market,
+            generation: record.intent.generation.to_le_bytes(),
+            maker: record.maker,
+            nonce: record.intent.nonce.to_le_bytes(),
+        }
     }
 
     /// Borrow ordered seeds excluding the bump.
@@ -1890,11 +2244,39 @@ fn validate_intent_v2(
     outcome_count: u32,
     required_lifecycle: DirectLifecycleV2,
 ) -> SuccessorResult<()> {
+    let (_, lifecycle) = validate_intent_common_v2(config, intent, outcome_count)?;
+    if lifecycle != required_lifecycle {
+        return Err(SuccessorError::InvalidIntent);
+    }
+    Ok(())
+}
+
+fn validate_inline_intent_v2(
+    config: DirectExecutionConfigV1,
+    intent: CompactIntentV2,
+    outcome_count: u32,
+    fill: u64,
+) -> SuccessorResult<()> {
+    let (_, lifecycle) = validate_intent_common_v2(config, intent, outcome_count)?;
+    match lifecycle {
+        DirectLifecycleV2::InlineFillOrKill if fill == intent.maximum_fill => Ok(()),
+        DirectLifecycleV2::InlineImmediateOrCancel if fill <= intent.maximum_fill => Ok(()),
+        DirectLifecycleV2::InlineFillOrKill
+        | DirectLifecycleV2::InlineImmediateOrCancel
+        | DirectLifecycleV2::Registered => Err(SuccessorError::InvalidIntent),
+    }
+}
+
+fn validate_intent_common_v2(
+    config: DirectExecutionConfigV1,
+    intent: CompactIntentV2,
+    outcome_count: u32,
+) -> SuccessorResult<(DirectSideV2, DirectLifecycleV2)> {
     require_nonzero(intent.market)?;
     require_nonzero(intent.collateral_account)?;
-    if DirectLifecycleV2::decode(intent.lifecycle)? != required_lifecycle
-        || DirectSideV2::decode(intent.side).is_err()
-        || outcome_count < 2
+    let side = DirectSideV2::decode(intent.side)?;
+    let lifecycle = DirectLifecycleV2::decode(intent.lifecycle)?;
+    if outcome_count < 2
         || intent.outcome >= outcome_count
         || intent.valid_from > intent.valid_through
         || intent.maximum_fill == 0
@@ -1903,7 +2285,7 @@ fn validate_intent_v2(
     {
         return Err(SuccessorError::InvalidIntent);
     }
-    Ok(())
+    Ok((side, lifecycle))
 }
 
 fn maximum_buy_reserve_v2(
@@ -2145,6 +2527,55 @@ mod tests {
         }
     }
 
+    fn inline_intent(
+        side: u8,
+        lifecycle: DirectLifecycleV2,
+        nonce: u64,
+        maximum_fill: u64,
+        limit_price: u64,
+        collateral: [u8; 32],
+    ) -> CompactIntentV2 {
+        let lifecycle = match lifecycle {
+            DirectLifecycleV2::InlineFillOrKill => 0,
+            DirectLifecycleV2::InlineImmediateOrCancel => 1,
+            DirectLifecycleV2::Registered => 2,
+        };
+        CompactIntentV2 {
+            side,
+            outcome: 1,
+            lifecycle,
+            market: id(1),
+            generation: 4,
+            nonce,
+            valid_from: 2,
+            valid_through: 20,
+            maximum_fill,
+            limit_price,
+            fee_basis_points: 1_000,
+            collateral_account: collateral,
+        }
+    }
+
+    fn first_inline_participant(
+        maker: [u8; 32],
+        compact: CompactIntentV2,
+        bump: u8,
+        observed_lamports: u64,
+    ) -> InlineParticipantV2 {
+        InlineParticipantV2 {
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker, compact)
+                .expect("authentication projection"),
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
+                bump,
+                observed_lamports,
+            )),
+            first_use: Some(MakerReplayFirstUseV1 {
+                rent_owner: id(bump),
+                rent_principal: 100,
+            }),
+        }
+    }
+
     fn register(
         root: DirectRootStateV1,
         maker: [u8; 32],
@@ -2215,12 +2646,29 @@ mod tests {
         assert_eq!(root.phase(), DirectRootPhaseV1::Open);
         assert_eq!(root.open_maker_root_count(), 3);
         assert_eq!(root.encode(), generated::DIRECT_ROOT_EXAMPLE_V1);
+        assert_eq!(DirectRootStateLayoutV1::RESERVED_BYTES, 5);
+        assert_eq!(
+            generated::DIRECT_ROOT_EXAMPLE_V1.get(
+                DirectRootStateLayoutV1::RESERVED
+                    ..DirectRootStateLayoutV1::RESERVED + DirectRootStateLayoutV1::RESERVED_BYTES
+            ),
+            Some([0_u8; 5].as_slice())
+        );
 
         let maker = MakerReplayRootV1::decode(&generated::DIRECT_MAKER_EXAMPLE_V1).expect("maker");
         assert_eq!(maker.next_nonce(), 9);
         assert_eq!(maker.live_count(), 2);
         assert_eq!(maker.minimum_live_nonce(), 5);
         assert_eq!(maker.rent_principal(), 2_000_000);
+        assert_eq!(DirectMakerReplayLayoutV1::RESERVED_BYTES, 5);
+        assert_eq!(
+            generated::DIRECT_MAKER_EXAMPLE_V1.get(
+                DirectMakerReplayLayoutV1::RESERVED
+                    ..DirectMakerReplayLayoutV1::RESERVED
+                        + DirectMakerReplayLayoutV1::RESERVED_BYTES
+            ),
+            Some([0_u8; 5].as_slice())
+        );
         assert_eq!(
             maker.encode().expect("encode"),
             generated::DIRECT_MAKER_EXAMPLE_V1
@@ -2234,6 +2682,36 @@ mod tests {
         assert_eq!(record.filled(), 3);
         assert_eq!(record.reserved_claims(), 4_997);
         assert_eq!(record.cumulative_gross(), 1);
+        assert_eq!(DirectRegisteredRecordLayoutV2::RESERVED_BYTES, 5);
+        assert_eq!(
+            generated::DIRECT_RECORD_EXAMPLE_V2.get(
+                DirectRegisteredRecordLayoutV2::MAGIC..DirectRegisteredRecordLayoutV2::MAGIC + 8
+            ),
+            Some(
+                DirectRegisteredRecordLayoutV2::MAGIC_WORD
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            generated::DIRECT_RECORD_EXAMPLE_V2.get(
+                DirectRegisteredRecordLayoutV2::VERSION
+                    ..DirectRegisteredRecordLayoutV2::VERSION + 2
+            ),
+            Some(
+                DirectRegisteredRecordLayoutV2::ABI_VERSION
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            generated::DIRECT_RECORD_EXAMPLE_V2.get(
+                DirectRegisteredRecordLayoutV2::RESERVED
+                    ..DirectRegisteredRecordLayoutV2::RESERVED
+                        + DirectRegisteredRecordLayoutV2::RESERVED_BYTES
+            ),
+            Some([0_u8; 5].as_slice())
+        );
         assert_eq!(
             record.encode_selected(config, 2).expect("record encode"),
             generated::DIRECT_RECORD_EXAMPLE_V2
@@ -2346,6 +2824,224 @@ mod tests {
         .expect("next nonce");
         assert_eq!(next.root, consumed.root);
         assert_eq!(next.maker_root.next_nonce(), 2);
+    }
+
+    #[test]
+    fn inline_fok_price_improvement_binds_conserving_ordered_effects() {
+        let seller = first_inline_participant(
+            id(2),
+            inline_intent(0, DirectLifecycleV2::InlineFillOrKill, 0, 100, 40, id(30)),
+            11,
+            3,
+        );
+        let buyer = first_inline_participant(
+            id(3),
+            inline_intent(1, DirectLifecycleV2::InlineFillOrKill, 0, 100, 60, id(31)),
+            12,
+            130,
+        );
+        let settlement = settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+            root: DirectRootStateV1::new(),
+            seller,
+            buyer,
+            execution: InlineExecutionV2 {
+                config: config(),
+                outcome_count: 3,
+                slot: 7,
+                fill: 100,
+                execution_price: 50,
+            },
+        })
+        .expect("inline FOK match");
+
+        assert_eq!(settlement.root.open_maker_root_count(), 2);
+        assert_eq!(settlement.seller_maker_root.next_nonce(), 1);
+        assert_eq!(settlement.buyer_maker_root.next_nonce(), 1);
+        assert_eq!(settlement.seller_maker_root.live_count(), 0);
+        assert_eq!(settlement.buyer_maker_root.live_count(), 0);
+        assert_eq!(
+            settlement.seller_creation,
+            Some(MakerReplayCreationPlanV1 {
+                observed_lamports: 3,
+                top_up_lamports: 97,
+                post_lamports: 100,
+            })
+        );
+        assert_eq!(
+            settlement.buyer_creation,
+            Some(MakerReplayCreationPlanV1 {
+                observed_lamports: 130,
+                top_up_lamports: 0,
+                post_lamports: 130,
+            })
+        );
+        assert_eq!(settlement.effects.claim_transfer, 100);
+        assert_eq!(settlement.effects.gross_collateral, 50);
+        assert_eq!(settlement.effects.seller_net_collateral_credit, 45);
+        assert_eq!(settlement.effects.buyer_collateral_debit, 55);
+        assert_eq!(settlement.effects.total_fee_transfer, 10);
+        assert_eq!(settlement.effects.fee_recipient, id(99));
+        assert_eq!(settlement.effects.seller_collateral_destination, id(30));
+        assert_eq!(settlement.effects.buyer_collateral_source, id(31));
+        assert_eq!(
+            settlement
+                .effects
+                .seller_net_collateral_credit
+                .checked_add(settlement.effects.total_fee_transfer),
+            Some(settlement.effects.buyer_collateral_debit)
+        );
+    }
+
+    #[test]
+    fn inline_ioc_partial_fill_debits_actual_not_worst_case_and_replays_refuse() {
+        let seller_intent = inline_intent(
+            0,
+            DirectLifecycleV2::InlineImmediateOrCancel,
+            0,
+            100,
+            40,
+            id(30),
+        );
+        let buyer_intent = inline_intent(
+            1,
+            DirectLifecycleV2::InlineImmediateOrCancel,
+            0,
+            100,
+            60,
+            id(31),
+        );
+        let seller = first_inline_participant(id(2), seller_intent, 11, 0);
+        let buyer = first_inline_participant(id(3), buyer_intent, 12, 0);
+        let input = InlineOrdinaryInputV2 {
+            root: DirectRootStateV1::new(),
+            seller,
+            buyer,
+            execution: InlineExecutionV2 {
+                config: config(),
+                outcome_count: 3,
+                slot: 7,
+                fill: 40,
+                execution_price: 50,
+            },
+        };
+        let settlement = settle_inline_ordinary_v2(input).expect("inline IOC match");
+        assert_eq!(settlement.effects.gross_collateral, 20);
+        assert_eq!(settlement.effects.buyer_collateral_debit, 22);
+        assert_eq!(maximum_buy_reserve_v2(config(), buyer_intent), Ok(66));
+        assert!(settlement.effects.buyer_collateral_debit < 66);
+
+        let replay = settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+            root: settlement.root,
+            seller: InlineParticipantV2 {
+                maker_replay: MakerReplayObservationV1::Existing(settlement.seller_maker_root),
+                first_use: None,
+                ..seller
+            },
+            buyer: InlineParticipantV2 {
+                maker_replay: MakerReplayObservationV1::Existing(settlement.buyer_maker_root),
+                first_use: None,
+                ..buyer
+            },
+            ..input
+        });
+        assert_eq!(replay, Err(SuccessorError::NonceMismatch));
+    }
+
+    #[test]
+    fn inline_lifecycle_slot_price_and_maker_substitutions_refuse() {
+        let seller = first_inline_participant(
+            id(2),
+            inline_intent(0, DirectLifecycleV2::InlineFillOrKill, 0, 100, 40, id(30)),
+            11,
+            0,
+        );
+        let buyer = first_inline_participant(
+            id(3),
+            inline_intent(
+                1,
+                DirectLifecycleV2::InlineImmediateOrCancel,
+                0,
+                100,
+                60,
+                id(31),
+            ),
+            12,
+            0,
+        );
+        let input = InlineOrdinaryInputV2 {
+            root: DirectRootStateV1::new(),
+            seller,
+            buyer,
+            execution: InlineExecutionV2 {
+                config: config(),
+                outcome_count: 3,
+                slot: 7,
+                fill: 40,
+                execution_price: 50,
+            },
+        };
+        assert_eq!(
+            settle_inline_ordinary_v2(input),
+            Err(SuccessorError::InvalidIntent)
+        );
+        let full = InlineOrdinaryInputV2 {
+            execution: InlineExecutionV2 {
+                fill: 100,
+                ..input.execution
+            },
+            ..input
+        };
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                execution: InlineExecutionV2 {
+                    slot: 21,
+                    ..full.execution
+                },
+                ..full
+            }),
+            Err(SuccessorError::IntentExpired)
+        );
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                execution: InlineExecutionV2 {
+                    execution_price: 61,
+                    ..full.execution
+                },
+                ..full
+            }),
+            Err(SuccessorError::IncompatibleMatch)
+        );
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                buyer: InlineParticipantV2 {
+                    authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                        id(2),
+                        buyer.authenticated.intent(),
+                    )
+                    .expect("alias signer"),
+                    ..buyer
+                },
+                ..full
+            }),
+            Err(SuccessorError::IncompatibleMatch)
+        );
+        assert_eq!(
+            settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+                buyer: InlineParticipantV2 {
+                    authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                        id(3),
+                        CompactIntentV2 {
+                            lifecycle: 2,
+                            ..buyer.authenticated.intent()
+                        },
+                    )
+                    .expect("registered signer"),
+                    ..buyer
+                },
+                ..full
+            }),
+            Err(SuccessorError::InvalidIntent)
+        );
     }
 
     #[test]
@@ -2989,5 +3685,164 @@ mod tests {
             ),
             Err(SuccessorError::MakerRootCountInvariant)
         );
+    }
+
+    #[test]
+    fn public_projection_layout_tracks_canonical_encoders() {
+        let selected = config();
+        let config_bytes = selected.encode();
+        assert_eq!(
+            config_bytes.get(
+                DirectExecutionConfigLayoutV1::PRICE_SCALE
+                    ..DirectExecutionConfigLayoutV1::PRICE_SCALE + 8
+            ),
+            Some(selected.price_scale().to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            config_bytes.get(
+                DirectExecutionConfigLayoutV1::FEE_BASIS_POINTS
+                    ..DirectExecutionConfigLayoutV1::FEE_BASIS_POINTS + 2
+            ),
+            Some(selected.fee_basis_points().to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            config_bytes.get(
+                DirectExecutionConfigLayoutV1::FEE_RECIPIENT
+                    ..DirectExecutionConfigLayoutV1::FEE_RECIPIENT + 32
+            ),
+            Some(selected.fee_recipient().as_slice())
+        );
+        let mut price_scale = 0;
+        let mut fee_basis_points = 0;
+        let mut fee_recipient = [0; 32];
+        DirectExecutionConfigLayoutV1::copy_facts_into(
+            id(42),
+            id(42),
+            &config_bytes,
+            &mut price_scale,
+            &mut fee_basis_points,
+            &mut fee_recipient,
+        )
+        .expect("config projection");
+        assert_eq!(price_scale, selected.price_scale());
+        assert_eq!(fee_basis_points, selected.fee_basis_points());
+        assert_eq!(fee_recipient, selected.fee_recipient());
+
+        let root = DirectRootStateV1::new();
+        let root_bytes = root.encode();
+        assert_eq!(
+            root_bytes.get(DirectRootStateLayoutV1::MAGIC..DirectRootStateLayoutV1::MAGIC + 8),
+            Some(DirectRootStateLayoutV1::MAGIC_WORD.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            root_bytes.get(DirectRootStateLayoutV1::VERSION..DirectRootStateLayoutV1::VERSION + 2),
+            Some(
+                DirectRootStateLayoutV1::ABI_VERSION
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            root_bytes.get(DirectRootStateLayoutV1::PHASE),
+            Some(&(root.phase().byte()))
+        );
+        assert_eq!(
+            root_bytes
+                .get(DirectRootStateLayoutV1::RESERVED..DirectRootStateLayoutV1::RESERVED + 5),
+            Some([0_u8; 5].as_slice())
+        );
+        assert_eq!(
+            root_bytes.get(
+                DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT
+                    ..DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT + 8
+            ),
+            Some(root.open_maker_root_count().to_le_bytes().as_slice())
+        );
+
+        let maker = MakerReplayRootV1::new(
+            DirectCoordinatesV1::new(id(1), 4).expect("coordinates"),
+            id(2),
+            id(3),
+            100,
+            7,
+        )
+        .expect("maker");
+        let maker_bytes = maker.encode().expect("maker bytes");
+        assert_eq!(
+            maker_bytes.get(DirectMakerReplayLayoutV1::MAGIC..DirectMakerReplayLayoutV1::MAGIC + 8),
+            Some(
+                DirectMakerReplayLayoutV1::MAGIC_WORD
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            maker_bytes
+                .get(DirectMakerReplayLayoutV1::VERSION..DirectMakerReplayLayoutV1::VERSION + 2),
+            Some(
+                DirectMakerReplayLayoutV1::ABI_VERSION
+                    .to_le_bytes()
+                    .as_slice()
+            )
+        );
+        for (offset, expected) in [
+            (DirectMakerReplayLayoutV1::MARKET, maker.market()),
+            (DirectMakerReplayLayoutV1::MAKER, maker.maker()),
+            (DirectMakerReplayLayoutV1::RENT_OWNER, maker.rent_owner()),
+        ] {
+            assert_eq!(
+                maker_bytes.get(offset..offset + 32),
+                Some(expected.as_slice())
+            );
+        }
+        for (offset, expected) in [
+            (DirectMakerReplayLayoutV1::GENERATION, maker.generation()),
+            (DirectMakerReplayLayoutV1::NEXT_NONCE, maker.next_nonce()),
+            (DirectMakerReplayLayoutV1::LIVE_COUNT, maker.live_count()),
+            (
+                DirectMakerReplayLayoutV1::MINIMUM_LIVE_NONCE,
+                maker.minimum_live_nonce(),
+            ),
+            (
+                DirectMakerReplayLayoutV1::RENT_PRINCIPAL,
+                maker.rent_principal(),
+            ),
+        ] {
+            assert_eq!(
+                maker_bytes.get(offset..offset + 8),
+                Some(expected.to_le_bytes().as_slice())
+            );
+        }
+        assert_eq!(
+            maker_bytes.get(DirectMakerReplayLayoutV1::BUMP),
+            Some(&maker.bump())
+        );
+        assert_eq!(
+            maker_bytes
+                .get(DirectMakerReplayLayoutV1::RESERVED..DirectMakerReplayLayoutV1::RESERVED + 5),
+            Some([0_u8; 5].as_slice())
+        );
+    }
+
+    #[test]
+    fn hostile_config_projection_preserves_all_outputs() {
+        let mut bytes = config().encode();
+        bytes[generated::DIRECT_CONFIG_RESERVED_A_OFFSET_V1] = 1;
+        let mut price_scale = 9;
+        let mut fee_basis_points = 8;
+        let mut fee_recipient = id(7);
+        let before = (price_scale, fee_basis_points, fee_recipient);
+        assert!(
+            DirectExecutionConfigLayoutV1::copy_facts_into(
+                id(42),
+                id(42),
+                &bytes,
+                &mut price_scale,
+                &mut fee_basis_points,
+                &mut fee_recipient,
+            )
+            .is_err()
+        );
+        assert_eq!((price_scale, fee_basis_points, fee_recipient), before);
     }
 }

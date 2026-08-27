@@ -1,14 +1,15 @@
 //! Hostile generated Market Core ABI and sparse lifecycle coverage.
 
 use dclutch_market_core_codec::{
-    ACTION_ACTIVATE_CAPABILITY_TAG, ACTION_CLOSE_CAPABILITY_TAG, ACTION_VERIFY_READINESS_TAG,
-    AccountCreation, Action, Admission, Binding, CapabilityChildObservation,
-    ChildEffectObservation, ClaimsEffectObservation, CollateralObservation, CoreState, Error,
-    FoundingAccounts, FoundingFrame, FoundingQuote, Holder, Identity, MarketIdentity, Phase,
-    Product, REQUEST_BYTES, Readiness, Realm, ReleaseReceipt, ReleaseSet, Representation, Request,
-    Role, STATE_BYTES, TerminalReceipt, VacantAccount, activate_capability_child, admit_terminal,
-    begin_retiring, close_capability_child, found, open_market, redeem_terminal, retire,
-    split_complete_set, verify_readiness,
+    ACTION_ACTIVATE_CAPABILITY_TAG, ACTION_CLOSE_CAPABILITY_TAG, ACTION_EXECUTE_PROVIDER_TAG,
+    ACTION_VERIFY_READINESS_TAG, AccountCreation, Action, Admission, Binding,
+    CapabilityChildObservation, ChildEffectObservation, ClaimsEffectObservation,
+    CollateralObservation, CoreState, Error, FoundingAccounts, FoundingFrame, FoundingQuote,
+    Holder, Identity, MarketIdentity, Phase, Product, REQUEST_BYTES, Readiness, Realm,
+    ReleaseReceipt, ReleaseSet, Representation, Request, RetirementAdmissions, Role, STATE_BYTES,
+    SeriesOpenObservation, TerminalReceipt, VacantAccount, activate_capability_child,
+    admit_terminal, begin_retiring, close_capability_child, found, open_market, open_series_market,
+    redeem_terminal, retire, split_complete_set, verify_readiness,
 };
 
 fn id(byte: u8) -> Identity {
@@ -64,6 +65,21 @@ fn admission(role: Role) -> Admission {
     }
 }
 
+fn retirement_admissions(state: CoreState) -> RetirementAdmissions {
+    let mut value =
+        RetirementAdmissions::core(state, admission(Role::Core)).expect("current Core admission");
+    value
+        .admit(state, admission(Role::Claims), Role::Claims)
+        .expect("current Claims admission");
+    value
+        .admit(state, admission(Role::Resolution), Role::Resolution)
+        .expect("current Resolution admission");
+    value
+        .admit(state, admission(Role::Custody), Role::Custody)
+        .expect("current Custody admission");
+    value
+}
+
 fn realm() -> Realm {
     Realm {
         realm_id: id(20),
@@ -75,11 +91,16 @@ fn realm() -> Realm {
 
 fn product(outcome_count: u32) -> Product {
     Product {
+        product_record: id(29),
         product_id: id(30),
         result_domain: id(31),
+        portfolio: id(32),
+        coordinate_domain: id(33),
+        result_unit: id(34),
         claim_basis: id(32),
-        capacity_profile: id(33),
-        compiler_release: id(34),
+        liability_basis: id(35),
+        representation_release: id(36),
+        mapping_release: id(37),
         outcome_count,
     }
 }
@@ -88,8 +109,8 @@ fn identity() -> MarketIdentity {
     MarketIdentity {
         market_id: id(40),
         realm_id: id(20),
+        product_record: id(29),
         product_id: id(30),
-        result_domain: id(31),
         resolution_policy: id(41),
         capability_manifest: id(42),
         selected_release_set: id(10),
@@ -132,6 +153,24 @@ fn child() -> ChildEffectObservation {
         exact_request_authenticated: true,
         exact_receipt_authenticated: true,
         post_resource_authenticated: true,
+    }
+}
+
+fn series_observation() -> SeriesOpenObservation {
+    SeriesOpenObservation {
+        claims_admission: admission(Role::Claims),
+        custody_admission: admission(Role::Custody),
+        quantity: 7,
+        basis_scale: 11,
+        source_debit: 77,
+        hoard_credit: 77,
+        hoard_funding_authenticated: true,
+        found_state_bound_by_custody: true,
+        claims_custody_join_authenticated: true,
+        ticket_prepared_authenticated: true,
+        ticket_consumed_candidate_authenticated: true,
+        claims_effect: child(),
+        custody_effect: child(),
     }
 }
 
@@ -236,6 +275,7 @@ fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
     assert_eq!(ACTION_VERIFY_READINESS_TAG, 1);
     assert_eq!(ACTION_ACTIVATE_CAPABILITY_TAG, 8);
     assert_eq!(ACTION_CLOSE_CAPABILITY_TAG, 9);
+    assert_eq!(ACTION_EXECUTE_PROVIDER_TAG, 10);
 
     let mut state = open_state(17);
     state.outstanding_capabilities = 9;
@@ -250,6 +290,7 @@ fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
         Action::VerifyReadiness,
         Action::ActivateCapability,
         Action::CloseCapability,
+        Action::ExecuteProvider,
     ] {
         let request = admin(action, state);
         assert_eq!(
@@ -273,7 +314,7 @@ fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
     reserved[13] = 1;
     assert_eq!(Request::decode(&reserved), Err(Error::NonzeroReserved));
     let mut unknown = bytes;
-    unknown[10] = 10;
+    unknown[10] = 11;
     assert_eq!(Request::decode(&unknown), Err(Error::InvalidTag));
 }
 
@@ -356,6 +397,28 @@ fn found_creates_only_the_dust_tolerant_core_market_account() {
         found(Request::administrative(Action::Found, 7, id(40)), aliased),
         Err(Error::InvalidCoordinates)
     );
+
+    let mut substituted_root = founding_frame(17, 0);
+    substituted_root.product.product_record = id(98);
+    assert_eq!(
+        found(
+            Request::administrative(Action::Found, 7, id(40)),
+            substituted_root,
+        ),
+        Err(Error::InvalidFunding),
+        "a Product graph-root substitution must not preserve stable Product authority",
+    );
+
+    let mut substituted_stable_id = founding_frame(17, 0);
+    substituted_stable_id.product.product_id = id(97);
+    assert_eq!(
+        found(
+            Request::administrative(Action::Found, 7, id(40)),
+            substituted_stable_id,
+        ),
+        Err(Error::InvalidFunding),
+        "a stable Product ID substitution under the same graph root must fail closed",
+    );
 }
 
 #[test]
@@ -428,6 +491,62 @@ fn readiness_and_open_require_exact_external_child_evidence_before_commit() {
     assert_eq!(creation.donation, 5);
     assert_eq!(state.phase, Phase::Open);
     assert_eq!(state.readiness, Readiness::Consumed);
+}
+
+#[test]
+fn series_open_requires_equal_source_debit_and_hoard_credit_before_commit() {
+    let initial = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(17, 7),
+    )
+    .expect("found succeeds")
+    .state;
+    let request = admin(Action::OpenMarket, initial);
+
+    for hostile in [
+        SeriesOpenObservation {
+            hoard_credit: 76,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            source_debit: 76,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            claims_effect: ChildEffectObservation {
+                exact_receipt_authenticated: false,
+                ..child()
+            },
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            found_state_bound_by_custody: false,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            claims_custody_join_authenticated: false,
+            ..series_observation()
+        },
+        SeriesOpenObservation {
+            ticket_consumed_candidate_authenticated: false,
+            ..series_observation()
+        },
+    ] {
+        let mut candidate = initial;
+        assert_eq!(
+            open_series_market(request, &mut candidate, hostile),
+            Err(Error::InvalidChildEffect)
+        );
+        assert_eq!(candidate, initial);
+    }
+
+    let mut candidate = initial;
+    open_series_market(request, &mut candidate, series_observation())
+        .expect("exact Series founding evidence opens Market");
+    assert_eq!(candidate.phase, Phase::Open);
+    assert_eq!(candidate.readiness, Readiness::Consumed);
+    assert_eq!(candidate.identity, initial.identity);
+    assert_eq!(candidate.rent_beneficiary, initial.rent_beneficiary);
 }
 
 #[test]
@@ -602,16 +721,27 @@ fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
         admission(Role::Core),
     )
     .expect("begin retiring");
+    let mut substituted_claims = admission(Role::Claims);
+    *substituted_claims
+        .selected
+        .bindings
+        .get_mut(Role::Claims as usize)
+        .expect("Claims binding") = binding(99);
+    substituted_claims.receipt.observed = binding(99);
+    let mut partial =
+        RetirementAdmissions::core(state, admission(Role::Core)).expect("current Core admission");
+    assert_eq!(
+        partial.admit(state, substituted_claims, Role::Claims),
+        Err(Error::InvalidRelease)
+    );
     state.outstanding_capabilities = 1;
     let before = state;
+    let admissions = retirement_admissions(state);
     assert_eq!(
         retire(
             admin(Action::Retire, state),
             &mut state,
-            admission(Role::Core),
-            admission(Role::Claims),
-            admission(Role::Resolution),
-            admission(Role::Custody),
+            admissions,
             claims(0, true),
             child(),
             child(),
@@ -625,14 +755,12 @@ fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
 
     state.outstanding_capabilities = 0;
     let before = state;
+    let admissions = retirement_admissions(state);
     assert_eq!(
         retire(
             admin(Action::Retire, state),
             &mut state,
-            admission(Role::Core),
-            admission(Role::Claims),
-            admission(Role::Resolution),
-            admission(Role::Custody),
+            admissions,
             claims(0, true),
             child(),
             child(),
@@ -644,14 +772,12 @@ fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
     );
     assert_eq!(state, before);
 
+    let admissions = retirement_admissions(state);
     assert_eq!(
         retire(
             admin(Action::Retire, state),
             &mut state,
-            admission(Role::Core),
-            admission(Role::Claims),
-            admission(Role::Resolution),
-            admission(Role::Custody),
+            admissions,
             claims(0, true),
             child(),
             child(),

@@ -21,7 +21,16 @@ composing adapter must:
 3. resolve every referenced artifact release through checked Program,
    ProgramData, deployment-slot, ELF, and upgrade-policy evidence; and
 4. persist or authenticate one activation binding before lending any
-   controller PDA authority.
+controller PDA authority.
+
+The separate 144-byte `ProtocolInfrastructureProfileV1` is the noncyclic
+bootstrap root for Registry and Rent. It is a Core-owned per-program PDA,
+initialized once by the exact signer named in the current Core ProgramData
+upgrade-authority field. Its fixed Registry and Rent `(program, artifact
+release)` bindings are not a sixth Registry-owned release-set role. Runtime
+adapters must still authenticate both selected `ArtifactReleaseV1` bodies and
+their current Loader deployments before trusting Registry records or a
+RentCredit owner.
 
 `CapabilityExecutionSelectionV1` is the Lean-owned, generated-layout projection
 from one exact manifest entry to the fixed Trading role. It carries the

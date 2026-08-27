@@ -23,7 +23,7 @@ def version : Nat := 2
 
 inductive StateField where
   | magic | version | phase | readiness | terminalWinner
-  | marketId | identityRealm | identityProduct | identityResultDomain
+  | marketId | identityRealm | productRecord | productId
   | resolutionPolicy | capabilityManifest | selectedReleaseSet | registryProgram | generation
   | outstandingCapabilities
   | rentBeneficiary
@@ -34,7 +34,7 @@ def stateSchema : List (FieldSpec StateField) := [
   ⟨.magic, .bytes 8⟩, ⟨.version, .u16⟩, ⟨.phase, .u8⟩, ⟨.readiness, .u8⟩,
   ⟨.terminalWinner, .u32⟩,
   ⟨.marketId, .bytes 32⟩, ⟨.identityRealm, .bytes 32⟩,
-  ⟨.identityProduct, .bytes 32⟩, ⟨.identityResultDomain, .bytes 32⟩,
+  ⟨.productRecord, .bytes 32⟩, ⟨.productId, .bytes 32⟩,
   ⟨.resolutionPolicy, .bytes 32⟩,
   ⟨.capabilityManifest, .bytes 32⟩,
   ⟨.selectedReleaseSet, .bytes 32⟩, ⟨.registryProgram, .bytes 32⟩,
@@ -54,8 +54,8 @@ def rustName : StateField → String
   | .phase => "STATE_PHASE_OFFSET" | .readiness => "STATE_READINESS_OFFSET"
   | .terminalWinner => "STATE_TERMINAL_WINNER_OFFSET"
   | .marketId => "STATE_MARKET_ID_OFFSET" | .identityRealm => "STATE_IDENTITY_REALM_OFFSET"
-  | .identityProduct => "STATE_IDENTITY_PRODUCT_OFFSET"
-  | .identityResultDomain => "STATE_IDENTITY_RESULT_DOMAIN_OFFSET"
+  | .productRecord => "STATE_PRODUCT_RECORD_OFFSET"
+  | .productId => "STATE_PRODUCT_ID_OFFSET"
   | .resolutionPolicy => "STATE_RESOLUTION_POLICY_OFFSET"
   | .capabilityManifest => "STATE_CAPABILITY_MANIFEST_OFFSET"
   | .selectedReleaseSet => "STATE_SELECTED_RELEASE_SET_OFFSET"
@@ -77,12 +77,13 @@ theorem state_fields_bounded (placed : PlacedField StateField) (member : placed 
 inductive Action where
   | found | verifyReadiness | openMarket | admitTerminal
   | split | redeem | beginRetiring | retire | activateCapability | closeCapability
+  | executeProvider
   deriving DecidableEq, Repr
 
 def Action.tag : Action → Nat
   | .found => 0 | .verifyReadiness => 1 | .openMarket => 2 | .admitTerminal => 3
   | .split => 4 | .redeem => 5 | .beginRetiring => 6 | .retire => 7
-  | .activateCapability => 8 | .closeCapability => 9
+  | .activateCapability => 8 | .closeCapability => 9 | .executeProvider => 10
 
 def phaseFoundingTag : Nat := 0
 def phaseOpenTag : Nat := 1
@@ -104,12 +105,12 @@ def representationMaterializedTag : Nat := 2
 
 theorem action_tags_fit_u8 :
     [Action.found, .verifyReadiness, .openMarket, .admitTerminal, .split, .redeem,
-      .beginRetiring, .retire, .activateCapability, .closeCapability].all
+      .beginRetiring, .retire, .activateCapability, .closeCapability, .executeProvider].all
       (fun action => action.tag < 256) = true := by native_decide
 
 theorem action_tags_unique :
     ([Action.found, .verifyReadiness, .openMarket, .admitTerminal, .split, .redeem,
-      .beginRetiring, .retire, .activateCapability, .closeCapability].map Action.tag).Nodup := by
+      .beginRetiring, .retire, .activateCapability, .closeCapability, .executeProvider].map Action.tag).Nodup := by
   native_decide
 
 inductive RequestField where

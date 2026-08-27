@@ -42,7 +42,7 @@ body. Byte-for-byte copying requires a specific justification.
 | ID | Invariant | Source commit/path | New owner | Status |
 | --- | --- | --- | --- | --- |
 | — | No code transplanted at repository bootstrap | — | — | closed |
-| PYTH-FIXTURE-001 | Real upgraded Pyth receiver/router ABI and cryptographic local execution, explicitly synthetic and non-production | Dragon's Clutch `169a1bad530d1d62b55c11acf39fa285a1740cb0`, `programs/clutch-sbf/svm-tests/tests/fixtures/real-pyth-local/` | `fixtures/pyth/local-upgraded-2026-08-22/` | accepted; see `docs/compost/PYTH_LOCAL_UPGRADED_2026_08_22.md` |
+| PYTH-FIXTURE-001 | Real upgraded Pyth receiver/router ABI and cryptographic local execution, explicitly synthetic and non-production | Dragon's Clutch `169a1bad530d1d62b55c11acf39fa285a1740cb0`, `programs/clutch-sbf/svm-tests/tests/fixtures/real-pyth-local/` | `fixtures/pyth/local-upgraded-2026-08-22/` | accepted; see `docs/compost/PYTH_LOCAL_UPGRADED_2026_08_22.md`. Amended 2026-08-27: eleven files (not ten), `PROVENANCE.md` digest corrected, and both ELFs confirmed byte-identical to the live upgraded generation on mainnet-beta and devnet |
 
 ## Future history graft
 

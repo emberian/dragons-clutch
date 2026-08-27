@@ -24,6 +24,49 @@ use dclutch_product_contract::{
     result_domain::{FINITE_RESULT_DOMAIN_BYTES, FiniteResultDomainV1},
 };
 
+#[allow(missing_docs)]
+mod generated_source_material_v2;
+#[allow(missing_docs)]
+mod generated_source_recovery_policy_v2;
+#[allow(missing_docs)]
+mod generated_source_resolution_state_v2;
+mod provider_join_v2;
+mod source_material_v2;
+mod source_recovery_policy_v2;
+mod source_resolution_v2;
+
+pub use generated_source_material_v2::{
+    SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_FAILURE_POLICY_RELEASE_PREIMAGE_V2,
+    SOURCE_MATERIAL_DERIVATION_RELEASE_ID_V2, SOURCE_MATERIAL_DERIVATION_RELEASE_PREIMAGE_V2,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V2,
+    SOURCE_MATERIAL_V2_BYTES, SOURCE_MATERIAL_V2_MAGIC, SOURCE_MATERIAL_V2_SCHEMA_VERSION,
+};
+pub use generated_source_recovery_policy_v2::{
+    RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAGIC_V2,
+    RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RECOVERY_POLICY_SCHEMA_PREIMAGE_V2, RECOVERY_POLICY_SCHEMA_VERSION_V2,
+};
+pub use provider_join_v2::{
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1,
+    PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
+    PythProviderAdapterObligationV2, SOURCE_SPEC_SCHEMA_ID_V1, SOURCE_SPEC_SCHEMA_PREIMAGE_V1,
+    STATISTIC_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1, WINDOW_SPEC_SCHEMA_ID_V1,
+    WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
+};
+pub use source_material_v2::SourceMaterialV2;
+pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
+pub use source_resolution_v2::{
+    SourceResolutionCreationPlanV2, SourceResolutionDecisionV2, SourceResolutionPdaSeedsV2,
+    SourceResolutionStateV2, SourceResolutionTerminalProjectionV2,
+};
+
+/// Exact width of one runtime-width Source resolution state.
+pub const SOURCE_RESOLUTION_STATE_BYTES_V2: usize =
+    generated_source_resolution_state_v2::SOURCE_RESOLUTION_STATE_V2_BYTES;
+/// PDA seed domain for one runtime-width Source resolution state.
+pub const SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2: &[u8] =
+    generated_source_resolution_state_v2::SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2_GENERATED;
+
 /// Exact width of an opaque nonzero content identity.
 pub const CONTENT_ID_BYTES: usize = 32;
 /// Exact width of a provider-release preimage.
@@ -6834,6 +6877,10 @@ mod tests {
             (
                 REOPEN_LINK_SCHEMA_RELEASE_PREIMAGE_V1,
                 REOPEN_LINK_SCHEMA_RELEASE_ID_V1,
+            ),
+            (
+                RECOVERY_POLICY_SCHEMA_PREIMAGE_V2,
+                RECOVERY_POLICY_SCHEMA_ID_V2,
             ),
         ];
         for (preimage, expected) in releases {

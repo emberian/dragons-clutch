@@ -117,14 +117,45 @@ pub const GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-quote-es
 /// PDA seed domain for one submitted candidate and verification cursor.
 pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-candidate/v1";
 /// PDA seed domain for one candidate-exclusive immutable page record.
-pub const GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-candidate-page/v1";
+///
+/// The name is abbreviated because a PDA seed may be at most
+/// [`MAX_PDA_SEED_BYTES`] bytes and the unabbreviated
+/// `dclutch/general-candidate-page/v1` is thirty-three. That spelling could
+/// never derive an address: `find_program_address` refuses every bump for an
+/// over-long seed, so the create, verify, and close routes for every candidate
+/// page were unreachable while compiling and reviewing cleanly. The static
+/// assertion below is what keeps that from recurring silently.
+pub const GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-cand-page/v1";
 /// PDA seed domain for one selected-candidate settlement cursor.
 pub const GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-settle/v1";
 /// PDA seed domain for the selected settlement's collateral-token escrow.
 pub const GENERAL_SETTLEMENT_ESCROW_PDA_DOMAIN_V1: &[u8] = b"dclutch/general-settle-escrow/v1";
 /// Domain-separated initial transcript commitment for one candidate identity.
+///
+/// This is a hash preimage label, never a PDA seed, so it is not bounded by
+/// [`MAX_PDA_SEED_BYTES`].
 pub const GENERAL_CANDIDATE_PAGE_CONTENT_DOMAIN_V1: &[u8] =
     b"dclutch/general-candidate-page-content/v1";
+
+/// Maximum bytes in one Solana program-derived-address seed.
+pub const MAX_PDA_SEED_BYTES: usize = 32;
+
+const _: () = {
+    // A PDA seed may be at most thirty-two bytes. An over-long domain refuses
+    // every bump inside `find_program_address`, so the account it names can
+    // never be derived and every route through it is unreachable. Assert it
+    // here rather than discovering it on a validator.
+    assert!(GENERAL_FUNDING_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_ROOT_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_BATCH_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_ORDER_STATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_ORDER_CUSTODY_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_QUOTE_ESCROW_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_CANDIDATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_SETTLEMENT_CURSOR_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_SETTLEMENT_ESCROW_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+};
 
 /// Refusal returned by the General venue contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

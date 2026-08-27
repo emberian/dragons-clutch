@@ -12,6 +12,7 @@ pub const ACTION_BEGIN_RETIRING_TAG: u8 = 6;
 pub const ACTION_RETIRE_TAG: u8 = 7;
 pub const ACTION_ACTIVATE_CAPABILITY_TAG: u8 = 8;
 pub const ACTION_CLOSE_CAPABILITY_TAG: u8 = 9;
+pub const ACTION_EXECUTE_PROVIDER_TAG: u8 = 10;
 pub const PHASE_FOUNDING_TAG: u8 = 0;
 pub const PHASE_OPEN_TAG: u8 = 1;
 pub const PHASE_TERMINAL_TAG: u8 = 2;
@@ -39,8 +40,8 @@ const STATE_READINESS_OFFSET: usize = 11;
 const STATE_TERMINAL_WINNER_OFFSET: usize = 12;
 const STATE_MARKET_ID_OFFSET: usize = 16;
 const STATE_IDENTITY_REALM_OFFSET: usize = 48;
-const STATE_IDENTITY_PRODUCT_OFFSET: usize = 80;
-const STATE_IDENTITY_RESULT_DOMAIN_OFFSET: usize = 112;
+const STATE_PRODUCT_RECORD_OFFSET: usize = 80;
+const STATE_PRODUCT_ID_OFFSET: usize = 112;
 const STATE_RESOLUTION_POLICY_OFFSET: usize = 144;
 const STATE_CAPABILITY_MANIFEST_OFFSET: usize = 176;
 const STATE_SELECTED_RELEASE_SET_OFFSET: usize = 208;
@@ -188,6 +189,103 @@ fn admission_valid(admission: Admission, role: Role) -> bool {
         && admission.receipt.current_deployment_reauthenticated
 }
 
+const RETIREMENT_REQUIRED_ROLE_MASK: u8 =
+    (1 << Role::Core as u8)
+        | (1 << Role::Claims as u8)
+        | (1 << Role::Resolution as u8)
+        | (1 << Role::Custody as u8);
+
+/// One shared ReleaseSet authenticated serially for every retirement role.
+///
+/// Fields are private so adapters cannot author the completion mask.  This is
+/// the fixed-memory lowering of Lean `RetirementAdmissions.valid` and avoids
+/// retaining four duplicate ReleaseSet values on the SBF stack.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RetirementAdmissions {
+    market_registry_program: Identity,
+    market_release_set_id: Identity,
+    selected: ReleaseSet,
+    authenticated_mask: u8,
+}
+
+impl RetirementAdmissions {
+    /// Lower one adapter-authenticated ordered role batch into the shared
+    /// semantic retirement observation.  `roles` is adapter-derived from the
+    /// Registry receipt and is never instruction data.
+    #[inline(never)]
+    pub fn from_authenticated_batch(
+        state: CoreState,
+        market_registry_program: Identity,
+        market_release_set_id: Identity,
+        selected: ReleaseSet,
+        roles: [Role; 4],
+    ) -> Result<Self, Error> {
+        if roles != [Role::Core, Role::Claims, Role::Resolution, Role::Custody]
+            || market_registry_program != state.identity.registry_program
+            || market_release_set_id != state.identity.selected_release_set
+            || selected.release_set_id != state.identity.selected_release_set
+            || !selected.valid()
+        {
+            return Err(Error::InvalidRelease);
+        }
+        Ok(Self {
+            market_registry_program,
+            market_release_set_id,
+            selected,
+            authenticated_mask: RETIREMENT_REQUIRED_ROLE_MASK,
+        })
+    }
+
+    /// Begin with the exact current Core admission.
+    #[inline(never)]
+    pub fn core(state: CoreState, admission: Admission) -> Result<Self, Error> {
+        require_admission(state, admission, Role::Core)?;
+        Ok(Self {
+            market_registry_program: admission.market_registry_program,
+            market_release_set_id: admission.market_release_set_id,
+            selected: admission.selected,
+            authenticated_mask: 1 << Role::Core as u8,
+        })
+    }
+
+    /// Add exactly one current Claims, Resolution, or Custody admission.
+    #[inline(never)]
+    pub fn admit(
+        &mut self,
+        state: CoreState,
+        admission: Admission,
+        role: Role,
+    ) -> Result<(), Error> {
+        let bit = match role {
+            Role::Claims | Role::Resolution | Role::Custody => 1 << role as u8,
+            Role::Core | Role::Trading => return Err(Error::InvalidRelease),
+        };
+        if self.authenticated_mask & bit != 0 {
+            return Err(Error::InvalidRelease);
+        }
+        require_admission(state, admission, role)?;
+        if admission.market_registry_program != self.market_registry_program
+            || admission.market_release_set_id != self.market_release_set_id
+            || admission.selected != self.selected
+        {
+            return Err(Error::InvalidRelease);
+        }
+        self.authenticated_mask |= bit;
+        Ok(())
+    }
+
+    fn require_complete(self, state: CoreState) -> Result<(), Error> {
+        if self.authenticated_mask != RETIREMENT_REQUIRED_ROLE_MASK
+            || self.market_registry_program != state.identity.registry_program
+            || self.market_release_set_id != state.identity.selected_release_set
+            || self.selected.release_set_id != state.identity.selected_release_set
+        {
+            return Err(Error::InvalidRelease);
+        }
+        Ok(())
+    }
+}
+
 /// Immutable Realm collateral coordinates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Realm {
@@ -197,14 +295,19 @@ pub struct Realm {
     pub collateral_release: Identity,
 }
 
-/// Canonical Product/result-domain coordinates and runtime width.
+/// Canonical runtime-width Product projection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Product {
+    pub product_record: Identity,
     pub product_id: Identity,
     pub result_domain: Identity,
+    pub portfolio: Identity,
+    pub coordinate_domain: Identity,
+    pub result_unit: Identity,
     pub claim_basis: Identity,
-    pub capacity_profile: Identity,
-    pub compiler_release: Identity,
+    pub liability_basis: Identity,
+    pub representation_release: Identity,
+    pub mapping_release: Identity,
     pub outcome_count: u32,
 }
 
@@ -219,8 +322,8 @@ impl Product {
 pub struct MarketIdentity {
     pub market_id: Identity,
     pub realm_id: Identity,
+    pub product_record: Identity,
     pub product_id: Identity,
-    pub result_domain: Identity,
     pub resolution_policy: Identity,
     pub capability_manifest: Identity,
     pub selected_release_set: Identity,
@@ -296,12 +399,8 @@ impl CoreState {
         put_u32(&mut output, STATE_TERMINAL_WINNER_OFFSET, self.terminal_winner)?;
         put_identity(&mut output, STATE_MARKET_ID_OFFSET, self.identity.market_id)?;
         put_identity(&mut output, STATE_IDENTITY_REALM_OFFSET, self.identity.realm_id)?;
-        put_identity(&mut output, STATE_IDENTITY_PRODUCT_OFFSET, self.identity.product_id)?;
-        put_identity(
-            &mut output,
-            STATE_IDENTITY_RESULT_DOMAIN_OFFSET,
-            self.identity.result_domain,
-        )?;
+        put_identity(&mut output, STATE_PRODUCT_RECORD_OFFSET, self.identity.product_record)?;
+        put_identity(&mut output, STATE_PRODUCT_ID_OFFSET, self.identity.product_id)?;
         put_identity(&mut output, STATE_RESOLUTION_POLICY_OFFSET, self.identity.resolution_policy)?;
         put_identity(&mut output, STATE_CAPABILITY_MANIFEST_OFFSET, self.identity.capability_manifest)?;
         put_identity(&mut output, STATE_SELECTED_RELEASE_SET_OFFSET, self.identity.selected_release_set)?;
@@ -343,8 +442,8 @@ impl CoreState {
             identity: MarketIdentity {
                 market_id: read_identity(input, STATE_MARKET_ID_OFFSET)?,
                 realm_id: read_identity(input, STATE_IDENTITY_REALM_OFFSET)?,
-                product_id: read_identity(input, STATE_IDENTITY_PRODUCT_OFFSET)?,
-                result_domain: read_identity(input, STATE_IDENTITY_RESULT_DOMAIN_OFFSET)?,
+                product_record: read_identity(input, STATE_PRODUCT_RECORD_OFFSET)?,
+                product_id: read_identity(input, STATE_PRODUCT_ID_OFFSET)?,
                 resolution_policy: read_identity(input, STATE_RESOLUTION_POLICY_OFFSET)?,
                 capability_manifest: read_identity(input, STATE_CAPABILITY_MANIFEST_OFFSET)?,
                 selected_release_set: read_identity(input, STATE_SELECTED_RELEASE_SET_OFFSET)?,
@@ -375,6 +474,7 @@ pub enum Action {
     Retire,
     ActivateCapability,
     CloseCapability,
+    ExecuteProvider,
 }
 
 /// Which authenticated holder is selected.
@@ -664,13 +764,31 @@ pub struct CapabilityChildObservation {
     pub effect: ChildEffectObservation,
 }
 
+/// Producer-authenticated evidence for atomic recurring-Series opening.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeriesOpenObservation {
+    pub claims_admission: Admission,
+    pub custody_admission: Admission,
+    pub quantity: u64,
+    pub basis_scale: u64,
+    pub source_debit: u64,
+    pub hoard_credit: u64,
+    pub hoard_funding_authenticated: bool,
+    pub found_state_bound_by_custody: bool,
+    pub claims_custody_join_authenticated: bool,
+    pub ticket_prepared_authenticated: bool,
+    pub ticket_consumed_candidate_authenticated: bool,
+    pub claims_effect: ChildEffectObservation,
+    pub custody_effect: ChildEffectObservation,
+}
+
 /// Execute sparse Core Found without mutating external state.
 pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, Error> {
     require_request(request, Action::Found, frame.identity.market_id, frame.identity.generation)?;
     if !frame.product.valid()
         || frame.identity.realm_id != frame.realm.realm_id
+        || frame.identity.product_record != frame.product.product_record
         || frame.identity.product_id != frame.product.product_id
-        || frame.identity.result_domain != frame.product.result_domain
         || frame.identity.selected_release_set != frame.core_admission.selected.release_set_id
         || frame.identity.registry_program != frame.core_admission.market_registry_program
         || !admission_valid(frame.core_admission, Role::Core)
@@ -792,6 +910,47 @@ pub fn open_market(
     Ok(creation)
 }
 
+/// Open one recurring-Series Market from an already-created, exactly funded
+/// Hoard, realized Custody replay, Claims founding receipt, and authenticated
+/// Trading replay candidate.
+pub fn open_series_market(
+    request: Request,
+    state: &mut CoreState,
+    observation: SeriesOpenObservation,
+) -> Result<(), Error> {
+    require_request(request, Action::OpenMarket, state.identity.market_id, state.identity.generation)?;
+    if state.phase != Phase::Founding || state.readiness != Readiness::Prepaid {
+        return Err(Error::InvalidPhase);
+    }
+    require_admission(*state, observation.claims_admission, Role::Claims)?;
+    require_admission(*state, observation.custody_admission, Role::Custody)?;
+    let collateral = observation
+        .quantity
+        .checked_mul(observation.basis_scale)
+        .ok_or(Error::ArithmeticOverflow)?;
+    if collateral == 0
+        || observation.source_debit != collateral
+        || observation.hoard_credit != collateral
+        || !observation.hoard_funding_authenticated
+        || !observation.found_state_bound_by_custody
+        || !observation.claims_custody_join_authenticated
+        || !observation.ticket_prepared_authenticated
+        || !observation.ticket_consumed_candidate_authenticated
+        || !observation.claims_effect.complete()
+        || !observation.custody_effect.complete()
+    {
+        return Err(Error::InvalidChildEffect);
+    }
+    let mut candidate = *state;
+    candidate.phase = Phase::Open;
+    candidate.readiness = Readiness::Consumed;
+    if !candidate.valid_static() {
+        return Err(Error::InvalidPhase);
+    }
+    *state = candidate;
+    Ok(())
+}
+
 /// Admit exact Claims mint and Custody principal effects for one complete set.
 pub fn split_complete_set(
     request: Request,
@@ -833,8 +992,8 @@ pub fn admit_terminal(
     require_admission(*state, admission, Role::Resolution)?;
     if !product_record_authenticated
         || !product.valid()
+        || product.product_record != state.identity.product_record
         || product.product_id != state.identity.product_id
-        || product.result_domain != state.identity.result_domain
         || !receipt.authenticated
         || receipt.market_id != state.identity.market_id
         || receipt.resolution_policy != state.identity.resolution_policy
@@ -962,8 +1121,8 @@ pub fn redeem_terminal(
     require_admission(*state, custody_admission, Role::Custody)?;
     if !product_record_authenticated
         || !product.valid()
+        || product.product_record != state.identity.product_record
         || product.product_id != state.identity.product_id
-        || product.result_domain != state.identity.result_domain
         || request.outcome >= product.outcome_count
         || !claims.child.complete()
     {
@@ -988,13 +1147,11 @@ pub fn redeem_terminal(
 /// Close terminal Core accounts and return every remaining classified and
 /// unclassified lamport to the immutable RentCredit.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 pub fn retire(
     request: Request,
     state: &mut CoreState,
-    core_admission: Admission,
-    claims_admission: Admission,
-    resolution_admission: Admission,
-    custody_admission: Admission,
+    admissions: RetirementAdmissions,
     claims: ClaimsEffectObservation,
     source: ChildEffectObservation,
     custody: ChildEffectObservation,
@@ -1003,10 +1160,7 @@ pub fn retire(
     rent_credit_authenticated: bool,
 ) -> Result<u64, Error> {
     require_request(request, Action::Retire, state.identity.market_id, state.identity.generation)?;
-    require_admission(*state, core_admission, Role::Core)?;
-    require_admission(*state, claims_admission, Role::Claims)?;
-    require_admission(*state, resolution_admission, Role::Resolution)?;
-    require_admission(*state, custody_admission, Role::Custody)?;
+    admissions.require_complete(*state)?;
     if state.phase != Phase::Retiring {
         return Err(Error::InvalidPhase);
     }
@@ -1129,6 +1283,7 @@ fn action_tag(action: Action) -> u8 {
         Action::Retire => ACTION_RETIRE_TAG,
         Action::ActivateCapability => ACTION_ACTIVATE_CAPABILITY_TAG,
         Action::CloseCapability => ACTION_CLOSE_CAPABILITY_TAG,
+        Action::ExecuteProvider => ACTION_EXECUTE_PROVIDER_TAG,
     }
 }
 
@@ -1144,6 +1299,7 @@ fn decode_action(tag: u8) -> Result<Action, Error> {
         ACTION_RETIRE_TAG => Ok(Action::Retire),
         ACTION_ACTIVATE_CAPABILITY_TAG => Ok(Action::ActivateCapability),
         ACTION_CLOSE_CAPABILITY_TAG => Ok(Action::CloseCapability),
+        ACTION_EXECUTE_PROVIDER_TAG => Ok(Action::ExecuteProvider),
         _ => Err(Error::InvalidTag),
     }
 }

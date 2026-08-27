@@ -28,12 +28,47 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::dispatch::TradingFamilyContextV1;
 
-/// Prepaid Custody activation and quiescent closure plans.
-pub mod lifecycle;
-/// Chain-derived unsigned construction for every Dealer action.
-pub mod operator;
-/// Exact Claims/Custody child packets and receipt postconditions.
-pub mod physical;
+/// Physical account authentication for the read-only Dealer accelerator.
+pub mod v3_accelerator_accounts;
+/// Read-only admitted-AOT evaluator for scenario exact-fill.
+pub mod v3_admitted;
+/// Finalized RequestProfile/Transition/Effect joins for junior equity.
+pub mod v3_artifacts;
+/// Atomic scenario-solvent Claims/Custody portfolio-fill composition.
+pub mod v3_composer;
+/// Exact scenario-residual junior pool-equity kernel.
+pub mod v3_equity;
+/// Canonical sparse SignedDeltaV3 packet for junior-equity Claims movement.
+pub mod v3_equity_claims;
+/// Runtime-width chain-derived junior-equity contribution/redemption requests.
+pub mod v3_equity_operator;
+/// Reproducible typed Hot EffectProgram artifact for junior equity.
+pub mod v3_hot_artifact;
+/// Canonical Claims Position plus Trading obligation activation and retirement.
+pub mod v3_lifecycle;
+/// Canonical LP Open/Close Profile6 and lifecycle artifacts.
+pub mod v3_lp_artifacts;
+/// Scenario-solvent, custody-backed multi-LP capital under canonical Trading.
+pub mod v3_multi_lp;
+/// Trading-owned runtime-width terminal obligations for scenario-solvent Dealer V3.
+pub mod v3_obligation;
+/// Chain-derived unsigned requests for every Dealer V3 multi-LP action.
+pub mod v3_operator;
+/// Exact logical AccountProfile for admitted junior-equity execution.
+pub mod v3_profile;
+/// One global selector authority and finalized V3 capability descriptors.
+pub mod v3_release;
+/// EffectProgram V3 admission for exact Dealer Custody request sequences.
+pub mod v3_route;
+/// Runtime-width exact trade requests and scenario-solvent physical composition.
+pub mod v3_trade;
+/// Selector-9 Request/Transition/Effect V4 artifact joins.
+pub mod v3_trade_artifacts;
+/// Selector-9 Profile13 protected physical-account geometry.
+pub mod v3_trade_profile;
+/// Schema-bound selector-9 V4 release finalization and global SetV2 migration.
+#[cfg(not(target_os = "solana"))]
+pub mod v4_scenario_release;
 
 /// Canonical Dealer capability-kind label.
 pub const DEALER_KIND_PREIMAGE_V2: &[u8] = b"dclutch/capability/dealer-v2";
@@ -388,21 +423,6 @@ impl DealerTransitionProjectionV2 {
         self.post_inventory
             .get(..usize::from(self.outcome_count))
             .unwrap_or(&[])
-    }
-
-    #[cfg(test)]
-    fn for_physical_test(
-        post_tail: RootTail,
-        plan: Plan,
-        outcome_count: u8,
-        post_inventory: [u64; MAX_OUTCOMES],
-    ) -> Self {
-        Self {
-            post_tail,
-            plan,
-            outcome_count,
-            post_inventory,
-        }
     }
 }
 

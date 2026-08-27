@@ -11,16 +11,26 @@ use core::convert::TryFrom;
 
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
-    CustodyAuthoritySeedsV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1,
-    CustodyRequestV1, CustodyVaultSeedsV1, OperationV1, ReceiptEvidenceV1,
+    CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
+    CompartmentV1, CustodyAuthoritySeedsV1, CustodyFrameSpecV1, CustodyReceiptV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1,
+    DELEGATED_CUSTODY_REQUEST_BYTES_V2, DELEGATED_CUSTODY_REQUEST_MAGIC_V2, OperationV1,
+    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
+    ProjectedCustodyRequestV1, ReceiptEvidenceV1,
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV1, STATE_BYTES};
+
+mod delegated;
+mod projected;
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_svm::continuation_v1::{
+    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
+    RegistryContinuationRequestV1,
+};
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
@@ -42,17 +52,23 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::create_account;
 
 /// Exact common prefix length.
-pub const COMMON_ACCOUNT_COUNT_V1: usize = 9;
+pub const COMMON_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::CUSTODY_COMMON_ACCOUNT_COUNT_V1 as usize;
 /// Exact `InitializeReplay` account count.
-pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize = 12;
+pub const INITIALIZE_REPLAY_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
 /// Exact `OpenVault` account count.
-pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize = 16;
+pub const OPEN_VAULT_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::OPEN_VAULT_ACCOUNT_COUNT_V1 as usize;
 /// Exact `Transfer` account count.
-pub const TRANSFER_ACCOUNT_COUNT_V1: usize = 14;
+pub const TRANSFER_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::TRANSFER_ACCOUNT_COUNT_V1 as usize;
 /// Exact `CloseVault` account count.
-pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize = 14;
+pub const CLOSE_VAULT_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::CLOSE_VAULT_ACCOUNT_COUNT_V1 as usize;
 /// Exact `CloseReplay` account count.
-pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize = 10;
+pub const CLOSE_REPLAY_ACCOUNT_COUNT_V1: usize =
+    dclutch_custody_contract::CLOSE_REPLAY_ACCOUNT_COUNT_V1 as usize;
 
 const CALLER_AUTHORITY: usize = 0;
 const CORE_MARKET: usize = 1;
@@ -108,11 +124,27 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len() == DELEGATED_CUSTODY_REQUEST_BYTES_V2
+        && instruction_data.get(..DELEGATED_CUSTODY_REQUEST_MAGIC_V2.len())
+            == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice())
+    {
+        return delegated::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
+        && instruction_data.get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
+            == Some(PROJECTED_CUSTODY_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request = ProjectedCustodyRequestV1::decode(instruction_data)
+            .map_err(|_| CustodySbfError::Instruction)?;
+        return projected::process(program_id, accounts, request, instruction_data);
+    }
+    let (request_bytes, continuation) = split_registry_continuation(instruction_data)?;
     let request =
-        CustodyRequestV1::decode(instruction_data).map_err(|_| CustodySbfError::Instruction)?;
-    require_account_count(accounts, request.operation)?;
-    let request_digest = hash(instruction_data).to_bytes();
-    let market = authenticate_common_frame(program_id, accounts, request, request_digest)?;
+        CustodyRequestV1::decode(request_bytes).map_err(|_| CustodySbfError::Instruction)?;
+    require_account_count(accounts, request.operation, continuation.is_some())?;
+    let request_digest = hash(request_bytes).to_bytes();
+    let market =
+        authenticate_common_frame(program_id, accounts, request, request_digest, continuation)?;
     let realm = authenticate_realm(program_id, accounts, request, market)?;
     match request.operation {
         OperationV1::InitializeReplay => {
@@ -129,53 +161,36 @@ pub fn process_instruction(
     }
 }
 
+fn split_registry_continuation(
+    instruction_data: &[u8],
+) -> Result<(&[u8], Option<RegistryContinuationRequestV1>), ProgramError> {
+    if instruction_data.len() == dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 {
+        return Ok((instruction_data, None));
+    }
+    let expected = dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1
+        .checked_add(REGISTRY_CONTINUATION_REQUEST_BYTES_V1)
+        .ok_or(CustodySbfError::Instruction)?;
+    if instruction_data.len() != expected {
+        return Err(CustodySbfError::Instruction.into());
+    }
+    let (request, continuation) = instruction_data.split_at(CUSTODY_REQUEST_BYTES_V1);
+    let continuation = RegistryContinuationRequestV1::decode(continuation)
+        .map_err(|_| CustodySbfError::Release)?;
+    Ok((request, Some(continuation)))
+}
+
 #[inline(never)]
 fn authenticate_common_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
     request_digest: [u8; 32],
+    continuation: Option<RegistryContinuationRequestV1>,
 ) -> Result<CoreState, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
-    let market = account(accounts, CORE_MARKET)?;
-    let cache = account(accounts, ACTIVATION_CACHE)?;
-    let registry = account(accounts, REGISTRY_PROGRAM)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
-    let caller_programdata = account(accounts, CALLER_PROGRAMDATA)?;
-    let realm = account(accounts, REALM)?;
-    let realm_staging = account(accounts, REALM_STAGING)?;
     let replay = account(accounts, REPLAY)?;
 
-    if !caller_authority.is_signer
-        || caller_authority.is_writable
-        || caller_authority.executable
-        || market.is_signer
-        || market.is_writable
-        || market.executable
-        || cache.is_signer
-        || cache.is_writable
-        || cache.executable
-        || registry.is_signer
-        || registry.is_writable
-        || !registry.executable
-        || caller_program.is_signer
-        || caller_program.is_writable
-        || !caller_program.executable
-        || caller_programdata.is_signer
-        || caller_programdata.is_writable
-        || caller_programdata.executable
-        || realm.is_signer
-        || realm.is_writable
-        || realm.executable
-        || realm_staging.is_signer
-        || realm_staging.is_writable
-        || realm_staging.executable
-        || replay.is_signer
-        || !replay.is_writable
-        || replay.executable
-    {
-        return Err(CustodySbfError::AccountFrame.into());
-    }
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
@@ -193,7 +208,7 @@ fn authenticate_common_frame(
     if caller_authority.key != &expected_caller {
         return Err(CustodySbfError::CallerAuthority.into());
     }
-    authenticate_calling_release(accounts, request)?;
+    authenticate_calling_release(program_id, accounts, request, continuation)?;
     authenticate_replay_identity(program_id, replay, request)?;
     Ok(market_state)
 }
@@ -254,7 +269,7 @@ fn authenticate_market(
         || state.identity.registry_program.to_bytes() != registry.key.to_bytes()
         || state.identity.generation != request.semantic.generation
         || Pubkey::find_program_address(
-            &MarketCoreStateSeedsV1::new(state.identity).as_slices(),
+            &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
             &core_program,
         )
         .0 != *market.key
@@ -266,9 +281,14 @@ fn authenticate_market(
 
 #[inline(never)]
 fn authenticate_calling_release(
+    program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
+    continuation: Option<RegistryContinuationRequestV1>,
 ) -> ProgramResult {
+    if let Some(continuation) = continuation {
+        return authenticate_registry_continuation(program_id, accounts, request, continuation);
+    }
     let registry = account(accounts, REGISTRY_PROGRAM)?;
     let cache = account(accounts, ACTIVATION_CACHE)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
@@ -305,6 +325,97 @@ fn authenticate_calling_release(
         || receipt.execution_release_set_id().as_bytes() != &request.release_set
         || receipt.program().as_bytes() != &request.caller_program
     {
+        return Err(CustodySbfError::Release.into());
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn authenticate_registry_continuation(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CustodyRequestV1,
+    continuation: RegistryContinuationRequestV1,
+) -> ProgramResult {
+    if request.caller_role != CallerRoleV1::Core {
+        return Err(CustodySbfError::Release.into());
+    }
+    let registry = account(accounts, REGISTRY_PROGRAM)?;
+    let cache_account = account(accounts, ACTIVATION_CACHE)?;
+    let caller_program = account(accounts, CALLER_PROGRAM)?;
+    let caller_programdata = account(accounts, CALLER_PROGRAMDATA)?;
+    let admission = accounts.last().ok_or(CustodySbfError::AccountFrame)?;
+    require_continuation_role_profile(request.operation, continuation)?;
+    if continuation.release_set_id().to_bytes() != request.release_set {
+        return Err(CustodySbfError::Release.into());
+    }
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, request.release_set.as_slice()],
+        registry.key,
+    )
+    .0;
+    if expected_cache != *cache_account.key || cache_account.owner != registry.key {
+        return Err(CustodySbfError::Release.into());
+    }
+    let cache_bytes = cache_account
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::Release)?;
+    if hash(&cache_bytes).to_bytes() != continuation.activation_cache_digest().to_bytes() {
+        return Err(CustodySbfError::Release.into());
+    }
+    let cache = ActivatedExecutionReleaseSetViewV1::decode(&cache_bytes)
+        .map_err(|_| CustodySbfError::Release)?;
+    let core_release = cache
+        .role(ExecutionRoleV1::Core)
+        .map_err(|_| CustodySbfError::Release)?
+        .release();
+    let custody_release = cache
+        .role(ExecutionRoleV1::Custody)
+        .map_err(|_| CustodySbfError::Release)?
+        .release();
+    if cache
+        .execution_release_set_id()
+        .map_err(|_| CustodySbfError::Release)?
+        .to_bytes()
+        != request.release_set
+        || core_release.program().to_bytes() != caller_program.key.to_bytes()
+        || core_release.programdata() != caller_programdata.key.to_bytes()
+        || custody_release.program().to_bytes() != program_id.to_bytes()
+    {
+        return Err(CustodySbfError::Release.into());
+    }
+    drop(cache_bytes);
+    let batch = continuation
+        .role_batch_request()
+        .map_err(|_| CustodySbfError::Release)?;
+    let batch_digest =
+        ContentId::new(hash(&batch.to_bytes()).to_bytes()).map_err(|_| CustodySbfError::Release)?;
+    let seeds = RegistryContinuationAdmissionSeedsV1::new(
+        continuation,
+        cache_account.key.to_bytes(),
+        batch_digest,
+    )
+    .map_err(|_| CustodySbfError::Release)?;
+    let release = seeds.release_set();
+    let cache_key = seeds.activation_cache();
+    let request_digest = seeds.batch_request_digest();
+    let mask = seeds.role_mask();
+    let role = seeds.continuation_role();
+    let continuation_digest = seeds.continuation_digest();
+    let expected = Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            release.as_slice(),
+            cache_key.as_slice(),
+            request_digest.as_slice(),
+            mask.as_slice(),
+            role.as_slice(),
+            continuation_digest.as_slice(),
+        ],
+        registry.key,
+    )
+    .0;
+    if expected != *admission.key {
         return Err(CustodySbfError::Release.into());
     }
     Ok(())
@@ -488,17 +599,8 @@ fn initialize_replay(
     let payer = account(accounts, 9)?;
     let system = account(accounts, 10)?;
     let rent_account = account(accounts, 11)?;
-    if !payer.is_signer
-        || !payer.is_writable
-        || payer.executable
-        || system.key != &system_program::ID
-        || !system.executable
-        || system.is_signer
-        || system.is_writable
+    if system.key != &system_program::ID
         || rent_account.key != &sysvar::rent::ID
-        || rent_account.is_signer
-        || rent_account.is_writable
-        || rent_account.executable
         || payer.key.to_bytes() != request.payer
     {
         return Err(CustodySbfError::AccountFrame.into());
@@ -573,17 +675,9 @@ fn open_vault(
     if vault.owner != &system_program::ID
         || vault.lamports() != 0
         || vault.data_len() != 0
-        || !vault.is_writable
-        || vault.is_signer
-        || !payer.is_signer
-        || !payer.is_writable
         || payer.key.to_bytes() != request.payer
         || system.key != &system_program::ID
-        || !system.executable
         || rent_account.key != &sysvar::rent::ID
-        || rent_account.is_signer
-        || rent_account.is_writable
-        || rent_account.executable
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
@@ -637,6 +731,11 @@ fn execute_transfer(
     request_digest: [u8; 32],
     realm: RealmFacts,
 ) -> ProgramResult {
+    // External debits must use the distinct V2 wire so an apparently correct
+    // balance delta cannot retain hidden delegated spending authority.
+    if request.source_compartment == CompartmentV1::External {
+        return Err(CustodySbfError::Instruction.into());
+    }
     let mint = account(accounts, 9)?;
     let source = account(accounts, 10)?;
     let destination = account(accounts, 11)?;
@@ -644,13 +743,7 @@ fn execute_transfer(
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     validate_custody_authority(program_id, authority, request)?;
-    if !source.is_writable
-        || source.is_signer
-        || source.executable
-        || !destination.is_writable
-        || destination.is_signer
-        || destination.executable
-        || source.key.to_bytes() != request.source
+    if source.key.to_bytes() != request.source
         || destination.key.to_bytes() != request.destination
         || source.owner != token_program.key
         || destination.owner != token_program.key
@@ -732,13 +825,7 @@ fn close_vault(
     validate_token_program_and_mint(mint, token_program, request, realm)?;
     validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, true)?;
-    if !vault.is_writable
-        || vault.is_signer
-        || vault.executable
-        || !rent_refund.is_writable
-        || rent_refund.executable
-        || rent_refund.key.to_bytes() != request.rent_refund
-    {
+    if rent_refund.key.to_bytes() != request.rent_refund {
         return Err(CustodySbfError::AccountFrame.into());
     }
     let token = read_custody_account(vault, token_program, mint, authority, realm.profile)?;
@@ -798,11 +885,7 @@ fn close_replay(
 ) -> ProgramResult {
     let replay = account(accounts, REPLAY)?;
     let rent_refund = account(accounts, 9)?;
-    if rent_refund.key == replay.key
-        || !rent_refund.is_writable
-        || rent_refund.executable
-        || rent_refund.key.to_bytes() != request.rent_refund
-    {
+    if rent_refund.key == replay.key || rent_refund.key.to_bytes() != request.rent_refund {
         return Err(CustodySbfError::AccountFrame.into());
     }
     let replay_lamports = replay.lamports();
@@ -875,16 +958,81 @@ fn close_replay(
     Ok(())
 }
 
-fn require_account_count(accounts: &[AccountInfo<'_>], operation: OperationV1) -> ProgramResult {
-    let expected = match operation {
-        OperationV1::InitializeReplay => INITIALIZE_REPLAY_ACCOUNT_COUNT_V1,
-        OperationV1::OpenVault => OPEN_VAULT_ACCOUNT_COUNT_V1,
-        OperationV1::Transfer => TRANSFER_ACCOUNT_COUNT_V1,
-        OperationV1::CloseVault => CLOSE_VAULT_ACCOUNT_COUNT_V1,
-        OperationV1::CloseReplay => CLOSE_REPLAY_ACCOUNT_COUNT_V1,
-    };
+fn require_account_count(
+    accounts: &[AccountInfo<'_>],
+    operation: OperationV1,
+    continuation: bool,
+) -> ProgramResult {
+    let spec = CustodyFrameSpecV1::new(operation);
+    let base = usize::from(spec.account_count());
+    let expected = base
+        .checked_add(usize::from(continuation))
+        .ok_or(CustodySbfError::AccountFrame)?;
     if accounts.len() != expected {
         return Err(CustodySbfError::AccountFrame.into());
+    }
+    if continuation && continuation_roles(operation).is_none() {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    for (index, observed) in accounts.iter().take(base).enumerate() {
+        let coordinate = u16::try_from(index).map_err(|_| CustodySbfError::AccountFrame)?;
+        let expected = spec
+            .account(coordinate)
+            .map_err(|_| CustodySbfError::AccountFrame)?
+            .privileges();
+        if observed.is_signer != expected.signer()
+            || observed.is_writable != expected.writable()
+            || observed.executable != expected.executable()
+        {
+            return Err(CustodySbfError::AccountFrame.into());
+        }
+    }
+    if continuation {
+        let admission = accounts.get(base).ok_or(CustodySbfError::AccountFrame)?;
+        if !admission.is_signer
+            || admission.is_writable
+            || admission.executable
+            || admission.owner != &system_program::ID
+            || !admission.data_is_empty()
+            || admission.lamports() != 0
+            || accounts
+                .get(..base)
+                .is_some_and(|prefix| prefix.iter().any(|account| account.key == admission.key))
+        {
+            return Err(CustodySbfError::AccountFrame.into());
+        }
+    }
+    Ok(())
+}
+
+fn continuation_roles(operation: OperationV1) -> Option<&'static [ExecutionRoleV1]> {
+    match operation {
+        OperationV1::InitializeReplay | OperationV1::OpenVault => {
+            Some(&[ExecutionRoleV1::Core, ExecutionRoleV1::Custody])
+        }
+        OperationV1::CloseVault | OperationV1::CloseReplay => Some(&[
+            ExecutionRoleV1::Core,
+            ExecutionRoleV1::Claims,
+            ExecutionRoleV1::Resolution,
+            ExecutionRoleV1::Custody,
+        ]),
+        OperationV1::Transfer => None,
+    }
+}
+
+fn require_continuation_role_profile(
+    operation: OperationV1,
+    continuation: RegistryContinuationRequestV1,
+) -> ProgramResult {
+    let roles = continuation_roles(operation).ok_or(CustodySbfError::AccountFrame)?;
+    if continuation.continuation_role() != ExecutionRoleV1::Core
+        || usize::from(continuation.role_count()) != roles.len()
+        || roles
+            .iter()
+            .enumerate()
+            .any(|(index, role)| continuation.role(index) != Some(*role))
+    {
+        return Err(CustodySbfError::Release.into());
     }
     Ok(())
 }
@@ -909,11 +1057,7 @@ fn validate_custody_authority(
 ) -> ProgramResult {
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
     let expected = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).0;
-    if authority.key != &expected
-        || authority.is_signer
-        || authority.is_writable
-        || authority.executable
-    {
+    if authority.key != &expected {
         return Err(CustodySbfError::TokenState.into());
     }
     Ok(())
@@ -940,14 +1084,8 @@ fn validate_token_program_and_mint(
     facts: RealmFacts,
 ) -> ProgramResult {
     if token_program.key.to_bytes() != request.token_program
-        || !token_program.executable
-        || token_program.is_signer
-        || token_program.is_writable
         || mint.key.to_bytes() != request.mint
         || mint.owner != token_program.key
-        || mint.is_signer
-        || mint.is_writable
-        || mint.executable
     {
         return Err(CustodySbfError::TokenState.into());
     }
@@ -1321,6 +1459,69 @@ mod tests {
         assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_REPLAY_ACCOUNT_COUNT_V1, 10);
+    }
+
+    fn continuation(roles: &[ExecutionRoleV1]) -> RegistryContinuationRequestV1 {
+        RegistryContinuationRequestV1::new(
+            ContentId::new([0x31; 32]).expect("release"),
+            ContentId::new([0x32; 32]).expect("cache"),
+            ContentId::new([0x33; 32]).expect("continuation"),
+            1,
+            ExecutionRoleV1::Core,
+            roles,
+        )
+        .expect("syntactically valid continuation")
+    }
+
+    #[test]
+    fn continuation_roles_are_operation_exact() {
+        let open = continuation(&[ExecutionRoleV1::Core, ExecutionRoleV1::Custody]);
+        for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
+            assert_eq!(require_continuation_role_profile(operation, open), Ok(()));
+        }
+
+        let retirement = continuation(&[
+            ExecutionRoleV1::Core,
+            ExecutionRoleV1::Claims,
+            ExecutionRoleV1::Resolution,
+            ExecutionRoleV1::Custody,
+        ]);
+        for operation in [OperationV1::CloseVault, OperationV1::CloseReplay] {
+            assert_eq!(
+                require_continuation_role_profile(operation, retirement),
+                Ok(())
+            );
+        }
+
+        assert!(
+            RegistryContinuationRequestV1::new(
+                ContentId::new([0x31; 32]).expect("release"),
+                ContentId::new([0x32; 32]).expect("cache"),
+                ContentId::new([0x33; 32]).expect("continuation"),
+                1,
+                ExecutionRoleV1::Core,
+                &[ExecutionRoleV1::Custody, ExecutionRoleV1::Core],
+            )
+            .is_err(),
+            "the Registry contract refuses swapped role order before Custody"
+        );
+        for hostile in [
+            continuation(&[
+                ExecutionRoleV1::Core,
+                ExecutionRoleV1::Claims,
+                ExecutionRoleV1::Custody,
+            ]),
+            continuation(&[ExecutionRoleV1::Core]),
+        ] {
+            assert_eq!(
+                require_continuation_role_profile(OperationV1::OpenVault, hostile),
+                Err(CustodySbfError::Release.into())
+            );
+        }
+        assert_eq!(
+            require_continuation_role_profile(OperationV1::Transfer, open),
+            Err(CustodySbfError::AccountFrame.into())
+        );
     }
 
     #[test]

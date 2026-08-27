@@ -13,6 +13,9 @@ use dclutch_market_core_codec::{
     VacantAccount, open_market,
 };
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_registry_svm::continuation_v1::{
+    REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationRequestV1,
+};
 use dclutch_release_set_contract::CallerAuthoritySeedsV1;
 use dclutch_token_svm::PRODUCTION_ADAPTER_RELEASES;
 use solana_program::{
@@ -32,16 +35,16 @@ use crate::{
     fixed_role::{FixedRoleAccountsV1, authenticate_market, persist_state, read_market_bytes},
     frame::require_distinct,
     records::authenticate_finalized_record,
-    release::{authenticate_role, identity},
+    release::{RoleDeploymentAccounts, authenticate_continuation_roles, identity},
 };
 
 /// Exact top-level instruction width for one canonical Custody creation effect.
 pub const OPEN_MARKET_INSTRUCTION_BYTES_V1: usize =
     dclutch_market_core_codec::REQUEST_BYTES + CUSTODY_REQUEST_BYTES_V1;
 /// Exact outer count for prerequisite replay initialization.
-pub const INITIALIZE_REPLAY_OUTER_ACCOUNT_COUNT_V1: usize = 14;
+pub const INITIALIZE_REPLAY_OUTER_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact outer count for vault creation and Market opening.
-pub const OPEN_MARKET_OUTER_ACCOUNT_COUNT_V1: usize = 18;
+pub const OPEN_MARKET_OUTER_ACCOUNT_COUNT_V1: usize = 19;
 
 const REALM_RAW: usize = 8;
 const REALM_STAGING: usize = 9;
@@ -63,6 +66,7 @@ struct AuthenticatedOpenV1 {
     custody_admission: Box<dclutch_market_core_codec::Admission>,
     realm: RealmV1,
     rent: Rent,
+    continuation: RegistryContinuationRequestV1,
 }
 
 /// Execute replay initialization or the exact Custody effect that opens a Market.
@@ -99,7 +103,14 @@ pub(crate) fn process(
         custody_bytes,
     )?;
     let pre = authenticate_prestate(accounts, &frame, authenticated.state.as_ref(), custody)?;
-    invoke_custody(program_id, accounts, &frame, custody, custody_bytes)?;
+    invoke_custody(
+        program_id,
+        accounts,
+        &frame,
+        custody,
+        custody_bytes,
+        authenticated.continuation,
+    )?;
     let receipt = authenticate_receipt_and_poststate(
         accounts,
         &frame,
@@ -139,10 +150,10 @@ pub(crate) fn process(
 }
 
 #[inline(never)]
-fn authenticate_open(
+fn authenticate_open<'accounts, 'info>(
     program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    frame: &FixedRoleAccountsV1<'_, '_>,
+    accounts: &'accounts [AccountInfo<'info>],
+    frame: &FixedRoleAccountsV1<'accounts, 'info>,
     request: Request,
     request_bytes: &[u8],
     custody: CustodyRequestV1,
@@ -157,29 +168,36 @@ fn authenticate_open(
     {
         return Err(CoreSbfError::Transition);
     }
-    let core_admission = Box::new(authenticate_role(
+    let continuation_digest = ContentId::new(hashv(&[request_bytes, custody_bytes]).to_bytes())
+        .map_err(|_| CoreSbfError::Release)?;
+    let continuation_len =
+        u32::try_from(OPEN_MARKET_INSTRUCTION_BYTES_V1).map_err(|_| CoreSbfError::Arithmetic)?;
+    let admission = accounts.last().ok_or(CoreSbfError::AccountFrame)?;
+    let (admissions, continuation) = authenticate_continuation_roles(
         frame.cache(),
         frame.registry(),
-        frame.core_program(),
-        frame.core_programdata(),
+        admission,
         state.identity.registry_program,
         state.identity.selected_release_set.to_bytes(),
-        Role::Core,
-    )?);
-    let custody_admission = Box::new(authenticate_role(
-        frame.cache(),
-        frame.registry(),
-        frame.target_program(),
-        frame.target_programdata(),
-        state.identity.registry_program,
-        state.identity.selected_release_set.to_bytes(),
-        Role::Custody,
-    )?);
+        &[
+            RoleDeploymentAccounts::new(Role::Core, frame.core_program(), frame.core_programdata()),
+            RoleDeploymentAccounts::new(
+                Role::Custody,
+                frame.target_program(),
+                frame.target_programdata(),
+            ),
+        ],
+        continuation_digest,
+        continuation_len,
+    )?;
+    let core_admission = Box::new(admissions.admission(Role::Core)?);
+    let custody_admission = Box::new(admissions.admission(Role::Custody)?);
     if core_admission.selected != custody_admission.selected {
         return Err(CoreSbfError::Release);
     }
     let expected_parent = hash(request_bytes).to_bytes();
     let expected_beneficiary = state.rent_beneficiary.to_bytes();
+    let payer = account(accounts, payer_index(custody.operation))?;
     let inactive_semantic = custody.semantic.candidate == [0; 32]
         && custody.semantic.source_owner == [0; 32]
         && custody.semantic.destination_owner == [0; 32]
@@ -196,7 +214,7 @@ fn authenticate_open(
         || custody.context != frame.market().key.to_bytes()
         || custody.semantic.parent_request_digest != expected_parent
         || custody.semantic.generation != state.identity.generation
-        || custody.payer != expected_beneficiary
+        || custody.payer != payer.key.to_bytes()
         || custody.rent_refund != expected_beneficiary
         || !inactive_semantic
     {
@@ -227,6 +245,7 @@ fn authenticate_open(
         custody_admission,
         realm,
         rent,
+        continuation,
     })
 }
 
@@ -392,10 +411,11 @@ fn invoke_custody<'accounts, 'info>(
     frame: &FixedRoleAccountsV1<'accounts, 'info>,
     request: CustodyRequestV1,
     request_bytes: &[u8],
+    continuation: RegistryContinuationRequestV1,
 ) -> Result<(), ProgramError> {
     let indices: &[usize] = match request.operation {
-        OperationV1::InitializeReplay => &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13],
-        OperationV1::OpenVault => &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+        OperationV1::InitializeReplay => &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14],
+        OperationV1::OpenVault => &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
         OperationV1::Transfer | OperationV1::CloseVault | OperationV1::CloseReplay => {
             return Err(CoreSbfError::Instruction.into());
         }
@@ -420,10 +440,17 @@ fn invoke_custody<'accounts, 'info>(
         infos.push(value.clone());
     }
     infos.push(frame.target_program().clone());
+    let mut data = Vec::with_capacity(
+        request_bytes
+            .len()
+            .saturating_add(REGISTRY_CONTINUATION_REQUEST_BYTES_V1),
+    );
+    data.extend_from_slice(request_bytes);
+    data.extend_from_slice(&continuation.to_bytes());
     let instruction = Instruction {
         program_id: *frame.target_program().key,
         accounts: metas,
-        data: request_bytes.to_vec(),
+        data,
     };
     let digest = hash(request_bytes).to_bytes();
     let seeds = CallerAuthoritySeedsV1::new(
@@ -637,6 +664,16 @@ fn validate_outer_frame(
         return Err(CoreSbfError::AccountFrame);
     }
     require_distinct(accounts)?;
+    let admission = accounts.last().ok_or(CoreSbfError::AccountFrame)?;
+    if !admission.is_signer
+        || admission.is_writable
+        || admission.executable
+        || admission.owner != &system_program::ID
+        || !admission.data_is_empty()
+        || admission.lamports() != 0
+    {
+        return Err(CoreSbfError::CallerAuthority);
+    }
     let common = FixedRoleAccountsV1::parse(program_id, accounts)?;
     for index in [REALM_RAW, REALM_STAGING] {
         let value = account(accounts, index)?;

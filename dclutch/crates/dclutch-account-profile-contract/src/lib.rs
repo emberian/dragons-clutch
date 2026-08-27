@@ -16,6 +16,8 @@ use core::convert::{TryFrom, TryInto};
 use dclutch_effect_kernel::v2::AccountPermission;
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 
+/// Data-defined Trading-owned PDA derivation and state lifecycle policy.
+pub mod lifecycle_v3;
 /// Runtime-tail account and register projection profiles.
 pub mod v2;
 
@@ -116,13 +118,14 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// Plain account facts supplied by a separately named runtime adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccountObservationV1<'a> {
-    key: [u8; 32],
-    owner: [u8; 32],
+    key: &'a [u8; 32],
+    owner: &'a [u8; 32],
     lamports: u64,
     data: &'a [u8],
     signer: bool,
     writable: bool,
     executable: bool,
+    adapter_authenticated_variable_data: bool,
 }
 
 impl<'a> AccountObservationV1<'a> {
@@ -130,8 +133,8 @@ impl<'a> AccountObservationV1<'a> {
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
-        key: [u8; 32],
-        owner: [u8; 32],
+        key: &'a [u8; 32],
+        owner: &'a [u8; 32],
         lamports: u64,
         data: &'a [u8],
         signer: bool,
@@ -146,18 +149,66 @@ impl<'a> AccountObservationV1<'a> {
             signer,
             writable,
             executable,
+            adapter_authenticated_variable_data: false,
+        }
+    }
+
+    /// Construct an observation whose variable-width data was independently
+    /// authenticated by the runtime adapter.
+    ///
+    /// This opt-in is intentionally separate from [`Self::new`]. A selected
+    /// account profile still decides whether the observation may be consumed;
+    /// the bit alone grants no projection or effect authority.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new_adapter_authenticated_variable_data(
+        key: &'a [u8; 32],
+        owner: &'a [u8; 32],
+        lamports: u64,
+        data: &'a [u8],
+        signer: bool,
+        writable: bool,
+        executable: bool,
+    ) -> Self {
+        Self {
+            key,
+            owner,
+            lamports,
+            data,
+            signer,
+            writable,
+            executable,
+            adapter_authenticated_variable_data: true,
         }
     }
 
     /// Account public key.
     #[must_use]
     pub const fn key(self) -> [u8; 32] {
+        *self.key
+    }
+
+    /// Borrowed account public key.
+    ///
+    /// A bounded runtime adapter materialises one observation per logical
+    /// coordinate, and a fixed topology aliases many coordinates onto the same
+    /// physical account. Borrowing the two 32-byte identities instead of
+    /// copying them halves the width of that bank, which matters on the SBF
+    /// bump allocator because it never frees.
+    #[must_use]
+    pub const fn key_bytes(self) -> &'a [u8; 32] {
         self.key
     }
 
     /// Account owner program identity.
     #[must_use]
     pub const fn owner(self) -> [u8; 32] {
+        *self.owner
+    }
+
+    /// Borrowed account owner program identity.
+    #[must_use]
+    pub const fn owner_bytes(self) -> &'a [u8; 32] {
         self.owner
     }
 
@@ -171,6 +222,13 @@ impl<'a> AccountObservationV1<'a> {
     #[must_use]
     pub const fn data(self) -> &'a [u8] {
         self.data
+    }
+
+    /// Whether the adapter independently authenticated this variable-width
+    /// record's Registry finality, schema, and exact content digest.
+    #[must_use]
+    pub const fn adapter_authenticated_variable_data(self) -> bool {
+        self.adapter_authenticated_variable_data
     }
 
     fn privileges(self) -> u8 {
@@ -786,10 +844,10 @@ fn validate_accounts(
             .get(usize::from(operation.register))
             .copied();
         match operation.kind {
-            OperationKindV1::RequireKeyEqIdentity if Some(account.key) != expected => {
+            OperationKindV1::RequireKeyEqIdentity if Some(*account.key) != expected => {
                 return Err(Error::KeyMismatch);
             }
-            OperationKindV1::RequireOwnerEqIdentity if Some(account.owner) != expected => {
+            OperationKindV1::RequireOwnerEqIdentity if Some(*account.owner) != expected => {
                 return Err(Error::OwnerMismatch);
             }
             _ => {}
@@ -842,10 +900,10 @@ fn apply_projections(
         match operation.kind {
             OperationKindV1::RequireKeyEqIdentity | OperationKindV1::RequireOwnerEqIdentity => {}
             OperationKindV1::ProjectKey => {
-                write_identity(identities, operation.register, account.key)?;
+                write_identity(identities, operation.register, *account.key)?;
             }
             OperationKindV1::ProjectOwner => {
-                write_identity(identities, operation.register, account.owner)?;
+                write_identity(identities, operation.register, *account.owner)?;
             }
             OperationKindV1::ProjectLamports => {
                 write_scalar(scalars, operation.register, account.lamports)?;
@@ -982,10 +1040,10 @@ mod tests {
         assert_eq!(profile.identity_count(), 16);
         let (descriptor, config, clock) = account_data();
         let accounts = [
-            AccountObservationV1::new([0x31; 32], [0x81; 32], 11, &descriptor, false, false, false),
-            AccountObservationV1::new([0x32; 32], [0x81; 32], 12, &config, false, false, false),
-            AccountObservationV1::new([0x33; 32], [0x82; 32], 13, &[], false, true, false),
-            AccountObservationV1::new([0x34; 32], [0x83; 32], 14, &clock, false, false, false),
+            AccountObservationV1::new(&[0x31; 32], &[0x81; 32], 11, &descriptor, false, false, false),
+            AccountObservationV1::new(&[0x32; 32], &[0x81; 32], 12, &config, false, false, false),
+            AccountObservationV1::new(&[0x33; 32], &[0x82; 32], 13, &[], false, true, false),
+            AccountObservationV1::new(&[0x34; 32], &[0x83; 32], 14, &clock, false, false, false),
         ];
         let mut input_scalars = [0_u64; 20];
         input_scalars[1] = 7;
@@ -1058,7 +1116,7 @@ mod tests {
                 .expect("Lean alias agreement profile");
         let data = 17_u64.to_le_bytes();
         let account =
-            AccountObservationV1::new([0x51; 32], [0x52; 32], 53, &data, false, false, false);
+            AccountObservationV1::new(&[0x51; 32], &[0x52; 32], 53, &data, false, false, false);
         let canonical = [account, account];
         let input_scalars = [0_u64; 1];
         let input_identities = [[0x51_u8; 32]; 1];
@@ -1123,10 +1181,10 @@ mod tests {
         let profile = profile();
         let (descriptor, config, clock) = account_data();
         let canonical_accounts = [
-            AccountObservationV1::new([0x31; 32], [0x81; 32], 11, &descriptor, false, false, false),
-            AccountObservationV1::new([0x32; 32], [0x81; 32], 12, &config, false, false, false),
-            AccountObservationV1::new([0x33; 32], [0x82; 32], 13, &[], false, true, false),
-            AccountObservationV1::new([0x34; 32], [0x83; 32], 14, &clock, false, false, false),
+            AccountObservationV1::new(&[0x31; 32], &[0x81; 32], 11, &descriptor, false, false, false),
+            AccountObservationV1::new(&[0x32; 32], &[0x81; 32], 12, &config, false, false, false),
+            AccountObservationV1::new(&[0x33; 32], &[0x82; 32], 13, &[], false, true, false),
+            AccountObservationV1::new(&[0x34; 32], &[0x83; 32], 14, &clock, false, false, false),
         ];
         let input_scalars = [0_u64; 20];
         let mut input_identities = [[0_u8; 32]; 16];
@@ -1142,10 +1200,10 @@ mod tests {
         for fault in 0..5 {
             let mut accounts = canonical_accounts;
             match fault {
-                0 => accounts[0].owner = [0xee; 32],
+                0 => accounts[0].owner = &[0xee; 32],
                 1 => accounts[1].key = accounts[0].key,
                 2 => accounts[2].writable = false,
-                3 => accounts[2].key = [0xef; 32],
+                3 => accounts[2].key = &[0xef; 32],
                 _ => accounts[3].data = &[],
             }
             let mut scratch_scalars = [0_u64; 20];

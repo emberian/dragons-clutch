@@ -16,10 +16,45 @@
 #[cfg(test)]
 extern crate std;
 
+/// Exact Profile13 rules for General state, evidence, child frames, and scratch pages.
+pub mod account_rules_v3;
+/// Read-only admitted-AOT General settlement evaluator.
+pub mod admitted_accelerator_v3;
+/// Complete content-addressed General V3 artifact joins for generic Trading.
+pub mod artifacts_v3;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
+/// Generated exact-child EffectProgram artifacts for every General action.
+pub mod effect_artifacts_v3;
+/// Complete General Hot38 candidate register ABI for exact child packets.
+pub mod hot_candidate_v3;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
+pub mod local_state_v3;
+/// Stateless, failure-atomic candidate and settlement plan evaluation.
+pub mod plan;
+/// Exact admission of all seven action-selected General V3 artifact bundles.
+pub mod release_v3;
+/// Exact General settlement projection into generic Strategy V2 candidate banks.
+pub mod runtime_candidate;
+/// Verifier-emitted runtime-width per-order settlement manifests.
+pub mod runtime_manifest;
+/// Runtime-width best-valid-submitted-candidate selection and freeze.
+pub mod runtime_selection;
+/// Permissionless runtime-width settlement over verifier-emitted order manifests.
+pub mod runtime_settlement;
+/// Streamed runtime-width candidate verification and exact selection comparison.
+pub mod runtime_verify;
+/// Runtime-width borrowed records without fixed outcome or page capacities.
+pub mod runtime_width;
+/// Stateless General binding to generic Shadow-AOT and chunked accelerator transport.
+pub mod shadow_accelerator_v3;
+/// Lean-owned action-specific request projections for generic Trading.
+pub mod specialization;
+/// Action-selected nonroot state lifecycle artifacts.
+pub mod state_artifacts_v3;
+/// Action-selected TransitionVM programs for admitted General execution.
+pub mod transition_artifacts_v3;
 
 use dclutch_general_codec::{
     CandidateV1, ExecutionV1, MAX_EXECUTIONS_PER_PAGE, MAX_OUTCOMES, MAX_PAGES_PER_CANDIDATE,
@@ -48,6 +83,24 @@ pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-candidate:v
 pub const GENERAL_POLICY_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-policy:v1";
 /// Immutable candidate page PDA domain.
 pub const GENERAL_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-page:v1";
+
+/// Maximum bytes in one Solana program-derived-address seed.
+pub const MAX_PDA_SEED_BYTES: usize = 32;
+
+const _: () = {
+    // A PDA seed may be at most thirty-two bytes. An over-long domain refuses
+    // every bump inside `find_program_address`, so the account or signer it
+    // names can never be derived and every route through it is unreachable.
+    // Assert it here rather than discovering it on a validator.
+    assert!(GENERAL_AUTHORITY_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_SELECTION_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_VERIFICATION_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_CERTIFICATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_SETTLEMENT_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_CANDIDATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_POLICY_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_PAGE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+};
 /// Canonical General-owned V2 child-plan preimage header width.
 pub const GENERAL_CHILD_PLAN_HEADER_BYTES_V2: usize = 272;
 /// Canonical General-owned V2 child-plan magic and digest domain.
@@ -224,24 +277,33 @@ impl VerifiedCandidateV1 {
 
     /// Encode one exact program-derived certificate.
     pub fn to_bytes(self) -> Result<[u8; VERIFIED_CANDIDATE_BYTES_V1]> {
-        self.validate()?;
         let mut output = [0_u8; VERIFIED_CANDIDATE_BYTES_V1];
-        put(&mut output, 0, &CERTIFICATE_MAGIC)?;
-        put(&mut output, 8, &VERSION.to_le_bytes())?;
-        put_byte(&mut output, 10, self.complete_set_move as u8)?;
-        put_byte(&mut output, 11, self.outcome_count)?;
-        put(&mut output, 16, &self.candidate_id)?;
-        put(&mut output, 48, &self.product_id)?;
-        put(&mut output, 80, &self.batch_id)?;
-        put(&mut output, 112, &self.page_count.to_le_bytes())?;
-        put(&mut output, 120, &self.filled_lots.to_le_bytes())?;
-        put(&mut output, 128, &self.quote_surplus.to_le_bytes())?;
-        put(&mut output, 136, &self.quote_inputs.to_le_bytes())?;
-        put(&mut output, 144, &self.quote_outputs.to_le_bytes())?;
-        put(&mut output, 152, &self.complete_set_quantity.to_le_bytes())?;
-        put_u64_array(&mut output, 160, &self.claim_inputs)?;
-        put_u64_array(&mut output, 288, &self.claim_outputs)?;
+        self.encode_into(&mut output)?;
         Ok(output)
+    }
+
+    /// Encode into one exact caller-owned certificate buffer.
+    pub fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate()?;
+        if output.len() != VERIFIED_CANDIDATE_BYTES_V1 {
+            return Err(Error::Certificate);
+        }
+        output.fill(0);
+        put(output, 0, &CERTIFICATE_MAGIC)?;
+        put(output, 8, &VERSION.to_le_bytes())?;
+        put_byte(output, 10, self.complete_set_move as u8)?;
+        put_byte(output, 11, self.outcome_count)?;
+        put(output, 16, &self.candidate_id)?;
+        put(output, 48, &self.product_id)?;
+        put(output, 80, &self.batch_id)?;
+        put(output, 112, &self.page_count.to_le_bytes())?;
+        put(output, 120, &self.filled_lots.to_le_bytes())?;
+        put(output, 128, &self.quote_surplus.to_le_bytes())?;
+        put(output, 136, &self.quote_inputs.to_le_bytes())?;
+        put(output, 144, &self.quote_outputs.to_le_bytes())?;
+        put(output, 152, &self.complete_set_quantity.to_le_bytes())?;
+        put_u64_array(output, 160, &self.claim_inputs)?;
+        put_u64_array(output, 288, &self.claim_outputs)
     }
 
     fn validate(&self) -> Result<()> {
@@ -279,6 +341,7 @@ struct OrderAccumulator {
 pub struct CandidateVerifierV1 {
     candidate: CandidateV1,
     next_page: u32,
+    next_execution: u8,
     order_count: u32,
     revision: u64,
     current_order: Option<OrderAccumulator>,
@@ -296,6 +359,7 @@ impl CandidateVerifierV1 {
         Self {
             candidate,
             next_page: 0,
+            next_execution: 0,
             order_count: 0,
             revision: 0,
             current_order: None,
@@ -311,10 +375,10 @@ impl CandidateVerifierV1 {
     #[inline(never)]
     pub fn ingest_page(&mut self, bytes: &[u8]) -> Result<()> {
         let mut staged = *self;
-        staged.ingest_page_inner(bytes)?;
+        let consumed = staged.ingest_page_inner(bytes)?;
         staged.revision = staged
             .revision
-            .checked_add(1)
+            .checked_add(u64::from(consumed))
             .ok_or(Error::ArithmeticOverflow)?;
         *self = staged;
         Ok(())
@@ -341,6 +405,67 @@ impl CandidateVerifierV1 {
         self.next_page
     }
 
+    /// Return the exact next execution-row coordinate within [`Self::next_page`].
+    #[must_use]
+    pub const fn next_execution(&self) -> u8 {
+        self.next_execution
+    }
+
+    /// Consume one exact execution row at an optimistic cursor revision.
+    ///
+    /// This is the sparse generic-Trading path: one selected page window and
+    /// one Product-width outcome fold per instruction. It preserves the exact
+    /// candidate-wide accumulator and therefore never imposes a page-balance
+    /// restriction. Every refusal preserves `self`.
+    #[inline(never)]
+    pub fn ingest_execution_row_at(
+        &mut self,
+        page_bytes: &[u8],
+        expected_page: u32,
+        expected_execution: u8,
+        expected_revision: u64,
+    ) -> Result<()> {
+        if self.next_page != expected_page
+            || self.next_execution != expected_execution
+            || self.revision != expected_revision
+        {
+            return Err(Error::RevisionMismatch);
+        }
+        let page = PageViewV1::decode(page_bytes).map_err(|_| Error::Codec)?;
+        if page.candidate_id() != self.candidate.candidate_id
+            || page.outcome_count() != self.candidate.outcome_count
+            || page.page_count() != self.candidate.page_count
+            || page.page_index() != self.next_page
+            || expected_execution >= page.execution_count()
+        {
+            return Err(Error::CandidateBinding);
+        }
+        let execution = page
+            .execution(usize::from(expected_execution))
+            .map_err(|_| Error::Codec)?;
+        let mut staged = *self;
+        staged.ingest_execution(execution)?;
+        let next = expected_execution
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if next == page.execution_count() {
+            staged.next_execution = 0;
+            staged.next_page = staged
+                .next_page
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
+        } else {
+            staged.next_execution = next;
+        }
+        staged.revision = staged
+            .revision
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        staged.validate_cursor()?;
+        *self = staged;
+        Ok(())
+    }
+
     /// Number of distinct globally grouped order identities consumed so far.
     #[must_use]
     pub const fn order_count(&self) -> u32 {
@@ -356,44 +481,56 @@ impl CandidateVerifierV1 {
     /// Return whether every declared page has been consumed.
     #[must_use]
     pub const fn is_complete(&self) -> bool {
-        self.next_page == self.candidate.page_count
+        self.next_page == self.candidate.page_count && self.next_execution == 0
     }
 
     /// Encode one exact persisted verification cursor.
     #[inline(never)]
     pub fn to_bytes(self) -> Result<[u8; VERIFICATION_CURSOR_BYTES_V1]> {
-        self.validate_cursor()?;
         let mut output = [0_u8; VERIFICATION_CURSOR_BYTES_V1];
-        infallible_put(&mut output, 0, &VERIFICATION_CURSOR_MAGIC);
-        infallible_put(&mut output, 8, &VERSION.to_le_bytes());
+        self.encode_into(&mut output)?;
+        Ok(output)
+    }
+
+    /// Encode into one exact caller-owned verification-cursor buffer.
+    #[inline(never)]
+    pub fn encode_into(&self, output: &mut [u8]) -> Result<()> {
+        self.validate_cursor()?;
+        if output.len() != VERIFICATION_CURSOR_BYTES_V1 {
+            return Err(Error::Certificate);
+        }
+        output.fill(0);
+        infallible_put(output, 0, &VERIFICATION_CURSOR_MAGIC);
+        infallible_put(output, 8, &VERSION.to_le_bytes());
         output[10] = u8::from(self.current_order.is_some());
         infallible_put(
-            &mut output,
+            output,
             16,
             &self.candidate.to_bytes().map_err(|_| Error::Codec)?,
         );
-        infallible_put(&mut output, 272, &self.next_page.to_le_bytes());
-        infallible_put(&mut output, 276, &self.order_count.to_le_bytes());
+        let packed_cursor = self.next_page | (u32::from(self.next_execution) << 24);
+        infallible_put(output, 272, &packed_cursor.to_le_bytes());
+        infallible_put(output, 276, &self.order_count.to_le_bytes());
         if let Some(current) = self.current_order {
             infallible_put(
-                &mut output,
+                output,
                 280,
                 &current
                     .terms
                     .to_bytes_for_outcomes(self.candidate.outcome_count)
                     .map_err(|_| Error::Codec)?,
             );
-            infallible_put(&mut output, 648, &current.lots.to_le_bytes());
-            infallible_put(&mut output, 656, &current.quote_debit.to_le_bytes());
-            infallible_put(&mut output, 664, &current.quote_credit.to_le_bytes());
+            infallible_put(output, 648, &current.lots.to_le_bytes());
+            infallible_put(output, 656, &current.quote_debit.to_le_bytes());
+            infallible_put(output, 664, &current.quote_credit.to_le_bytes());
         }
-        infallible_put(&mut output, 672, &self.filled_lots.to_le_bytes());
-        infallible_put(&mut output, 680, &self.quote_inputs.to_le_bytes());
-        infallible_put(&mut output, 688, &self.quote_outputs.to_le_bytes());
-        infallible_put_u64_array(&mut output, 696, &self.claim_inputs);
-        infallible_put_u64_array(&mut output, 824, &self.claim_outputs);
-        infallible_put(&mut output, 952, &self.revision.to_le_bytes());
-        Ok(output)
+        infallible_put(output, 672, &self.filled_lots.to_le_bytes());
+        infallible_put(output, 680, &self.quote_inputs.to_le_bytes());
+        infallible_put(output, 688, &self.quote_outputs.to_le_bytes());
+        infallible_put_u64_array(output, 696, &self.claim_inputs);
+        infallible_put_u64_array(output, 824, &self.claim_outputs);
+        infallible_put(output, 952, &self.revision.to_le_bytes());
+        Ok(())
     }
 
     /// Hostile-decode one exact persisted verification cursor.
@@ -430,9 +567,11 @@ impl CandidateVerifierV1 {
             }
             None
         };
+        let packed_cursor = read_u32(input, 272)?;
         let value = Self {
             candidate,
-            next_page: read_u32(input, 272)?,
+            next_page: packed_cursor & 0x00ff_ffff,
+            next_execution: u8::try_from(packed_cursor >> 24).map_err(|_| Error::Certificate)?,
             order_count: read_u32(input, 276)?,
             revision: read_u64(input, 952)?,
             current_order,
@@ -449,7 +588,7 @@ impl CandidateVerifierV1 {
     /// Finalize the candidate-wide per-order rounding and balance checks.
     #[inline(never)]
     pub fn finish(mut self) -> Result<VerifiedCandidateV1> {
-        if self.next_page != self.candidate.page_count {
+        if !self.is_complete() {
             return Err(Error::VerificationIncomplete);
         }
         self.finalize_current_order()?;
@@ -480,12 +619,13 @@ impl CandidateVerifierV1 {
         Ok(certificate)
     }
 
-    fn ingest_page_inner(&mut self, bytes: &[u8]) -> Result<()> {
+    fn ingest_page_inner(&mut self, bytes: &[u8]) -> Result<u8> {
         let page = PageViewV1::decode(bytes).map_err(|_| Error::Codec)?;
         if page.candidate_id() != self.candidate.candidate_id
             || page.outcome_count() != self.candidate.outcome_count
             || page.page_count() != self.candidate.page_count
             || page.page_index() != self.next_page
+            || self.next_execution != 0
         {
             return Err(Error::CandidateBinding);
         }
@@ -497,30 +637,38 @@ impl CandidateVerifierV1 {
             .next_page
             .checked_add(1)
             .ok_or(Error::ArithmeticOverflow)?;
-        Ok(())
+        Ok(page.execution_count())
     }
 
     fn validate_cursor(&self) -> Result<()> {
         let count = usize::from(self.candidate.outcome_count);
         self.candidate.to_bytes().map_err(|_| Error::Codec)?;
+        let initial = self.next_page == 0
+            && self.next_execution == 0
+            && self.current_order.is_none()
+            && self.filled_lots == 0
+            && self.quote_inputs == 0
+            && self.quote_outputs == 0
+            && self.order_count == 0;
         if self.next_page > self.candidate.page_count
-            || self.revision != u64::from(self.next_page)
+            || self.next_page > 0x00ff_ffff
+            || usize::from(self.next_execution) >= MAX_EXECUTIONS_PER_PAGE
+            || (self.next_page == self.candidate.page_count && self.next_execution != 0)
+            || self.revision < u64::from(self.next_page)
+            || (self.revision == 0) != initial
             || self.current_order.is_some() != (self.order_count != 0)
             || self.claim_inputs[count..].iter().any(|value| *value != 0)
             || self.claim_outputs[count..].iter().any(|value| *value != 0)
-            || (self.next_page == 0)
-                != (self.current_order.is_none()
-                    && self.filled_lots == 0
-                    && self.quote_inputs == 0
-                    && self.quote_outputs == 0
-                    && self.order_count == 0)
         {
             return Err(Error::Certificate);
         }
-        if let Some(current) = self.current_order
-            && (current.lots == 0 || current.lots > current.terms.max_lots)
-        {
-            return Err(Error::Certificate);
+        // The workspace still targets an edition where let-chains are not
+        // available; keep the compatible nested form intentionally.
+        #[allow(clippy::collapsible_if)]
+        if let Some(current) = self.current_order {
+            if current.lots == 0 || current.lots > current.terms.max_lots {
+                return Err(Error::Certificate);
+            }
         }
         Ok(())
     }
@@ -710,6 +858,24 @@ pub fn candidate_better(
     false
 }
 
+/// Borrowed best-valid-submitted-candidate selection inputs.
+///
+/// This packed ABI keeps the physical SBF call boundary below its fixed
+/// argument-register limit without changing the interpreted policy semantics.
+#[derive(Clone, Copy, Debug)]
+pub struct ConsiderVerifiedInputV1<'a> {
+    /// Immutable candidate header.
+    pub candidate: &'a CandidateV1,
+    /// Immutable interpreted selection policy.
+    pub policy: &'a SelectionPolicyV1,
+    /// Program-derived certificate for the submitted candidate.
+    pub verified: &'a VerifiedCandidateV1,
+    /// Current best certificate, when selection is nonempty.
+    pub incumbent: Option<&'a VerifiedCandidateV1>,
+    /// Exact selection cursor revision consumed by this admission.
+    pub expected_revision: u64,
+}
+
 /// Admit one verified candidate and atomically update selection/certificate bytes.
 pub fn consider_verified(
     selection_output: &mut [u8],
@@ -720,6 +886,33 @@ pub fn consider_verified(
     incumbent: Option<&VerifiedCandidateV1>,
     expected_revision: u64,
 ) -> Result<()> {
+    consider_verified_input(
+        selection_output,
+        certificate_output,
+        ConsiderVerifiedInputV1 {
+            candidate,
+            policy,
+            verified: &verified,
+            incumbent,
+            expected_revision,
+        },
+    )
+}
+
+/// Admit through the SBF-bounded best-valid-submitted-candidate argument ABI.
+#[inline(never)]
+pub fn consider_verified_input(
+    selection_output: &mut [u8],
+    certificate_output: &mut [u8],
+    input: ConsiderVerifiedInputV1<'_>,
+) -> Result<()> {
+    let ConsiderVerifiedInputV1 {
+        candidate,
+        policy,
+        verified,
+        incumbent,
+        expected_revision,
+    } = input;
     if verified.candidate_id != candidate.candidate_id
         || verified.product_id != candidate.product_id
         || verified.batch_id != candidate.batch_id
@@ -755,7 +948,7 @@ pub fn consider_verified(
         None => incumbent.is_none(),
         Some(best) => match incumbent {
             Some(certificate) if certificate.candidate_id == best => {
-                candidate_better(policy, &verified, certificate)
+                candidate_better(policy, verified, certificate)
             }
             _ => return Err(Error::Selection),
         },
@@ -840,6 +1033,23 @@ pub struct ExecutionContextV1 {
     pub market_id: [u8; 32],
     /// Registry-authenticated execution-release-set identity.
     pub release_set_id: [u8; 32],
+}
+
+/// Borrowed inputs for one runtime-width settlement row.
+///
+/// Keeping the row coordinates behind one reference is part of the SBF
+/// adapter contract: it avoids a sixth scalar argument crossing a 4 KiB SBF
+/// frame while preserving the same total, allocation-free kernel operation.
+#[derive(Clone, Copy, Debug)]
+pub struct SettlementRowInputV1<'a> {
+    /// Authenticated Market/release coordinates.
+    pub context: ExecutionContextV1,
+    /// Program-derived candidate certificate.
+    pub verified: &'a VerifiedCandidateV1,
+    /// Exact immutable candidate page bytes.
+    pub page_bytes: &'a [u8],
+    /// Exact cursor revision consumed by this row.
+    pub expected_revision: u64,
 }
 
 impl ExecutionContextV1 {
@@ -1236,6 +1446,31 @@ pub fn collect_execution<C: SettlementChildrenV1>(
     expected_revision: u64,
     children: &mut C,
 ) -> Result<()> {
+    collect_execution_row(
+        output,
+        SettlementRowInputV1 {
+            context,
+            verified,
+            page_bytes,
+            expected_revision,
+        },
+        children,
+    )
+}
+
+/// Collect one exact next execution row through the SBF-bounded argument ABI.
+#[inline(never)]
+pub fn collect_execution_row<C: SettlementChildrenV1>(
+    output: &mut [u8],
+    input: SettlementRowInputV1<'_>,
+    children: &mut C,
+) -> Result<()> {
+    let SettlementRowInputV1 {
+        context,
+        verified,
+        page_bytes,
+        expected_revision,
+    } = input;
     context.validate()?;
     let mut cursor = settlement_pre(output, verified, expected_revision, Phase::Collecting)?;
     let page = settlement_page(verified, page_bytes, cursor.next_page)?;
@@ -1343,6 +1578,31 @@ pub fn distribute_execution<C: SettlementChildrenV1>(
     expected_revision: u64,
     children: &mut C,
 ) -> Result<()> {
+    distribute_execution_row(
+        output,
+        SettlementRowInputV1 {
+            context,
+            verified,
+            page_bytes,
+            expected_revision,
+        },
+        children,
+    )
+}
+
+/// Distribute one exact next execution row through the SBF-bounded argument ABI.
+#[inline(never)]
+pub fn distribute_execution_row<C: SettlementChildrenV1>(
+    output: &mut [u8],
+    input: SettlementRowInputV1<'_>,
+    children: &mut C,
+) -> Result<()> {
+    let SettlementRowInputV1 {
+        context,
+        verified,
+        page_bytes,
+        expected_revision,
+    } = input;
     context.validate()?;
     let mut cursor = settlement_pre(output, verified, expected_revision, Phase::Distributing)?;
     let page = settlement_page(verified, page_bytes, cursor.next_page)?;
@@ -2075,6 +2335,50 @@ mod tests {
             .ingest_page_at(&second, 1)
             .expect("second distinct order page");
         assert_eq!(verifier.order_count(), 2);
+    }
+
+    #[test]
+    fn candidate_verification_streams_rows_without_page_balance_restrictions() {
+        let candidate = candidate(25, 1);
+        let page = page(
+            25,
+            0,
+            1,
+            &[
+                execution(1, 11, vector(1, 0), 1, 1, 1),
+                execution(2, 12, vector(0, 1), 1, 1, 1),
+            ],
+        );
+        let mut streamed = CandidateVerifierV1::begin(candidate);
+        streamed
+            .ingest_execution_row_at(&page, 0, 0, 0)
+            .expect("first row");
+        assert_eq!(streamed.next_page(), 0);
+        assert_eq!(streamed.next_execution(), 1);
+        assert_eq!(streamed.revision(), 1);
+        let middle = streamed.to_bytes().expect("mid-page cursor");
+        assert_eq!(CandidateVerifierV1::decode(&middle), Ok(streamed));
+
+        let snapshot = streamed;
+        assert_eq!(
+            streamed.ingest_execution_row_at(&page, 0, 2, 1),
+            Err(Error::RevisionMismatch)
+        );
+        assert_eq!(streamed, snapshot);
+        streamed
+            .ingest_execution_row_at(&page, 0, 1, 1)
+            .expect("terminal row");
+        assert_eq!(streamed.next_page(), 1);
+        assert_eq!(streamed.next_execution(), 0);
+        assert_eq!(streamed.revision(), 2);
+
+        let mut whole_page = CandidateVerifierV1::begin(candidate);
+        whole_page.ingest_page(&page).expect("whole page oracle");
+        assert_eq!(streamed, whole_page);
+        assert_eq!(
+            streamed.finish().expect("streamed certificate"),
+            whole_page.finish().expect("whole-page certificate")
+        );
     }
 
     #[test]

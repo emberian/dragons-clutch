@@ -8,7 +8,14 @@ use dclutch_registry_contract::{
     ActivatedExecutionReleaseSetV1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
     initialize_activation_cache_v1,
 };
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_registry_svm::{
+    AuthenticatedRoleReceiptV1, RegistryInstructionV1,
+    batch_v2::{
+        AuthenticatedRoleBatchReceiptV2, BatchErrorV2, ROLE_BATCH_RECEIPT_BYTES_V2,
+        RoleBatchReceiptInputV2, RoleBatchRequestV2, RoleDeploymentObservationV2,
+        encode_role_batch_receipt_v2,
+    },
+};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
@@ -274,16 +281,7 @@ impl Fixture {
         self.cache_account_with_writability(false)
     }
 
-    fn activation_accounts(&self) -> Vec<AccountInfo<'static>> {
-        let payer = account(
-            Pubkey::new_from_array(bytes(98)),
-            true,
-            true,
-            1,
-            Vec::new(),
-            system_program::ID,
-            false,
-        );
+    fn runtime_plumbing(&self) -> (AccountInfo<'static>, AccountInfo<'static>) {
         let system = account(
             system_program::ID,
             false,
@@ -303,24 +301,60 @@ impl Fixture {
             false,
         );
         assert_eq!(Rent::default().to_account_info(&mut rent), Some(()));
+        (system, rent)
+    }
 
-        let mut accounts = vec![
+    fn role_activation_accounts(&self, cache: AccountInfo<'static>) -> Vec<AccountInfo<'static>> {
+        let payer = account(
+            Pubkey::new_from_array(bytes(98)),
+            true,
+            true,
+            1,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let (system, rent) = self.runtime_plumbing();
+        let accounts = vec![
             payer,
-            self.cache_account_with_writability(true),
+            cache,
             self.release_set_raw.clone(),
             self.release_set_staging.clone(),
+            self.artifact_raw.clone(),
+            self.artifact_staging.clone(),
+            self.program.clone(),
+            self.programdata.clone(),
+            system,
+            rent,
         ];
-        for _ in 0..5 {
-            accounts.extend([
-                self.artifact_raw.clone(),
-                self.artifact_staging.clone(),
-                self.program.clone(),
-                self.programdata.clone(),
-            ]);
-        }
-        accounts.extend([system, rent]);
-        assert_eq!(accounts.len(), super::ACTIVATE_ACCOUNT_COUNT_V1);
+        assert_eq!(accounts.len(), dclutch_registry_svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1);
         accounts
+    }
+
+    /// A Registry-owned, correctly derived, rent-exempt cache with no role written.
+    ///
+    /// This is exactly what the create branch leaves behind — the account is
+    /// created and its header initialized in one instruction — and it is what
+    /// per-role activation walks up from.
+    fn empty_cache_account(&self) -> AccountInfo<'static> {
+        let key = Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, self.release_set_id.as_bytes()],
+            &self.registry,
+        )
+        .0;
+        let mut header = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+        initialize_activation_cache_v1(&mut header, self.release_set_id)
+            .expect("initialize empty cache");
+        let data = header.to_vec();
+        account(
+            key,
+            false,
+            true,
+            self.rent.minimum_balance(data.len()),
+            data,
+            self.registry,
+            false,
+        )
     }
 }
 
@@ -478,6 +512,160 @@ fn reauthentication_refuses_substituted_cache_and_stale_programdata() {
 }
 
 #[test]
+fn batch_reauthentication_accepts_one_cache_and_four_ordered_current_roles() {
+    let fixture = Fixture::new();
+    let cache = fixture.cache_account();
+    let cache_digest =
+        ContentId::new(hash(&cache.try_borrow_data().expect("cache bytes")).to_bytes())
+            .expect("cache digest");
+    let roles = [
+        ExecutionRoleV1::Core,
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Trading,
+        ExecutionRoleV1::Custody,
+    ];
+    let request = RoleBatchRequestV2::new(fixture.release_set_id, cache_digest, &roles)
+        .expect("batch request");
+    let mut accounts = vec![cache];
+    for _ in roles {
+        accounts.extend([fixture.program.clone(), fixture.programdata.clone()]);
+    }
+    process_instruction(&fixture.registry, &accounts, &request.to_bytes())
+        .expect("one physical Registry batch");
+
+    // Host syscall stubs do not retain return data. Reconstruct the exact
+    // bytes from the authenticated facts and exercise the hostile decoder.
+    let observations = roles.map(|role| {
+        RoleDeploymentObservationV2::new(
+            role,
+            fixture.release.program(),
+            fixture.release.programdata(),
+            fixture.artifact_id,
+            fixture.release.semantic_release_id(),
+            fixture.release.deployment_slot(),
+        )
+        .expect("observation")
+    });
+    let request_bytes = request.to_bytes();
+    let mut receipt_bytes = [0_u8; ROLE_BATCH_RECEIPT_BYTES_V2];
+    encode_role_batch_receipt_v2(
+        RoleBatchReceiptInputV2 {
+            registry_program: ProgramIdentityV1::new(fixture.registry.to_bytes())
+                .expect("Registry program"),
+            activation_cache: *accounts.first().expect("cache").key.as_array(),
+            activation_cache_digest: cache_digest,
+            release_set_id: fixture.release_set_id,
+            request_digest: ContentId::new(hash(&request_bytes).to_bytes())
+                .expect("request digest"),
+            observations: &observations,
+        },
+        &mut receipt_bytes,
+    )
+    .expect("receipt");
+    let receipt = AuthenticatedRoleBatchReceiptV2::decode(&receipt_bytes).expect("batch receipt");
+    assert_eq!(receipt.role_count(), 4);
+    assert_eq!(receipt.role_mask(), 0b1_0111);
+    for (index, role) in roles.into_iter().enumerate() {
+        assert_eq!(
+            receipt
+                .observation(index)
+                .expect("active observation")
+                .expect("valid observation")
+                .role(),
+            role
+        );
+    }
+}
+
+#[test]
+fn batch_reauthentication_refuses_duplicate_reorder_cache_and_deployment_substitution() {
+    let fixture = Fixture::new();
+    let cache = fixture.cache_account();
+    let cache_digest =
+        ContentId::new(hash(&cache.try_borrow_data().expect("cache bytes")).to_bytes())
+            .expect("cache digest");
+    assert_eq!(
+        RoleBatchRequestV2::new(
+            fixture.release_set_id,
+            cache_digest,
+            &[ExecutionRoleV1::Core, ExecutionRoleV1::Core],
+        ),
+        Err(BatchErrorV2::NonCanonicalRoleOrder)
+    );
+    assert_eq!(
+        RoleBatchRequestV2::new(
+            fixture.release_set_id,
+            cache_digest,
+            &[ExecutionRoleV1::Trading, ExecutionRoleV1::Claims],
+        ),
+        Err(BatchErrorV2::NonCanonicalRoleOrder)
+    );
+
+    let roles = [ExecutionRoleV1::Core, ExecutionRoleV1::Claims];
+    let request = RoleBatchRequestV2::new(fixture.release_set_id, cache_digest, &roles)
+        .expect("batch request");
+    let wrong_digest =
+        RoleBatchRequestV2::new(fixture.release_set_id, content(99), &roles).expect("bad request");
+    let accounts = [
+        cache.clone(),
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+    ];
+    assert_eq!(
+        process_instruction(&fixture.registry, &accounts, &wrong_digest.to_bytes()),
+        Err(RegistryError::ActivationCache.into())
+    );
+
+    let wrong_cache = account(
+        Pubkey::new_from_array(bytes(99)),
+        false,
+        false,
+        cache.lamports(),
+        cache.try_borrow_data().expect("cache data").to_vec(),
+        fixture.registry,
+        false,
+    );
+    let substituted_cache_accounts = [
+        wrong_cache,
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+    ];
+    assert_eq!(
+        process_instruction(
+            &fixture.registry,
+            &substituted_cache_accounts,
+            &request.to_bytes(),
+        ),
+        Err(RegistryError::ActivationCache.into())
+    );
+
+    let stale_programdata = account(
+        *fixture.programdata.key,
+        false,
+        false,
+        1,
+        immutable_programdata_bytes(fixture.release.deployment_slot() + 1, &[0xa5; 96]),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    let stale_accounts = [
+        cache,
+        fixture.program.clone(),
+        fixture.programdata.clone(),
+        fixture.program.clone(),
+        stale_programdata,
+    ];
+    assert_eq!(
+        process_instruction(&fixture.registry, &stale_accounts, &request.to_bytes()),
+        Err(RegistryError::Deployment.into())
+    );
+}
+
+#[test]
 fn reauthentication_refuses_substituted_core_program_and_programdata() {
     let fixture = Fixture::new();
     let substituted_core = account(
@@ -607,23 +795,61 @@ fn finalized_record_refuses_substituted_owner_or_live_staging() {
 }
 
 #[test]
-fn repeated_existing_activation_is_byte_identical_and_does_not_panic() {
+fn per_role_activation_walks_up_and_is_byte_identical_when_repeated() {
     let fixture = Fixture::new();
-    let accounts = fixture.activation_accounts();
-    let before = accounts
-        .get(1)
-        .expect("activation cache account")
-        .try_borrow_data()
-        .expect("cache before repeat activation")
-        .to_vec();
+    let cache = fixture.empty_cache_account();
+    let accounts = fixture.role_activation_accounts(cache);
+    let roles = [
+        ExecutionRoleV1::Core,
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Trading,
+        ExecutionRoleV1::Resolution,
+        ExecutionRoleV1::Custody,
+    ];
 
-    for _ in 0..2 {
+    for (written, role) in roles.into_iter().enumerate() {
         process_instruction(
             &fixture.registry,
             &accounts,
-            &RegistryInstructionV1::Activate.to_bytes(),
+            &RegistryInstructionV1::ActivateRole(role).to_bytes(),
         )
-        .expect("existing activation remains idempotent");
+        .expect("one role activates into the shared cache");
+        let data = accounts
+            .get(1)
+            .expect("activation cache account")
+            .try_borrow_data()
+            .expect("cache after one role");
+        // Nothing may read a half-activated release set: the complete view is
+        // exactly what a consumer decodes, and it must refuse until the last
+        // role lands.
+        let complete = ActivatedExecutionReleaseSetV1::decode(&data).is_ok();
+        assert_eq!(
+            complete,
+            written + 1 == roles.len(),
+            "cache with {} of {} roles written",
+            written + 1,
+            roles.len()
+        );
+    }
+
+    let after_walk_up = accounts
+        .get(1)
+        .expect("activation cache account")
+        .try_borrow_data()
+        .expect("cache after walk-up")
+        .to_vec();
+    assert_eq!(
+        ActivatedExecutionReleaseSetV1::decode(&after_walk_up),
+        Ok(fixture.activated())
+    );
+
+    for role in roles {
+        process_instruction(
+            &fixture.registry,
+            &accounts,
+            &RegistryInstructionV1::ActivateRole(role).to_bytes(),
+        )
+        .expect("repeated activation of an already-written role is idempotent");
         assert_eq!(
             accounts
                 .get(1)
@@ -631,7 +857,144 @@ fn repeated_existing_activation_is_byte_identical_and_does_not_panic() {
                 .try_borrow_data()
                 .expect("cache after repeat activation")
                 .as_ref(),
-            before.as_slice()
+            after_walk_up.as_slice()
         );
     }
+}
+
+#[test]
+fn retired_five_role_activation_frame_refuses() {
+    let fixture = Fixture::new();
+    // The retired five-role `Activate` wire was action 0 with role 0, which now
+    // names `ActivateRole(Core)` — strictly less authority, never more. Its
+    // 26-account frame cannot reach the ten-account route.
+    let mut retired_frame = fixture.role_activation_accounts(fixture.empty_cache_account());
+    for _ in 0..4 {
+        retired_frame.insert(
+            8,
+            fixture.artifact_raw.clone(),
+        );
+        retired_frame.insert(9, fixture.artifact_staging.clone());
+        retired_frame.insert(10, fixture.program.clone());
+        retired_frame.insert(11, fixture.programdata.clone());
+    }
+    assert_eq!(retired_frame.len(), 26);
+    assert_eq!(
+        process_instruction(
+            &fixture.registry,
+            &retired_frame,
+            &RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes(),
+        ),
+        Err(RegistryError::AccountFrame.into())
+    );
+    let cache = retired_frame
+        .get(1)
+        .expect("activation cache account")
+        .try_borrow_data()
+        .expect("cache after refusal");
+    assert_eq!(
+        cache.as_ref(),
+        fixture
+            .empty_cache_account()
+            .try_borrow_data()
+            .expect("pristine cache")
+            .as_ref(),
+        "a refused stale-frame activation admits no role"
+    );
+}
+
+#[test]
+fn role_activation_refuses_a_hostile_account_frame() {
+    let fixture = Fixture::new();
+    let canonical = fixture.role_activation_accounts(fixture.empty_cache_account());
+    let data = RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes();
+
+    let mut short = canonical.clone();
+    short.pop();
+    assert_eq!(
+        process_instruction(&fixture.registry, &short, &data),
+        Err(RegistryError::AccountFrame.into())
+    );
+
+    let mut long = canonical.clone();
+    long.push(fixture.programdata.clone());
+    assert_eq!(
+        process_instruction(&fixture.registry, &long, &data),
+        Err(RegistryError::AccountFrame.into())
+    );
+
+    let mut readonly_cache = canonical.clone();
+    let cache = fixture.empty_cache_account();
+    readonly_cache[1] = account(
+        *cache.key,
+        false,
+        false,
+        cache.lamports(),
+        cache.try_borrow_data().expect("cache bytes").to_vec(),
+        fixture.registry,
+        false,
+    );
+    assert_eq!(
+        process_instruction(&fixture.registry, &readonly_cache, &data),
+        Err(RegistryError::AccountFrame.into())
+    );
+
+    let mut signer_programdata = canonical.clone();
+    signer_programdata[7] = account(
+        *fixture.programdata.key,
+        true,
+        false,
+        fixture.programdata.lamports(),
+        fixture
+            .programdata
+            .try_borrow_data()
+            .expect("programdata bytes")
+            .to_vec(),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        process_instruction(&fixture.registry, &signer_programdata, &data),
+        Err(RegistryError::AccountFrame.into())
+    );
+}
+
+#[test]
+fn role_activation_refuses_a_substituted_deployment() {
+    let fixture = Fixture::new();
+    let mut accounts = fixture.role_activation_accounts(fixture.empty_cache_account());
+    // Same well-shaped Loader state, different deployed bytes: first admission
+    // is the sole site that checks the artifact record's claimed ELF digest
+    // against what is actually deployed, and it must still hash to do it.
+    accounts[7] = account(
+        *fixture.programdata.key,
+        false,
+        false,
+        fixture.programdata.lamports(),
+        immutable_programdata_bytes(fixture.release.deployment_slot(), &[0x5a; 96]),
+        bpf_loader_upgradeable::ID,
+        false,
+    );
+    assert_eq!(
+        process_instruction(
+            &fixture.registry,
+            &accounts,
+            &RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes(),
+        ),
+        Err(RegistryError::Release.into())
+    );
+    let cache = accounts
+        .get(1)
+        .expect("activation cache account")
+        .try_borrow_data()
+        .expect("cache after refusal");
+    assert_eq!(
+        cache.as_ref(),
+        fixture
+            .empty_cache_account()
+            .try_borrow_data()
+            .expect("pristine cache")
+            .as_ref(),
+        "a refused role activation leaves no admitted role behind"
+    );
 }

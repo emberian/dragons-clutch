@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { ascii, hex, isZero, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { ascii, fromHex, hex, isZero, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 
 export type CoreKind = 'Market' | 'Realm' | 'Position' | 'RentCredit';
 
@@ -10,32 +10,67 @@ export type BindingCheck = Readonly<{
   detail: string;
 }>;
 
-type MarketSemantics = Readonly<{
+export type MarketPhase = 'Founding' | 'Open' | 'Resolved' | 'Retiring' | 'Retired';
+
+export type MarketSettlement =
+  | Readonly<{ status: 'empty'; label: string }>
+  | Readonly<{ status: 'resolved'; label: string; route: string; winner: number; terminalSequence: string; evidenceId: string }>;
+
+/** Which supply the Hoard must exactly cover at this phase. */
+export type RequiredBackingBasis = 'maximum-outcome-supply' | 'winning-outcome-supply';
+
+export type MarketSemantics = Readonly<{
   kind: 'Market';
   realmId: string;
   generation: string;
   outcomeCount: number;
-  phase: 'Founding' | 'Open' | 'Resolved' | 'Retiring' | 'Retired';
+  schemaVersion: number;
+  categoricalProfile: number;
+  accountBytes: number;
+  phase: MarketPhase;
   identityBytes: Uint8Array;
+  productInstanceId: string;
+  claimBasisId: string;
+  resolutionPolicyId: string;
+  capabilityManifestId: string;
+  rentRefundAuthority: string;
+  hoardAtoms: string;
+  outstandingChildren: string;
+  supply: ReadonlyArray<string>;
+  requiredBackingAtoms: string;
+  requiredBackingBasis: RequiredBackingBasis;
+  settlement: MarketSettlement;
 }>;
 
-type RealmSemantics = Readonly<{
+export type RealmAuthorityPolicy = 'Require absent' | 'Admit issuer control';
+
+export type RealmSemantics = Readonly<{
   kind: 'Realm';
   canonicalBytes: Uint8Array;
   contentDigest: string | null;
+  tokenProgram: string;
+  collateralMint: string;
+  adapterReleaseId: string;
+  mintAuthorityPolicy: RealmAuthorityPolicy;
+  freezeAuthorityPolicy: RealmAuthorityPolicy;
 }>;
 
-type PositionSemantics = Readonly<{
+export type PositionSemantics = Readonly<{
   kind: 'Position';
   market: string;
   owner: string;
   generation: string;
+  outcomeCount: number;
+  balances: ReadonlyArray<string>;
 }>;
 
 type RentCreditSemantics = Readonly<{
   kind: 'RentCredit';
-  refundAuthority: string;
-  refundAuthorityBytes: Uint8Array;
+  refundWallet: string;
+  market: string;
+  marketBytes: Uint8Array;
+  releaseSet: string;
+  generation: string;
   bump: number;
 }>;
 
@@ -45,7 +80,7 @@ export type DecodedProjection = Readonly<{
   address: string;
   lamports: string;
   observedSlot: string;
-  schema: 'v1';
+  schema: 'v1' | 'v2';
   details: ReadonlyArray<Readonly<{ label: string; value: string }>>;
   bindings: ReadonlyArray<BindingCheck>;
   semantics: MarketSemantics | RealmSemantics | PositionSemantics | RentCreditSemantics;
@@ -76,18 +111,22 @@ const MAGIC = Object.freeze({
   DCLTCAT1: 'Market',
   DCLTRLM1: 'Realm',
   DCLTPOS1: 'Position',
-  DCLTRNT1: 'RentCredit',
+  DCLRNTL2: 'RentCredit',
 } satisfies Record<string, CoreKind>);
 
-const PHASES = Object.freeze(['Founding', 'Open', 'Resolved', 'Retiring', 'Retired']);
+const PHASES = Object.freeze(['Founding', 'Open', 'Resolved', 'Retiring', 'Retired'] as const);
 const RESOLUTION_KINDS = Object.freeze(['Occurrence', 'Failure', 'Recovery']);
 const MARKET_SEED = new TextEncoder().encode('dclutch/market-root/v1');
 const REALM_SEED = new TextEncoder().encode('dclutch/realm/v1');
 const POSITION_SEED = new TextEncoder().encode('dclutch/position/v1');
-const RENT_CREDIT_SEED = new TextEncoder().encode('dclutch/rent-credit/v1');
+const RENT_CREDIT_SEED = new TextEncoder().encode('dclutch/rent-market/v2');
 
 function detail(label: string, value: string | number | bigint): Readonly<{ label: string; value: string }> {
   return Object.freeze({ label, value: String(value) });
+}
+
+function sameIdentity(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function kindFromMagic(data: Uint8Array): CoreKind | null {
@@ -101,6 +140,37 @@ function kindFromMagic(data: Uint8Array): CoreKind | null {
 
 export function classifyHeader(data: Uint8Array): CoreKind | null {
   return kindFromMagic(data);
+}
+
+/**
+ * A Market names its Realm by content identity, not by address. The canonical
+ * Realm account is the content-addressed PDA of that identity under the same
+ * Core program, so a Market alone is enough to name the Realm to reacquire.
+ */
+export function deriveRealmAddress(programId: string, realmContentIdHex: string): string {
+  const digest = fromHex(realmContentIdHex, 'Realm content ID');
+  if (digest.length !== 32 || isZero(digest)) throw new Error('Realm content ID must be one nonzero 32-byte identity');
+  return PublicKey.findProgramAddressSync([REALM_SEED, digest], new PublicKey(programId))[0].toBase58();
+}
+
+/**
+ * Derive the one canonical Position address for a Market and owner.
+ *
+ * dClutch publishes no position index and this browser will not invent one.
+ * It does not need to: a Position is the program-derived address of
+ * `POSITION_SEED` plus the exact Market and owner keys, in that order — the
+ * same seed domain `dclutch-realm-contract::POSITION_PDA_DOMAIN` names and the
+ * same order `verifyLocalBindings` checks a decoded Position against. An owner
+ * plus a Market address is therefore enough to ask the chain directly, and an
+ * address with no account is an honest "no Position", not a lookup failure.
+ */
+export function derivePositionAddressV1(programId: string, market: string, owner: string): string {
+  const program = new PublicKey(programId);
+  const [derived] = PublicKey.findProgramAddressSync(
+    [POSITION_SEED, new PublicKey(market).toBytes(), new PublicKey(owner).toBytes()],
+    program,
+  );
+  return derived.toBase58();
 }
 
 export function decodeCoreAccount(observation: FullAccountObservation, expectedProgramId: string): AccountProjection {
@@ -136,10 +206,10 @@ function refused(observation: FullAccountObservation, kind: 'Unknown' | CoreKind
   });
 }
 
-function commonHeader(bytes: Uint8Array, magic: string, exactLength: number): void {
+function commonHeader(bytes: Uint8Array, magic: string, exactLength: number, version = 1): void {
   if (bytes.length !== exactLength) throw new Error(`expected exactly ${exactLength} bytes, observed ${bytes.length}`);
   if (ascii(bytes, 0, 8) !== magic) throw new Error(`magic is not ${magic}`);
-  if (u16(bytes, 8) !== 1) throw new Error(`schema version ${u16(bytes, 8)} is unsupported`);
+  if (u16(bytes, 8) !== version) throw new Error(`schema version ${u16(bytes, 8)} is unsupported`);
 }
 
 function decodeMarket(observation: FullAccountObservation): DecodedProjection {
@@ -147,7 +217,8 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
   if (bytes.length < 16) throw new Error('Market header is truncated');
   if (u16(bytes, 8) !== 1) throw new Error(`Market schema version ${u16(bytes, 8)} is unsupported`);
   const outcomeCount = bytes[10];
-  if (bytes[11] !== 1) throw new Error(`categorical profile ${bytes[11]} is unsupported`);
+  const categoricalProfile = bytes[11];
+  if (categoricalProfile !== 1) throw new Error(`categorical profile ${categoricalProfile} is unsupported`);
   if (outcomeCount < 2 || outcomeCount > 16) throw new Error(`outcome count ${outcomeCount} is outside provisional profile 2..16`);
   const expectedLength = 320 + outcomeCount * 8;
   commonHeader(bytes, 'DCLTCAT1', expectedLength);
@@ -184,6 +255,7 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
   const settlement = slice(bytes, settlementOffset, 64);
   const status = settlement[0];
   let settlementLabel = 'Empty';
+  let settlementSemantics: MarketSettlement = Object.freeze({ status: 'empty', label: settlementLabel });
   let winner: number | null = null;
   let resolutionDetails: ReadonlyArray<Readonly<{ label: string; value: string }>> = [];
   if (status === 0) {
@@ -200,6 +272,10 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
     const evidence = slice(settlement, 16, 32);
     requireNonzero(evidence, 'resolution evidence ID');
     settlementLabel = `Resolved · ${route}`;
+    settlementSemantics = Object.freeze({
+      status: 'resolved', label: settlementLabel, route, winner,
+      terminalSequence: terminalSequence.toString(), evidenceId: hex(evidence),
+    });
     resolutionDetails = [detail('Winning state', winner), detail('Terminal sequence', terminalSequence), detail('Evidence ID', hex(evidence))];
   } else {
     throw new Error(`settlement status ${status} is undefined`);
@@ -213,6 +289,7 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
   if (phase === 'Retired' && !emptyEconomics) throw new Error('Retired Market retains economic state');
   const requiredBacking = winner === null ? supply.reduce((maximum, amount) => amount > maximum ? amount : maximum, 0n) : supply[winner];
   if (hoardAtoms < requiredBacking) throw new Error(`Hoard ${hoardAtoms} is below exact claimant backing ${requiredBacking}`);
+  const requiredBackingBasis: RequiredBackingBasis = winner === null ? 'maximum-outcome-supply' : 'winning-outcome-supply';
 
   return Object.freeze({
     status: 'decoded', kind: 'Market', address: observation.address, lamports: observation.lamports,
@@ -221,12 +298,24 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
       detail('Phase', phase), detail('Generation', generation), detail('Outcomes', outcomeCount),
       detail('Hoard atoms', hoardAtoms), detail('Outstanding children', outstandingChildren),
       detail('Settlement', settlementLabel), detail('Supply', supply.join(' · ')),
+      detail('Exact required backing', requiredBacking),
       detail('Realm ID', hex(realmId)), detail('Product instance ID', hex(productInstanceId)),
       detail('Claim basis ID', hex(claimBasisId)), detail('Resolution policy ID', hex(resolutionPolicyId)),
       detail('Capability manifest ID', hex(capabilityManifestId)), detail('Rent refund authority', pubkey(rentRefund, 'Market rent-refund authority')),
       ...resolutionDetails,
     ]),
-    semantics: Object.freeze({ kind: 'Market', realmId: hex(realmId), generation: generation.toString(), outcomeCount, phase, identityBytes: slice(bytes, 32, 168) }),
+    semantics: Object.freeze({
+      kind: 'Market', realmId: hex(realmId), generation: generation.toString(), outcomeCount, phase,
+      schemaVersion: u16(bytes, 8), categoricalProfile, accountBytes: bytes.length,
+      identityBytes: slice(bytes, 32, 168),
+      productInstanceId: hex(productInstanceId), claimBasisId: hex(claimBasisId),
+      resolutionPolicyId: hex(resolutionPolicyId), capabilityManifestId: hex(capabilityManifestId),
+      rentRefundAuthority: pubkey(rentRefund, 'Market rent-refund authority'),
+      hoardAtoms: hoardAtoms.toString(), outstandingChildren: outstandingChildren.toString(),
+      supply: Object.freeze(supply.map((amount) => amount.toString())),
+      requiredBackingAtoms: requiredBacking.toString(), requiredBackingBasis,
+      settlement: settlementSemantics,
+    }),
   });
 }
 
@@ -248,7 +337,11 @@ function decodeRealm(observation: FullAccountObservation): DecodedProjection {
       detail('Token program', tokenProgram), detail('Collateral mint', collateralMint), detail('Adapter release ID', hex(adapterRelease)),
       detail('Mint authority policy', mintPolicy), detail('Freeze authority policy', freezePolicy),
     ]),
-    semantics: Object.freeze({ kind: 'Realm', canonicalBytes: new Uint8Array(bytes), contentDigest: null }),
+    semantics: Object.freeze({
+      kind: 'Realm', canonicalBytes: new Uint8Array(bytes), contentDigest: null,
+      tokenProgram, collateralMint, adapterReleaseId: hex(adapterRelease),
+      mintAuthorityPolicy: mintPolicy, freezeAuthorityPolicy: freezePolicy,
+    }),
   });
 }
 
@@ -271,22 +364,35 @@ function decodePosition(observation: FullAccountObservation): DecodedProjection 
       detail('Market', market), detail('Owner', owner), detail('Generation', generation),
       detail('Outcomes', outcomeCount), detail('Owned balances', balances.join(' · ')),
     ]),
-    semantics: Object.freeze({ kind: 'Position', market, owner, generation: generation.toString() }),
+    semantics: Object.freeze({
+      kind: 'Position', market, owner, generation: generation.toString(), outcomeCount,
+      balances: Object.freeze(balances.map((amount) => amount.toString())),
+    }),
   });
 }
 
 function decodeRentCredit(observation: FullAccountObservation): DecodedProjection {
   const bytes = observation.data;
-  commonHeader(bytes, 'DCLTRNT1', 48);
+  commonHeader(bytes, 'DCLRNTL2', 128, 2);
   requireZero(bytes, 11, 5, 'RentCredit header');
-  const authorityBytes = slice(bytes, 16, 32);
-  const authority = pubkey(authorityBytes, 'RentCredit refund authority');
+  requireZero(bytes, 120, 8, 'RentCredit body');
+  const refundWallet = pubkey(slice(bytes, 16, 32), 'RentCredit refund wallet');
+  const marketBytes = slice(bytes, 48, 32);
+  const market = pubkey(marketBytes, 'RentCredit Market');
+  const releaseSet = hex(slice(bytes, 80, 32));
+  requireNonzero(slice(bytes, 80, 32), 'RentCredit release set');
+  const generation = u64(bytes, 112);
+  if (generation === 0n) throw new Error('RentCredit generation is zero');
+  if (refundWallet === market || sameIdentity(slice(bytes, 16, 32), slice(bytes, 80, 32)) || sameIdentity(marketBytes, slice(bytes, 80, 32))) throw new Error('RentCredit lifecycle identities alias');
   const bump = bytes[10];
   return Object.freeze({
     status: 'decoded', kind: 'RentCredit', address: observation.address, lamports: observation.lamports,
-    observedSlot: observation.observedSlot, schema: 'v1', bindings: Object.freeze([]),
-    details: Object.freeze([detail('Refund authority', authority), detail('Persisted PDA bump', bump), detail('Observed lamports', observation.lamports)]),
-    semantics: Object.freeze({ kind: 'RentCredit', refundAuthority: authority, refundAuthorityBytes: authorityBytes, bump }),
+    observedSlot: observation.observedSlot, schema: 'v2', bindings: Object.freeze([]),
+    details: Object.freeze([
+      detail('Refund wallet', refundWallet), detail('Market', market), detail('Generation', generation),
+      detail('Execution release set', releaseSet), detail('Persisted PDA bump', bump), detail('Observed lamports', observation.lamports),
+    ]),
+    semantics: Object.freeze({ kind: 'RentCredit', refundWallet, market, marketBytes, releaseSet, generation: generation.toString(), bump }),
   });
 }
 
@@ -307,8 +413,11 @@ export async function verifyLocalBindings(projection: DecodedProjection, program
     const [derived] = PublicKey.findProgramAddressSync([POSITION_SEED, new PublicKey(semantics.market).toBytes(), new PublicKey(semantics.owner).toBytes()], program);
     checks.push(Object.freeze({ label: 'Position PDA', ok: derived.toBase58() === projection.address, detail: `Market + owner → ${derived.toBase58()}` }));
   } else {
-    const [derived, bump] = PublicKey.findProgramAddressSync([RENT_CREDIT_SEED, semantics.refundAuthorityBytes], program);
-    checks.push(Object.freeze({ label: 'RentCredit PDA', ok: derived.toBase58() === projection.address && bump === semantics.bump, detail: `authority → ${derived.toBase58()}, bump ${bump}` }));
+    const generation = BigInt(semantics.generation);
+    const generationBytes = new Uint8Array(8);
+    new DataView(generationBytes.buffer).setBigUint64(0, generation, true);
+    const [derived, bump] = PublicKey.findProgramAddressSync([RENT_CREDIT_SEED, semantics.marketBytes, generationBytes], program);
+    checks.push(Object.freeze({ label: 'RentCredit PDA', ok: derived.toBase58() === projection.address && bump === semantics.bump, detail: `Market + generation → ${derived.toBase58()}, bump ${bump}` }));
   }
   return Object.freeze({ ...projection, bindings: Object.freeze(checks), semantics });
 }
@@ -327,6 +436,10 @@ export function crossCheckBindings(projections: ReadonlyArray<AccountProjection>
       const market = markets.get(projection.semantics.market);
       const generation = market?.semantics.kind === 'Market' ? market.semantics.generation : null;
       checks.push(Object.freeze({ label: 'Position → Market generation', ok: generation === projection.semantics.generation, detail: market ? `Position ${projection.semantics.generation}; Market ${generation}` : 'named Market was not decoded in this finalized scan' }));
+    } else if (projection.semantics.kind === 'RentCredit') {
+      const market = markets.get(projection.semantics.market);
+      const generation = market?.semantics.kind === 'Market' ? market.semantics.generation : null;
+      checks.push(Object.freeze({ label: 'RentCredit → Market lifecycle', ok: generation === projection.semantics.generation, detail: market ? `RentCredit ${projection.semantics.generation}; Market ${generation}` : 'bound Market was not decoded in this finalized scan' }));
     }
     return Object.freeze({ ...projection, bindings: Object.freeze(checks) });
   });

@@ -1,4 +1,8 @@
 //! Exact-N rational portfolio recipes over elementary categorical claims.
+//!
+//! This is the preserved V1 fixed-layout profile. Runtime-width Product V2
+//! portfolios and certified noncategorical projections live in their successor
+//! crates; the `16` below is not inherited by those paths.
 
 use core::convert::TryFrom;
 
@@ -9,9 +13,8 @@ use crate::{ContentId, Error, Result, array, byte, content_id, put, require_zero
 pub const MIN_PORTFOLIO_CLAIMS: usize = 2;
 /// Current provisional artifact profile's maximum exact recipe width.
 ///
-/// This is neither a mathematical nor permanent Product limit. Its lifting
-/// path is a new exact-width or paged template profile that keeps native
-/// categorical liabilities unchanged.
+/// This is neither a mathematical nor permanent Product limit. Runtime
+/// Product V2 already lifts it with a hostile-decodable tail.
 pub const MAX_PORTFOLIO_CLAIMS: usize = 16;
 /// Canonical portfolio-template magic.
 pub const PORTFOLIO_TEMPLATE_MAGIC: [u8; 8] = *b"DCLTPFT1";
@@ -300,8 +303,7 @@ mod tests {
 
     #[test]
     fn constructor_normalizes_and_exact_widths_scale_with_n() {
-        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [2, 4], 6)
-            .expect("normalized");
+        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [2, 4], 6).expect("normalized");
         assert_eq!(value.coefficients(), &[1, 2]);
         assert_eq!(value.denominator(), 3);
         assert_eq!(PortfolioTemplateV1::<2>::encoded_len(), Ok(104));
@@ -320,8 +322,7 @@ mod tests {
 
     #[test]
     fn hostile_lengths_headers_width_reserved_and_identity_refuse() {
-        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3)
-            .expect("template");
+        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3).expect("template");
         let encoded = bytes(value);
         for length in 0..104 {
             assert_eq!(
@@ -376,8 +377,7 @@ mod tests {
             Err(Error::EmptyPortfolioTemplate)
         );
 
-        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3)
-            .expect("template");
+        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3).expect("template");
         let mut changed = bytes(value);
         changed[80..88].copy_from_slice(&6u64.to_le_bytes());
         changed[88..96].copy_from_slice(&2u64.to_le_bytes());
@@ -402,8 +402,7 @@ mod tests {
 
     #[test]
     fn binding_and_materialization_are_exact_and_atomic() {
-        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3)
-            .expect("template");
+        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3).expect("template");
         assert_eq!(value.validate_claim_basis(id(9), id(8), basis(2)), Ok(()));
         assert_eq!(
             value.validate_claim_basis(id(7), id(8), basis(2)),
@@ -430,8 +429,8 @@ mod tests {
         assert_eq!(value.materialize(0, &mut output), Ok(()));
         assert_eq!(output, [0, 0]);
 
-        let overflowing = PortfolioTemplateV1::<2>::new(id(9), id(8), [u64::MAX, 1], 1)
-            .expect("template");
+        let overflowing =
+            PortfolioTemplateV1::<2>::new(id(9), id(8), [u64::MAX, 1], 1).expect("template");
         output = [9, 9];
         assert_eq!(
             overflowing.materialize(2, &mut output),
@@ -442,8 +441,7 @@ mod tests {
 
     #[test]
     fn refused_output_width_does_not_mutate() {
-        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3)
-            .expect("template");
+        let value = PortfolioTemplateV1::<2>::new(id(9), id(8), [1, 2], 3).expect("template");
         let mut output = [0xa5; 103];
         assert_eq!(value.encode(&mut output), Err(Error::OutputLength));
         assert_eq!(output, [0xa5; 103]);
@@ -451,8 +449,7 @@ mod tests {
 
     #[test]
     fn maximum_profile_round_trips() {
-        let value = PortfolioTemplateV1::<16>::new(id(9), id(8), [1; 16], 3)
-            .expect("template");
+        let value = PortfolioTemplateV1::<16>::new(id(9), id(8), [1; 16], 3).expect("template");
         let encoded = bytes(value);
         assert_eq!(PortfolioTemplateV1::<16>::decode(&encoded), Ok(value));
     }

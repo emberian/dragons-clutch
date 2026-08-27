@@ -1,0 +1,35 @@
+[package]
+name = "dclutch-representation-composition-v3-operator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Chain-derived unsigned operator for Product-to-representation composition"
+publish = false
+
+[dependencies]
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
+dclutch-rational-lifecycle-hot-v3 = { path = "../dclutch-rational-lifecycle-hot-v3" }
+dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
+dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
+solana-compute-budget-interface = "=3.1.0"
+solana-hash = "=4.6.0"
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+
+[dev-dependencies]
+dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
+dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
+solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode"] }
+solana-message = { version = "=3.1.0", features = ["bincode"] }
+
+[lints]
+workspace = true

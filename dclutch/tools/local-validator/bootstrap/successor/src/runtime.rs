@@ -1,1049 +1,1612 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
+    net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
-use dclutch_pyth_svm::{FullPriceUpdateV2, local_validator_release_v1};
-use dclutch_registry_svm::RegistryInstructionV1;
-use dclutch_release_set_contract::ExecutionRoleV1;
-use dclutch_resolution_codec::{
-    AcceptPythRequestV1, FundedTransitionActionV3, FundedTransitionRequestV3,
-    RESOLUTION_CERTIFICATE_BYTES, ResolutionCertificateV1,
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use dclutch_product_runtime_v2_operator::{
+    AccountObservationV2, CompiledProductRecordsV2,
+    publication::{
+        ProductPublicationContentV2, ProductPublicationMemberV2, ProductPublicationStateV2,
+        RecordPublicationActionV1, RecordPublicationContentV1, RecordPublicationStateV1,
+        build_product_publication_step_v2, build_record_publication_step_v1,
+        derive_record_addresses_v1, product_publication_content_v2,
+    },
 };
-use dclutch_source_contract::{SourceResolutionPhaseV1, SourceResolutionStateV1};
-use sha2::{Digest, Sha256};
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry_svm::{REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1};
+use dclutch_release_set_contract::{
+    ArtifactReleaseIdV1, ExecutionRoleV1, InitializeProtocolInfrastructureV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
+    ProtocolInfrastructureProfileV1,
+};
+use sha2::Digest as _;
+use solana_loader_v3_interface::instruction::set_upgrade_authority;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{Keypair, Signer},
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::transfer;
 
 use crate::{
     Error, Result,
-    model::{
-        AccountEvidence, ExecutionEvidence, LoaderProgramEvidence, ProviderEvidenceInput,
-        ProviderProgramInput, RecordPair, ReplayEvidence, RollbackEvidence, SourceCase,
-        SuccessorPlan,
-        TransactionEvidence,
+    model::{ProgramPin, RunProgramInput, SuccessorPlan, SuccessorRunEvidence, SuccessorRunSpec},
+    plan::{
+        PrepareArgs, hex, hex32, loader_programdata_bytes, loader_programdata_bytes_after_revoke,
+        pubkey, validate_program_ids,
     },
-    plan::{GENERATION, hex, hex32, pubkey},
-    rpc::{Rpc, RpcAccount, account_evidence, validate_loopback_url},
+    rpc::{Rpc, account_evidence, validate_loopback_url},
 };
 
-const PAYER_AIRDROP_LAMPORTS: u64 = 10_000_000_000;
-const WORKER_AIRDROP_LAMPORTS: u64 = 1_000_000;
-
-#[derive(Debug)]
-pub(crate) struct RunArgs {
-    pub(crate) rpc_url: String,
-    pub(crate) plan_path: PathBuf,
-    pub(crate) provider_evidence_path: PathBuf,
-    pub(crate) output: PathBuf,
+const RUN_SPEC_SCHEMA_V2: &str = "dclutch-local-successor-run-spec-v2";
+const RUN_EVIDENCE_SCHEMA_V2: &str = "dclutch-local-successor-run-evidence-v2";
+const EXPECTED_RPC_URL: &str = "http://127.0.0.1:20890/";
+const AUTHORITY_LAMPORTS: u64 = 5_000_000_000;
+const VALIDATOR_READY_TIMEOUT: Duration = Duration::from_secs(60);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PublishedRecord {
+    pub(crate) schema: [u8; 32],
+    pub(crate) digest: [u8; 32],
+    pub(crate) raw: Pubkey,
+    pub(crate) staging: Pubkey,
 }
 
-struct Runtime<'a> {
-    rpc: Rpc,
-    plan: &'a SuccessorPlan,
-    provider: &'a ProviderEvidenceInput,
-    registry: Pubkey,
-    core: Pubkey,
-    core_programdata: Pubkey,
-    claims: Pubkey,
-    claims_programdata: Pubkey,
-    trading: Pubkey,
-    trading_programdata: Pubkey,
-    resolution: Pubkey,
-    resolution_programdata: Pubkey,
-    custody: Pubkey,
-    custody_programdata: Pubkey,
-    payer: Keypair,
-    worker: Keypair,
-    transactions: Vec<TransactionEvidence>,
+struct ValidatorChild {
+    child: Child,
 }
 
-#[allow(clippy::too_many_lines)]
-pub(crate) fn execute(args: &RunArgs) -> Result<ExecutionEvidence> {
-    validate_path(&args.plan_path, "--plan")?;
-    validate_path(&args.provider_evidence_path, "--provider-evidence")?;
-    if !args.output.is_absolute() || args.output.exists() {
-        return Err(Error::new("--output must be an absolute nonexistent file"));
+impl ValidatorChild {
+    fn spawn(spec: &SuccessorRunSpec, plan: &SuccessorPlan, log_path: &Path) -> Result<Self> {
+        if plan.core_bootstrap.upgrade_authority == Pubkey::default().to_string() {
+            return Err(Error::new("refusing zero in-memory Core authority"));
+        }
+        let log = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(log_path)
+            .map_err(|error| {
+                Error::new(format!(
+                    "create validator log {}: {error}",
+                    log_path.display()
+                ))
+            })?;
+        let stderr = log
+            .try_clone()
+            .map_err(|error| Error::new(format!("clone validator log: {error}")))?;
+        let mut command = Command::new(&spec.launcher);
+        command
+            .arg("start")
+            .arg("--ledger")
+            .arg(&spec.ledger)
+            .arg("--account-dir")
+            .arg(&spec.account_dir)
+            .arg("--plan")
+            .arg(&spec.plan);
+        append_program_args(&mut command, "registry", &spec.registry);
+        append_program_args(&mut command, "core", &spec.core);
+        append_program_args(&mut command, "claims", &spec.claims);
+        append_program_args(&mut command, "trading", &spec.trading);
+        append_program_args(&mut command, "resolution", &spec.resolution);
+        append_program_args(&mut command, "custody", &spec.custody);
+        append_program_args(&mut command, "rent-credit", &spec.rent_credit);
+        command
+            .arg("--foreground")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log))
+            .stderr(Stdio::from(stderr));
+        let child = command.spawn().map_err(|error| {
+            Error::new(format!(
+                "launch guarded successor validator {}: {error}",
+                spec.launcher
+            ))
+        })?;
+        Ok(Self { child })
     }
-    let plan: SuccessorPlan = serde_json::from_slice(&fs::read(&args.plan_path)?)?;
-    let provider: ProviderEvidenceInput =
-        serde_json::from_slice(&fs::read(&args.provider_evidence_path)?)?;
-    validate_inputs(args, &plan, &provider)?;
-    let registry = pubkey(&plan.registry.program_id)?;
-    let core = pubkey(&plan.core.program_id)?;
-    let core_programdata = pubkey(&plan.core.programdata_id)?;
-    let claims = pubkey(&plan.claims.program_id)?;
-    let claims_programdata = pubkey(&plan.claims.programdata_id)?;
-    let trading = pubkey(&plan.trading.program_id)?;
-    let trading_programdata = pubkey(&plan.trading.programdata_id)?;
-    let resolution = pubkey(&plan.resolution.program_id)?;
-    let resolution_programdata = pubkey(&plan.resolution.programdata_id)?;
-    let custody = pubkey(&plan.custody.program_id)?;
-    let custody_programdata = pubkey(&plan.custody.programdata_id)?;
-    let rpc = Rpc::connect(&args.rpc_url)?;
-    let payer = Keypair::new();
-    let worker = Keypair::new();
-    let mut runtime = Runtime {
-        rpc,
-        plan: &plan,
-        provider: &provider,
-        registry,
-        core,
-        core_programdata,
-        claims,
-        claims_programdata,
-        trading,
-        trading_programdata,
-        resolution,
-        resolution_programdata,
-        custody,
-        custody_programdata,
-        payer,
-        worker,
-        transactions: Vec::new(),
-    };
-    runtime.transactions.push(runtime.rpc.airdrop(
-        "airdrop_ephemeral_payer",
-        runtime.payer.pubkey(),
-        PAYER_AIRDROP_LAMPORTS,
-    )?);
-    runtime.transactions.push(runtime.rpc.airdrop(
-        "airdrop_ephemeral_worker",
-        runtime.worker.pubkey(),
-        WORKER_AIRDROP_LAMPORTS,
-    )?);
 
-    let programs = BTreeMap::from([
-        (
-            "registry".into(),
-            authenticate_local_program(&mut runtime.rpc, "Registry", &plan.registry)?,
-        ),
-        (
-            "core".into(),
-            authenticate_local_program(&mut runtime.rpc, "Core", &plan.core)?,
-        ),
-        (
-            "claims".into(),
-            authenticate_local_program(&mut runtime.rpc, "Claims", &plan.claims)?,
-        ),
-        (
-            "trading".into(),
-            authenticate_local_program(&mut runtime.rpc, "Trading", &plan.trading)?,
-        ),
-        (
-            "resolution".into(),
-            authenticate_local_program(&mut runtime.rpc, "Resolution", &plan.resolution)?,
-        ),
-        (
-            "custody".into(),
-            authenticate_local_program(&mut runtime.rpc, "Custody", &plan.custody)?,
-        ),
-    ]);
-    authenticate_provider(&mut runtime.rpc, &provider)?;
-    authenticate_genesis(&mut runtime.rpc, &plan)?;
-
-    runtime.activate_registry()?;
-    runtime.reauthenticate_core()?;
-    runtime.reauthenticate_claims()?;
-    runtime.reauthenticate_trading()?;
-    runtime.reauthenticate_resolution()?;
-    runtime.reauthenticate_custody()?;
-    runtime.accept_primary()?;
-    let primary_replay = runtime.prove_primary_replay()?;
-    runtime.run_funded_lifecycle(&plan.lifecycle, "lifecycle")?;
-    runtime.run_funded_prefix(&plan.rollback, "rollback")?;
-    let rollback = runtime.prove_rollback()?;
-
-    let primary_state = runtime.account(pubkey(&plan.primary.state)?, "primary state")?;
-    let primary_value = SourceResolutionStateV1::decode(&primary_state.data)
-        .map_err(|error| Error::new(format!("primary Source state: {error:?}")))?;
-    if primary_value.phase() != SourceResolutionPhaseV1::Resolved {
-        return Err(Error::new("primary Source state is not Resolved"));
+    fn wait_for_rpc(&mut self, plan: &SuccessorPlan) -> Result<Rpc> {
+        let expected_programdata = pubkey(&plan.core.programdata_id)?;
+        let expected_hash = &plan.core_bootstrap.genesis_programdata_sha256;
+        let deadline = Instant::now() + VALIDATOR_READY_TIMEOUT;
+        loop {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .map_err(|error| Error::new(format!("poll validator child: {error}")))?
+            {
+                return Err(Error::new(format!(
+                    "successor validator exited before exact health: {status}"
+                )));
+            }
+            if let Ok(mut rpc) = Rpc::connect(EXPECTED_RPC_URL)
+                && let Ok(account) = rpc.required_account(expected_programdata, "Core ProgramData")
+                && hex(&sha2::Sha256::digest(&account.data)) == *expected_hash
+            {
+                return Ok(rpc);
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::new(
+                    "successor validator did not expose the exact prepared Core ProgramData within 60 seconds",
+                ));
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
     }
-    let lifecycle_state = runtime.account(pubkey(&plan.lifecycle.state)?, "lifecycle state")?;
-    let lifecycle_value = SourceResolutionStateV1::decode(&lifecycle_state.data)
-        .map_err(|error| Error::new(format!("lifecycle Source state: {error:?}")))?;
-    if lifecycle_value.phase() != SourceResolutionPhaseV1::FailureCommitted {
+}
+
+impl Drop for ValidatorChild {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+fn append_program_args(command: &mut Command, label: &str, input: &RunProgramInput) {
+    command
+        .arg(format!("--{label}-program-id"))
+        .arg(&input.program_id)
+        .arg(format!("--{label}-elf"))
+        .arg(&input.elf_path)
+        .arg(format!("--{label}-sha256"))
+        .arg(&input.elf_sha256)
+        .arg(format!("--{label}-attestation"))
+        .arg(&input.attestation);
+}
+
+/// Own the complete authority lifetime and leave the ledger as evidence.
+pub(crate) fn execute(spec_path: &Path) -> Result<()> {
+    validate_existing_canonical_file(spec_path, "--spec")?;
+    let spec: SuccessorRunSpec = serde_json::from_slice(&fs::read(spec_path)?)?;
+    validate_spec(&spec)?;
+    ensure_rpc_port_free()?;
+
+    let authority = Keypair::new();
+    let plan = crate::plan::prepare(prepare_args(&spec, authority.pubkey())?)?;
+    validate_plan(&plan)?;
+    if plan.core_bootstrap.upgrade_authority != authority.pubkey().to_string() {
         return Err(Error::new(
-            "funded lifecycle did not reach FailureCommitted",
+            "prepared Core authority did not equal the in-memory supervisor key",
         ));
     }
+    let plan_bytes = fs::read(&spec.plan)?;
+    let plan_sha256 = hex(&sha2::Sha256::digest(&plan_bytes));
+    let validator_log = validator_log_path(&spec)?;
+    let mut validator = ValidatorChild::spawn(&spec, &plan, &validator_log)?;
+    let mut rpc = validator.wait_for_rpc(&plan)?;
+    if rpc.url() != EXPECTED_RPC_URL {
+        return Err(Error::new("healthy RPC origin changed after launch"));
+    }
+
+    let hostile = Keypair::new();
+    let mut transactions = vec![
+        rpc.airdrop(
+            "fund ephemeral Core authority",
+            authority.pubkey(),
+            AUTHORITY_LAMPORTS,
+        )?,
+        rpc.airdrop(
+            "fund hostile wrong authority",
+            hostile.pubkey(),
+            AUTHORITY_LAMPORTS,
+        )?,
+    ];
+    let profile = pubkey(&plan.infrastructure_profile.address)?;
+    if rpc.account(profile)?.is_some() {
+        return Err(Error::new(
+            "infrastructure profile unexpectedly existed at genesis",
+        ));
+    }
+    transactions.push(rpc.send_expected_failure(
+        "wrong authority cannot initialize infrastructure",
+        &[initialize_instruction(
+            &plan,
+            hostile.pubkey(),
+            hostile.pubkey(),
+        )?],
+        &hostile,
+    )?);
+    if rpc.account(profile)?.is_some() {
+        return Err(Error::new(
+            "wrong-authority initialization left a profile account",
+        ));
+    }
+
+    transactions.push(rpc.send(
+        "initialize Core infrastructure profile",
+        &[initialize_instruction(
+            &plan,
+            authority.pubkey(),
+            authority.pubkey(),
+        )?],
+        &authority,
+    )?);
+    verify_profile(&mut rpc, &plan)?;
+
+    let activation = pubkey(&plan.activation)?;
+    if rpc.account(activation)?.is_some() {
+        return Err(Error::new(
+            "release activation cache unexpectedly existed at genesis",
+        ));
+    }
+    transactions.push(rpc.send_expected_failure(
+        "immutable release activation refuses pre-revocation Core",
+        &[role_activation_instruction(
+            &plan,
+            authority.pubkey(),
+            ExecutionRoleV1::Core,
+        )?],
+        &authority,
+    )?);
+    if rpc.account(activation)?.is_some() {
+        return Err(Error::new("pre-revocation activation left a cache account"));
+    }
+
+    let core_program = pubkey(&plan.core.program_id)?;
+    transactions.push(rpc.send(
+        "revoke Core Loader-v3 upgrade authority",
+        &[set_upgrade_authority(
+            &core_program,
+            &authority.pubkey(),
+            None,
+        )],
+        &authority,
+    )?);
+    verify_core_programdata(&mut rpc, &plan)?;
+
+    for (label, instruction) in activation_instructions(&plan, authority.pubkey())? {
+        transactions.push(rpc.send(label, &[instruction], &authority)?);
+    }
+    verify_activation(&mut rpc, &plan)?;
+
+    let rollback_recipient = Pubkey::new_unique();
+    let authority_before = rpc.required_account(authority.pubkey(), "Core authority wallet")?;
+    if rpc.account(rollback_recipient)?.is_some() {
+        return Err(Error::new("rollback recipient unexpectedly existed"));
+    }
+    let mut late_activation =
+        role_activation_instruction(&plan, authority.pubkey(), ExecutionRoleV1::Custody)?;
+    substitute_role_programdata(&mut late_activation, pubkey(&plan.core.programdata_id)?)?;
+    let late_failure = rpc.send_expected_failure(
+        "late activation substitution rolls back prior transfer",
+        &[
+            transfer(&authority.pubkey(), &rollback_recipient, 1),
+            late_activation,
+        ],
+        &authority,
+    )?;
+    let fee = late_failure
+        .fee_lamports
+        .ok_or_else(|| Error::new("late-failure transaction omitted exact fee"))?;
+    transactions.push(late_failure);
+    if rpc.account(rollback_recipient)?.is_some() {
+        return Err(Error::new(
+            "late-failure transaction did not roll back the earlier transfer",
+        ));
+    }
+    let authority_after = rpc.required_account(authority.pubkey(), "Core authority wallet")?;
+    if authority_after.lamports.checked_add(fee) != Some(authority_before.lamports) {
+        return Err(Error::new(
+            "late-failure authority delta was not exactly the transaction fee",
+        ));
+    }
+    verify_profile(&mut rpc, &plan)?;
+    verify_core_programdata(&mut rpc, &plan)?;
+    verify_activation(&mut rpc, &plan)?;
+
+    let market = crate::market::execute_found_market(
+        &mut rpc,
+        &plan,
+        &spec.market,
+        &authority,
+        &mut transactions,
+    )?;
 
     let mut accounts = BTreeMap::new();
-    for (label, pin) in &plan.genesis_accounts {
-        let key = pubkey(&pin.address)?;
-        if let Some(account) = runtime.rpc.account(key)? {
-            accounts.insert(label.clone(), account_evidence(key, &account));
-        }
+    for (label, address) in [
+        ("core_programdata", pubkey(&plan.core.programdata_id)?),
+        ("infrastructure_profile", profile),
+        ("release_activation", activation),
+        ("core_authority_wallet", authority.pubkey()),
+    ] {
+        let account = rpc.required_account(address, label)?;
+        accounts.insert(label.into(), account_evidence(address, &account));
     }
-    accounts.insert(
-        "registry.activation".into(),
-        account_evidence(
-            pubkey(&plan.activation)?,
-            &runtime.account(pubkey(&plan.activation)?, "Registry activation")?,
-        ),
-    );
-    accounts.insert(
-        "ephemeral.worker".into(),
-        account_evidence(
-            runtime.worker.pubkey(),
-            &runtime.account(runtime.worker.pubkey(), "worker")?,
-        ),
-    );
-    let evidence = ExecutionEvidence {
-        schema: "dclutch-local-successor-bootstrap-evidence-v1",
-        evidence_class: "localhost-real-registry-resolution-and-pyth-execution",
-        rpc_url: runtime.rpc.url().to_owned(),
-        provider_evidence_path: args.provider_evidence_path.display().to_string(),
-        plan_path: args.plan_path.display().to_string(),
-        genesis_fixture_boundary: plan.genesis_boundary.clone(),
-        semantic_records_created_onchain: false,
-        markets_created_onchain: false,
-        source_states_created_onchain: false,
-        funding_created_onchain: false,
-        certificates_created_by_resolution: true,
-        captured_release_identity_claimed: false,
-        checked_production_release_claimed: false,
-        registry_activated: true,
-        core_reauthenticated: true,
-        claims_reauthenticated: true,
-        trading_reauthenticated: true,
-        custody_reauthenticated: true,
-        registry_reauthenticated: true,
-        real_pyth_price_update_consumed: true,
-        primary_resolution_executed: true,
-        primary_replay_refused: primary_replay.state_unchanged
-            && primary_replay.certificate_unchanged,
-        sequential_recovery_exhaustion_failure_executed: true,
-        rollback_proved: rollback.state_unchanged
-            && rollback.certificate_unchanged
-            && rollback.funding_unchanged
-            && rollback.worker_unchanged,
-        programs,
+    accounts.extend(market.accounts);
+    let mut completed = vec![
+        "generated one ephemeral Core authority in process memory".into(),
+        "prepared exact public-key-only genesis plan".into(),
+        "started and health-bound guarded localhost validator".into(),
+        "proved wrong-authority infrastructure refusal".into(),
+        "initialized exact Core Registry/Rent infrastructure profile".into(),
+        "proved release activation refuses before Core revocation".into(),
+        "revoked Core Loader-v3 upgrade authority to None".into(),
+        "verified exact immutable Core ProgramData poststate".into(),
+        "activated exact immutable five-role release set".into(),
+        "proved late-failure atomic rollback".into(),
+    ];
+    completed.extend(market.completed);
+    let evidence = SuccessorRunEvidence {
+        schema: RUN_EVIDENCE_SCHEMA_V2.into(),
+        rpc_url: rpc.url().into(),
+        ledger: spec.ledger.clone(),
+        validator_log: validator_log.display().to_string(),
+        plan_sha256,
+        core_upgrade_authority_pubkey: authority.pubkey().to_string(),
+        private_key_persisted: false,
+        completed,
+        transactions,
         accounts,
-        transactions: runtime.transactions,
-        primary_replay,
-        rollback,
+        remaining_execution_seam: crate::market::REMAINING_OPEN_SEAM.into(),
     };
-    if !evidence.primary_replay_refused {
-        return Err(Error::new(
-            "primary replay refusal changed the Source state or certificate",
-        ));
-    }
-    if !evidence.rollback_proved {
-        return Err(Error::new(
-            "hostile transaction did not roll back all four outputs",
-        ));
-    }
-    Ok(evidence)
-}
-
-impl Runtime<'_> {
-    fn activate_registry(&mut self) -> Result<()> {
-        let release = record(self.plan, "execution_release_set")?;
-        let core_artifact = record(self.plan, "core_artifact_release")?;
-        let claims_artifact = record(self.plan, "claims_artifact_release")?;
-        let trading_artifact = record(self.plan, "trading_artifact_release")?;
-        let resolution_artifact = record(self.plan, "resolution_artifact_release")?;
-        let mut accounts = vec![
-            AccountMeta::new(self.payer.pubkey(), true),
-            AccountMeta::new(pubkey(&self.plan.activation)?, false),
-            AccountMeta::new_readonly(pubkey(&release.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&release.staging)?, false),
-        ];
-        append_role(
-            &mut accounts,
-            core_artifact,
-            self.core,
-            self.core_programdata,
-        )?;
-        append_role(
-            &mut accounts,
-            claims_artifact,
-            self.claims,
-            self.claims_programdata,
-        )?;
-        append_role(
-            &mut accounts,
-            trading_artifact,
-            self.trading,
-            self.trading_programdata,
-        )?;
-        append_role(
-            &mut accounts,
-            resolution_artifact,
-            self.resolution,
-            self.resolution_programdata,
-        )?;
-        let custody_artifact = record(self.plan, "custody_artifact_release")?;
-        append_role(
-            &mut accounts,
-            custody_artifact,
-            self.custody,
-            self.custody_programdata,
-        )?;
-        accounts.push(AccountMeta::new_readonly(system_program::ID, false));
-        accounts.push(AccountMeta::new_readonly(sysvar::rent::ID, false));
-        if accounts.len() != 26 {
-            return Err(Error::new("Registry Activate account count is not 26"));
-        }
-        let transaction = self.rpc.send(
-            "registry_activate_release_set",
-            &[Instruction {
-                program_id: self.registry,
-                accounts,
-                data: RegistryInstructionV1::Activate.to_bytes().to_vec(),
-            }],
-            &self.payer,
-        )?;
-        self.transactions.push(transaction);
-        let activation = self.account(pubkey(&self.plan.activation)?, "Registry activation")?;
-        if activation.owner != self.registry || activation.data.len() != 1_288 {
-            return Err(Error::new(
-                "Registry activation cache has wrong owner or width",
-            ));
-        }
-        Ok(())
-    }
-
-    fn reauthenticate_core(&mut self) -> Result<()> {
-        let transaction = self.rpc.send(
-            "registry_reauthenticate_core",
-            &[Instruction {
-                program_id: self.registry,
-                accounts: vec![
-                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
-                    AccountMeta::new_readonly(self.core, false),
-                    AccountMeta::new_readonly(self.core_programdata, false),
-                ],
-                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Core)
-                    .to_bytes()
-                    .to_vec(),
-            }],
-            &self.payer,
-        )?;
-        self.transactions.push(transaction);
-        Ok(())
-    }
-
-    fn reauthenticate_resolution(&mut self) -> Result<()> {
-        let transaction = self.rpc.send(
-            "registry_reauthenticate_resolution",
-            &[Instruction {
-                program_id: self.registry,
-                accounts: vec![
-                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
-                    AccountMeta::new_readonly(self.resolution, false),
-                    AccountMeta::new_readonly(self.resolution_programdata, false),
-                ],
-                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Resolution)
-                    .to_bytes()
-                    .to_vec(),
-            }],
-            &self.payer,
-        )?;
-        self.transactions.push(transaction);
-        Ok(())
-    }
-
-    fn reauthenticate_claims(&mut self) -> Result<()> {
-        let transaction = self.rpc.send(
-            "registry_reauthenticate_claims",
-            &[Instruction {
-                program_id: self.registry,
-                accounts: vec![
-                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
-                    AccountMeta::new_readonly(self.claims, false),
-                    AccountMeta::new_readonly(self.claims_programdata, false),
-                ],
-                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Claims)
-                    .to_bytes()
-                    .to_vec(),
-            }],
-            &self.payer,
-        )?;
-        self.transactions.push(transaction);
-        Ok(())
-    }
-
-    fn reauthenticate_trading(&mut self) -> Result<()> {
-        let transaction = self.rpc.send(
-            "registry_reauthenticate_trading",
-            &[Instruction {
-                program_id: self.registry,
-                accounts: vec![
-                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
-                    AccountMeta::new_readonly(self.trading, false),
-                    AccountMeta::new_readonly(self.trading_programdata, false),
-                ],
-                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Trading)
-                    .to_bytes()
-                    .to_vec(),
-            }],
-            &self.payer,
-        )?;
-        self.transactions.push(transaction);
-        Ok(())
-    }
-
-    fn reauthenticate_custody(&mut self) -> Result<()> {
-        let transaction = self.rpc.send(
-            "registry_reauthenticate_custody",
-            &[Instruction {
-                program_id: self.registry,
-                accounts: vec![
-                    AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
-                    AccountMeta::new_readonly(self.custody, false),
-                    AccountMeta::new_readonly(self.custody_programdata, false),
-                ],
-                data: RegistryInstructionV1::Reauthenticate(ExecutionRoleV1::Custody)
-                    .to_bytes()
-                    .to_vec(),
-            }],
-            &self.payer,
-        )?;
-        self.transactions.push(transaction);
-        Ok(())
-    }
-
-    fn accept_primary(&mut self) -> Result<()> {
-        let instruction = self.primary_instruction()?;
-        let transaction = self.rpc.send(
-            "resolution_accept_real_pyth_primary",
-            &[instruction],
-            &self.payer,
-        )?;
-        self.transactions.push(transaction);
-        let certificate = self.account(
-            case_key(&self.plan.primary, "success", true)?,
-            "success certificate",
-        )?;
-        authenticate_certificate(&certificate, self.resolution)
-    }
-
-    fn primary_instruction(&self) -> Result<Instruction> {
-        let provider_release = hex32(&self.plan.provider_release_id)?;
-        let result_domain = hex32(&self.plan.result_domain_id)?;
-        let request = AcceptPythRequestV1 {
-            expected_generation: self.plan.generation,
-            expected_result_domain_id: result_domain,
-            expected_provider_release_id: provider_release,
-        }
-        .to_bytes()
-        .map_err(|error| Error::new(format!("primary request: {error:?}")))?;
-        let update = pubkey(&self.provider.price_update)?;
-        let receiver = provider_program(self.provider, "pyth-receiver")?;
-        let router = provider_program(self.provider, "pyth-router")?;
-        let local = local_validator_release_v1()
-            .map_err(|error| Error::new(format!("local provider release: {error:?}")))?;
-        let release = local.release();
-        let material = record(self.plan, "source_material")?;
-        let product = record(self.plan, "product_instance")?;
-        let pyth = record(self.plan, "pyth_release")?;
-        let accounts = vec![
-            AccountMeta::new(pubkey(&self.plan.primary.state)?, false),
-            AccountMeta::new(case_key(&self.plan.primary, "success", true)?, false),
-            AccountMeta::new_readonly(pubkey(&self.plan.primary.market)?, false),
-            AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
-            AccountMeta::new_readonly(self.resolution, false),
-            AccountMeta::new_readonly(self.resolution_programdata, false),
-            AccountMeta::new_readonly(pubkey(&material.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&material.staging)?, false),
-            AccountMeta::new_readonly(pubkey(&product.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&product.staging)?, false),
-            AccountMeta::new_readonly(pubkey(&pyth.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&pyth.staging)?, false),
-            AccountMeta::new_readonly(update, false),
-            AccountMeta::new_readonly(receiver.program_id()?, false),
-            AccountMeta::new_readonly(receiver.programdata_id()?, false),
-            AccountMeta::new_readonly(Pubkey::new_from_array(release.receiver_config()), false),
-            AccountMeta::new_readonly(router.program_id()?, false),
-            AccountMeta::new_readonly(router.programdata_id()?, false),
-            AccountMeta::new_readonly(sysvar::clock::ID, false),
-            AccountMeta::new_readonly(sysvar::rent::ID, false),
-            AccountMeta::new_readonly(system_program::ID, false),
-        ];
-        if accounts.len() != 21 {
-            return Err(Error::new("Resolution primary account count is not 21"));
-        }
-        Ok(Instruction {
-            program_id: self.resolution,
-            accounts,
-            data: request.to_vec(),
-        })
-    }
-
-    fn prove_primary_replay(&mut self) -> Result<ReplayEvidence> {
-        let before = self.primary_snapshot()?;
-        let transaction = self.rpc.send_expected_failure(
-            "resolution_accept_real_pyth_primary_replay_refusal",
-            &[self.primary_instruction()?],
-            &self.payer,
-        )?;
-        let after = self.primary_snapshot()?;
-        Ok(ReplayEvidence {
-            transaction,
-            state_unchanged: same(&before, &after, "state"),
-            certificate_unchanged: same(&before, &after, "certificate"),
-            before,
-            after,
-        })
-    }
-
-    fn primary_snapshot(&mut self) -> Result<BTreeMap<String, AccountEvidence>> {
-        let entries = [
-            ("state", pubkey(&self.plan.primary.state)?),
-            (
-                "certificate",
-                case_key(&self.plan.primary, "success", true)?,
-            ),
-        ];
-        let mut output = BTreeMap::new();
-        for (label, key) in entries {
-            let account = self.account(key, label)?;
-            output.insert(label.into(), account_evidence(key, &account));
-        }
-        Ok(output)
-    }
-
-    fn run_funded_lifecycle(&mut self, case: &SourceCase, prefix: &str) -> Result<()> {
-        self.submit_funded(
-            case,
-            prefix,
-            "recovery",
-            FundedTransitionActionV3::FailNext,
-            false,
-        )?;
-        self.submit_funded(
-            case,
-            prefix,
-            "exhaustion",
-            FundedTransitionActionV3::Exhaust,
-            false,
-        )?;
-        self.submit_funded(
-            case,
-            prefix,
-            "failure",
-            FundedTransitionActionV3::CommitFailure,
-            false,
-        )?;
-        Ok(())
-    }
-
-    fn run_funded_prefix(&mut self, case: &SourceCase, prefix: &str) -> Result<()> {
-        self.submit_funded(
-            case,
-            prefix,
-            "recovery",
-            FundedTransitionActionV3::FailNext,
-            false,
-        )?;
-        self.submit_funded(
-            case,
-            prefix,
-            "exhaustion",
-            FundedTransitionActionV3::Exhaust,
-            false,
-        )?;
-        Ok(())
-    }
-
-    fn prove_rollback(&mut self) -> Result<RollbackEvidence> {
-        let case = &self.plan.rollback;
-        let before = self.rollback_snapshot(case)?;
-        let transaction = self.submit_funded(
-            case,
-            "rollback",
-            "failure",
-            FundedTransitionActionV3::CommitFailure,
-            true,
-        )?;
-        let after = self.rollback_snapshot(case)?;
-        Ok(RollbackEvidence {
-            transaction,
-            state_unchanged: same(&before, &after, "state"),
-            certificate_unchanged: same(&before, &after, "certificate"),
-            funding_unchanged: same(&before, &after, "funding"),
-            worker_unchanged: same(&before, &after, "worker"),
-            before,
-            after,
-        })
-    }
-
-    fn submit_funded(
-        &mut self,
-        case: &SourceCase,
-        prefix: &str,
-        step: &str,
-        action: FundedTransitionActionV3,
-        expect_failure: bool,
-    ) -> Result<TransactionEvidence> {
-        let recovery_index = match action {
-            FundedTransitionActionV3::FailNext => 0,
-            FundedTransitionActionV3::Exhaust | FundedTransitionActionV3::CommitFailure => 1,
-        };
-        let allocation = match action {
-            FundedTransitionActionV3::FailNext => hex32(&self.plan.recovery_allocation_id)?,
-            FundedTransitionActionV3::Exhaust => hex32(&self.plan.exhaustion_allocation_id)?,
-            FundedTransitionActionV3::CommitFailure => hex32(&self.plan.funded_source_material_id)?,
-        };
-        let request = FundedTransitionRequestV3 {
-            action,
-            expected_generation: GENERATION,
-            expected_recovery_index: recovery_index,
-            expected_result_domain_id: hex32(&self.plan.result_domain_id)?,
-            expected_funding_allocation_id: allocation,
-        }
-        .to_bytes()
-        .map_err(|error| Error::new(format!("funded request: {error:?}")))?;
-        let material = record(self.plan, "funded_source_material")?;
-        let product = record(self.plan, "product_instance")?;
-        let manifest = record(self.plan, "capability_manifest")?;
-        let accounts = vec![
-            AccountMeta::new(pubkey(&case.state)?, false),
-            AccountMeta::new(case_key(case, step, true)?, false),
-            AccountMeta::new(case_key(case, step, false)?, false),
-            AccountMeta::new(self.worker.pubkey(), false),
-            AccountMeta::new_readonly(pubkey(&case.market)?, false),
-            AccountMeta::new_readonly(pubkey(&self.plan.activation)?, false),
-            AccountMeta::new_readonly(self.resolution, false),
-            AccountMeta::new_readonly(self.resolution_programdata, false),
-            AccountMeta::new_readonly(pubkey(&material.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&material.staging)?, false),
-            AccountMeta::new_readonly(pubkey(&product.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&product.staging)?, false),
-            AccountMeta::new_readonly(pubkey(&manifest.raw)?, false),
-            AccountMeta::new_readonly(pubkey(&manifest.staging)?, false),
-            AccountMeta::new_readonly(sysvar::clock::ID, false),
-            AccountMeta::new_readonly(sysvar::rent::ID, false),
-            AccountMeta::new_readonly(system_program::ID, false),
-        ];
-        if accounts.len() != 17 {
-            return Err(Error::new("Resolution funded account count is not 17"));
-        }
-        let instruction = Instruction {
-            program_id: self.resolution,
-            accounts,
-            data: request.to_vec(),
-        };
-        let label = format!("resolution_{prefix}_{step}");
-        let transaction = if expect_failure {
-            self.rpc
-                .send_expected_failure(&label, &[instruction], &self.payer)?
-        } else {
-            self.rpc.send(&label, &[instruction], &self.payer)?
-        };
-        if !expect_failure {
-            self.transactions.push(transaction.clone());
-            let certificate = self.account(case_key(case, step, true)?, "funded certificate")?;
-            authenticate_certificate(&certificate, self.resolution)?;
-        }
-        Ok(transaction)
-    }
-
-    fn rollback_snapshot(
-        &mut self,
-        case: &SourceCase,
-    ) -> Result<BTreeMap<String, AccountEvidence>> {
-        let entries = [
-            ("state", pubkey(&case.state)?),
-            ("certificate", case_key(case, "failure", true)?),
-            ("funding", case_key(case, "failure", false)?),
-            ("worker", self.worker.pubkey()),
-        ];
-        let mut output = BTreeMap::new();
-        for (label, key) in entries {
-            let account = self.account(key, label)?;
-            output.insert(label.into(), account_evidence(key, &account));
-        }
-        Ok(output)
-    }
-
-    fn account(&mut self, address: Pubkey, label: &str) -> Result<RpcAccount> {
-        self.rpc.required_account(address, label)
-    }
-}
-
-fn validate_inputs(
-    args: &RunArgs,
-    plan: &SuccessorPlan,
-    provider: &ProviderEvidenceInput,
-) -> Result<()> {
-    if plan.schema != "dclutch-local-successor-genesis-plan-v1"
-        || plan.generation != GENERATION
-        || plan.genesis_boundary.len() != 4
-    {
-        return Err(Error::new(
-            "successor plan has unsupported schema or hidden boundary",
-        ));
-    }
-    if validate_loopback_url(&provider.rpc_url)? != validate_loopback_url(&args.rpc_url)?
-        || !provider.provider_state_initialized
-        || provider.captured_release_identity_claimed
-        || provider.price_update_reclaimed
-    {
-        return Err(Error::new(
-            "provider evidence is not the live, initialized, non-reclaimed localhost profile",
-        ));
-    }
-    let registry = pubkey(&plan.registry.program_id)?;
-    let core = pubkey(&plan.core.program_id)?;
-    let claims = pubkey(&plan.claims.program_id)?;
-    let trading = pubkey(&plan.trading.program_id)?;
-    let resolution = pubkey(&plan.resolution.program_id)?;
-    let custody = pubkey(&plan.custody.program_id)?;
-    let programs = [registry, core, claims, trading, resolution, custody];
-    if programs.iter().enumerate().any(|(index, program)| {
-        programs
-            .iter()
-            .skip(index.saturating_add(1))
-            .any(|other| other == program)
-    }) {
-        return Err(Error::new(
-            "Registry and all five role Program IDs must be pairwise distinct",
-        ));
-    }
-    validate_material_partition(plan)?;
+    write_evidence(Path::new(&spec.output), &evidence)?;
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&serde_json::to_vec_pretty(&evidence)?)?;
+    stdout.write_all(b"\n")?;
     Ok(())
 }
 
-fn validate_material_partition(plan: &SuccessorPlan) -> Result<()> {
-    let primary = record(plan, "source_material")?;
-    let funded = record(plan, "funded_source_material")?;
-    if plan.source_material_id == plan.funded_source_material_id
-        || primary.content_sha256 != plan.source_material_id
-        || funded.content_sha256 != plan.funded_source_material_id
-        || plan.configured_max_age_seconds <= plan.funded_max_age_seconds
-    {
-        return Err(Error::new(
-            "primary-observation and funded-expiry Source materials are not distinct exact profiles",
-        ));
-    }
-    Ok(())
-}
-
-fn authenticate_genesis(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
-    for (label, pin) in &plan.genesis_accounts {
-        let key = pubkey(&pin.address)?;
-        let account = rpc.required_account(key, label)?;
-        let evidence = account_evidence(key, &account);
-        if evidence.owner != pin.owner
-            || evidence.lamports != pin.lamports
-            || evidence.data_len != pin.data_len
-            || evidence.data_sha256 != pin.data_sha256
-            || evidence.account_sha256 != pin.account_sha256
-        {
-            return Err(Error::new(format!(
-                "genesis account {label} differs from its exact plan pin"
-            )));
-        }
-    }
-    if rpc.account(pubkey(&plan.activation)?)?.is_some() {
-        return Err(Error::new(
-            "Registry activation already exists; fresh run required",
-        ));
-    }
-    Ok(())
-}
-
-fn authenticate_local_program(
-    rpc: &mut Rpc,
-    label: &str,
-    pin: &crate::model::ProgramPin,
-) -> Result<LoaderProgramEvidence> {
-    let program = pubkey(&pin.program_id)?;
-    let programdata = pubkey(&pin.programdata_id)?;
-    let expected_programdata =
-        Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if programdata != expected_programdata {
-        return Err(Error::new(format!(
-            "{label} ProgramData PDA is not canonical"
-        )));
-    }
-    let program_account = rpc.required_account(program, label)?;
-    let data_account = rpc.required_account(programdata, &format!("{label} ProgramData"))?;
-    if program_account.owner != bpf_loader_upgradeable::ID
-        || !program_account.executable
-        || program_account.data.len() != 36
-        || program_account.data.get(..4) != Some(&2_u32.to_le_bytes())
-        || program_account.data.get(4..36) != Some(programdata.as_ref())
-        || data_account.owner != bpf_loader_upgradeable::ID
-        || data_account.executable
-        || data_account.data.get(..4) != Some(&3_u32.to_le_bytes())
-        || data_account.data.get(4..12) != Some(&0_u64.to_le_bytes())
-    {
-        return Err(Error::new(format!(
-            "{label} Loader V3 facts are not a canonical slot-0 deployment"
-        )));
-    }
-    if data_account.data.get(12) != Some(&0)
-        || data_account.data.get(13..45) != Some(&[0_u8; 32])
-        || pin.upgrade_authority.is_some()
-    {
-        return Err(Error::new(format!(
-            "{label} Loader V3 deployment is not canonically immutable"
-        )));
-    }
-    let elf = data_account
-        .data
-        .get(45..)
-        .ok_or_else(|| Error::new(format!("{label} ProgramData omitted ELF")))?;
-    if hex(&Sha256::digest(elf)) != pin.elf_sha256 {
-        return Err(Error::new(format!(
-            "{label} on-chain ELF hash differs from plan"
-        )));
-    }
-    let header = data_account
-        .data
-        .get(..45)
-        .ok_or_else(|| Error::new(format!("{label} ProgramData omitted Loader header")))?;
-    Ok(LoaderProgramEvidence {
-        program_id: program.to_string(),
-        programdata_id: programdata.to_string(),
-        deployment_slot: 0,
-        upgrade_authority: None,
-        upgrade_authority_effectively_disabled: true,
-        elf_sha256: pin.elf_sha256.clone(),
-        loader_header_sha256: hex(&Sha256::digest(header)),
-        program: account_evidence(program, &program_account),
-        programdata: account_evidence(programdata, &data_account),
+fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArgs> {
+    Ok(PrepareArgs {
+        account_dir: PathBuf::from(&spec.account_dir),
+        plan_path: PathBuf::from(&spec.plan),
+        registry_program: pubkey(&spec.registry.program_id)?,
+        registry_elf: PathBuf::from(&spec.registry.elf_path),
+        registry_sha256: spec.registry.elf_sha256.clone(),
+        registry_semantic_release_id: spec.registry.semantic_release_id.clone(),
+        core_program: pubkey(&spec.core.program_id)?,
+        core_elf: PathBuf::from(&spec.core.elf_path),
+        core_sha256: spec.core.elf_sha256.clone(),
+        core_semantic_release_id: spec.core.semantic_release_id.clone(),
+        core_bootstrap_upgrade_authority: authority,
+        claims_program: pubkey(&spec.claims.program_id)?,
+        claims_elf: PathBuf::from(&spec.claims.elf_path),
+        claims_sha256: spec.claims.elf_sha256.clone(),
+        claims_semantic_release_id: spec.claims.semantic_release_id.clone(),
+        trading_program: pubkey(&spec.trading.program_id)?,
+        trading_elf: PathBuf::from(&spec.trading.elf_path),
+        trading_sha256: spec.trading.elf_sha256.clone(),
+        trading_semantic_release_id: spec.trading.semantic_release_id.clone(),
+        resolution_program: pubkey(&spec.resolution.program_id)?,
+        resolution_elf: PathBuf::from(&spec.resolution.elf_path),
+        resolution_sha256: spec.resolution.elf_sha256.clone(),
+        resolution_semantic_release_id: spec.resolution.semantic_release_id.clone(),
+        custody_program: pubkey(&spec.custody.program_id)?,
+        custody_elf: PathBuf::from(&spec.custody.elf_path),
+        custody_sha256: spec.custody.elf_sha256.clone(),
+        custody_semantic_release_id: spec.custody.semantic_release_id.clone(),
+        rent_credit_program: pubkey(&spec.rent_credit.program_id)?,
+        rent_credit_elf: PathBuf::from(&spec.rent_credit.elf_path),
+        rent_credit_sha256: spec.rent_credit.elf_sha256.clone(),
+        rent_credit_semantic_release_id: spec.rent_credit.semantic_release_id.clone(),
     })
 }
 
-fn authenticate_provider(rpc: &mut Rpc, provider: &ProviderEvidenceInput) -> Result<()> {
-    let local = local_validator_release_v1()
-        .map_err(|error| Error::new(format!("local provider release: {error:?}")))?;
-    let release = local.release();
-    for (name, expected_program, expected_programdata, expected_hash) in [
-        (
-            "pyth-receiver",
-            Pubkey::new_from_array(release.receiver_program()),
-            Pubkey::new_from_array(release.receiver_programdata()),
-            "c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64",
-        ),
-        (
-            "pyth-router",
-            Pubkey::new_from_array(release.router_program()),
-            Pubkey::new_from_array(release.router_programdata()),
-            "f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb",
-        ),
-    ] {
-        let evidence = provider_program(provider, name)?;
-        if evidence.program_id()? != expected_program
-            || evidence.programdata_id()? != expected_programdata
-            || evidence.observed_deployment_slot != 0
-            || !evidence.observed_upgrade_authority_effectively_disabled
-            || evidence.elf_tail_sha256 != expected_hash
-        {
-            return Err(Error::new(format!(
-                "{name} provider evidence differs from local release"
-            )));
-        }
-        let account = rpc.required_account(expected_programdata, &format!("{name} ProgramData"))?;
-        let elf = account
-            .data
-            .get(45..)
-            .ok_or_else(|| Error::new(format!("{name} ProgramData omitted ELF")))?;
-        if hex(&Sha256::digest(elf)) != expected_hash {
-            return Err(Error::new(format!("{name} live ELF differs from evidence")));
-        }
+fn initialize_instruction(
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+    authority: Pubkey,
+) -> Result<Instruction> {
+    let registry = record(plan, "registry_artifact_release")?;
+    let rent = record(plan, "rent_artifact_release")?;
+    Ok(Instruction {
+        program_id: pubkey(&plan.core.program_id)?,
+        accounts: vec![
+            AccountMeta::new(payer, true),
+            AccountMeta::new(pubkey(&plan.infrastructure_profile.address)?, false),
+            AccountMeta::new_readonly(pubkey(&plan.core.programdata_id)?, false),
+            AccountMeta::new_readonly(authority, true),
+            AccountMeta::new_readonly(registry.0, false),
+            AccountMeta::new_readonly(registry.1, false),
+            AccountMeta::new_readonly(pubkey(&plan.registry.program_id)?, false),
+            AccountMeta::new_readonly(pubkey(&plan.registry.programdata_id)?, false),
+            AccountMeta::new_readonly(rent.0, false),
+            AccountMeta::new_readonly(rent.1, false),
+            AccountMeta::new_readonly(pubkey(&plan.rent_credit.program_id)?, false),
+            AccountMeta::new_readonly(pubkey(&plan.rent_credit.programdata_id)?, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data: InitializeProtocolInfrastructureV1.to_bytes().to_vec(),
+    })
+}
+
+/// Canonical order in which the release set is walked up, one role per
+/// transaction.
+const ACTIVATION_ROLES_V1: [ExecutionRoleV1; 5] = [
+    ExecutionRoleV1::Core,
+    ExecutionRoleV1::Claims,
+    ExecutionRoleV1::Trading,
+    ExecutionRoleV1::Resolution,
+    ExecutionRoleV1::Custody,
+];
+
+/// Exact ten-account frame admitting one role into the shared activation cache.
+///
+/// Activation is one role per transaction: whole-ELF hashing costs about one
+/// compute unit per two bytes, and the real seven artifacts total roughly
+/// 4.2 MB, so a five-role transaction cannot fit under the 1,400,000 maximum.
+fn role_activation_instruction(
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+    role: ExecutionRoleV1,
+) -> Result<Instruction> {
+    let release_set = record(plan, "execution_release_set")?;
+    let (label, pin) = match role {
+        ExecutionRoleV1::Core => ("core_artifact_release", &plan.core),
+        ExecutionRoleV1::Claims => ("claims_artifact_release", &plan.claims),
+        ExecutionRoleV1::Trading => ("trading_artifact_release", &plan.trading),
+        ExecutionRoleV1::Resolution => ("resolution_artifact_release", &plan.resolution),
+        ExecutionRoleV1::Custody => ("custody_artifact_release", &plan.custody),
+    };
+    let pair = record(plan, label)?;
+    let accounts = vec![
+        AccountMeta::new(payer, true),
+        AccountMeta::new(pubkey(&plan.activation)?, false),
+        AccountMeta::new_readonly(release_set.0, false),
+        AccountMeta::new_readonly(release_set.1, false),
+        AccountMeta::new_readonly(pair.0, false),
+        AccountMeta::new_readonly(pair.1, false),
+        AccountMeta::new_readonly(pubkey(&pin.program_id)?, false),
+        AccountMeta::new_readonly(pubkey(&pin.programdata_id)?, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+    ];
+    if accounts.len() != REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1 {
+        return Err(Error::new(
+            "internal Registry role-activation frame was not exact ten",
+        ));
     }
-    let update_key = pubkey(&provider.price_update)?;
-    let update_account = rpc.required_account(update_key, "real posted Pyth PriceUpdate")?;
-    let update = FullPriceUpdateV2::parse(&update_account.data)
-        .map_err(|error| Error::new(format!("PriceUpdate: {error:?}")))?;
-    if update_account.owner != Pubkey::new_from_array(release.receiver_program())
-        || update_account.data.len() != 134
-        || update.publish_time() != plan_publish_time()
+    Ok(Instruction {
+        program_id: pubkey(&plan.registry.program_id)?,
+        accounts,
+        data: RegistryInstructionV1::ActivateRole(role).to_bytes().to_vec(),
+    })
+}
+
+/// Ordered per-role activation instructions with a human label for each.
+fn activation_instructions(
+    plan: &SuccessorPlan,
+    payer: Pubkey,
+) -> Result<Vec<(&'static str, Instruction)>> {
+    let mut ordered = Vec::with_capacity(ACTIVATION_ROLES_V1.len());
+    for role in ACTIVATION_ROLES_V1 {
+        ordered.push((
+            match role {
+                ExecutionRoleV1::Core => "activate immutable release-set role: Core",
+                ExecutionRoleV1::Claims => "activate immutable release-set role: Claims",
+                ExecutionRoleV1::Trading => "activate immutable release-set role: Trading",
+                ExecutionRoleV1::Resolution => "activate immutable release-set role: Resolution",
+                ExecutionRoleV1::Custody => "activate immutable release-set role: Custody",
+            },
+            role_activation_instruction(plan, payer, role)?,
+        ));
+    }
+    Ok(ordered)
+}
+
+/// Replace the role ProgramData coordinate of one ten-account activation.
+fn substitute_role_programdata(instruction: &mut Instruction, replacement: Pubkey) -> Result<()> {
+    if instruction.accounts.len() != REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1 {
+        return Err(Error::new(
+            "late-failure probe requires an exact ten-account role activation",
+        ));
+    }
+    let meta = instruction
+        .accounts
+        .get_mut(7)
+        .ok_or_else(|| Error::new("activation omitted role ProgramData"))?;
+    if meta.is_signer || meta.is_writable {
+        return Err(Error::new("role ProgramData meta had privileges"));
+    }
+    meta.pubkey = replacement;
+    Ok(())
+}
+
+pub(crate) fn record(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubkey)> {
+    let pair = plan
+        .records
+        .get(label)
+        .ok_or_else(|| Error::new(format!("plan omitted record {label}")))?;
+    let raw = pubkey(&pair.raw)?;
+    let staging = pubkey(&pair.staging)?;
+    let schema = hex32(&pair.schema_id)?;
+    let content = hex32(&pair.content_sha256)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    if raw
+        != Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &content], &registry).0
+        || staging
+            != Pubkey::find_program_address(
+                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &content],
+                &registry,
+            )
+            .0
+    {
+        return Err(Error::new(format!("record {label} PDA mismatch")));
+    }
+    Ok((raw, staging))
+}
+
+pub(crate) fn publish_record(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    payer: &Keypair,
+    schema: [u8; 32],
+    content: &[u8],
+    hostile_refund_wallet: Option<Pubkey>,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<PublishedRecord> {
+    let publication = RecordPublicationContentV1 {
+        schema_release_id: schema,
+        content,
+    };
+    let (raw, staging, digest) = derive_record_addresses_v1(registry, publication)
+        .map_err(|error| Error::new(format!("derive record publication: {error:?}")))?;
+    let mut minimum_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .unwrap_or(rpc.finalized_slot()?);
+    for _ in 0..1024 {
+        let keys = [
+            payer.pubkey(),
+            raw,
+            staging,
+            system_program::ID,
+            sysvar::rent::ID,
+            sysvar::clock::ID,
+        ];
+        let (slot, values) = rpc.finalized_accounts(&keys, minimum_slot)?;
+        let observations = publication_observations(slot, &keys, &values)?;
+        let state = RecordPublicationStateV1 {
+            sponsor: observations[0],
+            raw_record: observations[1],
+            staging_cursor: observations[2],
+            system_program: observations[3],
+            rent: observations[4],
+            clock: observations[5],
+        };
+        let plan = build_record_publication_step_v1(registry, publication, state)
+            .map_err(|error| Error::new(format!("chain-derived record publication: {error:?}")))?;
+        if plan.action == RecordPublicationActionV1::Complete {
+            verify_published_record(rpc, registry, raw, staging, content)?;
+            return Ok(PublishedRecord {
+                schema,
+                digest,
+                raw,
+                staging,
+            });
+        }
+        let instruction = plan
+            .instruction
+            .ok_or_else(|| Error::new("incomplete record publication omitted instruction"))?;
+        if plan.action == RecordPublicationActionV1::Finalize
+            && let Some(hostile_wallet) = hostile_refund_wallet
+        {
+            let mut hostile = instruction.clone();
+            hostile
+                .accounts
+                .get_mut(2)
+                .ok_or_else(|| Error::new("Finalize omitted refund-wallet coordinate"))?
+                .pubkey = hostile_wallet;
+            transactions.push(rpc.send_expected_failure(
+                "publish record: substituted refund wallet refuses",
+                &[hostile],
+                payer,
+            )?);
+        }
+        let label = format!("publish record: {:?}", plan.action);
+        let evidence = rpc.send(&label, &[instruction], payer)?;
+        minimum_slot = evidence.slot;
+        transactions.push(evidence);
+    }
+    Err(Error::new(
+        "record publication exceeded its bounded transition count",
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_product_graph(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    payer: &Keypair,
+    compiled: CompiledProductRecordsV2,
+    product: &[u8],
+    result_domain: &[u8],
+    portfolio: &[u8],
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<(PublishedRecord, PublishedRecord, PublishedRecord)> {
+    let content =
+        product_publication_content_v2(registry, compiled, product, result_domain, portfolio)
+            .map_err(|error| Error::new(format!("Product publication graph: {error:?}")))?;
+    let coordinates = product_publication_coordinates(registry, content)?;
+    let mut minimum_slot = transactions
+        .last()
+        .map(|transaction| transaction.slot)
+        .unwrap_or(rpc.finalized_slot()?);
+    for _ in 0..3072 {
+        let keys = [
+            payer.pubkey(),
+            coordinates[0].0,
+            coordinates[0].1,
+            coordinates[1].0,
+            coordinates[1].1,
+            coordinates[2].0,
+            coordinates[2].1,
+            system_program::ID,
+            sysvar::rent::ID,
+            sysvar::clock::ID,
+        ];
+        let (slot, values) = rpc.finalized_accounts(&keys, minimum_slot)?;
+        let observations = publication_observations(slot, &keys, &values)?;
+        let state = |raw, staging| RecordPublicationStateV1 {
+            sponsor: observations[0],
+            raw_record: observations[raw],
+            staging_cursor: observations[staging],
+            system_program: observations[7],
+            rent: observations[8],
+            clock: observations[9],
+        };
+        let plan = build_product_publication_step_v2(
+            registry,
+            content,
+            ProductPublicationStateV2 {
+                product: state(1, 2),
+                result_domain: state(3, 4),
+                portfolio: state(5, 6),
+            },
+        )
+        .map_err(|error| Error::new(format!("chain-derived Product publication: {error:?}")))?;
+        if plan.member == ProductPublicationMemberV2::Complete {
+            for ((raw, staging, _), body) in
+                coordinates
+                    .iter()
+                    .copied()
+                    .zip([product, result_domain, portfolio])
+            {
+                verify_published_record(rpc, registry, raw, staging, body)?;
+            }
+            let published = |index: usize, schema| PublishedRecord {
+                schema,
+                digest: coordinates[index].2,
+                raw: coordinates[index].0,
+                staging: coordinates[index].1,
+            };
+            return Ok((
+                published(
+                    0,
+                    dclutch_product_runtime_v2_admission::PRODUCT_RECORD_SCHEMA_ID_V2,
+                ),
+                published(
+                    1,
+                    dclutch_product_runtime_v2_admission::RESULT_DOMAIN_SCHEMA_ID_V2,
+                ),
+                published(
+                    2,
+                    dclutch_product_runtime_v2_admission::PORTFOLIO_SCHEMA_ID_V2,
+                ),
+            ));
+        }
+        let instruction = plan
+            .record
+            .instruction
+            .ok_or_else(|| Error::new("incomplete Product publication omitted instruction"))?;
+        let label = format!(
+            "publish Product graph: {:?} {:?}",
+            plan.member, plan.record.action
+        );
+        let evidence = rpc.send(&label, &[instruction], payer)?;
+        minimum_slot = evidence.slot;
+        transactions.push(evidence);
+    }
+    Err(Error::new(
+        "Product graph publication exceeded its bounded transition count",
+    ))
+}
+
+fn product_publication_coordinates(
+    registry: Pubkey,
+    content: ProductPublicationContentV2<'_>,
+) -> Result<[(Pubkey, Pubkey, [u8; 32]); 3]> {
+    Ok([
+        derive_record_addresses_v1(registry, content.product)
+            .map_err(|error| Error::new(format!("Product record address: {error:?}")))?,
+        derive_record_addresses_v1(registry, content.result_domain)
+            .map_err(|error| Error::new(format!("domain record address: {error:?}")))?,
+        derive_record_addresses_v1(registry, content.portfolio)
+            .map_err(|error| Error::new(format!("portfolio record address: {error:?}")))?,
+    ])
+}
+
+fn publication_observations<'a, const N: usize>(
+    slot: u64,
+    keys: &[Pubkey; N],
+    values: &'a [Option<crate::rpc::RpcAccount>],
+) -> Result<[AccountObservationV2<'a>; N]> {
+    let observations = keys
+        .iter()
+        .copied()
+        .zip(values)
+        .map(|(key, value)| match value {
+            Some(account) => AccountObservationV2 {
+                slot,
+                key,
+                owner: account.owner,
+                lamports: account.lamports,
+                executable: account.executable,
+                data: &account.data,
+            },
+            None => AccountObservationV2 {
+                slot,
+                key,
+                owner: system_program::ID,
+                lamports: 0,
+                executable: false,
+                data: &[],
+            },
+        })
+        .collect::<Vec<_>>();
+    observations
+        .try_into()
+        .map_err(|_| Error::new("publication snapshot width changed"))
+}
+
+fn verify_published_record(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    raw: Pubkey,
+    staging: Pubkey,
+    content: &[u8],
+) -> Result<()> {
+    let finalized = rpc.required_account(raw, "finalized Registry record")?;
+    if finalized.owner != registry
+        || finalized.executable
+        || finalized.data != content
+        || finalized.lamports < rpc.minimum_balance(content.len())?
+        || rpc.account(staging)?.is_some()
+    {
+        return Err(Error::new("finalized Registry record poststate mismatch"));
+    }
+    Ok(())
+}
+
+fn verify_profile(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+    let address = pubkey(&plan.infrastructure_profile.address)?;
+    let account = rpc.required_account(address, "infrastructure profile")?;
+    let expected = decode_hex(&plan.infrastructure_profile.body_hex)?;
+    if account.owner != pubkey(&plan.core.program_id)?
+        || account.executable
+        || account.data != expected
+        || hex(&sha2::Sha256::digest(&account.data)) != plan.infrastructure_profile.body_sha256
+        || ProtocolInfrastructureProfileV1::decode(&account.data).is_err()
     {
         return Err(Error::new(
-            "posted Pyth PriceUpdate does not match captured fixture semantics",
+            "Core infrastructure profile poststate did not match exact plan bytes",
         ));
     }
     Ok(())
 }
 
-fn plan_publish_time() -> i64 {
-    crate::plan::FIXTURE_PUBLISH_TIME
-}
-
-fn authenticate_certificate(account: &RpcAccount, resolution: Pubkey) -> Result<()> {
-    if account.owner != resolution || account.data.len() != RESOLUTION_CERTIFICATE_BYTES {
+fn verify_core_programdata(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+    let address = pubkey(&plan.core.programdata_id)?;
+    let account = rpc.required_account(address, "Core ProgramData")?;
+    if account.owner != bpf_loader_upgradeable::ID
+        || account.executable
+        || account.data.get(..4) != Some(3_u32.to_le_bytes().as_slice())
+        || account.data.get(12) != Some(&0)
+        || account.data.get(13..45)
+            != Some(pubkey(&plan.core_bootstrap.upgrade_authority)?.as_ref())
+        || hex(&sha2::Sha256::digest(&account.data))
+            != plan.core_bootstrap.post_revoke_programdata_sha256
+    {
         return Err(Error::new(
-            "certificate was not allocated and assigned by Resolution",
+            "Core Loader-v3 ProgramData was not the exact authority-None poststate",
         ));
     }
-    ResolutionCertificateV1::decode(&account.data)
-        .map_err(|error| Error::new(format!("certificate bytes: {error:?}")))?;
     Ok(())
 }
 
-fn append_role(
-    accounts: &mut Vec<AccountMeta>,
-    record: &RecordPair,
-    program: Pubkey,
-    programdata: Pubkey,
-) -> Result<()> {
-    accounts.extend([
-        AccountMeta::new_readonly(pubkey(&record.raw)?, false),
-        AccountMeta::new_readonly(pubkey(&record.staging)?, false),
-        AccountMeta::new_readonly(program, false),
-        AccountMeta::new_readonly(programdata, false),
-    ]);
+fn verify_activation(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+    let address = pubkey(&plan.activation)?;
+    let account = rpc.required_account(address, "release activation")?;
+    let view = ActivatedExecutionReleaseSetViewV1::decode(&account.data)
+        .map_err(|error| Error::new(format!("decode release activation: {error:?}")))?;
+    let release_set_id = view
+        .execution_release_set_id()
+        .map_err(|error| Error::new(format!("activation release-set ID: {error:?}")))?;
+    if account.owner != pubkey(&plan.registry.program_id)?
+        || account.executable
+        || hex(release_set_id.as_bytes()) != plan.release_set_id
+    {
+        return Err(Error::new(
+            "Registry activation poststate did not match the exact release set",
+        ));
+    }
     Ok(())
 }
 
-fn record<'a>(plan: &'a SuccessorPlan, name: &str) -> Result<&'a RecordPair> {
-    plan.records
-        .get(name)
-        .ok_or_else(|| Error::new(format!("plan omitted {name} record")))
-}
-
-fn case_key(case: &SourceCase, step: &str, certificate: bool) -> Result<Pubkey> {
-    let map = if certificate {
-        &case.certificates
-    } else {
-        &case.funding
-    };
-    pubkey(
-        map.get(step)
-            .ok_or_else(|| Error::new(format!("case omitted {step}")))?,
-    )
-}
-
-fn provider_program<'a>(
-    provider: &'a ProviderEvidenceInput,
-    name: &str,
-) -> Result<&'a ProviderProgramInput> {
-    provider
-        .programs
-        .iter()
-        .find(|program| program.name == name)
-        .ok_or_else(|| Error::new(format!("provider evidence omitted {name}")))
-}
-
-impl ProviderProgramInput {
-    fn program_id(&self) -> Result<Pubkey> {
-        pubkey(&self.program_id)
+fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
+    if spec.schema != RUN_SPEC_SCHEMA_V2 {
+        return Err(Error::new("unsupported successor run-spec schema"));
     }
-
-    fn programdata_id(&self) -> Result<Pubkey> {
-        pubkey(&self.programdata_id)
-    }
-}
-
-fn same(
-    before: &BTreeMap<String, AccountEvidence>,
-    after: &BTreeMap<String, AccountEvidence>,
-    name: &str,
-) -> bool {
-    before.get(name).map(|value| &value.account_sha256)
-        == after.get(name).map(|value| &value.account_sha256)
-}
-
-fn validate_path(path: &Path, label: &str) -> Result<()> {
-    if !path.is_absolute() || !path.is_file() {
+    crate::market::validate_market_input(&spec.market)?;
+    let rpc = validate_loopback_url(&spec.rpc_url)?;
+    if rpc.as_str() != EXPECTED_RPC_URL {
         return Err(Error::new(format!(
-            "{label} must be an absolute regular file"
+            "successor launcher is pinned to exact RPC origin {EXPECTED_RPC_URL}"
         )));
     }
+    validate_existing_canonical_file(Path::new(&spec.launcher), "launcher")?;
+    for (label, input) in [
+        ("registry", &spec.registry),
+        ("core", &spec.core),
+        ("claims", &spec.claims),
+        ("trading", &spec.trading),
+        ("resolution", &spec.resolution),
+        ("custody", &spec.custody),
+        ("rent-credit", &spec.rent_credit),
+    ] {
+        let _ = pubkey(&input.program_id)?;
+        let _ = hex32(&input.elf_sha256)?;
+        let _ = hex32(&input.semantic_release_id)?;
+        validate_existing_canonical_file(Path::new(&input.elf_path), &format!("{label} ELF"))?;
+        validate_existing_canonical_file(
+            Path::new(&input.attestation),
+            &format!("{label} attestation"),
+        )?;
+    }
+    validate_program_ids(&[
+        pubkey(&spec.registry.program_id)?,
+        pubkey(&spec.core.program_id)?,
+        pubkey(&spec.claims.program_id)?,
+        pubkey(&spec.trading.program_id)?,
+        pubkey(&spec.resolution.program_id)?,
+        pubkey(&spec.custody.program_id)?,
+        pubkey(&spec.rent_credit.program_id)?,
+    ])?;
+    for (path, label) in [
+        (&spec.ledger, "ledger"),
+        (&spec.account_dir, "account_dir"),
+        (&spec.plan, "plan"),
+        (&spec.output, "output"),
+    ] {
+        validate_canonical_new_path(Path::new(path), label)?;
+    }
+    let mut outputs = [&spec.ledger, &spec.account_dir, &spec.plan, &spec.output];
+    outputs.sort();
+    if outputs.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(Error::new("successor output paths must be distinct"));
+    }
+    let log = validator_log_path(spec)?;
+    validate_canonical_new_path(&log, "validator_log")?;
+    if outputs.iter().any(|path| Path::new(path) == log) {
+        return Err(Error::new(
+            "validator log must be distinct from every requested output path",
+        ));
+    }
     Ok(())
+}
+
+fn ensure_rpc_port_free() -> Result<()> {
+    let address: SocketAddr = "127.0.0.1:20890"
+        .parse()
+        .map_err(|error| Error::new(format!("internal RPC socket: {error}")))?;
+    match TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
+        Ok(_) => Err(Error::new(
+            "refusing to launch while another process listens on 127.0.0.1:20890",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(()),
+        Err(error) => Err(Error::new(format!(
+            "could not prove successor RPC port is free: {error}"
+        ))),
+    }
+}
+
+fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
+    if plan.schema != "dclutch-local-successor-infrastructure-plan-v2"
+        || plan.genesis_boundary.len() != 2
+        || plan.bootstrap_order.len() != 5
+        || plan.execution_blocker.is_empty()
+    {
+        return Err(Error::new("invalid successor infrastructure plan header"));
+    }
+    let programs = [
+        pubkey(&plan.registry.program_id)?,
+        pubkey(&plan.core.program_id)?,
+        pubkey(&plan.claims.program_id)?,
+        pubkey(&plan.trading.program_id)?,
+        pubkey(&plan.resolution.program_id)?,
+        pubkey(&plan.custody.program_id)?,
+        pubkey(&plan.rent_credit.program_id)?,
+    ];
+    validate_program_ids(&programs)?;
+    let core_authority = pubkey(&plan.core_bootstrap.upgrade_authority)?;
+    if core_authority == Pubkey::default()
+        || programs.contains(&core_authority)
+        || !plan.core_bootstrap.release_recognition_requires_revoke
+        || plan.core_bootstrap.genesis_programdata_sha256
+            == plan.core_bootstrap.post_revoke_programdata_sha256
+    {
+        return Err(Error::new(
+            "Core bootstrap authority/revocation boundary is not canonical",
+        ));
+    }
+    for (label, pin, authority) in [
+        ("registry", &plan.registry, None),
+        ("core", &plan.core, Some(core_authority)),
+        ("claims", &plan.claims, None),
+        ("trading", &plan.trading, None),
+        ("resolution", &plan.resolution, None),
+        ("custody", &plan.custody, None),
+        ("rent-credit", &plan.rent_credit, None),
+    ] {
+        validate_program_pin(plan, label, pin, authority)?;
+    }
+    let core_programdata = plan
+        .genesis_accounts
+        .get("loader.core.programdata")
+        .ok_or_else(|| Error::new("missing Core ProgramData genesis pin"))?;
+    if core_programdata.data_sha256 != plan.core_bootstrap.genesis_programdata_sha256 {
+        return Err(Error::new(
+            "Core genesis ProgramData is not the authority-bearing pre-init observation",
+        ));
+    }
+
+    let profile_address = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &programs[1],
+    )
+    .0;
+    if plan.infrastructure_profile.address != profile_address.to_string()
+        || hex32(&plan.infrastructure_profile.schema_id)?
+            != PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1
+    {
+        return Err(Error::new(
+            "infrastructure profile address or schema is not canonical",
+        ));
+    }
+    let body = decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let profile = ProtocolInfrastructureProfileV1::decode(&body)
+        .map_err(|error| Error::new(format!("infrastructure profile: {error:?}")))?;
+    let registry_artifact = artifact_id(&plan.registry.artifact_release_id)?;
+    let rent_artifact = artifact_id(&plan.rent_credit.artifact_release_id)?;
+    if profile.registry().program().to_bytes() != programs[0].to_bytes()
+        || profile.registry().artifact_release() != registry_artifact
+        || profile.rent().program().to_bytes() != programs[6].to_bytes()
+        || profile.rent().artifact_release() != rent_artifact
+        || plan.infrastructure_profile.registry_artifact_release_id
+            != plan.registry.artifact_release_id
+        || plan.infrastructure_profile.rent_artifact_release_id
+            != plan.rent_credit.artifact_release_id
+    {
+        return Err(Error::new(
+            "infrastructure profile substituted a Registry or Rent binding",
+        ));
+    }
+    if plan.infrastructure_profile.body_sha256 != hex(&sha2::Sha256::digest(&body)) {
+        return Err(Error::new("infrastructure profile body hash mismatch"));
+    }
+    for label in [
+        "execution_release_set",
+        "registry_artifact_release",
+        "core_artifact_release",
+        "claims_artifact_release",
+        "trading_artifact_release",
+        "resolution_artifact_release",
+        "custody_artifact_release",
+        "rent_artifact_release",
+        "pyth_release",
+    ] {
+        let _ = record(plan, label)?;
+    }
+    if plan.genesis_accounts.len() != 23 {
+        return Err(Error::new(
+            "infrastructure plan must contain fourteen Loader and nine finalized record accounts",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_program_pin(
+    plan: &SuccessorPlan,
+    label: &str,
+    pin: &ProgramPin,
+    bootstrap_authority: Option<Pubkey>,
+) -> Result<()> {
+    let program = pubkey(&pin.program_id)?;
+    let expected_programdata =
+        Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if pubkey(&pin.programdata_id)? != expected_programdata
+        || pin.upgrade_authority.is_some()
+        || !PathBuf::from(&pin.elf_path).is_absolute()
+    {
+        return Err(Error::new(
+            "program pin is not an immutable canonical Loader-v3 binding",
+        ));
+    }
+    let expected_elf = hex32(&pin.elf_sha256)?;
+    let _ = hex32(&pin.semantic_release_id)?;
+    let _ = artifact_id(&pin.artifact_release_id)?;
+    let elf = fs::read(&pin.elf_path)?;
+    if sha2::Sha256::digest(&elf).as_slice() != expected_elf {
+        return Err(Error::new(format!("{label} ELF digest mismatch")));
+    }
+    let expected_programdata = loader_programdata_bytes(&elf, bootstrap_authority);
+    let genesis = plan
+        .genesis_accounts
+        .get(&format!("loader.{label}.programdata"))
+        .ok_or_else(|| Error::new(format!("missing {label} ProgramData genesis pin")))?;
+    if genesis.data_sha256 != hex(&sha2::Sha256::digest(&expected_programdata)) {
+        return Err(Error::new(format!(
+            "{label} ProgramData header/ELF genesis hash mismatch"
+        )));
+    }
+    if label == "core" {
+        let post_revoke = loader_programdata_bytes_after_revoke(
+            &elf,
+            bootstrap_authority.ok_or_else(|| Error::new("Core bootstrap authority was absent"))?,
+        );
+        if plan.core_bootstrap.post_revoke_programdata_sha256
+            != hex(&sha2::Sha256::digest(&post_revoke))
+        {
+            return Err(Error::new(
+                "Core post-revoke immutable ProgramData hash mismatch",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_existing_canonical_file(path: &Path, label: &str) -> Result<()> {
+    if !path.is_absolute() {
+        return Err(Error::new(format!("{label} must be absolute")));
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| Error::new(format!("inspect {label} {}: {error}", path.display())))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(Error::new(format!(
+            "{label} must be a nonsymlink regular file"
+        )));
+    }
+    let canonical = fs::canonicalize(path)?;
+    if canonical != path {
+        return Err(Error::new(format!("{label} path must be canonical")));
+    }
+    Ok(())
+}
+
+fn validate_canonical_new_path(path: &Path, label: &str) -> Result<()> {
+    if !path.is_absolute() || path.exists() || fs::symlink_metadata(path).is_ok() {
+        return Err(Error::new(format!(
+            "{label} must be an absolute nonexistent path"
+        )));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new(format!("{label} omitted parent")))?;
+    let canonical_parent = fs::canonicalize(parent).map_err(|error| {
+        Error::new(format!(
+            "canonicalize {label} parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    if canonical_parent != parent || !parent.is_dir() {
+        return Err(Error::new(format!(
+            "{label} parent must be an existing canonical directory"
+        )));
+    }
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| Error::new(format!("{label} omitted UTF-8 basename")))?;
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(Error::new(format!("{label} has unsafe basename")));
+    }
+    Ok(())
+}
+
+fn validator_log_path(spec: &SuccessorRunSpec) -> Result<PathBuf> {
+    let ledger = Path::new(&spec.ledger);
+    let name = ledger
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| Error::new("ledger omitted UTF-8 basename"))?;
+    Ok(ledger.with_file_name(format!("{name}.validator.log")))
+}
+
+fn write_evidence(path: &Path, evidence: &SuccessorRunEvidence) -> Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(evidence)?;
+    bytes.push(b'\n');
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| Error::new(format!("create evidence {}: {error}", path.display())))?
+        .write_all(&bytes)?;
+    Ok(())
+}
+
+fn artifact_id(value: &str) -> Result<ArtifactReleaseIdV1> {
+    ArtifactReleaseIdV1::new(hex32(value)?)
+        .map_err(|error| Error::new(format!("artifact release ID: {error:?}")))
+}
+
+pub(crate) fn decode_hex(value: &str) -> Result<Vec<u8>> {
+    if value.len() & 1 == 1
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(Error::new("invalid lowercase hexadecimal bytes"));
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let pair = core::str::from_utf8(pair).map_err(|_| Error::new("non-UTF8 hex"))?;
+            u8::from_str_radix(pair, 16).map_err(|_| Error::new("invalid hexadecimal byte"))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     #[test]
-    fn unsupported_or_hidden_plan_boundary_is_refused() {
-        let plan = dummy_plan();
-        let provider = ProviderEvidenceInput {
-            rpc_url: "http://127.0.0.1:20890/".into(),
-            provider_state_initialized: true,
-            captured_release_identity_claimed: false,
-            price_update: Pubkey::new_unique().to_string(),
-            price_update_reclaimed: false,
-            programs: vec![],
-        };
-        let args = RunArgs {
-            rpc_url: provider.rpc_url.clone(),
-            plan_path: "/tmp/a".into(),
-            provider_evidence_path: "/tmp/b".into(),
-            output: "/tmp/c".into(),
-        };
-        assert!(validate_inputs(&args, &plan, &provider).is_err());
+    fn run_spec_refuses_any_persisted_private_key_field() {
+        let input = serde_json::json!({
+            "program_id": Pubkey::new_unique().to_string(),
+            "elf_path": "/tmp/program.so",
+            "elf_sha256": "11".repeat(32),
+            "semantic_release_id": "22".repeat(32),
+            "attestation": "/tmp/attestation.json",
+            "private_key": [1, 2, 3]
+        });
+        assert!(serde_json::from_value::<RunProgramInput>(input).is_err());
     }
 
     #[test]
-    fn conflated_primary_and_funded_materials_are_refused() {
-        let mut plan = dummy_plan();
-        let pair = RecordPair {
-            raw: Pubkey::new_unique().to_string(),
-            staging: Pubkey::new_unique().to_string(),
-            schema_id: "33".repeat(32),
-            content_sha256: plan.source_material_id.clone(),
+    fn late_failure_substitution_only_replaces_role_programdata() {
+        let original = Pubkey::new_unique();
+        let replacement = Pubkey::new_unique();
+        let mut instruction = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: (0..REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1)
+                .map(|_| AccountMeta::new_readonly(original, false))
+                .collect(),
+            data: Vec::new(),
         };
-        plan.records.insert("source_material".into(), pair.clone());
-        plan.records.insert("funded_source_material".into(), pair);
-        assert!(validate_material_partition(&plan).is_err());
+        substitute_role_programdata(&mut instruction, replacement).expect("substitute");
+        assert_eq!(instruction.accounts[7].pubkey, replacement);
+        assert!(
+            instruction
+                .accounts
+                .iter()
+                .enumerate()
+                .all(|(index, meta)| index == 7 || meta.pubkey == original)
+        );
+        // The retired 26-account five-role frame is refused, not reinterpreted.
+        let mut retired = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: (0..26)
+                .map(|_| AccountMeta::new_readonly(original, false))
+                .collect(),
+            data: Vec::new(),
+        };
+        assert!(substitute_role_programdata(&mut retired, replacement).is_err());
     }
 
-    fn dummy_plan() -> SuccessorPlan {
-        SuccessorPlan {
-            schema: "wrong".into(),
-            genesis_boundary: vec![],
-            account_dir: "/tmp/unused".into(),
-            registry: dummy_pin([1; 32]),
-            core: dummy_pin([2; 32]),
-            claims: dummy_pin([3; 32]),
-            trading: dummy_pin([4; 32]),
-            resolution: dummy_pin([5; 32]),
-            custody: dummy_pin([6; 32]),
-            activation: Pubkey::new_unique().to_string(),
-            release_set_id: "11".repeat(32),
-            records: BTreeMap::new(),
-            result_domain_id: "11".repeat(32),
-            source_material_id: "11".repeat(32),
-            funded_source_material_id: "11".repeat(32),
-            capability_manifest_id: "11".repeat(32),
-            provider_release_id: "11".repeat(32),
-            recovery_allocation_id: "11".repeat(32),
-            exhaustion_allocation_id: "11".repeat(32),
-            fixture_publish_time: plan_publish_time(),
-            configured_max_age_seconds: 1,
-            funded_max_age_seconds: 1,
-            generation: GENERATION,
-            primary: dummy_case(),
-            lifecycle: dummy_case(),
-            rollback: dummy_case(),
-            genesis_accounts: BTreeMap::new(),
+    #[test]
+    fn rpc_origin_is_the_launcher_fixed_loopback_origin() {
+        assert!(validate_loopback_url(EXPECTED_RPC_URL).is_ok());
+        assert!(validate_loopback_url("http://8.8.8.8:20890/").is_err());
+        assert!(validate_loopback_url("https://127.0.0.1:20890/").is_err());
+    }
+
+    #[test]
+    fn profile_body_hex_decoder_refuses_odd_uppercase_and_non_hex() {
+        assert_eq!(decode_hex("00ff").expect("hex"), [0, 255]);
+        assert!(decode_hex("0").is_err());
+        assert!(decode_hex("AA").is_err());
+        assert!(decode_hex("gg").is_err());
+    }
+
+    #[test]
+    fn zero_artifact_identity_refuses() {
+        assert!(artifact_id(&"00".repeat(32)).is_err());
+    }
+
+    #[test]
+    fn agave_4_0_2_loader_revoke_retains_inactive_authority_bytes() {
+        let validator_path = PathBuf::from(
+            which_validator().expect("solana-test-validator 4.0.2 must be installed"),
+        );
+        let version = Command::new(&validator_path)
+            .arg("--version")
+            .output()
+            .expect("query validator version");
+        let version = String::from_utf8(version.stdout).expect("UTF-8 validator version");
+        assert!(
+            version.starts_with("solana-test-validator 4.0.2 "),
+            "pinned Loader runtime changed: {version}"
+        );
+
+        let root =
+            std::env::temp_dir().join(format!("dclutch-loader-revoke-{}", Pubkey::new_unique()));
+        let accounts = root.join("accounts");
+        let ledger = root.join("ledger");
+        fs::create_dir_all(&accounts).expect("create Loader test directory");
+        let authority = Keypair::new();
+        let program = Pubkey::new_unique();
+        let programdata =
+            Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let mut elf = vec![0_u8; 64];
+        elf[..4].copy_from_slice(b"\x7fELF");
+        elf[48..52].copy_from_slice(&3_u32.to_le_bytes());
+        let genesis = loader_programdata_bytes(&elf, Some(authority.pubkey()));
+        let body = serde_json::json!({
+            "pubkey": programdata.to_string(),
+            "account": {
+                "lamports": 1_000_000_000_u64,
+                "data": [BASE64.encode(&genesis), "base64"],
+                "owner": bpf_loader_upgradeable::ID.to_string(),
+                "executable": false,
+                "rentEpoch": 0_u64,
+                "space": genesis.len()
+            }
+        });
+        fs::write(
+            accounts.join(format!("{programdata}.json")),
+            serde_json::to_vec_pretty(&body).expect("Loader account JSON"),
+        )
+        .expect("write Loader account");
+
+        let child = Command::new(&validator_path)
+            .arg("--config")
+            .arg("/dev/null")
+            .arg("--ledger")
+            .arg(&ledger)
+            .arg("--account-dir")
+            .arg(&accounts)
+            .arg("--mint")
+            .arg(system_program::ID.to_string())
+            .arg("--bind-address")
+            .arg("127.0.0.1")
+            .arg("--rpc-port")
+            .arg("22090")
+            .arg("--faucet-port")
+            .arg("22092")
+            .arg("--gossip-port")
+            .arg("22093")
+            .arg("--dynamic-port-range")
+            .arg("22100-22131")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn pinned Loader validator");
+        let mut validator = ValidatorChild { child };
+        let mut rpc =
+            wait_test_rpc(&mut validator, "http://127.0.0.1:22090/").expect("pinned Loader RPC");
+        rpc.airdrop("fund Loader authority", authority.pubkey(), 1_000_000_000)
+            .expect("fund authority");
+        rpc.send(
+            "real Loader-v3 SetAuthority None",
+            &[set_upgrade_authority(&program, &authority.pubkey(), None)],
+            &authority,
+        )
+        .expect("revoke Loader authority");
+        let observed = rpc
+            .required_account(programdata, "revoked ProgramData")
+            .expect("revoked ProgramData");
+        let expected = loader_programdata_bytes_after_revoke(&elf, authority.pubkey());
+        assert_eq!(observed.data, expected);
+        let view = dclutch_registry_svm::ProgramDataV3View::parse(&observed.data)
+            .expect("Registry parses real Loader poststate");
+        assert_eq!(view.upgrade_authority(), None);
+        assert_eq!(&observed.data[13..45], authority.pubkey().as_ref());
+        drop(validator);
+        fs::remove_dir_all(root).expect("remove scoped Loader test directory");
+    }
+
+    #[test]
+    fn real_sbf_infrastructure_revoke_and_registry_activation_when_supplied() {
+        let (Ok(core_elf), Ok(registry_elf), Ok(rent_elf)) = (
+            std::env::var("DCLUTCH_SUCCESSOR_CORE_ELF"),
+            std::env::var("DCLUTCH_SUCCESSOR_REGISTRY_ELF"),
+            std::env::var("DCLUTCH_SUCCESSOR_RENT_ELF"),
+        ) else {
+            return;
+        };
+        let core_elf = fs::canonicalize(core_elf).expect("canonical Core test ELF");
+        let registry_elf = fs::canonicalize(registry_elf).expect("canonical Registry test ELF");
+        let rent_elf = fs::canonicalize(rent_elf).expect("canonical Rent test ELF");
+        // The Found path invokes only Registry, Core, and Rent. When the real
+        // Claims/Trading/Resolution/Custody artifacts are supplied the release
+        // set binds them exactly; otherwise each role is a distinct immutable
+        // Loader deployment of the Registry ELF, and the evidence says so.
+        let role_elf = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| fs::canonicalize(value).expect("canonical role test ELF"))
+                .unwrap_or_else(|| registry_elf.clone())
+        };
+        let claims_elf = role_elf("DCLUTCH_SUCCESSOR_CLAIMS_ELF");
+        let trading_elf = role_elf("DCLUTCH_SUCCESSOR_TRADING_ELF");
+        let resolution_elf = role_elf("DCLUTCH_SUCCESSOR_RESOLUTION_ELF");
+        let custody_elf = role_elf("DCLUTCH_SUCCESSOR_CUSTODY_ELF");
+        let authority = Keypair::new();
+        let root = std::env::temp_dir().join(format!(
+            "dclutch-successor-real-sbf-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("wall clock after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir(&root).expect("create real-SBF test root");
+        let digest = |path: &Path| {
+            hex(&sha2::Sha256::digest(
+                fs::read(path).expect("read real-SBF test ELF"),
+            ))
+        };
+        let registry_sha = digest(&registry_elf);
+        let core_sha = digest(&core_elf);
+        let rent_sha = digest(&rent_elf);
+        let program = |tag| Pubkey::new_from_array([tag; 32]);
+        let plan = crate::plan::prepare(PrepareArgs {
+            account_dir: root.join("accounts"),
+            plan_path: root.join("plan.json"),
+            registry_program: program(0x31),
+            registry_elf: registry_elf.clone(),
+            registry_sha256: registry_sha.clone(),
+            registry_semantic_release_id: "11".repeat(32),
+            core_program: program(0x32),
+            core_elf,
+            core_sha256: core_sha,
+            core_semantic_release_id: "12".repeat(32),
+            core_bootstrap_upgrade_authority: authority.pubkey(),
+            claims_program: program(0x33),
+            claims_sha256: digest(&claims_elf),
+            claims_elf,
+            claims_semantic_release_id: "13".repeat(32),
+            trading_program: program(0x34),
+            trading_sha256: digest(&trading_elf),
+            trading_elf,
+            trading_semantic_release_id: "14".repeat(32),
+            resolution_program: program(0x35),
+            resolution_sha256: digest(&resolution_elf),
+            resolution_elf,
+            resolution_semantic_release_id: hex(
+                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+            ),
+            custody_program: program(0x36),
+            custody_sha256: digest(&custody_elf),
+            custody_elf,
+            custody_semantic_release_id: "16".repeat(32),
+            rent_credit_program: program(0x37),
+            rent_credit_elf: rent_elf,
+            rent_credit_sha256: rent_sha,
+            rent_credit_semantic_release_id: "17".repeat(32),
+        })
+        .expect("prepare real-SBF infrastructure plan");
+        validate_plan(&plan).expect("validate real-SBF plan");
+
+        let child = Command::new(which_validator().expect("pinned validator"))
+            .arg("--config")
+            .arg("/dev/null")
+            .arg("--ledger")
+            .arg(root.join("ledger"))
+            .arg("--account-dir")
+            .arg(root.join("accounts"))
+            .arg("--mint")
+            .arg(system_program::ID.to_string())
+            .arg("--bind-address")
+            .arg("127.0.0.1")
+            .arg("--rpc-port")
+            .arg("22290")
+            .arg("--faucet-port")
+            .arg("22292")
+            .arg("--gossip-port")
+            .arg("22293")
+            .arg("--dynamic-port-range")
+            .arg("22300-22331")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn real-SBF validator");
+        let mut validator = ValidatorChild { child };
+        let mut rpc =
+            wait_test_rpc(&mut validator, "http://127.0.0.1:22290/").expect("real-SBF RPC");
+        let hostile = Keypair::new();
+        rpc.airdrop(
+            "fund real-SBF Core authority",
+            authority.pubkey(),
+            AUTHORITY_LAMPORTS,
+        )
+        .expect("fund Core authority");
+        rpc.airdrop(
+            "fund real-SBF hostile authority",
+            hostile.pubkey(),
+            AUTHORITY_LAMPORTS,
+        )
+        .expect("fund hostile authority");
+        rpc.send_expected_failure(
+            "real-SBF wrong-authority initialization",
+            &[
+                initialize_instruction(&plan, hostile.pubkey(), hostile.pubkey())
+                    .expect("hostile init instruction"),
+            ],
+            &hostile,
+        )
+        .expect("wrong-authority initialization refuses");
+        assert!(
+            rpc.account(pubkey(&plan.infrastructure_profile.address).expect("profile key"))
+                .expect("profile query")
+                .is_none()
+        );
+        rpc.send(
+            "real-SBF infrastructure init",
+            &[
+                initialize_instruction(&plan, authority.pubkey(), authority.pubkey())
+                    .expect("init instruction"),
+            ],
+            &authority,
+        )
+        .expect("execute real-SBF init");
+        verify_profile(&mut rpc, &plan).expect("real-SBF profile");
+        rpc.send_expected_failure(
+            "real-SBF activation before revoke",
+            &[
+                role_activation_instruction(&plan, authority.pubkey(), ExecutionRoleV1::Core)
+                    .expect("pre-revoke activation"),
+            ],
+            &authority,
+        )
+        .expect("pre-revoke activation refuses");
+        assert!(
+            rpc.account(pubkey(&plan.activation).expect("activation key"))
+                .expect("activation query")
+                .is_none()
+        );
+        rpc.send(
+            "real-SBF Core Loader revoke",
+            &[set_upgrade_authority(
+                &pubkey(&plan.core.program_id).expect("Core program"),
+                &authority.pubkey(),
+                None,
+            )],
+            &authority,
+        )
+        .expect("real-SBF Core revoke");
+        verify_core_programdata(&mut rpc, &plan).expect("real-SBF Core poststate");
+        for (label, instruction) in
+            activation_instructions(&plan, authority.pubkey()).expect("activation walk-up")
+        {
+            rpc.send(label, &[instruction], &authority)
+                .expect("real-SBF role activation succeeds");
         }
+        verify_activation(&mut rpc, &plan).expect("real-SBF activation cache");
+
+        let mut publication_transactions = Vec::new();
+        let published = publish_record(
+            &mut rpc,
+            pubkey(&plan.registry.program_id).expect("Registry program"),
+            &authority,
+            [0x61; 32],
+            b"transaction-produced successor Registry record",
+            Some(hostile.pubkey()),
+            &mut publication_transactions,
+        )
+        .expect("real-SBF record publication");
+        assert_eq!(published.schema, [0x61; 32]);
+        assert_eq!(
+            published.digest,
+            <[u8; 32]>::from(sha2::Sha256::digest(
+                b"transaction-produced successor Registry record"
+            ))
+        );
+        assert!(publication_transactions.len() >= 4);
+
+        let market_input = crate::market::demo_market_input(
+            pubkey(&plan.registry.program_id).expect("Registry program"),
+        )
+        .expect("canonical demo market input");
+        let market_evidence = crate::market::execute_found_market(
+            &mut rpc,
+            &plan,
+            &market_input,
+            &authority,
+            &mut publication_transactions,
+        )
+        .expect("real-SBF RentV2 and Found31 campaign");
+        assert!(market_evidence.accounts.contains_key("market"));
+        assert!(
+            market_evidence
+                .accounts
+                .contains_key("lifecycle_rent_credit")
+        );
+
+        let recipient = Pubkey::new_unique();
+        let authority_before = rpc
+            .required_account(authority.pubkey(), "real-SBF authority")
+            .expect("authority prestate");
+        let mut late_activation =
+            role_activation_instruction(&plan, authority.pubkey(), ExecutionRoleV1::Custody)
+                .expect("late activation");
+        substitute_role_programdata(
+            &mut late_activation,
+            pubkey(&plan.core.programdata_id).expect("substitution key"),
+        )
+        .expect("substitute late Custody ProgramData");
+        let late_failure = rpc
+            .send_expected_failure(
+                "real-SBF late substituted activation",
+                &[
+                    transfer(&authority.pubkey(), &recipient, 1),
+                    late_activation,
+                ],
+                &authority,
+            )
+            .expect("late activation refuses");
+        assert!(rpc.account(recipient).expect("recipient query").is_none());
+        let fee = late_failure.fee_lamports.expect("late failure fee");
+        let authority_after = rpc
+            .required_account(authority.pubkey(), "real-SBF authority")
+            .expect("authority poststate");
+        assert_eq!(
+            authority_after.lamports.checked_add(fee),
+            Some(authority_before.lamports)
+        );
+        verify_profile(&mut rpc, &plan).expect("profile survived late rollback");
+        verify_core_programdata(&mut rpc, &plan).expect("Core survived late rollback");
+        verify_activation(&mut rpc, &plan).expect("activation survived late rollback");
+        drop(validator);
+        fs::remove_dir_all(root).expect("remove scoped real-SBF test directory");
     }
 
-    fn dummy_pin(bytes: [u8; 32]) -> crate::model::ProgramPin {
-        crate::model::ProgramPin {
-            program_id: Pubkey::new_from_array(bytes).to_string(),
-            programdata_id: Pubkey::new_unique().to_string(),
-            elf_path: "/tmp/unused".into(),
-            elf_sha256: "11".repeat(32),
-            semantic_release_id: "22".repeat(32),
-            upgrade_authority: None,
+    fn which_validator() -> Option<String> {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg("command -v solana-test-validator")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
         }
+        String::from_utf8(output.stdout)
+            .ok()
+            .map(|value| value.trim().into())
     }
 
-    fn dummy_case() -> SourceCase {
-        SourceCase {
-            market: Pubkey::new_unique().to_string(),
-            state: Pubkey::new_unique().to_string(),
-            certificates: BTreeMap::new(),
-            funding: BTreeMap::new(),
-            hostile_certificate_preoccupied: false,
+    fn wait_test_rpc(validator: &mut ValidatorChild, url: &str) -> Result<Rpc> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(status) = validator.child.try_wait()? {
+                return Err(Error::new(format!(
+                    "pinned Loader validator exited before readiness: {status}"
+                )));
+            }
+            if let Ok(rpc) = Rpc::connect(url) {
+                return Ok(rpc);
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::new("pinned Loader validator readiness timeout"));
+            }
+            thread::sleep(Duration::from_millis(250));
         }
     }
 }

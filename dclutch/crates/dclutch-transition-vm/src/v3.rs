@@ -9,6 +9,8 @@
 
 use core::convert::TryInto;
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
+
 /// Canonical V3 transition magic.
 pub const MAGIC: [u8; 4] = *b"DCTV";
 /// Finalized-record schema label for runtime-tail TransitionVM programs.
@@ -100,6 +102,25 @@ pub struct ProgramV3<'a> {
 impl<'a> ProgramV3<'a> {
     /// Hostile-decode and completely prevalidate one V3 fold program.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let value = Self::decode_shape(bytes)?;
+        value.validate_body()?;
+        Ok(value)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// Decision 0005 owns the argument. The header, every register width and
+    /// the exact expected length are read here from these bytes on both paths;
+    /// only the per-instruction sweep, a pure function of the same bytes, is
+    /// taken from the seal.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::TransitionProgram, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        Self::decode_shape(bytes)
+    }
+
+    fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -144,18 +165,26 @@ impl<'a> ProgramV3<'a> {
         if bytes.len() != expected {
             return Err(Error::InvalidLength);
         }
-        let prelude_end = usize::from(value.prelude_ops);
+        Ok(value)
+    }
+
+    /// Validate every instruction of this program.
+    ///
+    /// The expensive half of `decode`, and the only half a sealed view skips.
+    fn validate_body(self) -> Result<()> {
+        let operation_count = self.operation_count()?;
+        let prelude_end = usize::from(self.prelude_ops);
         let item_end = prelude_end
-            .checked_add(usize::from(value.item_ops))
+            .checked_add(usize::from(self.item_ops))
             .ok_or(Error::InvalidLength)?;
         let mut index = 0_usize;
         while index < operation_count {
-            let instruction = value.instruction(index)?;
+            let instruction = self.instruction(index)?;
             let item_body = index >= prelude_end && index < item_end;
-            instruction.validate(value, item_body)?;
+            instruction.validate(self, item_body)?;
             index = index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        Ok(value)
+        Ok(())
     }
 
     /// Common scalar-bank width.
@@ -181,6 +210,42 @@ impl<'a> ProgramV3<'a> {
     /// Borrow the complete canonical program bytes.
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
+    }
+
+    /// Whether any transition instruction writes any of `targets`.
+    ///
+    /// `writes_register` answers one target with a full linear scan of the
+    /// program, so a static ownership predicate over `n` register targets
+    /// decodes every instruction `n` times. This decodes each instruction once
+    /// and tests it against the whole target set, and its answer is exactly
+    /// `targets.iter().any(|target| self.writes_register(*target))` — including
+    /// the refusal an unknown opcode raises, which is still reached on the
+    /// first instruction that carries it.
+    pub fn writes_any_register(self, targets: &[RegisterWriteTargetV3]) -> Result<bool> {
+        let mut index = 0_usize;
+        let count = self.operation_count()?;
+        while index < count {
+            if let Some(written) = self.instruction(index)?.write_target()?
+                && targets.contains(&written)
+            {
+                return Ok(true);
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(false)
+    }
+
+    /// Whether any transition instruction writes `target`.
+    pub fn writes_register(self, target: RegisterWriteTargetV3) -> Result<bool> {
+        let mut index = 0_usize;
+        let count = self.operation_count()?;
+        while index < count {
+            if self.instruction(index)?.write_target()? == Some(target) {
+                return Ok(true);
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(false)
     }
 
     fn operation_count(self) -> Result<usize> {
@@ -217,6 +282,433 @@ pub struct RegisterOutput<'a> {
     pub scalars: &'a mut [u64],
     /// Common identities followed by every canonical per-item identity stride.
     pub identities: &'a mut [[u8; 32]],
+}
+
+/// Common-prefix or current-item register address used by the canonical
+/// no-allocation program encoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisterSpaceV3 {
+    /// One register in the fixed common bank.
+    Common,
+    /// One register in the current runtime-item stride.
+    Item,
+}
+
+/// Scalar or identity transition write bank.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisterKindV3 {
+    /// Scalar register bank.
+    Scalar,
+    /// Identity register bank.
+    Identity,
+}
+
+/// One typed logical transition destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegisterWriteTargetV3 {
+    /// Scalar or identity bank.
+    pub kind: RegisterKindV3,
+    /// Common or current-item register space.
+    pub space: RegisterSpaceV3,
+    /// Local register coordinate.
+    pub index: u16,
+}
+
+/// One typed scalar-register operand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScalarRegisterV3 {
+    index: u16,
+    space: RegisterSpaceV3,
+}
+
+impl ScalarRegisterV3 {
+    /// Select one common scalar register.
+    pub const fn common(index: u16) -> Self {
+        Self {
+            index,
+            space: RegisterSpaceV3::Common,
+        }
+    }
+
+    /// Select one scalar in the current runtime-item stride.
+    pub const fn item(index: u16) -> Self {
+        Self {
+            index,
+            space: RegisterSpaceV3::Item,
+        }
+    }
+}
+
+/// One typed identity-register operand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IdentityRegisterV3 {
+    index: u16,
+    space: RegisterSpaceV3,
+}
+
+impl IdentityRegisterV3 {
+    /// Select one common identity register.
+    pub const fn common(index: u16) -> Self {
+        Self {
+            index,
+            space: RegisterSpaceV3::Common,
+        }
+    }
+
+    /// Select one identity in the current runtime-item stride.
+    pub const fn item(index: u16) -> Self {
+        Self {
+            index,
+            space: RegisterSpaceV3::Item,
+        }
+    }
+}
+
+/// One typed canonical V3 instruction.
+///
+/// Constructors expose the VM vocabulary without leaking private numeric
+/// opcode tags into family artifact emitters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InstructionV3 {
+    opcode: u8,
+    spaces: u8,
+    operands: [u16; 4],
+    immediate: u64,
+}
+
+impl InstructionV3 {
+    /// Load one exact immediate constant.
+    pub const fn load_const(destination: ScalarRegisterV3, value: u64) -> Self {
+        Self::one_scalar(OP_LOAD_CONST, destination, value)
+    }
+
+    /// Require two scalars to be equal.
+    pub const fn scalar_eq(left: ScalarRegisterV3, right: ScalarRegisterV3) -> Self {
+        Self::two_scalars(OP_SCALAR_EQ, left, right)
+    }
+
+    /// Require two identities to be equal.
+    pub const fn identity_eq(left: IdentityRegisterV3, right: IdentityRegisterV3) -> Self {
+        Self::two_identities(OP_IDENTITY_EQ, left, right)
+    }
+
+    /// Require two identities to differ.
+    pub const fn identity_ne(left: IdentityRegisterV3, right: IdentityRegisterV3) -> Self {
+        Self::two_identities(OP_IDENTITY_NE, left, right)
+    }
+
+    /// Require the left scalar to be strictly less than the right scalar.
+    pub const fn scalar_lt(left: ScalarRegisterV3, right: ScalarRegisterV3) -> Self {
+        Self::two_scalars(OP_SCALAR_LT, left, right)
+    }
+
+    /// Require the left scalar to be at most the right scalar.
+    pub const fn scalar_le(left: ScalarRegisterV3, right: ScalarRegisterV3) -> Self {
+        Self::two_scalars(OP_SCALAR_LE, left, right)
+    }
+
+    /// Require one scalar to be nonzero.
+    pub const fn nonzero(source: ScalarRegisterV3) -> Self {
+        Self::one_scalar(OP_NONZERO, source, 0)
+    }
+
+    /// Require FOK/IOC/GTC lifecycle admission for one fill.
+    pub const fn lifecycle_accepts(
+        lifecycle: ScalarRegisterV3,
+        maximum: ScalarRegisterV3,
+        fill: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_LIFECYCLE_ACCEPTS, lifecycle, maximum, fill)
+    }
+
+    /// Checked increment into a distinct or aliased destination.
+    pub const fn increment_into(source: ScalarRegisterV3, destination: ScalarRegisterV3) -> Self {
+        Self::two_scalars(OP_INCREMENT_INTO, source, destination)
+    }
+
+    /// Multiply two scalars and require exact division into the destination.
+    pub const fn mul_div_exact(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        denominator: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::four_scalars(OP_MUL_DIV_EXACT, left, right, denominator, destination)
+    }
+
+    /// Multiply two scalars and floor-divide into the destination.
+    pub const fn mul_div_floor(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        denominator: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::four_scalars(OP_MUL_DIV_FLOOR, left, right, denominator, destination)
+    }
+
+    /// Require `left + right <= limit` in widened arithmetic.
+    pub const fn add_le(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        limit: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_ADD_LE, left, right, limit)
+    }
+
+    /// Require `left + right` to fit in `u64`.
+    pub const fn add_fits_u64(left: ScalarRegisterV3, right: ScalarRegisterV3) -> Self {
+        Self::two_scalars(OP_ADD_FITS_U64, left, right)
+    }
+
+    /// Checked subtraction into the destination.
+    pub const fn sub_into(
+        minuend: ScalarRegisterV3,
+        subtrahend: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_SUB_INTO, minuend, subtrahend, destination)
+    }
+
+    /// Copy `if_equal` into the destination exactly when `left == right`.
+    pub const fn select_eq(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        if_equal: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::four_scalars(OP_SELECT_EQ, left, right, if_equal, destination)
+    }
+
+    /// Copy `if_zero` into the destination exactly when `source == 0`.
+    pub const fn select_zero(
+        source: ScalarRegisterV3,
+        if_zero: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_SELECT_ZERO, source, if_zero, destination)
+    }
+
+    /// Checked addition into the destination.
+    pub const fn checked_add_into(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_CHECKED_ADD_INTO, left, right, destination)
+    }
+
+    /// Checked multiplication into the destination.
+    pub const fn checked_mul_into(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_CHECKED_MUL_INTO, left, right, destination)
+    }
+
+    /// Write the minimum of two scalars.
+    pub const fn min_into(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_MIN_INTO, left, right, destination)
+    }
+
+    /// Write the maximum of two scalars.
+    pub const fn max_into(
+        left: ScalarRegisterV3,
+        right: ScalarRegisterV3,
+        destination: ScalarRegisterV3,
+    ) -> Self {
+        Self::three_scalars(OP_MAX_INTO, left, right, destination)
+    }
+
+    /// Copy one scalar.
+    pub const fn copy_scalar(source: ScalarRegisterV3, destination: ScalarRegisterV3) -> Self {
+        Self::two_scalars(OP_COPY_SCALAR, source, destination)
+    }
+
+    /// Copy one identity.
+    pub const fn copy_identity(
+        source: IdentityRegisterV3,
+        destination: IdentityRegisterV3,
+    ) -> Self {
+        Self::two_identities(OP_COPY_IDENTITY, source, destination)
+    }
+
+    const fn one_scalar(opcode: u8, first: ScalarRegisterV3, immediate: u64) -> Self {
+        Self {
+            opcode,
+            spaces: space_bit(first.space, 0),
+            operands: [first.index, 0, 0, 0],
+            immediate,
+        }
+    }
+
+    const fn two_scalars(opcode: u8, first: ScalarRegisterV3, second: ScalarRegisterV3) -> Self {
+        Self {
+            opcode,
+            spaces: space_bit(first.space, 0) | space_bit(second.space, 1),
+            operands: [first.index, second.index, 0, 0],
+            immediate: 0,
+        }
+    }
+
+    const fn three_scalars(
+        opcode: u8,
+        first: ScalarRegisterV3,
+        second: ScalarRegisterV3,
+        third: ScalarRegisterV3,
+    ) -> Self {
+        Self {
+            opcode,
+            spaces: space_bit(first.space, 0)
+                | space_bit(second.space, 1)
+                | space_bit(third.space, 2),
+            operands: [first.index, second.index, third.index, 0],
+            immediate: 0,
+        }
+    }
+
+    const fn four_scalars(
+        opcode: u8,
+        first: ScalarRegisterV3,
+        second: ScalarRegisterV3,
+        third: ScalarRegisterV3,
+        fourth: ScalarRegisterV3,
+    ) -> Self {
+        Self {
+            opcode,
+            spaces: space_bit(first.space, 0)
+                | space_bit(second.space, 1)
+                | space_bit(third.space, 2)
+                | space_bit(fourth.space, 3),
+            operands: [first.index, second.index, third.index, fourth.index],
+            immediate: 0,
+        }
+    }
+
+    const fn two_identities(
+        opcode: u8,
+        first: IdentityRegisterV3,
+        second: IdentityRegisterV3,
+    ) -> Self {
+        Self {
+            opcode,
+            spaces: space_bit(first.space, 0) | space_bit(second.space, 1),
+            operands: [first.index, second.index, 0, 0],
+            immediate: 0,
+        }
+    }
+
+    fn encode_into(self, output: &mut [u8]) -> Result<()> {
+        if output.len() != INSTRUCTION_BYTES {
+            return Err(Error::InvalidLength);
+        }
+        output.fill(0);
+        *output.get_mut(0).ok_or(Error::InvalidLength)? = self.opcode;
+        *output.get_mut(1).ok_or(Error::InvalidLength)? = self.spaces;
+        for (slot, operand) in self.operands.into_iter().enumerate() {
+            let offset = 2_usize
+                .checked_add(slot.checked_mul(2).ok_or(Error::InvalidLength)?)
+                .ok_or(Error::InvalidLength)?;
+            output
+                .get_mut(offset..offset + 2)
+                .ok_or(Error::InvalidLength)?
+                .copy_from_slice(&operand.to_le_bytes());
+        }
+        output
+            .get_mut(16..24)
+            .ok_or(Error::InvalidLength)?
+            .copy_from_slice(&self.immediate.to_le_bytes());
+        Ok(())
+    }
+}
+
+const fn space_bit(space: RegisterSpaceV3, slot: u32) -> u8 {
+    match space {
+        RegisterSpaceV3::Common => 0,
+        RegisterSpaceV3::Item => 1_u8 << slot,
+    }
+}
+
+/// Exact register geometry encoded in a V3 program header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProgramGeometryV3 {
+    /// Common scalar-register count.
+    pub common_scalars: u16,
+    /// Per-item scalar-register stride.
+    pub item_scalar_stride: u16,
+    /// Common identity-register count.
+    pub common_identities: u16,
+    /// Per-item identity-register stride.
+    pub item_identity_stride: u16,
+}
+
+/// Encode one exact program into caller-owned scratch and copy to output only
+/// after hostile decoding accepts the complete result.
+pub fn encode_program_atomic(
+    geometry: ProgramGeometryV3,
+    prelude: &[InstructionV3],
+    item: &[InstructionV3],
+    epilogue: &[InstructionV3],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let operation_count = prelude
+        .len()
+        .checked_add(item.len())
+        .and_then(|value| value.checked_add(epilogue.len()))
+        .ok_or(Error::InvalidLength)?;
+    let expected = operation_count
+        .checked_mul(INSTRUCTION_BYTES)
+        .and_then(|body| HEADER_BYTES.checked_add(body))
+        .ok_or(Error::InvalidLength)?;
+    if operation_count == 0
+        || scratch.len() != expected
+        || output.len() != expected
+        || (geometry.common_scalars == 0
+            && geometry.item_scalar_stride == 0
+            && geometry.common_identities == 0
+            && geometry.item_identity_stride == 0)
+    {
+        return Err(Error::InvalidLength);
+    }
+    let prelude_count = u16::try_from(prelude.len()).map_err(|_| Error::InvalidLength)?;
+    let item_count = u16::try_from(item.len()).map_err(|_| Error::InvalidLength)?;
+    let epilogue_count = u16::try_from(epilogue.len()).map_err(|_| Error::InvalidLength)?;
+    scratch.fill(0);
+    scratch
+        .get_mut(0..4)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&MAGIC);
+    *scratch.get_mut(4).ok_or(Error::InvalidLength)? = VERSION;
+    for (offset, value) in [
+        (6, prelude_count),
+        (8, item_count),
+        (10, epilogue_count),
+        (12, geometry.common_scalars),
+        (14, geometry.item_scalar_stride),
+        (16, geometry.common_identities),
+        (18, geometry.item_identity_stride),
+    ] {
+        scratch
+            .get_mut(offset..offset + 2)
+            .ok_or(Error::InvalidLength)?
+            .copy_from_slice(&value.to_le_bytes());
+    }
+    let mut cursor = HEADER_BYTES;
+    for instruction in prelude.iter().chain(item).chain(epilogue).copied() {
+        let end = cursor
+            .checked_add(INSTRUCTION_BYTES)
+            .ok_or(Error::InvalidLength)?;
+        instruction.encode_into(scratch.get_mut(cursor..end).ok_or(Error::InvalidLength)?)?;
+        cursor = end;
+    }
+    ProgramV3::decode(scratch)?;
+    output.copy_from_slice(scratch);
+    Ok(())
 }
 
 /// Execute a V3 fold atomically for one authenticated Product tail count.
@@ -459,6 +951,29 @@ impl Instruction {
             }
             _ => Err(Error::UnknownOpcode),
         }
+    }
+
+    fn write_target(self) -> Result<Option<RegisterWriteTargetV3>> {
+        let (kind, slot) = match self.opcode {
+            OP_LOAD_CONST => (RegisterKindV3::Scalar, 0),
+            OP_INCREMENT_INTO | OP_COPY_SCALAR => (RegisterKindV3::Scalar, 1),
+            OP_MUL_DIV_EXACT | OP_MUL_DIV_FLOOR | OP_SELECT_EQ => (RegisterKindV3::Scalar, 3),
+            OP_SUB_INTO | OP_SELECT_ZERO | OP_CHECKED_ADD_INTO | OP_CHECKED_MUL_INTO
+            | OP_MIN_INTO | OP_MAX_INTO => (RegisterKindV3::Scalar, 2),
+            OP_COPY_IDENTITY => (RegisterKindV3::Identity, 1),
+            OP_SCALAR_EQ | OP_IDENTITY_EQ | OP_IDENTITY_NE | OP_SCALAR_LT | OP_SCALAR_LE
+            | OP_NONZERO | OP_LIFECYCLE_ACCEPTS | OP_ADD_LE | OP_ADD_FITS_U64 => return Ok(None),
+            _ => return Err(Error::UnknownOpcode),
+        };
+        Ok(Some(RegisterWriteTargetV3 {
+            kind,
+            space: if self.space(slot)? {
+                RegisterSpaceV3::Item
+            } else {
+                RegisterSpaceV3::Common
+            },
+            index: self.operand(slot)?,
+        }))
     }
 
     fn space(self, slot: usize) -> Result<bool> {
@@ -706,6 +1221,62 @@ mod tests {
         output
     }
 
+    /// `writes_any_register` must accept exactly the target sets whose members
+    /// `writes_register` accepts, whichever position the matching member holds.
+    #[test]
+    fn batch_write_query_agrees_with_the_single_target_query() {
+        let bytes = program();
+        let decoded = ProgramV3::decode(&bytes).expect("V3 program");
+        let universe = [
+            RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Item,
+                index: 0,
+            },
+            RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: 1,
+            },
+            RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: 0,
+            },
+            RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Identity,
+                space: RegisterSpaceV3::Common,
+                index: 0,
+            },
+        ];
+        // The program writes exactly one register - the common scalar 0, from
+        // both `load_const` and `checked_add_into` - and it sits third, so the
+        // windows below cover a hit at the head, in the middle, at the tail,
+        // and no hit at all. The truth vector is stated, not derived from the
+        // predicate under test.
+        assert_eq!(
+            universe
+                .iter()
+                .map(|target| decoded.writes_register(*target).expect("single"))
+                .collect::<Vec<_>>(),
+            vec![false, false, true, false]
+        );
+        for length in 0..=universe.len() {
+            for start in 0..=universe.len() - length {
+                let window = universe.get(start..start + length).expect("window");
+                let expected = window
+                    .iter()
+                    .any(|target| decoded.writes_register(*target).expect("single"));
+                assert_eq!(
+                    decoded.writes_any_register(window).expect("batch"),
+                    expected,
+                    "window {start}..{}",
+                    start + length
+                );
+            }
+        }
+    }
+
     #[test]
     fn canonical_fold_accumulates_two_items() {
         let bytes = program();
@@ -814,5 +1385,105 @@ mod tests {
             ProgramV3::decode(&item_outside_body),
             Err(Error::NonCanonicalInstruction)
         );
+    }
+
+    #[test]
+    fn typed_encoder_round_trips_and_preserves_output_on_late_refusal() {
+        let s0 = ScalarRegisterV3::common(0);
+        let s1 = ScalarRegisterV3::common(1);
+        let i0 = IdentityRegisterV3::common(0);
+        let i1 = IdentityRegisterV3::common(1);
+        let prelude = [
+            InstructionV3::load_const(s0, 7),
+            InstructionV3::identity_eq(i0, i1),
+        ];
+        let epilogue = [InstructionV3::scalar_eq(s0, s1)];
+        let width = HEADER_BYTES + 3 * INSTRUCTION_BYTES;
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0x55_u8; width];
+        encode_program_atomic(
+            ProgramGeometryV3 {
+                common_scalars: 2,
+                item_scalar_stride: 0,
+                common_identities: 2,
+                item_identity_stride: 0,
+            },
+            &prelude,
+            &[],
+            &epilogue,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("typed program");
+        let program = ProgramV3::decode(&output).expect("round trip");
+        assert_eq!(
+            program.writes_register(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: 0,
+            }),
+            Ok(true)
+        );
+        assert_eq!(
+            program.writes_register(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: 1,
+            }),
+            Ok(false)
+        );
+        assert_eq!(
+            program.writes_register(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Identity,
+                space: RegisterSpaceV3::Common,
+                index: 0,
+            }),
+            Ok(false)
+        );
+        let mut scalar_scratch = [0_u64; 2];
+        let mut scalar_output = [99_u64; 2];
+        execute_fold_atomic(
+            program,
+            0,
+            RegisterInput {
+                scalars: &[0, 7],
+                identities: &[[3; 32], [3; 32]],
+            },
+            RegisterOutput {
+                scalars: &mut scalar_scratch,
+                identities: &mut [[0; 32]; 2],
+            },
+            RegisterOutput {
+                scalars: &mut scalar_output,
+                identities: &mut [[0; 32]; 2],
+            },
+        )
+        .expect("encoded semantics execute");
+        assert_eq!(scalar_output, [7, 7]);
+
+        let hostile = [InstructionV3::copy_scalar(
+            ScalarRegisterV3::item(0),
+            ScalarRegisterV3::common(0),
+        )];
+        let mut scratch = vec![0_u8; HEADER_BYTES + INSTRUCTION_BYTES];
+        let mut output = vec![0x77_u8; HEADER_BYTES + INSTRUCTION_BYTES];
+        let before = output.clone();
+        assert_eq!(
+            encode_program_atomic(
+                ProgramGeometryV3 {
+                    common_scalars: 1,
+                    item_scalar_stride: 1,
+                    common_identities: 0,
+                    item_identity_stride: 0,
+                },
+                &hostile,
+                &[],
+                &[],
+                &mut scratch,
+                &mut output,
+            ),
+            Err(Error::NonCanonicalInstruction)
+        );
+        assert_eq!(output, before);
     }
 }

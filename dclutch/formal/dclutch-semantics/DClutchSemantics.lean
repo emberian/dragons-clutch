@@ -23,10 +23,15 @@ import DClutchSemantics.ExecutionRelease
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 import DClutchSemantics.SourceMaterialV2Abi
+import DClutchSemantics.SourceRecoveryPolicyV2Abi
+import DClutchSemantics.SourceResolutionStateV2Abi
+import DClutchSemantics.SourceResolutionTerminalV2Abi
 import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
+import DClutchSemantics.GeneralV5Assurance
 import DClutchSemantics.GeneralControllerAbi
 import DClutchSemantics.GeneralConfigAbi
+import DClutchSemantics.GeneralConfigV3Abi
 import DClutchSemantics.ProductPayoff
 import DClutchSemantics.ProductPayoffExamples
 import DClutchSemantics.ProductPayoffAbi
@@ -36,12 +41,27 @@ import DClutchSemantics.ClaimsRepresentationExamples
 import DClutchSemantics.DealerLiquidity
 import DClutchSemantics.DealerLiquidityExamples
 import DClutchSemantics.DealerScenarioCollateral
+import DClutchSemantics.DealerScenarioSolvency
 import DClutchSemantics.DealerTradingProfile
 import DClutchSemantics.Series
 import DClutchSemantics.SeriesExamples
 import DClutchSemantics.MarketCore
 import DClutchSemantics.MarketCoreExamples
+import DClutchSemantics.MarketRetirementV1Abi
 import DClutchSemantics.CapabilityProgramV3Abi
+import DClutchSemantics.CapabilityProgramV4Abi
+import DClutchSemantics.RequestProfileAbi
+import DClutchSemantics.RequestProfileV4Abi
+import DClutchSemantics.StateLifecyclePolicyV5Abi
+import DClutchSemantics.AccountProfileV2Profile13
+import DClutchSemantics.AccountProfileV2Profile14
+import DClutchSemantics.RepresentationCompositionV3Abi
+import DClutchSemantics.ProductRepresentationExposureV3Abi
+import DClutchSemantics.EffectProgramV4Abi
+import DClutchSemantics.RationalCrossDomainV3
+import DClutchSemantics.StructuredV2
+import DClutchSemantics.StructuredV2Abi
+import DClutchSemantics.StructuredV2Examples
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.
