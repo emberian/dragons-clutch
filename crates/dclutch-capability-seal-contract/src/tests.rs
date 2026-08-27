@@ -300,3 +300,113 @@ fn the_seed_projection_is_the_four_key_coordinates_under_one_domain() {
         assert!(seed.len() <= 32);
     }
 }
+
+fn body_for(seal: SealedDescriptorClosureV1, role: SealedRoleV1) -> Vec<u8> {
+    let row = seal.row(role).expect("row");
+    vec![
+        row.role().tag().to_le_bytes()[0];
+        usize::try_from(row.exact_data_length()).expect("row width")
+    ]
+}
+
+fn token<'a>(
+    seal: SealedDescriptorClosureV1,
+    role: SealedRoleV1,
+    body: &'a [u8],
+) -> SealedArtifactV1<'a> {
+    let row = seal.row(role).expect("row");
+    seal.authenticate_artifact(role, row.schema(), row.content_digest(), body)
+        .expect("token")
+}
+
+#[test]
+fn a_join_cannot_be_assembled_out_of_two_seals() {
+    let first_bytes = canonical();
+    let first = SealedDescriptorClosureV1::decode(&first_bytes).expect("decode");
+
+    // A second, entirely legitimate seal for a different descriptor closure.
+    let other_key =
+        CapabilitySealKeyV1::new(id(0x11), id(0x88), 7, id(0x33)).expect("second seal key");
+    let mut other_rows = rows();
+    if let Some(row) = other_rows.get_mut(SealedRoleV1::Descriptor.ordinal()) {
+        *row = SealedRecordRowV1::new(
+            SealedRoleV1::Descriptor,
+            64,
+            id(0x11),
+            id(0x88),
+            id(0x61),
+            id(0x71),
+        )
+        .expect("descriptor row");
+    }
+    let mut other_bytes = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
+    SealedDescriptorClosureV1::encode(other_key, other_rows, &mut other_bytes)
+        .expect("second seal");
+    let second = SealedDescriptorClosureV1::decode(&other_bytes).expect("decode");
+
+    let policy_body = body_for(first, SealedRoleV1::LifecyclePolicy);
+    let profile_body = body_for(second, SealedRoleV1::AccountProfile);
+    let policy = token(first, SealedRoleV1::LifecyclePolicy, &policy_body);
+    let foreign_profile = token(second, SealedRoleV1::AccountProfile, &profile_body);
+
+    assert_eq!(
+        first
+            .authenticate_profile_join(policy, foreign_profile)
+            .map(|_| ()),
+        Err(Error::DescriptorMismatch)
+    );
+
+    let own_profile_body = body_for(first, SealedRoleV1::AccountProfile);
+    let own_profile = token(first, SealedRoleV1::AccountProfile, &own_profile_body);
+    first
+        .authenticate_profile_join(policy, own_profile)
+        .expect("own join");
+    assert_eq!(
+        first
+            .authenticate_profile_join(own_profile, policy)
+            .map(|_| ()),
+        Err(Error::TokenRoleMismatch)
+    );
+}
+
+#[test]
+fn the_ownership_verdict_covers_only_its_four_artifacts_and_its_own_action() {
+    let bytes = canonical();
+    let seal = SealedDescriptorClosureV1::decode(&bytes).expect("decode");
+    let profile_body = body_for(seal, SealedRoleV1::AccountProfile);
+    let policy_body = body_for(seal, SealedRoleV1::LifecyclePolicy);
+    let request_body = body_for(seal, SealedRoleV1::RequestProfile);
+    let transition_body = body_for(seal, SealedRoleV1::TransitionProgram);
+    let verdict = seal
+        .authenticate_static_ownership(
+            token(seal, SealedRoleV1::AccountProfile, &profile_body),
+            token(seal, SealedRoleV1::LifecyclePolicy, &policy_body),
+            token(seal, SealedRoleV1::RequestProfile, &request_body),
+            token(seal, SealedRoleV1::TransitionProgram, &transition_body),
+        )
+        .expect("ownership verdict");
+    verdict
+        .require(
+            7,
+            &profile_body,
+            &policy_body,
+            &request_body,
+            &transition_body,
+        )
+        .expect("exact coverage");
+    assert_eq!(
+        verdict.require(
+            8,
+            &profile_body,
+            &policy_body,
+            &request_body,
+            &transition_body
+        ),
+        Err(Error::ActionMismatch)
+    );
+    let twin = profile_body.clone();
+    assert_eq!(
+        verdict.require(7, &twin, &policy_body, &request_body, &transition_body),
+        Err(Error::TokenRangeMismatch)
+    );
+}

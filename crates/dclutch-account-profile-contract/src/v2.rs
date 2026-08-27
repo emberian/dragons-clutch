@@ -9,6 +9,7 @@
 
 use core::convert::TryInto;
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
 use dclutch_effect_kernel::v2::AccountPermission;
 
 use super::{
@@ -766,6 +767,28 @@ pub struct AccountProfileV2<'a> {
 impl<'a> AccountProfileV2<'a> {
     /// Hostile-decode and prevalidate one complete V2 profile.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let value = Self::decode_shape(bytes)?;
+        value.validate_body()?;
+        Ok(value)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// Decision 0005 owns the argument: the caller has just recomputed
+    /// `sha256(bytes)` against the identity the authenticated descriptor names
+    /// for the account profile, and the seal that minted `sealed` is addressed
+    /// under the interpreter release now executing. `validate_body` reads
+    /// nothing but these bytes. The header, every counter, the trusted
+    /// environment and the exact expected length are still parsed here from the
+    /// bytes on every path.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::AccountProfile, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        Self::decode_shape(bytes)
+    }
+
+    fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -889,11 +912,18 @@ impl<'a> AccountProfileV2<'a> {
         if bytes.len() != expected {
             return Err(Error::InvalidLength);
         }
-        value.validate_rules()?;
-        value.validate_operations()?;
-        value.validate_fixed_data_predicates()?;
-        value.validate_tail_count_projection()?;
         Ok(value)
+    }
+
+    /// Sweep every rule, operation, predicate and tail-count projection.
+    ///
+    /// This is the expensive half of `decode` and the only half a sealed view
+    /// skips. It is a pure function of `self.bytes`.
+    fn validate_body(self) -> Result<()> {
+        self.validate_rules()?;
+        self.validate_operations()?;
+        self.validate_fixed_data_predicates()?;
+        self.validate_tail_count_projection()
     }
 
     /// Fixed-prefix account count.
@@ -4206,7 +4236,15 @@ mod tests {
             &DISTINCT
         };
         vec![
-            AccountObservationV1::new(&[0x11; 32], &[1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new(
+                &[0x11; 32],
+                &[1; 32],
+                1,
+                &PRODUCT_COUNT,
+                false,
+                false,
+                false,
+            ),
             AccountObservationV1::new(&[0x21; 32], &[1; 32], 2, &[], false, false, false),
             AccountObservationV1::new(&[0x22; 32], &[1; 32], 3, &[], false, false, false),
             AccountObservationV1::new(second, &[1; 32], 4, &[], false, false, false),
@@ -4458,7 +4496,13 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("affine profile");
         let data = affine_data(2);
         let accounts = [AccountObservationV1::new(
-            &[0x11; 32], &[1; 32], 1, &data, false, false, false,
+            &[0x11; 32],
+            &[1; 32],
+            1,
+            &data,
+            false,
+            false,
+            false,
         )];
         let input_scalars = [0_u64; 5];
         let input_identities = [[0x11_u8; 32], [0; 32], [0; 32]];
@@ -4541,7 +4585,15 @@ mod tests {
         let selector = 1_u32.to_le_bytes();
         let page = selected_window_data();
         let accounts = [
-            AccountObservationV1::new(&[0x11; 32], &[1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new(
+                &[0x11; 32],
+                &[1; 32],
+                1,
+                &PRODUCT_COUNT,
+                false,
+                false,
+                false,
+            ),
             AccountObservationV1::new(&[0x12; 32], &[1; 32], 1, &selector, false, false, false),
             AccountObservationV1::new(&[0x13; 32], &[1; 32], 1, &page, false, false, false),
         ];
@@ -4602,7 +4654,15 @@ mod tests {
         let hostile_selector = 2_u32.to_le_bytes();
         let page = selected_window_data();
         let accounts = [
-            AccountObservationV1::new(&[0x11; 32], &[1; 32], 1, &PRODUCT_COUNT, false, false, false),
+            AccountObservationV1::new(
+                &[0x11; 32],
+                &[1; 32],
+                1,
+                &PRODUCT_COUNT,
+                false,
+                false,
+                false,
+            ),
             AccountObservationV1::new(
                 &[0x12; 32],
                 &[1; 32],

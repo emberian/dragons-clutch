@@ -1519,6 +1519,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 name = "dclutch-account-profile-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-seal-contract",
  "dclutch-effect-kernel",
  "dclutch-transition-vm",
 ]
@@ -1904,6 +1905,9 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-effect-sbf"
@@ -2569,6 +2573,7 @@ dependencies = [
 name = "dclutch-request-profile-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-seal-contract",
  "solana-ed25519-program",
 ]
 
@@ -2786,6 +2791,9 @@ dependencies = [
 [[package]]
 name = "dclutch-transition-vm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-versioned-message-operator"

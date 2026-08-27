@@ -9,6 +9,8 @@
 
 use core::convert::TryInto;
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
+
 /// Canonical V3 transition magic.
 pub const MAGIC: [u8; 4] = *b"DCTV";
 /// Finalized-record schema label for runtime-tail TransitionVM programs.
@@ -100,6 +102,25 @@ pub struct ProgramV3<'a> {
 impl<'a> ProgramV3<'a> {
     /// Hostile-decode and completely prevalidate one V3 fold program.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let value = Self::decode_shape(bytes)?;
+        value.validate_body()?;
+        Ok(value)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// Decision 0005 owns the argument. The header, every register width and
+    /// the exact expected length are read here from these bytes on both paths;
+    /// only the per-instruction sweep, a pure function of the same bytes, is
+    /// taken from the seal.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::TransitionProgram, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        Self::decode_shape(bytes)
+    }
+
+    fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -144,18 +165,26 @@ impl<'a> ProgramV3<'a> {
         if bytes.len() != expected {
             return Err(Error::InvalidLength);
         }
-        let prelude_end = usize::from(value.prelude_ops);
+        Ok(value)
+    }
+
+    /// Validate every instruction of this program.
+    ///
+    /// The expensive half of `decode`, and the only half a sealed view skips.
+    fn validate_body(self) -> Result<()> {
+        let operation_count = self.operation_count()?;
+        let prelude_end = usize::from(self.prelude_ops);
         let item_end = prelude_end
-            .checked_add(usize::from(value.item_ops))
+            .checked_add(usize::from(self.item_ops))
             .ok_or(Error::InvalidLength)?;
         let mut index = 0_usize;
         while index < operation_count {
-            let instruction = value.instruction(index)?;
+            let instruction = self.instruction(index)?;
             let item_body = index >= prelude_end && index < item_end;
-            instruction.validate(value, item_body)?;
+            instruction.validate(self, item_body)?;
             index = index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        Ok(value)
+        Ok(())
     }
 
     /// Common scalar-bank width.

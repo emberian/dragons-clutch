@@ -10,6 +10,9 @@ description = "Total no-alloc request-byte projector for data-driven Trading"
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
+
 [dev-dependencies]
 solana-ed25519-program = "=3.0.0"
 

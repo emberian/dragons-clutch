@@ -9,6 +9,8 @@
 
 use core::convert::TryInto;
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
+
 use super::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionRegistersV1, ProjectionTargetV1,
     RequestProfileV1, project_atomic,
@@ -273,6 +275,23 @@ impl<'a> RequestProfileV4<'a> {
 
     /// Hostile-decode and prevalidate one complete V4 artifact.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        Self::decode_inner(bytes, true)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// See Decision 0005. The wrapper header, the row geometry and its
+    /// `validate_geometry` join are read here from these bytes on both paths;
+    /// only the embedded V1 sweep and the row-operation sweep come from the
+    /// seal.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::RequestProfile, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        Self::decode_inner(bytes, false)
+    }
+
+    fn decode_inner(bytes: &'a [u8], full: bool) -> Result<Self> {
         if bytes.len() < REQUEST_PROFILE_V4_HEADER_BYTES
             || bytes.len() > REQUEST_PROFILE_V4_MAX_BYTES
             || bytes.get(REQUEST_PROFILE_V4_MAGIC_OFFSET..REQUEST_PROFILE_V4_SCHEMA_VERSION_OFFSET)
@@ -298,12 +317,16 @@ impl<'a> RequestProfileV4<'a> {
         if row_operation_count == 0 || bytes.len() != expected {
             return Err(Error::InvalidLength);
         }
-        let embedded = RequestProfileV1::decode(
-            bytes
-                .get(REQUEST_PROFILE_V4_HEADER_BYTES..operation_start)
-                .ok_or(Error::InvalidLength)?,
-        )
-        .map_err(|_| Error::InvalidEmbeddedProfile)?;
+        let embedded_bytes_slice = bytes
+            .get(REQUEST_PROFILE_V4_HEADER_BYTES..operation_start)
+            .ok_or(Error::InvalidLength)?;
+        let embedded = RequestProfileV1::decode_shape(embedded_bytes_slice)
+            .map_err(|_| Error::InvalidEmbeddedProfile)?;
+        if full {
+            embedded
+                .validate_body()
+                .map_err(|_| Error::InvalidEmbeddedProfile)?;
+        }
         let geometry = RowProgramGeometryV4 {
             expected_row_count: read_u32(bytes, EXPECTED_ROW_COUNT_OFFSET)?,
             row_bytes: read_u32(bytes, ROW_BYTES_OFFSET)?,
@@ -324,7 +347,9 @@ impl<'a> RequestProfileV4<'a> {
             bytes,
             operation_start,
         };
-        profile.validate_operations()?;
+        if full {
+            profile.validate_operations()?;
+        }
         Ok(profile)
     }
 

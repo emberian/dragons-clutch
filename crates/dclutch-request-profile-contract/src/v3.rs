@@ -6,6 +6,8 @@
 //! executor must additionally prove that exactly one selected child route
 //! borrows the complete suffix. This contract never interprets child payloads.
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
+
 use super::{ProjectionRegistersV1, ProjectionTargetV1, RequestProfileV1, project_atomic};
 
 /// RequestProfile V3 magic.
@@ -144,6 +146,22 @@ impl<'a> RequestProfileV3<'a> {
 
     /// Hostile-decode the exact wrapper, policy, and embedded V1 profile.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        Self::decode_inner(bytes, true)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// See Decision 0005. Only the embedded V1 operation sweep is taken from
+    /// the seal; the wrapper header and the borrowed-witness policy are read
+    /// and validated here from these bytes on both paths.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::RequestProfile, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        Self::decode_inner(bytes, false)
+    }
+
+    fn decode_inner(bytes: &'a [u8], full: bool) -> Result<Self> {
         if bytes.len() < REQUEST_PROFILE_V3_HEADER_BYTES
             || bytes.get(..8) != Some(REQUEST_PROFILE_V3_MAGIC.as_slice())
             || read_u16(bytes, 8)? != REQUEST_PROFILE_V3_SCHEMA_VERSION
@@ -170,12 +188,16 @@ impl<'a> RequestProfileV3<'a> {
             child_receipt_bytes: read_u32(bytes, CHILD_RECEIPT_BYTES_OFFSET)?,
         };
         policy.validate()?;
-        let request = RequestProfileV1::decode(
-            bytes
-                .get(REQUEST_PROFILE_V3_HEADER_BYTES..)
-                .ok_or(Error::InvalidLength)?,
-        )
-        .map_err(|_| Error::InvalidEmbeddedProfile)?;
+        let embedded = bytes
+            .get(REQUEST_PROFILE_V3_HEADER_BYTES..)
+            .ok_or(Error::InvalidLength)?;
+        let request =
+            RequestProfileV1::decode_shape(embedded).map_err(|_| Error::InvalidEmbeddedProfile)?;
+        if full {
+            request
+                .validate_body()
+                .map_err(|_| Error::InvalidEmbeddedProfile)?;
+        }
         Ok(Self {
             request,
             policy,

@@ -586,6 +586,52 @@ impl SealedDescriptorClosureV1 {
         Ok(())
     }
 
+    /// Mint the invocation-scoped token for this seal's policy/profile join.
+    pub fn authenticate_profile_join<'a>(
+        self,
+        policy: SealedArtifactV1<'a>,
+        profile: SealedArtifactV1<'a>,
+    ) -> Result<SealedProfileJoinV1<'a>> {
+        self.require_own_token(policy, SealedRoleV1::LifecyclePolicy)?;
+        self.require_own_token(profile, SealedRoleV1::AccountProfile)?;
+        Ok(SealedProfileJoinV1 {
+            policy: policy.bytes,
+            profile: profile.bytes,
+        })
+    }
+
+    /// Mint the invocation-scoped token for this seal's ownership conjunction.
+    pub fn authenticate_static_ownership<'a>(
+        self,
+        profile: SealedArtifactV1<'a>,
+        policy: SealedArtifactV1<'a>,
+        request: SealedArtifactV1<'a>,
+        transition: SealedArtifactV1<'a>,
+    ) -> Result<SealedStaticOwnershipV1<'a>> {
+        self.require_own_token(profile, SealedRoleV1::AccountProfile)?;
+        self.require_own_token(policy, SealedRoleV1::LifecyclePolicy)?;
+        self.require_own_token(request, SealedRoleV1::RequestProfile)?;
+        self.require_own_token(transition, SealedRoleV1::TransitionProgram)?;
+        Ok(SealedStaticOwnershipV1 {
+            action: self.key.action,
+            profile: profile.bytes,
+            policy: policy.bytes,
+            request: request.bytes,
+            transition: transition.bytes,
+        })
+    }
+
+    /// Refuse unless `token` is this seal's own token for exactly `role`.
+    fn require_own_token(self, token: SealedArtifactV1<'_>, role: SealedRoleV1) -> Result<()> {
+        if token.role != role {
+            return Err(Error::TokenRoleMismatch);
+        }
+        if token.seal != self.key.descriptor_digest {
+            return Err(Error::DescriptorMismatch);
+        }
+        Ok(())
+    }
+
     /// Mint the invocation-scoped token for one sealed artifact.
     ///
     /// `schema` and `content_digest` must be the identities the *authenticated
@@ -611,7 +657,11 @@ impl SealedDescriptorClosureV1 {
         {
             return Err(Error::RecordWidthMismatch);
         }
-        Ok(SealedArtifactV1 { role, bytes })
+        Ok(SealedArtifactV1 {
+            seal: self.key.descriptor_digest,
+            role,
+            bytes,
+        })
     }
 }
 
@@ -625,11 +675,21 @@ impl SealedDescriptorClosureV1 {
 /// body whose digest pinned it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SealedArtifactV1<'a> {
+    seal: [u8; 32],
     role: SealedRoleV1,
     bytes: &'a [u8],
 }
 
 impl<'a> SealedArtifactV1<'a> {
+    /// The descriptor digest of the seal that minted this token.
+    ///
+    /// Two tokens from two different seals are two verdicts about two different
+    /// closures. Every join below requires its operands to carry the same seal
+    /// identity, so no caller can assemble a join out of halves.
+    pub const fn seal(self) -> [u8; 32] {
+        self.seal
+    }
+
     /// The role this token was minted for.
     pub const fn role(self) -> SealedRoleV1 {
         self.role
@@ -651,6 +711,72 @@ impl<'a> SealedArtifactV1<'a> {
         }
         if !core::ptr::eq(self.bytes.as_ptr(), bytes.as_ptr()) || self.bytes.len() != bytes.len() {
             return Err(Error::TokenRangeMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// Invocation-scoped proof that one policy's join to one account profile holds.
+///
+/// The lifecycle policy's join to the account profile is a fact about a *pair*
+/// of artifacts, so it cannot live in either artifact's own row. It is minted
+/// only from two tokens of one seal, which is what keeps a join proved for one
+/// closure out of a plan over another.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealedProfileJoinV1<'a> {
+    policy: &'a [u8],
+    profile: &'a [u8],
+}
+
+impl<'a> SealedProfileJoinV1<'a> {
+    /// Borrow the exact policy byte range this join was proved for.
+    pub const fn policy(self) -> &'a [u8] {
+        self.policy
+    }
+
+    /// Borrow the exact account-profile byte range this join was proved for.
+    pub const fn profile(self) -> &'a [u8] {
+        self.profile
+    }
+}
+
+/// Invocation-scoped proof of the static register-ownership conjunction.
+///
+/// This one is a fact about four artifacts *and* an action selector, which is
+/// why the action is a seed of the seal rather than a field a caller supplies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SealedStaticOwnershipV1<'a> {
+    action: u32,
+    profile: &'a [u8],
+    policy: &'a [u8],
+    request: &'a [u8],
+    transition: &'a [u8],
+}
+
+impl SealedStaticOwnershipV1<'_> {
+    /// Refuse unless this verdict covers exactly these four artifacts and this
+    /// action.
+    pub fn require(
+        self,
+        action: u32,
+        profile: &[u8],
+        policy: &[u8],
+        request: &[u8],
+        transition: &[u8],
+    ) -> Result<()> {
+        if self.action != action {
+            return Err(Error::ActionMismatch);
+        }
+        for (proved, observed) in [
+            (self.profile, profile),
+            (self.policy, policy),
+            (self.request, request),
+            (self.transition, transition),
+        ] {
+            if !core::ptr::eq(proved.as_ptr(), observed.as_ptr()) || proved.len() != observed.len()
+            {
+                return Err(Error::TokenRangeMismatch);
+            }
         }
         Ok(())
     }

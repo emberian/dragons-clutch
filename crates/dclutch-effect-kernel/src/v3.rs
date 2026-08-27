@@ -523,6 +523,19 @@ impl<'a> ProgramV3<'a> {
 
     /// Hostile-decode and prevalidate one exact V3 program.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let program = Self::decode_shape(bytes)?;
+        program.validate_shape()?;
+        Ok(program)
+    }
+
+    /// Parse only the fixed header and the derived section offsets.
+    ///
+    /// Every counter this view exposes is read here, from these bytes, on every
+    /// path. `decode` runs this and then `validate_shape`; the sealed path runs
+    /// this alone, because `validate_shape` is a pure function of bytes that a
+    /// seal has already pinned by their own digest. Nothing that shapes the
+    /// view is ever taken from a seal.
+    pub(crate) fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -589,6 +602,22 @@ impl<'a> ProgramV3<'a> {
             template_start,
             bytes,
         };
+        Ok(program)
+    }
+
+    /// Sweep every route, receipt dependency and operation of this program.
+    ///
+    /// This is the expensive half of `decode` and the only half a sealed view
+    /// skips. It reads nothing but `self.bytes`, so "it accepted these bytes
+    /// once" and "it accepts these bytes now" are the same proposition.
+    pub(crate) fn validate_shape(self) -> Result<()> {
+        let program = self;
+        let bytes = self.bytes;
+        let route_count = self.route_count;
+        let receipt_dependency_count = self.receipt_dependency_count;
+        let fixed_operations = self.fixed_operations;
+        let item_operations = self.item_operations;
+        let template_start = self.template_start;
         let mut template_bytes = 0_usize;
         let mut dependency_cursor = 0_u16;
         let mut route = 0_u16;
@@ -629,7 +658,7 @@ impl<'a> ProgramV3<'a> {
             program.require_nonoverlap(true, operation, decoded)?;
             operation = operation.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        Ok(program)
+        Ok(())
     }
 
     /// Fixed account-prefix width.

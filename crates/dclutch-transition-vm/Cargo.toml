@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Fixed-memory interpreter for Lean-owned dClutch transition programs"
 
 [dependencies]
+dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
 
 [lints]
 workspace = true

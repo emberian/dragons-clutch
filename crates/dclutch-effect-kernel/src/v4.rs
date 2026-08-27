@@ -8,6 +8,8 @@
 //! common scalar registers own every coordinate. Admission must prove that
 //! every selected scalar is derived and protected by the selected Transition.
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
+
 use super::v3::{
     Error as ErrorV3, ProgramV3, ProjectionV3, ResolvedEffectV3, ResolvedInvocationV3,
     initialize_requests, overlaps, project_effect, representative, resolved_data_range,
@@ -366,6 +368,31 @@ pub struct ProgramV4<'a> {
 impl<'a> ProgramV4<'a> {
     /// Hostile-decode the exact successor program and every embedded join.
     pub fn decode(bytes: &'a [u8]) -> ResultV4<Self> {
+        let value = Self::decode_shape(bytes)?;
+        value.base.validate_shape()?;
+        value.validate_span_table()?;
+        value.validate_range_table()?;
+        Ok(value)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// Decision 0005 owns the argument. In outline: the caller has just
+    /// recomputed `sha256(bytes)` and compared it with the identity the
+    /// authenticated descriptor names for the effect program, and the seal that
+    /// minted `sealed` is addressed under the interpreter release that is
+    /// executing. `decode`'s span table, range table and embedded V3 sweeps read
+    /// nothing but these bytes, so their verdict cannot have changed. The
+    /// header is parsed here on every path, so every counter this view exposes
+    /// still comes from the bytes rather than from the seal.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> ResultV4<Self> {
+        sealed
+            .require(SealedRoleV1::EffectProgram, bytes)
+            .map_err(|_| ErrorV4::Wire)?;
+        Self::decode_shape(bytes)
+    }
+
+    fn decode_shape(bytes: &'a [u8]) -> ResultV4<Self> {
         if bytes.len() < HEADER_BYTES_V4
             || bytes.get(..4) != Some(MAGIC_V4.as_slice())
             || read_u8(bytes, 4)? != VERSION_V4
@@ -402,8 +429,9 @@ impl<'a> ProgramV4<'a> {
         if base_end != bytes.len() {
             return Err(ErrorV4::Wire);
         }
-        let base = ProgramV3::decode(slice(bytes, base_start, base_bytes)?)?;
-        let value = Self {
+        let body = slice(bytes, base_start, base_bytes)?;
+        let base = ProgramV3::decode_shape(body)?;
+        Ok(Self {
             bytes,
             base,
             policy,
@@ -411,10 +439,7 @@ impl<'a> ProgramV4<'a> {
             range_count,
             semantic_prefix_bytes,
             range_start,
-        };
-        value.validate_span_table()?;
-        value.validate_range_table()?;
-        Ok(value)
+        })
     }
 
     /// Borrow the complete canonical successor bytes.
@@ -1334,6 +1359,109 @@ mod tests {
         )
         .expect("successor");
         output
+    }
+
+    /// Build one canonical seal whose effect row names `bytes`.
+    fn seal_for(bytes: &[u8]) -> [u8; dclutch_capability_seal_contract::CAPABILITY_SEAL_BYTES_V1] {
+        use dclutch_capability_seal_contract::{
+            CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, SealedDescriptorClosureV1,
+            SealedRecordRowV1, SealedRoleV1,
+        };
+        let key = CapabilitySealKeyV1::new([0x11; 32], [0x22; 32], 3, [0x33; 32]).expect("key");
+        let width = u32::try_from(bytes.len()).expect("record width");
+        let rows = SealedRoleV1::canonical_order().map(|role| {
+            let tag = u8::try_from(role.tag()).expect("role tag");
+            let (schema, digest) = if role == SealedRoleV1::Descriptor {
+                ([0x11; 32], [0x22; 32])
+            } else {
+                (
+                    [0x40_u8.saturating_add(tag); 32],
+                    [0x50_u8.saturating_add(tag); 32],
+                )
+            };
+            let row_width = if role == SealedRoleV1::EffectProgram {
+                width
+            } else {
+                64
+            };
+            SealedRecordRowV1::new(
+                role,
+                row_width,
+                schema,
+                digest,
+                [0x60_u8.saturating_add(tag); 32],
+                [0x70_u8.saturating_add(tag); 32],
+            )
+            .expect("row")
+        });
+        let mut output = [0_u8; CAPABILITY_SEAL_BYTES_V1];
+        SealedDescriptorClosureV1::encode(key, rows, &mut output).expect("seal");
+        output
+    }
+
+    #[test]
+    fn a_sealed_view_is_the_same_view_and_only_over_the_bytes_it_names() {
+        use dclutch_capability_seal_contract::{SealedDescriptorClosureV1, SealedRoleV1};
+        let bytes = series_successor(BorrowedRangePolicyV4::IdenticalReuseExactCoverage, [1, 2]);
+        let sealed_bytes = seal_for(&bytes);
+        let seal = SealedDescriptorClosureV1::decode(&sealed_bytes).expect("seal");
+        let row = seal.row(SealedRoleV1::EffectProgram).expect("effect row");
+        let token = seal
+            .authenticate_artifact(
+                SealedRoleV1::EffectProgram,
+                row.schema(),
+                row.content_digest(),
+                &bytes,
+            )
+            .expect("token");
+
+        let full = ProgramV4::decode(&bytes).expect("full decode");
+        let sealed = ProgramV4::from_sealed(&bytes, token).expect("sealed decode");
+        assert_eq!(full, sealed);
+
+        // A token minted for one artifact does not construct a view over a
+        // byte-identical artifact at another address.
+        let twin = bytes;
+        assert_eq!(ProgramV4::from_sealed(&twin, token), Err(ErrorV4::Wire));
+
+        // Nor over a different role's bytes.
+        let profile_row = seal.row(SealedRoleV1::AccountProfile).expect("row");
+        let profile_body = [0_u8; 64];
+        let profile_token = seal
+            .authenticate_artifact(
+                SealedRoleV1::AccountProfile,
+                profile_row.schema(),
+                profile_row.content_digest(),
+                &profile_body,
+            )
+            .expect("token");
+        assert_eq!(
+            ProgramV4::from_sealed(&bytes, profile_token),
+            Err(ErrorV4::Wire)
+        );
+    }
+
+    #[test]
+    fn a_sealed_view_still_refuses_bytes_whose_header_does_not_parse() {
+        use dclutch_capability_seal_contract::{SealedDescriptorClosureV1, SealedRoleV1};
+        // The seal is trusted for the operation sweep and nothing else. Every
+        // header field, width and section offset is still read from the bytes,
+        // so a body that is not a V4 program at all refuses even with a token.
+        let mut bytes =
+            series_successor(BorrowedRangePolicyV4::IdenticalReuseExactCoverage, [1, 2]);
+        bytes[0] = 0xff;
+        let sealed_bytes = seal_for(&bytes);
+        let seal = SealedDescriptorClosureV1::decode(&sealed_bytes).expect("seal");
+        let row = seal.row(SealedRoleV1::EffectProgram).expect("effect row");
+        let token = seal
+            .authenticate_artifact(
+                SealedRoleV1::EffectProgram,
+                row.schema(),
+                row.content_digest(),
+                &bytes,
+            )
+            .expect("token");
+        assert_eq!(ProgramV4::from_sealed(&bytes, token), Err(ErrorV4::Wire));
     }
 
     #[test]

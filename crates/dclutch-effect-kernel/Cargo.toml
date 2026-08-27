@@ -6,5 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 description = "Tiny no-alloc interpreter for Lean-owned dClutch Effect IR"
 
+[dependencies]
+dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
+
 [lints]
 workspace = true

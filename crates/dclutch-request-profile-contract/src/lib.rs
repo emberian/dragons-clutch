@@ -12,6 +12,8 @@
 
 use core::convert::TryInto;
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
+
 /// Safe, allocation-free typed RequestProfile V1 artifact encoder.
 pub mod encode;
 /// Descriptor-selected RequestProfile V2 with generic native-signature evidence.
@@ -171,6 +173,25 @@ impl<'a> RequestProfileV1<'a> {
 
     /// Hostile-decode and prevalidate one complete RequestProfile.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        let value = Self::decode_shape(bytes)?;
+        value.validate_body()?;
+        Ok(value)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// Decision 0005 owns the argument. The header, every counter and the exact
+    /// expected width are still read here, from these bytes; only the operation
+    /// sweep -- a pure function of the same bytes, which the caller has just
+    /// re-pinned by their own digest -- is taken from the seal.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::RequestProfile, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        Self::decode_shape(bytes)
+    }
+
+    pub(crate) fn decode_shape(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() < HEADER_BYTES || bytes.len() > MAX_BYTES {
             return Err(Error::InvalidLength);
         }
@@ -221,21 +242,28 @@ impl<'a> RequestProfileV1<'a> {
         if bytes.len() != expected {
             return Err(Error::InvalidLength);
         }
+        Ok(value)
+    }
+
+    /// Sweep every fixed and item operation of this profile.
+    ///
+    /// The expensive half of `decode`, and the only half a sealed view skips.
+    pub(crate) fn validate_body(self) -> Result<()> {
         let mut index = 0_u16;
-        while index < value.fixed_operations {
-            let operation = value.operation(false, index)?;
-            operation.validate(value, false)?;
-            value.require_unique_projection(false, index, operation)?;
+        while index < self.fixed_operations {
+            let operation = self.operation(false, index)?;
+            operation.validate(self, false)?;
+            self.require_unique_projection(false, index, operation)?;
             index = index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
         index = 0;
-        while index < value.item_operations {
-            let operation = value.operation(true, index)?;
-            operation.validate(value, true)?;
-            value.require_unique_projection(true, index, operation)?;
+        while index < self.item_operations {
+            let operation = self.operation(true, index)?;
+            operation.validate(self, true)?;
+            self.require_unique_projection(true, index, operation)?;
             index = index.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        Ok(value)
+        Ok(())
     }
 
     /// Exact fixed request-prefix width.

@@ -8,6 +8,8 @@
 
 use core::convert::TryFrom;
 
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1};
+
 use super::{ProjectionRegistersV1, ProjectionTargetV1, RequestProfileV1, project_atomic};
 
 /// RequestProfile V2 magic.
@@ -236,6 +238,22 @@ impl<'a> RequestProfileV2<'a> {
 
     /// Hostile-decode one exact V2 wrapper, V1 program, and evidence tail.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        Self::decode_inner(bytes, true)
+    }
+
+    /// Construct the same view over bytes a Trading seal has already validated.
+    ///
+    /// See Decision 0005. Only the embedded V1 operation sweep is taken from
+    /// the seal; the wrapper header, the widths and the evidence-tail geometry
+    /// are read here from these bytes on both paths.
+    pub fn from_sealed(bytes: &'a [u8], sealed: SealedArtifactV1<'_>) -> Result<Self> {
+        sealed
+            .require(SealedRoleV1::RequestProfile, bytes)
+            .map_err(|_| Error::InvalidLength)?;
+        Self::decode_inner(bytes, false)
+    }
+
+    fn decode_inner(bytes: &'a [u8], full: bool) -> Result<Self> {
         if bytes.len() < REQUEST_PROFILE_V2_HEADER_BYTES
             || bytes.get(..8) != Some(REQUEST_PROFILE_V2_MAGIC.as_slice())
             || read_u16(bytes, 8)? != REQUEST_PROFILE_V2_SCHEMA_VERSION
@@ -263,12 +281,16 @@ impl<'a> RequestProfileV2<'a> {
         if bytes.len() != expected {
             return Err(Error::InvalidLength);
         }
-        let request = RequestProfileV1::decode(
-            bytes
-                .get(REQUEST_PROFILE_V2_HEADER_BYTES..embedded_end)
-                .ok_or(Error::InvalidLength)?,
-        )
-        .map_err(|_| Error::InvalidEmbeddedProfile)?;
+        let embedded = bytes
+            .get(REQUEST_PROFILE_V2_HEADER_BYTES..embedded_end)
+            .ok_or(Error::InvalidLength)?;
+        let request =
+            RequestProfileV1::decode_shape(embedded).map_err(|_| Error::InvalidEmbeddedProfile)?;
+        if full {
+            request
+                .validate_body()
+                .map_err(|_| Error::InvalidEmbeddedProfile)?;
+        }
         let signatures = NativeSignatureEvidenceProfileV1 {
             count,
             bytes: bytes.get(embedded_end..).ok_or(Error::InvalidLength)?,
