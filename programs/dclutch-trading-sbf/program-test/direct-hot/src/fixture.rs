@@ -102,7 +102,7 @@ use dclutch_rent_contract::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID;
+use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
     hash::{hash, hashv},
@@ -895,7 +895,14 @@ fn realm_record(
     RealmV1::new(RealmV1Input {
         token_program: LEGACY_TOKEN_PROGRAM_ID,
         collateral_mint: key(0xa4).to_bytes(),
-        collateral_adapter_release_id: [0xa5; 32],
+        // Custody selects the collateral adapter by matching this against
+        // `hash(release.to_bytes())` over its own production catalog, and
+        // refuses `Realm` when nothing matches. A placeholder digest here was a
+        // Realm no live Custody route could ever accept, and it was invisible
+        // for as long as nothing reached Custody's body. The legacy exact
+        // transfer profile is the one whose `program_id()` is the
+        // `token_program` this Realm names.
+        collateral_adapter_release_id: hash(&PRODUCTION_ADAPTER_RELEASES[0].to_bytes()).to_bytes(),
         mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
         freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
     })
