@@ -366,6 +366,18 @@ name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-claims-svm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
@@ -391,6 +403,7 @@ dependencies = [
  "base64",
  "bincode",
  "dclutch-capability-contract",
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-market-core-codec",
@@ -504,6 +517,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-rational-representation-v2-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-lifecycle-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-request-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-token-svm",
+]
+
+[[package]]
 name = "dclutch-realm-contract"
 version = "0.1.0"
 
@@ -540,6 +576,10 @@ version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
 ]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-resolution-codec"

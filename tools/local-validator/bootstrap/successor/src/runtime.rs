@@ -471,7 +471,9 @@ fn role_activation_instruction(
     Ok(Instruction {
         program_id: pubkey(&plan.registry.program_id)?,
         accounts,
-        data: RegistryInstructionV1::ActivateRole(role).to_bytes().to_vec(),
+        data: RegistryInstructionV1::ActivateRole(role)
+            .to_bytes()
+            .to_vec(),
     })
 }
 

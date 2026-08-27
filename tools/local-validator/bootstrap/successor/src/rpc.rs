@@ -21,24 +21,37 @@ use crate::{
 
 const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 
-/// Why this campaign does NOT request a larger heap frame.
+/// Heap frame the two founding routes request, and why it now does something.
 ///
-/// `DCLTPCB1` exhausts the program heap entering its third stage. Requesting a
-/// 256 KiB heap frame was tried and **measured to change nothing**: the
-/// transaction carried the instruction, the runtime accepted it, and the route
-/// failed at the same point.
+/// A previous campaign requested 256 KiB here and **measured it to change
+/// nothing**: the transaction carried the instruction and the runtime accepted
+/// it, but `DCLTPCB1` still died out of memory at the same point, because
+/// `RequestHeapFrame` raises the region the runtime *grants* while the stock
+/// `solana-program-entrypoint` allocator is constructed with the compile-time
+/// constant `HEAP_LENGTH = 32 * 1024` and never asks how much it was given.
+/// The request was withdrawn rather than left in place, because an instruction
+/// that only looks like a fix costs compute and moves every measurement.
 ///
-/// The reason is that `RequestHeapFrame` raises the heap region the runtime
-/// grants, while the stock allocator never asks how big it is:
-/// `solana-program-entrypoint` builds its `BumpAllocator` with
-/// `len: HEAP_LENGTH`, and `HEAP_LENGTH` is the compile-time constant
-/// `32 * 1024` (`solana-program-entrypoint-3.1.1/src/lib.rs:39,226`). Every
-/// dClutch program uses that entrypoint, so no transaction-level declaration
-/// can move the bound.
+/// That is no longer the shape of the world. Trading now owns its entrypoint
+/// and its allocator (`programs/dclutch-trading-sbf/src/entrypoint_adapter.rs`),
+/// and `admit_heap_frame_v1` re-derives the grant from the instructions sysvar
+/// the runtime itself serialized, applying agave's own
+/// `sanitize_requested_heap_size`. Exactly two routes declare the extended
+/// profile — `DCLTGMF1` and `DCLTPCB1` — and both now carry the instructions
+/// sysvar in their frame so the adapter can find it. The Hot execution path is
+/// deliberately **not** on that list and keeps the 32 KiB discipline, so this
+/// constant is applied per transaction and never globally.
 ///
-/// This is therefore a **program-side** bound, and it is recorded against
-/// `projected_custody_bootstrap_v1` rather than papered over with an
-/// instruction that only looks like a fix.
+/// Chain-derived: agave's `MAX_HEAP_FRAME_BYTES`. The adapter refuses anything
+/// outside `[32 KiB, 256 KiB]` or not a multiple of 1 KiB, which are the same
+/// bounds `sanitize_requested_heap_size` enforces.
+const FOUNDING_HEAP_FRAME_BYTES: u32 = 256 * 1024;
+
+/// ComputeBudget program instruction discriminant for `RequestHeapFrame(u32)`.
+const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
+
+/// ComputeBudget program instruction discriminant for `SetComputeUnitLimit(u32)`.
+const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT: u8 = 2;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RpcAccount {
@@ -303,7 +316,16 @@ impl Rpc {
         observation: Observation,
         tables: &[ObservedAccount],
     ) -> Result<TransactionEvidence> {
-        self.send_v0_inner(label, instructions, payer, &[], observation, tables, false)
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            &[],
+            observation,
+            tables,
+            false,
+            None,
+        )
     }
 
     pub(crate) fn send_v0_expected_failure(
@@ -314,41 +336,27 @@ impl Rpc {
         observation: Observation,
         tables: &[ObservedAccount],
     ) -> Result<TransactionEvidence> {
-        self.send_v0_inner(label, instructions, payer, &[], observation, tables, true)
-    }
-
-    /// Submit one routed v0 transaction expected to refuse, carrying the exact
-    /// signatures its frame requires.
-    ///
-    /// A hostile case must differ from the honest one in exactly the coordinate
-    /// under test. If it also drops a signature the frame needs, the transaction
-    /// never reaches the chain and the refusal proves nothing.
-    pub(crate) fn send_v0_expected_failure_with_signers(
-        &mut self,
-        label: &str,
-        instructions: &[Instruction],
-        payer: &Keypair,
-        additional_signers: &[&Keypair],
-        observation: Observation,
-        tables: &[ObservedAccount],
-    ) -> Result<TransactionEvidence> {
         self.send_v0_inner(
             label,
             instructions,
             payer,
-            additional_signers,
+            &[],
             observation,
             tables,
             true,
+            None,
         )
     }
 
-    /// Submit one routed v0 transaction carrying additional exact signers.
+    /// Submit one routed v0 transaction on a runtime-granted extended heap.
     ///
-    /// A routed frame can still require a signature that is not the fee
-    /// payer's: the projected-Custody bootstrap needs the principal supplier to
-    /// sign while remaining non-writable, which the fee payer cannot do.
-    pub(crate) fn send_v0_with_signers(
+    /// Only the two founding routes may use this: `DCLTGMF1` and `DCLTPCB1`
+    /// are the exhaustive list in
+    /// `entrypoint_adapter::declares_extended_heap_profile_v1`, and each
+    /// presents the instructions sysvar in its own frame so the program can
+    /// re-derive the grant. A route not on that list keeps the 32 KiB
+    /// structural discipline and the instruction would be dead weight.
+    pub(crate) fn send_v0_on_founding_heap_with_signers(
         &mut self,
         label: &str,
         instructions: &[Instruction],
@@ -365,6 +373,34 @@ impl Rpc {
             observation,
             tables,
             false,
+            Some(FOUNDING_HEAP_FRAME_BYTES),
+        )
+    }
+
+    /// Submit one routed v0 founding transaction expected to refuse.
+    ///
+    /// Carries the identical ComputeBudget declarations as the honest
+    /// transaction. A hostile case that also withheld the heap frame would
+    /// differ from the honest one in two coordinates, and its refusal would
+    /// not be attributable to the one under test.
+    pub(crate) fn send_v0_on_founding_heap_expected_failure_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            additional_signers,
+            observation,
+            tables,
+            true,
+            Some(FOUNDING_HEAP_FRAME_BYTES),
         )
     }
 
@@ -378,9 +414,11 @@ impl Rpc {
         observation: Observation,
         tables: &[ObservedAccount],
         expect_failure: bool,
+        heap_frame_bytes: Option<u32>,
     ) -> Result<TransactionEvidence> {
         let blockhash = self.latest_blockhash()?;
-        let bounded = bounded_instructions(instructions);
+        let bounded = bounded_instructions(instructions, heap_frame_bytes)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
         let plan = dclutch_versioned_message_operator::compile_v0_message(
             payer.pubkey(),
             &bounded,
@@ -462,7 +500,8 @@ impl Rpc {
             }
         }
         let blockhash = self.latest_blockhash()?;
-        let bounded_instructions = bounded_instructions(instructions);
+        let bounded_instructions = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
         let mut signers: Vec<&dyn Signer> = Vec::with_capacity(additional_signers.len() + 1);
         signers.push(payer);
         signers.extend(
@@ -642,18 +681,59 @@ impl Rpc {
     }
 }
 
-fn bounded_instructions(instructions: &[Instruction]) -> Vec<Instruction> {
-    let mut bounded = Vec::with_capacity(instructions.len().saturating_add(1));
+/// Prepend this campaign's ComputeBudget declarations to one instruction list.
+///
+/// Every transaction carries the compute-unit limit. A transaction whose route
+/// declares the extended heap profile additionally carries `RequestHeapFrame`;
+/// see [`FOUNDING_HEAP_FRAME_BYTES`] for why that is no longer inert.
+///
+/// **The prepend is a refusal surface, not a formatting step.** A signature
+/// precompile (ed25519, secp256k1, secp256r1) carries the *instruction index*
+/// of the instruction whose data it verifies, inside its own payload, so
+/// inserting anything ahead of one silently re-points it at a different
+/// instruction. This campaign builds no such transaction today, and this
+/// refusal is what keeps that true: a precompile appearing in a bounded list
+/// is a defect to fix at the call site, never something to prepend past.
+fn bounded_instructions(
+    instructions: &[Instruction],
+    heap_frame_bytes: Option<u32>,
+) -> Result<Vec<Instruction>> {
+    for instruction in instructions {
+        if instruction.program_id == solana_sdk_ids::ed25519_program::ID
+            || instruction.program_id == solana_sdk_ids::secp256k1_program::ID
+            || instruction.program_id == solana_sdk_ids::secp256r1_program::ID
+        {
+            return Err(Error::new(
+                "a signature precompile carries instruction indices in its payload and cannot be prepended past",
+            ));
+        }
+        if instruction.program_id == solana_sdk_ids::compute_budget::ID {
+            return Err(Error::new(
+                "the ComputeBudget declarations are owned by bounded_instructions; a duplicate is a transaction error",
+            ));
+        }
+    }
+    let mut bounded = Vec::with_capacity(instructions.len().saturating_add(2));
     let mut compute_limit_data = Vec::with_capacity(5);
-    compute_limit_data.push(2);
+    compute_limit_data.push(SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT);
     compute_limit_data.extend_from_slice(&LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT.to_le_bytes());
     bounded.push(Instruction {
         program_id: solana_sdk_ids::compute_budget::ID,
         accounts: Vec::new(),
         data: compute_limit_data,
     });
+    if let Some(bytes) = heap_frame_bytes {
+        let mut heap_frame_data = Vec::with_capacity(5);
+        heap_frame_data.push(REQUEST_HEAP_FRAME_DISCRIMINANT);
+        heap_frame_data.extend_from_slice(&bytes.to_le_bytes());
+        bounded.push(Instruction {
+            program_id: solana_sdk_ids::compute_budget::ID,
+            accounts: Vec::new(),
+            data: heap_frame_data,
+        });
+    }
     bounded.extend_from_slice(instructions);
-    bounded
+    Ok(bounded)
 }
 
 fn parse_optional_account(value: &Value) -> Result<Option<RpcAccount>> {

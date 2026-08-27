@@ -5,20 +5,37 @@ use dclutch_capability_contract::{
     ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1,
     FundingStateV1, FundingStatus,
 };
+use dclutch_claims_svm::{
+    founding_v5::{
+        ClaimsFoundingAggregateSeedsV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
+    },
+    liability_basis_state_v2::{
+        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+        liability_basis_vector_width_v2,
+    },
+    protocol_position_v2::{
+        PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionSeedsV2,
+        ProtocolPositionSeedsV2,
+    },
+};
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
-    CompartmentV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
+    CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1,
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateV1, SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
 };
 use dclutch_market_core_codec::{
-    Action, CoreState, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
-    MarketCoreStateSeedsV2, MarketIdentity, Phase, ProjectFoundReceiptV1, Request,
-    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, generic_founding_funding_list_id_v1,
+    Action, CoreState, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
+    Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, ProjectFoundReceiptV1, Readiness,
+    Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    generic_founding_funding_list_id_v1,
 };
-use dclutch_market_founding_v1_operator::construct_generic_founding_root_selection_v1;
+use dclutch_market_founding_v1_operator::{
+    authenticate_generic_market_founding_artifact_v1, construct_generic_founding_root_selection_v1,
+    construct_generic_market_founding_plan_v1,
+};
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
@@ -42,6 +59,7 @@ use dclutch_product_runtime_v2_operator::{
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
@@ -502,6 +520,7 @@ pub(crate) fn execute_found_market(
         product_id,
         mint,
         collateral_wallet,
+        market,
         payer,
         transactions,
         &mut accounts,
@@ -1091,11 +1110,18 @@ const FOUNDING_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/local-campaign/founding-cont
 const PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1: [u8; 8] = *b"DCLTPCB1";
 
 /// Exact projected-Custody bootstrap frame width before the funding tail.
-const PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNTS_V1: usize = 78;
+///
+/// 78 physical accounts plus the instructions sysvar the route presents to its
+/// own entrypoint. `entrypoint_adapter::admit_heap_frame_v1` re-derives the
+/// transaction's heap grant from that sysvar and scans the instruction's own
+/// account list to find it, so a frame without it keeps the compile-time
+/// 32 KiB ceiling this route was measured exhausting at stage three.
+const PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNTS_V1: usize = 79;
 
 /// Every coordinate one generic founding determines, derived once.
 struct FoundingCoordinates {
     generation: u64,
+    identity: MarketIdentity,
     market: Pubkey,
     credit: Pubkey,
     hoard_vault: Pubkey,
@@ -1371,6 +1397,7 @@ fn derive_founding_coordinates(
 
     Ok(FoundingCoordinates {
         generation,
+        identity,
         market,
         credit,
         hoard_vault,
@@ -1444,7 +1471,7 @@ fn identity_of(bytes: [u8; 32]) -> Result<Identity> {
     Identity::new(bytes).map_err(|error| Error::new(format!("identity: {error:?}")))
 }
 
-/// Build the exact 78 + funding_count account `DCLTPCB1` frame.
+/// Build the exact 79 + funding_count account `DCLTPCB1` frame.
 ///
 /// Privileges are the outer's own assertion, not a guess: the route refuses a
 /// frame that under-privileges an account rather than failing opaquely inside
@@ -1508,6 +1535,7 @@ fn build_projected_custody_bootstrap_v1(
     );
     accounts.push(AccountMeta::new_readonly(found_raw, false));
     accounts.push(AccountMeta::new_readonly(lock_raw, false));
+    accounts.push(AccountMeta::new_readonly(sysvar::instructions::ID, false));
     accounts.push(AccountMeta::new_readonly(custody, false));
 
     // Initialize: the seven shared projected coordinates, four Initialize
@@ -1629,6 +1657,7 @@ fn execute_projected_custody_bootstrap(
     product: ProductContentId,
     mint: Pubkey,
     collateral_wallet: Pubkey,
+    found31_market: Pubkey,
     payer: &Keypair,
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
@@ -1856,7 +1885,7 @@ fn execute_projected_custody_bootstrap(
         .get_mut(1)
         .ok_or_else(|| Error::new("bootstrap omitted its terminal Lock coordinate"))?
         .pubkey = open_hoard_record.raw;
-    transactions.push(rpc.send_v0_expected_failure_with_signers(
+    transactions.push(rpc.send_v0_on_founding_heap_expected_failure_with_signers(
         "DCLTPCB1 refuses a non-terminal projected-Custody request",
         &[non_terminal],
         payer,
@@ -1878,7 +1907,7 @@ fn execute_projected_custody_bootstrap(
         reordered.accounts.swap(first, second);
         let rollback_recipient = Pubkey::new_unique();
         let before = rpc.required_account(payer.pubkey(), "bootstrap rollback prestate")?;
-        let rolled_back = rpc.send_v0_expected_failure_with_signers(
+        let rolled_back = rpc.send_v0_on_founding_heap_expected_failure_with_signers(
             "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
             &[transfer(&payer.pubkey(), &rollback_recipient, 1), reordered],
             payer,
@@ -1901,9 +1930,9 @@ fn execute_projected_custody_bootstrap(
         refuse_left_nothing(rpc, "the refused reordered bootstrap")?;
     }
 
-    transactions.push(rpc.send_v0_with_signers(
+    transactions.push(rpc.send_v0_on_founding_heap_with_signers(
         "create the projected-Custody founding prestate (DCLTPCB1)",
-        &[bootstrap],
+        std::slice::from_ref(&bootstrap),
         payer,
         &[&beneficiary],
         routing,
@@ -1947,7 +1976,25 @@ fn execute_projected_custody_bootstrap(
     completed.push(
         "executed DCLTPCB1: projected replay at SourceFunded, empty Hoard vault, funded source compartment, and one prepaid FundingStateV1 per capability-manifest entry, in one rollback domain".into(),
     );
-    Ok(())
+
+    // The prestate is complete. Everything from here is one transaction.
+    execute_generic_market_founding(
+        rpc,
+        plan,
+        input,
+        records,
+        &coordinates,
+        product,
+        mint,
+        found31_market,
+        founder.pubkey(),
+        found_record.raw,
+        lock_record.raw,
+        payer,
+        transactions,
+        accounts,
+        completed,
+    )
 }
 
 /// Reacquire and check the exact prestate the founding outer will consume.
@@ -2019,6 +2066,1075 @@ fn authenticate_bootstrap_poststate(
             )));
         }
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// DCLTGMF1 - the atomic generic Market founding.
+//
+// Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core Open, five
+// stages in one rollback domain. The outer carries eight bytes; every economic
+// byte travels in four readonly content-addressed request records, so a
+// substituted request is a substituted address.
+//
+// Nothing below is a runner choice. The Lock and Realize receipts the founding
+// commits to are produced by running the Custody kernel's own transitions over
+// the exact prestate bytes DCLTPCB1 left on chain; the permit intent and the
+// Claims request are the same values Core will rebuild inside the Found stage,
+// assembled from the same authenticated coordinates in the same order.
+// ---------------------------------------------------------------------------
+
+/// Sole top-level generic Market founding instruction.
+///
+/// Owned by `programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`
+/// (`GENERIC_MARKET_FOUNDING_MAGIC_V1`); restated here because a localhost host
+/// utility does not depend on an SBF program crate.
+const GENERIC_MARKET_FOUNDING_MAGIC_V1: [u8; 8] = *b"DCLTGMF1";
+
+/// Exact `DCLTGMF1` frame width before the founding's FundingState tail.
+///
+/// Four readonly requests, the instructions sysvar the heap-frame admission
+/// reads back, then Lock (14), Found (34 fixed + tail + 15 suffix), Realize
+/// (12), Claims (32), and Open (23). The total is
+/// `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1 + funding_count`.
+const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1: usize = 135;
+
+/// Exact normal replay revision the founding's Realize stage commits.
+///
+/// Core pins this rather than accepting it: `build_permit_plan` writes
+/// `normal_replay_revision: 1` into the intent, and Claims requires
+/// `post_custody_revision` to equal it.
+const FOUNDING_NORMAL_REPLAY_REVISION_V1: u64 = 1;
+
+/// Every coordinate the founding outer determines beyond its prestate.
+struct FoundingOuterV1 {
+    found_raw: Vec<u8>,
+    lock_raw: Vec<u8>,
+    realize_raw: Vec<u8>,
+    claims_raw: Vec<u8>,
+    substituted_claims_raw: Vec<u8>,
+    lock_caller: Pubkey,
+    realize_caller: Pubkey,
+    claims_caller: Pubkey,
+    found_authority: Pubkey,
+    open_authority: Pubkey,
+    permit: Pubkey,
+    aggregate: Pubkey,
+    position: Pubkey,
+    admission: Pubkey,
+    aggregate_width: usize,
+    position_width: usize,
+    market_rent: u64,
+    permit_rent: u64,
+    principal: u64,
+}
+
+/// Derive the founding outer's four requests and every PDA it signs through.
+///
+/// The order is forced and acyclic, and each step consumes only values the
+/// previous ones produced:
+///
+/// 1. the Lock receipt, from the Custody kernel applied to the chain's own
+///    `SourceFunded` projection and its normal source replay;
+/// 2. the Realize request, which is the Lock request with exactly its operation
+///    and its two revisions moved - the same derivation the outer's
+///    `authenticate_projected_sequence` evaluates;
+/// 3. the Realize receipt, which needs the candidate Core state the Found stage
+///    will write, so that state is built here and cross-checked below;
+/// 4. the permit intent, whose digest is a caller-PDA seed input for Claims;
+/// 5. the Claims request, which carries that digest.
+#[allow(clippy::too_many_arguments)]
+fn derive_founding_outer_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    records: &MarketRecords,
+    coordinates: &FoundingCoordinates,
+    product: ProductContentId,
+    founder: Pubkey,
+) -> Result<FoundingOuterV1> {
+    let core = pubkey(&plan.core.program_id)?;
+    let claims_program = pubkey(&plan.claims.program_id)?;
+    let trading = pubkey(&plan.trading.program_id)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let release_set = hex32(&plan.release_set_id)?;
+    let principal = coordinates.lock.amount;
+
+    // The prestate is read back from the chain rather than modelled. These are
+    // the exact bytes DCLTPCB1 left, and the kernel transitions below are the
+    // ones Custody itself will run over them.
+    let replay = rpc.required_account(coordinates.projected_replay, "projected Custody replay")?;
+    let projection = ProjectedCustodyStateV1::decode(&replay.data)
+        .map_err(|error| Error::new(format!("projected Custody state: {error:?}")))?;
+    let source_replay_account =
+        rpc.required_account(coordinates.source_replay, "founding source replay")?;
+    let source_replay = CustodyReplayV1::decode(&source_replay_account.data)
+        .map_err(|error| Error::new(format!("founding source replay: {error:?}")))?;
+
+    let found_raw = coordinates
+        .found
+        .encode()
+        .map_err(|error| Error::new(format!("founding artifact encoding: {error:?}")))?;
+    let lock_raw = coordinates
+        .lock
+        .encode()
+        .map_err(|error| Error::new(format!("terminal Lock encoding: {error:?}")))?;
+    let lock_digest: [u8; 32] = Sha256::digest(lock_raw).into();
+
+    let (locked, lock_receipt) = projection
+        .lock_hoard_and_close_source(
+            coordinates.lock,
+            lock_digest,
+            coordinates.source_replay.to_bytes(),
+            source_replay,
+            principal,
+            0,
+            0,
+            principal,
+            coordinates.lock.funding_source_vault_rent_lamports,
+            coordinates.lock.funding_source_state_rent_lamports,
+            coordinates.lock.rent_credit,
+            true,
+        )
+        .map_err(|error| Error::new(format!("projected Lock transition: {error:?}")))?;
+    let lock_receipt_bytes = lock_receipt
+        .encode()
+        .map_err(|error| Error::new(format!("Lock receipt encoding: {error:?}")))?;
+    let lock_receipt_digest: [u8; 32] = Sha256::digest(lock_receipt_bytes).into();
+
+    // Exactly the sequence the outer re-derives before its Realize CPI: the
+    // terminal Lock request with its operation and its two revisions moved.
+    let mut realize = coordinates.lock;
+    realize.operation = ProjectedCustodyOperationV1::RealizeAndClose;
+    realize.expected_revision = coordinates.lock.resulting_revision;
+    realize.resulting_revision = coordinates
+        .lock
+        .resulting_revision
+        .checked_add(1)
+        .ok_or_else(|| Error::new("Realize revision overflow"))?;
+    let realize_raw = realize
+        .encode()
+        .map_err(|error| Error::new(format!("Realize request encoding: {error:?}")))?;
+    let realize_digest: [u8; 32] = Sha256::digest(realize_raw).into();
+
+    // The candidate Core state the Found stage writes. Every field of it is
+    // fixed by the kernel's `found`: the phase and readiness are constants, the
+    // identity is the one this campaign already derived the Market address
+    // from, and the rent beneficiary is the founding generation's credit. It is
+    // cross-checked against the chain in `authenticate_core_state_encoding_v1`
+    // before anything commits to its digest.
+    let market_state = CoreState {
+        phase: Phase::Founding,
+        readiness: Readiness::Prepaid,
+        terminal_winner: 0,
+        identity: coordinates.identity,
+        outstanding_capabilities: 0,
+        rent_beneficiary: identity_of(coordinates.credit.to_bytes())?,
+        terminal_receipt: None,
+    };
+    let market_state_bytes = market_state
+        .encode()
+        .map_err(|error| Error::new(format!("candidate Core state: {error:?}")))?;
+    let market_state_digest: [u8; 32] = Sha256::digest(market_state_bytes).into();
+
+    let realize_receipt = locked
+        .realize_and_close_ref(
+            &realize,
+            realize_digest,
+            &market_state,
+            market_state_digest,
+            principal,
+            coordinates.lock.rent_credit,
+        )
+        .map_err(|error| Error::new(format!("projected Realize transition: {error:?}")))?;
+    if realize_receipt.resulting_revision != coordinates.found.projected_resulting_revision() {
+        return Err(Error::new(
+            "derived Realize receipt did not reach the artifact's projected revision",
+        ));
+    }
+    let realize_receipt_bytes = realize_receipt
+        .encode()
+        .map_err(|error| Error::new(format!("Realize receipt encoding: {error:?}")))?;
+    let realize_receipt_digest: [u8; 32] = Sha256::digest(realize_receipt_bytes).into();
+
+    // The one-shot Core-owned permit. Its bump is an intent field, so the
+    // address must be derived before the intent it commits to.
+    let permit_seeds = SeriesFoundingPermitSeedsV1::new(
+        coordinates.found.release_set(),
+        coordinates.found.market(),
+        coordinates.found.context(),
+    );
+    let (permit, permit_bump) = Pubkey::find_program_address(&permit_seeds.as_slices(), &core);
+
+    // The three Claims-owned accounts the founding allocates. Their addresses
+    // are Core's to re-derive at Found and Claims' to re-derive at FoundingV5;
+    // deriving them here is what lets the runner pre-fund them, which nothing
+    // in the protocol does.
+    let aggregate = Pubkey::find_program_address(
+        &ClaimsFoundingAggregateSeedsV5::new(coordinates.market.to_bytes())
+            .map_err(|error| Error::new(format!("Claims aggregate seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
+            .map_err(|error| Error::new(format!("Claims position seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let admission = Pubkey::find_program_address(
+        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
+            .map_err(|error| Error::new(format!("Claims admission seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+
+    let claim_count = u32::try_from(
+        input
+            .cuts
+            .len()
+            .checked_add(2)
+            .ok_or_else(|| Error::new("outcome width overflow"))?,
+    )
+    .map_err(|_| Error::new("outcome width exceeds the runtime domain"))?;
+    let aggregate_width =
+        liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, claim_count)
+            .map_err(|error| Error::new(format!("aggregate width: {error:?}")))?;
+    let position_width =
+        liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, claim_count)
+            .map_err(|error| Error::new(format!("position width: {error:?}")))?;
+    let aggregate_rent = rpc.minimum_balance(aggregate_width)?;
+    let position_rent = rpc.minimum_balance(position_width)?;
+    let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
+
+    let intent = FoundingIntentV5::new(
+        permit_bump,
+        coordinates.found.release_set(),
+        coordinates.found.market(),
+        identity_of(records.product.digest)?,
+        identity_of(records.source.digest)?,
+        coordinates.found.founder(),
+        coordinates.found.context(),
+        coordinates.found.capability_root(),
+        coordinates.found.projected_replay(),
+        coordinates.found.funding_source(),
+        coordinates.found.hoard(),
+        identity_of(realize_digest)?,
+        identity_of(realize_receipt_digest)?,
+        identity_of(trading.to_bytes())?,
+        identity_of(claims_program.to_bytes())?,
+        identity_of(coordinates.credit.to_bytes())?,
+        coordinates.found.generation(),
+        coordinates.found.quantity(),
+        coordinates.found.basis_scale(),
+        coordinates.found.expiry_slot(),
+        realize_receipt.resulting_revision,
+        FOUNDING_NORMAL_REPLAY_REVISION_V1,
+    )
+    .map_err(|error| Error::new(format!("founding permit intent: {error:?}")))?;
+    let intent_bytes = intent
+        .encode()
+        .map_err(|error| Error::new(format!("founding intent encoding: {error:?}")))?;
+    let intent_digest: [u8; 32] = Sha256::digest(intent_bytes).into();
+
+    // Exactly the request Core compiles inside the Found stage and commits to
+    // in the permit. Every observed lamport figure below is what the runner
+    // will have transferred, and Core reads the same accounts to rebuild it: a
+    // pre-funding that differs by one lamport moves the permit's digest and the
+    // founding refuses at Claims.
+    let claims_input = ClaimsFoundingRequestInputV5 {
+        release_set,
+        market: coordinates.market.to_bytes(),
+        product_record_digest: records.product.digest,
+        product_instance_id: product.to_bytes(),
+        linked_basis_record_digest: records.basis.digest,
+        semantic_basis_id: product_id(&input.liability_basis_id)?.to_bytes(),
+        founder: founder.to_bytes(),
+        founding_intent_digest: intent_digest,
+        aggregate: aggregate.to_bytes(),
+        position: position.to_bytes(),
+        admission: admission.to_bytes(),
+        hoard: coordinates.hoard_vault.to_bytes(),
+        rent_credit: coordinates.credit.to_bytes(),
+        rent_program: rent_program.to_bytes(),
+        claims_program: claims_program.to_bytes(),
+        trading_program: trading.to_bytes(),
+        funding_source: coordinates.source_vault.to_bytes(),
+        custody_replay: coordinates.projected_replay.to_bytes(),
+        custody_request_digest: lock_digest,
+        custody_receipt_digest: lock_receipt_digest,
+        generation: coordinates.generation,
+        claim_count,
+        quantity: coordinates.found.quantity(),
+        basis_scale: coordinates.found.basis_scale(),
+        pre_source_amount: principal,
+        post_source_amount: 0,
+        pre_hoard_amount: 0,
+        post_hoard_amount: principal,
+        pre_custody_revision: 0,
+        post_custody_revision: FOUNDING_NORMAL_REPLAY_REVISION_V1,
+        aggregate_rent_principal: aggregate_rent,
+        position_rent_principal: position_rent,
+        admission_rent_principal: admission_rent,
+        observed_aggregate_lamports: aggregate_rent,
+        observed_position_lamports: position_rent,
+        observed_admission_lamports: admission_rent,
+        pre_aggregate_revision: 0,
+        post_aggregate_revision: 1,
+        pre_position_revision: 0,
+        post_position_revision: 1,
+    };
+    let claims_raw = ClaimsFoundingRequestV5::new(claims_input)
+        .map_err(|error| Error::new(format!("Claims founding request: {error:?}")))?
+        .to_bytes()
+        .to_vec();
+
+    // The hostile request differs in exactly one coordinate: the founder whose
+    // Position the founding mints. Everything else, including the permit intent
+    // digest it carries, is the honest founding's. The outer's cross-request
+    // join is the only thing between a substituted Claims record and a Position
+    // minted to somebody else.
+    let substituted_founder = Keypair::new().pubkey();
+    let substituted_claims_raw = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+        founder: substituted_founder.to_bytes(),
+        ..claims_input
+    })
+    .map_err(|error| Error::new(format!("substituted Claims request: {error:?}")))?
+    .to_bytes()
+    .to_vec();
+
+    let claims_digest: [u8; 32] = Sha256::digest(&claims_raw).into();
+    let claims_caller = Pubkey::find_program_address(
+        &CallerAuthoritySeedsV1::from_bytes(
+            release_set,
+            coordinates.market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            intent_digest,
+            claims_digest,
+        )
+        .map_err(|error| Error::new(format!("Claims caller seeds: {error:?}")))?
+        .as_slices(),
+        &trading,
+    )
+    .0;
+
+    let lock_caller = Pubkey::find_program_address(
+        &ProjectedCustodyCallerSeedsV1::new(coordinates.lock, lock_digest).as_slices(),
+        &trading,
+    )
+    .0;
+    let realize_caller = Pubkey::find_program_address(
+        &ProjectedCustodyCallerSeedsV1::new(realize, realize_digest).as_slices(),
+        &trading,
+    )
+    .0;
+
+    let selected = authenticate_generic_market_founding_artifact_v1(
+        CapabilityContentId::new(Sha256::digest(found_raw).into())
+            .map_err(|error| Error::new(format!("founding artifact identity: {error:?}")))?,
+        &found_raw,
+    )
+    .map_err(|error| Error::new(format!("founding artifact: {error:?}")))?;
+    let stages = construct_generic_market_founding_plan_v1(selected, trading, core)
+        .map_err(|error| Error::new(format!("founding stage plan: {error:?}")))?;
+    if stages.permit != permit {
+        return Err(Error::new(
+            "the founding permit the operator derived is not the one the intent commits to",
+        ));
+    }
+
+    Ok(FoundingOuterV1 {
+        found_raw: found_raw.to_vec(),
+        lock_raw: lock_raw.to_vec(),
+        realize_raw: realize_raw.to_vec(),
+        claims_raw,
+        substituted_claims_raw,
+        lock_caller,
+        realize_caller,
+        claims_caller,
+        found_authority: stages.found_authority,
+        open_authority: stages.open_authority,
+        permit,
+        aggregate,
+        position,
+        admission,
+        aggregate_width,
+        position_width,
+        market_rent: coordinates.found.market_rent(),
+        permit_rent: coordinates.found.permit_rent(),
+        principal,
+    })
+}
+
+/// Prove the candidate Core state is encoded exactly the way the chain writes.
+///
+/// The founding commits to `sha256(CoreState)` two stages before that state
+/// exists, so an encoding that differed from Core's by one byte would produce a
+/// permit the Claims stage refuses and a failure with no visible cause. This
+/// re-encodes the Found31 Market's own decoded state and requires the result to
+/// be the bytes the chain is holding: one independent derivation of a value the
+/// validator produced, not a read-back.
+fn authenticate_core_state_encoding_v1(rpc: &mut Rpc, market: Pubkey) -> Result<()> {
+    let account = rpc.required_account(market, "Found31 Market")?;
+    let state = CoreState::decode(&account.data)
+        .map_err(|error| Error::new(format!("Found31 Market state: {error:?}")))?;
+    let encoded = state
+        .encode()
+        .map_err(|error| Error::new(format!("Found31 Market re-encoding: {error:?}")))?;
+    if encoded.as_slice() != account.data.as_slice() {
+        return Err(Error::new(
+            "CoreState re-encoding did not reproduce the Market bytes the chain holds",
+        ));
+    }
+    Ok(())
+}
+
+/// Build the exact 135 + funding_count account `DCLTGMF1` frame.
+///
+/// Privileges are the outer's own assertion. Exactly eleven distinct keys are
+/// writable — the projected replay, the rent credit, the Hoard vault, the
+/// source vault, the source replay, the Found caller PDA, the Market, the
+/// permit, and the three Claims accounts — and **no account in the frame is a
+/// transaction-level signer**: every stage's signer is a PDA the outer signs
+/// for under `invoke_signed`, so the fee payer must be a key that appears
+/// nowhere in this list.
+///
+/// Writability is unioned per key at the end rather than per slot. Solana
+/// grants privileges per key, so an account that must be writable in one stage
+/// is writable in every stage that names it; the outer downgrades it back to
+/// readonly in each child's metas, which is where the child's own
+/// non-writability requirements are enforced.
+#[allow(clippy::too_many_arguments)]
+fn build_generic_market_founding_v1(
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    outer: &FoundingOuterV1,
+    records: &MarketRecords,
+    requests: [Pubkey; 4],
+    founder: Pubkey,
+    mint: Pubkey,
+) -> Result<Instruction> {
+    let trading = pubkey(&plan.trading.program_id)?;
+    let trading_programdata = pubkey(&plan.trading.programdata_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let core_programdata = pubkey(&plan.core.programdata_id)?;
+    let claims = pubkey(&plan.claims.program_id)?;
+    let claims_programdata = pubkey(&plan.claims.programdata_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let custody_programdata = pubkey(&plan.custody.programdata_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let cache = pubkey(&plan.activation)?;
+    let rent_program = pubkey(&plan.rent_credit.program_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+
+    let mut accounts: Vec<AccountMeta> = Vec::with_capacity(
+        GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1
+            .checked_add(coordinates.funding_states.len())
+            .ok_or_else(|| Error::new("founding frame width overflow"))?,
+    );
+    let push = |key: Pubkey, writable: bool, accounts: &mut Vec<AccountMeta>| {
+        accounts.push(if writable {
+            AccountMeta::new(key, false)
+        } else {
+            AccountMeta::new_readonly(key, false)
+        });
+    };
+
+    // Four readonly content-addressed requests, then the instructions sysvar
+    // the heap-frame admission reads the transaction's grant back out of.
+    for request in requests {
+        push(request, false, &mut accounts);
+    }
+    push(sysvar::instructions::ID, false, &mut accounts);
+
+    // Lock: LockHoardAndCloseSource, 14 accounts.
+    push(outer.lock_caller, false, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.source_vault, true, &mut accounts);
+    push(coordinates.custody_authority, false, &mut accounts);
+    push(mint, false, &mut accounts);
+    push(token_program, false, &mut accounts);
+    push(coordinates.source_replay, true, &mut accounts);
+    push(coordinates.market, false, &mut accounts);
+
+    // Found: Core's own 31-account Found31 frame, then Trading and the clock,
+    // then this founding's FundingState tail, then the fifteen-account suffix.
+    for (index, key) in found_snapshot_keys(
+        plan,
+        outer.found_authority,
+        coordinates.market,
+        coordinates.credit,
+        records,
+    )?
+    .into_iter()
+    .enumerate()
+    {
+        // Index 0 is the payer and the Trading caller PDA in one slot; index 1
+        // is the Market the stage creates.
+        push(key, index < 2, &mut accounts);
+    }
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(sysvar::clock::ID, false, &mut accounts);
+    for funding in &coordinates.funding_states {
+        push(*funding, false, &mut accounts);
+    }
+    push(outer.permit, true, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.source_vault, true, &mut accounts);
+    push(coordinates.source_replay, true, &mut accounts);
+    push(records.basis.raw, false, &mut accounts);
+    push(records.basis.staging, false, &mut accounts);
+    push(claims, false, &mut accounts);
+    push(claims_programdata, false, &mut accounts);
+    push(custody, false, &mut accounts);
+    push(custody_programdata, false, &mut accounts);
+    push(outer.aggregate, true, &mut accounts);
+    push(outer.position, true, &mut accounts);
+    push(outer.admission, true, &mut accounts);
+    push(founder, false, &mut accounts);
+
+    // Realize: RealizeAndClose, 12 accounts.
+    push(outer.realize_caller, false, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.market, false, &mut accounts);
+    push(coordinates.custody_authority, false, &mut accounts);
+    push(mint, false, &mut accounts);
+    push(token_program, false, &mut accounts);
+
+    // Claims FoundingV5, 32 accounts.
+    push(outer.claims_caller, false, &mut accounts);
+    push(outer.permit, true, &mut accounts);
+    push(outer.aggregate, true, &mut accounts);
+    push(outer.position, true, &mut accounts);
+    push(outer.admission, true, &mut accounts);
+    push(coordinates.source_vault, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(records.basis.raw, false, &mut accounts);
+    push(records.basis.staging, false, &mut accounts);
+    push(records.product.raw, false, &mut accounts);
+    push(records.product.staging, false, &mut accounts);
+    push(records.domain.raw, false, &mut accounts);
+    push(records.domain.staging, false, &mut accounts);
+    push(records.portfolio.raw, false, &mut accounts);
+    push(records.portfolio.staging, false, &mut accounts);
+    push(sysvar::rent::ID, false, &mut accounts);
+    push(system_program::ID, false, &mut accounts);
+    push(coordinates.market, false, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(claims, false, &mut accounts);
+    push(claims_programdata, false, &mut accounts);
+    push(core, false, &mut accounts);
+    push(core_programdata, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(custody, false, &mut accounts);
+    push(custody_programdata, false, &mut accounts);
+    push(founder, false, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(rent_program, false, &mut accounts);
+
+    // Core Open, commit-last, 23 accounts.
+    push(outer.open_authority, false, &mut accounts);
+    push(coordinates.market, true, &mut accounts);
+    push(outer.permit, true, &mut accounts);
+    push(coordinates.credit, true, &mut accounts);
+    push(rent_program, false, &mut accounts);
+    push(cache, false, &mut accounts);
+    push(registry, false, &mut accounts);
+    push(trading, false, &mut accounts);
+    push(trading_programdata, false, &mut accounts);
+    push(claims, false, &mut accounts);
+    push(claims_programdata, false, &mut accounts);
+    push(custody, false, &mut accounts);
+    push(custody_programdata, false, &mut accounts);
+    push(core, false, &mut accounts);
+    push(core_programdata, false, &mut accounts);
+    push(coordinates.projected_replay, true, &mut accounts);
+    push(coordinates.hoard_vault, true, &mut accounts);
+    push(coordinates.source_vault, true, &mut accounts);
+    push(outer.aggregate, true, &mut accounts);
+    push(outer.position, true, &mut accounts);
+    push(outer.admission, true, &mut accounts);
+    push(sysvar::clock::ID, false, &mut accounts);
+    push(sysvar::rent::ID, false, &mut accounts);
+
+    let expected = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1
+        .checked_add(coordinates.funding_states.len())
+        .ok_or_else(|| Error::new("founding frame width overflow"))?;
+    if accounts.len() != expected {
+        return Err(Error::new(
+            "assembled founding frame did not match its exact width",
+        ));
+    }
+
+    // One key, one privilege: union writability so a key writable in any stage
+    // is writable everywhere the message names it.
+    let writable: Vec<Pubkey> = accounts
+        .iter()
+        .filter(|meta| meta.is_writable)
+        .map(|meta| meta.pubkey)
+        .collect();
+    for meta in &mut accounts {
+        if writable.contains(&meta.pubkey) {
+            meta.is_writable = true;
+        }
+    }
+    let mut distinct: Vec<Pubkey> = Vec::new();
+    for meta in &accounts {
+        if !distinct.contains(&meta.pubkey) {
+            distinct.push(meta.pubkey);
+        }
+    }
+    let mut distinct_writable: Vec<Pubkey> = Vec::new();
+    for key in &writable {
+        if !distinct_writable.contains(key) {
+            distinct_writable.push(*key);
+        }
+    }
+    // Chain-derived: agave raises MAX_TX_ACCOUNT_LOCKS to 128 under
+    // `increase_tx_account_lock_limit`, which solana-test-validator activates.
+    // The fee payer is the one key that is not in this frame.
+    if distinct
+        .len()
+        .checked_add(1)
+        .is_none_or(|total| total > 128)
+    {
+        return Err(Error::new(
+            "the founding frame exceeds the transaction account-lock limit",
+        ));
+    }
+    if distinct_writable.len() != 11 {
+        return Err(Error::new(format!(
+            "the founding frame declared {} writable keys, not the eleven the outer requires",
+            distinct_writable.len()
+        )));
+    }
+    Ok(Instruction {
+        program_id: trading,
+        accounts,
+        data: GENERIC_MARKET_FOUNDING_MAGIC_V1.to_vec(),
+    })
+}
+
+/// Found the Market atomically on a real validator: `DCLTGMF1`.
+///
+/// Five stages in one rollback domain against the prestate `DCLTPCB1` left.
+/// The Market is created by the Found stage and Opened by the last, so this
+/// single transaction is the whole distance between a projected-Custody
+/// prestate and a live Market with a Claims aggregate, a founder Position, and
+/// a Hoard holding the collateral.
+#[allow(clippy::too_many_arguments)]
+fn execute_generic_market_founding(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    records: &MarketRecords,
+    coordinates: &FoundingCoordinates,
+    product: ProductContentId,
+    mint: Pubkey,
+    found31_market: Pubkey,
+    founder: Pubkey,
+    found_raw_account: Pubkey,
+    lock_raw_account: Pubkey,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+    accounts: &mut BTreeMap<String, AccountEvidence>,
+    completed: &mut Vec<String>,
+) -> Result<()> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let claims_program = pubkey(&plan.claims.program_id)?;
+    let custody = pubkey(&plan.custody.program_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+
+    authenticate_core_state_encoding_v1(rpc, found31_market)?;
+    let outer = derive_founding_outer_v1(rpc, plan, input, records, coordinates, product, founder)?;
+
+    // The founding artifact and the terminal Lock are the records the
+    // bootstrap already published. Requiring the chain's bytes to equal the
+    // ones this derivation consumed is what makes the join below a statement
+    // about the accounts the outer will read, rather than about two independent
+    // encodings that happen to agree.
+    for (label, key, expected) in [
+        ("founding artifact", found_raw_account, &outer.found_raw),
+        ("terminal Lock request", lock_raw_account, &outer.lock_raw),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        if &account.data != expected {
+            return Err(Error::new(format!(
+                "the published {label} record is not the bytes the founding derived"
+            )));
+        }
+    }
+
+    // Nothing in the protocol funds these five. Core allocates the Market and
+    // the permit and Claims allocates its three accounts with `allocate` and
+    // `assign` only, never a transfer, so each must already hold its rent. The
+    // Market and the permit are checked for EXACT equality with their rent
+    // minima, and all three Claims balances are folded byte-exactly into the
+    // permit's committed Claims request, so this transaction is part of the
+    // founding's authenticated prestate and not a convenience.
+    let aggregate_rent = rpc.minimum_balance(outer.aggregate_width)?;
+    let position_rent = rpc.minimum_balance(outer.position_width)?;
+    let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
+    transactions.push(rpc.send(
+        "pre-fund the founding's five program-allocated accounts",
+        &[
+            transfer(&payer.pubkey(), &coordinates.market, outer.market_rent),
+            transfer(&payer.pubkey(), &outer.permit, outer.permit_rent),
+            transfer(&payer.pubkey(), &outer.aggregate, aggregate_rent),
+            transfer(&payer.pubkey(), &outer.position, position_rent),
+            transfer(&payer.pubkey(), &outer.admission, admission_rent),
+        ],
+        payer,
+    )?);
+    authenticate_founding_prefunding_v1(rpc, &outer, coordinates.market)?;
+
+    // The Realize and Claims requests join the founding artifact and terminal
+    // Lock this campaign already published. A substituted request is a
+    // substituted address, so the outer's frame checks catch it.
+    let realize_record = publish_record(
+        rpc,
+        registry,
+        payer,
+        raw_request_schema_v1("projected-custody-realize"),
+        &outer.realize_raw,
+        None,
+        transactions,
+    )?;
+    let claims_record = publish_record(
+        rpc,
+        registry,
+        payer,
+        raw_request_schema_v1("claims-founding-v5"),
+        &outer.claims_raw,
+        None,
+        transactions,
+    )?;
+    let substituted_claims_record = publish_record(
+        rpc,
+        registry,
+        payer,
+        raw_request_schema_v1("claims-founding-v5-substituted-founder"),
+        &outer.substituted_claims_raw,
+        None,
+        transactions,
+    )?;
+
+    let founding = build_generic_market_founding_v1(
+        plan,
+        coordinates,
+        &outer,
+        records,
+        [
+            found_raw_account,
+            lock_raw_account,
+            realize_record.raw,
+            claims_record.raw,
+        ],
+        founder,
+        mint,
+    )?;
+    let (routing, tables) = publish_routing_table(
+        rpc,
+        payer,
+        "DCLTGMF1",
+        std::slice::from_ref(&founding),
+        transactions,
+    )?;
+
+    // Every account the founding creates, in the state it must be in if and
+    // only if the whole five-stage chain committed.
+    let created = [
+        ("founding_market", coordinates.market),
+        ("founding_permit", outer.permit),
+        ("claims_aggregate", outer.aggregate),
+        ("founder_position", outer.position),
+        ("claims_admission", outer.admission),
+    ];
+    let untouched = |rpc: &mut Rpc, label: &str| -> Result<()> {
+        for (name, key) in created {
+            let account = rpc.required_account(key, name)?;
+            if account.owner != system_program::ID || !account.data.is_empty() {
+                return Err(Error::new(format!("{label} allocated the {name} account")));
+            }
+        }
+        let source = rpc.required_account(coordinates.source_vault, "founding source vault")?;
+        let replay = rpc.required_account(coordinates.projected_replay, "projected replay")?;
+        if source.owner != token_program || replay.data.len() != PROJECTED_CUSTODY_STATE_BYTES_V1 {
+            return Err(Error::new(format!(
+                "{label} moved the projected-Custody prestate"
+            )));
+        }
+        Ok(())
+    };
+    untouched(rpc, "the founding prestate")?;
+
+    // The founding-outer hostile case. The substituted Claims request names a
+    // different founder and is otherwise byte-identical, so the Position and
+    // the admission it would mint belong to somebody else. The outer's
+    // cross-request join is the only thing that refuses it, and the refusal has
+    // to roll back Lock, Found, Realize, and Claims together: a chain that
+    // committed the Market and then refused would be worse than one that never
+    // ran.
+    let mut substituted = founding.clone();
+    substituted
+        .accounts
+        .get_mut(3)
+        .ok_or_else(|| Error::new("the founding frame omitted its Claims request"))?
+        .pubkey = substituted_claims_record.raw;
+    let rollback_recipient = Pubkey::new_unique();
+    let before = rpc.required_account(payer.pubkey(), "founding rollback prestate")?;
+    let rolled_back = rpc.send_v0_on_founding_heap_expected_failure_with_signers(
+        "DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back",
+        &[
+            transfer(&payer.pubkey(), &rollback_recipient, 1),
+            substituted,
+        ],
+        payer,
+        &[],
+        routing,
+        &tables,
+    )?;
+    let fee = rolled_back
+        .fee_lamports
+        .ok_or_else(|| Error::new("refused founding omitted its fee"))?;
+    let after = rpc.required_account(payer.pubkey(), "founding rollback poststate")?;
+    if rpc.account(rollback_recipient)?.is_some()
+        || after.lamports.checked_add(fee) != Some(before.lamports)
+    {
+        return Err(Error::new(
+            "refused founding did not roll its whole transaction back to a fee-only debit",
+        ));
+    }
+    transactions.push(rolled_back);
+    untouched(rpc, "the refused substituted-Claims founding")?;
+
+    transactions.push(rpc.send_v0_on_founding_heap_with_signers(
+        "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
+        &[founding],
+        payer,
+        &[],
+        routing,
+        &tables,
+    )?);
+
+    authenticate_open_market_poststate_v1(
+        rpc,
+        coordinates,
+        &outer,
+        core,
+        claims_program,
+        custody,
+        token_program,
+        mint,
+        founder,
+    )?;
+    for (label, key) in [
+        ("founding_market", coordinates.market),
+        ("claims_aggregate", outer.aggregate),
+        ("founder_position", outer.position),
+        ("claims_admission", outer.admission),
+        ("founding_hoard_vault_open", coordinates.hoard_vault),
+        (
+            "founding_normal_custody_replay",
+            coordinates.projected_replay,
+        ),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        accounts.insert(label.into(), account_evidence(key, &account));
+    }
+    completed.push(
+        "pre-funded the five accounts the founding allocates but never funds - the Market, the one-shot Core permit, and the Claims aggregate, founder Position, and admission - to the exact rents the permit's committed Claims request re-derives".into(),
+    );
+    completed.push(
+        "derived the founding's Lock and Realize receipts by running the Custody kernel's own transitions over the exact prestate DCLTPCB1 left on chain, and the permit intent and Claims request Core rebuilds inside the Found stage".into(),
+    );
+    completed.push(
+        "proved DCLTGMF1 refuses a substituted Claims request naming a different founder and rolls Lock, Found, Realize, and Claims back to a fee-only debit".into(),
+    );
+    completed.push(
+        "executed DCLTGMF1: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
+    );
+    Ok(())
+}
+
+/// Require the five program-allocated accounts to hold exactly their rents.
+fn authenticate_founding_prefunding_v1(
+    rpc: &mut Rpc,
+    outer: &FoundingOuterV1,
+    market: Pubkey,
+) -> Result<()> {
+    for (label, key, lamports) in [
+        ("founding Market", market, outer.market_rent),
+        ("founding permit", outer.permit, outer.permit_rent),
+        (
+            "Claims aggregate",
+            outer.aggregate,
+            rpc.minimum_balance(outer.aggregate_width)?,
+        ),
+        (
+            "founder Position",
+            outer.position,
+            rpc.minimum_balance(outer.position_width)?,
+        ),
+        (
+            "Claims admission",
+            outer.admission,
+            rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?,
+        ),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        if account.owner != system_program::ID
+            || !account.data.is_empty()
+            || account.executable
+            || account.lamports != lamports
+        {
+            return Err(Error::new(format!(
+                "{label} prestate was not the exact vacant rent-funded account the founding requires"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Reacquire and check every poststate the Open gate claims.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_open_market_poststate_v1(
+    rpc: &mut Rpc,
+    coordinates: &FoundingCoordinates,
+    outer: &FoundingOuterV1,
+    core: Pubkey,
+    claims_program: Pubkey,
+    custody: Pubkey,
+    token_program: Pubkey,
+    mint: Pubkey,
+    founder: Pubkey,
+) -> Result<()> {
+    let market = rpc.required_account(coordinates.market, "founded Market")?;
+    let state = CoreState::decode(&market.data)
+        .map_err(|error| Error::new(format!("founded Market state: {error:?}")))?;
+    if market.owner != core
+        || market.data.len() != STATE_BYTES
+        || market.executable
+        || state.phase != Phase::Open
+        || state.readiness != Readiness::Consumed
+        || state.identity != coordinates.identity
+        || state.terminal_receipt.is_some()
+        || state.rent_beneficiary.to_bytes() != coordinates.credit.to_bytes()
+    {
+        return Err(Error::new(
+            "the founded Market did not reach the Open phase its founding claims",
+        ));
+    }
+
+    // The one-shot permit is consumed by the commit-last Open stage and its
+    // lamports return to the lifecycle credit. A permit that survived would be
+    // a second founding.
+    let permit = rpc.account(outer.permit)?;
+    if permit.is_some_and(|account| {
+        account.owner != system_program::ID || account.lamports != 0 || !account.data.is_empty()
+    }) {
+        return Err(Error::new(
+            "the founding permit survived the Open stage that must consume it",
+        ));
+    }
+
+    for (label, key, owner, width) in [
+        (
+            "Claims aggregate",
+            outer.aggregate,
+            claims_program,
+            outer.aggregate_width,
+        ),
+        (
+            "founder Position",
+            outer.position,
+            claims_program,
+            outer.position_width,
+        ),
+        (
+            "Claims admission",
+            outer.admission,
+            claims_program,
+            PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+        ),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        if account.owner != owner
+            || account.data.len() != width
+            || account.data.iter().all(|byte| *byte == 0)
+        {
+            return Err(Error::new(format!(
+                "{label} was not allocated, owned, and written by the Claims founding"
+            )));
+        }
+    }
+
+    let hoard = rpc.required_account(coordinates.hoard_vault, "founded Hoard")?;
+    let hoard_state = TokenAccount::parse(&hoard.data)
+        .map_err(|error| Error::new(format!("Hoard vault: {error:?}")))?;
+    if hoard.owner != token_program
+        || hoard_state.mint != mint.to_bytes()
+        || hoard_state.amount != outer.principal
+        || hoard_state.state != AccountState::Initialized
+    {
+        return Err(Error::new(
+            "the Hoard does not hold exactly the founding principal",
+        ));
+    }
+
+    // The source compartment is fully consumed: both accounts closed to the
+    // lifecycle credit, and the projection rewritten in place as the normal
+    // live replay the Market's ordinary Custody route will use.
+    for (label, key) in [
+        ("founding source vault", coordinates.source_vault),
+        ("founding source replay", coordinates.source_replay),
+    ] {
+        if let Some(account) = rpc.account(key)?
+            && (account.owner != system_program::ID
+                || account.lamports != 0
+                || !account.data.is_empty())
+        {
+            return Err(Error::new(format!(
+                "{label} was not closed by the founding Lock stage"
+            )));
+        }
+    }
+    let replay = rpc.required_account(coordinates.projected_replay, "normal Custody replay")?;
+    let normal = CustodyReplayV1::decode(&replay.data)
+        .map_err(|error| Error::new(format!("normal Custody replay: {error:?}")))?;
+    if replay.owner != custody
+        || replay.data.len() != CUSTODY_REPLAY_BYTES_V1
+        || normal.market != coordinates.market.to_bytes()
+        || normal.generation != coordinates.generation
+        || normal.open_vault_count != 1
+        || normal.next_revision != FOUNDING_NORMAL_REPLAY_REVISION_V1
+    {
+        return Err(Error::new(
+            "the projected replay was not realized into the Market's normal Custody replay",
+        ));
+    }
+    let _ = founder;
     Ok(())
 }
 
