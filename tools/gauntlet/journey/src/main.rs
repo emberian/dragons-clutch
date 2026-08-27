@@ -1,9 +1,15 @@
-//! JRNY-1: one campaign that lives a Market's whole life.
+//! JRNY: one campaign that lives a Market's whole life.
 //!
 //! The gauntlet's route census answered "does each route run at all." This
 //! answers a different question: does a Market, founded the way a founder
 //! founds one, survive being USED — distributed, custodied, resolved,
 //! redeemed, retired — with every collateral atom accounted for at every step.
+//!
+//! It reaches: founded, distributed, traded around a ring, resolved through a
+//! real Pyth publication verified by a real Wormhole router, and retiring with
+//! its Source subtree closed. What it does not reach is one door — every Claims
+//! mutation needs a program to sign its own PDA — and the gap register says so
+//! route by route.
 //!
 //! Stage 1 is not a reimplementation of the founding. The tier-1 producer's
 //! own source files are compiled into this binary by `#[path]` and its
