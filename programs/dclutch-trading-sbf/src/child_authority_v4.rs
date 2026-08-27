@@ -62,10 +62,7 @@ pub fn child_caller_authority_v4(
     preflighted: PreflightedCallerBumpV4,
 ) -> Result<(Pubkey, u8), ProgramError> {
     match preflighted {
-        None => Ok(Pubkey::find_program_address(
-            &seeds.as_slices(),
-            program_id,
-        )),
+        None => Ok(Pubkey::find_program_address(&seeds.as_slices(), program_id)),
         Some(bump) => {
             let [domain, release, market, role, context, digest] = seeds.as_slices();
             let bump_seed = [bump];
