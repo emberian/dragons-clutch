@@ -671,32 +671,40 @@ impl ConservationLedgerV1 {
                 ),
             );
         }
-        let mut watched_growth: i128 = 0;
+        // Sum by ADDRESS, not by label. The ledger legitimately watches one
+        // account under several names -- the discovery loop names accounts by
+        // the founding's own evidence keys, and several of those keys point at
+        // one account: the Market's rent beneficiary IS the founding's
+        // lifecycle credit, the Found31 Market is the `market` record, the
+        // normal and projected Custody replays are the same realized account,
+        // and the fee payer is also a credit's refund wallet. Summing per label
+        // counted every change to those FOUR addresses twice, and the first run
+        // that closed accounts and refunded rent turned that into three L7
+        // violations whose residuals were exactly the doubled amounts.
+        //
+        // The payer is then excluded outright rather than subtracted back out:
+        // it appears under two labels here, so subtracting "the payer's label"
+        // removed one copy and left the other.
+        let payer = self.payer.to_string();
+        let mut before_by_address: BTreeMap<&str, u64> = BTreeMap::new();
+        let mut after_by_address: BTreeMap<&str, u64> = BTreeMap::new();
         for (label, after) in &now.accounts {
+            if after.address == payer {
+                continue;
+            }
             let Some(before) = previous.accounts.get(label) else {
                 continue;
             };
-            watched_growth += i128::from(after.lamports) - i128::from(before.lamports);
+            before_by_address.insert(before.address.as_str(), before.lamports);
+            after_by_address.insert(after.address.as_str(), after.lamports);
+        }
+        let mut watched_growth: i128 = 0;
+        for (address, after) in &after_by_address {
+            let before = before_by_address.get(address).copied().unwrap_or(0);
+            watched_growth += i128::from(*after) - i128::from(before);
         }
         let payer_delta = i128::from(now.payer_lamports) - i128::from(previous.payer_lamports);
-        // The payer may itself be a watched account; counting it on both sides
-        // would make the law assert an identity. Subtract it back out.
-        let payer_label_growth: i128 = now
-            .accounts
-            .iter()
-            .filter(|(label, state)| {
-                state.address == self.payer.to_string()
-                    && previous.accounts.contains_key(label.as_str())
-            })
-            .map(|(label, after)| {
-                let before = previous
-                    .accounts
-                    .get(label)
-                    .map(|state| state.lamports)
-                    .unwrap_or(0);
-                i128::from(after.lamports) - i128::from(before)
-            })
-            .sum();
+
         if now.lamports.unwatched_lamports > 0 && now.lamports.unwatched_note.trim().is_empty() {
             return VerdictV1::violated(
                 "L7",
@@ -710,8 +718,7 @@ impl ConservationLedgerV1 {
         let residual = payer_delta
             + i128::from(now.lamports.fees_lamports)
             + watched_growth
-            + i128::from(now.lamports.unwatched_lamports)
-            - payer_label_growth;
+            + i128::from(now.lamports.unwatched_lamports);
         if residual == 0 {
             VerdictV1::holds(
                 "L7",
@@ -720,7 +727,7 @@ impl ConservationLedgerV1 {
                      fees, watched accounts gained {}, and {} went to {}; debit == credit + fee",
                     previous.stage,
                     now.lamports.fees_lamports,
-                    watched_growth - payer_label_growth,
+                    watched_growth,
                     now.lamports.unwatched_lamports,
                     if now.lamports.unwatched_note.is_empty() {
                         "nothing unwatched"
@@ -737,9 +744,7 @@ impl ConservationLedgerV1 {
                      in fees, but watched accounts gained {}; {residual} lamports are unaccounted \
                      for. L1..L6 cannot see this: they are stated about collateral atoms and about \
                      accounts that CLOSE, and nothing closed here.",
-                    previous.stage,
-                    now.lamports.fees_lamports,
-                    watched_growth - payer_label_growth
+                    previous.stage, now.lamports.fees_lamports, watched_growth
                 ),
             )
         }
