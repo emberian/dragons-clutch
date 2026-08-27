@@ -2121,12 +2121,27 @@ pub fn process_hot_execution_v3(
             transition.bytes(),
         )
         .map_err(|_| TradingSbfError::Content)?;
+    // Every register bank the rest of this execution needs is now already on
+    // the heap. The projection rotated through three pairs and kept one; the
+    // preplan arena takes the two it finished with, the interpreted transition
+    // takes the request output once the preplan has copied it, and the replan
+    // takes the preplan's own output once the candidate has consumed it. Under
+    // an allocator whose `dealloc` is a no-op, each of those rentals is a whole
+    // pair of `scalar_count` and `identity_count` banks that is never charged.
     let mut preplan_scratch = LifecyclePreplanScratchV4::new(
         &observations,
         &runtime_accounts,
         scalar_count,
         identity_count,
+        projected_request.spare_scalars,
+        projected_request.spare_identities,
     )?;
+    // The one pair this phase genuinely has to allocate: the preplan's input is
+    // the request output and the arena holds the other two, so nothing dead is
+    // available to rent yet. It is handed to the replan later rather than
+    // dropped.
+    let preplan_output_scalars = vec![0_u64; scalar_count];
+    let preplan_output_identities = vec![[0_u8; 32]; identity_count];
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2144,6 +2159,8 @@ pub fn process_hot_execution_v3(
         &aliases,
         profile_join,
         &mut preplan_scratch,
+        preplan_output_scalars,
+        preplan_output_identities,
     )?;
     hot_cu_checkpoint!("request-lifecycle-preplan");
 
@@ -2173,20 +2190,32 @@ pub fn process_hot_execution_v3(
             identities: &preplanned_lifecycle.identities,
         })?
     } else {
+        // The request-profile banks have been copied into the independently
+        // prepared lifecycle batch, so they are dead here and are moved in as
+        // the fold's scratch. Moving them, rather than dropping them and
+        // cloning the input again, is what keeps the SBF caller frame from
+        // retaining two register-bank owners across this noinline semantic
+        // boundary and keeps the allocator from being asked for a pair it
+        // already handed out.
         execute_interpreted_transition_v3(
             transition,
             tail_count,
             &preplanned_lifecycle.scalars,
             &preplanned_lifecycle.identities,
+            request_output_scalars,
+            request_output_identities,
         )?
     };
     hot_cu_checkpoint!("candidate");
-    // The request-profile banks have been copied into the independently
-    // prepared lifecycle batch.  End their lifetime before the candidate and
-    // Effect phases so the SBF caller frame cannot retain two register-bank
-    // owners across the next noinline semantic boundary.
-    drop(request_output_scalars);
-    drop(request_output_identities);
+    // The preplan's own output banks are dead the moment the candidate has
+    // consumed them, and the replan needs exactly one pair of that width. It
+    // rents these; only `plans` is still read after this point, by the replan
+    // agreement.
+    let PreparedLifecycleBatchV4 {
+        plans: preplanned_plans,
+        scalars: replan_output_scalars,
+        identities: replan_output_identities,
+    } = preplanned_lifecycle;
     let transition_output_scalars = candidate.scalars;
     let transition_output_identities = candidate.identities;
     let admitted_execution_digest = candidate.transcript_digest;
@@ -2225,7 +2254,7 @@ pub fn process_hot_execution_v3(
         &transition_output_scalars,
         &transition_output_identities,
         &observations,
-        &preplanned_lifecycle.plans,
+        &preplanned_plans,
         account_profile,
         &dynamic_spans.widths,
         &aliases,
@@ -2259,9 +2288,11 @@ pub fn process_hot_execution_v3(
         &aliases,
         profile_join,
         &mut preplan_scratch,
+        replan_output_scalars,
+        replan_output_identities,
     )?;
     require_lifecycle_replan_agreement_v4(
-        &preplanned_lifecycle,
+        &preplanned_plans,
         &revalidated_lifecycle,
         &transition_output_scalars,
         &transition_output_identities,
@@ -2801,9 +2832,18 @@ fn execute_interpreted_transition_v3(
     tail_count: u32,
     input_scalars: &[u64],
     input_identities: &[[u8; 32]],
+    // The request-projection output pair, dead since the preplan copied it.
+    // Rented as the fold's scratch rather than cloned from the input again.
+    mut scratch_scalars: Vec<u64>,
+    mut scratch_identities: Vec<[u8; 32]>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
-    let mut scratch_scalars = input_scalars.to_vec();
-    let mut scratch_identities = input_identities.to_vec();
+    if scratch_scalars.len() != input_scalars.len()
+        || scratch_identities.len() != input_identities.len()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    scratch_scalars.copy_from_slice(input_scalars);
+    scratch_identities.copy_from_slice(input_identities);
     let mut output_scalars = input_scalars.to_vec();
     let mut output_identities = input_identities.to_vec();
     execute_fold_atomic(
@@ -4092,15 +4132,37 @@ struct LifecyclePreplanScratchV4<'a> {
 }
 
 impl<'a> LifecyclePreplanScratchV4<'a> {
+    /// Build the arena, renting the two register-bank pairs the request
+    /// projection finished with instead of allocating two fresh ones.
+    ///
+    /// The rented banks arrive holding whatever the projection rotation left in
+    /// them, so they are zeroed here: this is the same initial state
+    /// `vec![0; n]` produced, reached without asking an allocator that never
+    /// frees for a second copy of a buffer that already exists.
     fn new(
         observations: &[AccountObservationV1<'a>],
         accounts: &[&AccountInfo<'_>],
         scalar_count: usize,
         identity_count: usize,
-    ) -> Result<Self, ProgramError> {
+        spare_scalars: [Vec<u64>; 2],
+        spare_identities: [Vec<[u8; 32]>; 2],
+    ) -> Result<Box<Self>, ProgramError> {
         if observations.len() != accounts.len() {
             return Err(TradingSbfError::Content.into());
         }
+        let [mut scalar_scratch, mut next_scalars] = spare_scalars;
+        let [mut identity_scratch, mut next_identities] = spare_identities;
+        if scalar_scratch.len() != scalar_count
+            || next_scalars.len() != scalar_count
+            || identity_scratch.len() != identity_count
+            || next_identities.len() != identity_count
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        scalar_scratch.fill(0);
+        next_scalars.fill(0);
+        identity_scratch.fill([0_u8; 32]);
+        next_identities.fill([0_u8; 32]);
         let mut candidate_lamports = Vec::new();
         candidate_lamports
             .try_reserve_exact(observations.len())
@@ -4117,15 +4179,21 @@ impl<'a> LifecyclePreplanScratchV4<'a> {
                 observation.lamports(),
             ));
         }
-        Ok(Self {
+        // Boxed, and boxed here rather than at the call site: seven register
+        // and observation banks are 168 bytes of `Vec` headers, and
+        // `process_hot_execution_v3` is close enough to the 4KB SBF frame limit
+        // that carrying them as caller locals makes a later call overwrite the
+        // frame. Behind one pointer the caller pays 8 bytes and the headers
+        // live in this constructor's frame instead.
+        Ok(Box::new(Self {
             candidate_lamports,
             candidate_observations,
-            scalar_scratch: vec![0_u64; scalar_count],
-            identity_scratch: vec![[0_u8; 32]; identity_count],
-            next_scalars: vec![0_u64; scalar_count],
-            next_identities: vec![[0_u8; 32]; identity_count],
+            scalar_scratch,
+            identity_scratch,
+            next_scalars,
+            next_identities,
             used_states: vec![false; observations.len()],
-        })
+        }))
     }
 }
 
@@ -4148,6 +4216,12 @@ fn prepare_lifecycle_v4<'a>(
     aliases: &[usize],
     profile_join: ValidatedProfileJoinV3<'_>,
     scratch: &mut LifecyclePreplanScratchV4<'a>,
+    // Rented, never allocated. Both preplan passes want a working copy of the
+    // register banks they were handed, and on an allocator that never frees a
+    // `to_vec()` per pass charges the heap two whole pairs for two copies that
+    // are never live at the same time as the bank they came from.
+    mut output_scalars: Vec<u64>,
+    mut output_identities: Vec<[u8; 32]>,
 ) -> Result<PreparedLifecycleBatchV4, ProgramError> {
     if observations.len() != accounts.len()
         || aliases.len() != accounts.len()
@@ -4161,8 +4235,11 @@ fn prepare_lifecycle_v4<'a>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let mut output_scalars = scalars.to_vec();
-    let mut output_identities = identities.to_vec();
+    if output_scalars.len() != scalars.len() || output_identities.len() != identities.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    output_scalars.copy_from_slice(scalars);
+    output_identities.copy_from_slice(identities);
     // Every working bank is rented from one arena that outlives both passes.
     // The SBF allocator never frees, so a second preplan otherwise charged a
     // fresh 90-coordinate candidate bank, four register banks and a state
@@ -4467,12 +4544,15 @@ fn prepare_immutable_identity_bindings_v4(
 }
 
 fn require_lifecycle_replan_agreement_v4(
-    preplanned: &PreparedLifecycleBatchV4,
+    // The preplan's own register banks are rented out to the replan by the time
+    // the two batches are compared, and were never part of this agreement:
+    // only the plan table is, and the replan's registers against the transition.
+    preplanned_plans: &[PreparedLifecycleInvocationV3],
     revalidated: &PreparedLifecycleBatchV4,
     transition_scalars: &[u64],
     transition_identities: &[[u8; 32]],
 ) -> Result<(), ProgramError> {
-    if preplanned.plans != revalidated.plans
+    if preplanned_plans != revalidated.plans.as_slice()
         || revalidated.scalars != transition_scalars
         || revalidated.identities != transition_identities
     {
@@ -6438,9 +6518,20 @@ fn require_projected_tail_count_agreement_v3(
     Ok(())
 }
 
+/// The projected request registers, together with the two register-bank pairs
+/// the rotation left holding stale values.
+///
+/// The SBF bump allocator's `dealloc` is a no-op, so a bank that goes out of
+/// scope is still charged against total-ever-allocated for the rest of the
+/// execution. Dropping the two spare pairs here and allocating two more in the
+/// preplan arena therefore costs the heap two whole pairs to obtain buffers
+/// that already exist and are already dead. They are handed back instead of
+/// dropped, and the phases downstream rent them rather than allocate.
 struct ProjectedRequestRegistersV3 {
     scalars: Vec<u64>,
     identities: Vec<[u8; 32]>,
+    spare_scalars: [Vec<u64>; 2],
+    spare_identities: [Vec<[u8; 32]>; 2],
 }
 
 /// Keep the transient Account/Request projection banks in one noinline phase.
@@ -6608,6 +6699,8 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     Ok(ProjectedRequestRegistersV3 {
         scalars: current_scalars,
         identities: current_identities,
+        spare_scalars: [scratch_scalars, next_scalars],
+        spare_identities: [scratch_identities, next_identities],
     })
 }
 
