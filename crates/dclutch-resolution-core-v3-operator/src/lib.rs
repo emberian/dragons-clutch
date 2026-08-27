@@ -557,7 +557,7 @@ pub fn build_resolution_create_fund_v3(
         caller_authority,
         role_request_digest,
         role_bytes,
-        create_accounts(snapshot, caller_authority),
+        create_accounts(snapshot, caller_authority, material.recovery_policy().is_some()),
     )?;
     validate_funding_frame(
         &instruction,
@@ -565,6 +565,7 @@ pub fn build_resolution_create_fund_v3(
         caller_authority,
         snapshot.source_destination.key,
         market.rent_beneficiary.to_bytes(),
+        material.recovery_policy().is_some(),
     )?;
     Ok(ResolutionCreateFundReportV3 {
         instruction,
@@ -611,7 +612,7 @@ pub fn build_resolution_verify_fund_ready_v3(
     {
         return Err(ResolutionCoreOperatorErrorV3::Funding);
     }
-    let (_, _, entries) = authenticate_founding_records(
+    let (verify_material, _, entries) = authenticate_founding_records(
         snapshot.registry_program.key,
         &snapshot.source_material,
         &snapshot.source_material_staging,
@@ -622,6 +623,7 @@ pub fn build_resolution_verify_fund_ready_v3(
         market,
         &rent,
     )?;
+    let verify_has_recovery_policy = verify_material.recovery_policy().is_some();
     authenticate_primary_source(snapshot, market, &rent)?;
     let manifest = CapabilityManifestV1::decode(&snapshot.capability_manifest.data)
         .map_err(|_| ResolutionCoreOperatorErrorV3::Funding)?;
@@ -704,7 +706,7 @@ pub fn build_resolution_verify_fund_ready_v3(
         caller_authority,
         role_request_digest,
         role_bytes,
-        verify_accounts(snapshot, caller_authority),
+        verify_accounts(snapshot, caller_authority, verify_has_recovery_policy),
     )?;
     validate_funding_frame(
         &instruction,
@@ -712,6 +714,7 @@ pub fn build_resolution_verify_fund_ready_v3(
         caller_authority,
         snapshot.source_state.key,
         snapshot.beneficiary.key.to_bytes(),
+        verify_has_recovery_policy,
     )?;
     Ok(ResolutionVerifyFundReadyReportV3 {
         instruction,
@@ -1164,7 +1167,7 @@ pub fn build_resolution_close_fund_v3(
             .map_err(|_| ResolutionCoreOperatorErrorV3::Encoding)?,
     );
     data.extend_from_slice(&role_bytes);
-    let accounts = close_accounts(snapshot, caller_authority);
+    let accounts = close_accounts(snapshot, caller_authority, material.recovery_policy().is_some());
     if !exact_close_frame(&accounts, snapshot, caller_authority) {
         return Err(ResolutionCoreOperatorErrorV3::Frame);
     }
@@ -1748,8 +1751,9 @@ fn assemble_funding_instruction(
 fn create_accounts(
     snapshot: &ResolutionCreateFundSnapshotV3,
     authority: Pubkey,
+    has_recovery_policy: bool,
 ) -> Vec<AccountMeta> {
-    vec![
+    let mut accounts = vec![
         AccountMeta::new_readonly(authority, false),
         AccountMeta::new(snapshot.market.key, false),
         AccountMeta::new_readonly(snapshot.activation_cache.key, false),
@@ -1768,16 +1772,26 @@ fn create_accounts(
         AccountMeta::new(snapshot.failure_destination.key, false),
         AccountMeta::new_readonly(snapshot.rent_sysvar.key, false),
         AccountMeta::new_readonly(snapshot.system_program.key, false),
-        AccountMeta::new_readonly(snapshot.recovery_policy.key, false),
-        AccountMeta::new_readonly(snapshot.recovery_policy_staging.key, false),
-    ]
+    ];
+    // The no-recovery frame is the same frame without its two policy tail
+    // positions: the short frame IS the statement that no policy record
+    // exists, and the program checks that statement against the material.
+    if has_recovery_policy {
+        accounts.push(AccountMeta::new_readonly(snapshot.recovery_policy.key, false));
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy_staging.key,
+            false,
+        ));
+    }
+    accounts
 }
 
 fn verify_accounts(
     snapshot: &ResolutionVerifyFundReadySnapshotV3,
     authority: Pubkey,
+    has_recovery_policy: bool,
 ) -> Vec<AccountMeta> {
-    vec![
+    let mut accounts = vec![
         AccountMeta::new_readonly(authority, false),
         AccountMeta::new(snapshot.market.key, false),
         AccountMeta::new_readonly(snapshot.activation_cache.key, false),
@@ -1797,9 +1811,15 @@ fn verify_accounts(
         AccountMeta::new(snapshot.beneficiary.key, false),
         AccountMeta::new_readonly(snapshot.clock_sysvar.key, false),
         AccountMeta::new_readonly(snapshot.rent_sysvar.key, false),
-        AccountMeta::new_readonly(snapshot.recovery_policy.key, false),
-        AccountMeta::new_readonly(snapshot.recovery_policy_staging.key, false),
-    ]
+    ];
+    if has_recovery_policy {
+        accounts.push(AccountMeta::new_readonly(snapshot.recovery_policy.key, false));
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy_staging.key,
+            false,
+        ));
+    }
+    accounts
 }
 
 fn validate_funding_frame(
@@ -1808,11 +1828,17 @@ fn validate_funding_frame(
     authority: Pubkey,
     source_state: Pubkey,
     beneficiary: [u8; 32],
+    has_recovery_policy: bool,
 ) -> Result<ResolutionRoleRequestV1, ResolutionCoreOperatorErrorV3> {
-    let account_count = match action {
+    let full_count = match action {
         ResolutionCoreActionV1::CreateFund => RESOLUTION_CREATE_FUND_ACCOUNT_COUNT_V3,
         ResolutionCoreActionV1::VerifyFundReady => RESOLUTION_VERIFY_FUND_ACCOUNT_COUNT_V3,
         _ => return Err(ResolutionCoreOperatorErrorV3::Frame),
+    };
+    let account_count = if has_recovery_policy {
+        full_count
+    } else {
+        full_count.saturating_sub(2)
     };
     let accounts = &instruction.accounts;
     let writable: &[usize] = match action {
@@ -2552,8 +2578,12 @@ fn admit_accounts(
     ]
 }
 
-fn close_accounts(snapshot: &ResolutionCloseFundSnapshotV3, authority: Pubkey) -> Vec<AccountMeta> {
-    vec![
+fn close_accounts(
+    snapshot: &ResolutionCloseFundSnapshotV3,
+    authority: Pubkey,
+    has_recovery_policy: bool,
+) -> Vec<AccountMeta> {
+    let mut accounts = vec![
         AccountMeta::new_readonly(authority, false),
         AccountMeta::new(snapshot.market.key, false),
         AccountMeta::new_readonly(snapshot.activation_cache.key, false),
@@ -2576,9 +2606,15 @@ fn close_accounts(snapshot: &ResolutionCloseFundSnapshotV3, authority: Pubkey) -
         AccountMeta::new_readonly(snapshot.clock_sysvar.key, false),
         AccountMeta::new_readonly(snapshot.rent_sysvar.key, false),
         AccountMeta::new_readonly(snapshot.system_program.key, false),
-        AccountMeta::new_readonly(snapshot.recovery_policy.key, false),
-        AccountMeta::new_readonly(snapshot.recovery_policy_staging.key, false),
-    ]
+    ];
+    if has_recovery_policy {
+        accounts.push(AccountMeta::new_readonly(snapshot.recovery_policy.key, false));
+        accounts.push(AccountMeta::new_readonly(
+            snapshot.recovery_policy_staging.key,
+            false,
+        ));
+    }
+    accounts
 }
 
 fn exact_admit_frame(
@@ -2615,7 +2651,13 @@ fn exact_close_frame(
     snapshot: &ResolutionCloseFundSnapshotV3,
     authority: Pubkey,
 ) -> bool {
-    if accounts.len() != RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3
+    // The no-recovery close frame omits the two policy tail positions.
+    let expected_count = if accounts.len() == RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3 {
+        RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3
+    } else {
+        RESOLUTION_ADMIT_TERMINAL_ACCOUNT_COUNT_V3.saturating_sub(2)
+    };
+    if accounts.len() != expected_count
         || accounts.iter().any(|account| account.is_signer)
         || accounts.first().map(|account| account.pubkey) != Some(authority)
         || accounts.get(1).map(|account| account.pubkey) != Some(snapshot.market.key)
@@ -2701,12 +2743,18 @@ pub fn validate_resolution_create_fund_report_v3(
         .get(12)
         .ok_or(ResolutionCoreOperatorErrorV3::Frame)?
         .pubkey;
+    // Whether the frame carries the policy pair is read off the frame itself;
+    // `validate_funding_frame` then requires the exact width for that shape,
+    // and the program requires the shape to agree with the material.
+    let has_recovery_policy =
+        report.instruction.accounts.len() == RESOLUTION_CREATE_FUND_ACCOUNT_COUNT_V3;
     let role = validate_funding_frame(
         &report.instruction,
         ResolutionCoreActionV1::CreateFund,
         report.caller_authority,
         source,
         report.beneficiary.to_bytes(),
+        has_recovery_policy,
     )?;
     if role.recovery_entry_index != report.funding_entry_indices[0]
         || role.exhaustion_entry_index != report.funding_entry_indices[1]
@@ -2739,12 +2787,15 @@ pub fn validate_resolution_verify_fund_ready_report_v3(
         .get(12)
         .ok_or(ResolutionCoreOperatorErrorV3::Frame)?
         .pubkey;
+    let has_recovery_policy =
+        report.instruction.accounts.len() == RESOLUTION_VERIFY_FUND_ACCOUNT_COUNT_V3;
     let role = validate_funding_frame(
         &report.instruction,
         ResolutionCoreActionV1::VerifyFundReady,
         report.caller_authority,
         source,
         report.beneficiary.to_bytes(),
+        has_recovery_policy,
     )?;
     if report
         .instruction
