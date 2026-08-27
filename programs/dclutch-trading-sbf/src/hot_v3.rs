@@ -4068,12 +4068,8 @@ fn set_candidate_lamports_v3<'data>(
     value: u64,
     observations: &[AccountObservationV1<'data>],
     accounts: &[&AccountInfo<'_>],
-    candidate_lamports: &mut [u64],
     candidate_observations: &mut [AccountObservationV1<'data>],
 ) -> Result<(), ProgramError> {
-    *candidate_lamports
-        .get_mut(index)
-        .ok_or(TradingSbfError::Content)? = value;
     let observation = observations.get(index).ok_or(TradingSbfError::Content)?;
     let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
     *candidate_observations
@@ -4122,7 +4118,6 @@ fn candidate_observation_v3<'data>(
 /// reservation bank against total-ever-allocated for a pass whose only purpose
 /// is to agree with the first.
 struct LifecyclePreplanScratchV4<'a> {
-    candidate_lamports: Vec<u64>,
     candidate_observations: Vec<AccountObservationV1<'a>>,
     scalar_scratch: Vec<u64>,
     identity_scratch: Vec<[u8; 32]>,
@@ -4163,16 +4158,11 @@ impl<'a> LifecyclePreplanScratchV4<'a> {
         next_scalars.fill(0);
         identity_scratch.fill([0_u8; 32]);
         next_identities.fill([0_u8; 32]);
-        let mut candidate_lamports = Vec::new();
-        candidate_lamports
-            .try_reserve_exact(observations.len())
-            .map_err(|_| TradingSbfError::Content)?;
         let mut candidate_observations = Vec::new();
         candidate_observations
             .try_reserve_exact(observations.len())
             .map_err(|_| TradingSbfError::Content)?;
         for (observation, account) in observations.iter().zip(accounts) {
-            candidate_lamports.push(observation.lamports());
             candidate_observations.push(candidate_observation_v3(
                 *observation,
                 account,
@@ -4186,7 +4176,6 @@ impl<'a> LifecyclePreplanScratchV4<'a> {
         // frame. Behind one pointer the caller pays 8 bytes and the headers
         // live in this constructor's frame instead.
         Ok(Box::new(Self {
-            candidate_lamports,
             candidate_observations,
             scalar_scratch,
             identity_scratch,
@@ -4225,7 +4214,6 @@ fn prepare_lifecycle_v4<'a>(
 ) -> Result<PreparedLifecycleBatchV4, ProgramError> {
     if observations.len() != accounts.len()
         || aliases.len() != accounts.len()
-        || scratch.candidate_lamports.len() != accounts.len()
         || scratch.candidate_observations.len() != accounts.len()
         || scratch.used_states.len() != accounts.len()
         || scratch.scalar_scratch.len() != scalars.len()
@@ -4246,7 +4234,6 @@ fn prepare_lifecycle_v4<'a>(
     // reservation bank against total-ever-allocated purely to agree with the
     // first. They are reset here rather than reallocated.
     let LifecyclePreplanScratchV4 {
-        candidate_lamports,
         candidate_observations,
         scalar_scratch,
         identity_scratch,
@@ -4255,14 +4242,6 @@ fn prepare_lifecycle_v4<'a>(
         used_states,
     } = scratch;
     used_states.fill(false);
-    for ((slot, observation), account) in candidate_lamports
-        .iter_mut()
-        .zip(observations)
-        .zip(accounts.iter())
-    {
-        *slot = observation.lamports();
-        let _ = account;
-    }
     for ((slot, observation), account) in candidate_observations
         .iter_mut()
         .zip(observations)
@@ -4380,9 +4359,10 @@ fn prepare_lifecycle_v4<'a>(
                     authenticate_lifecycle_credit_v3(
                         accounts,
                         index,
-                        *candidate_lamports
+                        candidate_observations
                             .get(index)
-                            .ok_or(TradingSbfError::Content)?,
+                            .ok_or(TradingSbfError::Content)?
+                            .lamports(),
                         rent,
                         expected_market,
                         expected_release_set,
@@ -4454,7 +4434,6 @@ fn prepare_lifecycle_v4<'a>(
                             balance,
                             observations,
                             accounts,
-                            candidate_lamports,
                             candidate_observations,
                         )?;
                     }
@@ -4472,7 +4451,6 @@ fn prepare_lifecycle_v4<'a>(
                             balance,
                             observations,
                             accounts,
-                            candidate_lamports,
                             candidate_observations,
                         )?;
                     }
