@@ -997,7 +997,12 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
                 .to_bytes(),
         )
         .map_err(|_| TradingSbfError::Content)?,
-        family_request_digest: ContentId::new(hash(family_request).to_bytes())
+        // The producer of this field is `execute_admitted_candidate_v3`, and it
+        // commits the domain-separated, length-prefixed digest. Hashing the
+        // request bare here recomputes a value the producer can never emit, so
+        // the equality below could never hold and the whole admitted lane
+        // refused every well-formed invocation.
+        family_request_digest: family_request_digest_v3(family_request)
             .map_err(|_| TradingSbfError::Content)?,
         runtime_observations_digest,
         root_prestate_digest: ContentId::new(root_prestate)
@@ -7018,12 +7023,36 @@ fn child_receipt_provenance_v4(
         .ok_or(TradingSbfError::Content)?
         .try_into()
         .map_err(|_| TradingSbfError::Content)?;
-    let request_digest = match borrowed_request {
-        Some(witness) => {
-            hashv(&[CHILD_REQUEST_DIGEST_DOMAIN_V4, child_request, witness]).to_bytes()
-        }
-        None => hashv(&[CHILD_REQUEST_DIGEST_DOMAIN_V4, child_request]).to_bytes(),
-    };
+    // Domain ‖ 0x00 ‖ presence tag ‖ u32_le(request len) ‖ u32_le(witness len)
+    // ‖ request ‖ witness — the `shadow_digest_v3` framing convention, with the
+    // lengths hoisted ahead of the variable fields so `hashv` never has to see
+    // a concatenation it cannot re-split.
+    //
+    // `hashv` concatenates its parts and frames nothing. Digesting the request
+    // and the borrowed witness bare therefore committed only to their
+    // concatenation: any other split of the same bytes hashes identically, and
+    // a witnessless request collides with every pair that spells it. Both
+    // preimages are attacker-shaped — the Effect program chooses
+    // `request_offset`/`request_len` and the borrowed-witness range — and this
+    // digest is exactly what binds a resolved receipt to the request that
+    // produced it, so a collision here lets one invocation's receipt satisfy
+    // another's declared dependency.
+    let presence = [0_u8, u8::from(borrowed_request.is_some())];
+    let child_request_len = u32::try_from(child_request.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let witness_len = u32::try_from(borrowed_request.map_or(0, |witness| witness.len()))
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let request_digest = hashv(&[
+        CHILD_REQUEST_DIGEST_DOMAIN_V4,
+        &presence,
+        &child_request_len,
+        &witness_len,
+        child_request,
+        borrowed_request.unwrap_or(&[]),
+    ])
+    .to_bytes();
     let context_digest = hashv(&[
         CHILD_RECEIPT_CONTEXT_DOMAIN_V4,
         &release_set,
@@ -9741,7 +9770,7 @@ mod tests {
         assert!(decode_selected_effect_v4([7; 32], &output).is_err());
 
         let mut hostile = output;
-        hostile[0] ^= 1;
+        *hostile.first_mut().expect("effect output is non-empty") ^= 1;
         assert!(decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &hostile).is_err());
     }
 
@@ -9794,7 +9823,13 @@ mod tests {
             authenticate_accelerator_input_bank_v4(wrong_digest, &[], &Pubkey::new_unique())
                 .is_err()
         );
-        assert!(decode_accelerator_register_bank_v4(request, &bank[..40]).is_err());
+        assert!(
+            decode_accelerator_register_bank_v4(
+                request,
+                bank.get(..40).expect("bank holds at least 40 bytes")
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -9835,16 +9870,27 @@ mod tests {
         let mut keys = (0..=HOT_FIXED_ACCOUNT_COUNT_V3)
             .map(|_| Pubkey::new_unique())
             .collect::<Vec<_>>();
-        keys[HOT_TRADING_PROGRAM_ACCOUNT_V3] = program_id;
-        keys[HOT_REGISTRY_PROGRAM_ACCOUNT_V3] = registry;
-        keys[HOT_RENT_SYSVAR_ACCOUNT_V3] = sysvar::rent::ID;
-        keys[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = sysvar::instructions::ID;
+        let key_at = |keys: &[Pubkey], slot: usize| {
+            *keys.get(slot).expect("Hot fixed slot inside the frame")
+        };
+        *keys
+            .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = program_id;
+        *keys
+            .get_mut(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = registry;
+        *keys
+            .get_mut(HOT_RENT_SYSVAR_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = sysvar::rent::ID;
+        *keys
+            .get_mut(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = sysvar::instructions::ID;
         let activation_bytes = vec![0xa7; 64];
         let release = ContentId::new([0x31; 32]).expect("release");
         let envelope = HotExecutionEnvelopeV3::new(
             1,
             release.to_bytes(),
-            keys[HOT_MARKET_ACCOUNT_V3].to_bytes(),
+            key_at(&keys, HOT_MARKET_ACCOUNT_V3).to_bytes(),
             7,
             [0x32; 32],
         )
@@ -9866,7 +9912,7 @@ mod tests {
             ContentId::new(hash(&batch.to_bytes()).to_bytes()).expect("batch digest");
         let seeds = RegistryContinuationAdmissionSeedsV1::new(
             continuation,
-            keys[HOT_ACTIVATION_CACHE_ACCOUNT_V3].to_bytes(),
+            key_at(&keys, HOT_ACTIVATION_CACHE_ACCOUNT_V3).to_bytes(),
             batch_digest,
         )
         .expect("admission seeds");
@@ -9876,7 +9922,9 @@ mod tests {
         let mask_seed = seeds.role_mask();
         let role_seed = seeds.continuation_role();
         let digest_seed = seeds.continuation_digest();
-        keys[HOT_FIXED_ACCOUNT_COUNT_V3] = Pubkey::find_program_address(
+        *keys
+            .get_mut(HOT_FIXED_ACCOUNT_COUNT_V3)
+            .expect("admission slot inside the frame") = Pubkey::find_program_address(
             &[
                 seeds.domain(),
                 release_seed.as_slice(),
@@ -9892,12 +9940,12 @@ mod tests {
 
         let top_data = hot_bytes.clone();
         let outer_keys = [
-            keys[HOT_ACTIVATION_CACHE_ACCOUNT_V3],
-            keys[HOT_CORE_PROGRAM_ACCOUNT_V3],
-            keys[HOT_CORE_PROGRAMDATA_ACCOUNT_V3],
-            keys[HOT_TRADING_PROGRAM_ACCOUNT_V3],
-            keys[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3],
-            keys[HOT_FIXED_ACCOUNT_COUNT_V3],
+            key_at(&keys, HOT_ACTIVATION_CACHE_ACCOUNT_V3),
+            key_at(&keys, HOT_CORE_PROGRAM_ACCOUNT_V3),
+            key_at(&keys, HOT_CORE_PROGRAMDATA_ACCOUNT_V3),
+            key_at(&keys, HOT_TRADING_PROGRAM_ACCOUNT_V3),
+            key_at(&keys, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3),
+            key_at(&keys, HOT_FIXED_ACCOUNT_COUNT_V3),
         ];
         let build_metas = || {
             let mut metas = outer_keys
@@ -9988,19 +10036,26 @@ mod tests {
             .get_mut(substituted_end - 2..)
             .expect("substituted current instruction")
             .copy_from_slice(&0_u16.to_le_bytes());
-        accounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]
+        accounts
+            .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("instructions sysvar slot inside the frame")
             .try_borrow_mut_data()
             .expect("instructions data")
             .copy_from_slice(&substituted_instructions);
         assert!(
             authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
         );
-        accounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]
+        accounts
+            .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("instructions sysvar slot inside the frame")
             .try_borrow_mut_data()
             .expect("instructions restore")
             .copy_from_slice(&instructions_data);
 
-        accounts[HOT_FIXED_ACCOUNT_COUNT_V3].is_signer = false;
+        accounts
+            .get_mut(HOT_FIXED_ACCOUNT_COUNT_V3)
+            .expect("admission slot inside the frame")
+            .is_signer = false;
         assert!(
             authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
         );
@@ -10068,9 +10123,10 @@ mod tests {
         let quotes = authenticate_current_rent_quotes_v5(policy, &rent)
             .expect("authenticated current Rent quote");
         assert_eq!(quotes.len(), 1);
-        assert_eq!(quotes[0].exact_data_len, 152);
-        assert_eq!(quotes[0].scalar_destination, 64);
-        assert_eq!(quotes[0].current_minimum, rent.minimum_balance(152));
+        let quote = quotes.first().expect("exactly one quote");
+        assert_eq!(quote.exact_data_len, 152);
+        assert_eq!(quote.scalar_destination, 64);
+        assert_eq!(quote.current_minimum, rent.minimum_balance(152));
     }
 
     #[test]
@@ -10174,7 +10230,16 @@ mod tests {
         )
         .expect("expand physical representatives");
         assert_eq!(logical.len(), 7);
-        assert_eq!(logical[4].key, logical[6].key);
+        assert_eq!(
+            logical
+                .get(4)
+                .expect("representative coordinate inside the expanded frame")
+                .key,
+            logical
+                .get(6)
+                .expect("alias coordinate inside the expanded frame")
+                .key
+        );
 
         let declared =
             child_route_privileges_v3(profile, 0, &[], &logical).expect("declared privileges");
@@ -10412,7 +10477,7 @@ mod tests {
             value
         };
         assert!(resolve(&[inert], &[0]).is_err());
-        assert!(resolve(&[other.clone()], &[0]).is_err());
+        assert!(resolve(core::slice::from_ref(&other), &[0]).is_err());
 
         // The alias table has to be the one this vector was downgraded at.
         assert!(resolve(&series, &[0, 0, 2]).is_err());
@@ -10483,8 +10548,14 @@ mod tests {
         let pages = authenticated_input_scratch_pages_v3(profile, &[2], Some(0), &logical)
             .expect("exact trailing pages");
         assert_eq!(pages.len(), 2);
-        assert_eq!(pages[0].key, accounts[5].key);
-        assert_eq!(pages[1].key, accounts[6].key);
+        assert_eq!(
+            pages.first().expect("first trailing page").key,
+            accounts.get(5).expect("page slot inside the frame").key
+        );
+        assert_eq!(
+            pages.get(1).expect("second trailing page").key,
+            accounts.get(6).expect("page slot inside the frame").key
+        );
         assert!(authenticated_input_scratch_pages_v3(profile, &[2], Some(1), &logical).is_err());
         assert!(authenticated_input_scratch_pages_v3(profile, &[4], Some(0), &logical).is_err());
     }
