@@ -86,7 +86,16 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     let start_unix = now_unix()?;
 
     // ---------------------------------------------------------- 1. the twin
-    let twin = twin::start(&request.work, start_unix)?;
+    // The successor validator's base is allocated by the runner but not yet
+    // bound; the twin's allocator must not take that block.
+    let template_probe: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&request.spec_template)?)?;
+    let successor_base = template_probe
+        .get("rpc_url")
+        .and_then(|value| value.as_str())
+        .and_then(|url| url.rsplit(':').next())
+        .and_then(|tail| tail.trim_end_matches('/').parse::<u16>().ok());
+    let twin = twin::start(&request.work, start_unix, successor_base)?;
     stages.push(StageV1 {
         stage: "mainnet twin".into(),
         outcome: "running".into(),

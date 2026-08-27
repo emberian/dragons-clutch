@@ -153,10 +153,19 @@ fn write_account_fixture(
 }
 
 /// Bind a whole port block on 127.0.0.1 to prove it free, then release it.
-fn allocate_port_block() -> Result<u16> {
+///
+/// `avoid` is the successor validator's own base: that block is allocated by
+/// the runner but not yet BOUND when the twin starts, so proving it free here
+/// would prove nothing — it is excluded outright.
+fn allocate_port_block(avoid: Option<u16>) -> Result<u16> {
     // The successor launcher derives {base, base+2, base+3, base+10..base+41};
     // the twin uses the same shape so the two never interleave by accident.
     for candidate in (24_000..48_000u16).step_by(64) {
+        if let Some(base) = avoid
+            && candidate.abs_diff(base) < 64
+        {
+            continue;
+        }
         let mut held = Vec::new();
         let mut all = true;
         for offset in [0u16, 1, 2, 3].into_iter().chain(10..42) {
@@ -195,7 +204,11 @@ impl Drop for MainnetTwinV1 {
 }
 
 /// Start the twin with the synthetic DBC world installed at genesis.
-pub(crate) fn start(work: &Path, finish_unix_seconds: i64) -> Result<MainnetTwinV1> {
+pub(crate) fn start(
+    work: &Path,
+    finish_unix_seconds: i64,
+    avoid_port_base: Option<u16>,
+) -> Result<MainnetTwinV1> {
     let fixtures = work.join("twin-fixtures");
     let ledger = work.join("twin-ledger");
     std::fs::create_dir_all(&fixtures)?;
@@ -219,7 +232,7 @@ pub(crate) fn start(work: &Path, finish_unix_seconds: i64) -> Result<MainnetTwin
         false,
     )?;
 
-    let base = allocate_port_block()?;
+    let base = allocate_port_block(avoid_port_base)?;
     let rpc_url = format!("http://127.0.0.1:{base}/");
     let log = std::fs::File::create(work.join("twin-validator.log"))?;
     let child = Command::new("solana-test-validator")
