@@ -15,6 +15,7 @@
 extern crate alloc;
 
 use alloc::{vec, vec::Vec};
+use core::cell::Ref;
 
 use dclutch_account_profile_contract::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
@@ -28,6 +29,7 @@ use dclutch_capability_contract::{
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
     CapabilityRootAccountV1, CapabilityRootHeaderV1, initialize_root_account_v1,
+    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
 use dclutch_effect_kernel::v2::{
     AccountInput, ProgramV2 as EffectProgramV2, ResolvedEffect, SCHEMA_RELEASE_ID,
@@ -65,8 +67,8 @@ use crate::{
     },
 };
 
-const DESCRIPTOR_RAW: usize = 0;
-const DESCRIPTOR_STAGING: usize = 1;
+const RELEASE_RAW: usize = 0;
+const RELEASE_STAGING: usize = 1;
 const CONFIG_RAW: usize = 2;
 const CONFIG_STAGING: usize = 3;
 const PROFILE_RAW: usize = 4;
@@ -81,7 +83,12 @@ const TRADING_PROGRAMDATA: usize = 12;
 const REGISTRY_PROGRAM: usize = 13;
 const RENT_SYSVAR: usize = 14;
 const SYSTEM_PROGRAM: usize = 15;
-const EFFECT_ACCOUNTS_START: usize = 16;
+/// Fixed authentication accounts every activation carries.
+const AUTHENTICATION_ACCOUNTS_V1: usize = 16;
+/// Selected activation descriptor, present only for a `ProgramSet` release.
+const SET_DESCRIPTOR_RAW: usize = 16;
+/// Its staging cursor.
+const SET_DESCRIPTOR_STAGING: usize = 17;
 
 const COMMON_SCALARS_V2: usize = 8;
 const COMMON_IDENTITIES_V2: usize = 12;
@@ -89,6 +96,66 @@ const MAX_RUNTIME_SCALARS_V2: usize = 96;
 const MAX_RUNTIME_IDENTITIES_V2: usize = 32;
 const MAX_RUNTIME_ACCOUNTS_V2: usize = 64;
 const MAX_ROLE_REQUEST_BYTES_V2: usize = 2_048;
+
+/// Which generation of capability release `selection.capability_release()` names.
+///
+/// This is not a dispatch on a capability kind. It is a fact about one finalized
+/// record, decided the only way a raw record can be identified before it is read:
+/// its raw-record PDA is `[RAW_RECORD_PDA_SEED_V1, schema, digest]`, so the
+/// supplied account's own address says which schema the Registry finalized it
+/// under. Exactly one of the two derivations can match a given account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CapabilityReleaseGenerationV1 {
+    /// The record at `capability_release` IS the activation descriptor.
+    FlatDescriptor,
+    /// The record at `capability_release` is a `CapabilityProgramSetV2`, and the
+    /// activation descriptor is the entry its family request selects.
+    ProgramSet,
+}
+
+impl CapabilityReleaseGenerationV1 {
+    /// Extra finalized-record accounts this generation carries after the fixed 16.
+    const fn extra_accounts(self) -> usize {
+        match self {
+            Self::FlatDescriptor => 0,
+            Self::ProgramSet => 2,
+        }
+    }
+
+    /// Schema the record at `capability_release` is authenticated under.
+    const fn release_schema(self) -> [u8; 32] {
+        match self {
+            Self::FlatDescriptor => CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
+            Self::ProgramSet => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        }
+    }
+}
+
+/// Decide the release generation from the supplied raw record's own address.
+fn select_release_generation(
+    registry: &Pubkey,
+    release_raw: &AccountInfo<'_>,
+    capability_release: [u8; 32],
+) -> Result<CapabilityReleaseGenerationV1, ProgramError> {
+    for generation in [
+        CapabilityReleaseGenerationV1::FlatDescriptor,
+        CapabilityReleaseGenerationV1::ProgramSet,
+    ] {
+        let expected = Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &generation.release_schema(),
+                &capability_release,
+            ],
+            registry,
+        )
+        .0;
+        if release_raw.key == &expected {
+            return Ok(generation);
+        }
+    }
+    Err(TradingSbfError::Content.into())
+}
 
 /// Execute one Core-signed, data-defined capability activation.
 #[inline(never)]
@@ -115,25 +182,45 @@ pub fn process_activation(
         )
         .map_err(|_| TradingSbfError::Content)?;
     let framed = TradingActivationAccountsV1::parse(accounts, request.funding())?;
-    let suffix = AuthenticatedSuffixV2::parse(program_id, framed.family_accounts())?;
+    let family_accounts = framed.family_accounts();
+    let capability_release = request.selection().capability_release().to_bytes();
+    let generation = select_release_generation(
+        get(family_accounts, REGISTRY_PROGRAM)?.key,
+        get(family_accounts, RELEASE_RAW)?,
+        capability_release,
+    )?;
+    let suffix = AuthenticatedSuffixV2::parse(program_id, family_accounts, generation)?;
     let market_state = authenticate_market_and_caller(program_id, &framed, &suffix, envelope)?;
     let rent = Rent::from_account_info(suffix.rent).map_err(|_| TradingSbfError::Content)?;
 
-    let descriptor_data = suffix
-        .descriptor_raw
+    let release_data = suffix
+        .release_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     authenticate_finalized_record(
         suffix.registry.key,
-        suffix.descriptor_raw,
-        suffix.descriptor_staging,
+        suffix.release_raw,
+        suffix.release_staging,
         &rent,
-        CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
-        request.selection().capability_release().to_bytes(),
-        &descriptor_data,
+        generation.release_schema(),
+        capability_release,
+        &release_data,
     )?;
+    let set_descriptor_data = authenticate_set_descriptor(
+        &suffix,
+        generation,
+        &rent,
+        capability_release,
+        release_data.as_ref(),
+        request.family_request(),
+    )?;
+    let descriptor_data: &[u8] = match &set_descriptor_data {
+        Some(data) => data.as_ref(),
+        None => release_data.as_ref(),
+    };
+    let descriptor_id = content(hash(descriptor_data).to_bytes())?;
     let descriptor =
-        CapabilityProgramV1::decode(&descriptor_data).map_err(|_| TradingSbfError::Content)?;
+        CapabilityProgramV1::decode(descriptor_data).map_err(|_| TradingSbfError::Content)?;
     let root_bytes = descriptor
         .root_account_bytes()
         .map_err(|_| TradingSbfError::Root)?;
@@ -191,8 +278,13 @@ pub fn process_activation(
         request.selection().config().to_bytes(),
         &config_data,
     )?;
-    let descriptor =
-        authenticate_activation_program(context, &manifest_data, &descriptor_data, &config_data)?;
+    let descriptor = authenticate_activation_program(
+        context,
+        descriptor_id,
+        &manifest_data,
+        descriptor_data,
+        &config_data,
+    )?;
 
     let profile_data = suffix
         .profile_raw
@@ -298,7 +390,8 @@ pub fn process_activation(
     drop(effect_data);
     drop(profile_data);
     drop(config_data);
-    drop(descriptor_data);
+    drop(set_descriptor_data);
+    drop(release_data);
     drop(manifest_data);
 
     commit_activation(
@@ -319,8 +412,10 @@ pub fn process_activation(
 }
 
 struct AuthenticatedSuffixV2<'accounts, 'info> {
-    descriptor_raw: &'accounts AccountInfo<'info>,
-    descriptor_staging: &'accounts AccountInfo<'info>,
+    release_raw: &'accounts AccountInfo<'info>,
+    release_staging: &'accounts AccountInfo<'info>,
+    set_descriptor_raw: Option<&'accounts AccountInfo<'info>>,
+    set_descriptor_staging: Option<&'accounts AccountInfo<'info>>,
     config_raw: &'accounts AccountInfo<'info>,
     config_staging: &'accounts AccountInfo<'info>,
     profile_raw: &'accounts AccountInfo<'info>,
@@ -342,10 +437,23 @@ impl<'accounts, 'info> AuthenticatedSuffixV2<'accounts, 'info> {
     fn parse(
         program_id: &Pubkey,
         accounts: &'accounts [AccountInfo<'info>],
+        generation: CapabilityReleaseGenerationV1,
     ) -> Result<Self, ProgramError> {
+        let authentication_accounts = AUTHENTICATION_ACCOUNTS_V1
+            .checked_add(generation.extra_accounts())
+            .ok_or(TradingSbfError::Content)?;
+        let (set_descriptor_raw, set_descriptor_staging) = match generation {
+            CapabilityReleaseGenerationV1::FlatDescriptor => (None, None),
+            CapabilityReleaseGenerationV1::ProgramSet => (
+                Some(get(accounts, SET_DESCRIPTOR_RAW)?),
+                Some(get(accounts, SET_DESCRIPTOR_STAGING)?),
+            ),
+        };
         let value = Self {
-            descriptor_raw: get(accounts, DESCRIPTOR_RAW)?,
-            descriptor_staging: get(accounts, DESCRIPTOR_STAGING)?,
+            release_raw: get(accounts, RELEASE_RAW)?,
+            release_staging: get(accounts, RELEASE_STAGING)?,
+            set_descriptor_raw,
+            set_descriptor_staging,
             config_raw: get(accounts, CONFIG_RAW)?,
             config_staging: get(accounts, CONFIG_STAGING)?,
             profile_raw: get(accounts, PROFILE_RAW)?,
@@ -361,7 +469,7 @@ impl<'accounts, 'info> AuthenticatedSuffixV2<'accounts, 'info> {
             rent: get(accounts, RENT_SYSVAR)?,
             system: get(accounts, SYSTEM_PROGRAM)?,
             effect_accounts: accounts
-                .get(EFFECT_ACCOUNTS_START..)
+                .get(authentication_accounts..)
                 .ok_or(TradingSbfError::Content)?,
         };
         if value.trading_program.key != program_id
@@ -382,16 +490,81 @@ impl<'accounts, 'info> AuthenticatedSuffixV2<'accounts, 'info> {
         {
             return Err(TradingSbfError::Content.into());
         }
-        require_authentication_accounts_distinct(accounts)?;
+        require_authentication_accounts_distinct(accounts, authentication_accounts)?;
         Ok(value)
     }
 }
 
+/// Authenticate the activation descriptor a `ProgramSet` release selects.
+///
+/// A flat release IS its own activation descriptor and this returns `None`. A
+/// `CapabilityProgramSetV2` release is a selector table, so the descriptor is a
+/// second finalized record, named by the entry the family request selects and
+/// authenticated under the schema that entry states. Requiring
+/// `CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1` there is what keeps this seam
+/// family-neutral without acquiring a second descriptor decoder: a hot-action
+/// `CapabilityProgramV4` entry can never be presented here, because the raw
+/// record it names is finalized under a different schema and therefore lives at
+/// a different address.
+///
+/// The caller choosing the entry is the same trust structure the hot path
+/// already has, and it is bounded twice over: every entry is inside the set
+/// whose digest the Market's manifest binds, and `validate_selection` then
+/// requires the selected descriptor's kind, capacity profile, root schema and
+/// derivation policy to equal the manifest entry's own.
+fn authenticate_set_descriptor<'accounts, 'info>(
+    suffix: &AuthenticatedSuffixV2<'accounts, 'info>,
+    generation: CapabilityReleaseGenerationV1,
+    rent: &Rent,
+    capability_release: [u8; 32],
+    release_data: &[u8],
+    family_request: &[u8],
+) -> Result<Option<Ref<'accounts, &'accounts mut [u8]>>, ProgramError> {
+    let (raw, staging) = match generation {
+        CapabilityReleaseGenerationV1::FlatDescriptor => return Ok(None),
+        CapabilityReleaseGenerationV1::ProgramSet => (
+            suffix.set_descriptor_raw.ok_or(TradingSbfError::Content)?,
+            suffix
+                .set_descriptor_staging
+                .ok_or(TradingSbfError::Content)?,
+        ),
+    };
+    // `authenticate_finalized_record` already required `hash(release_data)` to be
+    // exactly `capability_release`, so the selected and authenticated set
+    // identities are the same value by construction.
+    let set = CapabilityProgramSetV2::decode_selected(
+        capability_release,
+        capability_release,
+        release_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let selected = set
+        .select_descriptor(family_request)
+        .map_err(|_| TradingSbfError::Content)?;
+    if selected.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let data = raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    authenticate_finalized_record(
+        suffix.registry.key,
+        raw,
+        staging,
+        rent,
+        selected.schema().to_bytes(),
+        selected.program().to_bytes(),
+        data.as_ref(),
+    )?;
+    Ok(Some(data))
+}
+
 fn require_authentication_accounts_distinct(
     accounts: &[AccountInfo<'_>],
+    authentication_accounts: usize,
 ) -> Result<(), ProgramError> {
     let fixed = accounts
-        .get(..EFFECT_ACCOUNTS_START)
+        .get(..authentication_accounts)
         .ok_or(TradingSbfError::Content)?;
     for (index, account) in fixed.iter().enumerate() {
         if accounts

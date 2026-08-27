@@ -361,8 +361,13 @@ pub fn dispatch_activation_authenticated<'descriptor>(
     supported: SupportedContentV1,
     registers: CapabilityRegistersV2<'_>,
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
-    let descriptor =
-        authenticate_activation_program(context, manifest_bytes, descriptor_bytes, config_bytes)?;
+    let descriptor = authenticate_activation_program(
+        context,
+        context.selection().capability_release(),
+        manifest_bytes,
+        descriptor_bytes,
+        config_bytes,
+    )?;
     supported
         .require(descriptor)
         .map_err(map_capability_program_error)?;
@@ -377,8 +382,17 @@ pub fn dispatch_activation_authenticated<'descriptor>(
 /// The executable outer uses this join before interpreting the descriptor's
 /// finalized AccountProfile and EffectProgram. It deliberately performs no
 /// transition and carries no compiled `SupportedContentV1` list.
+///
+/// `descriptor_id` is the identity the caller independently authenticated the
+/// descriptor record under. For a flat release it is `capability_release`
+/// itself; for a `CapabilityProgramSetV2` release the selection names the set
+/// and the descriptor is one of its entries, so its identity is a different
+/// value and the caller must supply it. Passing anything the caller did not
+/// authenticate the record's own bytes under would defeat the digest join
+/// below, which is why this is a parameter rather than a hash of the bytes.
 pub fn authenticate_activation_program<'descriptor>(
     context: TradingFamilyContextV1,
+    descriptor_id: ContentId,
     manifest_bytes: &[u8],
     descriptor_bytes: &'descriptor [u8],
     config_bytes: &[u8],
@@ -394,7 +408,8 @@ pub fn authenticate_activation_program<'descriptor>(
         .map_err(|_| TradingSbfError::Content)?;
     require_entry_identity(entry, selection)?;
 
-    let descriptor = authenticate_common_content(context, descriptor_bytes, config_bytes)?;
+    let descriptor =
+        authenticate_common_content(context, descriptor_id, descriptor_bytes, config_bytes)?;
     descriptor
         .validate_selection(selection, entry)
         .map_err(map_capability_program_error)?;
@@ -415,7 +430,12 @@ pub fn dispatch_hot_authenticated<'descriptor>(
     supported: SupportedContentV1,
     registers: CapabilityRegistersV2<'_>,
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
-    let descriptor = authenticate_common_content(context, descriptor_bytes, config_bytes)?;
+    let descriptor = authenticate_common_content(
+        context,
+        context.selection().capability_release(),
+        descriptor_bytes,
+        config_bytes,
+    )?;
     supported
         .require(descriptor)
         .map_err(map_capability_program_error)?;
@@ -430,12 +450,13 @@ pub fn dispatch_hot_authenticated<'descriptor>(
 
 fn authenticate_common_content<'descriptor>(
     context: TradingFamilyContextV1,
+    descriptor_id: ContentId,
     descriptor_bytes: &'descriptor [u8],
     config_bytes: &[u8],
 ) -> Result<CapabilityProgramV1<'descriptor>, TradingSbfError> {
     let selection = context.selection();
 
-    if hash(descriptor_bytes).to_bytes() != selection.capability_release().to_bytes()
+    if hash(descriptor_bytes).to_bytes() != descriptor_id.to_bytes()
         || hash(config_bytes).to_bytes() != selection.config().to_bytes()
     {
         return Err(TradingSbfError::Content);
