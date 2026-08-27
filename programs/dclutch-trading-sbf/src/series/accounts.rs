@@ -39,16 +39,21 @@ pub const SERIES_ROOT_ACCOUNT_BYTES_V3: usize =
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SeriesAccountErrorV3 {
     /// Owner, width, key, phase, or canonical bytes refused.
-    State,
+    State = 0x4100,
     /// Signer, writable, executable, System, or alias contract refused.
-    Frame,
+    Frame = 0x4101,
     /// Exact native funding or checked arithmetic refused.
-    Funding,
+    Funding = 0x4102,
     /// System creation or direct lamport transfer failed.
-    Creation,
+    Creation = 0x4103,
     /// Core acknowledgement or final state write refused.
-    Commit,
+    Commit = 0x4104,
 }
+
+const _: () = assert!(
+    SeriesAccountErrorV3::State as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE + 0x100,
+    "the Series account boundary must sit in Trading's registered band"
+);
 
 impl From<SeriesAccountErrorV3> for ProgramError {
     fn from(value: SeriesAccountErrorV3) -> Self {

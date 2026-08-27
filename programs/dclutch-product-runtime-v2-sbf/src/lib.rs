@@ -37,24 +37,39 @@ pub const ADMISSION_ACCOUNT_COUNT_V2: usize = 9;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmissionSbfErrorV2 {
     /// Account count, aliasing, privilege, or owner was invalid.
-    AccountFrame = 0,
+    AccountFrame = 0x9000,
     /// Instruction bytes or request identity were invalid.
-    Instruction = 1,
+    Instruction = 0x9001,
     /// Rent sysvar identity or bytes were invalid.
-    Rent = 2,
+    Rent = 0x9002,
     /// Receipt address, initial bytes, or physical funding was invalid.
-    Receipt = 3,
+    Receipt = 0x9003,
     /// Product finalized-record evidence was invalid.
-    ProductRecord = 4,
+    ProductRecord = 0x9004,
     /// Result-domain finalized-record evidence was invalid.
-    ResultDomainRecord = 5,
+    ResultDomainRecord = 0x9005,
     /// Portfolio finalized-record evidence was invalid.
-    PortfolioRecord = 6,
+    PortfolioRecord = 0x9006,
     /// Exact Product/domain/portfolio semantic composition refused.
-    Composition = 7,
+    Composition = 0x9007,
     /// Account data could not be borrowed.
-    Borrow = 8,
+    Borrow = 0x9008,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    AdmissionSbfErrorV2::AccountFrame as u32
+        == dclutch_refusal_registry::PRODUCT_RUNTIME_V2_REFUSAL_BASE,
+    "AdmissionSbfErrorV2 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (AdmissionSbfErrorV2::Borrow as u32)
+        < dclutch_refusal_registry::PRODUCT_RUNTIME_V2_REFUSAL_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "AdmissionSbfErrorV2 must not run past its registered refusal band"
+);
 
 impl From<AdmissionSbfErrorV2> for ProgramError {
     fn from(value: AdmissionSbfErrorV2) -> Self {

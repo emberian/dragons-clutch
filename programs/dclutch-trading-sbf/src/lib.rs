@@ -141,20 +141,33 @@ pub mod shadow_composition_v3;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TradingSbfError {
     /// The instruction is not supported by an admitted content profile.
-    UnsupportedContent = 0,
+    UnsupportedContent = 0x4000,
     /// The Registry receipt did not authenticate this Program as current Trading.
-    Release = 1,
+    Release = 0x4001,
     /// The immutable Trading child root or its PDA refused.
-    Root = 2,
+    Root = 0x4002,
     /// Manifest, selected entry, descriptor, or config content refused.
-    Content = 3,
+    Content = 0x4003,
     /// The checked data-defined transition refused.
-    Transition = 4,
+    Transition = 0x4004,
     /// A projected physical mutation or account write could not commit.
-    Commit = 5,
+    Commit = 0x4005,
     /// Instructions-sysvar or native-signature evidence was not exact.
-    NativeSignature = 6,
+    NativeSignature = 0x4006,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    TradingSbfError::UnsupportedContent as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE,
+    "TradingSbfError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (TradingSbfError::NativeSignature as u32)
+        < dclutch_refusal_registry::TRADING_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "TradingSbfError must not run past its registered refusal band"
+);
 
 impl From<TradingSbfError> for ProgramError {
     fn from(value: TradingSbfError) -> Self {

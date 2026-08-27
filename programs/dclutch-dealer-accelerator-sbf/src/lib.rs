@@ -35,12 +35,27 @@ use solana_program::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerAcceleratorSbfErrorV4 {
     /// AcceleratorRequestV2 transport or candidate-bank width differed.
-    InvalidRequest = 0,
+    InvalidRequest = 0xD000,
     /// Common Trading could not authenticate the release/artifact/runtime view.
-    InvalidInvocation = 1,
+    InvalidInvocation = 0xD001,
     /// A canonical acknowledgement could not be constructed.
-    InvalidAcknowledgement = 2,
+    InvalidAcknowledgement = 0xD002,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    DealerAcceleratorSbfErrorV4::InvalidRequest as u32
+        == dclutch_refusal_registry::DEALER_ACCELERATOR_REFUSAL_BASE,
+    "DealerAcceleratorSbfErrorV4 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (DealerAcceleratorSbfErrorV4::InvalidAcknowledgement as u32)
+        < dclutch_refusal_registry::DEALER_ACCELERATOR_REFUSAL_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "DealerAcceleratorSbfErrorV4 must not run past its registered refusal band"
+);
 
 impl From<DealerAcceleratorSbfErrorV4> for ProgramError {
     fn from(value: DealerAcceleratorSbfErrorV4) -> Self {

@@ -19,6 +19,7 @@ custom-panic = []
 [dependencies]
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-trading-sbf = { path = "../dclutch-trading-sbf", default-features = false, features = ["dealer-family", "series-family", "no-entrypoint"] }
 solana-program = { version = "=3.0.0", default-features = false }
 

@@ -67,18 +67,32 @@ pub const MARKET_CLOSURE_CONTINUATION_ACCOUNT_COUNT_V1: usize = 12;
 #[repr(u32)]
 pub enum ClaimsMarketClosureSbfErrorV1 {
     /// The fixed account frame or privileges refused.
-    Accounts = 500,
+    Accounts = 0x5500,
     /// Caller PDA or current Registry releases refused.
-    Authority = 501,
+    Authority = 0x5501,
     /// Core/aggregate/RentCredit identities or revisions refused.
-    Identity = 502,
+    Identity = 0x5502,
     /// A nonzero aggregate supply prevented closure.
-    Liability = 503,
+    Liability = 0x5503,
     /// Checked refund accounting or commit-last closure refused.
-    Commit = 504,
+    Commit = 0x5504,
     /// Typed receipt construction refused.
-    Receipt = 505,
+    Receipt = 0x5505,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    ClaimsMarketClosureSbfErrorV1::Accounts as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x500,
+    "ClaimsMarketClosureSbfErrorV1 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (ClaimsMarketClosureSbfErrorV1::Receipt as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "ClaimsMarketClosureSbfErrorV1 must not run past its registered refusal band"
+);
 
 impl From<ClaimsMarketClosureSbfErrorV1> for ProgramError {
     fn from(value: ClaimsMarketClosureSbfErrorV1) -> Self {

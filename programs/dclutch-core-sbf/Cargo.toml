@@ -28,6 +28,7 @@ dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" 
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }

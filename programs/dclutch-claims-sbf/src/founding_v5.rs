@@ -103,26 +103,40 @@ const RENT_PROGRAM: usize = 31;
 #[repr(u32)]
 pub enum ClaimsFoundingSbfErrorV5 {
     /// Instruction bytes did not decode as the sole FoundingV5 ABI.
-    Instruction = 180,
+    Instruction = 0x5180,
     /// Account count, privileges, executable flags, or aliases refused.
-    Accounts = 181,
+    Accounts = 0x5181,
     /// Core caller authority or current release selection refused.
-    Release = 182,
+    Release = 0x5182,
     /// Custody source, Hoard, or replay post-observations refused.
-    Custody = 183,
+    Custody = 0x5183,
     /// Product graph, linked basis, or Founding Core Market refused.
-    ProductBasis = 184,
+    ProductBasis = 0x5184,
     /// Claims aggregate, Position, or admission PDA/vacancy refused.
-    ClaimsState = 185,
+    ClaimsState = 0x5185,
     /// Rent sysvar, exact principals, target lamports, or RentCredit refused.
-    Rent = 186,
+    Rent = 0x5186,
     /// System allocation or assignment refused.
-    Allocation = 187,
+    Allocation = 0x5187,
     /// Candidate receipt or post-resource digest refused.
-    Receipt = 188,
+    Receipt = 0x5188,
     /// State-last copy or immutable postcondition refused.
-    Commit = 189,
+    Commit = 0x5189,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    ClaimsFoundingSbfErrorV5::Instruction as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x180,
+    "ClaimsFoundingSbfErrorV5 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (ClaimsFoundingSbfErrorV5::Commit as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "ClaimsFoundingSbfErrorV5 must not run past its registered refusal band"
+);
 
 impl From<ClaimsFoundingSbfErrorV5> for ProgramError {
     fn from(value: ClaimsFoundingSbfErrorV5) -> Self {
@@ -226,7 +240,7 @@ pub fn process(
     authenticate_privileges(program_id, accounts, &request)?;
     authenticate_authority(accounts, &request, request_digest)?;
     authenticate_releases(accounts, &request)?;
-    authenticate_permit_and_projection(
+    let custody_context = authenticate_permit_and_projection(
         accounts,
         &request,
         request_digest,
@@ -241,7 +255,7 @@ pub fn process(
         &projected_receipt,
         projected_receipt_digest,
     )?;
-    let market = authenticate_product_core(program_id, accounts, &request)?;
+    let market = authenticate_product_core(program_id, accounts, &request, custody_context)?;
     authenticate_rent_and_vacancy(program_id, accounts, &request, market)?;
 
     let candidates =
@@ -451,7 +465,7 @@ fn authenticate_permit_and_projection(
     lock_receipt_digest: [u8; 32],
     projected_receipt: &ProjectedCustodyReceiptV1,
     projected_receipt_digest: [u8; 32],
-) -> Result<(), ProgramError> {
+) -> Result<[u8; 32], ProgramError> {
     if accounts.permit.owner != accounts.core_program.key
         || accounts.permit.data_len() != SERIES_FOUNDING_PERMIT_BYTES_V1
     {
@@ -498,7 +512,14 @@ fn authenticate_permit_and_projection(
         projected_context,
         projected_receipt_digest,
         core_digest,
-    )
+    )?;
+    // The Market's Custody namespace, and the only authenticated statement of
+    // it this instruction has. It comes from the Core-owned permit's intent,
+    // is cross-checked against the Lock receipt, the realization receipt, and
+    // (in `authenticate_custody_poststate`) the live replay account's own
+    // `context`. `authenticate_product_core` persists it; nothing downstream
+    // may assume it.
+    Ok(projected_context)
 }
 
 #[inline(never)]
@@ -711,6 +732,7 @@ fn authenticate_product_core(
     program_id: &Pubkey,
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
+    custody_context: [u8; 32],
 ) -> Result<MarketViewV2, ProgramError> {
     if accounts.core_market.key.to_bytes() != request.market()
         || accounts.core_market.owner != accounts.core_program.key
@@ -733,7 +755,15 @@ fn authenticate_product_core(
         product_instance_id: request.product_instance_id(),
         basis_id: request.semantic_basis_id(),
         realm_id: core.identity.realm_id.to_bytes(),
-        custody_context: request.market(),
+        // The authenticated Custody namespace, not the Market address. The
+        // founding creates the Hoard Vault and realizes the Market's normal
+        // replay under
+        // `SHA-256(PROJECTED_HOARD_CONTEXT_DOMAIN_V1 || permit.ticket_context)`,
+        // and `GenericFoundingRequestV1::context` is caller-owned, so no
+        // address reconciles with it. Writing `request.market()` here made the
+        // aggregate lie about the one coordinate every payout route needs, in
+        // the same instruction that had already authenticated the truth.
+        custody_context,
         generation: request.generation(),
     };
     authenticate_runtime_product_basis_core_v3(

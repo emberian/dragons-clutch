@@ -40,14 +40,27 @@ pub const TEST_CALLER_DELEGATED_INSTRUCTION_BYTES_V2: usize =
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TestCallerError {
     /// Wrapper or canonical Custody bytes were malformed.
-    Instruction = 0,
+    Instruction = 0x10_7000,
     /// Custody program or forwarded caller-authority frame was not exact.
-    AccountFrame = 1,
+    AccountFrame = 0x10_7001,
     /// Custody CPI failed or returned no producer-authenticated receipt.
-    CustodyCpi = 2,
+    CustodyCpi = 0x10_7002,
     /// Deliberate failure after a successful child effect.
-    DeliberateLateFailure = 3,
+    DeliberateLateFailure = 0x10_7003,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    TestCallerError::Instruction as u32 == dclutch_refusal_registry::TEST_CUSTODY_CALLER_BASE,
+    "TestCallerError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (TestCallerError::DeliberateLateFailure as u32)
+        < dclutch_refusal_registry::TEST_CUSTODY_CALLER_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "TestCallerError must not run past its registered refusal band"
+);
 
 impl From<TestCallerError> for ProgramError {
     fn from(value: TestCallerError) -> Self {

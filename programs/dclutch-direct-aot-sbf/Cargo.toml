@@ -22,6 +22,7 @@ dclutch-direct-aot-contract = { path = "../../crates/dclutch-direct-aot-contract
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
 solana-program = { version = "=3.0.0", default-features = false }
 
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 [dev-dependencies]
 solana-hash = "=4.6.0"
 solana-message = "=4.5.0"

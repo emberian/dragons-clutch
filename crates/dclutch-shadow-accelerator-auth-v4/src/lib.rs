@@ -51,9 +51,9 @@ use deployment::authenticate_current_deployment;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShadowAcceleratorAuthErrorV4 {
     /// The Registry receipt did not authenticate this Program as current Trading.
-    Release = 1,
+    Release = 0x4001,
     /// Manifest, selected entry, descriptor, or config content refused.
-    Content = 3,
+    Content = 0x4003,
 }
 
 impl From<ShadowAcceleratorAuthErrorV4> for ProgramError {

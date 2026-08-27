@@ -33,16 +33,31 @@ const CHILD_AUTHORITY_ACCOUNT: usize = 20;
 #[repr(u32)]
 pub enum RationalLifecycleCallerErrorV2 {
     /// Wrapper bytes or the lifecycle request refused.
-    Instruction = 0,
+    Instruction = 0x10_3000,
     /// Claims program or forwarded frame refused.
-    Accounts = 1,
+    Accounts = 0x10_3001,
     /// A release-scoped caller PDA did not join the request.
-    Authority = 2,
+    Authority = 0x10_3002,
     /// Claims CPI or its exact lifecycle receipt refused.
-    Claims = 3,
+    Claims = 0x10_3003,
     /// Deliberate refusal after the full Claims route returned.
-    DeliberateLateFailure = 4,
+    DeliberateLateFailure = 0x10_3004,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    RationalLifecycleCallerErrorV2::Instruction as u32
+        == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE,
+    "RationalLifecycleCallerErrorV2 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (RationalLifecycleCallerErrorV2::DeliberateLateFailure as u32)
+        < dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "RationalLifecycleCallerErrorV2 must not run past its registered refusal band"
+);
 
 impl From<RationalLifecycleCallerErrorV2> for ProgramError {
     fn from(value: RationalLifecycleCallerErrorV2) -> Self {

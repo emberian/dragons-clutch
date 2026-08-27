@@ -36,45 +36,58 @@ pub mod relay_v1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolutionError {
     /// Account count, order, privilege, executable state, or aliasing was invalid.
-    AccountFrame = 0,
+    AccountFrame = 0x8000,
     /// The generated fixed-layout request refused hostile bytes.
-    Instruction = 1,
+    Instruction = 0x8001,
     /// A writable Source state or certificate account was not canonical.
-    OutputState = 2,
+    OutputState = 0x8002,
     /// Market owner, root, lifecycle, generation, or Source binding was invalid.
-    MarketAuthority = 3,
+    MarketAuthority = 0x8003,
     /// A finalized raw-record owner, PDA, digest, rent, or vacancy proof was invalid.
-    FinalizedRecord = 4,
+    FinalizedRecord = 0x8004,
     /// The Market-selected Registry activation did not authorize this Resolution release.
-    ResolutionRelease = 5,
+    ResolutionRelease = 0x8005,
     /// Current Loader V3 Program, ProgramData, ELF, slot, or upgrade policy was substituted.
-    ResolutionDeployment = 6,
+    ResolutionDeployment = 0x8006,
     /// Source material or one of its embedded content identities was inconsistent.
-    SourceMaterial = 7,
+    SourceMaterial = 0x8007,
     /// The external Product-owned result-domain identity or bytes differed.
-    ProductDomain = 8,
+    ProductDomain = 0x8008,
     /// The selected Pyth provider-release record or Loader accounts differed.
-    ProviderRelease = 9,
+    ProviderRelease = 0x8009,
     /// Pyth configuration or fully verified update authentication failed.
-    ProviderObservation = 10,
+    ProviderObservation = 0x800A,
     /// Clock or Rent sysvar identity or bytes were invalid.
-    Sysvar = 11,
+    Sysvar = 0x800B,
     /// Provider-neutral Source admission or Product mapping refused.
-    Transition = 12,
+    Transition = 0x800C,
     /// Checked physical arithmetic or signed timestamp conversion failed.
-    Arithmetic = 13,
+    Arithmetic = 0x800D,
     /// Canonical capability funding, typed custody, or exact bounty debit failed.
-    Funding = 14,
+    Funding = 0x800E,
     /// The sealed relayed observation record was not consumable against this
     /// Market's authenticated Source graph.
-    RelayedRecord = 15,
+    RelayedRecord = 0x800F,
     /// The relayed observation was admissible but did not satisfy the Product's
     /// own window: it is no answer rather than a wrong one, and the market is
     /// still live. Distinct from every "the bytes were wrong" refusal on
     /// purpose, because "come back later" and "something is broken" are not the
     /// same message to whoever is holding the position.
-    RelayedWindow = 16,
+    RelayedWindow = 0x8010,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    ResolutionError::AccountFrame as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE,
+    "ResolutionError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (ResolutionError::RelayedWindow as u32)
+        < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "ResolutionError must not run past its registered refusal band"
+);
 
 impl From<ResolutionError> for ProgramError {
     fn from(value: ResolutionError) -> Self {

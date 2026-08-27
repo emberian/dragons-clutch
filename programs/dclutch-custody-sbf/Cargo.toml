@@ -22,6 +22,7 @@ dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }

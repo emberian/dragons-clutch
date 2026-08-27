@@ -168,16 +168,14 @@ pub const SERIES_SHADOW_REFUSAL_BASE: u32 = 0x0000_B000;
 pub const GENERAL_ACCELERATOR_REFUSAL_BASE: u32 = 0x0000_C000;
 /// Band 13 — `dclutch-dealer-accelerator-sbf`.
 pub const DEALER_ACCELERATOR_REFUSAL_BASE: u32 = 0x0000_D000;
-/// Band 14 — `dclutch-controller-proof-sbf`.
-pub const CONTROLLER_PROOF_REFUSAL_BASE: u32 = 0x0000_E000;
-/// Band 15 — `dclutch-custody-proof-sbf`.
-pub const CUSTODY_PROOF_REFUSAL_BASE: u32 = 0x0000_F000;
-/// Band 16 — `dclutch-claims-proof-sbf`.
-///
-/// Allocated but unpopulated: the program is a generated-profile evaluator and
-/// raises no custom code today. The band is held so that when it grows one it
-/// does not reach for zero.
-pub const CLAIMS_PROOF_REFUSAL_BASE: u32 = 0x0001_0000;
+
+// Bands 14, 15 and 16 were drafted for `dclutch-controller-proof-sbf`,
+// `dclutch-custody-proof-sbf` and `dclutch-claims-proof-sbf` and are NOT
+// allocated: `11ca28b` banished all three DCLTCAT1 proof programs while this
+// registry was being written. They are absent rather than retired-in-place
+// because no wire ever carried them -- a band entry for a program that does
+// not exist reads exactly like a live one, which is the failure the census's
+// own TARGETS comment records paying for once already.
 
 /// Band 0x100 — `dclutch-claims-sbf` test caller `affine-batch-caller`.
 pub const TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE: u32 = 0x0010_0000;
@@ -299,99 +297,78 @@ pub const BANDS: &[RefusalBand] = &[
         tier: BandTier::Program,
     },
     RefusalBand {
-        label: "controller-proof",
-        package: "dclutch-controller-proof-sbf",
-        base: CONTROLLER_PROOF_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
-        label: "custody-proof",
-        package: "dclutch-custody-proof-sbf",
-        base: CUSTODY_PROOF_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
-        label: "claims-proof",
-        package: "dclutch-claims-proof-sbf",
-        base: CLAIMS_PROOF_REFUSAL_BASE,
-        span: BAND_SPAN,
-        tier: BandTier::Program,
-    },
-    RefusalBand {
         label: "test/claims-affine-batch-caller",
-        package: "dclutch-claims-affine-batch-test-caller",
+        package: "dclutch-claims-affine-batch-test-caller-sbf",
         base: TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/claims-fractional-signed-delta-caller",
-        package: "dclutch-fractional-signed-delta-test-caller",
+        package: "dclutch-fractional-signed-delta-test-caller-sbf",
         base: TEST_CLAIMS_FRACTIONAL_SIGNED_DELTA_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/claims-liability-basis-caller",
-        package: "dclutch-liability-basis-test-caller",
+        package: "dclutch-claims-liability-basis-test-caller-sbf",
         base: TEST_CLAIMS_LIABILITY_BASIS_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/claims-rational-lifecycle-caller",
-        package: "dclutch-rational-lifecycle-test-caller",
+        package: "dclutch-rational-lifecycle-test-caller-sbf",
         base: TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/claims-rational-v2-caller",
-        package: "dclutch-rational-v2-test-caller",
+        package: "dclutch-rational-v2-test-caller-sbf",
         base: TEST_CLAIMS_RATIONAL_V2_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/claims-sparse-chain-caller",
-        package: "dclutch-sparse-chain-test-caller",
+        package: "dclutch-claims-sparse-chain-test-caller-sbf",
         base: TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/claims-terminal-settlement-caller",
-        package: "dclutch-terminal-settlement-test-caller",
+        package: "dclutch-terminal-settlement-test-caller-sbf",
         base: TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/custody-caller",
-        package: "dclutch-custody-test-caller",
+        package: "dclutch-custody-test-caller-sbf",
         base: TEST_CUSTODY_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/dealer-accelerator-caller",
-        package: "dclutch-dealer-accelerator-test-caller",
+        package: "dclutch-dealer-accelerator-test-caller-sbf",
         base: TEST_DEALER_ACCELERATOR_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/general-accelerator-caller",
-        package: "dclutch-general-accelerator-test-caller",
+        package: "dclutch-general-accelerator-test-caller-sbf",
         base: TEST_GENERAL_ACCELERATOR_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
     RefusalBand {
         label: "test/resolution-receipt-caller",
-        package: "dclutch-resolution-receipt-test-caller",
+        package: "dclutch-resolution-receipt-test-caller-sbf",
         base: TEST_RESOLUTION_RECEIPT_CALLER_BASE,
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
@@ -544,9 +521,6 @@ mod tests {
             SERIES_SHADOW_REFUSAL_BASE,
             GENERAL_ACCELERATOR_REFUSAL_BASE,
             DEALER_ACCELERATOR_REFUSAL_BASE,
-            CONTROLLER_PROOF_REFUSAL_BASE,
-            CUSTODY_PROOF_REFUSAL_BASE,
-            CLAIMS_PROOF_REFUSAL_BASE,
             TEST_CLAIMS_AFFINE_BATCH_CALLER_BASE,
             TEST_CLAIMS_FRACTIONAL_SIGNED_DELTA_CALLER_BASE,
             TEST_CLAIMS_LIABILITY_BASIS_CALLER_BASE,
@@ -564,7 +538,7 @@ mod tests {
                 "named base {base:#x} is not in BANDS"
             );
         }
-        assert_eq!(BANDS.len(), 27, "BANDS gained or lost an entry");
+        assert_eq!(BANDS.len(), 24, "BANDS gained or lost an entry");
     }
 
     #[test]

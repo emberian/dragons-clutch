@@ -114,24 +114,38 @@ const POST_RESOURCE_DOMAIN_V2: &[u8] = b"dclutch/rational-lifecycle/post/v2";
 #[repr(u32)]
 pub enum RationalLifecycleSbfErrorV2 {
     /// Instruction bytes or runtime width refused.
-    Instruction = 210,
+    Instruction = 0x5210,
     /// Account frame, privilege, or alias refused.
-    Accounts = 211,
+    Accounts = 0x5211,
     /// Current release selection or Trading caller refused.
-    Release = 212,
+    Release = 0x5212,
     /// Finalized descriptor or a derived resource identity refused.
-    Descriptor = 213,
+    Descriptor = 0x5213,
     /// Core Market or canonical Claims aggregate refused.
-    Market = 214,
+    Market = 0x5214,
     /// Prepaid or reclaimed native rent accounting refused.
-    Rent = 215,
+    Rent = 0x5215,
     /// Token-2022 resource state or effect refused.
-    Token = 216,
+    Token = 0x5216,
     /// Canonical protocol Position lifecycle refused.
-    Position = 217,
+    Position = 0x5217,
     /// Final resource observation or typed receipt refused.
-    Receipt = 218,
+    Receipt = 0x5218,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    RationalLifecycleSbfErrorV2::Instruction as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x210,
+    "RationalLifecycleSbfErrorV2 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (RationalLifecycleSbfErrorV2::Receipt as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "RationalLifecycleSbfErrorV2 must not run past its registered refusal band"
+);
 
 impl From<RationalLifecycleSbfErrorV2> for ProgramError {
     fn from(value: RationalLifecycleSbfErrorV2) -> Self {

@@ -97,22 +97,36 @@ const RESOURCE_DIGEST_DOMAIN_V2: &[u8] = b"dclutch/claims/affine-post-resources/
 #[repr(u32)]
 pub enum AffineBatchSbfErrorV2 {
     /// Instruction bytes did not decode as the canonical public ABI.
-    Instruction = 160,
+    Instruction = 0x5160,
     /// Account count, order, privileges, owners, or aliases refused.
-    Accounts = 161,
+    Accounts = 0x5161,
     /// Registry current-release authentication or caller authority refused.
-    Release = 162,
+    Release = 0x5162,
     /// Product graph, linked basis, semantic identity, or Core join refused.
-    ProductBasis = 163,
+    ProductBasis = 0x5163,
     /// Aggregate or Position PDA, width, identity, or revision refused.
-    ClaimsState = 164,
+    ClaimsState = 0x5164,
     /// An exact delta overflowed, underflowed, or selected an invalid coordinate.
-    Candidate = 165,
+    Candidate = 0x5165,
     /// Complete candidate buffers could not all be borrowed and committed last.
-    Commit = 166,
+    Commit = 0x5166,
     /// The canonical success receipt could not be constructed.
-    Receipt = 167,
+    Receipt = 0x5167,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    AffineBatchSbfErrorV2::Instruction as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x160,
+    "AffineBatchSbfErrorV2 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (AffineBatchSbfErrorV2::Receipt as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "AffineBatchSbfErrorV2 must not run past its registered refusal band"
+);
 
 impl From<AffineBatchSbfErrorV2> for ProgramError {
     fn from(value: AffineBatchSbfErrorV2) -> Self {

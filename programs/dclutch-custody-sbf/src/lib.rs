@@ -85,27 +85,27 @@ const REPLAY: usize = 8;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CustodySbfError {
     /// Instruction bytes did not decode as the one generated request.
-    Instruction = 0,
+    Instruction = 0x6000,
     /// Account count, order, privileges, or aliases were not exact.
-    AccountFrame = 1,
+    AccountFrame = 0x6001,
     /// Registry CPI, producer, receipt, release, role, or caller refused.
-    Release = 2,
+    Release = 0x6002,
     /// Caller authority was not the release-pinned role PDA signer.
-    CallerAuthority = 3,
+    CallerAuthority = 0x6003,
     /// Realm content, PDA, owner, Mint, token program, or adapter release refused.
-    Realm = 4,
+    Realm = 0x6004,
     /// Replay PDA, owner, bytes, or revision refused.
-    Replay = 5,
+    Replay = 0x6005,
     /// Vault PDA, token state, or authority policy refused.
-    TokenState = 6,
+    TokenState = 0x6006,
     /// Rent, payer, System program, or account creation refused.
-    Create = 7,
+    Create = 0x6007,
     /// Exact token or close-account CPI refused.
-    TokenCpi = 8,
+    TokenCpi = 0x6008,
     /// Exact CPI postcondition or checked balance arithmetic refused.
-    Postcondition = 9,
+    Postcondition = 0x6009,
     /// Replay state could not be committed after all effects succeeded.
-    Commit = 10,
+    Commit = 0x600A,
     /// An expiry-gated terminal was attempted at the wrong time.
     ///
     /// The kernel has always distinguished this from [`Self::Replay`]; this
@@ -114,8 +114,21 @@ pub enum CustodySbfError {
     /// is not what happened and is not what a reader needs to know. For a
     /// terminal whose entire safety property is that it refuses while the
     /// founding is still satisfiable, the refusal has to be able to say so.
-    Expiry = 11,
+    Expiry = 0x600B,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    CustodySbfError::Instruction as u32 == dclutch_refusal_registry::CUSTODY_REFUSAL_BASE,
+    "CustodySbfError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (CustodySbfError::Expiry as u32)
+        < dclutch_refusal_registry::CUSTODY_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "CustodySbfError must not run past its registered refusal band"
+);
 
 impl From<CustodySbfError> for ProgramError {
     fn from(value: CustodySbfError) -> Self {

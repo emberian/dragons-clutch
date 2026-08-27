@@ -151,28 +151,42 @@ const ACTION_NONCE_OFFSET: usize = 56;
 #[repr(u32)]
 pub enum LiabilityBasisSbfErrorV2 {
     /// Instruction bytes were not the sole canonical V2 action.
-    Instruction = 100,
+    Instruction = 0x5100,
     /// Account count, order, privilege, owner, or alias checks refused.
-    Accounts = 101,
+    Accounts = 0x5101,
     /// Claims aggregate or Position bytes/PDA/revision refused.
-    ClaimsState = 102,
+    ClaimsState = 0x5102,
     /// A finalized raw-record PDA, staging vacancy, rent, or digest refused.
-    FinalizedRecord = 103,
+    FinalizedRecord = 0x5103,
     /// Product instance, basis identity, runtime width, or Core join refused.
-    ProductLink = 104,
+    ProductLink = 0x5104,
     /// Registry current-deployment authentication refused.
-    Release = 105,
+    Release = 0x5105,
     /// The pure exact liability transition refused.
-    Candidate = 106,
+    Candidate = 0x5106,
     /// Exact Custody request, authority, replay, or vault binding refused.
-    CustodyRequest = 107,
+    CustodyRequest = 0x5107,
     /// Custody CPI failed.
-    CustodyCpi = 108,
+    CustodyCpi = 0x5108,
     /// Custody return data or physical postconditions refused.
-    Postcondition = 109,
+    Postcondition = 0x5109,
     /// Complete candidate state could not be committed atomically.
-    Commit = 110,
+    Commit = 0x510A,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    LiabilityBasisSbfErrorV2::Instruction as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x100,
+    "LiabilityBasisSbfErrorV2 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (LiabilityBasisSbfErrorV2::Commit as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "LiabilityBasisSbfErrorV2 must not run past its registered refusal band"
+);
 
 impl From<LiabilityBasisSbfErrorV2> for ProgramError {
     fn from(value: LiabilityBasisSbfErrorV2) -> Self {
@@ -1282,13 +1296,17 @@ fn expected_custody_request_v2(
         },
         source: accounts.source_token.key.to_bytes(),
         destination: accounts.destination_token.key.to_bytes(),
+        // The HoardPrincipal side — destination on Split, source on Merge —
+        // is namespaced by the Market's persisted Custody context, the same
+        // coordinate the replay above uses. The `External` side carries no
+        // vault context at all.
         source_vault_context: if split {
             [0; 32]
         } else {
-            market.logical_market
+            market.custody_context
         },
         destination_vault_context: if split {
-            market.logical_market
+            market.custody_context
         } else {
             [0; 32]
         },

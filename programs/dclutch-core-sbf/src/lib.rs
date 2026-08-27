@@ -84,38 +84,51 @@ pub const CAPABILITY_ROLE_PREFIX_BYTES_V1: usize =
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoreSbfError {
     /// Instruction bytes or action-specific inactive fields refused.
-    Instruction = 0,
+    Instruction = 0x3000,
     /// Account count, order, privilege, executable flag, or alias refused.
-    AccountFrame = 1,
+    AccountFrame = 0x3001,
     /// Finalized record owner, PDA, cursor absence, Rent, digest, or schema refused.
-    FinalizedRecord = 2,
+    FinalizedRecord = 0x3002,
     /// Realm/Product/result-domain/Market identity linkage refused.
-    Reference = 3,
+    Reference = 0x3003,
     /// Registry cache, Loader-backed current deployment, or release-set join refused.
-    Release = 4,
+    Release = 0x3004,
     /// Core Market PDA, owner, width, phase, or generation refused.
-    Market = 5,
+    Market = 0x3005,
     /// RentCredit owner, bytes, PDA, or persisted beneficiary refused.
-    RentCredit = 6,
+    RentCredit = 0x3006,
     /// System, Rent, Clock, vacant account, or exact creation plan refused.
-    Creation = 7,
+    Creation = 0x3007,
     /// Capability manifest entry, FundingState, custody, deadline, or PDA refused.
-    Funding = 8,
+    Funding = 0x3008,
     /// Canonical release-pinned Core caller authority refused.
-    CallerAuthority = 9,
+    CallerAuthority = 0x3009,
     /// Selected child invocation or immediate return-data producer refused.
-    ChildCpi = 10,
+    ChildCpi = 0x300A,
     /// Child acknowledgement or post-funding physical delta refused.
-    ChildAck = 11,
+    ChildAck = 0x300B,
     /// Generated semantic transition refused.
-    Transition = 12,
+    Transition = 0x300C,
     /// Commit-last Core state persistence postcheck refused.
-    Commit = 13,
+    Commit = 0x300D,
     /// Checked arithmetic or bounded conversion refused.
-    Arithmetic = 14,
+    Arithmetic = 0x300E,
     /// Core bootstrap profile, artifact, Loader, or immutability authority refused.
-    Infrastructure = 15,
+    Infrastructure = 0x300F,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    CoreSbfError::Instruction as u32 == dclutch_refusal_registry::CORE_REFUSAL_BASE,
+    "CoreSbfError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (CoreSbfError::Infrastructure as u32)
+        < dclutch_refusal_registry::CORE_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "CoreSbfError must not run past its registered refusal band"
+);
 
 impl From<CoreSbfError> for ProgramError {
     fn from(value: CoreSbfError) -> Self {

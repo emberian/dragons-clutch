@@ -1800,6 +1800,10 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-registry-contract"
 version = "0.1.0"
 dependencies = [
@@ -1941,6 +1945,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",

@@ -72,16 +72,31 @@ const LINKED_BASIS_STAGING_BASE_COORDINATE: usize = 67;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SeriesShadowSbfErrorV4 {
     /// Common Trading could not authenticate the Shadow callback.
-    InvalidInvocation = 0,
+    InvalidInvocation = 0xB000,
     /// This ELF has no deliberately selected generated release.
-    NoSelectedRelease = 1,
+    NoSelectedRelease = 0xB001,
     /// Profile13 geometry or normalized runtime observations differed.
-    Runtime = 2,
+    Runtime = 0xB002,
     /// A finalized Series or Product record did not authenticate.
-    FinalizedRecord = 3,
+    FinalizedRecord = 0xB003,
     /// The typed acknowledgement could not be encoded.
-    InvalidAcknowledgement = 4,
+    InvalidAcknowledgement = 0xB004,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    SeriesShadowSbfErrorV4::InvalidInvocation as u32
+        == dclutch_refusal_registry::SERIES_SHADOW_REFUSAL_BASE,
+    "SeriesShadowSbfErrorV4 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (SeriesShadowSbfErrorV4::InvalidAcknowledgement as u32)
+        < dclutch_refusal_registry::SERIES_SHADOW_REFUSAL_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "SeriesShadowSbfErrorV4 must not run past its registered refusal band"
+);
 
 impl From<SeriesShadowSbfErrorV4> for ProgramError {
     fn from(value: SeriesShadowSbfErrorV4) -> Self {

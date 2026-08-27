@@ -158,26 +158,39 @@ impl<'accounts, 'info> GenericAccounts<'accounts, 'info> {
 #[repr(u32)]
 pub enum ClaimsSbfError {
     /// Instruction bytes were hostile or selected no supported family.
-    Instruction = 0,
+    Instruction = 0x5000,
     /// Account count, privileges, owners, or executable flags were wrong.
-    Accounts = 1,
+    Accounts = 0x5001,
     /// Market or Position semantic identities did not join the packet.
-    Identity = 2,
+    Identity = 0x5002,
     /// Registry receipt or current deployment authentication failed.
-    Release = 3,
+    Release = 0x5003,
     /// Caller PDA authority did not authenticate the packet.
-    Authority = 4,
+    Authority = 0x5004,
     /// Claims economic transition refused.
-    Economic = 5,
+    Economic = 0x5005,
     /// This action requires the canonical Custody child composition.
-    CustodyRequired = 6,
+    CustodyRequired = 0x5006,
     /// Receipt construction or post-state commitment failed.
-    Receipt = 7,
+    Receipt = 0x5007,
     /// Representation descriptor/state or unified wrapper transition refused.
-    Representation = 8,
+    Representation = 0x5008,
     /// Token-2022 mint/account profile or CPI refused.
-    Token = 9,
+    Token = 0x5009,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    ClaimsSbfError::Instruction as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE,
+    "ClaimsSbfError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (ClaimsSbfError::Token as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "ClaimsSbfError must not run past its registered refusal band"
+);
 
 impl From<ClaimsSbfError> for ProgramError {
     fn from(value: ClaimsSbfError) -> Self {

@@ -31,12 +31,27 @@ use solana_program::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerAcceleratorTestCallerErrorV1 {
     /// The request, accelerator, or forwarded frame was malformed.
-    Frame = 0,
+    Frame = 0x10_8000,
     /// The canonical caller-authority PDA or privilege set differed.
-    Authority = 1,
+    Authority = 0x10_8001,
     /// The accelerator returned no typed bytes or another producer returned.
-    ReturnData = 2,
+    ReturnData = 0x10_8002,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    DealerAcceleratorTestCallerErrorV1::Frame as u32
+        == dclutch_refusal_registry::TEST_DEALER_ACCELERATOR_CALLER_BASE,
+    "DealerAcceleratorTestCallerErrorV1 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (DealerAcceleratorTestCallerErrorV1::ReturnData as u32)
+        < dclutch_refusal_registry::TEST_DEALER_ACCELERATOR_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "DealerAcceleratorTestCallerErrorV1 must not run past its registered refusal band"
+);
 
 impl From<DealerAcceleratorTestCallerErrorV1> for ProgramError {
     fn from(value: DealerAcceleratorTestCallerErrorV1) -> Self {

@@ -69,32 +69,45 @@ pub const REAUTHENTICATE_ACCOUNT_COUNT_V1: usize = 3;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistryError {
     /// Instruction bytes were not the one canonical Registry wire.
-    Instruction = 0,
+    Instruction = 0x1000,
     /// Account count, order, privilege, or aliasing was invalid.
-    AccountFrame = 1,
+    AccountFrame = 0x1001,
     /// A finalized record owner, digest, PDA, rent, or vacancy proof refused.
-    FinalizedRecord = 2,
+    FinalizedRecord = 0x1002,
     /// Loader Program, ProgramData, linkage, slot, ELF, or authority refused.
-    Deployment = 3,
+    Deployment = 0x1003,
     /// Release-set or artifact semantic admission refused.
-    Release = 4,
+    Release = 0x1004,
     /// The activation cache owner, PDA, bytes, or lifecycle refused.
-    ActivationCache = 5,
+    ActivationCache = 0x1005,
     /// System account creation failed or produced the wrong account.
-    CreateCpi = 6,
+    CreateCpi = 0x1006,
     /// Account data could not be borrowed.
-    Borrow = 7,
+    Borrow = 0x1007,
     /// Checked width or lamport arithmetic refused.
-    Arithmetic = 8,
+    Arithmetic = 0x1008,
     /// Clock-independent Rent or native-program authentication refused.
-    Sysvar = 9,
+    Sysvar = 0x1009,
     /// A batched request or receipt failed its canonical fixed-width contract.
-    Batch = 10,
+    Batch = 0x100A,
     /// Registry-authenticated continuation header, signer, or child refused.
-    Continuation = 11,
+    Continuation = 0x100B,
     /// Immutable-record publication wire, frame, transition, or account refused.
-    Record = 12,
+    Record = 0x100C,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    RegistryError::Instruction as u32 == dclutch_refusal_registry::REGISTRY_REFUSAL_BASE,
+    "RegistryError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (RegistryError::Record as u32)
+        < dclutch_refusal_registry::REGISTRY_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "RegistryError must not run past its registered refusal band"
+);
 
 impl From<RegistryError> for ProgramError {
     fn from(value: RegistryError) -> Self {

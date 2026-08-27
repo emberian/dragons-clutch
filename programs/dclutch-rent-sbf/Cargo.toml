@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.89"
-description = "Thin successor SBF adapter for permanent dClutch RentCredit"
+description = "Thin successor SBF adapter for the dClutch lifecycle RentCredit"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -17,6 +17,7 @@ custom-heap = []
 custom-panic = []
 
 [dependencies]
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
