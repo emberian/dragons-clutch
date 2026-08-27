@@ -376,6 +376,83 @@ envelope, so 2,040 bytes at `K = 3`; lifecycle request
 (`lifecycle-contract/src/lib.rs:35,37`, asserted at `:497-503`), which carries
 no cap of its own and is bounded only by its own caller's profile.
 
+## 3c. AMENDMENT: Option A means Structured authors NO artifacts. They are all already landed.
+
+Same lane, same day, found while sizing the campaign. This is the largest
+consequence of the ruling and §3 does not contain it.
+
+§6 said the nearest twin
+`dclutch-bearer-v2-operator::open_structured_v3::encode_effect` "settles the
+mechanical shape of the encoder". Read again with Option A taken, that
+understates it to the point of being misleading. The twin is not a shape
+reference. **It is the artifact.**
+
+`crates/dclutch-bearer-v2-operator/src/open_structured_v3.rs:1` describes
+itself as "Data-defined Hot artifacts for full-width Structured issue and
+unwrap", and `build_rational_open_structured_hot_bundle_v3` (`:188`) takes a
+`RepresentationDescriptorV2` plus a `RepresentationActionV2` and returns the
+complete bundle: `account_profile`, `request_profile`, `lifecycle_policy`,
+`transition`, `strategy`, `effect`, and the `CapabilityProgramV4` descriptor
+selecting all of them. It is parameterized by the descriptor, so it serves any
+representation -- including one founded from Structured terms.
+
+The other two actions are in the same position:
+
+| Structured action | Rational action | already-landed builder |
+|---|---|---|
+| `Issue` | `IssueStructured` | `build_rational_open_structured_hot_bundle_v3` (`bearer-v2-operator/src/open_structured_v3.rs:188`) |
+| `Unwrap` | `UnwrapStructured` | same builder |
+| `TerminalRedeem` | `UnwrapStructured` then `RedeemTerminal` | same builder, then `build_rational_terminal_hot_bundle_v3` (`bearer-v2-operator/src/hot_bundle_v3.rs:96`) |
+| `ZeroSupplyRetire` | `RetireCoordinate` | `build_rational_lifecycle_hot_bundle_v3` (`rational-lifecycle-hot-v3/src/bundle.rs:94`) |
+| `ZeroSupplyRetire` | `RetireReceipt` | the compact V4 path -- `bundle.rs:92` states complete-support receipt retirement is "exclusively compact V4", and `artifacts.rs:228` refuses `RetireReceipt` in V3 |
+
+**So §3's numbered artifact chain, and §6's "the order of work is fixed by the
+digest chain: EffectProgramV4 first, then the AccountProfile ... then the
+descriptor, then the set", is already executed for every Structured action.**
+The warning that "an effect-schema mistake invalidates everything downstream of
+it" is no longer a risk this family carries, because this family is not
+choosing an effect schema. It is reusing four that are digest-stable and
+landed.
+
+None of these builders has a caller outside its own crate today
+(`open_structured_v3` is re-exported at `bearer-v2-operator/src/lib.rs:75` and
+otherwise unreferenced), which is why the twin read as a parallel effort rather
+than as Structured's own route.
+
+### What actually remains, then
+
+1. **Derive a `RepresentationDescriptorV2` from the Structured terms.** This is
+   the one genuinely new host-side artifact and it is small: the descriptor
+   preimage is a 10-byte-reserved header plus `graph_id`, `graph_digest`,
+   `root_id`, `market_id`, `release_set_id`, `receipt_mint`, `token_program`,
+   `outcome_count`, `denominator` and `K` coefficients, every one of which the
+   Structured terms already carry or determine. Its digest is `descriptor_id`,
+   and §3b showed that identity is the whole of Structured's on-chain physics.
+2. **Feed it to the four builders**, once per action, and seal per
+   `(descriptor, action)` with the already-implemented
+   `hot_v3::process_capability_seal_v1`.
+3. **The `CapabilityProgramSetV2` and the manifest entry** (§3 items 2 and 3),
+   which are joins over descriptors that now exist rather than artifacts to
+   author.
+4. **The campaign and the census bindings** (§6): a
+   `tools/gauntlet/structured/` directory whose `bindings.json` binds to
+   existing trading routes. Still no `TARGETS` row; Structured still ships no
+   `programs/` entrypoint.
+
+The lowering from Structured's own plan onto that wire is landed in
+`crates/dclutch-structured-v2-operator/src/child_request.rs` with per-kind
+witnesses (16 tests), including the three divergences §3b records.
+
+### What Fractional's twin inherits
+
+All of it, and this is the reusable part. §5 said Fractional's physical twin
+"needs this record before it needs code". Sharper now: if Fractional takes
+Option A, it authors no artifacts either -- its work is a descriptor
+derivation, a kind-to-style lowering with its own divergence audit, and a
+campaign. The generalisation is that **a family adopting an existing child ABI
+inherits that ABI's whole artifact closure**, and the expensive part is not the
+encoder but discovering where its own semantics disagree with the wire's.
+
 ## 4. `frame.rs` is two objects, and only one of them is an artifact input
 
 `frame.rs` is now load-bearing for the effect coordinates (`dee3311e`), and
