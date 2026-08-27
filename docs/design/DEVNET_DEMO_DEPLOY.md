@@ -171,12 +171,19 @@ programs and is the reference for the byte offsets.
 ⚠ **REQUIRES EXPLICIT USER AUTHORIZATION.** Each of these is irreversible.
 
 `programs/dclutch-core-sbf/src/infrastructure.rs::process_initialize`
-authenticates the Registry and Rent artifacts through
-`require_pinned_immutable_deployment`, which refuses unless the observed
-ProgramData carries **no** upgrade authority — while
+authenticates the Registry and Rent artifacts through `authenticate_artifact`,
+which refuses outright unless each record's `upgrade_policy()` is `Immutable`
+(`:281`) and then, under `FirstAdmission`, runs `require_current_deployment` —
+the one site that hashes the *actual deployed ELF* rather than trusting a pinned
+digest. `authenticate_deployment` then compares the observed upgrade authority
+against the record's, which is `None`. Meanwhile
 `authenticate_current_core_upgrade_authority` in the same function requires Core
 to *still hold* an authority that signs. Both conditions are live in one
 instruction.
+
+(That first admission hashes 373,040 bytes of Registry + Rent ELF, ≈206,000 CU
+at the measured 0.552 CU/byte. Comfortable, but it is the reason the profile
+initialization is not free.)
 
 The minimal constraint is therefore only: *Registry and Rent immutable before
 Core init; Core mutable during it and immutable before activation; Claims,
