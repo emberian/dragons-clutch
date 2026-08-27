@@ -211,11 +211,12 @@ for entry in $ROLES; do
     grep -h "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" 2>/dev/null \
         | sed "s|^|$role\t|" >> "$WORK/frame-diagnostics.txt" || true
 done
-if [ -s "$WORK/frame-diagnostics.txt" ]; then
-    python3 "$TIER/check-frame-diagnostics.py" \
-            "$TIER/frame-diagnostics.json" "$WORK/frame-diagnostics.txt" >&2 || \
-        die "SBF stack-frame-overwrite diagnostics are not covered by tools/gauntlet/journey/frame-diagnostics.json; refusing to run a journey on artifacts the toolchain calls potentially-undefined."
-fi
+# Run unconditionally, including when nothing was observed: an empty observed
+# file is exactly the case where a STALE exemption needs reporting, and gating
+# the checker on `-s` meant a lapsed entry could sit here forever unnoticed.
+python3 "$TIER/check-frame-diagnostics.py" \
+        "$TIER/frame-diagnostics.json" "$WORK/frame-diagnostics.txt" >&2 || \
+    die "SBF stack-frame-overwrite diagnostics are not covered by tools/gauntlet/journey/frame-diagnostics.json; refusing to run a journey on artifacts the toolchain calls potentially-undefined."
 
 # ----------------------------------------------------------- 3. journey binary
 JOURNEY_DIGEST="$(cat "$TIER/Cargo.toml" "$TIER"/src/*.rs | sha256_stdin)"
@@ -239,6 +240,15 @@ if python3 -c 'import socket,sys
 s=socket.socket(); s.settimeout(0.5)
 sys.exit(0 if s.connect_ex(("127.0.0.1",20890))==0 else 1)'; then
     die "127.0.0.1:20890 is occupied; the successor launcher is pinned to that origin"
+fi
+
+# Checked AGAIN here, immediately before the campaign. The earlier check is six
+# minutes of SBF builds away from this point, and on 2026-08-27 a lane took the
+# slot inside that window and the run died after paying for every artifact.
+if python3 -c 'import socket,sys
+s=socket.socket(); s.settimeout(0.5)
+sys.exit(0 if s.connect_ex(("127.0.0.1",20890))==0 else 1)'; then
+    die "127.0.0.1:20890 was taken while this run was building; re-run to reuse the stamped artifacts"
 fi
 
 RUN="$RUNS/$(date -u '+%Y%m%dT%H%M%SZ')-${SOURCE_REVISION:0:12}-h$HOLDERS"

@@ -109,9 +109,17 @@ undefined behaviour anywhere in that chain voids the claim silently.
 
 The first time it ran it refused, on **65 diagnostics — every one of them in
 `dclutch_resolution_proof_sbf::relay_transport_v1::process_relay_transport_v1`**,
-with the other six role artifacts at zero. That artifact is bound into the
-five-role release set and activated by tier 1, which has been producing evidence
-on it under a warning nobody had to read.
+with the other six role artifacts at zero (measured at `0ca81cc`). That artifact
+is bound into the five-role release set and activated by tier 1, which had been
+producing evidence on it under a warning nobody has to read.
+
+**It reports zero at `37d873f`.** Nothing in the Resolution program's own
+history obviously fixes it — the codegen moved under it — so it can come back,
+and if it does this tier refuses again. `frame-diagnostics.json` is therefore
+*empty* rather than holding a lapsed exemption "just in case": an entry is kept
+only while it is true, exactly as `blocked.json` requires of a blocking reason.
+The measurement is recorded here so deleting the entry does not delete the
+history.
 
 The narrow exception is `frame-diagnostics.json`, shaped like `blocked.json`:
 each entry names the exact mangled symbol, the measured count, why this campaign
