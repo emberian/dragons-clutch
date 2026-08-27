@@ -8,10 +8,7 @@
 //! `LifecycleRentCreditV2` that tier 1 creates, sweeps, and closes. Its whole
 //! grammar lives in that module.
 //!
-//! What remains at this root is the V1 record and its accounting primitives.
-//! `RentCreditV1` is a program-owned, non-closeable 48-byte account whose
-//! immutable field is a source's `rent_refund` refund/beneficiary authority,
-//! never a direct payout account.
+//! What remains at this root is the shared accounting primitives.
 //!
 //! The V1 Create and Withdraw INSTRUCTIONS were deleted on 2026-08-27 (the
 //! answered supersession decision in tools/gauntlet/blocked.json; AGENTS.md
@@ -21,13 +18,15 @@
 //! [`CreateBalancePlanV1`] survives its name: the lifecycle V2 Create path uses
 //! the same exact fund-at-current-Rent-minimum plan.
 //!
-//! Consequence, stated rather than hidden: with no Create route, no new
-//! `RentCreditV1` account can come into existence. The type, its width, and its
-//! PDA domain are kept because live code still reads them — most consequentially
-//! `dclutch-direct-codec`, which pins `RENT_CREDIT_BYTES_V1` at registered
-//! artifact coordinates 7 and 10, where the RentCredit V1/V2 width skew is a
-//! known emitter defect owned by DP2. That migration retires the last of V1;
-//! this crate does not front-run it under a live emitter lane.
+//! The V1 RECORD went on 2026-08-27 too, once its last reader did. With no
+//! Create route no `RentCreditV1` could come into existence, and the type
+//! survived only because `dclutch-direct-codec` pinned its width at registered
+//! artifact coordinates 7 and 10. That pin is now a 128-byte
+//! `LifecycleRentCreditV2` and a Rent program coordinate; the two SVM-harness
+//! Markets that planted a V1 record as their rent beneficiary never decoded its
+//! bytes, and say so where they plant one. Nothing reads a V1 credit any more,
+//! so `RentCreditV1`, `RentCreditPdaSeedsV1`, the 48-byte width, the PDA
+//! domain, the magic, the schema version and every V1 field offset are gone.
 //!
 //! This crate owns byte canonicality and exact balance plans. It does not derive
 //! PDAs, inspect account owners or data, deserialize Rent, invoke System,
@@ -40,30 +39,6 @@ use core::convert::TryInto;
 
 /// Exact width of a Solana-compatible public-key byte string.
 pub const PUBKEY_BYTES: usize = 32;
-/// Exact width of a persistent V1 rent-credit record.
-pub const RENT_CREDIT_BYTES_V1: usize = 48;
-
-/// PDA domain for one permanent rent credit per refund authority.
-///
-/// This is 22 bytes, within Solana's 32-byte individual PDA-seed limit.
-pub const RENT_CREDIT_PDA_DOMAIN_V1: &[u8] = b"dclutch/rent-credit/v1";
-/// Exact byte count of [`RENT_CREDIT_PDA_DOMAIN_V1`].
-pub const RENT_CREDIT_PDA_DOMAIN_BYTES_V1: usize = 22;
-
-/// Canonical persistent-account magic.
-pub const RENT_CREDIT_MAGIC_V1: [u8; 8] = *b"DCLTRNT1";
-/// Implemented persistent-account and instruction schema version.
-pub const RENT_CREDIT_SCHEMA_VERSION_V1: u16 = 1;
-
-/// Offset of the persisted schema version.
-pub const RENT_CREDIT_SCHEMA_OFFSET_V1: usize = 8;
-/// Offset of the persisted PDA bump.
-pub const RENT_CREDIT_PDA_BUMP_OFFSET_V1: usize = 10;
-/// Offset of five canonical zero bytes in a persistent credit.
-pub const RENT_CREDIT_RESERVED_OFFSET_V1: usize = 11;
-/// Offset of the immutable refund/beneficiary authority.
-pub const RENT_CREDIT_REFUND_AUTHORITY_OFFSET_V1: usize = 16;
-
 /// Canonical System Program key bytes (`11111111111111111111111111111111`).
 pub const SYSTEM_PROGRAM_ID: [u8; PUBKEY_BYTES] = [0; PUBKEY_BYTES];
 /// Canonical Rent sysvar key bytes (`SysvarRent111111111111111111111111111111111`).
@@ -97,8 +72,6 @@ pub enum Error {
     InvalidSystemWallet,
     /// Roles that must be distinct used the same account key.
     AccountAlias,
-    /// A record did not bind the supplied authority and bump.
-    CreditBindingMismatch,
     /// Creation was not funded by exactly the current Rent minimum.
     CreationFundingMismatch,
     /// A required nonzero requested withdrawal amount was zero.
@@ -138,106 +111,6 @@ impl RefundAuthority {
     /// Return the exact authority bytes.
     pub const fn to_bytes(self) -> [u8; PUBKEY_BYTES] {
         self.0
-    }
-}
-
-/// Immutable, permanent program-owned native-rent credit state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RentCreditV1 {
-    refund_authority: RefundAuthority,
-    pda_bump: u8,
-}
-
-impl RentCreditV1 {
-    /// Construct canonical semantic credit state before encoding it.
-    pub const fn new(refund_authority: RefundAuthority, pda_bump: u8) -> Self {
-        Self {
-            refund_authority,
-            pda_bump,
-        }
-    }
-
-    /// Hostile-decode exactly one canonical 48-byte V1 credit account.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != RENT_CREDIT_BYTES_V1 {
-            return Err(Error::InvalidLength);
-        }
-        if read_array(bytes, 0)? != RENT_CREDIT_MAGIC_V1 {
-            return Err(Error::InvalidMagic);
-        }
-        if read_u16(bytes, RENT_CREDIT_SCHEMA_OFFSET_V1)? != RENT_CREDIT_SCHEMA_VERSION_V1 {
-            return Err(Error::UnsupportedSchema);
-        }
-        require_zero(bytes, RENT_CREDIT_RESERVED_OFFSET_V1, 5)?;
-        Ok(Self::new(
-            RefundAuthority::new(read_array(bytes, RENT_CREDIT_REFUND_AUTHORITY_OFFSET_V1)?)?,
-            read_byte(bytes, RENT_CREDIT_PDA_BUMP_OFFSET_V1)?,
-        ))
-    }
-
-    /// Return the exact canonical 48-byte persistent representation.
-    pub fn to_bytes(self) -> [u8; RENT_CREDIT_BYTES_V1] {
-        let mut output = [0; RENT_CREDIT_BYTES_V1];
-        put(&mut output, 0, &RENT_CREDIT_MAGIC_V1);
-        put(
-            &mut output,
-            RENT_CREDIT_SCHEMA_OFFSET_V1,
-            &RENT_CREDIT_SCHEMA_VERSION_V1.to_le_bytes(),
-        );
-        output[RENT_CREDIT_PDA_BUMP_OFFSET_V1] = self.pda_bump;
-        put(
-            &mut output,
-            RENT_CREDIT_REFUND_AUTHORITY_OFFSET_V1,
-            &self.refund_authority.to_bytes(),
-        );
-        output
-    }
-
-    /// Return the immutable refund/beneficiary authority.
-    pub const fn refund_authority(self) -> RefundAuthority {
-        self.refund_authority
-    }
-    /// Return the persisted PDA bump that the adapter must verify by derivation.
-    pub const fn pda_bump(self) -> u8 {
-        self.pda_bump
-    }
-    /// Return the exact PDA seed projection for an SDK-owning adapter.
-    pub const fn pda_seeds(self) -> RentCreditPdaSeedsV1 {
-        RentCreditPdaSeedsV1 {
-            domain: RENT_CREDIT_PDA_DOMAIN_V1,
-            refund_authority: self.refund_authority,
-            bump: self.pda_bump,
-        }
-    }
-    /// Verify immutable state against a separately derived Create binding.
-    pub fn validate_binding(self, authority: RefundAuthority, bump: u8) -> Result<()> {
-        if self.refund_authority != authority || self.pda_bump != bump {
-            return Err(Error::CreditBindingMismatch);
-        }
-        Ok(())
-    }
-}
-
-/// Exact PDA seed projection; actual PDA derivation remains in the SVM adapter.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RentCreditPdaSeedsV1 {
-    domain: &'static [u8],
-    refund_authority: RefundAuthority,
-    bump: u8,
-}
-
-impl RentCreditPdaSeedsV1 {
-    /// Return the fixed PDA domain.
-    pub const fn domain(self) -> &'static [u8] {
-        self.domain
-    }
-    /// Return the immutable authority seed.
-    pub const fn refund_authority(self) -> RefundAuthority {
-        self.refund_authority
-    }
-    /// Return the persisted bump seed.
-    pub const fn bump(self) -> u8 {
-        self.bump
     }
 }
 
@@ -425,19 +298,6 @@ fn is_zero(bytes: &[u8; PUBKEY_BYTES]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
 
-fn require_zero(bytes: &[u8], offset: usize, length: usize) -> Result<()> {
-    let end = offset.checked_add(length).ok_or(Error::InvalidLength)?;
-    if bytes
-        .get(offset..end)
-        .ok_or(Error::InvalidLength)?
-        .iter()
-        .any(|byte| *byte != 0)
-    {
-        return Err(Error::NonCanonicalReservedBytes);
-    }
-    Ok(())
-}
-
 fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
     let end = offset.checked_add(N).ok_or(Error::InvalidLength)?;
     bytes
@@ -447,62 +307,10 @@ fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
         .map_err(|_| Error::InvalidLength)
 }
 
-fn read_byte(bytes: &[u8], offset: usize) -> Result<u8> {
-    bytes.get(offset).copied().ok_or(Error::InvalidLength)
-}
-fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    Ok(u16::from_le_bytes(read_array(bytes, offset)?))
-}
-
-fn put(output: &mut [u8], offset: usize, value: &[u8]) {
-    if let Some(destination) = output.get_mut(offset..offset.saturating_add(value.len())) {
-        destination.copy_from_slice(value);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn key(value: u8) -> [u8; 32] {
-        [value; 32]
-    }
-    fn authority(value: u8) -> RefundAuthority {
-        RefundAuthority::new(key(value)).expect("authority")
-    }
-    #[test]
-    fn canonical_roundtrip_bump_and_binding() {
-        let record = RentCreditV1::new(authority(7), 254);
-        let bytes = record.to_bytes();
-        assert_eq!(bytes.len(), 48);
-        assert_eq!(bytes[10], 254);
-        assert_eq!(RentCreditV1::decode(&bytes), Ok(record));
-        assert_eq!(record.pda_seeds().domain(), RENT_CREDIT_PDA_DOMAIN_V1);
-        assert_eq!(record.validate_binding(authority(7), 254), Ok(()));
-        assert_eq!(
-            record.validate_binding(authority(8), 254),
-            Err(Error::CreditBindingMismatch)
-        );
-    }
-
-    #[test]
-    fn decode_refuses_reserved_trailing_and_zero_authority() {
-        let record = RentCreditV1::new(authority(3), 1);
-        let mut dirty = record.to_bytes();
-        dirty[11] = 1;
-        assert_eq!(
-            RentCreditV1::decode(&dirty),
-            Err(Error::NonCanonicalReservedBytes)
-        );
-        let mut zero = record.to_bytes();
-        zero[16..48].fill(0);
-        assert_eq!(
-            RentCreditV1::decode(&zero),
-            Err(Error::ZeroAuthorityOrAccount)
-        );
-    }
-
-    #[test]
     // The V1 Create route is deleted; this plan is not. Lifecycle V2's Create
     // funds a credit by the same exact rule, so its coverage stays here.
     #[test]
@@ -522,8 +330,6 @@ mod tests {
 
     #[test]
     fn under_rent_credit_liveness_and_donation_claimability() {
-        let record = RentCreditV1::new(authority(4), 2);
-        assert_eq!(RentCreditV1::decode(&record.to_bytes()), Ok(record));
         assert_eq!(claimable_lamports(90, 100), 0);
         let source = SourceCloseCreditPlanV1::new(0, 90, 0).expect("under-rent live");
         assert_eq!(source.credit_after(), 90);

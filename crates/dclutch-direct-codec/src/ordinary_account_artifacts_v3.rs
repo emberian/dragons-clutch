@@ -973,7 +973,6 @@ mod tests {
     use std::{vec, vec::Vec};
 
     use super::*;
-    use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
 
     use dclutch_account_profile_contract::{
         AccountObservationV1, EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
@@ -1305,10 +1304,9 @@ mod tests {
     /// adapter refused: it authenticates 128 bytes of `LifecycleRentCreditV2`.
     #[test]
     fn superseded_rent_credit_geometries_refuse_atomically() {
-        for hostile_width in [
-            width(RENT_CREDIT_BYTES_V1).expect("V1 RentCredit width"),
-            64,
-        ] {
+        // 48 is the deleted `RentCreditV1` width and 64 the legacy one; both
+        // are literals now, because no record type in the tree carries either.
+        for hostile_width in [48_u32, 64] {
             let mut hostile = lengths(256);
             hostile[7] = hostile_width;
             let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];

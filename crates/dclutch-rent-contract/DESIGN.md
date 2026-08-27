@@ -2,27 +2,26 @@
 
 `dclutch-rent-contract` is an SDK-free, `no_std`, `no_alloc`, safe, fixed-layout semantic contract. It has no account-memory access, PDA implementation, Rent deserialization, CPI, wallet inspection, or transaction construction.
 
-The live rent path is `lifecycle_v2`: the Market-generation-scoped `LifecycleRentCreditV2` that tier 1 creates, sweeps, and closes. **The V1 Create and Withdraw instructions were deleted on 2026-08-27** as superseded by it, taking with them the wire and frame grammar, the role/alias policy, `SystemWalletFactsV1`, and `WithdrawBalancePlanV1`. What this document describes below is the V1 *record* and the accounting primitives that survive it. Superseded source: `~/dev/dclutch-legacy/dclutch-rent-credit-v1-routes/`.
+The live rent path is `lifecycle_v2`: the Market-generation-scoped `LifecycleRentCreditV2` that tier 1 creates, sweeps, and closes. **The V1 Create and Withdraw instructions were deleted on 2026-08-27** as superseded by it, taking with them the wire and frame grammar, the role/alias policy, `SystemWalletFactsV1`, and `WithdrawBalancePlanV1`. What this document describes below is the accounting primitives that survive it. Superseded source: `~/dev/dclutch-legacy/dclutch-rent-credit-v1-routes/`.
 
-## Persistent ownership and width
+## The V1 record is gone
 
-`RentCreditV1` is exactly 48 bytes:
+`RentCreditV1` -- a 48-byte permanent program-owned record keyed by refund
+authority under the seed domain `dclutch/rent-credit/v1` -- **was deleted on
+2026-08-27**, together with `RentCreditPdaSeedsV1`, `RENT_CREDIT_BYTES_V1`, the
+PDA domain, the magic, the schema version and every V1 field offset. Its
+Create route went first (see above), which meant no such account could come into
+existence; the type outlived the route only because two readers were still
+compiling against it.
 
-| byte range | field |
-|---|---|
-| `0..8` | `DCLTRNT1` magic |
-| `8..10` | little-endian schema `1` |
-| `10` | derived PDA bump |
-| `11..16` | five canonical zero bytes |
-| `16..48` | nonzero immutable refund/beneficiary authority |
+Both readers are gone now. `dclutch-direct-codec` pinned `RENT_CREDIT_BYTES_V1`
+at registered artifact coordinates 7 and 10; those are a 128-byte
+`LifecycleRentCreditV2` and a Rent program coordinate. Two SVM-harness Markets
+planted a V1 record as their rent beneficiary; nothing on any path they exercise
+decodes a beneficiary's bytes -- Core compares that account by key and credits
+lamports to it -- and they now say so where they plant one.
 
-It is a permanent program-owned account. Data validation never consults observed lamports, so a credit remains admitted even if a later Rent increase makes its balance temporarily below the new minimum.
-
-`RENT_CREDIT_PDA_DOMAIN_V1` is the 22-byte seed domain `dclutch/rent-credit/v1`. The adapter derives one PDA from this domain, the authority, and persisted bump. The semantic crate cannot perform curve/PDA checks.
-
-Legacy source `rent_refund` bytes mean this immutable authority, never a direct payout account. A source close authenticates its stored authority and credits that derived PDA.
-
-**No route creates one of these any more.** The record, its width, and its PDA domain are kept because live code still reads them — most consequentially `dclutch-direct-codec`, which pins `RENT_CREDIT_BYTES_V1` at registered artifact coordinates 7 and 10, where the RentCredit V1/V2 width skew is a known emitter defect owned by DP2. That migration retires the last of V1.
+Superseded source: `~/dev/dclutch-legacy/dclutch-rent-credit-v1-routes/`.
 
 ## Balance semantics
 

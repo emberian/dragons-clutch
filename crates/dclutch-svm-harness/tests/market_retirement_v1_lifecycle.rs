@@ -14,6 +14,9 @@ use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
+// `RefundAuthority` used to arrive through the `include!` above, on the back of
+// the V1 record's own import. That record is deleted; the wallet type is not.
+use dclutch_rent_contract::RefundAuthority;
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
