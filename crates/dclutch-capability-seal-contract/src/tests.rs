@@ -9,7 +9,7 @@ fn id(fill: u8) -> [u8; 32] {
 }
 
 fn key() -> CapabilitySealKeyV1 {
-    CapabilitySealKeyV1::new(id(0x11), id(0x22), 7, id(0x33)).expect("canonical seal key")
+    CapabilitySealKeyV1::new(id(0x11), id(0x22), 7, id(0x33), id(0x44)).expect("canonical seal key")
 }
 
 fn rows() -> [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1] {
@@ -41,10 +41,10 @@ fn canonical() -> Vec<u8> {
 
 #[test]
 fn canonical_seal_round_trips_and_pins_its_width() {
-    assert_eq!(CAPABILITY_SEAL_BYTES_V1, 936);
+    assert_eq!(CAPABILITY_SEAL_BYTES_V1, 968);
     let bytes = canonical();
     let decoded = SealedDescriptorClosureV1::decode(&bytes).expect("decode");
-    assert_eq!(decoded.key(), key());
+    assert_eq!(decoded.key(), Ok(key()));
     decoded.require_key(key()).expect("same key");
     for (ordinal, role) in SealedRoleV1::canonical_order().into_iter().enumerate() {
         let row = decoded.row(role).expect("row");
@@ -179,19 +179,19 @@ fn a_seal_for_another_key_refuses_at_every_coordinate() {
     let decoded = SealedDescriptorClosureV1::decode(&bytes).expect("decode");
     let cases = [
         (
-            CapabilitySealKeyV1::new(id(0x11), id(0x23), 7, id(0x33)).expect("key"),
+            CapabilitySealKeyV1::new(id(0x11), id(0x23), 7, id(0x33), id(0x44)).expect("key"),
             Error::DescriptorMismatch,
         ),
         (
-            CapabilitySealKeyV1::new(id(0x12), id(0x22), 7, id(0x33)).expect("key"),
+            CapabilitySealKeyV1::new(id(0x12), id(0x22), 7, id(0x33), id(0x44)).expect("key"),
             Error::DescriptorMismatch,
         ),
         (
-            CapabilitySealKeyV1::new(id(0x11), id(0x22), 8, id(0x33)).expect("key"),
+            CapabilitySealKeyV1::new(id(0x11), id(0x22), 8, id(0x33), id(0x44)).expect("key"),
             Error::ActionMismatch,
         ),
         (
-            CapabilitySealKeyV1::new(id(0x11), id(0x22), 7, id(0x34)).expect("key"),
+            CapabilitySealKeyV1::new(id(0x11), id(0x22), 7, id(0x34), id(0x44)).expect("key"),
             Error::InterpreterReleaseMismatch,
         ),
     ];
@@ -203,15 +203,15 @@ fn a_seal_for_another_key_refuses_at_every_coordinate() {
 #[test]
 fn zero_identities_and_zero_widths_are_refused() {
     assert_eq!(
-        CapabilitySealKeyV1::new([0; 32], id(0x22), 7, id(0x33)),
+        CapabilitySealKeyV1::new([0; 32], id(0x22), 7, id(0x33), id(0x44)),
         Err(Error::ZeroIdentity)
     );
     assert_eq!(
-        CapabilitySealKeyV1::new(id(0x11), [0; 32], 7, id(0x33)),
+        CapabilitySealKeyV1::new(id(0x11), [0; 32], 7, id(0x33), id(0x44)),
         Err(Error::ZeroIdentity)
     );
     assert_eq!(
-        CapabilitySealKeyV1::new(id(0x11), id(0x22), 7, [0; 32]),
+        CapabilitySealKeyV1::new(id(0x11), id(0x22), 7, [0; 32], id(0x44)),
         Err(Error::ZeroIdentity)
     );
     assert_eq!(
@@ -296,6 +296,7 @@ fn the_seed_projection_is_the_four_key_coordinates_under_one_domain() {
     assert_eq!(slices[2], id(0x22));
     assert_eq!(slices[3], 7_u32.to_le_bytes());
     assert_eq!(slices[4], id(0x33));
+    assert_eq!(slices[5], id(0x44));
     for seed in slices {
         assert!(seed.len() <= 32);
     }
@@ -325,8 +326,8 @@ fn a_join_cannot_be_assembled_out_of_two_seals() {
     let first = SealedDescriptorClosureV1::decode(&first_bytes).expect("decode");
 
     // A second, entirely legitimate seal for a different descriptor closure.
-    let other_key =
-        CapabilitySealKeyV1::new(id(0x11), id(0x88), 7, id(0x33)).expect("second seal key");
+    let other_key = CapabilitySealKeyV1::new(id(0x11), id(0x88), 7, id(0x33), id(0x44))
+        .expect("second seal key");
     let mut other_rows = rows();
     if let Some(row) = other_rows.get_mut(SealedRoleV1::Descriptor.ordinal()) {
         *row = SealedRecordRowV1::new(

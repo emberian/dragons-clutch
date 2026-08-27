@@ -305,11 +305,13 @@ fn content_id(bytes: &[u8]) -> Result<ContentId> {
     ContentId::new(hash(bytes).to_bytes()).map_err(|_| SeriesShadowOperatorErrorV3::Identity)
 }
 
-const _: () = assert!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 == 38);
-const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3 == 42);
-const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 == 43);
-const _: () = assert!(SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 == 44);
-const _: () = assert!(SERIES_SHADOW_RUNTIME_ACCOUNTS_START_V3 == 45);
+// The fixed hot prefix gained the read-only validated-artifact seal at index 38
+// (Decision 0005), so every Shadow coordinate after it moved by exactly one.
+const _: () = assert!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3 == 39);
+const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3 == 43);
+const _: () = assert!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 == 44);
+const _: () = assert!(SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 == 45);
+const _: () = assert!(SERIES_SHADOW_RUNTIME_ACCOUNTS_START_V3 == 46);
 
 #[cfg(test)]
 mod tests {
@@ -402,11 +404,11 @@ mod tests {
                 .iter()
                 .all(|b| *b == 0)
         );
-        assert_eq!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3, 38);
-        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3, 42);
-        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, 43);
-        assert_eq!(SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, 44);
-        assert_eq!(SERIES_SHADOW_RUNTIME_ACCOUNTS_START_V3, 45);
+        assert_eq!(SERIES_SHADOW_STRATEGY_ACCOUNTS_START_V3, 39);
+        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAM_ACCOUNT_V3, 43);
+        assert_eq!(SERIES_SHADOW_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3, 44);
+        assert_eq!(SERIES_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3, 45);
+        assert_eq!(SERIES_SHADOW_RUNTIME_ACCOUNTS_START_V3, 46);
         assert_eq!(
             request.digests.family_request,
             family_request_digest_v3(&family).expect("family digest")

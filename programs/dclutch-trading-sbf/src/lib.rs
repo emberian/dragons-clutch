@@ -266,6 +266,13 @@ pub fn process_instruction(
             instruction_data,
         );
     }
+    // Decision 0005. The validated-artifact seal is written by its own outer,
+    // once per (descriptor, action, Trading interpreter release, Registry).
+    // It creates one PDA under this Program, signs nothing else, and can only
+    // ever persist this executable's own verdict about immutable public bytes.
+    if dclutch_capability_seal_contract::is_capability_seal_request_v1(instruction_data) {
+        return hot_v3::process_capability_seal_v1(program_id, accounts, instruction_data);
+    }
     if hot_v3::is_hot_execution_v3(instruction_data) {
         hot_v3::process_hot_execution_v3(program_id, accounts, instruction_data)
     } else {

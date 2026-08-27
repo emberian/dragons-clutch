@@ -15,8 +15,17 @@ use dclutch_capability_program_contract::{
         HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HotExecutionEnvelopeV3,
     },
 };
+use dclutch_capability_seal_contract::{
+    CAPABILITY_SEAL_ACTION_OFFSET_V1, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1,
+    CAPABILITY_SEAL_HEADER_BYTES_V1, CAPABILITY_SEAL_MAGIC_OFFSET_V1,
+    CAPABILITY_SEAL_REGISTRY_OFFSET_V1, CAPABILITY_SEAL_ROW_BYTES_V1,
+    CAPABILITY_SEAL_ROW_DIGEST_OFFSET_V1, CAPABILITY_SEAL_ROW_RAW_OFFSET_V1,
+    CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1, CAPABILITY_SEAL_VERDICTS_OFFSET_V1,
+    CapabilitySealRequestV1,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::CustodyReplayV1;
+use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
 use dclutch_direct_codec::native_evidence_v3::{
     DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
 };
@@ -257,6 +266,22 @@ fn direct_case(
     artifacts: &Elves,
     corrupt_destination: bool,
 ) -> DirectCase {
+    direct_case_v2(test, releases, artifacts, corrupt_destination, false)
+}
+
+/// Build the canonical Direct case, optionally leaving the seal PDA vacant.
+///
+/// The ordinary campaign installs the seal already written, exactly as a Market
+/// that has sealed this closure once would find it. `vacant_seal` leaves the
+/// PDA empty and System-owned instead, which is the prestate the on-chain seal
+/// outer requires.
+fn direct_case_v2(
+    test: &mut ProgramTest,
+    releases: Releases,
+    artifacts: &Elves,
+    corrupt_destination: bool,
+    vacant_seal: bool,
+) -> DirectCase {
     let payer = Keypair::new();
     let makers = [Keypair::new(), Keypair::new()];
     let clock = Clock {
@@ -296,6 +321,9 @@ fn direct_case(
         payer: payer.pubkey(),
         makers: [makers[0].pubkey(), makers[1].pubkey()],
         clock_slot: clock.slot,
+        // `add_release_waist` binds Trading at semantic release 0x33; the
+        // validated-artifact seal is filed under exactly that release.
+        trading_semantic_release: [0x33; 32],
     })
     .expect("canonical Profile14 Direct chain fixture");
     if corrupt_destination {
@@ -312,6 +340,17 @@ fn direct_case(
             .expect("base token state byte");
         *state = 0;
         assert!(TokenAccount::parse(&account.account.data).is_ok());
+    }
+    if vacant_seal {
+        let seal = chain.capability_seal;
+        let account = chain
+            .accounts
+            .iter_mut()
+            .find(|value| value.key == seal)
+            .expect("validated-artifact seal fixture account");
+        account.account.data = Vec::new();
+        account.account.owner = system_program::ID;
+        account.account.lamports = 0;
     }
     for (index, candidate) in chain.accounts.iter().enumerate() {
         if candidate.key == Pubkey::default() {
@@ -531,7 +570,11 @@ async fn submit_v0(
             .get(1)
             .is_some_and(|instruction| instruction.program_id == REGISTRY_PROGRAM_ID)
     {
-        assert_eq!(wire, 1_224, "transparent continuation wire changed");
+        // Decision 0005 added the read-only validated-artifact seal at fixed
+        // coordinate 38. The key itself is ALT-routed, but the continuation
+        // carries the nested Hot account list twice, so the canonical packet
+        // grew by exactly two index bytes: 1,224 -> 1,226 of the 1,232 limit.
+        assert_eq!(wire, 1_226, "transparent continuation wire changed");
     }
     let mut all_signers = vec![transaction_payer];
     all_signers.extend_from_slice(signers);
@@ -1054,4 +1097,205 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     );
     let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     assert_eq!(after, before, "maker refusal mutated Profile14 state");
+}
+
+// --- Decision 0005: the validated-artifact seal ------------------------------
+//
+// The hot campaign above installs the seal already written, which is what a
+// Market that has sealed a closure once actually finds. That would be circular
+// evidence on its own: it proves the hot path accepts a seal the *fixture*
+// wrote. These tests close the circle by making the on-chain seal outer write
+// it and requiring the result to equal the fixture's bytes exactly, and then by
+// refusing every seal that is not the canonical one.
+
+/// Build the seal outer for one Direct case.
+///
+/// The account list is the hot fixed prefix with the root read-only and the
+/// seal writable, followed by the rent payer and the System Program.
+fn seal_instruction(direct: &DirectCase, action: u32, descriptor_digest: [u8; 32]) -> Instruction {
+    let mut accounts = direct
+        .chain
+        .hot_instruction
+        .accounts
+        .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
+        .expect("hot fixed prefix")
+        .to_vec();
+    for meta in accounts.iter_mut() {
+        meta.is_writable = meta.pubkey == direct.chain.capability_seal;
+        meta.is_signer = false;
+    }
+    accounts.push(AccountMeta::new(direct.payer.pubkey(), true));
+    accounts.push(AccountMeta::new_readonly(system_program::ID, false));
+    Instruction {
+        program_id: TRADING_PROGRAM_ID,
+        accounts,
+        data: CapabilitySealRequestV1::new(action, descriptor_digest)
+            .expect("canonical seal request")
+            .to_bytes()
+            .to_vec(),
+    }
+}
+
+async fn maybe_account(context: &mut ProgramTestContext, key: Pubkey) -> Option<Account> {
+    context.banks_client.get_account(key).await.expect("read")
+}
+
+fn descriptor_digest(direct: &DirectCase) -> [u8; 32] {
+    direct.chain.descriptor_digest
+}
+
+fn direct_action() -> u32 {
+    DirectExecutionActionV3::InlineOrdinary as u32
+}
+
+async fn submit_seal(
+    context: &mut ProgramTestContext,
+    direct: &DirectCase,
+    instruction: Instruction,
+) -> Result<u64, RefusedExecution> {
+    let addresses =
+        canonical_lookup_addresses(core::slice::from_ref(&instruction), direct.payer.pubkey());
+    submit_v0(context, &[instruction], addresses, Some(&direct.payer), &[]).await
+}
+
+#[tokio::test]
+async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
+    let descriptor_digest = descriptor_digest(&direct);
+    let canonical = seal_instruction(&direct, direct_action(), descriptor_digest);
+    let addresses =
+        canonical_lookup_addresses(core::slice::from_ref(&canonical), direct.payer.pubkey());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+
+    assert!(
+        maybe_account(&mut context, direct.chain.capability_seal)
+            .await
+            .is_none_or(|value| value.owner == system_program::ID && value.data.is_empty()),
+        "the seal PDA is not vacant before the seal outer runs"
+    );
+
+    let units = submit_seal(&mut context, &direct, canonical.clone())
+        .await
+        .expect("canonical validated-artifact seal");
+    assert!(units > 0 && units <= COMPUTE_LIMIT);
+
+    let sealed = account(&mut context, direct.chain.capability_seal).await;
+    assert_eq!(sealed.owner, TRADING_PROGRAM_ID);
+    assert_eq!(
+        sealed.data, direct.chain.capability_seal_bytes,
+        "the on-chain seal outer and the fixture disagree about the verdict"
+    );
+    assert!(sealed.lamports >= Rent::default().minimum_balance(sealed.data.len()));
+
+    // Write-once: a second seal of the same closure refuses and leaves the
+    // recorded verdict byte-for-byte intact.
+    let refused = submit_seal(&mut context, &direct, canonical).await;
+    assert!(refused.is_err(), "an existing seal was rewritten");
+    let after = account(&mut context, direct.chain.capability_seal).await;
+    assert_eq!(after.data, sealed.data);
+}
+
+#[tokio::test]
+async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
+    let descriptor_digest = descriptor_digest(&direct);
+    let hostile = [
+        seal_instruction(&direct, direct_action() ^ 1, descriptor_digest),
+        seal_instruction(&direct, direct_action(), [0x5a; 32]),
+    ];
+    let addresses = canonical_lookup_addresses(&hostile, direct.payer.pubkey());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+
+    for instruction in hostile {
+        assert!(
+            submit_seal(&mut context, &direct, instruction)
+                .await
+                .is_err(),
+            "a seal filed under other coordinates reached the canonical address"
+        );
+        assert!(
+            maybe_account(&mut context, direct.chain.capability_seal)
+                .await
+                .is_none_or(|value| value.owner == system_program::ID && value.data.is_empty()),
+            "a refused seal left state at the canonical address"
+        );
+    }
+}
+
+#[tokio::test]
+async fn hot_refuses_a_missing_seal_and_a_seal_written_for_another_release() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = test.start_with_context().await;
+    let refused = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await;
+    assert!(
+        refused.is_err(),
+        "a hot action executed with no validated-artifact seal"
+    );
+}
+
+#[tokio::test]
+async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
+    for offset in [
+        CAPABILITY_SEAL_MAGIC_OFFSET_V1,
+        CAPABILITY_SEAL_VERDICTS_OFFSET_V1,
+        CAPABILITY_SEAL_ACTION_OFFSET_V1,
+        CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1,
+        CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1,
+        CAPABILITY_SEAL_REGISTRY_OFFSET_V1,
+        CAPABILITY_SEAL_HEADER_BYTES_V1 + CAPABILITY_SEAL_ROW_RAW_OFFSET_V1,
+        CAPABILITY_SEAL_HEADER_BYTES_V1
+            + 2 * CAPABILITY_SEAL_ROW_BYTES_V1
+            + CAPABILITY_SEAL_ROW_DIGEST_OFFSET_V1,
+    ] {
+        let artifacts = elves();
+        let mut test = program_test(&artifacts);
+        let releases = add_release_waist(&mut test, &artifacts);
+        let mut direct = direct_case(&mut test, releases, &artifacts, false);
+        let seal = direct.chain.capability_seal;
+        let account = direct
+            .chain
+            .accounts
+            .iter_mut()
+            .find(|value| value.key == seal)
+            .expect("seal fixture account");
+        let byte = account.account.data.get_mut(offset).expect("seal byte");
+        *byte ^= 0xff;
+        let instructions = direct_registry_instructions(releases, &direct);
+        let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+        add_lookup_table(&mut test, &addresses);
+        let mut context = test.start_with_context().await;
+        assert!(
+            submit_v0(
+                &mut context,
+                &instructions,
+                addresses,
+                Some(&direct.payer),
+                &[],
+            )
+            .await
+            .is_err(),
+            "hot accepted a seal whose byte {offset} was altered"
+        );
+    }
 }

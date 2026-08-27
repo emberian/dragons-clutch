@@ -63,8 +63,10 @@ pub const CAPABILITY_SEAL_DESCRIPTOR_SCHEMA_OFFSET_V1: usize = 24;
 pub const CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1: usize = 56;
 /// Offset of the persisted Trading interpreter semantic release.
 pub const CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1: usize = 88;
+/// Offset of the persisted Registry program the record addresses derive under.
+pub const CAPABILITY_SEAL_REGISTRY_OFFSET_V1: usize = 120;
 /// Exact persisted header width.
-pub const CAPABILITY_SEAL_HEADER_BYTES_V1: usize = 120;
+pub const CAPABILITY_SEAL_HEADER_BYTES_V1: usize = 152;
 
 /// Offset of a row's role tag.
 pub const CAPABILITY_SEAL_ROW_ROLE_OFFSET_V1: usize = 0;
@@ -335,6 +337,7 @@ pub struct CapabilitySealKeyV1 {
     descriptor_digest: [u8; 32],
     action: u32,
     trading_semantic_release: [u8; 32],
+    registry_program: [u8; 32],
 }
 
 impl CapabilitySealKeyV1 {
@@ -344,11 +347,13 @@ impl CapabilitySealKeyV1 {
         descriptor_digest: [u8; 32],
         action: u32,
         trading_semantic_release: [u8; 32],
+        registry_program: [u8; 32],
     ) -> Result<Self> {
         for identity in [
             &descriptor_schema,
             &descriptor_digest,
             &trading_semantic_release,
+            &registry_program,
         ] {
             if identity.iter().all(|byte| *byte == 0) {
                 return Err(Error::ZeroIdentity);
@@ -359,6 +364,7 @@ impl CapabilitySealKeyV1 {
             descriptor_digest,
             action,
             trading_semantic_release,
+            registry_program,
         })
     }
 
@@ -378,6 +384,10 @@ impl CapabilitySealKeyV1 {
     pub const fn trading_semantic_release(self) -> [u8; 32] {
         self.trading_semantic_release
     }
+    /// Registry program the persisted record addresses were derived under.
+    pub const fn registry_program(self) -> [u8; 32] {
+        self.registry_program
+    }
 
     /// Return the sole canonical seal PDA seed projection.
     pub fn seeds(self) -> CapabilitySealSeedsV1 {
@@ -386,6 +396,7 @@ impl CapabilitySealKeyV1 {
             descriptor_digest: self.descriptor_digest,
             action: self.action.to_le_bytes(),
             trading_semantic_release: self.trading_semantic_release,
+            registry_program: self.registry_program,
         }
     }
 }
@@ -397,29 +408,30 @@ pub struct CapabilitySealSeedsV1 {
     descriptor_digest: [u8; 32],
     action: [u8; 4],
     trading_semantic_release: [u8; 32],
+    registry_program: [u8; 32],
 }
 
 impl CapabilitySealSeedsV1 {
     /// Return the exact seed order interpreted under the Trading Program ID.
-    pub fn as_slices(&self) -> [&[u8]; 5] {
+    pub fn as_slices(&self) -> [&[u8]; 6] {
         [
             CAPABILITY_SEAL_PDA_DOMAIN_V1,
             &self.descriptor_schema,
             &self.descriptor_digest,
             &self.action,
             &self.trading_semantic_release,
+            &self.registry_program,
         ]
     }
 }
 
 /// Borrowed exact view of one persisted seal account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SealedDescriptorClosureV1 {
-    key: CapabilitySealKeyV1,
-    rows: [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1],
+pub struct SealedDescriptorClosureV1<'a> {
+    bytes: &'a [u8],
 }
 
-impl SealedDescriptorClosureV1 {
+impl<'a> SealedDescriptorClosureV1<'a> {
     /// Hostile-decode one exact persisted seal body.
     ///
     /// This validates only that the bytes are a canonical seal. It says nothing
@@ -427,7 +439,7 @@ impl SealedDescriptorClosureV1 {
     /// [`SealedDescriptorClosureV1::require_key`] and
     /// [`SealedDescriptorClosureV1::require_artifact`], and the caller must
     /// have derived the account's address from the same key.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
+    pub fn decode(bytes: &'a [u8]) -> Result<Self> {
         if bytes.len() != CAPABILITY_SEAL_BYTES_V1 {
             return Err(Error::InvalidLength);
         }
@@ -461,22 +473,20 @@ impl SealedDescriptorClosureV1 {
             read_array(bytes, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1)?,
             read_u32(bytes, CAPABILITY_SEAL_ACTION_OFFSET_V1)?,
             read_array(bytes, CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1)?,
+            read_array(bytes, CAPABILITY_SEAL_REGISTRY_OFFSET_V1)?,
         )?;
-        let rows = [
-            SealedRecordRowV1::decode(bytes, 0)?,
-            SealedRecordRowV1::decode(bytes, 1)?,
-            SealedRecordRowV1::decode(bytes, 2)?,
-            SealedRecordRowV1::decode(bytes, 3)?,
-            SealedRecordRowV1::decode(bytes, 4)?,
-            SealedRecordRowV1::decode(bytes, 5)?,
-        ];
-        let descriptor = rows.first().ok_or(Error::NonCanonicalRowOrder)?;
-        if descriptor.schema != key.descriptor_schema
-            || descriptor.content_digest != key.descriptor_digest
-        {
-            return Err(Error::DescriptorMismatch);
+        let mut ordinal = 0_usize;
+        while ordinal < CAPABILITY_SEAL_ROW_COUNT_V1 {
+            let row = SealedRecordRowV1::decode(bytes, ordinal)?;
+            if row.role == SealedRoleV1::Descriptor
+                && (row.schema != key.descriptor_schema
+                    || row.content_digest != key.descriptor_digest)
+            {
+                return Err(Error::DescriptorMismatch);
+            }
+            ordinal = ordinal.checked_add(1).ok_or(Error::InvalidLength)?;
         }
-        Ok(Self { key, rows })
+        Ok(Self { bytes })
     }
 
     /// Encode one exact canonical seal body.
@@ -485,6 +495,7 @@ impl SealedDescriptorClosureV1 {
         rows: [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1],
         output: &mut [u8],
     ) -> Result<()> {
+        // Associated on the borrowed view only for locality; it writes bytes.
         if output.len() != CAPABILITY_SEAL_BYTES_V1 {
             return Err(Error::InvalidLength);
         }
@@ -532,6 +543,11 @@ impl SealedDescriptorClosureV1 {
             CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1,
             &key.trading_semantic_release,
         )?;
+        copy(
+            output,
+            CAPABILITY_SEAL_REGISTRY_OFFSET_V1,
+            &key.registry_program,
+        )?;
         for (ordinal, row) in rows.iter().enumerate() {
             if row.role.ordinal() != ordinal {
                 return Err(Error::NonCanonicalRowOrder);
@@ -553,17 +569,29 @@ impl SealedDescriptorClosureV1 {
         Ok(())
     }
 
-    /// The four coordinates this seal was written under.
-    pub const fn key(self) -> CapabilitySealKeyV1 {
-        self.key
+    /// Borrow the persisted body this view was decoded from.
+    pub const fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// The coordinates this seal was written under.
+    ///
+    /// Parsed from the body on every call rather than kept by value: a decoded
+    /// seal is otherwise the largest single value on an SBF frame that is
+    /// already at its 4KB limit.
+    pub fn key(self) -> Result<CapabilitySealKeyV1> {
+        CapabilitySealKeyV1::new(
+            read_array(self.bytes, CAPABILITY_SEAL_DESCRIPTOR_SCHEMA_OFFSET_V1)?,
+            read_array(self.bytes, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1)?,
+            read_u32(self.bytes, CAPABILITY_SEAL_ACTION_OFFSET_V1)?,
+            read_array(self.bytes, CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1)?,
+            read_array(self.bytes, CAPABILITY_SEAL_REGISTRY_OFFSET_V1)?,
+        )
     }
 
     /// Borrow the canonical row for one role.
     pub fn row(self, role: SealedRoleV1) -> Result<SealedRecordRowV1> {
-        self.rows
-            .get(role.ordinal())
-            .copied()
-            .ok_or(Error::NonCanonicalRowOrder)
+        SealedRecordRowV1::decode(self.bytes, role.ordinal())
     }
 
     /// Refuse unless this seal is exactly the one the consumer derived.
@@ -572,26 +600,29 @@ impl SealedDescriptorClosureV1 {
     /// to be the canonical PDA for `expected`. This check makes the persisted
     /// body agree with that derivation rather than trusting either alone.
     pub fn require_key(self, expected: CapabilitySealKeyV1) -> Result<()> {
-        if self.key.descriptor_schema != expected.descriptor_schema
-            || self.key.descriptor_digest != expected.descriptor_digest
+        let key = self.key()?;
+        if key.descriptor_schema != expected.descriptor_schema
+            || key.descriptor_digest != expected.descriptor_digest
         {
             return Err(Error::DescriptorMismatch);
         }
-        if self.key.action != expected.action {
+        if key.action != expected.action {
             return Err(Error::ActionMismatch);
         }
-        if self.key.trading_semantic_release != expected.trading_semantic_release {
+        if key.trading_semantic_release != expected.trading_semantic_release
+            || key.registry_program != expected.registry_program
+        {
             return Err(Error::InterpreterReleaseMismatch);
         }
         Ok(())
     }
 
     /// Mint the invocation-scoped token for this seal's policy/profile join.
-    pub fn authenticate_profile_join<'a>(
+    pub fn authenticate_profile_join<'b>(
         self,
-        policy: SealedArtifactV1<'a>,
-        profile: SealedArtifactV1<'a>,
-    ) -> Result<SealedProfileJoinV1<'a>> {
+        policy: SealedArtifactV1<'b>,
+        profile: SealedArtifactV1<'b>,
+    ) -> Result<SealedProfileJoinV1<'b>> {
         self.require_own_token(policy, SealedRoleV1::LifecyclePolicy)?;
         self.require_own_token(profile, SealedRoleV1::AccountProfile)?;
         Ok(SealedProfileJoinV1 {
@@ -601,19 +632,19 @@ impl SealedDescriptorClosureV1 {
     }
 
     /// Mint the invocation-scoped token for this seal's ownership conjunction.
-    pub fn authenticate_static_ownership<'a>(
+    pub fn authenticate_static_ownership<'b>(
         self,
-        profile: SealedArtifactV1<'a>,
-        policy: SealedArtifactV1<'a>,
-        request: SealedArtifactV1<'a>,
-        transition: SealedArtifactV1<'a>,
-    ) -> Result<SealedStaticOwnershipV1<'a>> {
+        profile: SealedArtifactV1<'b>,
+        policy: SealedArtifactV1<'b>,
+        request: SealedArtifactV1<'b>,
+        transition: SealedArtifactV1<'b>,
+    ) -> Result<SealedStaticOwnershipV1<'b>> {
         self.require_own_token(profile, SealedRoleV1::AccountProfile)?;
         self.require_own_token(policy, SealedRoleV1::LifecyclePolicy)?;
         self.require_own_token(request, SealedRoleV1::RequestProfile)?;
         self.require_own_token(transition, SealedRoleV1::TransitionProgram)?;
         Ok(SealedStaticOwnershipV1 {
-            action: self.key.action,
+            action: self.key()?.action,
             profile: profile.bytes,
             policy: policy.bytes,
             request: request.bytes,
@@ -626,7 +657,7 @@ impl SealedDescriptorClosureV1 {
         if token.role != role {
             return Err(Error::TokenRoleMismatch);
         }
-        if token.seal != self.key.descriptor_digest {
+        if !core::ptr::eq(token.seal, self.bytes.as_ptr()) {
             return Err(Error::DescriptorMismatch);
         }
         Ok(())
@@ -641,13 +672,13 @@ impl SealedDescriptorClosureV1 {
     /// two obligations are what make the returned token mean what it says; this
     /// crate cannot check either, so it names them here and keeps the token's
     /// constructor private so no other path can mint one.
-    pub fn authenticate_artifact<'a>(
+    pub fn authenticate_artifact<'b>(
         self,
         role: SealedRoleV1,
         schema: [u8; 32],
         content_digest: [u8; 32],
-        bytes: &'a [u8],
-    ) -> Result<SealedArtifactV1<'a>> {
+        bytes: &'b [u8],
+    ) -> Result<SealedArtifactV1<'b>> {
         let row = self.row(role)?;
         if row.schema != schema || row.content_digest != content_digest {
             return Err(Error::ArtifactIdentityMismatch);
@@ -658,7 +689,7 @@ impl SealedDescriptorClosureV1 {
             return Err(Error::RecordWidthMismatch);
         }
         Ok(SealedArtifactV1 {
-            seal: self.key.descriptor_digest,
+            seal: self.bytes.as_ptr(),
             role,
             bytes,
         })
@@ -675,21 +706,12 @@ impl SealedDescriptorClosureV1 {
 /// body whose digest pinned it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SealedArtifactV1<'a> {
-    seal: [u8; 32],
+    seal: *const u8,
     role: SealedRoleV1,
     bytes: &'a [u8],
 }
 
 impl<'a> SealedArtifactV1<'a> {
-    /// The descriptor digest of the seal that minted this token.
-    ///
-    /// Two tokens from two different seals are two verdicts about two different
-    /// closures. Every join below requires its operands to carry the same seal
-    /// identity, so no caller can assemble a join out of halves.
-    pub const fn seal(self) -> [u8; 32] {
-        self.seal
-    }
-
     /// The role this token was minted for.
     pub const fn role(self) -> SealedRoleV1 {
         self.role
@@ -825,6 +847,85 @@ fn put_u16(output: &mut [u8], offset: usize, value: u16) -> Result<()> {
 
 fn put_u32(output: &mut [u8], offset: usize, value: u32) -> Result<()> {
     copy(output, offset, &value.to_le_bytes())
+}
+
+/// Canonical magic of one seal request.
+pub const CAPABILITY_SEAL_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTSEL1";
+/// Exact seal-request width.
+pub const CAPABILITY_SEAL_REQUEST_BYTES_V1: usize = 56;
+
+/// The complete instruction request for writing one validated-artifact seal.
+///
+/// It names only what the seal is *filed under* that the executing Program
+/// cannot derive for itself: which descriptor, and which of its actions. Both
+/// are seeds of the seal address, so a request naming the wrong one produces a
+/// truthful verdict at an address no hot action derives, never a false verdict
+/// at the right one. The descriptor schema, the Trading interpreter release and
+/// the Registry program are all supplied by the executing Program from facts it
+/// authenticates, and none of them appears here.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilitySealRequestV1 {
+    action: u32,
+    descriptor_digest: [u8; 32],
+}
+
+impl CapabilitySealRequestV1 {
+    /// Construct one canonical seal request.
+    pub fn new(action: u32, descriptor_digest: [u8; 32]) -> Result<Self> {
+        if descriptor_digest.iter().all(|byte| *byte == 0) {
+            return Err(Error::ZeroIdentity);
+        }
+        Ok(Self {
+            action,
+            descriptor_digest,
+        })
+    }
+
+    /// Hostile-decode one exact seal request.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != CAPABILITY_SEAL_REQUEST_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        if slice(bytes, 0, 8)? != CAPABILITY_SEAL_REQUEST_MAGIC_V1 {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(bytes, 8)? != CAPABILITY_SEAL_SCHEMA_VERSION_V1 {
+            return Err(Error::UnsupportedSchema);
+        }
+        if read_u16(bytes, 10)? != CAPABILITY_SEAL_PROFILE_V1 {
+            return Err(Error::UnsupportedArtifactProfile);
+        }
+        require_zero(bytes, 12, 4)?;
+        require_zero(bytes, 20, 4)?;
+        Self::new(read_u32(bytes, 16)?, read_array(bytes, 24)?)
+    }
+
+    /// Encode one exact canonical seal request.
+    pub fn to_bytes(self) -> [u8; CAPABILITY_SEAL_REQUEST_BYTES_V1] {
+        let mut output = [0_u8; CAPABILITY_SEAL_REQUEST_BYTES_V1];
+        let _ = copy(&mut output, 0, &CAPABILITY_SEAL_REQUEST_MAGIC_V1);
+        let _ = put_u16(&mut output, 8, CAPABILITY_SEAL_SCHEMA_VERSION_V1);
+        let _ = put_u16(&mut output, 10, CAPABILITY_SEAL_PROFILE_V1);
+        let _ = put_u32(&mut output, 16, self.action);
+        let _ = copy(&mut output, 24, &self.descriptor_digest);
+        output
+    }
+
+    /// Selected action.
+    pub const fn action(self) -> u32 {
+        self.action
+    }
+
+    /// Selected descriptor content identity.
+    pub const fn descriptor_digest(self) -> [u8; 32] {
+        self.descriptor_digest
+    }
+}
+
+/// Whether instruction data selects the validated-artifact seal outer.
+pub fn is_capability_seal_request_v1(instruction_data: &[u8]) -> bool {
+    instruction_data.len() == CAPABILITY_SEAL_REQUEST_BYTES_V1
+        && instruction_data.get(..8) == Some(CAPABILITY_SEAL_REQUEST_MAGIC_V1.as_slice())
 }
 
 #[cfg(test)]

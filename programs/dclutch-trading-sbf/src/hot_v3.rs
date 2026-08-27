@@ -33,14 +33,15 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
-        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_MAGIC_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
-        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
+        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
+        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_MAGIC_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
         HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
         HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
         HOT_PRODUCT_STAGING_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
@@ -58,6 +59,11 @@ use dclutch_capability_program_contract::{
         CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
         SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
+};
+use dclutch_capability_seal_contract::{
+    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
+    CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1, SealedRecordRowV1,
+    SealedRoleV1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -1651,8 +1657,31 @@ pub fn process_hot_execution_v3(
     let selected_program = selected_descriptor.program();
     let selected_action = selected_entry.selector();
 
-    let descriptor_data = borrow_finalized_record(
+    // Decision 0005: the validated-artifact seal for exactly this descriptor,
+    // this action, this authenticated Trading interpreter release and this
+    // Market-selected Registry. Authenticated before any artifact it names is
+    // read, and consulted only for addresses this Program derived once from
+    // the same seeds and for verdicts about bytes still pinned live by their
+    // own digest.
+    let seal_data = frame
+        .capability_seal
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let seal = authenticate_capability_seal_v3(
+        program_id,
         *frame,
+        &rent,
+        selected_descriptor.schema().to_bytes(),
+        selected_program.to_bytes(),
+        selected_action,
+        root.trading_semantic_release,
+        &seal_data,
+    )?;
+
+    let descriptor_data = borrow_sealed_record(
+        *frame,
+        seal,
+        SealedRoleV1::Descriptor,
         frame.descriptor_raw,
         frame.descriptor_staging,
         &rent,
@@ -1691,8 +1720,10 @@ pub fn process_hot_execution_v3(
             .content_digest
             .to_bytes(),
     })?;
-    let lifecycle_data = borrow_finalized_record(
+    let lifecycle_data = borrow_sealed_record(
         *frame,
+        seal,
+        SealedRoleV1::LifecyclePolicy,
         frame.lifecycle_raw,
         frame.lifecycle_staging,
         &rent,
@@ -1704,18 +1735,20 @@ pub fn process_hot_execution_v3(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    // Same single owner as the program set above: the borrow already proved
-    // `hash(lifecycle_data)` is the selected lifecycle program identity.
-    let selected_lifecycle = descriptor.lifecycle().program().to_bytes();
-    let lifecycle = StateLifecyclePolicyV5::decode_selected(
-        selected_lifecycle,
-        selected_lifecycle,
+    let lifecycle_token = sealed_token(
+        seal,
+        SealedRoleV1::LifecyclePolicy,
+        descriptor.lifecycle().schema().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
         &lifecycle_data,
-    )
-    .map_err(|_| TradingSbfError::Content)?;
+    )?;
+    let lifecycle = StateLifecyclePolicyV5::from_sealed(&lifecycle_data, lifecycle_token)
+        .map_err(|_| TradingSbfError::Content)?;
 
-    let account_profile_data = borrow_finalized_record(
+    let account_profile_data = borrow_sealed_record(
         *frame,
+        seal,
+        SealedRoleV1::AccountProfile,
         frame.account_profile_raw,
         frame.account_profile_staging,
         &rent,
@@ -1725,24 +1758,48 @@ pub fn process_hot_execution_v3(
     if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    let account_profile_token = sealed_token(
+        seal,
+        SealedRoleV1::AccountProfile,
+        descriptor.account_profile().schema().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
+        &account_profile_data,
+    )?;
     let account_profile =
-        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
+        AccountProfileV2::from_sealed(&account_profile_data, account_profile_token)
+            .map_err(|_| TradingSbfError::Content)?;
     // One validated join for the whole execution: the lifecycle preplan runs a
     // batch of plans over these same two immutable artifacts, twice, and the
-    // planner otherwise re-derives this join for every planned state.
+    // planner otherwise re-derives this join for every planned state. The join
+    // is a fact about the pair, so the seal owns it and mints it from its own
+    // two tokens.
     let profile_join = lifecycle
-        .validate_account_profile_join(account_profile)
+        .sealed_account_profile_join(
+            account_profile,
+            seal.authenticate_profile_join(lifecycle_token, account_profile_token)
+                .map_err(|_| TradingSbfError::Content)?,
+        )
         .map_err(|_| TradingSbfError::Content)?;
 
-    let request_profile_data = borrow_finalized_record(
+    let request_profile_data = borrow_sealed_record(
         *frame,
+        seal,
+        SealedRoleV1::RequestProfile,
         frame.request_profile_raw,
         frame.request_profile_staging,
         &rent,
         descriptor.request_profile().schema().to_bytes(),
         descriptor.request_profile().program().to_bytes(),
     )?;
-    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
+    let request_profile_token = sealed_token(
+        seal,
+        SealedRoleV1::RequestProfile,
+        descriptor.request_profile().schema().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
+        &request_profile_data,
+    )?;
+    let request_profile =
+        decode_sealed_request_profile(*descriptor, &request_profile_data, request_profile_token)?;
 
     let (strategy, strategy_extras_end) = authenticate_strategy_boxed_v3(
         &frame,
@@ -1756,8 +1813,10 @@ pub fn process_hot_execution_v3(
         .get(invocation.strategy_extras_start..strategy_extras_end)
         .ok_or(TradingSbfError::Content)?;
 
-    let transition_data = borrow_finalized_record(
+    let transition_data = borrow_sealed_record(
         *frame,
+        seal,
+        SealedRoleV1::TransitionProgram,
         frame.transition_raw,
         frame.transition_staging,
         &rent,
@@ -1770,18 +1829,48 @@ pub fn process_hot_execution_v3(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let transition =
-        TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
+    let transition_token = sealed_token(
+        seal,
+        SealedRoleV1::TransitionProgram,
+        descriptor.transition().schema().to_bytes(),
+        descriptor.transition().program().to_bytes(),
+        &transition_data,
+    )?;
+    let transition = TransitionProgramV3::from_sealed(&transition_data, transition_token)
+        .map_err(|_| TradingSbfError::Content)?;
 
-    let effect_data = borrow_finalized_record(
+    let effect_data = borrow_sealed_record(
         *frame,
+        seal,
+        SealedRoleV1::EffectProgram,
         frame.effect_raw,
         frame.effect_staging,
         &rent,
         descriptor.effect().schema().to_bytes(),
         descriptor.effect().program().to_bytes(),
     )?;
-    let effect = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
+    let effect_token = sealed_token(
+        seal,
+        SealedRoleV1::EffectProgram,
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
+        &effect_data,
+    )?;
+    let effect = decode_sealed_effect_v4(
+        descriptor.effect().schema().to_bytes(),
+        &effect_data,
+        effect_token,
+    )?;
+    // The ownership conjunction is a fact about four immutable artifacts and
+    // the selected action, and the action is a seed of this seal.
+    let sealed_ownership = seal
+        .authenticate_static_ownership(
+            account_profile_token,
+            lifecycle_token,
+            request_profile_token,
+            transition_token,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
     hot_cu_checkpoint!("artifacts-strategy-effect");
 
     let provisional_scalar_count = effect
@@ -2023,13 +2112,15 @@ pub fn process_hot_execution_v3(
     )?;
     let request_output_scalars = projected_request.scalars;
     let request_output_identities = projected_request.identities;
-    require_static_register_ownership_v5(StaticRegisterOwnershipV5 {
-        account_profile,
-        policy: lifecycle,
-        action: selected_action,
-        request: request_profile,
-        transition,
-    })?;
+    sealed_ownership
+        .require(
+            selected_action,
+            account_profile.bytes(),
+            lifecycle.bytes(),
+            request_profile.bytes(),
+            transition.bytes(),
+        )
+        .map_err(|_| TradingSbfError::Content)?;
     let mut preplan_scratch = LifecyclePreplanScratchV4::new(
         &observations,
         &runtime_accounts,
@@ -2450,6 +2541,7 @@ fn finalize_hot_ack_v3(
 struct AuthenticatedRootV3 {
     context: TradingFamilyContextV1,
     immutable_header: [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
+    trading_semantic_release: [u8; 32],
 }
 
 #[inline(never)]
@@ -2501,6 +2593,7 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
             authenticate_continuation_root_roles_v3(*frame, envelope)?
         }
     };
+    let trading_semantic_release = trading_receipt.semantic_release_id().to_bytes();
     let root_data = frame
         .root
         .try_borrow_data()
@@ -2528,6 +2621,7 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
     Ok(Box::new(AuthenticatedRootV3 {
         context,
         immutable_header: root_header.to_bytes(),
+        trading_semantic_release,
     }))
 }
 
@@ -5880,6 +5974,16 @@ enum RequestProfileKindV3<'a> {
 }
 
 impl<'a> RequestProfileKindV3<'a> {
+    /// Borrow the exact canonical record body this profile was decoded from.
+    const fn bytes(self) -> &'a [u8] {
+        match self {
+            Self::Unsigned(profile) => profile.bytes(),
+            Self::Signed(profile) => profile.bytes(),
+            Self::Borrowed(profile) => profile.bytes(),
+            Self::RepeatedRows(profile) => profile.bytes(),
+        }
+    }
+
     const fn v1(self) -> RequestProfileV1<'a> {
         match self {
             Self::Unsigned(profile) => profile,
@@ -5993,6 +6097,41 @@ impl<'a> RequestProfileKindV3<'a> {
     }
 }
 
+/// Select and construct the request profile from a Trading-sealed record.
+///
+/// The live dispatcher re-hashes the record to produce its `authenticated`
+/// argument; the sealed one does not, because `borrow_sealed_record` has
+/// already required `hash(bytes)` to be exactly the identity the authenticated
+/// descriptor names. The schema selection is unchanged and still comes from
+/// the descriptor.
+fn decode_sealed_request_profile<'a>(
+    descriptor: CapabilityProgramV4,
+    bytes: &'a [u8],
+    sealed: SealedArtifactV1<'_>,
+) -> Result<RequestProfileKindV3<'a>, ProgramError> {
+    let schema = descriptor.request_profile().schema().to_bytes();
+    if schema == REQUEST_PROFILE_SCHEMA_ID_V1 {
+        RequestProfileV1::from_sealed(bytes, sealed)
+            .map(RequestProfileKindV3::Unsigned)
+            .map_err(|_| TradingSbfError::Content.into())
+    } else if schema == REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID {
+        RequestProfileV2::from_sealed(bytes, sealed)
+            .map(RequestProfileKindV3::Signed)
+            .map_err(|_| TradingSbfError::Content.into())
+    } else if schema == REQUEST_PROFILE_V3_SCHEMA_RELEASE_ID {
+        RequestProfileV3::from_sealed(bytes, sealed)
+            .map(RequestProfileKindV3::Borrowed)
+            .map_err(|_| TradingSbfError::Content.into())
+    } else if schema == REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID {
+        RequestProfileV4::from_sealed(bytes, sealed)
+            .map(RequestProfileKindV3::RepeatedRows)
+            .map_err(|_| TradingSbfError::Content.into())
+    } else {
+        Err(TradingSbfError::UnsupportedContent.into())
+    }
+}
+
+#[allow(dead_code)]
 fn decode_request_profile<'a>(
     descriptor: CapabilityProgramV4,
     bytes: &'a [u8],
@@ -6026,6 +6165,29 @@ fn decode_request_profile<'a>(
     }
 }
 
+/// Construct the selected effect program from a Trading-sealed record.
+#[inline(never)]
+fn decode_sealed_effect_v4<'a>(
+    schema: [u8; 32],
+    bytes: &'a [u8],
+    sealed: SealedArtifactV1<'_>,
+) -> Result<SelectedEffectProgramV4<'a>, ProgramError> {
+    if schema != EFFECT_SCHEMA_ID_V4 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let successor =
+        EffectProgramV4::from_sealed(bytes, sealed).map_err(|_| TradingSbfError::Content)?;
+    // Profile13 and the EffectV4 kernel jointly own selected account spans.
+    if successor.range_count() != 0 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    Ok(SelectedEffectProgramV4 {
+        base: successor.base(),
+        successor,
+    })
+}
+
+#[allow(dead_code)]
 #[inline(never)]
 fn decode_selected_effect_v4<'a>(
     schema: [u8; 32],
@@ -6937,6 +7099,426 @@ fn reauthenticate_role<'accounts, 'info>(
     Ok(receipt)
 }
 
+/// First account after the fixed hot prefix on the seal outer: the rent payer.
+pub const SEAL_PAYER_ACCOUNT_V1: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
+/// System Program on the seal outer.
+pub const SEAL_SYSTEM_PROGRAM_ACCOUNT_V1: usize = SEAL_PAYER_ACCOUNT_V1 + 1;
+/// Exact account count of the seal outer.
+pub const SEAL_ACCOUNT_COUNT_V1: usize = SEAL_SYSTEM_PROGRAM_ACCOUNT_V1 + 1;
+
+/// Write one validated-artifact seal for a descriptor closure and action.
+///
+/// Decision 0005. This is the hot path's own artifact prologue, run once and
+/// persisted. Every validator it calls is the very function the hot path calls
+/// without a seal -- `CapabilityProgramV4::decode`,
+/// `StateLifecyclePolicyV5::decode_selected`, `AccountProfileV2::decode`,
+/// `decode_request_profile`, `TransitionProgramV3::decode`,
+/// `decode_selected_effect_v4`, `validate_account_profile_join` and
+/// `require_static_register_ownership_v5` -- so the persisted verdict is a
+/// memoisation of this executable's own answer and not a second opinion.
+///
+/// The act is permissionless because its output is a pure function of immutable
+/// public bytes: the only freedom a caller has is whether a seal exists and
+/// when. It is write-once: an already-sealed address refuses rather than being
+/// rewritten, so nothing can replace a verdict once one is recorded.
+pub fn process_capability_seal_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    let request =
+        CapabilitySealRequestV1::decode(instruction_data).map_err(|_| TradingSbfError::Content)?;
+    if accounts.len() != SEAL_ACCOUNT_COUNT_V1 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let payer = account(accounts, SEAL_PAYER_ACCOUNT_V1)?;
+    let system = account(accounts, SEAL_SYSTEM_PROGRAM_ACCOUNT_V1)?;
+    if !payer.is_signer
+        || !payer.is_writable
+        || payer.executable
+        || system.key != &system_program::ID
+        || !system.executable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let frame = HotFrameV3::parse_seal(program_id, accounts)?;
+    let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
+
+    // The Market and the capability root are authenticated exactly as a hot
+    // action authenticates them, because the only fact this act needs from them
+    // is the one a hot action will re-derive: the Registry the Market selected
+    // and the Trading interpreter release currently bound to it. The envelope
+    // is reconstructed from the root's own immutable header, whose seeds bind
+    // it to the root address under this Program.
+    let root_header = {
+        let bytes = frame
+            .root
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Root)?;
+        CapabilityRootHeaderV1::decode(
+            bytes
+                .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+                .ok_or(TradingSbfError::Root)?,
+        )
+        .map_err(|_| TradingSbfError::Root)?
+    };
+    let envelope = HotExecutionEnvelopeV3::new(
+        u32::try_from(instruction_data.len()).map_err(|_| TradingSbfError::Content)?,
+        root_header.release_set().to_bytes(),
+        root_header.market(),
+        root_header.generation(),
+        [0xff; 32],
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let market = authenticate_market_boxed_v3(&frame, envelope)?;
+    let root = authenticate_root_boxed_v3(
+        program_id,
+        &frame,
+        envelope,
+        &market,
+        HotRoleAuthenticationV3::ReauthenticateRegistry,
+    )?;
+
+    let key = CapabilitySealKeyV1::new(
+        PROGRAM_SCHEMA_ID_V4,
+        request.descriptor_digest(),
+        request.action(),
+        root.trading_semantic_release,
+        frame.registry.key.to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    // Write-once: an existing seal is never replaced, so a recorded verdict
+    // cannot be swapped for another and a griefer cannot poison the address.
+    let seeds = key.seeds();
+    let base = seeds.as_slices();
+    let (expected, bump) = Pubkey::find_program_address(&base, program_id);
+    let seal = frame.capability_seal;
+    if seal.key != &expected
+        || seal.owner != &system_program::ID
+        || seal.data_len() != 0
+        || seal.executable
+        || !seal.is_writable
+        || seal.is_signer
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+
+    let rows = validate_descriptor_closure_v1(&frame, &rent, key, request.action())?;
+
+    let space = u64::try_from(CAPABILITY_SEAL_BYTES_V1).map_err(|_| TradingSbfError::Commit)?;
+    let minimum = rent.minimum_balance(CAPABILITY_SEAL_BYTES_V1);
+    let deficit = minimum.saturating_sub(seal.lamports());
+    if deficit > 0 {
+        invoke(
+            &system_transfer(payer.key, seal.key, deficit),
+            &[payer.clone(), seal.clone(), system.clone()],
+        )
+        .map_err(|_| TradingSbfError::Commit)?;
+    }
+    let bump_seed = [bump];
+    let signer = [
+        base[0], base[1], base[2], base[3], base[4], base[5], &bump_seed,
+    ];
+    invoke_signed(
+        &allocate(seal.key, space),
+        &[seal.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| TradingSbfError::Commit)?;
+    invoke_signed(
+        &assign(seal.key, program_id),
+        &[seal.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| TradingSbfError::Commit)?;
+    let mut data = seal
+        .try_borrow_mut_data()
+        .map_err(|_| TradingSbfError::Commit)?;
+    if data.len() != CAPABILITY_SEAL_BYTES_V1 {
+        return Err(TradingSbfError::Commit.into());
+    }
+    SealedDescriptorClosureV1::encode(key, rows, &mut data).map_err(|_| TradingSbfError::Commit)?;
+    Ok(())
+}
+
+/// Run the complete artifact conjunction a hot action would run, once.
+///
+/// Returns the canonical rows the verdict is recorded as. Every record borrow
+/// ends with this call; nothing it decodes outlives it.
+#[inline(never)]
+fn validate_descriptor_closure_v1<'info>(
+    frame: &HotFrameV3<'_, 'info>,
+    rent: &Rent,
+    key: CapabilitySealKeyV1,
+    action: u32,
+) -> Result<[SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1], ProgramError> {
+    let descriptor_data = borrow_finalized_record(
+        *frame,
+        frame.descriptor_raw,
+        frame.descriptor_staging,
+        rent,
+        PROGRAM_SCHEMA_ID_V4,
+        key.descriptor_digest(),
+    )?;
+    if descriptor_data.len() != CAPABILITY_PROGRAM_V4_BYTES {
+        return Err(TradingSbfError::Content.into());
+    }
+    let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
+
+    let lifecycle_data = borrow_finalized_record(
+        *frame,
+        frame.lifecycle_raw,
+        frame.lifecycle_staging,
+        rent,
+        descriptor.lifecycle().schema().to_bytes(),
+        descriptor.lifecycle().program().to_bytes(),
+    )?;
+    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
+        || descriptor.derivation_policy() != descriptor.lifecycle().program()
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let selected_lifecycle = descriptor.lifecycle().program().to_bytes();
+    let lifecycle = StateLifecyclePolicyV5::decode_selected(
+        selected_lifecycle,
+        selected_lifecycle,
+        &lifecycle_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+
+    let account_profile_data = borrow_finalized_record(
+        *frame,
+        frame.account_profile_raw,
+        frame.account_profile_staging,
+        rent,
+        descriptor.account_profile().schema().to_bytes(),
+        descriptor.account_profile().program().to_bytes(),
+    )?;
+    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let account_profile =
+        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
+    lifecycle
+        .validate_account_profile_join(account_profile)
+        .map_err(|_| TradingSbfError::Content)?;
+
+    let request_profile_data = borrow_finalized_record(
+        *frame,
+        frame.request_profile_raw,
+        frame.request_profile_staging,
+        rent,
+        descriptor.request_profile().schema().to_bytes(),
+        descriptor.request_profile().program().to_bytes(),
+    )?;
+    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
+
+    let transition_data = borrow_finalized_record(
+        *frame,
+        frame.transition_raw,
+        frame.transition_staging,
+        rent,
+        descriptor.transition().schema().to_bytes(),
+        descriptor.transition().program().to_bytes(),
+    )?;
+    if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let transition =
+        TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
+
+    let effect_data = borrow_finalized_record(
+        *frame,
+        frame.effect_raw,
+        frame.effect_staging,
+        rent,
+        descriptor.effect().schema().to_bytes(),
+        descriptor.effect().program().to_bytes(),
+    )?;
+    // Decoded for its verdict only; the seal records that this executable
+    // accepted these bytes, not the view it built from them.
+    let _ = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
+
+    require_static_register_ownership_v5(StaticRegisterOwnershipV5 {
+        account_profile,
+        policy: lifecycle,
+        action,
+        request: request_profile,
+        transition,
+    })?;
+
+    Ok([
+        seal_row_v1(
+            SealedRoleV1::Descriptor,
+            PROGRAM_SCHEMA_ID_V4,
+            key.descriptor_digest(),
+            descriptor_data.len(),
+            frame.descriptor_raw,
+            frame.descriptor_staging,
+        )?,
+        seal_row_v1(
+            SealedRoleV1::LifecyclePolicy,
+            descriptor.lifecycle().schema().to_bytes(),
+            descriptor.lifecycle().program().to_bytes(),
+            lifecycle_data.len(),
+            frame.lifecycle_raw,
+            frame.lifecycle_staging,
+        )?,
+        seal_row_v1(
+            SealedRoleV1::AccountProfile,
+            descriptor.account_profile().schema().to_bytes(),
+            descriptor.account_profile().program().to_bytes(),
+            account_profile_data.len(),
+            frame.account_profile_raw,
+            frame.account_profile_staging,
+        )?,
+        seal_row_v1(
+            SealedRoleV1::RequestProfile,
+            descriptor.request_profile().schema().to_bytes(),
+            descriptor.request_profile().program().to_bytes(),
+            request_profile_data.len(),
+            frame.request_profile_raw,
+            frame.request_profile_staging,
+        )?,
+        seal_row_v1(
+            SealedRoleV1::TransitionProgram,
+            descriptor.transition().schema().to_bytes(),
+            descriptor.transition().program().to_bytes(),
+            transition_data.len(),
+            frame.transition_raw,
+            frame.transition_staging,
+        )?,
+        seal_row_v1(
+            SealedRoleV1::EffectProgram,
+            descriptor.effect().schema().to_bytes(),
+            descriptor.effect().program().to_bytes(),
+            effect_data.len(),
+            frame.effect_raw,
+            frame.effect_staging,
+        )?,
+    ])
+}
+
+/// Record one row from the accounts `borrow_finalized_record` just authenticated.
+#[allow(clippy::too_many_arguments)]
+fn seal_row_v1(
+    role: SealedRoleV1,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    width: usize,
+    raw: &AccountInfo<'_>,
+    staging: &AccountInfo<'_>,
+) -> Result<SealedRecordRowV1, ProgramError> {
+    SealedRecordRowV1::new(
+        role,
+        u32::try_from(width).map_err(|_| TradingSbfError::Content)?,
+        schema,
+        digest,
+        raw.key.to_bytes(),
+        staging.key.to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::Content.into())
+}
+
+/// Authenticate the Trading validated-artifact seal for one selected action.
+///
+/// Decision 0005. This proves the seal account is the canonical PDA for the
+/// exact descriptor, action, authenticated Trading interpreter release and
+/// Market-selected Registry, is owned by this Program, is read-only and
+/// rent-exempt at its exact width, and carries a canonical body that agrees
+/// with that derivation. It consumes nothing from the seal; every artifact the
+/// seal names is still bound to its own digest, live, by
+/// `borrow_finalized_record`.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn authenticate_capability_seal_v3<'a>(
+    program_id: &Pubkey,
+    frame: HotFrameV3<'_, '_>,
+    rent: &Rent,
+    descriptor_schema: [u8; 32],
+    descriptor_digest: [u8; 32],
+    action: u32,
+    trading_semantic_release: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<SealedDescriptorClosureV1<'a>, ProgramError> {
+    let key = CapabilitySealKeyV1::new(
+        descriptor_schema,
+        descriptor_digest,
+        action,
+        trading_semantic_release,
+        frame.registry.key.to_bytes(),
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let seal = frame.capability_seal;
+    let expected = Pubkey::find_program_address(&key.seeds().as_slices(), program_id).0;
+    if seal.key != &expected
+        || seal.owner != program_id
+        || seal.is_signer
+        || seal.is_writable
+        || seal.executable
+        || seal.data_len() != CAPABILITY_SEAL_BYTES_V1
+        || bytes.len() != CAPABILITY_SEAL_BYTES_V1
+        || !rent.is_exempt(seal.lamports(), CAPABILITY_SEAL_BYTES_V1)
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let closure = SealedDescriptorClosureV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
+    closure
+        .require_key(key)
+        .map_err(|_| TradingSbfError::Content)?;
+    Ok(closure)
+}
+
+/// Borrow one finalized record against the addresses a Trading seal derived.
+///
+/// The seal's row supplies the two canonical Registry addresses that
+/// `borrow_finalized_record` would otherwise re-derive with two
+/// `find_program_address` calls from the very same seeds under the very same
+/// Registry, which is a seed of the seal. Everything else is the identical
+/// conjunction, `hash(bytes) == digest` included: the row is honoured only
+/// after its `schema` and `content_digest` are required to equal the identities
+/// the authenticated descriptor names for this role. The caller mints the
+/// sealed token from the returned borrow, so the token can never name a range
+/// the caller did not just authenticate.
+#[allow(clippy::too_many_arguments)]
+fn borrow_sealed_record<'a, 'info>(
+    frame: HotFrameV3<'_, 'info>,
+    closure: SealedDescriptorClosureV1,
+    role: SealedRoleV1,
+    raw: &'a AccountInfo<'info>,
+    staging: &AccountInfo<'info>,
+    rent: &Rent,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
+    let row: SealedRecordRowV1 = closure.row(role).map_err(|_| TradingSbfError::Content)?;
+    if row.schema() != schema || row.content_digest() != digest {
+        return Err(TradingSbfError::Content.into());
+    }
+    borrow_record_against(
+        frame,
+        raw,
+        staging,
+        rent,
+        digest,
+        Pubkey::new_from_array(row.raw_record_account()),
+        Pubkey::new_from_array(row.staging_account()),
+    )
+}
+
+/// Mint one sealed-artifact token for a record this invocation just borrowed.
+fn sealed_token<'a>(
+    closure: SealedDescriptorClosureV1,
+    role: SealedRoleV1,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<SealedArtifactV1<'a>, ProgramError> {
+    closure
+        .authenticate_artifact(role, schema, digest, bytes)
+        .map_err(|_| TradingSbfError::Content.into())
+}
+
 fn borrow_finalized_record<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
     raw: &'a AccountInfo<'info>,
@@ -6945,9 +7527,6 @@ fn borrow_finalized_record<'a, 'info>(
     schema: [u8; 32],
     digest: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
-    let data = raw
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Content)?;
     let expected_raw = Pubkey::find_program_address(
         &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
         frame.registry.key,
@@ -6958,6 +7537,29 @@ fn borrow_finalized_record<'a, 'info>(
         frame.registry.key,
     )
     .0;
+    borrow_record_against(
+        frame,
+        raw,
+        staging,
+        rent,
+        digest,
+        expected_raw,
+        expected_staging,
+    )
+}
+
+fn borrow_record_against<'a, 'info>(
+    frame: HotFrameV3<'_, 'info>,
+    raw: &'a AccountInfo<'info>,
+    staging: &AccountInfo<'info>,
+    rent: &Rent,
+    digest: [u8; 32],
+    expected_raw: Pubkey,
+    expected_staging: Pubkey,
+) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
+    let data = raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
     if raw.key != &expected_raw
         || raw.owner != frame.registry.key
         || raw.is_signer
@@ -7017,6 +7619,7 @@ struct HotFrameV3<'accounts, 'info> {
     portfolio_staging: &'accounts AccountInfo<'info>,
     linked_basis_raw: &'accounts AccountInfo<'info>,
     linked_basis_staging: &'accounts AccountInfo<'info>,
+    capability_seal: &'accounts AccountInfo<'info>,
 }
 
 impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
@@ -7063,6 +7666,7 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
             portfolio_staging: account(accounts, HOT_PORTFOLIO_STAGING_ACCOUNT_V3)?,
             linked_basis_raw: account(accounts, HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?,
             linked_basis_staging: account(accounts, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3)?,
+            capability_seal: account(accounts, HOT_CAPABILITY_SEAL_ACCOUNT_V3)?,
         })
     }
 
@@ -7092,6 +7696,56 @@ impl<'accounts, 'info> HotFrameV3<'accounts, 'info> {
             || value.rent.is_signer
             || value.rent.is_writable
             || value.rent.executable
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        for (left, account) in accounts
+            .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
+            .ok_or(TradingSbfError::Content)?
+            .iter()
+            .enumerate()
+        {
+            if accounts
+                .get(left.saturating_add(1)..HOT_FIXED_ACCOUNT_COUNT_V3)
+                .ok_or(TradingSbfError::Content)?
+                .iter()
+                .any(|other| other.key == account.key)
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+        Ok(value)
+    }
+
+    /// Parse the seal outer's fixed prefix: read-only root, writable seal.
+    fn parse_seal(
+        program_id: &Pubkey,
+        accounts: &'accounts [AccountInfo<'info>],
+    ) -> Result<Self, ProgramError> {
+        let value = Self::from_accounts(accounts)?;
+        if value.market.is_signer
+            || value.market.is_writable
+            || value.market.executable
+            || value.root.is_signer
+            || value.root.is_writable
+            || value.root.executable
+            || value.trading_program.key != program_id
+            || !value.trading_program.executable
+            || value.trading_program.is_signer
+            || value.trading_program.is_writable
+            || !value.core_program.executable
+            || value.core_program.is_signer
+            || value.core_program.is_writable
+            || !value.registry.executable
+            || value.registry.is_signer
+            || value.registry.is_writable
+            || value.rent.key != &sysvar::rent::ID
+            || value.rent.is_signer
+            || value.rent.is_writable
+            || value.rent.executable
+            || !value.capability_seal.is_writable
+            || value.capability_seal.is_signer
+            || value.capability_seal.executable
         {
             return Err(TradingSbfError::Content.into());
         }
@@ -8604,9 +9258,9 @@ mod tests {
 
     #[test]
     fn admitted_runtime_follows_the_exact_chunk_authority_vector() {
-        assert_eq!(HOT_ADMITTED_CALLER_AUTHORITIES_START_V3, 46);
-        assert_eq!(hot_admitted_runtime_accounts_start_v3(1, 1), Ok(47));
-        assert_eq!(hot_admitted_runtime_accounts_start_v3(120, 2), Ok(48));
+        assert_eq!(HOT_ADMITTED_CALLER_AUTHORITIES_START_V3, 47);
+        assert_eq!(hot_admitted_runtime_accounts_start_v3(1, 1), Ok(48));
+        assert_eq!(hot_admitted_runtime_accounts_start_v3(120, 2), Ok(49));
         assert!(hot_admitted_runtime_accounts_start_v3(0, 0).is_err());
     }
 }

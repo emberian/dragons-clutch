@@ -9,6 +9,7 @@ publish = false
 dclutch-account-profile-contract = { path = "../../../../crates/dclutch-account-profile-contract" }
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }

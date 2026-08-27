@@ -16,15 +16,16 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
-        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_ENVELOPE_BYTES_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_LINKED_BASIS_STAGING_ACCOUNT_V3,
-        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
-        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
+        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
+        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
+        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_EXECUTION_ENVELOPE_BYTES_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_STAGING_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
+        HOT_PORTFOLIO_STAGING_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3,
         HOT_PRODUCT_STAGING_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
         HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
         HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
@@ -36,6 +37,10 @@ use dclutch_capability_program_contract::{
     },
     set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
     v4::{CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4},
+};
+use dclutch_capability_seal_contract::{
+    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
+    SealedDescriptorClosureV1, SealedRecordRowV1, SealedRoleV1,
 };
 use dclutch_claims_svm::{
     CallerRole as ClaimsCallerRole,
@@ -156,6 +161,11 @@ pub struct DirectHotChainInputV5 {
     pub makers: [Pubkey; 2],
     /// Current trusted Clock slot encoded into both intents.
     pub clock_slot: u64,
+    /// Trading interpreter semantic release the activation cache authenticates.
+    ///
+    /// Decision 0005: it is a seed of the validated-artifact seal, so a Trading
+    /// release whose validators differ never reads another release's verdict.
+    pub trading_semantic_release: [u8; 32],
 }
 
 /// Complete canonical Direct child instruction and owned account declarations.
@@ -183,6 +193,12 @@ pub struct DirectHotChainFixtureV5 {
     pub custody_replay: Pubkey,
     /// Ordered source, destination, and untouched collateral token accounts.
     pub collateral_accounts: [Pubkey; 3],
+    /// Canonical validated-artifact seal for the selected descriptor closure.
+    pub capability_seal: Pubkey,
+    /// Exact canonical seal body the on-chain seal outer must produce.
+    pub capability_seal_bytes: Vec<u8>,
+    /// SHA-256 of the selected descriptor record.
+    pub descriptor_digest: [u8; 32],
 }
 
 /// Stable refusal from executable Direct fixture construction.
@@ -244,6 +260,9 @@ pub fn build_direct_hot_chain_fixture_v5(
         &state,
         &capability,
     )?;
+    let capability_seal = fixed.capability_seal;
+    let capability_seal_bytes = fixed.capability_seal_bytes.clone();
+    let fixed = fixed.accounts;
     let envelope = HotExecutionEnvelopeV3::new(
         u32::try_from(request.len()).map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
         input.release_set,
@@ -318,6 +337,9 @@ pub fn build_direct_hot_chain_fixture_v5(
         maker_replays: [capability.seller_maker, capability.buyer_maker],
         custody_replay: realm.custody_replay,
         collateral_accounts: product.collateral_accounts,
+        capability_seal,
+        capability_seal_bytes,
+        descriptor_digest: artifacts.descriptor_id,
     })
 }
 
@@ -345,6 +367,7 @@ struct Finalized {
     staging: Pubkey,
     bytes: Vec<u8>,
     digest: [u8; 32],
+    schema: [u8; 32],
     owner: Pubkey,
 }
 
@@ -954,6 +977,12 @@ fn custody_request(
     Ok(delegated)
 }
 
+struct FixedHotAccountsV5 {
+    accounts: Vec<ChainAccount>,
+    capability_seal: Pubkey,
+    capability_seal_bytes: Vec<u8>,
+}
+
 fn fixed_hot_accounts(
     input: DirectHotChainInputV5,
     rent: &Rent,
@@ -962,7 +991,7 @@ fn fixed_hot_accounts(
     product: &ProductFixture,
     state: &StateFixture,
     capability: &CapabilityFixture,
-) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
+) -> Result<FixedHotAccountsV5, DirectHotChainFixtureErrorV5> {
     let descriptor = CapabilityProgramV4::decode(&artifacts.bundle.descriptor)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut fixed = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
@@ -1091,10 +1120,76 @@ fn fixed_hot_accounts(
             ),
         ),
     ];
-    for (raw, staging, record) in finalized_records {
-        set(&mut fixed, raw, finalized_raw(rent, &record, false))?;
-        set(&mut fixed, staging, vacant(record.staging, false))?;
+    for (raw, staging, record) in &finalized_records {
+        set(&mut fixed, *raw, finalized_raw(rent, record, false))?;
+        set(&mut fixed, *staging, vacant(record.staging, false))?;
     }
+    // Decision 0005: the validated-artifact seal for exactly this descriptor,
+    // this action, this Trading interpreter release and this Registry. The
+    // fixture writes the bytes the on-chain seal outer must produce; the
+    // continuation campaign proves that it does, byte for byte, rather than
+    // assuming it.
+    let seal_key = CapabilitySealKeyV1::new(
+        CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        artifacts.descriptor_id,
+        DirectExecutionActionV3::InlineOrdinary as u32,
+        input.trading_semantic_release,
+        input.registry_program.to_bytes(),
+    )
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let capability_seal =
+        Pubkey::find_program_address(&seal_key.seeds().as_slices(), &input.trading_program).0;
+    let seal_rows = [
+        (SealedRoleV1::Descriptor, HOT_DESCRIPTOR_RAW_ACCOUNT_V3),
+        (SealedRoleV1::LifecyclePolicy, HOT_LIFECYCLE_RAW_ACCOUNT_V3),
+        (
+            SealedRoleV1::AccountProfile,
+            HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        ),
+        (
+            SealedRoleV1::RequestProfile,
+            HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+        ),
+        (
+            SealedRoleV1::TransitionProgram,
+            HOT_TRANSITION_RAW_ACCOUNT_V3,
+        ),
+        (SealedRoleV1::EffectProgram, HOT_EFFECT_RAW_ACCOUNT_V3),
+    ]
+    .into_iter()
+    .map(|(role, coordinate)| {
+        let (_, _, record) = finalized_records
+            .iter()
+            .find(|(raw, _, _)| *raw == coordinate)
+            .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+        SealedRecordRowV1::new(
+            role,
+            u32::try_from(record.bytes.len()).map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
+            record.schema,
+            record.digest,
+            record.raw.to_bytes(),
+            record.staging.to_bytes(),
+        )
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    let seal_rows: [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1] = seal_rows
+        .try_into()
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let mut capability_seal_bytes = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
+    SealedDescriptorClosureV1::encode(seal_key, seal_rows, &mut capability_seal_bytes)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    set(
+        &mut fixed,
+        HOT_CAPABILITY_SEAL_ACCOUNT_V3,
+        owned(
+            rent,
+            capability_seal,
+            input.trading_program,
+            capability_seal_bytes.clone(),
+            false,
+        ),
+    )?;
     set(
         &mut fixed,
         HOT_ACTIVATION_CACHE_ACCOUNT_V3,
@@ -1172,7 +1267,11 @@ fn fixed_hot_accounts(
         set(&mut fixed, raw, finalized_raw(rent, record, false))?;
         set(&mut fixed, staging, vacant(record.staging, false))?;
     }
-    Ok(fixed)
+    Ok(FixedHotAccountsV5 {
+        accounts: fixed,
+        capability_seal,
+        capability_seal_bytes,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1199,7 +1298,8 @@ fn logical_accounts(
             )
         })
         .collect::<Vec<_>>();
-    let fixed = fixed_hot_accounts(input, rent, artifacts, config, product, state, capability)?;
+    let fixed =
+        fixed_hot_accounts(input, rent, artifacts, config, product, state, capability)?.accounts;
     for (logical_index, fixed_index) in [
         (0, HOT_ROOT_ACCOUNT_V3),
         (1, HOT_CONFIG_RAW_ACCOUNT_V3),
@@ -1810,6 +1910,7 @@ mod tests {
             payer: key(11),
             makers: [key(12), key(13)],
             clock_slot: 50,
+            trading_semantic_release: [0x33; 32],
         }
     }
 
@@ -1975,6 +2076,7 @@ fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> Finalized {
         staging,
         bytes,
         digest,
+        schema,
         owner,
     }
 }

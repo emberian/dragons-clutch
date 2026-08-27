@@ -1367,7 +1367,8 @@ mod tests {
             CAPABILITY_SEAL_BYTES_V1, CapabilitySealKeyV1, SealedDescriptorClosureV1,
             SealedRecordRowV1, SealedRoleV1,
         };
-        let key = CapabilitySealKeyV1::new([0x11; 32], [0x22; 32], 3, [0x33; 32]).expect("key");
+        let key = CapabilitySealKeyV1::new([0x11; 32], [0x22; 32], 3, [0x33; 32], [0x44; 32])
+            .expect("key");
         let width = u32::try_from(bytes.len()).expect("record width");
         let rows = SealedRoleV1::canonical_order().map(|role| {
             let tag = u8::try_from(role.tag()).expect("role tag");

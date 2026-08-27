@@ -106,8 +106,16 @@ pub const HOT_PORTFOLIO_STAGING_ACCOUNT_V3: usize = 35;
 pub const HOT_LINKED_BASIS_RAW_ACCOUNT_V3: usize = 36;
 /// Vacant Product-linked basis staging cursor.
 pub const HOT_LINKED_BASIS_STAGING_ACCOUNT_V3: usize = 37;
+/// Read-only Trading validated-artifact seal for the selected descriptor.
+///
+/// Decision 0005. The seal is content-addressed under the Trading Program from
+/// the selected descriptor identity, the selected action, the authenticated
+/// Trading interpreter semantic release, and the Market-selected Registry. It
+/// is never writable on a hot action and is authenticated before any artifact
+/// it names is decoded.
+pub const HOT_CAPABILITY_SEAL_ACCOUNT_V3: usize = 38;
 /// Exact family-neutral account prefix width.
-pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 38;
+pub const HOT_FIXED_ACCOUNT_COUNT_V3: usize = 39;
 /// First disposition-derived ExecutionStrategy account.
 pub const HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
 /// Runtime AccountProfile coordinate occupied by the prefix root account.
