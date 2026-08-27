@@ -98,6 +98,10 @@ name = "emit-direct-ordinary-v3-rust"
 root = "EmitDirectOrdinaryV3Rust"
 
 [[lean_exe]]
+name = "emit-direct-registered-fill-v4-rust"
+root = "EmitDirectRegisteredFillV4Rust"
+
+[[lean_exe]]
 name = "emit-direct-program"
 root = "EmitDirectProgram"
 
