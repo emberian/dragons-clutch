@@ -184,36 +184,44 @@ not just Direct fills: no holder can be admitted a Position, no outcome token
 can move, no vault can be opened. That reframes W2i from "trading does not work
 yet" to "the Market's entire post-Open life is behind one door."
 
-### An atomically founded Market can never be resolved
+### The campaign leaves two admissible resolution prestates — and the gap that used to be here is closed
 
-Every route that can put a terminal receipt on a Market consumes a
-`SourceResolutionStateV2`: `execute_provider_v3` requires one at phase
-`Primary`, `funded::process_funded_transition` takes one as account 0, and
-`resolution::process#AdmitTerminal` requires the certificate those produce. The
-**only** route that creates a Source state is
-`core/resolution::process#CreateFund`, whose phase gate
-(`programs/dclutch-core-sbf/src/resolution.rs:331`) admits `Founding+Prepaid`
-and nothing else. `DCLTGMF1`'s commit-last stage is `open_series_market`
-(`programs/dclutch-core-sbf/src/generic_founding_v1.rs:1671`,
-`crates/dclutch-market-core-codec/src/generated.rs:922`), which goes
-`Founding+Prepaid -> Open+Consumed` in **one** transition and never passes
-through `Ready`.
+This section used to read *"an atomically founded Market can never be
+resolved."* It is worth keeping the correction visible, because the finding was
+real when it was written and the fix landed between the tier being built and the
+tier first running.
 
-So the moment a Market is founded atomically, the route that would give it a
-Source state has already closed behind it. Note the precise shape: the founded
-Market *passes* `AdmitTerminal`'s own phase gate — it is `Open+Consumed`. What
-it can never obtain is the **certificate**, because the thing that mints one
-needs the Source state. **At this revision the atomic founding and the
-resolution lifecycle are mutually exclusive prestates.**
-Two witnesses pin both halves on chain: the founded Market is
-`Open+Consumed+false`, and the canonical Found31 Market this same campaign
-leaves behind is still `Founding+Prepaid` — which is where a Source/provider
-tier should start, and it does not need a new campaign to get there.
+The claim was: every route that can put a terminal receipt on a Market consumes
+a `SourceResolutionStateV2`; the **only** route that creates one is
+`core/resolution::process#CreateFund`; its phase gate admitted
+`Founding+Prepaid` and nothing else; and `DCLTGMF1`'s commit-last
+`open_series_market` (`crates/dclutch-market-core-codec/src/generated.rs:922`)
+goes `Founding+Prepaid -> Open+Consumed` in **one** transition, never passing
+through `Ready`. So the atomic founding closed the resolution door behind
+itself.
 
-Whether that is a defect in the atomic founding or a deliberate split between
-"atomically founded" and "resolvable" markets is an owner decision, not this
-tier's. What the tier can say is that nobody had noticed the two paths do not
-meet.
+`edfcb24` admitted the second prestate and `60a2101` walked it end to end
+against the compiled Registry, Core, Custody and Resolution ELFs and a real
+posted Pyth update. The gate is now `resolution_fund_prestate_admissible`
+(`programs/dclutch-core-sbf/src/resolution.rs:386`):
+
+```rust
+state.terminal_receipt.is_none()
+    && matches!(
+        (state.phase, state.readiness),
+        (Phase::Founding, Readiness::Prepaid) | (Phase::Open, Readiness::Consumed)
+    )
+```
+
+So both Markets this one campaign leaves on one ledger are admissible starting
+points, and two witnesses pin them: the founded Market at `Open+Consumed+false`
+and the canonical Found31 Market at `Founding+Prepaid`. A Source/provider tier
+needs no new campaign to reach either.
+
+What remains is **a missing campaign, not a closed door**: nothing yet composes
+`CreateFund` → `VerifyFundReady` → posted provider evidence → Core-driven
+execution → `AdmitTerminal` against a live validator. The journey states that as
+its gap and does not build it.
 
 ### The campaign locks the entire collateral supply, and strands half of it
 

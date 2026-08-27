@@ -266,35 +266,38 @@ fn gap_register() -> Vec<GapV1> {
                 "core/execute_provider_v3::process#ExecuteProvider".into(),
                 "core/persist_state#AdmitTerminal".into(),
             ],
-            owner: "the Source/provider tier; and an owner decision on the founding ladder".into(),
-            reason: "NEW FINDING, and the one worth acting on: at HEAD the atomic founding and the \
-                     resolution lifecycle are mutually exclusive prestates. Every route that can \
-                     put a terminal receipt on a Market consumes a SourceResolutionStateV2 -- \
-                     execute_provider_v3 requires one at phase Primary, funded::process_funded_ \
-                     transition takes one as account 0, and resolution::process#AdmitTerminal \
-                     requires the certificate those produce. The ONLY route that creates a Source \
-                     state is core/resolution::process#CreateFund, whose phase gate \
-                     (core-sbf/src/resolution.rs:331) admits Founding+Prepaid and nothing else. \
-                     DCLTGMF1's commit-last stage is open_series_market \
-                     (core-sbf/src/generic_founding_v1.rs:1671, market-core-codec generated.rs:922), \
-                     which goes Founding+Prepaid -> Open+Consumed in ONE transition and never \
-                     passes through Ready. So the moment a Market is founded atomically, the route \
-                     that would give it a Source state has already closed behind it. Note the \
-                     precise shape: the founded Market PASSES AdmitTerminal's own phase gate \
-                     (Open+Consumed) -- what it can never obtain is the certificate, because the \
-                     thing that mints one needs the Source state. The reachable prestate is on the \
-                     same ledger: the canonical Found31 Market, still Founding+Prepaid, which is \
-                     what a Source/provider tier should drive."
+            owner: "the Source/provider tier (campaign composition only)".into(),
+            reason: "A MISSING CAMPAIGN, and — as of this revision — nothing worse. The journey's \
+                     first execution reported this stage as a PROTOCOL gap: that the atomic \
+                     founding and the resolution lifecycle were mutually exclusive prestates, \
+                     because every route that mints a terminal receipt consumes a \
+                     SourceResolutionStateV2 and the only route that creates one, \
+                     core/resolution::process#CreateFund, admitted Founding+Prepaid alone, which \
+                     DCLTGMF1's commit-last open_series_market skips straight past. That was true \
+                     when it was written and is NOT true here. `edfcb24` admitted the second \
+                     prestate and `60a2101` walked it end to end against the compiled ELFs; the \
+                     gate is now resolution_fund_prestate_admissible \
+                     (programs/dclutch-core-sbf/src/resolution.rs:386), which takes \
+                     (Founding, Prepaid) OR (Open, Consumed) and refuses anything already carrying \
+                     a terminal receipt. So an atomically founded Market CAN reach a certificate, \
+                     and the two prestates this campaign leaves on the ledger -- the founded \
+                     Market at Open+Consumed and the canonical Found31 Market at Founding+Prepaid \
+                     -- are now BOTH admissible starting points. What is missing is a campaign \
+                     that composes the ladder: CreateFund, VerifyFundReady, a posted Pyth update, \
+                     a Core-driven execution, AdmitTerminal. This journey does not build one, and \
+                     that is the whole of the remaining gap."
                 .into(),
         },
         GapV1 {
             stage: "redemption: winners redeem through terminal settlement".into(),
             routes: vec!["claims/terminal_settlement_v3::process".into()],
-            owner: "TA-CL, behind the resolution gap and the Hot gate".into(),
+            owner: "TA-CL, behind the Hot gate; and the missing resolution campaign".into(),
             reason: "Terminal settlement needs a Market with terminal_receipt set, which needs the \
-                     resolution gap closed, AND it is a SignedDeltaV3-framed Claims route, so it \
+                     resolution ladder actually driven -- reachable at this revision, but no \
+                     campaign drives it -- AND it is a SignedDeltaV3-framed Claims route, so it \
                      carries the same signing-CallerAuthority requirement as every other Claims \
-                     mutation. Two independent gates, either of which alone is enough to block it."
+                     mutation. The Hot gate is the structural half and would block this even on a \
+                     Market that had already reached Terminal."
                 .into(),
         },
         GapV1 {
@@ -304,10 +307,11 @@ fn gap_register() -> Vec<GapV1> {
                 "core/retire_v1::process#Retire".into(),
                 "rent/process_close_v2#Close".into(),
             ],
-            owner: "cycle-2 retirement, behind the resolution gap".into(),
+            owner: "cycle-2 retirement, behind the missing resolution campaign".into(),
             reason: "BeginRetiring admits only Phase::Terminal, and rent close_v2 additionally \
                      requires a retired Market plus a Core close-authority signer. Both sit behind \
-                     the resolution gap above. The rent SWEEP half of recovery is NOT behind it and \
+                     a Market that has reached Terminal, which is reachable at this revision and \
+                     simply not driven yet. The rent SWEEP half of recovery needs none of it and \
                      this journey executes it."
                 .into(),
         },

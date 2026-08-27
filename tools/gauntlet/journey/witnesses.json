@@ -31,18 +31,18 @@
       "provenance": "A cross-check between two independent derivations: the load knob the campaign was invoked with, carried in the transcript, against the chain's own count of finalized error-free transactions carrying that label. Neither side reads the other. A holder that failed to open, or a retry that opened two, moves one side and not the other."
     },
     {
-      "id": "an-atomically-founded-market-is-open-and-cannot-become-terminal",
+      "id": "the-atomic-founding-leaves-an-admissible-resolution-prestate",
       "kind": "plan-jq",
       "query": "[.markets[] | select(.label == \"founding_market\")] | .[0] | \"\\(.phase)+\\(.readiness)+\\(.terminal_receipt)\"",
       "expect": "Open+Consumed+false",
-      "provenance": "programs/dclutch-core-sbf/src/execute_provider_v3.rs:188 admits only Phase::Open with Readiness::Consumed AND requires a SourceResolutionStateV2 at phase Primary; programs/dclutch-core-sbf/src/resolution.rs:331, the only route that creates one, admits only Phase::Founding with Readiness::Prepaid. The founded Market passes AdmitTerminal's own phase gate; what it can never obtain is the certificate, because every route that mints one consumes that Source state. DCLTGMF1's commit-last stage is `open_series_market` (crates/dclutch-market-core-codec/src/generated.rs:922), which goes Founding+Prepaid -> Open+Consumed in ONE transition and never passes through Ready. This witness records the consequence on chain: the Market this journey founds is Open, has no terminal receipt, and no route at this revision can give it one."
+      "provenance": "The prestate an atomic founding leaves, pinned on chain. DCLTGMF1's commit-last stage is `open_series_market` (crates/dclutch-market-core-codec/src/generated.rs:922), which goes Founding+Prepaid -> Open+Consumed in ONE transition and never passes through Ready, so the Market this journey founds is Open, Consumed, and carries no terminal receipt. That combination USED to be a dead end: the only route that creates the SourceResolutionStateV2 every terminal receipt consumes admitted Founding+Prepaid alone, which made every atomically founded Market permanently unresolvable, and the first run of this tier reported exactly that. `edfcb24` admitted the second prestate and `60a2101` walked it end to end against the compiled ELFs. The gate is now `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386): (Founding, Prepaid) OR (Open, Consumed), and refused outright once a terminal receipt exists. So this witness now pins the OPPOSITE fact from the one it was written for -- the founded Market sits on an admissible resolution prestate -- and the `false` in the expected value is what keeps it admissible rather than already spent."
     },
     {
-      "id": "the-found31-market-is-the-reachable-resolution-prestate",
+      "id": "the-found31-market-is-the-second-resolution-prestate",
       "kind": "plan-jq",
       "query": "[.markets[] | select(.label == \"found31_market\")] | .[0] | \"\\(.phase)+\\(.readiness)\"",
       "expect": "Founding+Prepaid",
-      "provenance": "Same code as above, read the other way: the prestate `core/resolution::process#CreateFund` admits is Founding+Prepaid, and this campaign leaves exactly one such Market on the same ledger — the canonical Found31 Market, which the atomic founding does not consume. A Source/provider tier does not need a new campaign to reach a resolvable Market; it needs this one. The witness pins that the prestate is really there, so the claim does not decay into a plan."
+      "provenance": "The same gate read the other way. `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386) admits (Founding, Prepaid) as well as (Open, Consumed), and this campaign leaves exactly one Market of the first kind on the same ledger -- the canonical Found31 Market, which the atomic founding does not consume. A Source/provider tier therefore has BOTH admissible prestates sitting on one ledger and needs no new campaign to reach either; it needs this one. The witness pins that the prestate is really there, so the claim does not decay into a plan."
     }
   ]
 }
