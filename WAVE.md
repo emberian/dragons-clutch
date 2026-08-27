@@ -281,10 +281,17 @@ pool prices, majors). Cross-cluster truth transport:
    ~/dev/dclutch-legacy (copy for grep convenience; git history is the
    authoritative record). Banished so far: the gen-2 monolith
    (programs/dclutch-sbf), series-sbf, effect-sbf, economic-sbf,
-   product-payoff-sbf, product-evidence-sbf. In progress (integrator lane):
-   the verticals live/dead split, dealer/general contracts, the remaining
-   gen-2 cascade, and the census denominator correction. The repo's contents
-   converge to ONLY the active built system.
+   product-payoff-sbf, product-evidence-sbf; and **the whole DCLTCAT1 stratum**
+   (STRATUM lane, 2026-08-27) — claims/custody/controller-proof-sbf and their
+   three svm-harness campaigns, market/collateral/direct/terminal-contract,
+   realm-contract's PositionV1, dclutch-kernel's CategoricalLedger, the
+   operator's foundation/compiled_direct/registered_direct/source_resolution
+   modules AND its 1,474-line crate root, the gen-2 local-validator launchers
+   and old bootstrap, the browser's Rust fixture generator, and the
+   MarketRoot-reading test-only modules (product-admission-contract,
+   registry-contract's authority, capability-contract's readiness_frame).
+   Plus **DCLLBX02**, the liability-basis V2 issuance route. ~38,000 lines.
+   The repo's contents converge to ONLY the active built system.
 
 ## MILESTONE: THE MARKET IS OPEN (2026-08-27, run 6, 67e441d)
 
@@ -327,20 +334,39 @@ question with a recommended answer, not an inventory row.
 
 ## Fable-wave agenda seeds (from FD3, 2026-08-27)
 
-- TWO live Market representations on chain: DCLTCAT1 (native Realm/Position
-  family, own Rust fixture generator) alongside DCLTCOR2 Core state — one
-  truth or a second authority? Architecture-coherence question for the Fable
-  reviewers, NOT a quick knife.
+- ~~TWO live Market representations on chain: DCLTCAT1 alongside DCLTCOR2~~
+  **ANSWERED AND EXECUTED (STRATUM, 2026-08-27): DCLTCOR2 is the one Market
+  truth.** DCLTCAT1 had no writer in the tree — its only founding route needed
+  the deleted monolith ELF — so it was never a second authority, only a second
+  vocabulary waiting to become one. Buried with carve-outs. Two residues are
+  NAMED, not swept: (a) core-contract's `MarketRoot`/`MarketIdentity` survive
+  with exactly two readers — general-config's test-only
+  `plan_general_activation_v2`/`v3`, and
+  `trading-sbf/src/dealer/v3_accelerator_accounts.rs:499`, which decodes a
+  232-byte `MarketRoot` out of the 352-byte `CoreState` the chain actually
+  holds and therefore ALWAYS refuses (three sibling sites in the same program
+  get it right); (b) the browser's `lib/decoders.ts` DCLTCAT1 arm waits on
+  `lib/economicSuccessor.ts`, which is itself stratum and belongs to the
+  economic-web lane.
 - The Hoard vault has no chain-derivable address (namespaced by caller-chosen
   founding context) — frontend refuses-with-reason today; decide whether the
   context belongs in a discoverable record.
 
-- DCLLBX02 (liability-basis V2 route): campaign green + census EXECUTED, but
-  its ONLY issuance path (Split) composes an External source compartment that
-  Custody refuses by design (84b1426), and nothing on chain finalizes its
-  record type (CL's earlier finding). Live route or superseded second truth?
-  Fable-wave architecture call; the candidate fix (compose the DCLCUDQ2
-  delegated V2 wire in liability_basis_v2.rs) is real protocol work either way.
+- ~~DCLLBX02 (liability-basis V2 route): live route or superseded second
+  truth?~~ **ANSWERED AND EXECUTED (STRATUM, 2026-08-27): deleted.** Dead on
+  both ends — no producer built the instruction, nothing on chain finalized the
+  `DCLTLNK2` record it decoded — and its own deletion note had queued it behind
+  "whoever retires the V2 liability-basis kernel", an event that will never
+  arrive because that kernel has an active lane. The shared LBV2 state
+  vocabulary (`MarketViewV2`, seeds, widths, encoders; ~20 live consumers
+  including the web portfolio) is INTACT in
+  `dclutch-claims-svm::liability_basis_state_v2`. Correction for whoever reads
+  the old note: `test-programs/liability-basis-caller` is LIVE and was NOT
+  deleted — it is the `trading` program in the protocol-position ProgramTest.
+  Census note: the route was never enumerated by the census inventory in the
+  first place, so no denominator moved; its dispatch shape
+  (`instruction_data.get(..MAGIC.len()) == Some(...)`) is invisible to the
+  enumerator, which is a census gap worth closing.
 - Relayer daemon slice note: consumption (1,534 B) and full-body append
   (1,377 B) exceed legacy packets — witnessed by label in the relayed tier;
   the daemon must build v0/ALT for those two when it goes live. The failure
