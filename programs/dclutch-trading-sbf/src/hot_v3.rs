@@ -21,7 +21,7 @@ use dclutch_account_profile_contract::{
         StateLifecyclePlanV3, StateLifecyclePolicyV5, plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
-        AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2,
+        AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2, RouteAccountPrivilegesV2,
         SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2, TrustedEnvironmentV2,
         derive_effect_permissions, derive_effect_permissions_with_dynamic_spans,
         project_atomic as project_accounts_atomic, project_dynamic_fixed_spans_atomic,
@@ -3493,36 +3493,56 @@ fn downgraded_effect_accounts_v3<'info>(
         .try_reserve_exact(logical_accounts.len())
         .map_err(|_| TradingSbfError::Content)?;
     for (coordinate, account) in logical_accounts.iter().enumerate() {
-        let privileges = profile
-            .route_privileges(tail_count, coordinate)
-            .map_err(|_| TradingSbfError::Content)?;
-        // An authenticated route alias declares zero privileges of its own, so
-        // the representative coordinate is the sole owner of the physical
-        // executable fact. Resolve to the representative before checking
-        // executability, or an alias of an executable representative refuses
-        // even though the physical account is genuinely executable. Signer and
-        // writable stay route-local: those are legitimately downgraded per
-        // child. Sibling of `downgrade_dynamic_child_accounts_v4`.
-        let representative = profile
-            .representative(tail_count, coordinate)
-            .map_err(|_| TradingSbfError::Content)?;
-        let representative_executable = if representative == coordinate {
-            privileges.executable()
-        } else {
+        downgraded.push(child_route_view_v3(
+            account,
             profile
-                .route_privileges(tail_count, representative)
-                .map_err(|_| TradingSbfError::Content)?
-                .executable()
-        };
-        if account.executable != representative_executable {
-            return Err(TradingSbfError::Content.into());
-        }
-        let mut logical = (*account).clone();
-        logical.is_signer = privileges.signer();
-        logical.is_writable = privileges.writable();
-        downgraded.push(logical);
+                .route_privileges(
+                    tail_count,
+                    profile
+                        .representative(tail_count, coordinate)
+                        .map_err(|_| TradingSbfError::Content)?,
+                )
+                .map_err(|_| TradingSbfError::Content)?,
+        )?);
     }
     Ok(downgraded)
+}
+
+/// Build one child CPI view of a physical account from the privileges its
+/// semantic owner declares.
+///
+/// An authenticated route alias declares no privileges of its own -- the
+/// AccountProfile validator's route-alias contract requires the producer to
+/// emit it privilege-free -- so the representative coordinate is the sole owner
+/// of every privilege fact about the physical account, signer and writable
+/// included, not only executability. Reading them from the alias produced a
+/// readonly non-signer meta for an account the authenticated FrameSpec-derived
+/// representative rule states as writable, which the child program cannot
+/// honour; nothing about the alias ever expressed a per-route downgrade,
+/// because there is no privilege field in an alias to express one with.
+///
+/// The other direction is refused here for writability: a declaration never
+/// becomes a writable meta for an account the transaction did not include as
+/// writable, because no CPI can escalate that and the runtime's own refusal
+/// names nothing useful. Signer is deliberately not required of the
+/// transaction: a child route's caller authority is a Trading PDA that signs
+/// only inside the child CPI, through `invoke_signed`, which is exactly the
+/// privilege the FrameSpec owns and the outer frame never grants; a meta that
+/// claims a signer Trading cannot produce seeds for still fails closed in the
+/// runtime. Executability is exact in both directions: it is a property of the
+/// account, never granted or suppressed by a route.
+fn child_route_view_v3<'info>(
+    account: &AccountInfo<'info>,
+    declared: RouteAccountPrivilegesV2,
+) -> Result<AccountInfo<'info>, ProgramError> {
+    if (declared.writable() && !account.is_writable) || declared.executable() != account.executable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let mut logical = account.clone();
+    logical.is_signer = declared.signer();
+    logical.is_writable = declared.writable();
+    Ok(logical)
 }
 
 #[derive(Clone, Copy)]
@@ -7626,9 +7646,40 @@ mod tests {
 
         let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
             .expect("downgrade route views");
+        // Coordinate 6 is an authenticated route alias of the writable
+        // representative 4. An alias is emitted privilege-free, so it states
+        // nothing at all, and a child CPI meta built from the alias would hand
+        // the child program a readonly view of an account its own authenticated
+        // declaration states as writable.
         assert!(child[4].is_writable);
-        assert!(!child[6].is_writable);
+        assert!(child[6].is_writable);
         assert_eq!(child[4].key, child[6].key);
+
+        // A declaration never becomes a writable meta for an account the
+        // transaction did not include as writable.
+        let withheld = [
+            make_account(false),
+            make_account(false),
+            make_account(false),
+            make_account(false),
+            make_account(false),
+            make_account(false),
+        ];
+        let withheld_logical = expand_runtime_accounts_v3(
+            profile,
+            0,
+            &[],
+            [
+                &withheld[0],
+                &withheld[1],
+                &withheld[2],
+                &withheld[3],
+                &withheld[4],
+            ],
+            &withheld[5..],
+        )
+        .expect("expand physical representatives");
+        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &withheld_logical).is_err());
         assert!(
             expand_runtime_accounts_v3(
                 profile,

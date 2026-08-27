@@ -81,9 +81,12 @@ pub(crate) fn expand_dynamic_physical_accounts_v4<'accounts, 'info>(
 
 /// Clone the complete logical vector into route-local child views.
 ///
-/// Signer and writable bits are downgraded to the exact logical-coordinate
-/// declaration. Executability must already agree with the physical
-/// representative and cannot be upgraded or suppressed by this adapter.
+/// Every privilege in a child view comes from the representative coordinate --
+/// the semantic owner of the physical account's authenticated declaration --
+/// and never from an authenticated route alias, which the AccountProfile
+/// validator requires to be emitted privilege-free and therefore states
+/// nothing at all. A declaration is never turned into a meta the transaction
+/// did not grant, and executability is exact in both directions.
 pub(crate) fn downgrade_dynamic_child_accounts_v4<'info>(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
@@ -101,34 +104,20 @@ pub(crate) fn downgrade_dynamic_child_accounts_v4<'info>(
         .try_reserve_exact(logical_count)
         .map_err(|_| TradingSbfError::Content)?;
     for (coordinate, physical) in logical_accounts.iter().enumerate() {
-        let privileges = profile
-            .route_privileges_with_dynamic_spans(tail_count, span_counts, coordinate)
-            .map_err(|_| TradingSbfError::Content)?;
-        // An authenticated route alias declares zero privileges of its own
-        // (the Profile13 producer emits it privilege-free, per the shared
-        // AccountProfile validator's route-alias contract): the representative
-        // coordinate is the sole owner of the physical executable fact. Resolve
-        // to the representative before checking executability so an alias of
-        // an executable representative is not mistaken for a non-executable
-        // account; signer/writable stay route-local (they are legitimately
-        // downgraded per child).
         let representative = profile
             .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
-        let representative_executable = if representative == coordinate {
-            privileges.executable()
-        } else {
-            profile
-                .route_privileges_with_dynamic_spans(tail_count, span_counts, representative)
-                .map_err(|_| TradingSbfError::Content)?
-                .executable()
-        };
-        if physical.executable != representative_executable {
+        let declared = profile
+            .route_privileges_with_dynamic_spans(tail_count, span_counts, representative)
+            .map_err(|_| TradingSbfError::Content)?;
+        if (declared.writable() && !physical.is_writable)
+            || declared.executable() != physical.executable
+        {
             return Err(TradingSbfError::Content.into());
         }
         let mut logical = (*physical).clone();
-        logical.is_signer = privileges.signer();
-        logical.is_writable = privileges.writable();
+        logical.is_signer = declared.signer();
+        logical.is_writable = declared.writable();
         downgraded.push(logical);
     }
     Ok(downgraded)
@@ -186,12 +175,16 @@ mod tests {
             let representative = profile
                 .physical_representative_coordinate_with_dynamic_spans(0, &span_counts, ordinal)
                 .expect("representative");
-            let executable = profile
+            let declared = profile
                 .route_privileges_with_dynamic_spans(0, &span_counts, representative)
-                .expect("representative privileges")
-                .executable();
-            let writable = representative == 53;
-            physical.push(account(writable, executable));
+                .expect("representative privileges");
+            // A frame the chain would actually present: every coordinate the
+            // profile declares writable is included writable, exactly as
+            // `validate_accounts` requires. Coordinate 53 is additionally
+            // writable without declaring it, which is the legitimate
+            // effect-permission case a route view must NOT upgrade.
+            let writable = declared.writable() || representative == 53;
+            physical.push(account(writable, declared.executable()));
             ordinal += 1;
         }
         physical
@@ -214,14 +207,38 @@ mod tests {
 
         let child = downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical)
             .expect("child views");
-        // 18 is the Shared Market representative and owns the writable
-        // union; its alias 20 is an authenticated route alias and is
-        // privilege-free, so the child view stays readonly.
+        // 18 is the Shared Market representative and owns every privilege fact
+        // about the physical account. 20 is an authenticated route alias of it:
+        // an alias is emitted privilege-free, so it states nothing, and a child
+        // CPI meta built from the alias would silently hand the child program a
+        // readonly view of an account the representative declares writable.
         assert!(child[18].is_writable);
-        assert!(!child[20].is_writable);
+        assert!(child[20].is_writable);
+        assert_eq!(child[18].key, child[20].key);
+        // 53 and its alias 137 are readonly at the representative, so both
+        // child views stay readonly: inheriting from the representative is not
+        // a blanket upgrade.
         assert!(!child[53].is_writable);
         assert!(!child[137].is_writable);
-        assert_eq!(child[18].key, child[20].key);
+    }
+
+    /// A route view must never claim a privilege the transaction did not grant,
+    /// even when the authenticated declaration states one.
+    #[test]
+    fn a_declared_privilege_the_transaction_withheld_refuses() {
+        let bytes = profile_bytes();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile");
+        let span_counts = [1_u32];
+        let mut physical = physical_accounts(profile, span_counts[0]);
+        let ordinal = profile
+            .physical_account_ordinal_with_dynamic_spans(0, &span_counts, 18)
+            .expect("shared market ordinal");
+        assert!(physical[ordinal].is_writable, "representative is writable");
+        physical[ordinal].is_writable = false;
+        let physical_refs = physical.iter().collect::<Vec<_>>();
+        let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &physical_refs)
+            .expect("logical expansion");
+        assert!(downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical).is_err());
     }
 
     #[test]
