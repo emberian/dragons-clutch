@@ -363,6 +363,20 @@ fn evaluate_candidate(
     let environment = general_hot_environment_from_bank_v3(candidate, outcome_count)
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
     match request.action {
+        // The accelerator is the read-only evaluator for the SETTLEMENT half.
+        // The collection, escrow and candidate actions have no artifact triple
+        // and no accelerated evaluation; a request naming one is refused here
+        // rather than falling through to an evaluator that would read the wrong
+        // state. They are written out one by one on purpose: a catch-all would
+        // let the next action be added without anyone deciding what this
+        // program does with it.
+        Action::OpenBatch
+        | Action::PlaceOrder
+        | Action::CancelOrder
+        | Action::CloseBatch
+        | Action::SubmitCandidate
+        | Action::VerifyCandidateRow
+        | Action::ReleaseOrder => Err(GeneralAcceleratorSemanticErrorV3::State),
         Action::Consider | Action::Freeze => {
             evaluate_selection(request, runtime, outcome_count, environment, candidate)
         }

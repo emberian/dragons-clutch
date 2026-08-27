@@ -7,6 +7,7 @@
 //! contract, not account or CPI authority; generic Trading remains the only
 //! physical executor and writer.
 
+use crate::effect_artifacts_v3::unauthored_actions;
 use dclutch_account_profile_contract::{
     lifecycle_v3::StateLifecyclePolicyV5,
     v2::{AccountProfileV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
@@ -611,6 +612,9 @@ fn validate_hot_account_profile(account: AccountProfileV2<'_>) -> Result<()> {
 
 fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
     match action {
+        // No artifact was authored for these, so no route table can be correct
+        // for them and none is accepted.
+        unauthored_actions!() => Err(GeneralArtifactErrorV3::Effect),
         Action::Consider | Action::Freeze => require_route_count(effect, 0),
         Action::InitializeSettlement => {
             require_route_count(effect, 3)?;

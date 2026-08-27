@@ -6,6 +6,7 @@
 //! the common EffectProgram. The Product-owned tail is folded at runtime; no
 //! outcome width is compiled into an artifact.
 
+use crate::effect_artifacts_v3::unauthored_actions;
 use dclutch_general_codec::Action;
 use dclutch_general_config_contract::GeneralLifecycleV2;
 use dclutch_transition_vm::v3::{
@@ -31,6 +32,8 @@ pub enum GeneralTransitionArtifactErrorV3 {
     Geometry,
     /// The canonical TransitionVM encoder refused the complete program.
     Transition(dclutch_transition_vm::v3::Error),
+    /// The action is a declared protocol selector with no authored artifacts.
+    UnauthoredAction,
 }
 
 /// Result alias for General transition artifacts.
@@ -47,6 +50,7 @@ pub const GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3: InstructionV3 =
 #[must_use]
 pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, usize, usize) {
     match action {
+        unauthored_actions!() => (0, 0, 0),
         Action::Consider => (15, 1, 0),
         Action::Freeze => (17, 1, 0),
         Action::InitializeSettlement => (21, 2, 0),
@@ -58,6 +62,9 @@ pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, 
 
 /// Exact finalized program byte width for one action.
 pub fn general_transition_program_bytes_v3(action: Action) -> Result<usize> {
+    if !crate::effect_artifacts_v3::general_action_artifacts_authored_v3(action) {
+        return Err(GeneralTransitionArtifactErrorV3::UnauthoredAction);
+    }
     let (prelude, item, epilogue) = general_transition_instruction_count_v3(action);
     prelude
         .checked_add(item)
@@ -163,6 +170,9 @@ fn append_common(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
 
 fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usize) -> Result<()> {
     match action {
+        unauthored_actions!() => {
+            return Err(GeneralTransitionArtifactErrorV3::UnauthoredAction);
+        }
         Action::Consider => {
             for instruction in [
                 InstructionV3::load_const(
@@ -335,6 +345,9 @@ fn append_item(action: Action, output: &mut [InstructionV3], cursor: &mut usize)
         InstructionV3::scalar_lt(is(item_scalar::OUTCOME)?, s(scalar::OUTCOME_COUNT)?),
     )?;
     match action {
+        unauthored_actions!() => {
+            return Err(GeneralTransitionArtifactErrorV3::UnauthoredAction);
+        }
         Action::Consider | Action::Freeze | Action::Materialize => {}
         Action::InitializeSettlement => push(
             output,

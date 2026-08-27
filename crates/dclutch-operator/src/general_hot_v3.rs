@@ -671,6 +671,17 @@ fn derive_general_request_v5(
         return Err(GeneralHotOperatorErrorV3::ContentIdentity);
     }
     match action {
+        // The collection, escrow and candidate actions are not hot-executable:
+        // no artifact triple has been authored for them, so this operator has
+        // no request to derive. Named one by one so adding an action forces a
+        // decision here rather than inheriting a catch-all.
+        Action::OpenBatch
+        | Action::PlaceOrder
+        | Action::CancelOrder
+        | Action::CloseBatch
+        | Action::SubmitCandidate
+        | Action::VerifyCandidateRow
+        | Action::ReleaseOrder => Err(GeneralHotOperatorErrorV3::ChainState),
         Action::Consider => {
             derive_consider_request_v5(state, config, outcome_count, product_record)
         }
@@ -901,7 +912,16 @@ fn derive_settlement_request_v5(
         Action::Materialize => RuntimeSettlementActionV2::Materialize,
         Action::Distribute => RuntimeSettlementActionV2::Distribute,
         Action::Close => RuntimeSettlementActionV2::Close,
-        Action::Consider | Action::Freeze | Action::InitializeSettlement => {
+        Action::Consider
+        | Action::Freeze
+        | Action::InitializeSettlement
+        | Action::OpenBatch
+        | Action::PlaceOrder
+        | Action::CancelOrder
+        | Action::CloseBatch
+        | Action::SubmitCandidate
+        | Action::VerifyCandidateRow
+        | Action::ReleaseOrder => {
             return Err(GeneralHotOperatorErrorV3::ChainState);
         }
     };

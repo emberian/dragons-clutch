@@ -113,6 +113,11 @@ pub struct GeneralEffectRouteFrameV3 {
 #[must_use]
 pub const fn general_effect_route_count_v3(action: Action) -> u16 {
     match action {
+        // The collection and candidate actions have no authored artifact
+        // triple, so they select no route. Every fallible entry point refuses
+        // them by name first -- see `general_effect_program_bytes_v3` -- so a
+        // zero here can never reach an encoder and be mistaken for a shape.
+        unauthored_actions!() => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => 3,
         Action::Collect | Action::Materialize | Action::Distribute => 2,
@@ -219,6 +224,44 @@ pub enum GeneralEffectArtifactErrorV3 {
     Effect(dclutch_effect_kernel::v3::Error),
     /// The V4 envelope encoder refused, or did not preserve its V3 base.
     Envelope,
+    /// The action is a declared protocol selector with no authored artifacts.
+    UnauthoredAction,
+}
+
+/// The seven actions whose artifact triple has not been authored.
+///
+/// Their tags are Lean-owned and their `CapabilityProgramSetV2` coordinates are
+/// reserved, because a selector is a protocol fact before it is an artifact.
+/// What does not exist yet is a TransitionVM program, an EffectProgram and an
+/// AccountProfile for each. Naming them in one place -- and refusing them by
+/// name at every fallible entry point -- is what stops a release being
+/// assembled that claims artifacts nobody wrote.
+macro_rules! unauthored_actions {
+    () => {
+        Action::OpenBatch
+            | Action::PlaceOrder
+            | Action::CancelOrder
+            | Action::CloseBatch
+            | Action::SubmitCandidate
+            | Action::VerifyCandidateRow
+            | Action::ReleaseOrder
+    };
+}
+pub(crate) use unauthored_actions;
+
+/// Whether one action's complete V3 artifact triple has been authored.
+#[must_use]
+pub const fn general_action_artifacts_authored_v3(action: Action) -> bool {
+    !matches!(action, unauthored_actions!())
+}
+
+/// Refuse one action whose artifact triple has not been authored.
+pub const fn require_authored_action_v3(action: Action) -> Result<()> {
+    if general_action_artifacts_authored_v3(action) {
+        Ok(())
+    } else {
+        Err(GeneralEffectArtifactErrorV3::UnauthoredAction)
+    }
 }
 
 /// Result alias for General EffectProgram generation.
@@ -239,6 +282,7 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 /// Return `(fixed, repeated-item)` instruction counts for one action artifact.
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
+        unauthored_actions!() => (0, 0),
         Action::Consider => (22, 0),
         Action::Freeze => (16, 0),
         Action::InitializeSettlement => (54, 1),
@@ -250,6 +294,7 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
 /// Return the exact child-template workspace width for one action artifact.
 pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
     match action {
+        unauthored_actions!() => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
             PROTOCOL_POSITION_REQUEST_BYTES_V2 + 2 * CUSTODY_REQUEST_BYTES_V1
@@ -344,6 +389,7 @@ pub fn encode_general_effect_program_v4_atomic(
 
 /// Return the exact finalized EffectProgram byte width for one action.
 pub fn general_effect_program_bytes_v3(action: Action) -> Result<usize> {
+    require_authored_action_v3(action)?;
     let (fixed, item) = general_effect_instruction_count_v3(action);
     EFFECT_HEADER_BYTES_V3
         .checked_add(
@@ -369,6 +415,7 @@ pub fn general_effect_program_bytes_v3(action: Action) -> Result<usize> {
 
 const fn receipt_dependency_count(action: Action) -> usize {
     match action {
+        unauthored_actions!() => 0,
         Action::InitializeSettlement | Action::Close => 1,
         Action::Consider
         | Action::Freeze
@@ -395,6 +442,7 @@ const fn receipt_dependency_count(action: Action) -> usize {
 #[must_use]
 pub const fn general_custody_callee_account_count_v3(action: Action) -> u16 {
     match action {
+        unauthored_actions!() => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement
         | Action::Collect
@@ -419,7 +467,9 @@ pub fn general_custody_callee_coordinate_v3(action: Action) -> Result<Option<u16
 
 /// Return the exact logical account width selected by one action AccountProfile.
 pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
+    require_authored_action_v3(action)?;
     let suffix = match action {
+        unauthored_actions!() => return Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
             POSITION_ADMIT_ACCOUNTS + CUSTODY_INITIALIZE_ACCOUNTS + CUSTODY_OPEN_ACCOUNTS
@@ -526,6 +576,7 @@ fn build_action<'a>(
     routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
 ) -> Result<usize> {
     match action {
+        unauthored_actions!() => Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
         Action::Consider | Action::Freeze => Ok(0),
         Action::InitializeSettlement => build_initialize(instructions, fixed, templates, routes),
         Action::Collect => build_settlement(
@@ -2010,6 +2061,7 @@ fn slice_at(input: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
 
 const fn route_count(action: Action) -> usize {
     match action {
+        unauthored_actions!() => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => 3,
         Action::Collect | Action::Materialize | Action::Distribute => 2,
