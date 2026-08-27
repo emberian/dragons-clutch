@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Run the tier-2 Series occurrence campaign and fold it into the census ledger.
+# Run the tier-4 Series occurrence campaign and fold it into the census ledger.
 #
-# This is a ProgramTest FAST LANE. Read tools/gauntlet/tier2/README.md for which
+# This is a ProgramTest FAST LANE. Read tools/gauntlet/tier4/README.md for which
 # of the four TIERS.md fast-lane conditions it satisfies before treating any row
 # it produces as validator evidence.
 #
@@ -9,8 +9,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
-tier_dir="$repo_root/tools/gauntlet/tier2"
-work="/private/tmp/dclutch-tier2"
+tier_dir="$repo_root/tools/gauntlet/tier4"
+work="/private/tmp/dclutch-tier4"
 gauntlet_out="/private/tmp/dclutch-gauntlet/out"
 ledger=""
 inventory=""
@@ -69,7 +69,7 @@ cargo run --quiet -p dclutch-program-test-evidence \
     --bin fold-program-test-evidence -- "$evidence_dir" "$evidence"
 
 # The witness evaluator takes three files; this tier has no bootstrap plan, so
-# it is handed the program map as the third. Every tier-2 witness is
+# it is handed the program map as the third. Every tier-4 witness is
 # `evidence-jq` and none reads it -- the argument exists only because the
 # evaluator requires the path to be present.
 "$repo_root/tools/gauntlet/tier1/check-witnesses.sh" \
@@ -83,5 +83,5 @@ cargo run --quiet --manifest-path tools/gauntlet/census/Cargo.toml -- observe \
     --evidence "$evidence"
 
 echo
-echo "tier2: folded into $ledger"
-echo "tier2: render the report with 'tools/gauntlet/run.sh --mode census'"
+echo "tier4: folded into $ledger"
+echo "tier4: render the report with 'tools/gauntlet/run.sh --mode census'"

@@ -1,5 +1,5 @@
 {
-  "campaign": "tier2-series-occurrence-programtest",
+  "campaign": "tier4-series-occurrence-programtest",
   "witnesses": [
     {
       "id": "every-transaction-fits-the-compute-maximum",
@@ -16,17 +16,17 @@
       "provenance": "Solana's MAX_INSTRUCTION_STACK_DEPTH is 5, counting the top-level instruction as depth 1, so the deepest admissible `invoke [n]` line any program can produce is [5]. The Series occurrence chain runs caller -> Core -> role artifact, and this witness is what would catch a composition change that quietly added a CPI level and put the route one hop from the runtime's hard stop."
     },
     {
-      "id": "both-refusals-reached-a-programs-own-taxonomy",
+      "id": "every-refusal-reached-a-programs-own-taxonomy",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length > 0)] | length | tostring",
-      "expect": "2",
-      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. TIERS.md draws exactly this distinction and records a pre-taxonomy refusal as an unnamed one, because crediting it would overstate what the program proved. This witness is the campaign's claim that both of its hostile cases were decided by a dClutch program rather than bounced by the runtime -- which is what makes naming a refusal code admissible at all."
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. TIERS.md draws exactly this distinction and records a pre-taxonomy refusal as an unnamed one, because crediting it would overstate what the program proved. This witness asserts that NO refused transaction in the campaign was bounced by the runtime -- which is what makes naming a refusal code admissible at all. It counts the violations rather than the conformers deliberately: a witness pinned to how many hostile cases the campaign happens to have would have to be edited every time one was added, and an edited witness is one nobody reads."
     },
     {
       "id": "the-occurrence-that-founds-is-the-only-one-that-succeeds",
       "kind": "evidence-jq",
       "query": "[.transactions[] | select(.error == null) | .label] | sort | join(\"|\")",
-      "expect": "Series occurrence Consume founds its Market with a Core permit",
+      "expect": "Series occurrence Consume founds its Market with a Core permit|Series occurrence Consume founds its Market with a Core permit (replay campaign)",
       "provenance": "A route is EXECUTED in this census only on a succeeding transaction, and a campaign that accidentally accepted one of its own hostile cases would flip a row on the strength of a bug. This witness pins which single transaction is allowed to succeed, so a future change that weakened either refusal fails the tier instead of silently improving its coverage numbers. The rule it encodes is AGENTS.md's: do not weaken a refusal to make an integration test pass."
     }
   ]

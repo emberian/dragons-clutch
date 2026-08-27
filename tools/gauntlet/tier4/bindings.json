@@ -1,0 +1,44 @@
+{
+  "campaign": "tier4-series-occurrence-programtest",
+  "note": "The Series occurrence waist, driven as real ELFs under solana-program-test rather than on a validator. This is a FAST LANE: read tools/gauntlet/tier4/README.md for which of the four TIERS.md fast-lane conditions it satisfies and which it does not, before reading any row it produces as validator evidence. The campaign lives in programs/dclutch-core-sbf/tests/found_program_test.rs; the transaction's top-level program is a test-only caller standing in for Trading's Series route, so this tier binds NO trading route and the program map deliberately omits `trading`.",
+  "bindings": [
+    {
+      "label": "Series occurrence Consume founds its Market with a Core permit",
+      "routes": ["core/series_consume::process"],
+      "program": "core",
+      "outcome": "executed",
+      "note": "One Series occurrence consumes its ticket and commits Found: the Market lands in phase Founding / readiness Prepaid at 258 outcomes, and Core writes the SeriesFoundingPermit naming that Market, its parent root, its projected replay, and the Claims program. The projected-Custody Lock receipt rides in the instruction tail, which is what selects series_consume over series_open."
+    },
+    {
+      "label": "Series occurrence Consume founds its Market with a Core permit (replay campaign)",
+      "routes": ["core/series_consume::process"],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The first half of the replay campaign: the same successful occurrence, submitted into a bank that is then asked to consume the ticket a second time. It is bound separately from the standalone Consume because a binding that matched both would make the replay campaign's setup indistinguishable from its result."
+    },
+    {
+      "label": "Series Consume refuses a replayed ticket",
+      "routes": ["core/series_consume::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::Market",
+      "note": "The one-shot property. A ticket is the authority to found this Market at this index exactly once; a second Consume would mint a second liability from one prepayment. The replay carries a FRESH BLOCKHASH, so the bank cannot dismiss it as already processed -- duplicate-signature rejection is the runtime declining to look, not Core declining to act twice. Core refuses with its own Market code because the first Consume moved the Market out of the prestate the occurrence requires, and the campaign additionally asserts the Market and permit are untouched by the refused replay."
+    },
+    {
+      "label": "Series Consume refuses a substituted Claims ProgramData",
+      "routes": ["core/series_consume::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "registry/RegistryError::Deployment",
+      "note": "The hostile case for release identity. series_consume is entered and reauthenticates its role artifacts through Registry; a substituted Claims ProgramData makes Registry's batch refuse with its own Deployment code, which Core propagates unchanged. The refusal is credited to Registry because Registry is the program that decided it -- Core never reaches its own taxonomy here."
+    },
+    {
+      "label": "Series Consume refuses a late Hoard postcondition",
+      "routes": ["core/series_consume::process"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::ChildAck",
+      "note": "The hostile case for atomicity. The refusal lands AFTER Found has committed and after the child CPIs returned, so it is the transaction boundary rather than an early guard that must undo the Market, the permit, and every replay account. The campaign asserts byte-exact rollback of that whole set; the census records only the refusal, which is the part the chain itself reports."
+    }
+  ]
+}
