@@ -6,21 +6,20 @@
 -->
 # Routes
 
-Every instruction route the census enumerates, with its selector and its
-execution status. Status comes from two in-tree ledgers: the gauntlet
-campaigns' bindings (authored by the gauntlet, never by a campaign) name the
-routes each witnessed transaction executes or refuses, and
-`tools/gauntlet/blocked.json` names every route deliberately not driven yet,
-with the reason. A route with neither is listed as **NEVER-EXECUTED, no
-stated reason** -- the row that should make someone uncomfortable.
+Every instruction the programs accept, with its selector and where it
+stands:
 
-A "witnessed" status here means an in-tree campaign binds the route; it is
-campaign coverage, not a proof about all inputs. Blocked reasons are
-truncated to their first sentence -- the full entries live in
-`blocked.json`.
+- **witnessed** -- an in-tree test campaign has actually run this route
+  (that is test coverage, not a proof about every input). The campaign is
+  named in the row.
+- **blocked** -- the route cannot be driven yet, and the reason is written
+  down in `tools/gauntlet/blocked.json` (rows show the first sentence;
+  the file has the rest).
+- **NEVER-EXECUTED** -- no campaign has run it and no reason is recorded
+  yet.
 
-Currently **2** of **100** routes
-have neither an execution binding nor a blocked entry.
+Currently **2** of **100**
+routes are in that last group.
 
 ## claims
 
@@ -33,10 +32,10 @@ have neither an execution binding nor a blocked entry.
 | `claims/process_admit#Admit` | action | variant `ProtocolPositionActionV2::Admit` | executed (claims-family-programtest); refused (claims-family-programtest) | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:224` |
 | `claims/process_close#Close` | action | variant `ProtocolPositionActionV2::Close` | executed (claims-family-programtest); refused (claims-family-programtest) | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:230` |
 | `claims/process_core_effect` | entry | magic `DCLTCEF1` | blocked by rule `claims/process_core_effect`: The DCLTCEF1 Core-effect route. | `programs/dclutch-claims-sbf/src/lib.rs:209` |
-| `claims/process_instruction` | entry | -- | executed (claims-affine-batch-programtest); executed (claims-family-programtest); executed (claims-fractional-signed-delta-programtest); executed (claims-rational-lifecycle-programtest); executed (claims-rational-representation-v2-programtest); executed (tier1); refused (claims-affine-batch-programtest); refused (claims-family-programtest); refused (claims-fractional-signed-delta-programtest); refused (claims-rational-lifecycle-programtest); refused (claims-rational-representation-v2-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:1` |
+| `claims/process_instruction` | entry | -- | executed (claims-affine-batch-programtest); executed (claims-family-programtest); executed (claims-fractional-signed-delta-programtest); executed (claims-rational-lifecycle-programtest); executed (claims-rational-representation-v2-programtest); executed (tier1); refused (claims-affine-batch-programtest); refused (claims-family-programtest); refused (claims-fractional-signed-delta-programtest); refused (claims-rational-lifecycle-programtest); refused (claims-rational-representation-v2-programtest); refused (structured-v2-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:1` |
 | `claims/protocol_position_v2::process` | entry | magic `DCLPPR02` | executed (claims-family-programtest); refused (claims-family-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:264` |
 | `claims/rational_lifecycle_v2::process` | entry | magic `DCRRLC02` | executed (claims-rational-lifecycle-programtest); refused (claims-rational-lifecycle-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:277` |
-| `claims/rational_representation_v2::process` | entry | magic `DCRRPRQ2` | executed (claims-rational-representation-v2-programtest); refused (claims-rational-representation-v2-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:269` |
+| `claims/rational_representation_v2::process` | entry | magic `DCRRPRQ2` | executed (claims-rational-representation-v2-programtest); refused (claims-rational-representation-v2-programtest); refused (structured-v2-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:269` |
 | `claims/signed_delta_v3::process` | entry | magic `DCLSDP03` | executed (claims-fractional-signed-delta-programtest); refused (claims-fractional-signed-delta-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:228` |
 | `claims/sparse_native_transfer_v1::process` | entry | magic `DCLSPT01` | executed (claims-family-programtest); refused (claims-family-programtest) | `programs/dclutch-claims-sbf/src/lib.rs:244` |
 | `claims/terminal_settlement_v3::process` | entry | magic `DCLTSQ03` | blocked by rule `claims/terminal_settlement_v3::process`: No campaign drives it. | `programs/dclutch-claims-sbf/src/lib.rs:235` |
@@ -58,7 +57,7 @@ have neither an execution binding nor a blocked entry.
 | `core/infrastructure::process_initialize` | entry | length `INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1` | executed (tier1); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:152` |
 | `core/open_market::process#OpenMarket` | entry | variant `Action::OpenMarket`; length `open_market::OPEN_MARKET_INSTRUCTION_BYTES_V1` | blocked by rule `core/open_market::process#OpenMarket`: The standalone `Action::OpenMarket` route. | `programs/dclutch-core-sbf/src/lib.rs:290` |
 | `core/persist_state#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | blocked by rule `core/persist_state#AdmitTerminal`: Terminal admission; needs the Source/provider tier and a resolved Market. | `programs/dclutch-core-sbf/src/resolution.rs:232` |
-| `core/persist_state#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey) | `programs/dclutch-core-sbf/src/resolution.rs:218` |
+| `core/persist_state#VerifyFundReady` | action | variant `ResolutionCoreActionV1::VerifyFundReady` | executed (journey); executed (relayed-vertical) | `programs/dclutch-core-sbf/src/resolution.rs:218` |
 | `core/process_found#FoundAndPermit` | action | variant `GenericFoundingStageV1::FoundAndPermit` | executed (tier1) | `programs/dclutch-core-sbf/src/generic_founding_v1.rs:380` |
 | `core/process_instruction` | entry | -- | executed (journey); executed (relayed-vertical); executed (tier1); refused (journey); refused (tier1) | `programs/dclutch-core-sbf/src/lib.rs:1` |
 | `core/process_instruction#CloseCapability` | entry | variant `Action::ActivateCapability`; variant `Action::CloseCapability` | blocked by rule `core/process_instruction#CloseCapability`: The inline arm of Core's capability dispatch. | `programs/dclutch-core-sbf/src/lib.rs:338` |
@@ -116,7 +115,7 @@ have neither an execution binding nor a blocked entry.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `general-accelerator/process_instruction` | entry | -- | blocked by rule `general-accelerator/*`: General accelerator, not part of the seven-role successor release set; no tier deploys it. | `programs/dclutch-general-accelerator-sbf/src/lib.rs:1` |
+| `general-accelerator/process_instruction` | entry | -- | executed (general-accelerator-programtest); refused (general-accelerator-programtest) | `programs/dclutch-general-accelerator-sbf/src/lib.rs:1` |
 
 ## product-runtime-v2
 
@@ -134,7 +133,7 @@ have neither an execution binding nor a blocked entry.
 | `registry/process_append#2` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:52` |
 | `registry/process_begin#1` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:49` |
 | `registry/process_finalize#3` | action | tag `` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:55` |
-| `registry/process_instruction` | entry | -- | executed (relayed-vertical); executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
+| `registry/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:1` |
 | `registry/process_reauthenticate#Reauthenticate` | entry | variant `RegistryInstructionV1::Reauthenticate` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:164` |
 | `registry/record_v1::dispatch` | entry | magic `DCLTRIX1`; length `dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:149` |
 
@@ -179,23 +178,10 @@ have neither an execution binding nor a blocked entry.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `trading/generic_market_founding_v1::process_generic_market_founding_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:207` |
-| `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:247` |
-| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses `TradingSbfError::Content` (0x4003) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). | `programs/dclutch-trading-sbf/src/lib.rs:250` |
-| `trading/outer::process_activation#else` | entry | fallthrough `` | blocked by rule `trading/outer::process_activation#else`: Trading child-root activation, the fallthrough branch of Trading's dispatch. | `programs/dclutch-trading-sbf/src/lib.rs:252` |
+| `trading/generic_market_founding_v1::process_generic_market_founding_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:260` |
+| `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:300` |
+| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses `TradingSbfError::Content` (0x4003) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). | `programs/dclutch-trading-sbf/src/lib.rs:303` |
+| `trading/outer::process_activation#else` | entry | fallthrough `` | blocked by rule `trading/outer::process_activation#else`: Trading child-root activation, the fallthrough branch of Trading's dispatch. | `programs/dclutch-trading-sbf/src/lib.rs:305` |
 | `trading/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:1` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:236` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:219` |
-
-## Bindings naming routes the census does not
-
-These route references appear in a bindings file but match no route id
-in the current inventory. Each is either a stale binding or a census gap;
-neither is silently droppable.
-
-| reference | bindings file | binding label |
-| --- | --- | --- |
-| `core/resolution::process#VerifyFundReady` | `tools/gauntlet/relayed-vertical/bindings.json` | relayed vertical: activate the no-recovery Resolution funding |
-| `registry/record_publication::process#Append` | `tools/gauntlet/relayed-vertical/bindings.json` | publish record: * |
-| `registry/record_publication::process#Begin` | `tools/gauntlet/relayed-vertical/bindings.json` | publish record: * |
-| `registry/record_publication::process#Finalize` | `tools/gauntlet/relayed-vertical/bindings.json` | publish record: * |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:289` |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:272` |

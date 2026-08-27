@@ -168,6 +168,7 @@ export default function PortfolioWorkspace() {
         <Link href="/liquidity">Liquidity</Link>
         <Link href="/redeem">Represent</Link>
         <Link href="/release">Release</Link>
+        <Link href="/explorer">Explorer</Link>
       </nav>
       <span className="preview-control"><i className="preview-dot" />raw-u64 economics</span>
     </header>

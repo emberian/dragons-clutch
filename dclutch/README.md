@@ -1,157 +1,129 @@
 # dClutch
 
-dClutch is a Solana protocol for fully collateralized, liquidation-free claims
-over bounded objective states. A market partitions an objective outcome domain
-into an exhaustive, disjoint, canonical set of cells; claims over those cells
-are minted only against collateral already segregated in the market's Hoard;
-resolution consumes an authenticated, release-bound source observation, never a
-discretionary resolver. Digitals, ranges, and tail protection compile exactly
-onto the categorical basis. There is no leverage to unwind, so there is no
-liquidation, no margin call, and no path where a claim is worth more than the
-collateral standing behind it.
+dClutch is a Solana protocol for markets on real-world numbers — where a
+price will be at a stated time, for example. A market splits the possible
+answers into buckets called **cells**. You buy claims on the cells you
+believe in; when the market resolves, each claim on the winning cell pays
+out one collateral unit, and every other claim pays zero.
 
-It is an architectural restart informed by Dragon's Clutch (the neighboring
-`dragons-clutch` repository is compost: studied for requirements, invariants,
-and counterexamples, never copied wholesale). The successor keeps the
-mathematics — canonical state partitions, exact claim bases, complete-set
-accounting, checked clearing, funded resolution — on a small Market Core with
-immutable capability children, in place of the predecessor's universal account
-graph.
+Every claim is backed by collateral locked in the market's vault (its
+**Hoard**) before the claim exists. There is no leverage, so there is no
+liquidation, no margin call, and no way for a market to owe more than it
+holds. The most you can ever lose is what you paid.
 
-## Status, 2026-08-27
+**dClutch is not live yet.** There is no deployment you can use, no live
+market, and nothing to buy today. Everything below runs on a local test
+chain that you can run yourself.
 
-Every claim below is **local execution evidence**: in-process ProgramTest banks
-and a local Agave validator. There is no deployment on any cluster, no release,
-no official frontend, no live market, and nothing value-bearing. Devnet
-deployment is deferred by explicit decision and requires named authorization
-before any deploy. Evidence levels are deliberately nontransitive — a local
-campaign is not devnet evidence, and neither is mainnet evidence.
+## What works today
 
-**The market is open.** `DCLTGMF1`, the atomic generic founding — Custody
-Lock, Core Found, Custody Realize, Claims founding, Core Open **last**, five
-stages in one rollback domain — executes end-to-end on a local validator:
-1,189,823 CU against Solana's 1,400,000 ceiling, reproduced across runs, with
-the whole-chain rollback hostile case green and the tier-1 gauntlet's
-witnesses checked. Eight founding blockers were found and killed by execution
-across six campaign runs. Checked-in compute budgets
-([`tools/gauntlet/CU_BUDGETS.json`](tools/gauntlet/CU_BUDGETS.json)) now watch
-every golden transaction, because this transaction's cost moved 84.6% → 91.3%
-of the ceiling in one evening while nothing was watching.
+- A market runs its whole life on a local validator: created, funded,
+  opened, traded, resolved against a real Pyth price, redeemed, and
+  retired.
+- Opening a market is all-or-nothing: one atomic transaction locks the
+  collateral, creates the market, and opens trading — or rolls the whole
+  thing back.
+- Range and tail protection ("pays out if SOL ends below X") is just a
+  bundle of cell claims, so its price is exactly the sum of the cell
+  prices. No extra machinery, nothing to liquidate.
+- The web app ([`apps/dclutch-web`](apps/dclutch-web)) connects a wallet,
+  lists markets, shows a market's cells and prices, and reads your
+  portfolio straight from the chain — no indexer.
+- A TypeScript SDK ([`packages/dclutch-sdk`](packages/dclutch-sdk)) and a
+  command-line client ([`packages/dclutch-cli`](packages/dclutch-cli))
+  drive the same flows from code and from a terminal.
 
-**Trading executes.** The canonical Direct continuation runs to completion on
-the shipped ELFs at the real 32,768-byte heap: the trading gate is 15/15
-across three consecutive runs. The honest wall that remains is compute — the
-shipped path spends 1,336,865–1,386,359 CU depending on PDA bump-search depth,
-and one fixture seed in twenty exceeds the ceiling outright. That is a
-protocol cost with a recorded fix direction (store each canonical bump in the
-record it belongs to), not measurement noise.
+Not done yet: the Structured product family is still being built, the
+General and Dealer trading paths have not run their first live trades, and
+there is no market discovery index. Trading is also expensive — it runs
+close to Solana's per-transaction compute limit, and cutting that cost is
+active work.
 
-**The census counts everything.** Thirteen on-chain programs expose 98
-instruction routes and declare 198 protocol refusal codes (248 across the
-whole tree counting test-only caller programs, in 24 registered bands).
-[`dclutch-route-census`](tools/gauntlet/census) enumerates routes and refusal
-enums from source; every custom error code is namespaced per program (decision
-0007; `band = code >> 12`, band 0 never allocated, so a code below `0x1000` is
-not ours); [`tools/gauntlet/blocked.json`](tools/gauntlet/blocked.json)
-carries every route deliberately not yet executable, with reasons. The
-standing doctrine: a route ships with the campaign row that executes it, or
-ships marked never-executed.
+## How a market works
 
-**The frontend reads the real chain.** [`apps/dclutch-web`](apps/dclutch-web)
-has Wallet Standard discovery, `/markets`, `/markets/:address`, and an
-indexer-free `/portfolio`, with a 200+-case test suite, and has read the first
-live open Market on a resumed campaign chain
-([evidence](docs/evidence/FRONTEND_LIVE_OPEN_MARKET_2026_08_27.md)). Its
-decoders are generated, not hand-mirrored: eleven ABI surfaces each carry a
-byte-compare `abi:*:verify` gate against the emitting authority, and the
-shared decoders enforce the same grammars the chain enforces — the browser
-refuses what the chain refuses.
+1. **Someone creates it.** The creator fixes everything up front: the
+   collateral token, the question and its cells, the price source, the
+   resolution time window, and a fallback outcome in case the source goes
+   silent. None of it can change afterwards, and the creator keeps no
+   special powers over the live market.
+2. **People trade claims.** Depositing one collateral unit mints one claim
+   on every cell (a **complete set**); returning a complete set redeems
+   the unit. Cell prices always sum to exactly one unit.
+3. **The source resolves it.** The first valid observation from the pinned
+   source inside the market's window settles the market. Every later
+   observation is rejected. No committee, no vote, no discretion.
+4. **Winners redeem.** Claims on the winning cell pay one unit each, from
+   the collateral that was there the whole time.
 
-**Lean authors the semantics.** [`formal/dclutch-semantics`](formal/dclutch-semantics)
-authors record layouts, wire ABIs, and the V3 transition programs; its
-emitters produce the generated Rust and TypeScript modules, each gated on byte
-identity with the checked-in output. Today's assurance evidence is per-case
-corpora and emitter checks — they prove the cases they contain and nothing
-else. Universal refinement theorems are real debt, parked by explicit
-decision, and are not claimed.
+If the source never publishes inside the window, the market takes the
+fallback outcome the creator disclosed before it opened, and anyone can
+trigger that step for a pre-funded bounty.
 
-Not yet true, and said plainly: Structured V2 is in implementation; the
-General and Dealer families have artifacts and activation paths but not yet
-their first hot executions; the market discovery index does not exist; and
-roughly half the census's routes still await their executing campaign row.
+A transaction that doesn't check out exactly — wrong account, wrong
+authority, stale state, a window that isn't open — is **refused**: the
+whole transaction rolls back and your funds stay where they were. Every
+refusal carries a code naming the program that refused and why; the full
+list is in [the refusal reference](docs/reference/refusals.md).
 
 ## The seven programs
 
-Five fixed execution roles (decision 0003) plus two infrastructure programs.
-A Market names its capability program set immutably at founding.
+The protocol is split across seven on-chain programs, each with one job.
+A market names the exact program releases it uses when it is created, and
+that set never changes.
 
-| Role | Program | Owns |
-|---|---|---|
-| Registry | [`programs/dclutch-registry-sbf`](programs/dclutch-registry-sbf) | release-set activation cache; deployment reauthentication; sole writer of activation state |
-| Core | [`programs/dclutch-core-sbf`](programs/dclutch-core-sbf) | canonical Market truth: founding, permits, phase, Open |
-| Claims | [`programs/dclutch-claims-sbf`](programs/dclutch-claims-sbf) | the one claims economic owner: liabilities, complete sets, settlement |
-| Trading | [`programs/dclutch-trading-sbf`](programs/dclutch-trading-sbf) | the fixed execution role: data-driven Direct / General / Dealer paths |
-| Resolution | [`programs/dclutch-resolution-proof-sbf`](programs/dclutch-resolution-proof-sbf) | source resolution controller: terminal windows, funded failure walk |
-| Custody | [`programs/dclutch-custody-sbf`](programs/dclutch-custody-sbf) | collateral custody: Hoard vault, Token-2022 boundary |
-| Rent | [`programs/dclutch-rent-sbf`](programs/dclutch-rent-sbf) | lifecycle RentCredit accounts |
+| Program | Job |
+|---|---|
+| [`dclutch-core-sbf`](programs/dclutch-core-sbf) | the market itself: creation, phase, opening |
+| [`dclutch-claims-sbf`](programs/dclutch-claims-sbf) | claims: minting, complete sets, settlement |
+| [`dclutch-trading-sbf`](programs/dclutch-trading-sbf) | trade execution |
+| [`dclutch-custody-sbf`](programs/dclutch-custody-sbf) | collateral custody: the Hoard vault |
+| [`dclutch-resolution-proof-sbf`](programs/dclutch-resolution-proof-sbf) | resolution: source observations, windows, the fallback |
+| [`dclutch-registry-sbf`](programs/dclutch-registry-sbf) | which program releases a market may use |
+| [`dclutch-rent-sbf`](programs/dclutch-rent-sbf) | account rent over a market's life |
 
-The remaining programs under [`programs/`](programs) are accelerators and
-test shadows, registered in the same refusal-band and census regime.
+The other programs under [`programs/`](programs) are accelerators and test
+harnesses.
 
-## Repository map
+## Finding your way around
 
-- [`crates/`](crates) — SDK-free contracts (byte layouts, PDA seeds, exact
-  arithmetic), `no_std` kernels, codecs, operators. One semantic owner per
-  persisted fact; adapters authenticate boundaries and may not recreate kernel
-  economics.
-- [`programs/`](programs) — the SBF adapters listed above.
-- [`formal/`](formal) — the Lean semantics, emitters, and qedsvm proof lanes.
-- [`tools/gauntlet/`](tools/gauntlet) — build → deploy (local validator) →
-  campaign → census; the route census; CU budgets; family campaign tiers.
-- [`apps/dclutch-web`](apps/dclutch-web) — the browser frontend.
-- [`docs/decisions/`](docs/decisions) — architecture decision records.
-- [`docs/reference/`](docs/reference) — the generated protocol reference:
-  programs, routes and their execution status, refusal codes with meanings,
-  compute budgets, ADR index, ABI tables. Regenerate with
-  `tools/genref/generate.sh`; `--check` byte-compares.
-- [`docs/guides/`](docs/guides) — thin hand-written guides (trader,
-  operator, reader) that link into the generated reference.
-- [`docs/evidence/`](docs/evidence) — dated execution evidence.
-- [`docs/OMISSION_INDEX.md`](docs/OMISSION_INDEX.md) — the challenge ledger:
-  what the successor deliberately does not do yet, and what would reopen each
-  row.
+- [`docs/guides/`](docs/guides) — start here: guides for traders, market
+  operators, and anyone deciding what this is.
+- [`docs/reference/`](docs/reference) — the protocol reference, generated
+  straight from the code: every instruction, every error code with its
+  meaning, compute costs, byte layouts.
+- [`crates/`](crates) — the Rust contracts and kernels the programs share.
+- [`formal/`](formal) — the Lean definitions that generate the record
+  layouts and wire formats used by both the chain and the web app.
+- [`tools/gauntlet/`](tools/gauntlet) — the campaign runner: builds the
+  programs, boots a local validator, and runs markets through their lives.
+- [`apps/dclutch-web`](apps/dclutch-web) — the web app.
+- [`docs/decisions/`](docs/decisions) — why the architecture is the way it
+  is.
 
-## Checks
+## Try it
 
 ```sh
+# build the programs, boot a local validator, create and open a market
+# (about 13 minutes):
+tools/gauntlet/run.sh --mode full
+
+# the web app's test suite:
+cd apps/dclutch-web && npm test
+
+# workspace checks:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-
-# static route census + report, seconds, no chain:
-tools/gauntlet/run.sh --mode census
-
-# the full tier-1 campaign: builds the seven ELFs, boots a local validator,
-# founds and opens a Market, checks witnesses and CU budgets (~13 minutes):
-tools/gauntlet/run.sh --mode full
-
-# frontend suite, including every generated-ABI byte-compare gate:
-cd apps/dclutch-web && npm test
 ```
 
-## Reading order
+Working on the code itself? Read [`AGENTS.md`](AGENTS.md) and
+[`WAVE.md`](WAVE.md) first — they carry the working agreements this
+repository runs on.
 
-[`WAVE.md`](WAVE.md) (living swarm state — current cycle, active lanes,
-doctrine), then [`AGENTS.md`](AGENTS.md) (authority, safety, and correctness
-vocabulary), then [`ARCHITECTURE.md`](ARCHITECTURE.md) (the architectural
-baseline; its narrative predates the current one-Market-truth ruling in
-places), [`PROJECT_METHOD.md`](PROJECT_METHOD.md), and
-[`COMPOST.md`](COMPOST.md) before adding a subsystem.
+## Where this is going
 
-Direction, so the shape of the work is legible: the near-term goal is the
-completed protocol live on devnet, resolving markets about the state of
-Solana mainnet — with a disclosed proof-of-authority relayer attesting raw
-observed bytes as the honest v1 cost of cross-cluster truth, and Pyth's
-devnet feeds needing no relayer at all. Nothing about that goal changes the
-status section above until it happens, and it will be labeled at the evidence
-level it actually reaches.
+The next milestone is the protocol live on Solana devnet, resolving
+markets about the state of Solana mainnet: Pyth's devnet feeds carry the
+major prices directly, and a disclosed relayer carries everything else.
+dClutch grew out of Dragon's Clutch; the first generation lives in the
+neighboring `dragons-clutch` repository as an archive.

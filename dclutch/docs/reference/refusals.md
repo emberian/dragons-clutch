@@ -6,20 +6,20 @@
 -->
 # Refusal codes
 
-Every custom program error code is namespaced by program (decision 0007;
-`crates/dclutch-refusal-registry` is the authority). `band = code >> 12`,
-each band is 0x1000 codes wide, and band 0 is never allocated -- so a custom
-code below `0x1000` is, by construction, not a dClutch refusal. Read a band
-off a log line by dropping the last three hex digits: `custom program error:
-0x5180` is band 5 (Claims). Bands at `0x100000` and above belong to
-test-only caller programs that exist to drive hostile CPI cases and are never
-deployed.
+Every error code the protocol can return, with its meaning. When dClutch
+refuses a transaction, the whole transaction rolls back -- no partial
+effect survives -- and the code says exactly which program refused and why.
+A refusal isn't a malfunction; it's the protocol keeping the rules.
 
-A refusal is the protocol working. dClutch fails closed: an input, account
-shape, authority, or state that does not authenticate exactly is refused with
-a code that names the program and the reason, and no partial effect survives
-the transaction. The tables below carry all **201** protocol
-codes with their meanings, straight from the refusal enums' own doc comments.
+Reading a code: each program owns its own block ("band") of codes, and
+`band = code >> 12` -- drop the last three hex digits to get the band. So
+`custom program error: 0x5180` is band 5, which is Claims. Band 0 is
+never used, meaning a code below `0x1000` came from some other program in
+your transaction, not from dClutch. Bands at `0x100000` and above belong
+to test-only programs that are never deployed.
+
+The tables below carry all **201** codes, with meanings taken
+from the source code's own documentation.
 
 ## Band allocation
 
@@ -303,13 +303,13 @@ codes with their meanings, straight from the refusal enums' own doc comments.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:144` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:146` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:148` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:150` |
-| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:152` |
-| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:154` |
-| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:156` |
+| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:147` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:149` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:151` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:153` |
+| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:155` |
+| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:157` |
+| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:159` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |

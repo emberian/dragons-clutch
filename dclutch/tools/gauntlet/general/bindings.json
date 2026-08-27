@@ -1,0 +1,63 @@
+{
+  "campaign": "general-accelerator-programtest",
+  "note": "The General accelerator's first census campaign, and a FAST LANE restricted to runtime width 1 for one stated reason: at N=258 six of the seven actions serialise to 1,273-1,329 legacy-message bytes against Solana's 1,232-byte packet maximum, and ProgramTest submits no packet and so cannot notice. Folding an N=258 transaction here would record a route as executed on a frame no validator would accept, which is exactly the laundering TIERS.md's packet clause forbids. Those transactions still RUN -- the campaign exercises every action at both widths -- and their measured extents are the evidence that the clause fails there; they are simply not recorded. See tools/gauntlet/general/README.md for all four clauses and docs/evidence/GENERAL_ESCROW_PHYSICAL_2026_08_27.md for the extents. The accelerator exposes exactly ONE route, so every binding below names it and they are distinguished only by label; the labels are emitted by the campaign from the authenticated ControllerRequestV2 action and the runtime width, never hand-written per transaction. A SEMANTIC REFUSAL FROM THE ACCELERATOR IS A SUCCEEDING TRANSACTION -- it returns a typed refused AcceleratorAckV2 rather than a program error, which is how Trading distinguishes transport failure from a failure-atomic refusal -- so the accepted and refused dispositions are both bound as executed, and the single row below with outcome 'refused' is the one transaction that really did reach a program error.",
+  "bindings": [
+    {
+      "label": "general accelerator Consider at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "executed",
+      "note": "One accepted Consider: a verified candidate folded into the running maximum under an immutable interpreted policy. The accelerator reads the SubmittedVerifiedCandidate and the SelectionPolicy as readonly evidence, evaluates consider_verified_candidate_v2, and returns the projected candidate bank. The test re-reads every observed runtime account afterwards and requires the bytes to be unchanged, which is what makes 'readonly accelerator' a measurement rather than a claim."
+    },
+    {
+      "label": "general accelerator Freeze at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "executed",
+      "note": "Two accepted Freezes, from two independent fixtures: the selection-lifecycle test in tests/lifecycle.rs and the standalone width sweep in tests/freeze.rs. Freeze closes selection around the current best valid submitted candidate and is the narrowest General action -- 31 accounts and a 745-byte packet at this width, the smallest frame the family has."
+    },
+    {
+      "label": "general accelerator InitializeSettlement at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "executed",
+      "note": "Three InitializeSettlement submissions. One is accepted and initializes the streamed settlement cursor from the terminal runtime verifier and the selected certificate; the other two are HOSTILE and return a typed refused ack -- a candidate substituted against a frozen selection, and a Product or price-scale substitution -- with no runtime write in either case. All three are bound as executed because all three really executed the route; the refusal is semantic and rides the ack."
+    },
+    {
+      "label": "general accelerator Collect at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "executed",
+      "note": "Five Collect submissions: three accepted rows walking the settlement cursor in the manifest's own order, and two HOSTILE ones that return a typed refused ack -- a substituted source coordinate (the manifest ordinal and the source page/execution coordinates are distinct authenticated facts) and an attempt to skip to order three. Each accepted row is additionally checked against the escrow its order holds: the effect the transition produced names an order by identity, and authenticate_collect_from_escrow_v1 requires that order's own vault to cover the debit."
+    },
+    {
+      "label": "general accelerator Materialize at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "executed",
+      "note": "One accepted Materialize: the sole complete-set mint, merge or no-op for the whole candidate. It is the one action whose Custody compartment bytes the admitted EffectProgram patches at runtime, from the authenticated complete-set move, so its direction is not a constant of its artifact."
+    },
+    {
+      "label": "general accelerator Distribute at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "executed",
+      "note": "Three accepted Distribute rows, one per settled order, walking the cursor back down to an empty inventory. The test requires quote_inventory and every per-outcome inventory slot to be exactly zero before Close is attempted."
+    },
+    {
+      "label": "general accelerator Close at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "executed",
+      "note": "Two Close submissions: one HOSTILE, carrying a nonzero Position table on a terminal close, which returns a typed refused ack and leaves every observed account byte-identical; then the accepted terminal close, which routes the exact quote remainder to the configured beneficiary and enters terminal state. Both executed the route."
+    },
+    {
+      "label": "general accelerator Freeze refuses a corrupted scratch page at runtime width 1",
+      "routes": ["general-accelerator/process_instruction"],
+      "program": "general-accelerator",
+      "outcome": "refused",
+      "refusal": "general-accelerator/GeneralAcceleratorSbfErrorV3::InvalidScratchBank",
+      "note": "HOSTILE, and the only transaction in this campaign that reaches a program error rather than a typed ack -- which is the point. One byte of the last Trading-owned scratch page is flipped, so the reassembled input bank's whole-bank digest no longer equals the digest the request commits to. That is a TRANSPORT failure, not a semantic one, so it must refuse before any evaluation with 0xC003 InvalidScratchBank rather than returning a refused ack. The test additionally requires the selection account to be byte-identical afterwards."
+    }
+  ]
+}

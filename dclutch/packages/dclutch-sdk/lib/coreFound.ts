@@ -1,10 +1,13 @@
 import {
+  AddressLookupTableAccount,
   PublicKey,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
 
+import { boundedInstructionsV1 } from './founding/computeBudget';
+import { routableAddressesV1 } from './founding/lookupTable';
 import { PACKET_DATA_SIZE } from './directTransaction';
 import {
   CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1,
@@ -83,8 +86,12 @@ import {
   CORE_STATE_BYTES,
   CORE_VERSION,
   EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
+  LIFECYCLE_RENT_ACTION_CREATE_V2,
   LIFECYCLE_RENT_CREDIT_BYTES_V2,
+  LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2,
+  LIFECYCLE_RENT_CREDIT_MAGIC_V2,
   LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+  LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2,
   LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2,
   LIFECYCLE_RENT_SCHEMA_VERSION_V2,
   MARKET_CORE_STATE_PDA_DOMAIN_V2,
@@ -125,6 +132,16 @@ export type CoreFoundInputV2 = Readonly<{
   capabilityManifestRecord: string;
   executionReleaseSetRecord: string;
   generation: bigint;
+  /**
+   * The finalized routing table Found31 rides, read back off the chain.
+   *
+   * Absent, `prepareCoreFoundV2` still derives everything and still reports
+   * `routableAddresses`, but compiling refuses: with its required ComputeBudget
+   * declaration the inline frame is ten bytes over the packet bound. That
+   * refusal is the correct answer, and it is how a caller learns it owes a
+   * table rather than discovering it at submission.
+   */
+  lookupTable?: AddressLookupTableAccount;
 }>;
 
 export type CoreFoundPlanV2 = Readonly<{
@@ -144,13 +161,27 @@ export type CoreFoundPlanV2 = Readonly<{
   rentCreditRentDebit: string;
   lastValidBlockHeight: string;
   accountAddresses: ReadonlyArray<string>;
+  /** Every non-signer key a routing table may carry, in first-seen order. */
+  routableAddresses: ReadonlyArray<string>;
   requiredSigners: ReadonlyArray<string>;
   requestBytes: Uint8Array;
-  rentCreateRequestBytes: Uint8Array;
-  rentCreateTransaction: VersionedTransaction;
-  rentCreateWireBytes: Uint8Array;
-  transaction: VersionedTransaction;
-  wireBytes: Uint8Array;
+  /** `vacant` when this plan must create the credit, `created` when it exists. */
+  rentCreditState: 'vacant' | 'created';
+  rentCreateRequestBytes: Uint8Array | null;
+  rentCreateTransaction: VersionedTransaction | null;
+  rentCreateWireBytes: Uint8Array | null;
+  /**
+   * The compiled Found31 packet, or null when it could not be compiled.
+   *
+   * Null is not a failure of the derivation: everything above it -- the Market
+   * address, the 31-account frame, the exact rent debit -- is derived and
+   * correct. It means only that this frame does not fit a packet without a
+   * routing table, which is a fact about the frame and not about the caller.
+   * `foundRefusal` says so in words.
+   */
+  transaction: VersionedTransaction | null;
+  wireBytes: Uint8Array | null;
+  foundRefusal: string | null;
 }>;
 
 export type CompiledCoreFoundTransactionV2 = Readonly<{
@@ -428,7 +459,13 @@ function lifecycleRentCreateRequest(input: Readonly<{
   const output = new Uint8Array(CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2);
   output.set(LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2, 0);
   putU16(output, 8, LIFECYCLE_RENT_SCHEMA_VERSION_V2);
-  output[10] = 0;
+  // The action discriminator, not a reserved byte. This was a hand-written `0`
+  // and `LifecycleRentActionV2::Create` is 1, so every packet this builder
+  // produced was refused at `LifecycleRentInstructionV2::decode` before the
+  // Rent program looked at a single account. Nothing caught it because `/found`
+  // downloaded the packet and never submitted one; the first submission, from
+  // the create wizard against a local validator, refused in 1,041 CU.
+  output[LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2] = LIFECYCLE_RENT_ACTION_CREATE_V2;
   output.set(input.refundWallet.toBytes(), 16);
   output.set(input.market.toBytes(), 48);
   output.set(input.releaseSet, 80);
@@ -504,6 +541,7 @@ export function compileCoreFoundTransactionV2(input: Readonly<{
   generation: bigint;
   recentBlockhash: string;
   accountAddresses: ReadonlyArray<string>;
+  lookupTable?: AddressLookupTableAccount;
 }>): CompiledCoreFoundTransactionV2 {
   if (input.accountAddresses.length !== CORE_FOUND_ACCOUNT_COUNT_V2) {
     throw new Error(`Core Found requires exactly ${CORE_FOUND_ACCOUNT_COUNT_V2} account metas`);
@@ -529,14 +567,21 @@ export function compileCoreFoundTransactionV2(input: Readonly<{
     keys: metas,
     data: requestBytes as Buffer,
   });
+  // Found31 spends over a million compute units authenticating whole program
+  // ELFs, against a 200,000-unit default. Without the declaration the runtime
+  // kills it with `Program failed to complete`, which is what the first real
+  // submission of this builder's output got. The limit is the reference
+  // client's own, emitted rather than restated.
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: payer,
     recentBlockhash: key(input.recentBlockhash, 'recent blockhash').toBase58(),
-    instructions: [instruction],
-  }).compileToV0Message());
+    instructions: [...boundedInstructionsV1([instruction])],
+  }).compileToV0Message(input.lookupTable === undefined ? undefined : [input.lookupTable]));
   const wireBytes = transaction.serialize();
   if (wireBytes.length > PACKET_DATA_SIZE) {
-    throw new Error(`Core Found transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+    throw new Error(input.lookupTable === undefined
+      ? `Core Found transaction is ${wireBytes.length} bytes inline, above the ${PACKET_DATA_SIZE}-byte packet bound; this frame requires a finalized routing table`
+      : `Core Found transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
   }
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
     .slice(0, transaction.message.header.numRequiredSignatures)
@@ -626,9 +671,24 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   vacant(finalAccounts.get(market.toBase58()), 'Market destination');
   const refundWallet = required(finalAccounts, input.refundWallet, 'refund wallet');
   if (refundWallet.owner !== SYSTEM_PROGRAM_ID || refundWallet.executable || refundWallet.data.length !== 0) throw new Error('refund wallet is not a System-owned data-free wallet');
-  const creditDestination = finalAccounts.get(rentCredit.toBase58());
-  vacant(creditDestination, 'lifecycle RentCredit destination');
-  if ((creditDestination?.lamports ?? '0') !== '0') throw new Error('lifecycle RentCredit destination is prefunded');
+  // The credit is a PRECONDITION of Found31 and the OUTPUT of its own
+  // transaction, and those are different requirements. Demanding vacancy in
+  // both places is what made a two-stage flow impossible: the moment the credit
+  // landed, re-preparing Found31 against the same coordinates refused. So the
+  // observation branches on what is actually there, and each branch states the
+  // whole of its own requirement.
+  const creditDestination = finalAccounts.get(rentCredit.toBase58()) ?? null;
+  const creditExists = creditDestination !== null && creditDestination.owner === infrastructure.rent.program;
+  if (creditExists) {
+    if (creditDestination.executable
+        || creditDestination.data.length !== LIFECYCLE_RENT_CREDIT_BYTES_V2
+        || !same(slice(creditDestination.data, LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2, LIFECYCLE_RENT_CREDIT_MAGIC_V2.length), LIFECYCLE_RENT_CREDIT_MAGIC_V2)) {
+      throw new Error('the existing lifecycle RentCredit is not a canonical Rent-owned credit account');
+    }
+  } else {
+    vacant(creditDestination, 'lifecycle RentCredit destination');
+    if ((creditDestination?.lamports ?? '0') !== '0') throw new Error('lifecycle RentCredit destination is prefunded');
+  }
   for (const authority of [...authorities, releaseSetAuthority]) {
     const raw = required(finalAccounts, authority.raw, 'finalized raw record');
     if (raw.owner !== input.registryProgram || raw.executable || BigInt(raw.lamports) < authority.rentMinimum || !same(raw.data, authority.bytes) || !same(await sha256(raw.data), authority.digest)) throw new Error('finalized raw record changed or lost Registry/rent authority');
@@ -645,12 +705,13 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   const creditRent = await client.minimumBalanceForRentExemption(LIFECYCLE_RENT_CREDIT_BYTES_V2);
   const marketLamports = finalAccounts.get(market.toBase58())?.lamports ?? '0';
   const marketRentTopUp = BigInt(marketRent.lamports) > BigInt(marketLamports) ? BigInt(marketRent.lamports) - BigInt(marketLamports) : 0n;
-  const totalRentDebit = marketRentTopUp + BigInt(creditRent.lamports);
+  // A credit that already exists is already paid for.
+  const totalRentDebit = marketRentTopUp + (creditExists ? 0n : BigInt(creditRent.lamports));
   if (BigInt(payerAccount.lamports) < totalRentDebit) throw new Error('payer cannot cover the exact current Market and lifecycle-credit rent debit');
   const confirmedInfrastructure = await inspectProtocolInfrastructureV1(client, { registryProgram: input.registryProgram, activationCache: input.activationCache });
   if (!infrastructureEqual(infrastructure, confirmedInfrastructure)) throw new Error('immutable infrastructure projection changed during Found construction');
   const blockhash = await client.latestBlockhash(confirmedInfrastructure.observedSlot);
-  const rentCreation = compileLifecycleRentCreateTransactionV2({
+  const rentCreation = creditExists ? null : compileLifecycleRentCreateTransactionV2({
     payer: input.payer,
     refundWallet: input.refundWallet,
     market: market.toBase58(),
@@ -659,15 +720,40 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     rentProgram: infrastructure.rent.program,
     recentBlockhash: blockhash.blockhash,
   });
-  if (rentCreation.rentCredit !== rentCredit.toBase58()) throw new Error('lifecycle RentCredit derivation changed during compilation');
-  const compiled = compileCoreFoundTransactionV2({
-    payer: input.payer,
-    coreProgram: infrastructure.core.program,
-    market: market.toBase58(),
-    generation: input.generation,
-    recentBlockhash: blockhash.blockhash,
-    accountAddresses,
+  if (rentCreation !== null && rentCreation.rentCredit !== rentCredit.toBase58()) throw new Error('lifecycle RentCredit derivation changed during compilation');
+  // The frame's routable set is derived whether or not it can be compiled,
+  // because a caller who has just learned it needs a table needs to know what
+  // to put in one. Signers never route: a lookup table cannot carry one.
+  const foundInstruction = new TransactionInstruction({
+    programId: key(infrastructure.core.program, 'Core program'),
+    keys: accountAddresses.map((address, index) => ({
+      pubkey: key(address, `Found account ${index}`),
+      isSigner: CORE_FOUND_ACCOUNT_ROLES_V2[index].signer,
+      isWritable: CORE_FOUND_ACCOUNT_ROLES_V2[index].writable,
+    })),
+    data: foundRequest(input.generation, market) as Buffer,
   });
+  const routableAddresses = routableAddressesV1([foundInstruction], input.payer);
+  let compiled: CompiledCoreFoundTransactionV2 | null = null;
+  let foundRefusal: string | null = null;
+  try {
+    compiled = compileCoreFoundTransactionV2({
+      payer: input.payer,
+      coreProgram: infrastructure.core.program,
+      market: market.toBase58(),
+      generation: input.generation,
+      recentBlockhash: blockhash.blockhash,
+      accountAddresses,
+      lookupTable: input.lookupTable,
+    });
+  } catch (error) {
+    // Only a packet-bound refusal is recoverable into a plan. Anything else --
+    // an aliased role, a misplaced payer, an unexpected signer -- is a defect
+    // in the projection and must not be softened into a status line.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('packet bound')) throw error;
+    foundRefusal = message;
+  }
   return Object.freeze({
     observedSlot: finalObservation.slot,
     market: market.toBase58(),
@@ -685,12 +771,15 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     rentCreditRentDebit: creditRent.lamports,
     lastValidBlockHeight: blockhash.lastValidBlockHeight,
     accountAddresses: Object.freeze(accountAddresses),
-    requiredSigners: compiled.requiredSigners,
-    requestBytes: compiled.requestBytes,
-    rentCreateRequestBytes: rentCreation.requestBytes,
-    rentCreateTransaction: rentCreation.transaction,
-    rentCreateWireBytes: rentCreation.wireBytes,
-    transaction: compiled.transaction,
-    wireBytes: compiled.wireBytes,
+    routableAddresses,
+    requiredSigners: compiled?.requiredSigners ?? Object.freeze([input.payer]),
+    requestBytes: compiled?.requestBytes ?? foundRequest(input.generation, market),
+    rentCreditState: creditExists ? 'created' : 'vacant',
+    rentCreateRequestBytes: rentCreation?.requestBytes ?? null,
+    rentCreateTransaction: rentCreation?.transaction ?? null,
+    rentCreateWireBytes: rentCreation?.wireBytes ?? null,
+    transaction: compiled?.transaction ?? null,
+    wireBytes: compiled?.wireBytes ?? null,
+    foundRefusal,
   });
 }

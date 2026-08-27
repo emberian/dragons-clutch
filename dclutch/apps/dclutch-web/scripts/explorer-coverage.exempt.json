@@ -1,0 +1,8 @@
+{
+  "note": "Findings the explorer does not render, each with the reason. An entry here is a decision, not an oversight: the coverage gate fails on any finding that is neither rendered nor listed. Remove an entry when the finding is fixed, never to quiet the gate.",
+  "records": {},
+  "instructions": {},
+  "magiclessLayouts": {
+    "principalCapacityV1.ts": "Emits the full ManipulationFloorV1 layout — width, schema version, and eight field offsets including MANIPULATION_FLOOR_V1_MAGIC_OFFSET — without emitting the magic VALUE that offset points at. The browser can therefore read the record and cannot recognize one, so this explorer will not decode it: doing so would mean identifying the record by a magic nobody emitted. Not this lane's module (landed 2026-08-27 alongside abi:principal-capacity). The fix is one line in scripts/generate-principal-capacity.mjs, and this entry comes out with it."
+  }
+}

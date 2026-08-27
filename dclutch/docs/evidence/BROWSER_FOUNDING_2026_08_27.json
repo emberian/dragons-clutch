@@ -1,0 +1,76 @@
+{
+  "schema": "dclutch-web-browser-founding-evidence-v1",
+  "claim": "The two Core rungs of the founding ladder, originated in a real browser through a Wallet Standard wallet, against a local validator. This is NOT a Market at Open; DCLTGMF1 is not driven here.",
+  "baseUrl": "http://127.0.0.1:3111",
+  "endpoint": "http://127.0.0.1:22890",
+  "runDir": "/private/tmp/dclutch-journey/runs/20260827T102346Z-8aa62277a756-h16",
+  "generation": 11,
+  "observedFinalizedSlot": 15490,
+  "payer": "7jLfpyx2S94KYtmi7tdRac8QUXACHDNykrLgjqw9XSAy",
+  "coordinates": {
+    "registryProgram": "87syw3eBN6nrXYT5RkkRSBKcRbciD1sg5X3R3hu7mh7e",
+    "activationCache": "6xbtPhKFCXe2DG7KRZ1voeab4PvcaUDnR8DZPmBkbmDm",
+    "realmRecord": "2LUK2UG9tSFgXhwuKRNs1tfcc1yW92GhyxvJxUvLMCgE",
+    "productRecord": "Bn7kfrsCtDxPFszXXFAUsUUgUas23L6dyw64rweLT4Yi",
+    "resultDomainRecord": "A8Mts6a6HghkbFTai8h83K86pyiVBoG6G4wwadf9SCRq",
+    "portfolioRecord": "3v9uLoxqXZWRTYZnHXMNEXBZ5EARJXTvhaaWpdYHjS7Q",
+    "sourceMaterialRecord": "AaHVJbV4VCPH8PYhYHkMy3NrZCjg8QrQ8KXaHMBdBAN4",
+    "capabilityManifestRecord": "5wPMUd71vj48Bth9XcbjWDDLTdXTn2sncJq4hfaJWB9q",
+    "executionReleaseSetRecord": "DV7H7E9wPnYcaekCS7WEsj3X2VqhRYDQPMFpDgmAY7CZ"
+  },
+  "rendered": {
+    "derivedMarket": "8evRoQwEksaxtBHTDideCwbQmHpdyBZsNJEzUcGp2Zw4",
+    "derivedCredit": "9qzxYMHQ8eeKt5L3ZTfAoaiXpD7KtXKp51hkxXjn4Ly",
+    "outcomeWidth": "4"
+  },
+  "submissions": [
+    {
+      "stage": "lifecycle RentCredit Create",
+      "status": "submitted",
+      "detail": "Finalized at slot 15339",
+      "signature": "obB56zMsXU7CKqYMxBDnoaEmQPDJEUSjocZhxeedXKmntdUcZYaYeFn1RgrHvmRDfTQuSWqpx8HnEgGJPtBUjBV"
+    },
+    {
+      "stage": "routing table",
+      "status": "submitted",
+      "detail": "9JQu29kV7fjJqdnNZQykeYVjNQVh823XmpzQ6tqfyCSH · 30 addresses, contents verified against the plan",
+      "signature": "5FEDaBqYw8k2NdG9GEfPar85tEYPPXJ5kinacPf1N5ybDa6of1HxQ57EodbMdCaFioJbFKnHDRkzYsXq7Y3YjeQZ"
+    },
+    {
+      "stage": "Found31",
+      "status": "submitted",
+      "detail": "Finalized at slot 15485 · Market 8evRoQwEksaxtBHTDideCwbQmHpdyBZsNJEzUcGp2Zw4 is at phase Founding",
+      "signature": "3VKMGVaABK1wCJWS5iwiLfT4g4oGygi4RBSje5XiCFWjH7Y7EmS5cSY5HitiXxCrjNd49qFWgNVjRML11Gv3jA1o"
+    }
+  ],
+  "chainReadback": {
+    "market": {
+      "address": "8evRoQwEksaxtBHTDideCwbQmHpdyBZsNJEzUcGp2Zw4",
+      "owner": "2rJGzuF2AduNJCc2td1y87ApUk8NhiCUGhsKCNRqhd8o",
+      "lamports": 3340800,
+      "executable": false,
+      "magic": "DCLTCOR2",
+      "bytes": 352,
+      "schemaVersion": 2,
+      "phaseByte": 0,
+      "dataSha256": "1802f77fee89bba41b8c499a9549bc2cdf2ed3b4b717d80b706207fce0b2e039"
+    },
+    "rentCredit": {
+      "address": "9qzxYMHQ8eeKt5L3ZTfAoaiXpD7KtXKp51hkxXjn4Ly",
+      "owner": "2gUDaLHEAdfs44vDWyjj3cCkJDVTEjrBPntDKHQxD9U8",
+      "lamports": 1781760,
+      "bytes": 128,
+      "magic": "DCLRNTL2"
+    }
+  },
+  "consoleLines": [
+    "debug: [vite] connecting...",
+    "debug: [vite] connected.",
+    "info: %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold",
+    "warning: Module \"buffer\" has been externalized for browser compatibility. Cannot access \"buffer.Buffer\" in client code. See https://vite.dev/guide/troubleshooting.html#module-externalized-for-browser-compatibility for more details.",
+    "debug: [vite] css hot updated: /app/globals.css",
+    "debug: [vite] css hot updated: /app/globals.css",
+    "debug: [vite] css hot updated: /app/globals.css",
+    "debug: [vite] css hot updated: /app/globals.css"
+  ]
+}

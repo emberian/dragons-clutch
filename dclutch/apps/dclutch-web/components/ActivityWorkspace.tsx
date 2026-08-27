@@ -90,6 +90,7 @@ export default function ActivityWorkspace() {
         <Link className="active" href="/activity">Activity</Link>
         <Link href="/create">Create</Link>
         <Link href="/trade">Trade</Link>
+        <Link href="/explorer">Explorer</Link>
       </nav>
       <span className="preview-control"><i className="preview-dot" />node history · not a protocol index</span>
     </header>

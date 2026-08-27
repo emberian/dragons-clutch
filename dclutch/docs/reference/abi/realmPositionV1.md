@@ -60,8 +60,8 @@ Regenerate with: npm run abi:realm-position
 
 ## Unrendered exports (verbatim)
 
-The renderer did not recognize these statement shapes; they are
-carried verbatim so the reference never silently narrows its source.
+The renderer did not recognize these statement shapes, so they are
+shown verbatim rather than dropped.
 
 ```ts
 export const POSITION_GENERATION_OFFSET_V1 = 80 as const;

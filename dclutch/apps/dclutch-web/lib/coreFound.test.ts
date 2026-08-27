@@ -1,4 +1,4 @@
-import { PublicKey } from '@solana/web3.js';
+import { AddressLookupTableAccount, PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { sha256 } from './bytes';
@@ -16,6 +16,7 @@ import {
   CORE_REQUEST_BYTES,
   CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
 } from './generated/coreFound';
+import { canonicalLookupAddressesV1, routableAddressesV1 } from './founding/lookupTable';
 import { type SolanaRpcClient } from './rpc';
 
 function put(bytes: Uint8Array, offset: number, value: Uint8Array): void { bytes.set(value, offset); }
@@ -93,21 +94,54 @@ describe('Core Found31 browser kernel', () => {
     })).rejects.toThrow(/outside lifecycle u64/);
   });
 
-  it('compiles the exact 31-account Found v0 packet with payer as the sole signer', () => {
+  it('refuses the 31-account Found frame inline, because it does not fit a packet', () => {
+    // MEASURED, not predicted. With the ComputeBudget declaration Found31
+    // cannot execute without -- it spends over a million CU against a 200,000
+    // default -- the inline v0 message is 1,242 bytes against a 1,232-byte
+    // bound. Ten bytes. This is the same overflow `4e1c4db` recorded on the
+    // Rust side when it moved the route onto a finalized lookup table, and it
+    // is why the browser needs one too.
     const accounts = Object.freeze(Array.from({ length: CORE_FOUND_ACCOUNT_COUNT_V2 }, (_, index) => new PublicKey(id(index + 1)).toBase58()));
-    const compiled = compileCoreFoundTransactionV2({
+    const compile = (lookupTable?: AddressLookupTableAccount) => compileCoreFoundTransactionV2({
       payer: accounts[0],
       market: accounts[1],
       coreProgram: accounts[19],
       generation: 77n,
       recentBlockhash: new PublicKey(id(99)).toBase58(),
       accountAddresses: accounts,
+      lookupTable,
     });
+    expect(() => compile()).toThrow(/1242 bytes inline.*requires a finalized routing table/);
+
+    // With a table carrying every routable key, it fits and stays exact.
+    const routable = routableAddressesV1([new TransactionInstruction({
+      programId: new PublicKey(accounts[19]),
+      keys: accounts.map((address, index) => ({
+        pubkey: new PublicKey(address),
+        isSigner: CORE_FOUND_ACCOUNT_ROLES_V2[index].signer,
+        isWritable: CORE_FOUND_ACCOUNT_ROLES_V2[index].writable,
+      })),
+      data: Buffer.alloc(0),
+    })], accounts[0]);
+    const table = new AddressLookupTableAccount({
+      key: new PublicKey(id(200)),
+      state: {
+        deactivationSlot: 2n ** 64n - 1n,
+        lastExtendedSlot: 1,
+        lastExtendedSlotStartIndex: 0,
+        authority: new PublicKey(accounts[0]),
+        addresses: canonicalLookupAddressesV1(routable).map((address) => new PublicKey(address)),
+      },
+    });
+    const compiled = compile(table);
     expect(compiled.requestBytes).toHaveLength(CORE_REQUEST_BYTES);
     expect(compiled.wireBytes.length).toBeLessThanOrEqual(1_232);
     expect(compiled.requiredSigners).toEqual([accounts[0]]);
-    expect(compiled.transaction.message.compiledInstructions).toHaveLength(1);
-    expect(compiled.transaction.message.compiledInstructions[0].accountKeyIndexes).toHaveLength(CORE_FOUND_ACCOUNT_COUNT_V2);
+    // Two instructions now: the ComputeBudget limit this route cannot execute
+    // without, then Found31 itself. The declaration takes no accounts.
+    expect(compiled.transaction.message.compiledInstructions).toHaveLength(2);
+    expect(compiled.transaction.message.compiledInstructions[0].accountKeyIndexes).toHaveLength(0);
+    expect(compiled.transaction.message.compiledInstructions[1].accountKeyIndexes).toHaveLength(CORE_FOUND_ACCOUNT_COUNT_V2);
     // Privileges are the ones `found_metas` emits in
     // crates/dclutch-product-runtime-v2-operator/src/found.rs: payer writable
     // and signing, the Market destination writable, every other role readonly.
@@ -115,13 +149,19 @@ describe('Core Found31 browser kernel', () => {
     expect(CORE_FOUND_ACCOUNT_ROLES_V2[1]).toEqual({ signer: false, writable: true });
     expect(CORE_FOUND_ACCOUNT_ROLES_V2.filter((role) => role.signer)).toHaveLength(1);
     expect(CORE_FOUND_ACCOUNT_ROLES_V2.filter((role) => role.writable)).toHaveLength(2);
+    // Routing moved most keys off the static list, so the frame is checked
+    // against the RESOLVED key set -- which is the only list that says what
+    // the program will actually be handed.
     const message = compiled.transaction.message;
+    const resolved = message.getAccountKeys({ addressLookupTableAccounts: [table] });
     accounts.forEach((address, index) => {
-      const position = message.staticAccountKeys.findIndex((value) => value.toBase58() === address);
-      expect(position).toBeGreaterThanOrEqual(0);
-      expect(message.isAccountSigner(position)).toBe(CORE_FOUND_ACCOUNT_ROLES_V2[index].signer);
+      const position = compiled.transaction.message.compiledInstructions[1].accountKeyIndexes[index];
+      expect(resolved.get(position)?.toBase58()).toBe(address);
       expect(message.isAccountWritable(position)).toBe(CORE_FOUND_ACCOUNT_ROLES_V2[index].writable);
     });
+    // A signer can never live in a lookup table, so the payer stays static.
+    expect(message.staticAccountKeys[0].toBase58()).toBe(accounts[0]);
+    expect(message.addressTableLookups.map((lookup) => lookup.accountKey.toBase58())).toEqual([id(200) && new PublicKey(id(200)).toBase58()]);
   });
 
   it('derives a Market-generation lifecycle credit and binds its sole refund wallet and release set', () => {

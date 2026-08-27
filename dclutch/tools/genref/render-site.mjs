@@ -353,51 +353,47 @@ function page({ title, body, depth, crumbs }) {
 ${crumbHtml}
 ${body}
 </main>
-<footer>dClutch is unreleased: no deployment on any cluster, no release,
-nothing value-bearing. This page is published by manual dispatch and
-describes local execution evidence. <a href="${repoUrl.replace(/\/blob\/.*$/, "")}">Repository</a>.</footer>
+<footer>dClutch is not live yet: no deployment, no live market, nothing to
+buy. <a href="${repoUrl.replace(/\/blob\/.*$/, "")}">Repository</a>.</footer>
 </body>
 </html>
 `;
 }
 
 const LANDING_BODY = `<h1>dClutch</h1>
-<p>A Solana protocol for <strong>fully collateralized, liquidation-free
-claims over bounded objective states</strong>. A market partitions an
-objective outcome domain into exact cells; claims are minted only against
-collateral already segregated in the market's Hoard; resolution consumes an
-authenticated, release-bound source observation, never a discretionary
-resolver. No leverage, no liquidation, no path where a claim outgrows the
-collateral behind it.</p>
-<div class="unreleased"><strong>Unreleased.</strong> Nothing here is deployed
-to any cluster; there is no release, no official deployment, no live market,
-and nothing value-bearing. Everything below describes locally executed
-software, labeled at exactly the evidence level it reaches. This site is
-published by manual dispatch only.</div>
+<p>dClutch is a Solana protocol for markets on real-world numbers --
+where a price will be at a stated time, for example. You buy claims on the
+outcome you believe in; if you're right, each claim pays out one collateral
+unit. Every claim is fully backed by collateral locked up before the claim
+exists, so there is <strong>no leverage, no liquidation, and no way to lose
+more than you paid</strong>.</p>
+<div class="unreleased"><strong>Not live yet.</strong> dClutch is not
+deployed on any network. There is no live market, no token, and nothing to
+buy today. Everything on this site describes software running on a local
+test chain.</div>
 <ul class="cards">
-<li><strong><a href="readme.html">The README</a></strong>
-What exists today: the seven programs, the open market, the census, the
-evidence ladder.</li>
-<li><strong><a href="reference/README.html">Protocol reference</a></strong>
-Generated from the protocol's own authorities: routes and their execution
-status, every refusal code with its meaning, compute budgets, ABI tables,
-the decision index.</li>
 <li><strong><a href="guides/README.html">Guides</a></strong>
-Trader, operator, and reader: what a claim is, how to run a market, and how
-to audit the whole thing.</li>
-<li><strong><a href="app/index.html">The application</a></strong>
-The real frontend, statically exported: market discovery, portfolio,
-transaction workbenches. It reads whatever chain you point it at; with
-nothing deployed, expect it to refuse with reasons -- that is the protocol
-working.</li>
+Start here: what a claim is, how protection works, how to run a market,
+how to build your own client -- and how to try the whole thing
+yourself.</li>
+<li><strong><a href="readme.html">The README</a></strong>
+The project at a glance: what works today, the seven programs, and where
+it's going.</li>
+<li><strong><a href="reference/README.html">Protocol reference</a></strong>
+The exact numbers, generated from the code: every instruction, every error
+code with its meaning, compute costs, byte layouts.</li>
+<li><strong><a href="app/index.html">The app</a></strong>
+The real web frontend, statically exported. It reads whatever chain you
+point it at; with nothing deployed, expect polite refusals with
+reasons.</li>
 <li><strong><a href="notices.html">Third-party notices</a></strong>
-Every dependency this repository distributes, by license, generated from the
-complete dependency/license closure at <code>tools/sbom/SBOM.md</code>.</li>
+The licenses of everything this project ships.</li>
 </ul>
-<p class="appnote"><em>Note: the application build uses root-absolute asset
-URLs and works when this site is served at a domain root. Under a repository
-subpath its assets will not resolve (an upstream static-export limitation,
-stated here rather than hidden).</em></p>
+<p>Building on it? The tests and run logs behind every claim on this site
+live in the <a href="${repoUrl.replace(/\/blob\/.*$/, "")}">repository</a>.</p>
+<p class="appnote"><em>The app's assets only load when this site is served
+at a domain root; under a repository subpath the docs pages work but the
+app will not.</em></p>
 `;
 
 // ------------------------------------------------------------------- build

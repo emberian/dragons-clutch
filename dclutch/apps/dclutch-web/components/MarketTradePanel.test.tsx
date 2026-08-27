@@ -16,14 +16,16 @@ describe('the market-detail trade panel', () => {
   />);
 
   it('treats the named refusal as the product surface, not a disabled button', () => {
-    expect(html).toContain('a named refusal is this protocol&#x27;s honest interface');
+    expect(html).toContain('tells you exactly why in one sentence');
+    expect(html).toContain('never a greyed-out button with no reason');
   });
 
   it('carries the packet and prestate walls as exact named facts, never hedges', () => {
     // The walls render after inspection; their content is pinned at the source.
     expect(DIRECT_PACKET_WALL_V1.name).toBe('packet');
     expect(DIRECT_PRESTATE_WALL_V1.name).toBe('prestate');
-    expect(DIRECT_PACKET_WALL_V1.detail).toContain('owned by the Direct/Registry seam, not by this browser');
+    expect(DIRECT_PACKET_WALL_V1.detail).toContain('1,268 > 1,232');
+    expect(DIRECT_PACKET_WALL_V1.detail).toContain('nothing your browser or wallet can do differently');
   });
 
   it('starts from an honest empty state and links the advanced workbench', () => {

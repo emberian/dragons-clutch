@@ -6,10 +6,10 @@
 -->
 # Programs
 
-The census enumerates every program crate under `programs/` that declares an
-SBF entrypoint. "Entry routes" are dispatch arms selected by instruction bytes
-(magics); "action routes" are the actions reachable inside an entry route's
-request grammar.
+Every on-chain program in this repository, enumerated from the source under
+`programs/`. "Entry routes" are the instructions a program dispatches on
+directly (selected by magic bytes); "action routes" are the actions
+reachable inside an entry route's request.
 
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |

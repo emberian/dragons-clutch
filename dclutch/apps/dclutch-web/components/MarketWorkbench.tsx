@@ -14,6 +14,7 @@ import {
   evaluateCapabilityV1,
   type CapabilityStage,
 } from '@/lib/capabilityModel';
+import { smokeStoryEnabledV1 } from '@/lib/flags';
 import { SolanaRpcClient } from '@/lib/rpc';
 
 type Stage = Readonly<{
@@ -57,6 +58,13 @@ export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ 
   return <main className="product-shell workbench-shell">
     <header className="product-nav"><Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link><nav><Link href="/markets">Markets</Link><Link className={stageId === 'author' ? 'active' : ''} href="/create">Create</Link><Link className={stageId === 'trade' ? 'active' : ''} href="/liquidity">Trade</Link><Link className={stageId === 'resolve' ? 'active' : ''} href="/resolution">Resolve</Link><Link className={stageId === 'claim' ? 'active' : ''} href="/redeem">Redeem</Link><Link href="/operate">Operate</Link></nav><span className="preview-control"><i className="preview-dot" />chain workbench</span></header>
     <section className="workbench-heading"><div><p className="eyebrow">Market lifecycle workbench</p><h1>From exact terms<br />to terminal claims.</h1></div><p>No sample market, price, pool, provider, balance, or wallet authority appears here. Observe six program roles plus an optional Realm and Market; each concrete workspace must still prove its exact Registry, artifact, and Loader joins.</p></section>
+    {smokeStoryEnabledV1() && <section className="trade-v3-card">
+      <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
+      <div className="direct-actions">
+        <Link className="secondary-action" href="/smoke">Read the story →</Link>
+        <Link className="secondary-action" href="/bounty">How the bounty works →</Link>
+      </div>
+    </section>}
     <nav className="workbench-stages" aria-label="Market lifecycle stages">{STAGES.map((candidate) => <button type="button" className={candidate.id === stageId ? 'active' : ''} onClick={() => setStageId(candidate.id)} key={candidate.id}><span>{candidate.number}</span><strong>{candidate.title}</strong><small>{candidate.summary}</small></button>)}</nav>
 
     <div className="workbench-grid"><form className="workbench-coordinates" onSubmit={acquire}><header><span>Chain observation</span><h2>Reacquire one execution surface</h2><p>These addresses are transport, not a checked release manifest. Realm and Market ownership must match selected Core.</p></header><label><span>Finalized RPC endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><div>{OPERATOR_ROLES.map((role) => <label key={role}><span>{role}</span><input required value={coordinates[role]} onChange={(event) => update(role, event.target.value)} /></label>)}</div><label><span>Realm (optional)</span><input value={coordinates.realm} onChange={(event) => update('realm', event.target.value)} /></label><label><span>Market (optional during authoring)</span><input value={coordinates.market} onChange={(event) => update('market', event.target.value)} /></label><button type="submit" disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized state…' : 'Observe this chain surface'}</button><p className="direct-status" aria-live="polite">{state.kind === 'ready' ? `Observed at slot ${state.snapshot.observedSlot}${state.snapshot.market ? ` · ${compact(state.snapshot.market.address)} · ${state.snapshot.market.dataBytes} bytes` : ' · no Market selected'}` : state.message}</p>{state.kind === 'ready' && <dl className="workbench-authority"><div><dt>Programs</dt><dd>{state.snapshot.roles.length} executable</dd></div><div><dt>Realm</dt><dd>{state.snapshot.realm?.header ?? (state.snapshot.realm ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Market</dt><dd>{state.snapshot.market?.header ?? (state.snapshot.market ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Release</dt><dd>unrecognized until route preflight</dd></div></dl>}</form>

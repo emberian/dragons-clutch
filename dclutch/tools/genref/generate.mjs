@@ -377,43 +377,32 @@ const pages = new Map(); // relpath -> content
     ]) +
       `# dClutch protocol reference
 
-This reference is generated from the same authorities that run the protocol:
-the route census enumerates programs, routes, and refusal enums from source;
-the gauntlet's bindings and blocked ledger state which routes have executed
-under which campaign and why the rest have not; the compute budgets are the
-checked-in ceilings the campaigns are asserted against; the refusal-band
-registry allocates the error-code space; the ADRs record the decisions; and
-the ABI tables are read from the emitted modules that the browser itself
-decodes with, each byte-gated against its emitting authority. Nothing in this
-directory is hand-maintained, so nothing in it can drift silently: regenerate
-with \`tools/genref/generate.sh\`, verify with
-\`tools/genref/generate.sh --check\`.
+The exact numbers behind dClutch, generated straight from the code -- so
+these pages always match the source they describe. Regenerate with
+\`tools/genref/generate.sh\`; \`--check\` verifies the match byte for byte.
+
+- [programs.md](programs.md) -- the on-chain programs and what each one
+  does.
+- [routes.md](routes.md) -- every instruction the programs accept, and
+  whether the test campaigns have run it yet.
+- [refusals.md](refusals.md) -- every error code the protocol can return,
+  with its meaning.
+- [budgets.md](budgets.md) -- what the key transactions cost in compute,
+  measured against Solana's per-transaction limit.
+- [decisions.md](decisions.md) -- why the architecture is the way it is,
+  one decision per record.
+- [abi/](abi/README.md) -- byte layouts: magics, PDA seed domains, record
+  widths and offsets, account tables.
 
 Current totals: **${programs.length} programs**, **${totalRoutes} routes**
-(${witnessed} with an in-tree execution binding), **${totalRefusals} protocol
-refusal codes**.
+(${witnessed} exercised by the test campaigns), **${totalRefusals} refusal
+codes**.
 
-- [programs.md](programs.md) -- the on-chain programs, their entrypoints, and
-  their counts.
-- [routes.md](routes.md) -- every instruction route, its selector magic, and
-  its execution status. The standing doctrine: a route ships with the campaign
-  row that executes it, or ships marked never-executed.
-- [refusals.md](refusals.md) -- the band allocation and every refusal code
-  with its meaning. A refusal is the protocol working: dClutch fails closed,
-  and the code names exactly which program refused and why.
-- [budgets.md](budgets.md) -- the golden transactions' compute budgets and
-  the tolerance rule that keeps them honest.
-- [decisions.md](decisions.md) -- the architecture decision records.
-- [abi/](abi/README.md) -- record layouts, magics, PDA seed domains, schema
-  identities, and account tables, per surface.
+If you'd rather start with prose, the [guides](../guides/README.md)
+explain the protocol in plain terms and link back into these tables.
 
-The hand-written [guides](../guides/README.md) -- trader, operator, reader --
-are the narrative entry points; they link into these tables rather than
-restating them.
-
-Evidence level, stated once for the whole reference: everything here
-describes a locally executed protocol -- ProgramTest banks and local Agave
-validators. Nothing is deployed to any cluster and nothing is released.
+dClutch is not deployed yet: these tables describe the protocol as it runs
+on a local test chain.
 `,
   );
 }
@@ -443,10 +432,10 @@ validators. Nothing is deployed to any cluster and nothing is released.
     generatedHeader(["census inventory"]) +
       `# Programs
 
-The census enumerates every program crate under \`programs/\` that declares an
-SBF entrypoint. "Entry routes" are dispatch arms selected by instruction bytes
-(magics); "action routes" are the actions reachable inside an entry route's
-request grammar.
+Every on-chain program in this repository, enumerated from the source under
+\`programs/\`. "Entry routes" are the instructions a program dispatches on
+directly (selected by magic bytes); "action routes" are the actions
+reachable inside an entry route's request.
 
 ` +
       table(
@@ -510,9 +499,9 @@ request grammar.
       .map((u) => [`\`${u.ref}\``, `\`${u.file}\``, u.label]);
     unknown =
       `\n\n## Bindings naming routes the census does not\n\n` +
-      `These route references appear in a bindings file but match no route id
-in the current inventory. Each is either a stale binding or a census gap;
-neither is silently droppable.\n\n` +
+      `These route names appear in a campaign's records but match no route in
+the current code. Each one is stale or a gap; it is listed here so it gets
+fixed rather than dropped.\n\n` +
       table(["reference", "bindings file", "binding label"], rows);
   }
 
@@ -525,21 +514,20 @@ neither is silently droppable.\n\n` +
     ]) +
       `# Routes
 
-Every instruction route the census enumerates, with its selector and its
-execution status. Status comes from two in-tree ledgers: the gauntlet
-campaigns' bindings (authored by the gauntlet, never by a campaign) name the
-routes each witnessed transaction executes or refuses, and
-\`tools/gauntlet/blocked.json\` names every route deliberately not driven yet,
-with the reason. A route with neither is listed as **NEVER-EXECUTED, no
-stated reason** -- the row that should make someone uncomfortable.
+Every instruction the programs accept, with its selector and where it
+stands:
 
-A "witnessed" status here means an in-tree campaign binds the route; it is
-campaign coverage, not a proof about all inputs. Blocked reasons are
-truncated to their first sentence -- the full entries live in
-\`blocked.json\`.
+- **witnessed** -- an in-tree test campaign has actually run this route
+  (that is test coverage, not a proof about every input). The campaign is
+  named in the row.
+- **blocked** -- the route cannot be driven yet, and the reason is written
+  down in \`tools/gauntlet/blocked.json\` (rows show the first sentence;
+  the file has the rest).
+- **NEVER-EXECUTED** -- no campaign has run it and no reason is recorded
+  yet.
 
-Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}** routes
-have neither an execution binding nor a blocked entry.
+Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}**
+routes are in that last group.
 
 ` +
       sections.join("\n\n") +
@@ -583,20 +571,20 @@ have neither an execution binding nor a blocked entry.
     ]) +
       `# Refusal codes
 
-Every custom program error code is namespaced by program (decision 0007;
-\`crates/dclutch-refusal-registry\` is the authority). \`band = code >> 12\`,
-each band is 0x1000 codes wide, and band 0 is never allocated -- so a custom
-code below \`0x1000\` is, by construction, not a dClutch refusal. Read a band
-off a log line by dropping the last three hex digits: \`custom program error:
-0x5180\` is band 5 (Claims). Bands at \`0x100000\` and above belong to
-test-only caller programs that exist to drive hostile CPI cases and are never
-deployed.
+Every error code the protocol can return, with its meaning. When dClutch
+refuses a transaction, the whole transaction rolls back -- no partial
+effect survives -- and the code says exactly which program refused and why.
+A refusal isn't a malfunction; it's the protocol keeping the rules.
 
-A refusal is the protocol working. dClutch fails closed: an input, account
-shape, authority, or state that does not authenticate exactly is refused with
-a code that names the program and the reason, and no partial effect survives
-the transaction. The tables below carry all **${totalRefusals}** protocol
-codes with their meanings, straight from the refusal enums' own doc comments.
+Reading a code: each program owns its own block ("band") of codes, and
+\`band = code >> 12\` -- drop the last three hex digits to get the band. So
+\`custom program error: 0x5180\` is band 5, which is Claims. Band 0 is
+never used, meaning a code below \`0x1000\` came from some other program in
+your transaction, not from dClutch. Bands at \`0x100000\` and above belong
+to test-only programs that are never deployed.
+
+The tables below carry all **${totalRefusals}** codes, with meanings taken
+from the source code's own documentation.
 
 ## Band allocation
 
@@ -646,20 +634,17 @@ ${bandTable}
     generatedHeader(["tools/gauntlet/CU_BUDGETS.json"]) +
       `# Compute budgets for the golden transactions
 
-\`tools/gauntlet/CU_BUDGETS.json\` is the one owner of these numbers; the
-gauntlet's witness evaluator asserts them against each campaign's own
-finalized evidence, and a red row names the transaction and the delta. The
-chain's per-transaction ceiling is **${num(budgetsFile.ceiling.compute_units)}
-CU**; a budget above it is refused by the evaluator, which is how the file
-says out loud that a transaction has stopped fitting.
+What the protocol's key transactions cost, in compute units, measured from
+real runs. Solana allows at most
+**${num(budgetsFile.ceiling.compute_units)} CU** per transaction; a budget
+above that ceiling fails this file's own checks, so a transaction that
+stops fitting gets caught here, loudly.
 
-The tolerance rule, verbatim from the file:
-\`${budgetsFile.tolerance_rule.formula}\`. The measured value of every entry
-is the highest draw observed, never a single run. Read
-\`tools/gauntlet/CU_BUDGETS.md\` before changing a number -- in particular
-what it says about noise: PDA bump search costs 1,500 CU per iteration and
-moves with the keys in play, which is why the campaigns run seeded and why
-the tolerances are what they are.
+Each budget is measured cost plus a tolerance
+(\`${budgetsFile.tolerance_rule.formula}\`), where the measured value is
+the highest cost seen across runs, never a single run. Changing a number?
+Read \`tools/gauntlet/CU_BUDGETS.md\` first -- costs move with the accounts
+in play, and it explains how much of that is noise.
 
 ## Enforced budgets
 
@@ -716,9 +701,9 @@ ${provenance}
     generatedHeader(["docs/decisions/*.md"]) +
       `# Architecture decision records
 
-The decisions that bind the implementation. Each record carries its own
-context, alternatives, and consequences; this index carries the first
-sentence of each record's status line.
+Why the protocol is built the way it is, one decision per record. Each
+record carries its context, the alternatives, and the consequences; this
+index shows each record's current status.
 
 ` +
       table(["decision", "status"], rows) +
@@ -839,7 +824,7 @@ sentence of each record's status line.
     if (mod.unrendered.length > 0) {
       parts.push(`## Unrendered exports (verbatim)\n`);
       parts.push(
-        "The renderer did not recognize these statement shapes; they are\ncarried verbatim so the reference never silently narrows its source.\n",
+        "The renderer did not recognize these statement shapes, so they are\nshown verbatim rather than dropped.\n",
       );
       for (const stmt of mod.unrendered) {
         parts.push("```ts");
@@ -857,14 +842,14 @@ sentence of each record's status line.
     generatedHeader(["apps/dclutch-web/lib/generated/*.ts"]) +
       `# ABI surfaces
 
-One page per emitted ABI module. These are the byte layouts the protocol
-actually enforces: magics, PDA seed domains, schema release identities,
-record widths and field offsets, and account tables. The source modules live
-in \`apps/dclutch-web/lib/generated/\` -- they are what the browser decodes
-with, each carries an \`abi:*:verify\` byte-compare gate against its emitting
-authority (the Lean emitters in \`formal/dclutch-semantics\` or the canonical
-Rust contracts), and \`npm test\` runs every gate. This directory renders
-them; it never restates them by hand.
+The exact bytes the protocol speaks: instruction magics, PDA seed domains,
+record widths and field offsets, and account tables -- one page per
+surface.
+
+These pages are rendered from the same generated modules the web app uses
+to decode chain data (\`apps/dclutch-web/lib/generated/\`). Each module is
+byte-checked against the Rust or Lean source that defines its layout, and
+\`npm test\` runs every check.
 
 ` +
       table(["surface", "module authority", "regenerate"], indexRows) +

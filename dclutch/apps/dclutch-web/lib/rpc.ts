@@ -16,6 +16,10 @@ const MAX_REACQUIRED_ACCOUNTS = 128;
 const MAX_MULTIPLE_ACCOUNTS = 32;
 const SOLANA_PACKET_BYTES = 1_232;
 const RPC_TIMEOUT_MS = 15_000;
+const MAX_LOG_MESSAGES = 64;
+const MAX_LOG_MESSAGE_BYTES = 512;
+const MAX_INNER_INSTRUCTION_SETS = 64;
+const MAX_INNER_INSTRUCTIONS = 64;
 
 export type RpcAccount = Readonly<{
   data: Uint8Array;
@@ -76,17 +80,40 @@ export type SignatureStatusObservation = Readonly<{
   errorText: string | null;
 }>;
 
+/** One instruction a program invoked from inside another, as the chain reports it. */
+export type InnerInstructionObservation = Readonly<{
+  /** Index of the outer instruction this ran under. */
+  outerIndex: number;
+  programIdIndex: number;
+  /** Account indexes into the transaction's expanded address list. */
+  accounts: ReadonlyArray<number>;
+  /** Base58 instruction data, exactly as `getTransaction` returns it. */
+  data: string;
+  /** Invocation depth, when the node reports one. */
+  stackHeight: number | null;
+}>;
+
 export type TransactionMetaObservation = Readonly<{
   signature: string;
   slot: string;
   blockTime: string | null;
   succeeded: boolean;
   errorText: string | null;
+  /**
+   * The structured `meta.err`, unmodified.
+   *
+   * `errorText` is a truncated JSON rendering for display; this is the value a
+   * reader has to walk to find the `Custom` code, and truncating it can cut the
+   * code off. Both are carried because they answer different questions.
+   */
+  error: unknown;
   feeLamports: string;
+  computeUnits: string | null;
   accountAddresses: ReadonlyArray<string>;
   preBalances: ReadonlyArray<string>;
   postBalances: ReadonlyArray<string>;
   logMessages: ReadonlyArray<string>;
+  innerInstructions: ReadonlyArray<InnerInstructionObservation>;
   transactionBytes: Uint8Array;
 }>;
 
@@ -107,6 +134,53 @@ function exactUnsigned(value: unknown, field: string): number {
 function exactText(value: unknown, field: string, maximum = 512): string {
   if (typeof value !== 'string' || value.trim() !== value || value.length === 0 || value.length > maximum) throw new Error(`${field} is not bounded canonical text`);
   return value;
+}
+
+/**
+ * One log line, bounded but not refused.
+ *
+ * A log message is a program's own `msg!` output, not a protocol field: it can
+ * be empty, or carry trailing whitespace, and neither means the transaction is
+ * malformed. Passing these through `exactText` — which requires
+ * `value.trim() === value` and a nonzero length — made a single cosmetic log
+ * line throw away the entire transaction read, including its refusal code. The
+ * bound is kept; the refusal is not.
+ */
+function boundedLogMessage(value: unknown): string {
+  return typeof value === 'string' ? value.slice(0, MAX_LOG_MESSAGE_BYTES) : '';
+}
+
+/**
+ * The CPI frames the chain reports, flattened with the outer index they ran
+ * under. Data stays base58 — that is how `getTransaction` encodes it under a
+ * base64 request, and re-encoding it here would be a second representation.
+ */
+function readInnerInstructions(value: unknown): InnerInstructionObservation[] {
+  if (!Array.isArray(value)) return [];
+  const found: InnerInstructionObservation[] = [];
+  for (const set of value.slice(0, MAX_INNER_INSTRUCTION_SETS)) {
+    if (!plain(set) || !Array.isArray(set.instructions)) continue;
+    const outerIndex = exactUnsigned(set.index, 'inner instruction set index');
+    for (const instruction of set.instructions.slice(0, MAX_INNER_INSTRUCTIONS)) {
+      if (!plain(instruction)) continue;
+      if (typeof instruction.data !== 'string') continue;
+      found.push(Object.freeze({
+        outerIndex,
+        programIdIndex: exactUnsigned(instruction.programIdIndex, 'inner instruction program index'),
+        accounts: Object.freeze(
+          Array.isArray(instruction.accounts)
+            ? instruction.accounts.map((entry, index) => exactUnsigned(entry, `inner instruction account ${index}`))
+            : [],
+        ),
+        data: instruction.data.slice(0, SOLANA_PACKET_BYTES * 2),
+        stackHeight:
+          typeof instruction.stackHeight === 'number' && Number.isSafeInteger(instruction.stackHeight)
+            ? instruction.stackHeight
+            : null,
+      }));
+    }
+  }
+  return found;
 }
 
 function plain(value: unknown): value is Record<string, unknown> {
@@ -381,14 +455,42 @@ export class SolanaRpcClient {
       blockTime: typeof raw.blockTime === 'number' && Number.isSafeInteger(raw.blockTime) ? String(raw.blockTime) : null,
       succeeded: meta.err === null || meta.err === undefined,
       errorText: meta.err === null || meta.err === undefined ? null : JSON.stringify(meta.err).slice(0, 240),
+      error: meta.err ?? null,
       feeLamports: String(exactUnsigned(meta.fee, 'transaction fee')),
+      computeUnits: typeof meta.computeUnitsConsumed === 'number' && Number.isSafeInteger(meta.computeUnitsConsumed)
+        ? String(meta.computeUnitsConsumed)
+        : null,
       accountAddresses: Object.freeze(accountAddresses),
       preBalances: Object.freeze(meta.preBalances.map((value, index) => String(exactUnsigned(value, `pre-balance ${index}`)))),
       postBalances: Object.freeze(meta.postBalances.map((value, index) => String(exactUnsigned(value, `post-balance ${index}`)))),
       logMessages: Object.freeze(Array.isArray(meta.logMessages)
-        ? meta.logMessages.slice(0, 64).map((entry, index) => exactText(entry, `log message ${index}`, 512))
+        ? meta.logMessages.slice(0, MAX_LOG_MESSAGES).map(boundedLogMessage)
         : []),
+      innerInstructions: Object.freeze(readInnerInstructions(meta.innerInstructions)),
       transactionBytes: bytes,
+    });
+  }
+
+  /**
+   * Read one submitted signature's confirmation status.
+   *
+   * Submission is not landing. A route whose next transaction depends on the
+   * previous one's effect -- a lifecycle credit before Found31, a lookup table
+   * before anything routes through it -- has to observe that effect rather than
+   * assume it, and a lookup table specifically is usable only strictly after
+   * the slot that last extended it.
+   */
+  async signatureStatus(signature: string): Promise<Readonly<{ slot: string; confirmation: string | null; err: unknown }> | null> {
+    exactText(signature, 'signature', 96);
+    const result = await this.request('getSignatureStatuses', [[signature], { searchTransactionHistory: false }]);
+    if (!plain(result) || !Array.isArray(result.value)) throw new Error('getSignatureStatuses returned an invalid envelope');
+    const entry = result.value[0];
+    if (entry === null || entry === undefined) return null;
+    if (!plain(entry)) throw new Error('getSignatureStatuses returned an invalid status');
+    return Object.freeze({
+      slot: String(exactUnsigned(entry.slot, 'status slot')),
+      confirmation: entry.confirmationStatus === undefined || entry.confirmationStatus === null ? null : exactText(entry.confirmationStatus, 'confirmation status', 32),
+      err: entry.err ?? null,
     });
   }
 

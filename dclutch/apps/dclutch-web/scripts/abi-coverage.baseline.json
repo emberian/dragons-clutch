@@ -49,6 +49,7 @@
     "lib/dealerEquityChain.ts\tdclutch/schema/request-profile-v1",
     "lib/dealerEquityChain.ts\tdclutch/schema/request-profile-v3-borrowed-witness-v1",
     "lib/directHotChain.ts\tdclutch/product-basis/semantic/v3",
+    "lib/directTicket.ts\tdclutch/direct-intent-ticket/v1",
     "lib/directTransaction.ts\tdclutch/direct-replay/v3",
     "lib/generalPlanV5.ts\tdclutch/general-successor-plan/v5",
     "lib/infrastructure.ts\tdclutch:release-activation:v1",

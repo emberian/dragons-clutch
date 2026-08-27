@@ -268,7 +268,7 @@ describe('the Direct trade spine', () => {
     if (spine.status !== 'inspected') return;
     expect(spine.phase).toBe('Terminal');
     expect(spine.tradable).toBe(false);
-    expect(spine.walls.find((wall) => wall.name === 'phase')?.detail).toContain('only an Open Market admits');
+    expect(spine.walls.find((wall) => wall.name === 'phase')?.detail).toContain('trading is only open while a Market is Open');
   });
 
   it('refuses a manifest without a Direct entry by naming the Market choice', async () => {
