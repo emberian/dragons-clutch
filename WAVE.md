@@ -398,4 +398,8 @@ rustfmt is unpinned and reflows ~178 lines of hot_v3.
 7. LANE WRAPPER: tools/lane.sh — enforced --only, pinned rustfmt, board
    helper; retires four recurring accident classes.
 Sizing: patterned ≈ 10–14 lanes ≈ 2–3 swarmcycles to closed-or-explicitly-
-parked (vs ~25 bespoke). Parked-by-ember: the FRI/STARK assurance floor.
+parked (vs ~25 bespoke). Parked-by-ember: deep assurance beyond fail-closed labeling — the universal
+(vs per-case) round-trip and refinement theorems where today's evidence is
+corpus-based. (An earlier revision of this line said 'FRI/STARK floor' — that
+was contamination from an unrelated project's doctrine; dClutch has no
+STARK/FRI component anywhere.)
