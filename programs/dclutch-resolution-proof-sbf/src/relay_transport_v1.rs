@@ -57,6 +57,11 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
+use dclutch_capability_contract::{
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
+    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1,
+    FundingStateV1,
+};
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, Readiness as CoreReadiness,
 };
@@ -77,9 +82,9 @@ use dclutch_relay_contract::{
     frame::{RelayAccountPrivilegeV1, RelayFrameKindV1, validate_relay_frame_v1},
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,
-        ConsumeRecordInstructionV1, CreateRecordInstructionV1, RELAY_INSTRUCTION_MAGIC,
-        RelayInstructionV1, RetireRecordInstructionV1, SEAL_RECORD_PREFIX_BYTES,
-        SealRecordInstructionV1,
+        CommitDeadlineFailureInstructionV1, ConsumeRecordInstructionV1, CreateRecordInstructionV1,
+        RELAY_INSTRUCTION_MAGIC, RelayInstructionV1, RetireRecordInstructionV1,
+        SEAL_RECORD_PREFIX_BYTES, SealRecordInstructionV1,
     },
     record::{
         RelayedObservationRecordViewV1, RelayedRecordBindingV1,
@@ -122,7 +127,12 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
 use crate::{
-    ResolutionError, authenticate_clock, authenticate_rent,
+    RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
+    authenticate_rent,
+    funded::{
+        AuthenticatedFailureFundingV1, AuthenticatedWalkSourceV1, DeadlineFailureRequestV1,
+        FundedWalkErrorV1, plan_deadline_failure_v1,
+    },
     provider_instruction_v3::authenticate_record,
     relay_v1::{
         AuthenticatedRelaySourceRecordsV1, RelayJoinErrorV1, RelayResolutionRequestV1,
@@ -171,19 +181,8 @@ pub(crate) fn process_relay_transport_v1(
         RelayInstructionV1::ConsumeRecord(request, entries) => {
             process_consume(program_id, accounts, request, entries)
         }
-        RelayInstructionV1::CommitDeadlineFailure(_) => {
-            // Deliberately undispatched, and the reason is a refusal rather
-            // than an omission. `ResolutionCertificateV2::validate_shape`
-            // refuses a `ResolutionFailure` whose `funding_allocation` is zero
-            // or whose `work_paid` is zero, so the Lean-owned terminal schema
-            // encodes section 4.8's "prepaid, permissionless, pays whoever walks
-            // it" as a decode-time invariant: there is no such thing as an
-            // unfunded failure certificate, and a walk that emitted one would be
-            // recording a bounty nobody paid. The wire and the frame exist so
-            // the shape is fixed; the route lands with the V1-to-V2 port of the
-            // funded controller that debits a `FundingState` and credits the
-            // worker.
-            Err(ResolutionError::Funding.into())
+        RelayInstructionV1::CommitDeadlineFailure(request) => {
+            process_commit_deadline_failure(program_id, accounts, request)
         }
     }
 }
@@ -201,6 +200,7 @@ struct MarketFacts {
     registry_program: Pubkey,
     rent_beneficiary: [u8; 32],
     product_record: [u8; 32],
+    capability_manifest: [u8; 32],
 }
 
 fn account<'a, 'info>(
@@ -276,6 +276,10 @@ fn authenticate_market(
     let release_set = state.identity.selected_release_set.to_bytes();
     let rent_beneficiary = state.rent_beneficiary.to_bytes();
     let product_record = state.identity.product_record.to_bytes();
+    // Which manifest quotes this market's funding is a Market fact, never an
+    // argument: the deadline walk debits an escrow, and a caller who could name
+    // the manifest could name one that quotes a bounty this market never paid.
+    let capability_manifest = state.identity.capability_manifest.to_bytes();
     drop(market_data);
 
     let activation_data = activation
@@ -311,6 +315,7 @@ fn authenticate_market(
         registry_program,
         rent_beneficiary,
         product_record,
+        capability_manifest,
     })
 }
 
@@ -1005,6 +1010,438 @@ fn process_consume(
         &certificate,
     )
 }
+
+/// Walk a silent market to its Product's pre-disclosed failure outcome.
+///
+/// This is the route section 4.8 of `MAINNET_STATE_RELAY.md` promised and the
+/// one the family could not have without it: **a silent relayer cannot make a
+/// market unresolvable, only drive it to a pre-disclosed outcome, along a
+/// bounded, prepaid, permissionless path that pays whoever walks it.**
+///
+/// Every noun in that sentence is an account or a check here, and none of them
+/// is the relayer's. The narrowest instruction in the family carries only a
+/// generation and a terminal sequence; even the Source material identity is read
+/// out of the Resolution-owned Source state rather than accepted from the
+/// caller, and then compared against what the Market itself says its resolution
+/// policy is. A caller supplies which market, when, and nothing else.
+///
+/// What it authenticates, in order, each refusing on its own field:
+///
+/// 1. the frame — twenty-two positions, four writable, no aliases;
+/// 2. the Source state's program custody and its own derived address;
+/// 3. the Market, its Core ownership, its derived address, this Program as its
+///    Resolution role, and that its resolution policy is the material the state
+///    is bound to;
+/// 4. the `SourceMaterialV2` record, and the `WindowSpecV1` it names;
+/// 5. the Product Runtime V2 graph, against the Market's own Product record;
+/// 6. the `CapabilityManifestV1` the Market names, and the explicit-failure
+///    compartment's derived address under it.
+///
+/// Only then does [`crate::funded::plan_deadline_failure_v1`] decide anything,
+/// and it debits before it transitions so that a walk that cannot be paid for
+/// cannot move the market either.
+#[inline(never)]
+fn process_commit_deadline_failure(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: CommitDeadlineFailureInstructionV1,
+) -> ProgramResult {
+    validate_frame(RelayFrameKindV1::CommitDeadlineFailure, accounts)?;
+    let worker = account(accounts, 0)?;
+    let market_account = account(accounts, 1)?;
+    let core = account(accounts, 2)?;
+    let activation = account(accounts, 3)?;
+    let source_state_account = account(accounts, 4)?;
+    let certificate_account = account(accounts, 5)?;
+    let funding_account = account(accounts, 18)?;
+    let clock_account = account(accounts, 19)?;
+    let rent_sysvar = account(accounts, 20)?;
+    let system = account(accounts, 21)?;
+    require_system(system)?;
+    let rent = authenticate_rent(rent_sysvar)?;
+    let clock = authenticate_clock(clock_account)?;
+
+    // The material identity comes from the Source state, which this Program
+    // owns and derives, and is then checked against the Market's own resolution
+    // policy inside `authenticate_market`. Neither side is the caller.
+    authenticate_source_state_account(program_id, source_state_account, market_account)?;
+    let source_state = Box::new({
+        let data = source_state_account
+            .try_borrow_data()
+            .map_err(|_| ResolutionError::OutputState)?;
+        SourceResolutionStateV2::decode(&data).map_err(|_| ResolutionError::OutputState)?
+    });
+    let material_id = source_state.material_id();
+
+    let market = authenticate_market(
+        program_id,
+        market_account,
+        core,
+        activation,
+        request.generation(),
+        material_id.to_bytes(),
+    )?;
+    let walk_source = Box::new(deadline_walk_source(
+        &market.registry_program,
+        accounts,
+        &rent,
+        material_id,
+    )?);
+    let product_runtime = boxed_product_runtime(
+        &market.registry_program,
+        &rent,
+        ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
+        ProductRuntimeFrameV2 {
+            product: FinalizedRecordFrameV2 {
+                raw: account(accounts, 10)?,
+                staging: account(accounts, 11)?,
+            },
+            result_domain: FinalizedRecordFrameV2 {
+                raw: account(accounts, 12)?,
+                staging: account(accounts, 13)?,
+            },
+            portfolio: FinalizedRecordFrameV2 {
+                raw: account(accounts, 14)?,
+                staging: account(accounts, 15)?,
+            },
+        },
+    )?;
+
+    let manifest_data = account(accounts, 16)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    authenticate_finalized_record(
+        market.registry_program,
+        account(accounts, 16)?,
+        account(accounts, 17)?,
+        &rent,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        market.capability_manifest,
+        &manifest_data,
+        RecordKind::CapabilityManifest,
+    )?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
+    let manifest_id = CapabilityContentId::new(market.capability_manifest)
+        .map_err(|_| ResolutionError::Funding)?;
+    let escrow = Box::new(authenticate_failure_funding(
+        program_id,
+        funding_account,
+        market_account,
+        manifest_id,
+        manifest,
+        request.generation(),
+        &rent,
+    )?);
+
+    let domain_data = account(accounts, 12)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ProductDomain)?;
+    let result_domain =
+        ResultDomainV2::decode(&domain_data).map_err(|_| ResolutionError::ProductDomain)?;
+
+    let outputs = plan_and_encode_deadline_failure(
+        &DeadlineFailureRequestV1 {
+            market: market_account.key.to_bytes(),
+            generation: request.generation(),
+            terminal_sequence: request.terminal_sequence(),
+            certificate_account: certificate_account.key.to_bytes(),
+            current_unix_seconds: clock.unix_timestamp,
+        },
+        &source_state,
+        &walk_source,
+        &product_runtime,
+        result_domain,
+        &escrow,
+    )?;
+
+    let worker_lamports_after = worker
+        .lamports()
+        .checked_add(outputs.work_paid)
+        .ok_or(ResolutionError::Arithmetic)?;
+    drop(domain_data);
+    drop(manifest_data);
+    commit_deadline_failure(
+        program_id,
+        request.terminal_sequence(),
+        DeadlineFailureOutputs {
+            source_state: source_state_account,
+            certificate: certificate_account,
+            funding: funding_account,
+            worker,
+            system,
+        },
+        &rent,
+        &outputs,
+        worker_lamports_after,
+    )
+}
+
+/// The three account bodies and the lamport figure a completed walk writes.
+///
+/// This exists to keep [`DeadlineFailurePlanV1`] out of the dispatch arm's own
+/// stack frame. The plan carries a `SourceResolutionStateV2`, a
+/// `ResolutionCertificateV2` and a `FundingStateV1` by value — about eight
+/// hundred bytes of decoded state — and encoding it produces another eight
+/// hundred of wire bytes beside them. The SBF frame is four kilobytes and the
+/// arm already holds the authenticated Market, Source graph and escrow, so the
+/// two together overflowed it: `cargo build-sbf` reported nine
+/// stack-frame-overwrite diagnostics against `process_commit_deadline_failure`
+/// and exited zero anyway. Boxing the result is not enough on its own, because
+/// the plan is still returned *through* the caller's frame; the planning and
+/// the encoding have to happen somewhere else entirely.
+struct EncodedDeadlineFailureV1 {
+    /// `SourceResolutionStateV2` after `Primary → Exhausted → FailureCommitted`.
+    source: [u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
+    /// The terminal `ResolutionFailure` certificate, already schema-validated.
+    certificate: [u8; RESOLUTION_CERTIFICATE_BYTES_V2],
+    /// `FundingStateV1` after the bounty debit.
+    funding: [u8; FUNDING_STATE_BYTES],
+    /// Exact lamports the walker is owed.
+    work_paid: u64,
+    /// Exact funding-account lamports after the debit.
+    funding_lamports_after: u64,
+}
+
+/// Plan the walk and encode every byte it writes, on a frame of its own.
+///
+/// The encoding happens here rather than at the commit, and that ordering is
+/// the point: `ResolutionCertificateV2::to_bytes` runs `validate_shape`, which
+/// is where the Lean-owned schema refuses a `ResolutionFailure` carrying a zero
+/// `funding_allocation` or `work_paid`. A certificate the schema would refuse
+/// therefore never reaches an account, and no lamport has moved when it is
+/// refused.
+#[inline(never)]
+fn plan_and_encode_deadline_failure(
+    request: &DeadlineFailureRequestV1,
+    source_state: &SourceResolutionStateV2,
+    walk_source: &AuthenticatedWalkSourceV1,
+    product_runtime: &AuthenticatedProductRuntimeV2,
+    result_domain: ResultDomainV2<'_>,
+    escrow: &AuthenticatedFailureFundingV1<'_>,
+) -> Result<Box<EncodedDeadlineFailureV1>, ProgramError> {
+    let plan = plan_deadline_failure_v1(
+        request,
+        source_state,
+        walk_source,
+        product_runtime,
+        result_domain,
+        escrow,
+    )
+    .map_err(map_funded_walk_error)?;
+    let mut encoded = Box::new(EncodedDeadlineFailureV1 {
+        source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
+        certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
+        funding: [0; FUNDING_STATE_BYTES],
+        work_paid: plan.work_paid,
+        funding_lamports_after: plan.funding_lamports_after,
+    });
+    encoded.source = plan.next_source.to_bytes();
+    encoded.certificate = plan
+        .certificate
+        .to_bytes()
+        .map_err(|_| ResolutionError::Transition)?;
+    encoded.funding = plan.next_funding.to_bytes();
+    Ok(encoded)
+}
+
+const fn map_funded_walk_error(error: FundedWalkErrorV1) -> ResolutionError {
+    match error {
+        FundedWalkErrorV1::Request => ResolutionError::Instruction,
+        FundedWalkErrorV1::Source => ResolutionError::SourceMaterial,
+        FundedWalkErrorV1::Product => ResolutionError::ProductDomain,
+        FundedWalkErrorV1::Transition => ResolutionError::Transition,
+        FundedWalkErrorV1::Funding => ResolutionError::Funding,
+    }
+}
+
+/// Authenticate exactly the two Source records the walk reads.
+///
+/// A consumption walks material → spec → provider release → configuration →
+/// window → venue, because it has to interpret bytes a provider signed. This
+/// walk interprets nothing: it needs the material (for the Product record and
+/// the absence of a recovery policy) and the window (for the deadline), and
+/// naming any of the others would make the route depend on the party that has
+/// stopped answering.
+#[inline(never)]
+fn deadline_walk_source(
+    registry: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    rent: &Rent,
+    material_id: dclutch_source_contract::ContentId,
+) -> Result<AuthenticatedWalkSourceV1, ProgramError> {
+    let material_data = account(accounts, 6)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 6)?,
+        account(accounts, 7)?,
+        rent,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        material_id.to_bytes(),
+        &material_data,
+        SOURCE_MATERIAL_V2_BYTES,
+    )?;
+    let material =
+        SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    let window_spec_id = material.window_spec();
+    drop(material_data);
+
+    let window_data = account(accounts, 8)?
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_record(
+        registry,
+        account(accounts, 8)?,
+        account(accounts, 9)?,
+        rent,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        window_spec_id.to_bytes(),
+        &window_data,
+        WINDOW_SPEC_BYTES,
+    )?;
+    let window = WindowSpecV1::decode(&window_data).map_err(|_| ResolutionError::SourceMaterial)?;
+    drop(window_data);
+
+    Ok(AuthenticatedWalkSourceV1 {
+        material_id,
+        material,
+        window_spec_id,
+        window,
+    })
+}
+
+/// Authenticate the escrowed explicit-failure compartment at its own address.
+///
+/// The address is the check that matters. `CapabilityFundingDerivationV1` folds
+/// the Market, the generation, the manifest identity and the funding state's own
+/// entry index into the seeds, so a caller cannot present the *recovery*
+/// compartment — which is a real, active, correctly-owned `FundingState` of the
+/// same market — and have the walk debit it: that account lives at a different
+/// address than the one its own bytes derive.
+#[inline(never)]
+fn authenticate_failure_funding<'a>(
+    program_id: &Pubkey,
+    account_info: &AccountInfo<'_>,
+    market: &AccountInfo<'_>,
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'a>,
+    generation: u64,
+    rent: &Rent,
+) -> Result<AuthenticatedFailureFundingV1<'a>, ProgramError> {
+    if account_info.owner != program_id
+        || account_info.executable
+        || account_info.data_len() != FUNDING_STATE_BYTES
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    let data = account_info
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::Funding)?;
+    let funding = FundingStateV1::decode(&data).map_err(|_| ResolutionError::Funding)?;
+    drop(data);
+    let custody = FundingCustodyObservationV1::native_only(
+        account_info.lamports(),
+        rent.minimum_balance(FUNDING_STATE_BYTES),
+    )
+    .map_err(|_| ResolutionError::Funding)?;
+    let derivation = CapabilityFundingDerivationV1::new(
+        market.key.to_bytes(),
+        generation,
+        manifest_id,
+        manifest,
+        funding,
+    )
+    .map_err(|_| ResolutionError::Funding)?;
+    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0 != *account_info.key
+    {
+        return Err(ResolutionError::Funding.into());
+    }
+    Ok(AuthenticatedFailureFundingV1 {
+        manifest_id,
+        manifest,
+        entry_index: funding.entry_index(),
+        funding,
+        custody,
+    })
+}
+
+/// The four accounts a completed walk writes, named rather than indexed.
+struct DeadlineFailureOutputs<'a, 'info> {
+    source_state: &'a AccountInfo<'info>,
+    certificate: &'a AccountInfo<'info>,
+    funding: &'a AccountInfo<'info>,
+    worker: &'a AccountInfo<'info>,
+    system: &'a AccountInfo<'info>,
+}
+
+/// Commit the terminal failure, the debited escrow and the walker's payment.
+///
+/// All four move or none do, which is what makes the bounty a payment for work
+/// rather than a claim about it: the certificate that says `work_paid` is the
+/// same transaction that moved the lamports.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn commit_deadline_failure(
+    program_id: &Pubkey,
+    terminal_sequence: u64,
+    outputs: DeadlineFailureOutputs<'_, '_>,
+    rent: &Rent,
+    encoded: &EncodedDeadlineFailureV1,
+    worker_lamports_after: u64,
+) -> ProgramResult {
+    initialize_certificate_at_kind(
+        program_id,
+        RESOLUTION_FAILURE_CERTIFICATE_KIND_SEED,
+        terminal_sequence,
+        outputs.source_state,
+        outputs.certificate,
+        outputs.system,
+        rent,
+    )?;
+    let mut state_output = outputs
+        .source_state
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let mut certificate_output = outputs
+        .certificate
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let mut funding_output = outputs
+        .funding
+        .try_borrow_mut_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    if state_output.len() != SOURCE_RESOLUTION_STATE_BYTES_V2
+        || certificate_output.len() != RESOLUTION_CERTIFICATE_BYTES_V2
+        || funding_output.len() != FUNDING_STATE_BYTES
+        || certificate_output.iter().any(|byte| *byte != 0)
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    state_output.copy_from_slice(&encoded.source);
+    certificate_output.copy_from_slice(&encoded.certificate);
+    funding_output.copy_from_slice(&encoded.funding);
+
+    let mut funding_lamports = outputs
+        .funding
+        .try_borrow_mut_lamports()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let mut worker_lamports = outputs
+        .worker
+        .try_borrow_mut_lamports()
+        .map_err(|_| ResolutionError::OutputState)?;
+    **funding_lamports = encoded.funding_lamports_after;
+    **worker_lamports = worker_lamports_after;
+    Ok(())
+}
+
+/// The Lean-owned Runtime V2 wire tag for `ResolutionFailure`.
+///
+/// The kind is a PDA *seed*, so the failure a deadline walk writes and the
+/// success an observation writes live at different addresses for one Source
+/// state at one sequence, and neither can overwrite the other.
+const RESOLUTION_FAILURE_CERTIFICATE_KIND_SEED: u8 = 4;
 
 const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
     match error {

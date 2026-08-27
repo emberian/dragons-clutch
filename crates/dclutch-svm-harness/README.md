@@ -29,11 +29,20 @@ cargo build-sbf --manifest-path programs/dclutch-resolution-proof-sbf/Cargo.toml
 SBF_OUT_DIR=../../target/deploy cargo test --test relayed_mainnet_state
 ```
 
-Four cases: the create/append/seal/retire transport, the hostile corpus (five
-creation substitutions named by refusal code, plus the signature, cluster, slot
-and replay corpus), a below-threshold quorum, and the §4.10 swap tripwire. The
-signatures are cryptographically real; everything they attest is synthetic, so
-this is neither devnet nor mainnet evidence.
+Nineteen cases across three arcs. The **transport**:
+create/append/seal/retire, the hostile corpus (five creation substitutions
+named by refusal code, plus the signature, cluster, slot and replay corpus), a
+below-threshold quorum, and the §4.10 swap tripwire. The **consumption**: a
+sealed graduation resolving the market through the Product's own domain, plus
+the corpus of signed-but-wrong pool bodies, foreign clocks, and observations
+outside the window. The **liveness walk** (§4.8, §12.7): a market no relayer
+answered for walked to a terminal `ResolutionFailure` and the walker paid the
+manifest's own quoted bounty, with four refusals — before the deadline, twice,
+against a live compartment that is not this walk's escrow, and against an
+escrow one lamport short of what the market promised.
+
+The signatures are cryptographically real; everything they attest is synthetic,
+so this is neither devnet nor mainnet evidence.
 
 The successor Resolution campaign executes the compiled Registry and
 Resolution ELFs against the provenance-pinned local-validator projection of

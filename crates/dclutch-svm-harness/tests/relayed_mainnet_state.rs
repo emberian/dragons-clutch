@@ -28,6 +28,14 @@
 
 use std::{env, fs, path::PathBuf};
 
+use dclutch_capability_contract::{
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    CapabilityEntryV1,
+    CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
+    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1, FundingCustodyObservationV1,
+    FundingQuoteV1, FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
@@ -148,6 +156,16 @@ const MIGRATION_PROGRESS_CREATED_POOL: u8 = 3;
 const DEVNET_NOW: i64 = CREATED_UNIX + 600;
 /// The terminal sequence naming the certificate this resolution writes.
 const TERMINAL_SEQUENCE: u64 = 1;
+
+/// The bounty this market disclosed, before it opened, for whoever walks it to
+/// its pre-disclosed failure outcome.
+///
+/// It is a manifest quote rather than a walk-time argument, which is the whole
+/// difference between a prepaid permissionless path and an unfunded promise:
+/// `ResolutionCertificateV2::validate_shape` refuses a `ResolutionFailure`
+/// whose `work_paid` is zero, so a walk that could not be paid for could not
+/// have encoded its own certificate either.
+const BOUNTY: u64 = 250_000;
 /// Lean-owned Runtime V2 certificate wire tags, used as PDA seeds.
 const RESOLUTION_SUCCESS_KIND: u8 = 1;
 const RESOLUTION_FAILURE_KIND: u8 = 4;
@@ -337,6 +355,146 @@ fn add_record(test: &mut ProgramTest, schema: [u8; 32], data: Vec<u8>) -> (Recor
 
 fn source_id(bytes: [u8; 32]) -> SourceContentId {
     SourceContentId::new(bytes).expect("nonzero deterministic Source identity")
+}
+
+fn capability_id(bytes: [u8; 32]) -> CapabilityContentId {
+    CapabilityContentId::new(bytes).expect("nonzero capability identity")
+}
+
+/// One Resolution-controller funding entry, quoting this market's own bounty.
+///
+/// `config_id` is the only thing that varies across the three entries, and it
+/// is what makes one of them the *explicit-failure* compartment rather than
+/// the recovery or exhaustion one: `funded::plan_funding_release` admits the
+/// entry whose configuration is this market's own Source material and refuses
+/// every other, which is exactly the binding `core_effect`'s
+/// `authenticate_funding_entries` established when the three were created.
+///
+/// The quote pays rent out of the Rent compartment and the walk out of the
+/// Bounty compartment. Nothing else is applicable: this capability creates one
+/// account and pays one worker.
+fn funding_entry(config: [u8; 32]) -> CapabilityEntryV1 {
+    let quote = FundingQuoteV1::new(
+        FundingAmountsV1::new(
+            CompartmentFundingV1::native_lamports(Rent::default().minimum_balance(
+                FUNDING_STATE_BYTES,
+            ))
+            .expect("funding-state rent"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::native_lamports(BOUNTY).expect("worker bounty"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("typed funding amounts"),
+        None,
+    )
+    .expect("funding quote");
+    CapabilityEntryV1::new(
+        capability_id(hashv(&[b"dclutch/relayed/capability/", &config]).to_bytes()),
+        capability_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+        capability_id(config),
+        capability_id([0xa4; 32]),
+        capability_id([0xa5; 32]),
+        capability_id([0xa6; 32]),
+        ActivationPolicy::RequiredAtFounding,
+        0,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        quote,
+    )
+    .expect("Resolution funding entry")
+}
+
+/// The `FundingStateV1` a market's founding leaves in one compartment.
+///
+/// Built through the same two production calls `core_effect::new_funding`
+/// makes -- `FundingStateV1::new` against an observed native custody, then
+/// `activate` -- rather than by writing bytes that look right. Which account it
+/// lands in is `CapabilityFundingDerivationV1`'s answer, not this fixture's, so
+/// the address folds in the Market, the generation, the manifest identity and
+/// the state's own entry index. That is why presenting a *different* live
+/// compartment of the same market is refused by a config comparison rather
+/// than by an address check: the exhaustion compartment sits at its own correct
+/// address too.
+fn pending_funding(manifest: CapabilityManifestV1<'_>, entry_index: u16) -> FundingStateV1 {
+    let rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
+    let custody = native_custody(
+        rent.checked_mul(2)
+            .and_then(|value| value.checked_add(BOUNTY))
+            .expect("bounded funding custody"),
+    );
+    FundingStateV1::new(manifest_identity(manifest), manifest, entry_index, custody)
+        .expect("pending FundingState")
+}
+
+fn native_custody(lamports: u64) -> FundingCustodyObservationV1 {
+    FundingCustodyObservationV1::native_only(
+        lamports,
+        Rent::default().minimum_balance(FUNDING_STATE_BYTES),
+    )
+    .expect("native funding custody")
+}
+
+/// A compartment's own address, from the state its own bytes describe.
+fn funding_key(
+    market: Pubkey,
+    manifest: CapabilityManifestV1<'_>,
+    entry_index: u16,
+) -> (Pubkey, FundingStateV1) {
+    let pending = pending_funding(manifest, entry_index);
+    let derivation = CapabilityFundingDerivationV1::new(
+        market.to_bytes(),
+        GENERATION,
+        manifest_identity(manifest),
+        manifest,
+        pending,
+    )
+    .expect("funding derivation");
+    (
+        Pubkey::find_program_address(&derivation.seed_components(), &PROGRAM_ID).0,
+        pending,
+    )
+}
+
+/// Install one activated compartment, holding exactly rent plus its bounty.
+fn add_active_funding(
+    test: &mut ProgramTest,
+    market: Pubkey,
+    manifest: CapabilityManifestV1<'_>,
+    entry_index: u16,
+) -> Pubkey {
+    let rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
+    let (key, mut state) = funding_key(market, manifest, entry_index);
+    state
+        .activate(
+            manifest_identity(manifest),
+            manifest,
+            native_custody(
+                rent.checked_mul(2)
+                    .and_then(|value| value.checked_add(BOUNTY))
+                    .expect("bounded funding custody"),
+            ),
+            1,
+        )
+        .expect("active FundingState");
+    test.add_account(
+        key,
+        Account {
+            lamports: rent + BOUNTY,
+            data: state.to_bytes().to_vec(),
+            owner: PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    key
+}
+
+/// The manifest's own content identity, recomputed from the encoded bytes.
+fn manifest_identity(manifest: CapabilityManifestV1<'_>) -> CapabilityContentId {
+    capability_id(hash(manifest.as_bytes()).to_bytes())
 }
 
 /// The founding-time pinned ordered account set, exactly as the daemon derives
@@ -736,6 +894,9 @@ struct Fixture {
     venue: RecordPair,
     source_state: Pubkey,
     certificate: Pubkey,
+    capability_manifest: RecordPair,
+    failure_funding: Pubkey,
+    exhaustion_funding: Pubkey,
 }
 
 fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
@@ -870,13 +1031,56 @@ fn fixture_with_venue(
         protocol_account(RENT_PROGRAM_ID, rent_credit_value.to_bytes().to_vec()),
     );
 
+    // The capability manifest, and the reason the deadline walk has a bounty at
+    // all. Three `RESOLUTION_CONTROLLER_RELEASE_ID_V4` entries in the order
+    // `core_effect`'s `authenticate_funding_entries` fixes them -- recovery
+    // allocation, recovery policy, then THIS MARKET'S OWN Source material -- so
+    // the explicit-failure compartment is identified by what its manifest entry
+    // configures rather than by an account position. Only the third entry's
+    // config is a real identity here; the first two exist so the failure
+    // compartment is not entry zero and a walk that read the wrong index would
+    // be visible rather than accidentally correct.
+    let mut entries = [
+        funding_entry([0xa1; 32]),
+        funding_entry([0xa2; 32]),
+        funding_entry(graph.material_id),
+    ];
+    // A manifest is strictly ordered by capability-kind identity, so the entry
+    // *index* of the explicit-failure compartment is whatever the sort makes it
+    // rather than a number a fixture may choose. Both indices below are
+    // discovered by asking which entry configures which identity, which is the
+    // same question the route asks.
+    entries.sort_unstable_by_key(|entry| entry.kind_id().to_bytes());
+    let mut manifest_bytes = vec![0; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&entries, &mut manifest_bytes).expect("capability manifest");
+    let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest view");
+    let entry_index_of = |config: [u8; 32]| {
+        (0..manifest.entry_count())
+            .find(|index| {
+                manifest
+                    .entry(*index)
+                    .expect("manifest entry")
+                    .config_id()
+                    .to_bytes()
+                    == config
+            })
+            .expect("the manifest configures this identity")
+    };
+    let failure_entry_index = entry_index_of(graph.material_id);
+    let exhaustion_entry_index = entry_index_of([0xa2; 32]);
+    let (capability_manifest, manifest_digest) = add_record(
+        &mut test,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest_bytes.clone(),
+    );
+
     let mut identity = MarketIdentity {
         market_id: CoreIdentity::new([0xff; 32]).expect("placeholder Market"),
         realm_id: CoreIdentity::new([31; 32]).expect("Realm"),
         product_record: CoreIdentity::new(product.product_record_digest).expect("Product record"),
         product_id: CoreIdentity::new([33; 32]).expect("Product"),
         resolution_policy: CoreIdentity::new(graph.material_id).expect("Source material"),
-        capability_manifest: CoreIdentity::new([25; 32]).expect("manifest"),
+        capability_manifest: CoreIdentity::new(manifest_digest).expect("manifest"),
         selected_release_set: CoreIdentity::new(release_set).expect("release set"),
         registry_program: CoreIdentity::new(REGISTRY_PROGRAM_ID.to_bytes()).expect("Registry"),
         generation: GENERATION,
@@ -903,6 +1107,17 @@ fn fixture_with_venue(
             state.encode().expect("Core state").to_vec(),
         ),
     );
+
+    // Two live compartments, both correctly owned, both at their own derived
+    // addresses, both Active. Only one of them is this walk's: the third entry
+    // configures this market's own Source material. The second is the
+    // exhaustion compartment, and it is here so that "present a different
+    // compartment" is a case with a REAL account behind it rather than a
+    // fabricated one.
+    let failure_funding = add_active_funding(&mut test, market, manifest, failure_entry_index);
+    let exhaustion_funding =
+        add_active_funding(&mut test, market, manifest, exhaustion_entry_index);
+    assert_ne!(failure_funding, exhaustion_funding);
 
     let (record, record_bump) = Pubkey::find_program_address(
         &[
@@ -996,6 +1211,9 @@ fn fixture_with_venue(
         venue,
         source_state,
         certificate,
+        capability_manifest,
+        failure_funding,
+        exhaustion_funding,
     }
 }
 
@@ -1227,7 +1445,7 @@ impl Fixture {
         .0
     }
 
-    fn deadline_failure_instruction(&self) -> Instruction {
+    fn deadline_failure_instruction(&self, substitution: DeadlineSubstitution) -> Instruction {
         Instruction {
             program_id: PROGRAM_ID,
             accounts: vec![
@@ -1247,15 +1465,24 @@ impl Fixture {
                 AccountMeta::new_readonly(self.product.result_domain.staging, false),
                 AccountMeta::new_readonly(self.product.portfolio.raw, false),
                 AccountMeta::new_readonly(self.product.portfolio.staging, false),
+                AccountMeta::new_readonly(self.capability_manifest.raw, false),
+                AccountMeta::new_readonly(self.capability_manifest.staging, false),
+                AccountMeta::new(
+                    substitution.funding.unwrap_or(self.failure_funding),
+                    false,
+                ),
                 AccountMeta::new_readonly(sysvar::clock::ID, false),
                 AccountMeta::new_readonly(sysvar::rent::ID, false),
                 AccountMeta::new_readonly(system_program::ID, false),
             ],
-            data: CommitDeadlineFailureInstructionV1::new(GENERATION, TERMINAL_SEQUENCE)
-                .expect("deadline failure request")
-                .to_bytes()
-                .expect("deadline failure bytes")
-                .to_vec(),
+            data: CommitDeadlineFailureInstructionV1::new(
+                GENERATION,
+                substitution.terminal_sequence.unwrap_or(TERMINAL_SEQUENCE),
+            )
+            .expect("deadline failure request")
+            .to_bytes()
+            .expect("deadline failure bytes")
+            .to_vec(),
         }
     }
 
@@ -1291,6 +1518,18 @@ impl Fixture {
         .expect("seal bytes")
         .to_vec()
     }
+}
+
+/// One substitution a hostile deadline walk makes, and nothing else.
+///
+/// The walk's instruction carries a generation and a terminal sequence and
+/// nothing else, so there is very little for a caller to lie about — which is
+/// the property, not an omission. What remains is the one account whose
+/// identity is not fixed by the Market's own bytes: which escrow gets debited.
+#[derive(Clone, Copy, Default)]
+struct DeadlineSubstitution {
+    funding: Option<Pubkey>,
+    terminal_sequence: Option<u64>,
 }
 
 /// One substitution a hostile consumption makes, and nothing else.
@@ -1959,6 +2198,7 @@ const REFUSAL_OUTPUT_STATE: u32 = 2;
 const REFUSAL_RELAYED_RECORD: u32 = 15;
 const REFUSAL_RELAYED_WINDOW: u32 = 16;
 const REFUSAL_TRANSITION_LIVENESS: u32 = 12;
+const REFUSAL_FUNDING: u32 = 14;
 
 /// Pin the devnet clock so both time bounds are exact.
 ///
@@ -2362,13 +2602,20 @@ async fn the_consumption_hostile_corpus_is_refused_by_the_real_adapter() {
     .expect("the honest consumption after the corpus");
 }
 
+/// One named corruption of an otherwise canonical `VirtualPool` body.
+///
+/// Named rather than written inline because it is a hostile-corpus row, and a
+/// corpus row wants to read as one thing: a sentence saying what the relayer
+/// lied about, and the edit that tells the lie.
+type SignedPoolCorruption<'a> = (&'a str, Box<dyn Fn(&mut Vec<u8>)>);
+
 #[tokio::test]
 async fn a_signed_but_incoherent_or_foreign_pool_body_refuses_on_its_own_field() {
     // Every case here is a *real* quorum standing behind a *real* signed
     // statement. That is what makes them worth executing: the relayer is
     // trusted with the reading and can lie about it, and these are the lies the
     // decoding rules catch on this cluster rather than on the relayer's word.
-    let cases: [(&str, Box<dyn Fn(&mut Vec<u8>)>); 3] = [
+    let cases: [SignedPoolCorruption<'_>; 3] = [
         (
             "a pool claiming migration with `is_migrated` still zero",
             Box::new(|pool: &mut Vec<u8>| {
@@ -2491,14 +2738,14 @@ async fn warp_past_the_deadline(context: &mut ProgramTestContext) {
 
 #[tokio::test]
 async fn no_late_observation_can_resolve_a_market_past_its_primary_deadline() {
-    // The half of the liveness argument that *is* executable today.
+    // One half of the liveness argument; the other half is
+    // `a_silent_relayer_cannot_make_the_market_unresolvable`.
     //
     // Past the primary deadline the observation route refuses, permanently and
     // for every possible record: a relayer who goes quiet and comes back late
     // cannot resolve the market on its own schedule.  What that leaves is a
-    // market pinned at `Primary` with a pre-disclosed failure outcome nobody can
-    // yet commit -- see `an_unfunded_failure_certificate_cannot_exist` for the
-    // exact thing standing in the way.
+    // market pinned at `Primary`, and the walk is what takes it from there to
+    // its pre-disclosed outcome.
     //
     // The refusal is the two-clock staleness bound rather than the window, and
     // that is worth naming because the two coincide *by construction* at exactly
@@ -2529,24 +2776,22 @@ async fn no_late_observation_can_resolve_a_market_past_its_primary_deadline() {
 
 #[test]
 fn an_unfunded_failure_certificate_cannot_exist() {
-    // Why the deadline walk has a wire, a frame, a Source transition and no
-    // route, stated as an executed refusal rather than a paragraph.
+    // Why the deadline walk has to debit an escrow, stated as an executed
+    // refusal rather than a paragraph -- and why it could not have shipped as a
+    // route that simply commits the failure and pays nobody.
     //
-    // `SourceResolutionStateV2::exhaust_after_primary_deadline` lands in this
-    // cycle and is unit-tested: `Primary -> Exhausted` strictly after
-    // `window.end + max_age`, refusing any material that bought recovery legs.
-    // From `Exhausted`, `commit_failure_from_authenticated_domain` already
-    // reaches the Product's own failure selector.  So the transitions exist and
-    // the walk is one route away.
+    // The Lean-owned terminal schema refuses a `ResolutionFailure` whose
+    // `funding_allocation` is zero or whose `work_paid` is zero, which encodes
+    // section 4.8's "bounded, prepaid, permissionless path that pays whoever
+    // walks it" as a *decode-time* invariant.  There is no such thing as an
+    // unfunded failure certificate, so there was no honest half-measure: the
+    // route landed with the V1-to-V2 port of the funded controller that debits
+    // a `FundingState` and credits the worker, and
+    // `a_silent_relayer_cannot_make_the_market_unresolvable` executes it.
     //
-    // It is not the missing route that blocks it.  The Lean-owned terminal
-    // schema refuses a `ResolutionFailure` whose `funding_allocation` is zero or
-    // whose `work_paid` is zero, which encodes section 4.8's "bounded, prepaid,
-    // permissionless path that pays whoever walks it" as a *decode-time*
-    // invariant.  There is no such thing as an unfunded failure certificate, so
-    // there is no honest half-measure here: the route lands with the V1-to-V2
-    // port of the funded controller that debits a `FundingState` and credits the
-    // worker, and not before.
+    // This case stays because it is the constraint's own witness: it is the
+    // thing that would fail if the schema were ever loosened to let a route mint
+    // a bounty nobody paid.
     let unfunded = ResolutionCertificateV2 {
         kind: ResolutionCertificateKindV2::ResolutionFailure,
         market: [0x21; 32],
@@ -2578,11 +2823,311 @@ fn an_unfunded_failure_certificate_cannot_exist() {
     );
 
     // With a bounty allocation and a credited worker the same certificate is
-    // canonical, which is the shape the port has to produce.
+    // canonical, which is the shape the walk does produce -- and the committing
+    // case above asserts exactly those two fields on the certificate the chain
+    // wrote.
     let funded = ResolutionCertificateV2 {
         funding_allocation: [0x25; 32],
         work_paid: 100_000,
         ..unfunded
     };
     assert!(funded.to_bytes().is_ok());
+}
+
+/// The lamports one account holds right now.
+async fn lamports_of(context: &mut ProgramTestContext, key: Pubkey) -> u64 {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("bank read")
+        .map_or(0, |account| account.lamports)
+}
+
+/// Every fact the walk is supposed to move, read back off the chain at once.
+///
+/// A refusal case compares two of these and a committing case compares the
+/// difference against the manifest's quote, so no case can pass by asserting
+/// only the half of the state it happens to care about.
+#[derive(Debug, Eq, PartialEq)]
+struct WalkState {
+    source_phase: SourceResolutionPhaseV1,
+    failure_escrow: u64,
+    exhaustion_escrow: u64,
+    worker: u64,
+    failure_certificate_owner: Pubkey,
+    success_certificate_owner: Pubkey,
+}
+
+async fn walk_state(context: &mut ProgramTestContext, fixture: &Fixture) -> WalkState {
+    let source = SourceResolutionStateV2::decode(
+        &record_bytes(context, fixture.source_state).await,
+    )
+    .expect("Source decodes");
+    let owner_of = |account: Option<Account>| {
+        account.map_or(system_program::ID, |account| account.owner)
+    };
+    WalkState {
+        source_phase: source.phase(),
+        failure_escrow: lamports_of(context, fixture.failure_funding).await,
+        exhaustion_escrow: lamports_of(context, fixture.exhaustion_funding).await,
+        worker: lamports_of(context, fixture.worker.pubkey()).await,
+        failure_certificate_owner: owner_of(
+            context
+                .banks_client
+                .get_account(fixture.certificate_of(RESOLUTION_FAILURE_KIND))
+                .await
+                .expect("bank read"),
+        ),
+        success_certificate_owner: owner_of(
+            context
+                .banks_client
+                .get_account(fixture.certificate_of(RESOLUTION_SUCCESS_KIND))
+                .await
+                .expect("bank read"),
+        ),
+    }
+}
+
+#[tokio::test]
+async fn a_silent_relayer_cannot_make_the_market_unresolvable() {
+    // §4.8's headline property, executed rather than argued: **a silent relayer
+    // cannot make a market unresolvable, only drive it to a pre-disclosed
+    // outcome, along a bounded, prepaid, permissionless path that pays whoever
+    // walks it.** Every clause is an assertion below.
+    //
+    // Nothing about the relayer is an input. No record is created, no
+    // observation appended, no set sealed, and the frame carries no provider
+    // release, no adapter configuration and no key set -- so this route runs in
+    // exactly the world where the relayer has stopped answering, which is the
+    // only world it is for.
+    let mut fixture = fixture(1, &[]);
+    let mut context = start(&mut fixture).await;
+    warp_past_the_deadline(&mut context).await;
+    let before = walk_state(&mut context, &fixture).await;
+    assert_eq!(before.source_phase, SourceResolutionPhaseV1::Primary);
+    assert_eq!(
+        before.failure_escrow,
+        Rent::default().minimum_balance(FUNDING_STATE_BYTES) + BOUNTY,
+        "the escrow starts holding rent plus exactly the quoted bounty"
+    );
+
+    submit(
+        &mut context,
+        &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
+        &[&fixture.worker],
+    )
+    .await
+    .expect("a silent market walks to its pre-disclosed failure");
+
+    let after = walk_state(&mut context, &fixture).await;
+    assert_eq!(
+        after.source_phase,
+        SourceResolutionPhaseV1::FailureCommitted,
+        "the walk is Primary -> Exhausted -> FailureCommitted in one transition"
+    );
+    assert_eq!(
+        after.worker - before.worker,
+        BOUNTY,
+        "PAYS WHOEVER WALKS IT: the worker is credited the manifest's own quote"
+    );
+    assert_eq!(
+        before.failure_escrow - after.failure_escrow,
+        BOUNTY,
+        "PREPAID: the bounty came out of the escrow the market funded at founding"
+    );
+    assert_eq!(
+        after.exhaustion_escrow, before.exhaustion_escrow,
+        "the compartment this walk is not about is untouched"
+    );
+    assert_eq!(
+        after.success_certificate_owner,
+        system_program::ID,
+        "success and failure are different addresses; a failure walk cannot occupy the success one"
+    );
+
+    let funding = FundingStateV1::decode(
+        &record_bytes(&mut context, fixture.failure_funding).await,
+    )
+    .expect("Funding state decodes");
+    assert_eq!(funding.status(), FundingStatus::Active);
+    assert_eq!(
+        funding.remaining().bounty().amount(),
+        0,
+        "the whole disclosed bounty is spent, so a second walker has nothing to be paid from"
+    );
+
+    let certificate = ResolutionCertificateV2::decode(
+        &record_bytes(&mut context, fixture.certificate_of(RESOLUTION_FAILURE_KIND)).await,
+    )
+    .expect("terminal certificate decodes");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV2::ResolutionFailure
+    );
+    assert_eq!(certificate.market, fixture.market.to_bytes());
+    assert_eq!(certificate.generation, GENERATION);
+    assert_eq!(
+        certificate.selector, GRADUATION_REGION_COUNT,
+        "PRE-DISCLOSED OUTCOME: the selector is the Product's own explicit failure region, \
+         not a value this route chose"
+    );
+    assert_eq!(
+        certificate.route, [0; 32],
+        "no route: this terminal is attributable to no provider, which is the whole content \
+         of the claim that the relayer went silent"
+    );
+    assert_eq!(
+        certificate.provider_evidence, [0; 32],
+        "and no observation stands behind it"
+    );
+    assert_eq!(
+        certificate.funding_allocation,
+        fixture.graph.material_id,
+        "the allocation identity is the market's own Source material, which is what makes \
+         the explicit-failure compartment identifiable at all"
+    );
+    assert_eq!(certificate.work_paid, BOUNTY);
+    assert_eq!(certificate.funding_remaining, 0);
+    assert_eq!(
+        certificate.attempt_index, 0,
+        "zero legs were skipped: this material bought none"
+    );
+}
+
+#[tokio::test]
+async fn the_walk_refuses_before_the_deadline_it_is_named_for() {
+    // BOUNDED, in the direction that matters: the walk is a liveness path, not
+    // a way to end a market early. The deadline is `window.end + max_age`, both
+    // of them the market's own founding-time content, and one second before it
+    // an observation can still resolve this market honestly.
+    let mut fixture = fixture(1, &[]);
+    let mut context = start(&mut fixture).await;
+    let before = walk_state(&mut context, &fixture).await;
+
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_TRANSITION,
+    );
+    assert_eq!(
+        walk_state(&mut context, &fixture).await,
+        before,
+        "an early walk moves neither the Source, nor either escrow, nor the walker"
+    );
+}
+
+#[tokio::test]
+async fn the_bounty_cannot_be_collected_twice() {
+    // The certificate is a PDA of the Source state, the kind and the sequence,
+    // and the Source state is terminal after the first walk, so the second
+    // attempt has two independent reasons to refuse. What this asserts is the
+    // one that would cost real money if it were wrong: the escrow does not pay
+    // again.
+    let mut fixture = fixture(1, &[]);
+    let mut context = start(&mut fixture).await;
+    warp_past_the_deadline(&mut context).await;
+    submit(
+        &mut context,
+        &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
+        &[&fixture.worker],
+    )
+    .await
+    .expect("the first walk commits");
+    let after_first = walk_state(&mut context, &fixture).await;
+
+    assert!(
+        submit(
+            &mut context,
+            &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await
+        .is_err(),
+        "a market that already failed cannot be walked again"
+    );
+    assert_eq!(
+        walk_state(&mut context, &fixture).await,
+        after_first,
+        "the second walk pays nobody and moves nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_live_compartment_of_the_same_market_cannot_stand_in_for_the_escrow() {
+    // The substituted-compensation case, and the reason it is interesting: the
+    // exhaustion compartment is a REAL `FundingState` of this same market, at
+    // its own correctly derived address, correctly owned by this Program, and
+    // Active. Every check that is about *shape* passes on it.
+    //
+    // What refuses is the check that is about *identity*: the explicit-failure
+    // compartment is the one whose manifest entry configures this market's own
+    // Source material, exactly the binding `core_effect` established when the
+    // three compartments were created. Substituting the neighbour is therefore
+    // refused by that comparison rather than by an account-position convention,
+    // which is what makes the refusal survive a frame reordering.
+    let mut fixture = fixture(1, &[]);
+    let mut context = start(&mut fixture).await;
+    warp_past_the_deadline(&mut context).await;
+    let before = walk_state(&mut context, &fixture).await;
+
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.deadline_failure_instruction(DeadlineSubstitution {
+                funding: Some(fixture.exhaustion_funding),
+                ..DeadlineSubstitution::default()
+            })],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_FUNDING,
+    );
+    assert_eq!(walk_state(&mut context, &fixture).await, before);
+}
+
+#[tokio::test]
+async fn an_escrow_that_does_not_hold_what_the_market_promised_refuses() {
+    // The unfunded shape. The `FundingState` bytes stay exactly canonical --
+    // same entry index, same manifest, same Active status, same derived address
+    // -- and one lamport goes missing from the account.
+    //
+    // That is the only way to reach `validate_against`'s custody comparison at
+    // all, because the address folds in the state's own bytes: change the bytes
+    // and the account is at a different address; change the lamports and the
+    // account is at the right address holding the wrong thing. A route that
+    // trusted the bytes would pay a bounty out of an escrow that cannot cover
+    // it, and the shortfall would surface an instruction later as an unrelated
+    // rent failure.
+    let mut fixture = fixture(1, &[]);
+    let mut context = start(&mut fixture).await;
+    warp_past_the_deadline(&mut context).await;
+    let mut skimmed = context
+        .banks_client
+        .get_account(fixture.failure_funding)
+        .await
+        .expect("bank read")
+        .expect("the escrow exists");
+    skimmed.lamports -= 1;
+    context.set_account(&fixture.failure_funding, &skimmed.into());
+    let before = walk_state(&mut context, &fixture).await;
+
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_FUNDING,
+    );
+    assert_eq!(
+        walk_state(&mut context, &fixture).await,
+        before,
+        "one lamport short is short: the walk commits nothing and pays nobody"
+    );
 }

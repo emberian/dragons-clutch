@@ -83,6 +83,12 @@ pub enum RelayAccountNameV1 {
     PortfolioRecord,
     /// The finalized staging vacancy proving the portfolio record is immutable.
     PortfolioRecordStagingVacancy,
+    /// The raw immutable `CapabilityManifestV1` the funding compartments quote.
+    CapabilityManifest,
+    /// The finalized staging vacancy proving the manifest is immutable.
+    CapabilityManifestStagingVacancy,
+    /// The Resolution-owned explicit-failure funding compartment the walk debits.
+    FailureFunding,
 }
 
 /// One ordered SDK-free account-role requirement.
@@ -186,6 +192,13 @@ const PORTFOLIO_STAGE: RelayAccountRoleV1 = role(
     false,
     false,
 );
+const MANIFEST: RelayAccountRoleV1 = role(RelayAccountNameV1::CapabilityManifest, false, false);
+const MANIFEST_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::CapabilityManifestStagingVacancy,
+    false,
+    false,
+);
+const FAILURE_FUNDING: RelayAccountRoleV1 = role(RelayAccountNameV1::FailureFunding, false, true);
 
 /// Exact record-creation frame.
 ///
@@ -308,14 +321,28 @@ pub const CONSUME_RECORD_FRAME_V1: [RelayAccountRoleV1; 28] = [
 
 /// Exact deadline-failure frame: a silent market to its pre-disclosed outcome.
 ///
-/// Nineteen positions, and the interesting fact about them is what is missing.
+/// Twenty-two positions, and the interesting fact about them is what is missing.
 /// There is no record, no provider release, no adapter configuration, no key set
 /// and no venue: the failure outcome is the Product's own and the deadline is
 /// the window's own, so nothing about the provider is an input.  That is not
 /// economy, it is the property -- a route that needed the relayer to supply
 /// anything could not run when the relayer has stopped answering, and the whole
 /// point of this walk is that it runs anyway.
-pub const COMMIT_DEADLINE_FAILURE_FRAME_V1: [RelayAccountRoleV1; 19] = [
+///
+/// Three positions carry the *prepayment* half of the same property, and they
+/// are the reason this frame is not sixteen.  `ResolutionCertificateV2` refuses
+/// a `ResolutionFailure` whose `funding_allocation` or `work_paid` is zero, so
+/// "permissionless" without "paid" is not a shape this protocol can encode: the
+/// capability manifest quotes the bounty, its staging vacancy proves the quote
+/// is immutable, and the explicit-failure compartment is the escrow the walk
+/// actually debits.  None of the three is relayer-supplied -- the market
+/// prepaid them at founding -- so the walk still runs when nobody is answering.
+///
+/// Exactly three positions are writable: the Source state that becomes terminal,
+/// the certificate this route creates, and the escrow it spends.  The worker is
+/// writable because it is *paid*, which is the only lamport flow here that is
+/// not rent.
+pub const COMMIT_DEADLINE_FAILURE_FRAME_V1: [RelayAccountRoleV1; 22] = [
     WORKER,
     MARKET_READ,
     CORE_PROGRAM,
@@ -332,6 +359,9 @@ pub const COMMIT_DEADLINE_FAILURE_FRAME_V1: [RelayAccountRoleV1; 19] = [
     RESULT_DOMAIN_STAGE,
     PORTFOLIO,
     PORTFOLIO_STAGE,
+    MANIFEST,
+    MANIFEST_STAGE,
+    FAILURE_FUNDING,
     CLOCK,
     RENT,
     SYSTEM,
@@ -533,6 +563,39 @@ mod tests {
                 "the deadline walk depends on {absent:?}, which a silent relayer controls"
             );
         }
+    }
+
+    #[test]
+    fn the_deadline_walk_writes_exactly_the_source_the_certificate_and_the_escrow() {
+        // The other half of section 4.8's property. "Permissionless" without
+        // "paid" is not a shape `ResolutionCertificateV2` can encode, so a walk
+        // frame with no escrow in it could only ever produce a certificate the
+        // Lean-owned schema refuses.
+        let expected = [
+            RelayAccountNameV1::Worker,
+            RelayAccountNameV1::SourceResolutionState,
+            RelayAccountNameV1::ResolutionCertificate,
+            RelayAccountNameV1::FailureFunding,
+        ];
+        let mut seen = 0usize;
+        for role in COMMIT_DEADLINE_FAILURE_FRAME_V1
+            .iter()
+            .filter(|role| role.is_writable())
+        {
+            assert_eq!(
+                Some(role.name()),
+                expected.get(seen).copied(),
+                "the deadline walk acquired a write authority it does not have"
+            );
+            seen = seen.saturating_add(1);
+        }
+        assert_eq!(seen, expected.len(), "a writable position went missing");
+        assert!(
+            COMMIT_DEADLINE_FAILURE_FRAME_V1
+                .iter()
+                .any(|role| role.name() == RelayAccountNameV1::CapabilityManifest),
+            "the bounty amount has to come from the market's own quote"
+        );
     }
 
     #[test]

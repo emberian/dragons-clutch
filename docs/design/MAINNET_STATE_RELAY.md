@@ -1839,39 +1839,68 @@ resolution:** for a v1 graduation market, "the relayer went silent", "the venue
 was upgraded" and "it never graduated" all land on the same pre-disclosed
 failure outcome.
 
-### 12.7 The liveness walk: what landed, and the one thing that blocks it
+### 12.7 The liveness walk: executed
 
-`SourceResolutionStateV2::exhaust_after_primary_deadline` landed and is
-unit-tested: `Primary → Exhausted`, strictly after `window.end + window.max_age`,
-refusing any material carrying a recovery policy. From `Exhausted`,
-`commit_failure_from_authenticated_domain` already reaches the Product's failure
-selector. Before this, **nothing in V2 could reach `Exhausted` at all**, so §4.8's
-headline property had no executable form: `commit_failure_from_authenticated_domain`
-had zero callers and the V1 `exhaust_view` lives in a module that is not compiled.
+§4.8's headline property — **a silent relayer cannot make a market unresolvable,
+only drive it to a pre-disclosed outcome, along a bounded, prepaid,
+permissionless path that pays whoever walks it** — is executable against the real
+compiled Resolution ELF. `a_silent_relayer_cannot_make_the_market_unresolvable`
+in `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs` walks a market no
+relayer answered for to a terminal `ResolutionFailure` certificate and credits
+the walker, and four sibling cases refuse the ways it could be abused.
 
-The route is one instruction away and it is blocked, structurally, on funding:
+Every clause of that sentence is an account or a check rather than a claim:
+
+- **Silent.** The frame carries no record, no provider release, no adapter
+  configuration, no key set and no venue. Twenty-two positions, and nothing in
+  them is the relayer's, so the route runs in exactly the world the relayer has
+  abandoned. The instruction itself carries a generation and a terminal sequence
+  and nothing else — even the Source material identity is read out of the
+  Resolution-owned Source state and then compared against the Market's own
+  resolution policy.
+- **Bounded.** `exhaust_after_primary_deadline` refuses strictly before
+  `window.end + window.max_age`, both of them the market's own founding-time
+  content, so the walk cannot end a market early. The deadline and the last
+  second an observation may resolve the market are adjacent by construction
+  (§12.3), with no gap in which neither route can act.
+- **Pre-disclosed.** The selector is `ResultDomainV2::failure_selector()`, the
+  Product's own explicit failure region. The certificate carries `route = 0` and
+  `provider_evidence = 0`, which is the whole content of the claim that no
+  provider stands behind this terminal.
+- **Prepaid, and pays whoever walks it.** The bounty is the capability
+  manifest's own quote, debited from the explicit-failure `FundingState` the
+  market escrowed at founding. Nobody chooses what the walk pays at walk time.
+
+The compartment is identified by *configuration*, not by account position: the
+explicit-failure entry is the one whose manifest entry configures this market's
+own Source material, exactly the binding `core_effect`'s
+`authenticate_funding_entries` established when the three compartments were
+created. Presenting the exhaustion compartment instead — a real, Active,
+correctly-owned `FundingState` of the same market at its own correct address —
+is refused by that comparison, and the campaign executes it.
+
+The prepayment rule stayed a rule rather than becoming a special case:
 
 > `ResolutionCertificateV2::validate_shape` refuses a `ResolutionFailure` whose
 > `funding_allocation` is zero or whose `work_paid` is zero.
 
-The Lean-owned terminal schema encodes §4.8's "bounded, prepaid, permissionless
-path that pays whoever walks it" as a **decode-time invariant**. There is no such
-thing as an unfunded failure certificate, and no honest half-measure: a route
-emitting one would record a bounty nobody paid, and the alternative is weakening
-the prepayment rule the architecture rests on. `CommitDeadlineFailure` therefore
-has a wire, a frame, and a dispatch arm that refuses with `Funding` (14) naming
-the reason; `an_unfunded_failure_certificate_cannot_exist` executes the refusal.
+`an_unfunded_failure_certificate_cannot_exist` still executes that refusal, and
+it is now the constraint's witness rather than a blocker's: it is what would
+fail if the Lean-owned schema were ever loosened to let a route mint a bounty
+nobody paid. The walk plans and *encodes* before it commits, so a certificate
+the schema would refuse never reaches an account and no lamport has moved when
+it is refused.
 
-**What it needs**, exactly: the V1→V2 port of
-`programs/dclutch-resolution-proof-sbf/src/funded.rs`, which is orphaned dead code
-today — there is no `mod funded;` anywhere in the crate and its only call site
-sits under `#[cfg(any())]`. The port debits an authenticated `FundingState`
-allocation and emits a `FundedTransitionReceiptV1` crediting the worker.
-`core_effect.rs` already creates and escrows the three compartments, including
-`failure_funding`, so the money is there and nothing reads it.
-`crates/dclutch-svm-harness/tests/resolution_successor.rs` panics
-"Runtime V2 funded direct ABI and return receipt have not been frozen" and is the
-test that unblocks with it.
+The walk is one transition rather than three, and that is a consequence rather
+than a simplification. The V1 shape was `FailNext` per recovery leg, then
+`Exhaust`, then `CommitFailure` — six funded transitions worst case. That shape
+belongs to a market that *bought* named alternative sources, and
+`exhaust_after_primary_deadline` refuses any material carrying a recovery policy
+precisely because skipping paid-for legs would take an outcome away from the
+holders who paid for them. For a market with no policy the whole walk is
+`Primary → Exhausted → FailureCommitted`: one debit, one certificate, and no
+intermediate `Exhausted` certificate, because there is no intermediate moment a
+third party could act on.
 
 ### 12.8 What the demo Product still needs, as a record set
 
@@ -1900,8 +1929,8 @@ For one real DBC graduation market, in dependency order:
 9. Product Runtime V2: a `ResultDomainV2` with **zero cuts**, a two-coefficient
    `PortfolioV2`, and the `ProductRecordV2` root (§12.6).
 
-Still missing beyond the record set, in order of what would stop a demo first:
-the funded walk (§12.7); a measured two-clock skew profile; the daemon actually
-running and publishing (§4.11 is specification only); and a `RecoveryMaterialSlotV1`
-that admits a relayed source, without which §4.8's "degrades to a named
-alternative source" remains false (§10.5).
+Still missing beyond the record set, in order of what would stop a demo first: a
+measured two-clock skew profile; the daemon actually running and publishing
+(§4.11 is specification only); and a `RecoveryMaterialSlotV1` that admits a
+relayed source, without which §4.8's "degrades to a named alternative source"
+remains false (§10.5) — the walk itself is no longer on this list (§12.7).
