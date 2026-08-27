@@ -21,7 +21,7 @@ pub const RELAY_INSTRUCTION_MAGIC: [u8; 8] = *b"DCLTRIX1";
 /// Shared relay instruction header width.
 pub const RELAY_INSTRUCTION_HEADER_BYTES: usize = 16;
 /// Exact `CreateRecord` instruction width.
-pub const CREATE_RECORD_INSTRUCTION_BYTES: usize = 48;
+pub const CREATE_RECORD_INSTRUCTION_BYTES: usize = 144;
 /// Fixed prefix before the inline attestation message in `AppendObservation`.
 pub const APPEND_OBSERVATION_PREFIX_BYTES: usize = 40;
 /// Fixed prefix before the inline seal message in `SealRecord`.
@@ -74,10 +74,19 @@ pub struct CreateRecordInstructionV1 {
     set_count: u16,
     seal_threshold: u8,
     pda_bump: u8,
+    source_material_id: [u8; 32],
+    source_spec_id: [u8; 32],
+    rent_beneficiary: [u8; 32],
 }
 
 impl CreateRecordInstructionV1 {
     /// Construct one create request.
+    ///
+    /// The Source graph coordinates ride here because creation is the only
+    /// route that has to be told them; every later route reads them back out of
+    /// the persisted record, so a caller cannot re-point a live record at a
+    /// different Source graph.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         generation: u64,
         observed_slot: u64,
@@ -85,11 +94,17 @@ impl CreateRecordInstructionV1 {
         set_count: u16,
         seal_threshold: u8,
         pda_bump: u8,
+        source_material_id: [u8; 32],
+        source_spec_id: [u8; 32],
+        rent_beneficiary: [u8; 32],
     ) -> Result<Self> {
         crate::record::relayed_observation_record_bytes_v1(set_count)?;
         if seal_threshold == 0 || seal_threshold > crate::MAX_RELAYER_KEYS_V1_U8 {
             return Err(Error::NonCanonicalKeySet);
         }
+        crate::require_nonzero(&source_material_id)?;
+        crate::require_nonzero(&source_spec_id)?;
+        crate::require_nonzero(&rent_beneficiary)?;
         Ok(Self {
             generation,
             observed_slot,
@@ -97,7 +112,23 @@ impl CreateRecordInstructionV1 {
             set_count,
             seal_threshold,
             pda_bump,
+            source_material_id,
+            source_spec_id,
+            rent_beneficiary,
         })
+    }
+
+    /// The immutable Source material this record will serve.
+    pub const fn source_material_id(self) -> [u8; 32] {
+        self.source_material_id
+    }
+    /// The Source specification naming this provider release.
+    pub const fn source_spec_id(self) -> [u8; 32] {
+        self.source_spec_id
+    }
+    /// The pre-existing RentCredit that will receive the record's rent.
+    pub const fn rent_beneficiary(self) -> [u8; 32] {
+        self.rent_beneficiary
     }
 
     /// Encode the exact canonical bytes.
@@ -117,6 +148,9 @@ impl CreateRecordInstructionV1 {
         )?;
         put(&mut out, 40, &self.set_count.to_le_bytes())?;
         put(&mut out, 42, &[self.seal_threshold, self.pda_bump])?;
+        put(&mut out, 48, &self.source_material_id)?;
+        put(&mut out, 80, &self.source_spec_id)?;
+        put(&mut out, 112, &self.rent_beneficiary)?;
         Ok(out)
     }
 
@@ -301,6 +335,9 @@ impl<'a> RelayInstructionV1<'a> {
                     u16_at(bytes, 40)?,
                     one(bytes, 42)?,
                     one(bytes, 43)?,
+                    crate::array(bytes, 48)?,
+                    crate::array(bytes, 80)?,
+                    crate::array(bytes, 112)?,
                 )?))
             }
             RelayActionV1::AppendObservation => {
@@ -351,7 +388,18 @@ mod tests {
 
     #[test]
     fn each_action_round_trips() {
-        let create = CreateRecordInstructionV1::new(7, 423_941_138, 3, 4, 1, 254).expect("create");
+        let create = CreateRecordInstructionV1::new(
+            7,
+            423_941_138,
+            3,
+            4,
+            1,
+            254,
+            [0x11; 32],
+            [0x12; 32],
+            [0x13; 32],
+        )
+        .expect("create");
         let bytes = create.to_bytes().expect("encode");
         assert_eq!(
             RelayInstructionV1::decode(&bytes),
@@ -436,15 +484,15 @@ mod tests {
     #[test]
     fn a_seal_threshold_outside_the_key_set_bound_refuses_at_construction() {
         assert_eq!(
-            CreateRecordInstructionV1::new(1, 1, 0, 4, 0, 255),
+            CreateRecordInstructionV1::new(1, 1, 0, 4, 0, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
             Err(Error::NonCanonicalKeySet)
         );
         assert_eq!(
-            CreateRecordInstructionV1::new(1, 1, 0, 4, 6, 255),
+            CreateRecordInstructionV1::new(1, 1, 0, 4, 6, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
             Err(Error::NonCanonicalKeySet)
         );
         assert_eq!(
-            CreateRecordInstructionV1::new(1, 1, 0, 0, 1, 255),
+            CreateRecordInstructionV1::new(1, 1, 0, 0, 1, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
             Err(Error::InvalidSetGeometry)
         );
     }

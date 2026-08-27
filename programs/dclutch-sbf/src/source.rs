@@ -972,13 +972,14 @@ fn process_retire_shared(
 }
 
 #[derive(Clone, Copy)]
-struct MarketFacts {
-    outcome_count: u8,
-    child_count: u64,
-    capability_manifest_id: CoreContentId,
+pub(crate) struct MarketFacts {
+    pub(crate) outcome_count: u8,
+    pub(crate) child_count: u64,
+    #[allow(dead_code)]
+    pub(crate) capability_manifest_id: CoreContentId,
 }
 
-fn market_facts(
+pub(crate) fn market_facts(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     generation: u64,
@@ -1144,7 +1145,7 @@ fn market_facts_width<const N: usize>(
     })
 }
 
-fn register_market_child(
+pub(crate) fn register_market_child(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     generation: u64,
@@ -1162,7 +1163,7 @@ fn register_market_child(
     )
 }
 
-fn retire_market_child(
+pub(crate) fn retire_market_child(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     generation: u64,
@@ -1872,7 +1873,7 @@ fn decode_shared_state_view<'a>(
     Ok(state)
 }
 
-fn with_authenticated_material<'a, T>(
+pub(crate) fn with_authenticated_material<'a, T>(
     program_id: &Pubkey,
     raw: &AccountInfo<'a>,
     staging: &AccountInfo<'a>,
@@ -1951,7 +1952,7 @@ fn validate_frame(
     validate_source_frame_v1(kind, &privileges).map_err(|_| AdapterError::AccountPrivilege.into())
 }
 
-fn require_register_delta(
+pub(crate) fn require_register_delta(
     delta: dclutch_source_contract::MarketChildDeltaV1,
     before: u64,
 ) -> Result<(), ProgramError> {
@@ -1964,7 +1965,7 @@ fn require_register_delta(
     Ok(())
 }
 
-fn require_retire_delta(
+pub(crate) fn require_retire_delta(
     delta: dclutch_source_contract::MarketChildDeltaV1,
     before: u64,
 ) -> Result<(), ProgramError> {
@@ -1977,7 +1978,7 @@ fn require_retire_delta(
     Ok(())
 }
 
-fn authenticate_existing_rent_credit(
+pub(crate) fn authenticate_existing_rent_credit(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     rent_sysvar: &AccountInfo<'_>,
@@ -1995,7 +1996,7 @@ fn authenticate_existing_rent_credit(
     Ok(())
 }
 
-fn authenticate_existing_rent_credit_without_sysvar(
+pub(crate) fn authenticate_existing_rent_credit_without_sysvar(
     program_id: &Pubkey,
     account: &AccountInfo<'_>,
     beneficiary: [u8; 32],
@@ -2006,7 +2007,7 @@ fn authenticate_existing_rent_credit_without_sysvar(
     Ok(())
 }
 
-fn create_prefunded_pda<'info>(
+pub(crate) fn create_prefunded_pda<'info>(
     payer: &AccountInfo<'info>,
     created: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
@@ -2072,7 +2073,7 @@ fn persist_exact<const N: usize>(
     persist_bytes(account, bytes)
 }
 
-fn persist_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramError> {
+pub(crate) fn persist_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramError> {
     let mut data = account
         .try_borrow_mut_data()
         .map_err(|_| AdapterError::AccountData)?;
@@ -2086,7 +2087,7 @@ fn persist_bytes(account: &AccountInfo<'_>, bytes: &[u8]) -> Result<(), ProgramE
     Ok(())
 }
 
-fn close_to_rent_credit(
+pub(crate) fn close_to_rent_credit(
     source: &AccountInfo<'_>,
     credit: &AccountInfo<'_>,
 ) -> Result<(), ProgramError> {
@@ -2119,7 +2120,7 @@ fn close_to_rent_credit(
     Ok(())
 }
 
-fn clock(account: &AccountInfo<'_>) -> Result<Clock, ProgramError> {
+pub(crate) fn clock(account: &AccountInfo<'_>) -> Result<Clock, ProgramError> {
     require_clock(account)?;
     Clock::from_account_info(account).map_err(|_| AdapterError::AccountData.into())
 }
@@ -2142,7 +2143,7 @@ fn require_rent_clock(rent: &AccountInfo<'_>, clock: &AccountInfo<'_>) -> Result
     require_clock(clock)
 }
 
-fn require_system(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
+pub(crate) fn require_system(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
     if account.key != &system_program::ID
         || account.owner != &native_loader::ID
         || !account.executable
@@ -2152,21 +2153,21 @@ fn require_system(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
     Ok(())
 }
 
-fn require_rent(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
+pub(crate) fn require_rent(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
     if account.key != &sysvar::rent::ID || account.owner != &sysvar::ID || account.executable {
         return Err(AdapterError::AccountIdentity.into());
     }
     Ok(())
 }
 
-fn require_clock(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
+pub(crate) fn require_clock(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
     if account.key != &sysvar::clock::ID || account.owner != &sysvar::ID || account.executable {
         return Err(AdapterError::AccountIdentity.into());
     }
     Ok(())
 }
 
-fn account<'a, 'info>(
+pub(crate) fn account<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
     index: usize,
 ) -> Result<&'a AccountInfo<'info>, ProgramError> {

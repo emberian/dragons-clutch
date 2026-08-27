@@ -25,14 +25,16 @@ pub enum RelayAccountNameV1 {
     Record,
     /// The raw immutable `SourceMaterialV2` record.
     SourceMaterial,
-    /// The raw immutable `SourceSpecV1` record.
-    SourceSpec,
-    /// The raw immutable `ProviderReleaseV1` record.
-    ProviderRelease,
+    /// The finalized staging vacancy proving the material record is immutable.
+    SourceMaterialStagingVacancy,
     /// The raw immutable `RelayerKeySetV1` record.
     RelayerKeySet,
+    /// The finalized staging vacancy proving the key set is immutable.
+    RelayerKeySetStagingVacancy,
     /// The raw immutable `RelayedAdapterConfigV1` record.
     AdapterConfig,
+    /// The finalized staging vacancy proving the adapter config is immutable.
+    AdapterConfigStagingVacancy,
     /// The pre-existing RentCredit beneficiary.
     RentCredit,
     /// The Rent sysvar.
@@ -81,10 +83,23 @@ const MARKET_READ: RelayAccountRoleV1 = role(RelayAccountNameV1::Market, false, 
 const MARKET_WRITE: RelayAccountRoleV1 = role(RelayAccountNameV1::Market, false, true);
 const RECORD: RelayAccountRoleV1 = role(RelayAccountNameV1::Record, false, true);
 const MATERIAL: RelayAccountRoleV1 = role(RelayAccountNameV1::SourceMaterial, false, false);
-const SPEC: RelayAccountRoleV1 = role(RelayAccountNameV1::SourceSpec, false, false);
-const RELEASE: RelayAccountRoleV1 = role(RelayAccountNameV1::ProviderRelease, false, false);
+const MATERIAL_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::SourceMaterialStagingVacancy,
+    false,
+    false,
+);
 const KEY_SET: RelayAccountRoleV1 = role(RelayAccountNameV1::RelayerKeySet, false, false);
+const KEY_SET_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::RelayerKeySetStagingVacancy,
+    false,
+    false,
+);
 const CONFIG: RelayAccountRoleV1 = role(RelayAccountNameV1::AdapterConfig, false, false);
+const CONFIG_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::AdapterConfigStagingVacancy,
+    false,
+    false,
+);
 const CREDIT_READ: RelayAccountRoleV1 = role(RelayAccountNameV1::RentCredit, false, false);
 const CREDIT_WRITE: RelayAccountRoleV1 = role(RelayAccountNameV1::RentCredit, false, true);
 const RENT: RelayAccountRoleV1 = role(RelayAccountNameV1::RentSysvar, false, false);
@@ -93,40 +108,53 @@ const INSTRUCTIONS: RelayAccountRoleV1 = role(RelayAccountNameV1::InstructionsSy
 const SYSTEM: RelayAccountRoleV1 = role(RelayAccountNameV1::SystemProgram, false, false);
 
 /// Exact record-creation and Market-registration frame.
-pub const CREATE_RECORD_FRAME_V1: [RelayAccountRoleV1; 11] = [
+///
+/// Every raw record rides with the finalized staging vacancy that proves it is
+/// immutable, which is the discipline `dclutch-sbf` already enforces for the
+/// Source material.  `ProviderReleaseV1` needs no slot: it is carried inline by
+/// the authenticated `SourceMaterialViewV1`.
+pub const CREATE_RECORD_FRAME_V1: [RelayAccountRoleV1; 13] = [
     WORKER,
     MARKET_WRITE,
     RECORD,
     MATERIAL,
-    SPEC,
-    RELEASE,
+    MATERIAL_STAGE,
     KEY_SET,
+    KEY_SET_STAGE,
     CONFIG,
+    CONFIG_STAGE,
     CREDIT_READ,
     RENT,
+    CLOCK,
     SYSTEM,
 ];
 
 /// Exact append frame; the Ed25519 precompile rides immediately before it.
-pub const APPEND_OBSERVATION_FRAME_V1: [RelayAccountRoleV1; 9] = [
+///
+/// The adapter configuration is deliberately absent.  An append needs the
+/// account set (which the record already persists) and the key set (to place
+/// the signer); the staleness join needs the *attested mainnet* clock, which is
+/// a decoded field of an attested account and is therefore a resolution-time
+/// question, not a fill-time one.
+pub const APPEND_OBSERVATION_FRAME_V1: [RelayAccountRoleV1; 8] = [
     WORKER,
     MARKET_READ,
     RECORD,
-    SPEC,
-    RELEASE,
     KEY_SET,
-    CONFIG,
+    KEY_SET_STAGE,
+    RENT,
     INSTRUCTIONS,
     CLOCK,
 ];
 
 /// Exact seal frame; one signer per transaction.
-pub const SEAL_RECORD_FRAME_V1: [RelayAccountRoleV1; 7] = [
+pub const SEAL_RECORD_FRAME_V1: [RelayAccountRoleV1; 8] = [
     WORKER,
     MARKET_READ,
     RECORD,
-    RELEASE,
     KEY_SET,
+    KEY_SET_STAGE,
+    RENT,
     INSTRUCTIONS,
     CLOCK,
 ];
@@ -204,15 +232,15 @@ pub fn validate_relay_frame_v1(
 mod tests {
     use super::*;
 
-    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 11] {
+    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 13] {
         let roles = relay_frame_roles_v1(kind);
         let mut built = [RelayAccountPrivilegeV1 {
             key: [0; 32],
             is_signer: false,
             is_writable: false,
-        }; 11];
+        }; 13];
         for (index, expected) in roles.iter().enumerate() {
-            let slot = built.get_mut(index).expect("within eleven");
+            let slot = built.get_mut(index).expect("within thirteen");
             let mut key = [0u8; 32];
             let first = key.get_mut(0).expect("first byte");
             *first = u8::try_from(index).expect("small") + 1;

@@ -1832,6 +1832,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-relay-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-source-contract",
+]
+
+[[package]]
 name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
@@ -1929,6 +1940,7 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
+ "dclutch-relay-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-resolution-codec",

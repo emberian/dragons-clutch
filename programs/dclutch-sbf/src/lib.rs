@@ -43,6 +43,7 @@ mod provider;
 mod readiness;
 mod realm;
 mod records;
+mod relay;
 mod rent_credit;
 mod resolution;
 mod series;
@@ -72,6 +73,9 @@ pub fn process_instruction(
         == Some(&dclutch_source_contract::SOURCE_INSTRUCTION_MAGIC)
     {
         return source::dispatch(program_id, accounts, instruction_data);
+    }
+    if relay::is_routable_instruction(instruction_data) {
+        return relay::dispatch(program_id, accounts, instruction_data);
     }
     if series::is_routable_instruction(instruction_data) {
         return series::dispatch(program_id, accounts, instruction_data);

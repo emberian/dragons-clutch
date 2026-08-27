@@ -78,6 +78,11 @@ use dclutch_record_contract::{
     authenticate_finalized_raw_record_v1, prepare_abort_v1, prepare_append_page_v1,
     prepare_begin_v1, prepare_finalize_v1,
 };
+use dclutch_relay_contract::{
+    RELAYED_ADAPTER_CONFIG_BYTES, RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
+    RELAYER_KEY_SET_BYTES, RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
+    release::{RelayedAdapterConfigV1, RelayerKeySetV1},
+};
 use dclutch_rent_contract::{
     RENT_CREDIT_BYTES_V1, RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1,
     SourceCloseCreditPlanV1,
@@ -1023,6 +1028,21 @@ fn validate_found_schema(schema_release_id: SchemaReleaseId, content: &[u8]) -> 
             .map(|value| value.to_bytes().as_slice() == content)
             .unwrap_or(false);
     }
+    if schema == RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1 {
+        // The relayer key set is the provider *release identity* for the
+        // relayed family, so a record that is not byte-canonical would be a
+        // second, differently-shaped release under one content ID.
+        return RelayerKeySetV1::decode(content)
+            .ok()
+            .and_then(|value| value.to_bytes().ok())
+            .is_some_and(|bytes| bytes.as_slice() == content);
+    }
+    if schema == RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1 {
+        return RelayedAdapterConfigV1::decode(content)
+            .ok()
+            .and_then(|value| value.to_bytes().ok())
+            .is_some_and(|bytes| bytes.as_slice() == content);
+    }
     if schema == DEALER_CONFIG_SCHEMA_RELEASE_ID_V1 {
         return validate_dealer_config(content);
     }
@@ -1147,6 +1167,8 @@ fn is_supported_found_schema_release(schema_release_id: SchemaReleaseId) -> bool
             | SERIES_DERIVED_SCHEMA_RELEASE_ID_V1
             | SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1
             | DEALER_CONFIG_SCHEMA_RELEASE_ID_V1
+            | RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1
+            | RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1
     )
 }
 
@@ -1181,6 +1203,8 @@ fn is_admissible_found_schema_length(
         SERIES_DERIVED_SCHEMA_RELEASE_ID_V1 => length == DERIVED_OCCURRENCE_BYTES_V1,
         SERIES_CAPITALIZATION_SCHEMA_RELEASE_ID_V1 => length == OCCURRENCE_CAPITALIZATION_BYTES_V1,
         DEALER_CONFIG_SCHEMA_RELEASE_ID_V1 => dealer_config_length_is_admissible(length),
+        RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1 => length == RELAYER_KEY_SET_BYTES,
+        RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1 => length == RELAYED_ADAPTER_CONFIG_BYTES,
         value if value == GENERAL_CONFIG_SCHEMA_ID_V1.to_bytes() => length == GENERAL_CONFIG_BYTES,
         _ => false,
     }

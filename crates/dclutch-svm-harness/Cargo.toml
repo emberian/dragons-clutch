@@ -30,6 +30,7 @@ dclutch-realm-contract = { path = "../dclutch-realm-contract" }
 dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
+dclutch-relay-contract = { path = "../dclutch-relay-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
