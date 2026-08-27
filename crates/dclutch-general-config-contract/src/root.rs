@@ -25,6 +25,65 @@ pub const GENERAL_ROOT_BYTES_V2: usize = crate::generated::GENERAL_ROOT_BYTES_V2
 /// adapter's account-data offset is `CAPABILITY_ROOT_HEADER_BYTES_V1` plus this
 /// value.
 pub const GENERAL_ROOT_LIFECYCLE_OFFSET_V2: usize = crate::generated::ROOT_LIFECYCLE_OFFSET;
+
+/// Creation-time tail coordinates for a data-defined activation artifact.
+///
+/// The family-neutral activation seam composes a new capability root's family
+/// tail out of an EffectProgram's projected request buffer, one eight-byte
+/// scalar or one thirty-two-byte identity at a time. It has no family decoder
+/// and must not acquire one, so the offsets and constant words that spell an
+/// initial [`GeneralRootV2`] are published here, at the type that owns the
+/// layout, rather than restated in the artifact author.
+///
+/// These are not a second authority.
+/// [`general_root_creation_tail_v2`] composes them and is required to be
+/// byte-identical to [`GeneralRootV2::active`], so a layout change that missed
+/// them fails here rather than in a deployed artifact.
+pub const GENERAL_ROOT_MAGIC_WORD_V2: u64 =
+    u64::from_le_bytes(crate::generated::GENERAL_ROOT_MAGIC_V2);
+/// Tail offset of [`GENERAL_ROOT_MAGIC_WORD_V2`].
+pub const GENERAL_ROOT_MAGIC_OFFSET_V2: usize = 0;
+/// The eight-byte word at [`GENERAL_ROOT_HEADER_WORD_OFFSET_V2`] of a live root.
+///
+/// It spans the ABI version, the [`GeneralLifecycleV2::Active`] discriminant and
+/// the five reserved bytes the decoder requires to be zero, which is exactly one
+/// aligned scalar write.
+pub const GENERAL_ROOT_ACTIVE_HEADER_WORD_V2: u64 = (crate::generated::ABI_VERSION_V2 as u64)
+    | ((GeneralLifecycleV2::Active as u64) << ((GENERAL_ROOT_LIFECYCLE_OFFSET_V2 - 8) * 8));
+/// Tail offset of [`GENERAL_ROOT_ACTIVE_HEADER_WORD_V2`].
+pub const GENERAL_ROOT_HEADER_WORD_OFFSET_V2: usize = crate::generated::ROOT_VERSION_OFFSET;
+/// Tail offset of the Market identity.
+pub const GENERAL_ROOT_MARKET_OFFSET_V2: usize = crate::generated::ROOT_MARKET_OFFSET;
+/// Tail offset of the config content identity.
+pub const GENERAL_ROOT_CONFIG_ID_OFFSET_V2: usize = crate::generated::ROOT_CONFIG_ID_OFFSET;
+/// Tail offset of the Market generation.
+pub const GENERAL_ROOT_GENERATION_OFFSET_V2: usize = crate::generated::ROOT_GENERATION_OFFSET;
+/// Tail offset of the root revision.
+pub const GENERAL_ROOT_REVISION_OFFSET_V2: usize = crate::generated::ROOT_REVISION_OFFSET;
+/// Revision [`GeneralRootV2::active`] starts at.
+pub const GENERAL_ROOT_INITIAL_REVISION_V2: u64 = 1;
+
+const _: () = {
+    // The header word is one aligned scalar only if the version, lifecycle and
+    // reserved bytes occupy exactly `[8, 16)` of the tail.
+    assert!(GENERAL_ROOT_HEADER_WORD_OFFSET_V2 == 8);
+    assert!(GENERAL_ROOT_LIFECYCLE_OFFSET_V2 == 10);
+    assert!(crate::generated::ROOT_RESERVED_HEADER_OFFSET == 11);
+    assert!(GENERAL_ROOT_MARKET_OFFSET_V2 == 16);
+};
+
+/// Exact creation-time tail bytes an activation artifact must reproduce.
+///
+/// This is the oracle for a data-defined activation: whatever an artifact
+/// projects into the root's family tail has to equal this, or the capability it
+/// activates is one no General action can authenticate.
+pub fn general_root_creation_tail_v2(
+    market: [u8; 32],
+    config_id: [u8; 32],
+    generation: u64,
+) -> RootResult<[u8; GENERAL_ROOT_BYTES_V2]> {
+    Ok(GeneralRootV2::active(market, config_id, generation)?.to_bytes())
+}
 /// Domain preimage for the General capability-kind identity.
 pub const GENERAL_CAPABILITY_KIND_PREIMAGE_V1: &[u8] = b"dclutch/general/capability-kind/v1";
 /// SHA-256 of [`GENERAL_CAPABILITY_KIND_PREIMAGE_V1`].
@@ -775,6 +834,62 @@ mod tests {
     fn root() -> GeneralRootV2 {
         GeneralRootV2::active(id(0x11), id(0x22), 7)
             .unwrap_or_else(|error| panic!("root fixture: {error:?}"))
+    }
+
+    /// The published creation coordinates are a projection, not a second authority.
+    ///
+    /// An activation artifact spells a new root out of `GENERAL_ROOT_*_OFFSET_V2`
+    /// and the two constant words, one scalar or identity write at a time. This
+    /// composes exactly that way and requires the result to be
+    /// `GeneralRootV2::active` byte for byte, so a layout move that missed the
+    /// published coordinates fails here rather than in a deployed artifact.
+    #[test]
+    fn the_published_creation_coordinates_compose_an_active_root() {
+        let (market, config_id, generation) = (id(0x11), id(0x22), 7_u64);
+        let mut composed = [0_u8; GENERAL_ROOT_BYTES_V2];
+        for (offset, word) in [
+            (GENERAL_ROOT_MAGIC_OFFSET_V2, GENERAL_ROOT_MAGIC_WORD_V2),
+            (
+                GENERAL_ROOT_HEADER_WORD_OFFSET_V2,
+                GENERAL_ROOT_ACTIVE_HEADER_WORD_V2,
+            ),
+            (GENERAL_ROOT_GENERATION_OFFSET_V2, generation),
+            (
+                GENERAL_ROOT_REVISION_OFFSET_V2,
+                GENERAL_ROOT_INITIAL_REVISION_V2,
+            ),
+        ] {
+            composed[offset..offset + 8].copy_from_slice(&word.to_le_bytes());
+        }
+        for (offset, value) in [
+            (GENERAL_ROOT_MARKET_OFFSET_V2, market),
+            (GENERAL_ROOT_CONFIG_ID_OFFSET_V2, config_id),
+        ] {
+            composed[offset..offset + 32].copy_from_slice(&value);
+        }
+        let expected = general_root_creation_tail_v2(market, config_id, generation)
+            .unwrap_or_else(|error| panic!("creation tail: {error:?}"));
+        assert_eq!(composed, expected);
+        assert_eq!(
+            GeneralRootV2::decode(&composed).unwrap_or_else(|error| panic!("decode: {error:?}")),
+            GeneralRootV2::active(market, config_id, generation)
+                .unwrap_or_else(|error| panic!("active: {error:?}"))
+        );
+    }
+
+    /// A tail written without the header word is not a root, at its own magic.
+    #[test]
+    fn a_tail_missing_either_constant_word_refuses() {
+        let (market, config_id, generation) = (id(0x11), id(0x22), 7_u64);
+        for skipped in [
+            GENERAL_ROOT_MAGIC_OFFSET_V2,
+            GENERAL_ROOT_HEADER_WORD_OFFSET_V2,
+        ] {
+            let mut composed = general_root_creation_tail_v2(market, config_id, generation)
+                .unwrap_or_else(|error| panic!("creation tail: {error:?}"));
+            composed[skipped..skipped + 8].fill(0);
+            assert!(GeneralRootV2::decode(&composed).is_err());
+        }
     }
 
     fn content(low: u8) -> ContentId {
