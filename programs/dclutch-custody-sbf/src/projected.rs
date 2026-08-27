@@ -7,10 +7,11 @@ use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
     CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
     PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1,
-    ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
-    ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1, normal_replay_from_realization_v1,
+    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
+    ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
+    ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1,
+    ProjectedCustodyStateV1, normal_replay_from_realization_v1,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, ProjectFoundReceiptV1, ProjectFoundRequestV1, Request, STATE_BYTES,
@@ -26,7 +27,7 @@ use dclutch_token_svm::{
 use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
@@ -95,6 +96,19 @@ const ABORT_AUTHORITY: usize = 8;
 const ABORT_TOKEN_PROGRAM: usize = 9;
 const ABORT_MARKET: usize = 10;
 
+const OPEN_SOURCE_ACCOUNTS: usize = PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1;
+const OPEN_SOURCE_VAULT: usize = 7;
+const OPEN_SOURCE_REPLAY: usize = 8;
+const OPEN_SOURCE_AUTHORITY: usize = 9;
+const OPEN_SOURCE_MINT: usize = 10;
+const OPEN_SOURCE_TOKEN_PROGRAM: usize = 11;
+const OPEN_SOURCE_FUNDER: usize = 12;
+const OPEN_SOURCE_FUNDER_OWNER: usize = 13;
+const OPEN_SOURCE_PAYER: usize = 14;
+const OPEN_SOURCE_RENT: usize = 15;
+const OPEN_SOURCE_SYSTEM: usize = 16;
+const OPEN_SOURCE_MARKET: usize = 17;
+
 const LOCK_CLOSE_ACCOUNTS: usize = PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1;
 const LOCK_CLOSE_HOARD: usize = 7;
 const LOCK_CLOSE_SOURCE: usize = 8;
@@ -136,6 +150,9 @@ pub(crate) fn process(
         }
         ProjectedCustodyOperationV1::LockHoardAndCloseSource => {
             lock_hoard_and_close_source(program_id, accounts, request, request_digest)
+        }
+        ProjectedCustodyOperationV1::OpenSourceCompartment => {
+            open_source_compartment(program_id, accounts, request, request_digest)
         }
     }
 }
@@ -954,6 +971,311 @@ fn abort_open_and_close(
     return_receipt(receipt)
 }
 
+/// Create and fund the normal source compartment a founding Lock consumes.
+///
+/// This is the only route in the program that writes a normal
+/// [`CustodyReplayV1`] without a live Core-owned Market, and it does not reach
+/// `authenticate_market` at all: it is admitted by the projected family's own
+/// membrane — the single-use Trading-derived caller PDA, the persisted
+/// `ProjectFound` projection, an open Hoard at the exact prior revision — plus
+/// [`require_vacant_market`], which is the *inverse* of `authenticate_market`
+/// rather than a relaxation of it. Normal Custody's live-Market requirement is
+/// untouched and still applies to every ordinary operation.
+///
+/// Funding provenance is closed by construction. Rent for both created accounts
+/// comes from `request.payer`, the same prepaid creation payer that funds the
+/// projected replay and the Hoard vault, and both accounts' lamports return to
+/// `request.rent_credit` when Lock closes them. The principal comes from a
+/// token account owned by `request.refund_owner`, who must sign — the same
+/// party `RefundAndClose` pays the principal back to. Whoever may reclaim the
+/// principal is exactly who must supply it, so no new identity coordinate
+/// enters and no Hoard, fee, liveness, or reserve compartment can be the source.
+#[inline(never)]
+fn open_source_compartment(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: ProjectedCustodyRequestV1,
+    request_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let vault = account(accounts, OPEN_SOURCE_VAULT)?;
+    let replay = account(accounts, OPEN_SOURCE_REPLAY)?;
+    let authority = account(accounts, OPEN_SOURCE_AUTHORITY)?;
+    let mint = account(accounts, OPEN_SOURCE_MINT)?;
+    let token_program = account(accounts, OPEN_SOURCE_TOKEN_PROGRAM)?;
+    let funder = account(accounts, OPEN_SOURCE_FUNDER)?;
+    let funder_owner = account(accounts, OPEN_SOURCE_FUNDER_OWNER)?;
+    let payer = account(accounts, OPEN_SOURCE_PAYER)?;
+    let rent_account = account(accounts, OPEN_SOURCE_RENT)?;
+    let system = account(accounts, OPEN_SOURCE_SYSTEM)?;
+    require_vacant_market(account(accounts, OPEN_SOURCE_MARKET)?, request)?;
+    authenticate_source_creation_frame(
+        program_id,
+        vault,
+        replay,
+        authority,
+        mint,
+        token_program,
+        request,
+    )?;
+    if !funder.is_writable
+        || funder.owner != token_program.key
+        || funder.key == vault.key
+        || !funder_owner.is_signer
+        || funder_owner.is_writable
+        || funder_owner.executable
+        || funder_owner.key.to_bytes() != request.refund_owner
+        || !payer.is_signer
+        || !payer.is_writable
+        || payer.executable
+        || payer.key.to_bytes() != request.payer
+        || rent_account.key != &sysvar::rent::ID
+        || rent_account.is_writable
+        || rent_account.is_signer
+        || rent_account.executable
+        || system.key != &system_program::ID
+        || !system.executable
+        || system.is_writable
+        || system.is_signer
+    {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    let rent = Rent::from_account_info(rent_account).map_err(|_| CustodySbfError::Create)?;
+    if rent.minimum_balance(ACCOUNT_BYTES) != request.funding_source_vault_rent_lamports
+        || rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1)
+            != request.funding_source_state_rent_lamports
+    {
+        return Err(CustodySbfError::Create.into());
+    }
+
+    let vault_seeds = CustodyVaultSeedsV1::new(
+        request.market,
+        request.release_set,
+        request.funding_source_context,
+        request.funding_source_compartment,
+    );
+    let vault_bump = [Pubkey::find_program_address(&vault_seeds.as_slices(), program_id).1];
+    let [
+        vault_domain,
+        vault_market,
+        vault_release,
+        vault_context,
+        vault_compartment,
+    ] = vault_seeds.as_slices();
+    top_up_allocate_assign(
+        payer,
+        vault,
+        system,
+        request.funding_source_vault_rent_lamports,
+        ACCOUNT_BYTES,
+        token_program.key,
+        &[
+            vault_domain,
+            vault_market,
+            vault_release,
+            vault_context,
+            vault_compartment,
+            &vault_bump,
+        ],
+    )?;
+    let spec = initialize_account3(
+        request.token_program,
+        request.funding_source_vault,
+        request.mint,
+        authority.key.to_bytes(),
+    )
+    .map_err(|_| CustodySbfError::TokenState)?;
+    invoke(
+        &token_instruction(&spec),
+        &[vault.clone(), mint.clone(), token_program.clone()],
+    )
+    .map_err(|_| CustodySbfError::TokenCpi)?;
+
+    let funder_before = read_funder_amount(funder, request)?;
+    let decimals = {
+        let data = mint
+            .try_borrow_data()
+            .map_err(|_| CustodySbfError::TokenState)?;
+        collateral_profile(request)?
+            .check_mint(request.token_program, &data)
+            .map_err(|_| CustodySbfError::TokenState)?
+            .decimals
+    };
+    let source_before = read_vault_amount(vault, authority, request)?;
+    let spec = transfer_checked(
+        request.token_program,
+        funder.key.to_bytes(),
+        request.mint,
+        request.funding_source_vault,
+        funder_owner.key.to_bytes(),
+        request.amount,
+        decimals,
+    )
+    .map_err(|_| CustodySbfError::TokenState)?;
+    invoke(
+        &token_instruction(&spec),
+        &[
+            funder.clone(),
+            mint.clone(),
+            vault.clone(),
+            funder_owner.clone(),
+            token_program.clone(),
+        ],
+    )
+    .map_err(|_| CustodySbfError::TokenCpi)?;
+    let funder_after = read_funder_amount(funder, request)?;
+    let source_after = read_vault_amount(vault, authority, request)?;
+
+    let replay_bump = [Pubkey::find_program_address(
+        &[
+            CUSTODY_REPLAY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+            &request.funding_source_context,
+        ],
+        program_id,
+    )
+    .1];
+    top_up_allocate_assign(
+        payer,
+        replay,
+        system,
+        request.funding_source_state_rent_lamports,
+        CUSTODY_REPLAY_BYTES_V1,
+        program_id,
+        &[
+            CUSTODY_REPLAY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+            &request.funding_source_context,
+            &replay_bump,
+        ],
+    )?;
+
+    let commitment = hashv(&[
+        &request_digest,
+        &request.funding_source_vault,
+        &replay.key.to_bytes(),
+        &source_after.to_le_bytes(),
+    ])
+    .to_bytes();
+    let (next, source_replay) = read_state(account(accounts, STATE)?)?
+        .open_source_compartment(
+            request,
+            request_digest,
+            replay.key.to_bytes(),
+            funder_before,
+            funder_after,
+            source_before,
+            source_after,
+            commitment,
+            true,
+        )
+        .map_err(|_| CustodySbfError::Replay)?;
+    let replay_bytes = source_replay
+        .to_bytes()
+        .map_err(|_| CustodySbfError::Commit)?;
+    {
+        let mut data = replay
+            .try_borrow_mut_data()
+            .map_err(|_| CustodySbfError::Commit)?;
+        if data.len() != replay_bytes.len() {
+            return Err(CustodySbfError::Commit.into());
+        }
+        data.copy_from_slice(&replay_bytes);
+    }
+    commit_state(account(accounts, STATE)?, next)
+}
+
+/// Authenticate the two vacant source coordinates and their token frame.
+///
+/// The source vault and its replay must both be System-owned and empty: this
+/// operation creates them, so an existing compartment at either address is a
+/// replay and refuses here rather than being silently overwritten. The vault
+/// address, the replay address, and the transfer authority are all derived, so
+/// no coordinate is taken from the caller's word for it.
+#[inline(never)]
+fn authenticate_source_creation_frame(
+    program_id: &Pubkey,
+    vault: &AccountInfo<'_>,
+    replay: &AccountInfo<'_>,
+    authority: &AccountInfo<'_>,
+    mint: &AccountInfo<'_>,
+    token_program: &AccountInfo<'_>,
+    request: ProjectedCustodyRequestV1,
+) -> Result<(), ProgramError> {
+    let vault_seeds = CustodyVaultSeedsV1::new(
+        request.market,
+        request.release_set,
+        request.funding_source_context,
+        request.funding_source_compartment,
+    );
+    let authority_expected = Pubkey::find_program_address(
+        &[
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+        ],
+        program_id,
+    )
+    .0;
+    let replay_expected = Pubkey::find_program_address(
+        &[
+            CUSTODY_REPLAY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+            &request.funding_source_context,
+        ],
+        program_id,
+    )
+    .0;
+    if Pubkey::find_program_address(&vault_seeds.as_slices(), program_id).0 != *vault.key
+        || vault.key.to_bytes() != request.funding_source_vault
+        || !vault.is_writable
+        || vault.is_signer
+        || vault.owner != &system_program::ID
+        || vault.data_len() != 0
+        || replay.key != &replay_expected
+        || *replay.key == account_key_for_projection(program_id, request)
+        || replay.key == vault.key
+        || !replay.is_writable
+        || replay.is_signer
+        || replay.owner != &system_program::ID
+        || replay.data_len() != 0
+    {
+        return Err(CustodySbfError::Replay.into());
+    }
+    if authority.key != &authority_expected
+        || authority.is_signer
+        || authority.is_writable
+        || authority.executable
+        || mint.key.to_bytes() != request.mint
+        || mint.owner != token_program.key
+        || token_program.key.to_bytes() != request.token_program
+        || !token_program.executable
+        || collateral_profile(request)?.program_id() != request.token_program
+    {
+        return Err(CustodySbfError::TokenState.into());
+    }
+    Ok(())
+}
+
+/// Read the exact principal balance of the externally owned funding account.
+fn read_funder_amount(
+    funder: &AccountInfo<'_>,
+    request: ProjectedCustodyRequestV1,
+) -> Result<u64, ProgramError> {
+    let data = funder
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::TokenState)?;
+    let token = collateral_profile(request)?
+        .check_transfer_account(request.token_program, &data)
+        .map_err(|_| CustodySbfError::TokenState)?;
+    if token.mint != request.mint || token.owner != request.refund_owner {
+        return Err(CustodySbfError::TokenState.into());
+    }
+    Ok(token.amount)
+}
+
 #[inline(never)]
 fn lock_hoard_and_close_source(
     program_id: &Pubkey,
@@ -1498,6 +1820,7 @@ fn require_count(
         ProjectedCustodyOperationV1::RealizeAndClose => REALIZE_ACCOUNTS,
         ProjectedCustodyOperationV1::AbortOpenAndClose => ABORT_ACCOUNTS,
         ProjectedCustodyOperationV1::LockHoardAndCloseSource => LOCK_CLOSE_ACCOUNTS,
+        ProjectedCustodyOperationV1::OpenSourceCompartment => OPEN_SOURCE_ACCOUNTS,
     };
     if accounts.len() != expected {
         return Err(CustodySbfError::AccountFrame.into());
@@ -1527,5 +1850,7 @@ mod tests {
         assert_eq!(REALIZE_ACCOUNTS, 12);
         assert_eq!(ABORT_ACCOUNTS, 11);
         assert_eq!(LOCK_CLOSE_ACCOUNTS, 14);
+        assert_eq!(OPEN_SOURCE_ACCOUNTS, 18);
+        assert_eq!(OPEN_SOURCE_MARKET, OPEN_SOURCE_ACCOUNTS - 1);
     }
 }

@@ -1147,8 +1147,11 @@ mod tests {
             Err(TradingSbfError::Content.into())
         );
         assert_ne!(
-            ProjectedCustodyCallerSeedsV1::new(rerooted, hash(&rerooted.encode().expect("bytes")).to_bytes())
-                .as_slices(),
+            ProjectedCustodyCallerSeedsV1::new(
+                rerooted,
+                hash(&rerooted.encode().expect("bytes")).to_bytes()
+            )
+            .as_slices(),
             ProjectedCustodyCallerSeedsV1::new(lock, hash(&lock_raw).to_bytes()).as_slices()
         );
 

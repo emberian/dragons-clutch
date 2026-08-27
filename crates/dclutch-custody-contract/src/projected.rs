@@ -24,6 +24,8 @@ pub const PROJECTED_CUSTODY_RECEIPT_BYTES_V1: usize = 320;
 pub const PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1: usize = 42;
 /// Exact projected-Custody Hoard-vault-creation physical frame width.
 pub const PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1: usize = 15;
+/// Exact projected-Custody source-compartment-creation physical frame width.
+pub const PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1: usize = 18;
 /// Exact projected-Custody lock-and-source-close physical frame width.
 pub const PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1: usize = 14;
 /// Exact projected-Custody realization physical frame width.
@@ -111,6 +113,8 @@ pub enum ProjectedCustodyOperationV1 {
     AbortOpenAndClose = 5,
     /// Credit the Hoard and atomically close the emptied source Vault/replay.
     LockHoardAndCloseSource = 6,
+    /// Create and fund the normal source compartment a founding Lock consumes.
+    OpenSourceCompartment = 7,
 }
 
 impl ProjectedCustodyOperationV1 {
@@ -123,6 +127,7 @@ impl ProjectedCustodyOperationV1 {
             4 => Ok(Self::RealizeAndClose),
             5 => Ok(Self::AbortOpenAndClose),
             6 => Ok(Self::LockHoardAndCloseSource),
+            7 => Ok(Self::OpenSourceCompartment),
             _ => Err(ProjectedCustodyError::NonCanonical),
         }
     }
@@ -138,6 +143,19 @@ pub enum ProjectedCustodyPhaseV1 {
     HoardOpen = 2,
     /// Exact principal has been credited into the projected Hoard.
     HoardLocked = 3,
+    /// The normal source compartment exists and holds the exact principal.
+    ///
+    /// Reached only through [`ProjectedCustodyOperationV1::OpenSourceCompartment`],
+    /// which is the sole route that creates a normal `CustodyReplayV1` against a
+    /// vacant Market. A family that already holds its principal in some other
+    /// custodied compartment — Series escrow, for one — never enters this phase
+    /// and reaches Lock straight from [`Self::HoardOpen`], exactly as before.
+    ///
+    /// No terminal accepts this phase. That is deliberate: `AbortOpenAndClose`
+    /// admits only [`Self::HoardOpen`], so once real principal is under this
+    /// authority the authority over it cannot be destroyed, and the principal
+    /// can only move forward through Lock.
+    SourceFunded = 4,
 }
 
 /// Canonical projected-state PDA seeds under Custody.
@@ -281,6 +299,17 @@ pub struct ProjectedCustodyRequestV1 {
 pub const INITIALIZE_RESULTING_REVISION_V1: u64 = 1;
 /// Replay revision a projected-Custody `OpenHoard` always produces.
 pub const OPEN_HOARD_RESULTING_REVISION_V1: u64 = 2;
+/// Replay revision a projected-Custody `OpenSourceCompartment` always produces.
+pub const OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1: u64 = 3;
+/// The sole `next_revision` a projected-created normal source replay may carry.
+///
+/// `OpenSourceCompartment` mints the source replay whole — the normal-custody
+/// `InitializeReplay` and `OpenVault` pair can never run against a vacant
+/// Market — so its cursor is not a caller coordinate. One is the same value
+/// [`normal_replay_from_realization_v1`] mints for the other projected-family
+/// replay it produces, and pinning it here removes the only field of the source
+/// compartment a founder could otherwise choose.
+pub const SOURCE_COMPARTMENT_REPLAY_REVISION_V1: u64 = 1;
 
 /// The exact ordered prestate requests one terminal Lock request determines.
 ///
@@ -293,6 +322,8 @@ pub struct ProjectedCustodyFoundingPrestateV1 {
     pub initialize: ProjectedCustodyRequestV1,
     /// Creates the projected Hoard vault at revision `1 -> 2`.
     pub open_hoard: ProjectedCustodyRequestV1,
+    /// Creates and funds the normal source compartment at revision `2 -> 3`.
+    pub open_source: ProjectedCustodyRequestV1,
 }
 
 impl ProjectedCustodyRequestV1 {
@@ -345,7 +376,13 @@ impl ProjectedCustodyRequestV1 {
                 | ProjectedCustodyOperationV1::RefundAndClose
                 | ProjectedCustodyOperationV1::RealizeAndClose
                 | ProjectedCustodyOperationV1::LockHoardAndCloseSource
+                | ProjectedCustodyOperationV1::OpenSourceCompartment
         );
+        if self.operation == ProjectedCustodyOperationV1::OpenSourceCompartment
+            && self.funding_source_replay_revision != SOURCE_COMPARTMENT_REPLAY_REVISION_V1
+        {
+            return Err(ProjectedCustodyError::Revision);
+        }
         if amount_active != (self.amount > 0)
             || (self.operation == ProjectedCustodyOperationV1::Initialize
                 && (self.expected_revision != 0 || self.resulting_revision != 1))
@@ -357,11 +394,18 @@ impl ProjectedCustodyRequestV1 {
 
     /// Derive the exact ordered prestate requests this terminal request needs.
     ///
-    /// A projected-Custody replay reaches `HoardOpen` — the sole prestate the
-    /// atomic founding Lock stage accepts — by exactly two prior transitions:
-    /// `Initialize` at revision `0 -> 1`, which creates the replay, and
-    /// `OpenHoard` at `1 -> 2`, which creates the Hoard vault. There is no
-    /// other route, so this terminal request fully determines both.
+    /// A generic founding's projected-Custody replay reaches `SourceFunded` —
+    /// the prestate its Lock stage consumes — by exactly three prior
+    /// transitions: `Initialize` at revision `0 -> 1`, which creates the
+    /// replay; `OpenHoard` at `1 -> 2`, which creates the empty Hoard vault;
+    /// and `OpenSourceCompartment` at `2 -> 3`, which creates and funds the
+    /// normal source compartment the Lock consumes and closes. There is no
+    /// other route to a source compartment against a vacant Market, so this
+    /// terminal request fully determines all three.
+    ///
+    /// A family that already holds custodied principal reaches Lock from
+    /// `HoardOpen` at revision two instead and never calls this; Series is the
+    /// live example. This constructor is the *generic* ladder only.
     ///
     /// [`ProjectedCustodyStateV1::authenticate_next`] admits a successor only
     /// when all thirty of its non-transition fields match the persisted
@@ -379,11 +423,13 @@ impl ProjectedCustodyRequestV1 {
         if self.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource {
             return Err(ProjectedCustodyError::NonCanonical);
         }
-        // `Initialize` is pinned to `0 -> 1` by `validate`, and `OpenHoard` is
-        // the only transition between `Initialized` and `HoardOpen`, so a Lock
-        // that does not expect revision two cannot be reached from a fresh
-        // replay and must refuse here rather than at the third CPI.
-        if self.expected_revision != OPEN_HOARD_RESULTING_REVISION_V1 {
+        // `Initialize` is pinned to `0 -> 1` by `validate`, `OpenHoard` is the
+        // only transition between `Initialized` and `HoardOpen`, and
+        // `OpenSourceCompartment` is the only transition between `HoardOpen`
+        // and `SourceFunded`, so a Lock that does not expect revision three
+        // cannot be reached from a fresh replay and must refuse here rather
+        // than at the fourth CPI.
+        if self.expected_revision != OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1 {
             return Err(ProjectedCustodyError::Revision);
         }
         let initialize = Self {
@@ -400,11 +446,23 @@ impl ProjectedCustodyRequestV1 {
             amount: 0,
             ..self
         };
+        // The source compartment is funded with exactly the principal the Lock
+        // will move into the Hoard. It is the one prestate that carries the
+        // terminal request's `amount` unchanged, because funding it with any
+        // other quantity is refused at Lock and would strand the difference.
+        let open_source = Self {
+            operation: ProjectedCustodyOperationV1::OpenSourceCompartment,
+            expected_revision: OPEN_HOARD_RESULTING_REVISION_V1,
+            resulting_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            ..self
+        };
         initialize.validate()?;
         open_hoard.validate()?;
+        open_source.validate()?;
         Ok(ProjectedCustodyFoundingPrestateV1 {
             initialize,
             open_hoard,
+            open_source,
         })
     }
 
@@ -523,7 +581,8 @@ pub struct ProjectedCustodyStateV1 {
     pub request: ProjectedCustodyRequestV1,
     /// Next required request revision.
     pub next_revision: u64,
-    /// Locked principal; zero until Lock.
+    /// Principal held under this authority; zero until the source compartment
+    /// is funded, then unchanged as Lock moves it into the Hoard.
     pub locked_amount: u64,
     /// Digest of the last exact accepted request.
     pub last_request_digest: [u8; 32],
@@ -587,19 +646,29 @@ impl ProjectedCustodyStateV1 {
             1 => ProjectedCustodyPhaseV1::Initialized,
             2 => ProjectedCustodyPhaseV1::HoardOpen,
             3 => ProjectedCustodyPhaseV1::HoardLocked,
+            4 => ProjectedCustodyPhaseV1::SourceFunded,
             _ => return Err(ProjectedCustodyError::Phase),
         };
         let next_revision = read_u64(input, 720)?;
         let locked_amount = read_u64(input, 728)?;
-        if next_revision == 0
-            || (phase == ProjectedCustodyPhaseV1::HoardLocked) != (locked_amount > 0)
-        {
+        // `custodied_amount` is the principal this authority holds, wherever it
+        // currently sits: in the funded source compartment before Lock, in the
+        // Hoard after it. Both phases must carry a nonzero one and no other
+        // phase may.
+        let custodied_amount = matches!(
+            phase,
+            ProjectedCustodyPhaseV1::HoardLocked | ProjectedCustodyPhaseV1::SourceFunded
+        );
+        if next_revision == 0 || custodied_amount != (locked_amount > 0) {
             return Err(ProjectedCustodyError::Phase);
         }
         let operation = match phase {
             ProjectedCustodyPhaseV1::Initialized => ProjectedCustodyOperationV1::Initialize,
             ProjectedCustodyPhaseV1::HoardOpen => ProjectedCustodyOperationV1::OpenHoard,
             ProjectedCustodyPhaseV1::HoardLocked => ProjectedCustodyOperationV1::LockHoard,
+            ProjectedCustodyPhaseV1::SourceFunded => {
+                ProjectedCustodyOperationV1::OpenSourceCompartment
+            }
         };
         let immutable = ProjectedCustodyRequestV1 {
             operation,
@@ -631,11 +700,7 @@ impl ProjectedCustodyStateV1 {
             expiry_slot: read_u64(input, 712)?,
             expected_revision: next_revision.saturating_sub(1),
             resulting_revision: next_revision,
-            amount: if phase == ProjectedCustodyPhaseV1::HoardLocked {
-                locked_amount
-            } else {
-                0
-            },
+            amount: if custodied_amount { locked_amount } else { 0 },
             state_rent_lamports: read_u64(input, 736)?,
             vault_rent_lamports: read_u64(input, 744)?,
             funding_source_replay_revision: read_u64(input, 752)?,
@@ -719,6 +784,68 @@ impl ProjectedCustodyStateV1 {
         Ok(self)
     }
 
+    /// Create and fund the normal source compartment a founding Lock consumes.
+    ///
+    /// This is the sole authority in the protocol that mints a normal
+    /// [`CustodyReplayV1`] against a Market account that does not exist. It is
+    /// not a relaxation of normal custody's live-Market membrane: normal
+    /// Custody's `authenticate_market` is untouched, still requires a
+    /// Core-owned `STATE_BYTES` Market for every ordinary operation, and is not
+    /// on this path at all. What admits this transition instead is the
+    /// projected family's own prestate — an authenticated `ProjectFound`
+    /// projection persisted at `Initialize`, an open Hoard, a single-use
+    /// Trading-derived caller signature, and `market_vacant` asserted
+    /// explicitly, exactly as [`Self::open_hoard`] already asserts it.
+    ///
+    /// The replay this returns is the kernel's, not the adapter's: every field
+    /// is a function of the authenticated request, so the caller cannot choose
+    /// what the Lock stage will later read back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_source_compartment(
+        mut self,
+        request: ProjectedCustodyRequestV1,
+        request_digest: [u8; 32],
+        source_replay_key: [u8; 32],
+        funder_before: u64,
+        funder_after: u64,
+        source_before: u64,
+        source_after: u64,
+        poststate_commitment: [u8; 32],
+        market_vacant: bool,
+    ) -> Result<(Self, CustodyReplayV1), ProjectedCustodyError> {
+        self.authenticate_next(&request, request_digest)?;
+        nonzero(source_replay_key)?;
+        nonzero(poststate_commitment)?;
+        if self.phase != ProjectedCustodyPhaseV1::HoardOpen
+            || request.operation != ProjectedCustodyOperationV1::OpenSourceCompartment
+            || self.locked_amount != 0
+            || !market_vacant
+            || source_before != 0
+            || source_after != request.amount
+            || funder_before.checked_sub(request.amount) != Some(funder_after)
+        {
+            return Err(ProjectedCustodyError::Balance);
+        }
+        let replay = CustodyReplayV1 {
+            caller_role: ExecutionRoleV1::Trading,
+            release_set: request.release_set,
+            market: request.market,
+            realm: request.realm,
+            context: request.funding_source_context,
+            caller_program: request.caller_program,
+            rent_refund: request.rent_credit,
+            open_vault_count: 1,
+            next_revision: request.funding_source_replay_revision,
+            generation: request.generation,
+            last_request_digest: request_digest,
+            last_poststate_commitment: poststate_commitment,
+        };
+        self.phase = ProjectedCustodyPhaseV1::SourceFunded;
+        self.locked_amount = request.amount;
+        self.advance(request, request_digest);
+        Ok((self, replay))
+    }
+
     /// Credit exact principal into the projected Hoard before Found.
     pub fn lock_hoard(
         mut self,
@@ -763,7 +890,19 @@ impl ProjectedCustodyStateV1 {
     ) -> Result<(Self, ProjectedCustodyLockReceiptV1), ProjectedCustodyError> {
         self.authenticate_next(&request, request_digest)?;
         nonzero(source_replay_key)?;
-        if self.phase != ProjectedCustodyPhaseV1::HoardOpen
+        // Two prestates reach this terminal, and they are disjoint. A family
+        // whose principal was already custodied elsewhere arrives at
+        // `HoardOpen` holding nothing under this authority; a generic founding
+        // arrives at `SourceFunded` holding exactly the principal its own
+        // `OpenSourceCompartment` put in the source vault. `SourceFunded` is a
+        // value no previously reachable state can hold, so this admits nothing
+        // that was refused before.
+        let source_prepared = match self.phase {
+            ProjectedCustodyPhaseV1::HoardOpen => self.locked_amount == 0,
+            ProjectedCustodyPhaseV1::SourceFunded => self.locked_amount == request.amount,
+            _ => false,
+        };
+        if !source_prepared
             || request.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource
             || source_before != request.amount
             || source_after != 0
@@ -1441,6 +1580,23 @@ mod tests {
         }
     }
 
+    /// A request shaped for the *generic* founding ladder.
+    ///
+    /// The only difference from [`request`] is the source replay cursor:
+    /// `OpenSourceCompartment` mints the source replay itself and therefore
+    /// pins its cursor, while a family whose source already exists carries
+    /// whatever cursor that source actually reached.
+    fn generic_request(
+        operation: ProjectedCustodyOperationV1,
+        revision: u64,
+        amount: u64,
+    ) -> ProjectedCustodyRequestV1 {
+        ProjectedCustodyRequestV1 {
+            funding_source_replay_revision: SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
+            ..request(operation, revision, amount)
+        }
+    }
+
     fn source_replay() -> CustodyReplayV1 {
         CustodyReplayV1 {
             caller_role: ExecutionRoleV1::Trading,
@@ -1810,9 +1966,9 @@ mod tests {
 
     #[test]
     fn founding_prestate_varies_only_the_four_transition_fields() {
-        let lock = request(
+        let lock = generic_request(
             ProjectedCustodyOperationV1::LockHoardAndCloseSource,
-            OPEN_HOARD_RESULTING_REVISION_V1,
+            OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
             500,
         );
         let prestate = lock.founding_prestate_v1().expect("prestate");
@@ -1831,23 +1987,40 @@ mod tests {
         assert_eq!(prestate.open_hoard.expected_revision, 1);
         assert_eq!(prestate.open_hoard.resulting_revision, 2);
         assert_eq!(prestate.open_hoard.amount, 0);
+        assert_eq!(
+            prestate.open_source.operation,
+            ProjectedCustodyOperationV1::OpenSourceCompartment
+        );
+        assert_eq!(prestate.open_source.expected_revision, 2);
+        assert_eq!(prestate.open_source.resulting_revision, 3);
+        // The source compartment is funded with exactly the terminal principal.
+        assert_eq!(prestate.open_source.amount, lock.amount);
 
         // Every other field is the terminal request's, byte for byte. Rebuild
         // each prestate from the terminal request by varying only the four
         // transition fields: equality here is the whole family-neutrality
         // claim, and it fails the moment a coordinate is silently reshaped.
-        for (derived, operation, expected, resulting) in [
+        for (derived, operation, expected, resulting, amount) in [
             (
                 prestate.initialize,
                 ProjectedCustodyOperationV1::Initialize,
                 0,
                 1,
+                0,
             ),
             (
                 prestate.open_hoard,
                 ProjectedCustodyOperationV1::OpenHoard,
                 1,
                 2,
+                0,
+            ),
+            (
+                prestate.open_source,
+                ProjectedCustodyOperationV1::OpenSourceCompartment,
+                2,
+                3,
+                lock.amount,
             ),
         ] {
             assert_eq!(
@@ -1856,7 +2029,7 @@ mod tests {
                     operation,
                     expected_revision: expected,
                     resulting_revision: resulting,
-                    amount: 0,
+                    amount,
                     ..lock
                 }
             );
@@ -1878,7 +2051,238 @@ mod tests {
         );
         state.request = prestate.open_hoard;
         state.next_revision = OPEN_HOARD_RESULTING_REVISION_V1;
-        assert_eq!(state.authenticate_next(&lock, id(42)), Ok(()));
+        state.phase = ProjectedCustodyPhaseV1::HoardOpen;
+        assert_eq!(
+            state.authenticate_next(&prestate.open_source, id(42)),
+            Ok(())
+        );
+        // The terminal Lock is NOT admissible before the source exists: the
+        // ladder is ordered, not a menu.
+        assert_eq!(
+            state.authenticate_next(&lock, id(43)),
+            Err(ProjectedCustodyError::Revision)
+        );
+        let (state, replay) = state
+            .open_source_compartment(
+                prestate.open_source,
+                id(42),
+                id(50),
+                900,
+                400,
+                0,
+                500,
+                id(51),
+                true,
+            )
+            .expect("open source compartment");
+        assert_eq!(state.phase, ProjectedCustodyPhaseV1::SourceFunded);
+        assert_eq!(state.locked_amount, 500);
+        assert_eq!(state.next_revision, 3);
+        assert_eq!(replay.next_revision, SOURCE_COMPARTMENT_REPLAY_REVISION_V1);
+        assert_eq!(replay.open_vault_count, 1);
+        assert_eq!(replay.caller_role, ExecutionRoleV1::Trading);
+        assert_eq!(replay.context, lock.funding_source_context);
+        assert_eq!(replay.market, lock.market);
+        assert_eq!(replay.rent_refund, lock.rent_credit);
+        assert_eq!(state.authenticate_next(&lock, id(43)), Ok(()));
+
+        // And the replay the kernel minted is exactly the one the terminal
+        // Lock will accept, so the two cannot drift.
+        let (locked, _receipt) = state
+            .lock_hoard_and_close_source(
+                lock,
+                id(43),
+                id(50),
+                replay,
+                500,
+                0,
+                0,
+                500,
+                lock.funding_source_vault_rent_lamports,
+                lock.funding_source_state_rent_lamports,
+                lock.rent_credit,
+                true,
+            )
+            .expect("lock from a projected-created source");
+        assert_eq!(locked.phase, ProjectedCustodyPhaseV1::HoardLocked);
+        assert_eq!(locked.locked_amount, 500);
+    }
+
+    #[test]
+    fn source_compartment_creation_is_the_only_route_to_the_funded_phase() {
+        let lock = generic_request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            500,
+        );
+        let open_source = lock.founding_prestate_v1().expect("prestate").open_source;
+        let state = ProjectedCustodyStateV1 {
+            bump: 254,
+            phase: ProjectedCustodyPhaseV1::HoardOpen,
+            request: open_source,
+            next_revision: OPEN_HOARD_RESULTING_REVISION_V1,
+            locked_amount: 0,
+            last_request_digest: id(40),
+        };
+        let call = |request,
+                    digest,
+                    replay_key,
+                    funder_before,
+                    funder_after,
+                    before,
+                    after,
+                    commitment,
+                    vacant| {
+            state.open_source_compartment(
+                request,
+                digest,
+                replay_key,
+                funder_before,
+                funder_after,
+                before,
+                after,
+                commitment,
+                vacant,
+            )
+        };
+
+        // A live Market is the inverse of this operation's whole admission.
+        assert_eq!(
+            call(open_source, id(42), id(50), 900, 400, 0, 500, id(51), false)
+                .map(|(state, _)| state.phase),
+            Err(ProjectedCustodyError::Balance)
+        );
+        // The funder must be debited by exactly the principal credited.
+        assert_eq!(
+            call(open_source, id(42), id(50), 900, 401, 0, 500, id(51), true)
+                .map(|(state, _)| state.phase),
+            Err(ProjectedCustodyError::Balance)
+        );
+        // A pre-funded source vault is refused; this operation creates it.
+        assert_eq!(
+            call(open_source, id(42), id(50), 900, 400, 1, 501, id(51), true)
+                .map(|(state, _)| state.phase),
+            Err(ProjectedCustodyError::Balance)
+        );
+        // The vault must end holding exactly the request's principal.
+        assert_eq!(
+            call(open_source, id(42), id(50), 900, 400, 0, 499, id(51), true)
+                .map(|(state, _)| state.phase),
+            Err(ProjectedCustodyError::Balance)
+        );
+        // Neither the replay address nor its poststate commitment may be zero.
+        assert_eq!(
+            call(open_source, id(42), [0; 32], 900, 400, 0, 500, id(51), true)
+                .map(|(state, _)| state.phase),
+            Err(ProjectedCustodyError::ZeroIdentity)
+        );
+        assert_eq!(
+            call(open_source, id(42), id(50), 900, 400, 0, 500, [0; 32], true)
+                .map(|(state, _)| state.phase),
+            Err(ProjectedCustodyError::ZeroIdentity)
+        );
+        // No other operation reaches the funded phase, and this operation
+        // reaches no other phase.
+        for other in [
+            ProjectedCustodyOperationV1::OpenHoard,
+            ProjectedCustodyOperationV1::LockHoard,
+            ProjectedCustodyOperationV1::AbortOpenAndClose,
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+        ] {
+            let amount = u64::from(!matches!(
+                other,
+                ProjectedCustodyOperationV1::OpenHoard
+                    | ProjectedCustodyOperationV1::AbortOpenAndClose
+            )) * 500;
+            let substituted = ProjectedCustodyRequestV1 {
+                operation: other,
+                amount,
+                ..open_source
+            };
+            assert!(
+                call(substituted, id(42), id(50), 900, 400, 0, 500, id(51), true).is_err(),
+                "{other:?} must not reach SourceFunded"
+            );
+        }
+        // Replay: a second creation at the same cursor is refused.
+        let (funded, _) = call(open_source, id(42), id(50), 900, 400, 0, 500, id(51), true)
+            .expect("open source compartment");
+        assert_eq!(
+            funded
+                .open_source_compartment(
+                    open_source,
+                    id(43),
+                    id(50),
+                    900,
+                    400,
+                    0,
+                    500,
+                    id(51),
+                    true,
+                )
+                .map(|(state, _)| state.phase),
+            Err(ProjectedCustodyError::Revision)
+        );
+        // The funded phase is a dead end for every terminal but Lock, so real
+        // principal under this authority can never be closed out from under it.
+        assert_eq!(
+            funded.abort_open_and_close(
+                ProjectedCustodyRequestV1 {
+                    operation: ProjectedCustodyOperationV1::AbortOpenAndClose,
+                    expected_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+                    resulting_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1 + 1,
+                    amount: 0,
+                    ..open_source
+                },
+                id(44),
+                1_000,
+                0,
+                open_source.rent_credit,
+                true,
+            ),
+            Err(ProjectedCustodyError::Expiry)
+        );
+    }
+
+    #[test]
+    fn a_funded_source_phase_round_trips_through_the_persisted_state() {
+        let lock = generic_request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            500,
+        );
+        let prestate = lock.founding_prestate_v1().expect("prestate");
+        let state = ProjectedCustodyStateV1 {
+            bump: 254,
+            phase: ProjectedCustodyPhaseV1::HoardOpen,
+            request: prestate.open_hoard,
+            next_revision: OPEN_HOARD_RESULTING_REVISION_V1,
+            locked_amount: 0,
+            last_request_digest: id(40),
+        };
+        let (funded, _) = state
+            .open_source_compartment(
+                prestate.open_source,
+                id(42),
+                id(50),
+                900,
+                400,
+                0,
+                500,
+                id(51),
+                true,
+            )
+            .expect("open source compartment");
+        let bytes = funded.encode().expect("state bytes");
+        let decoded = ProjectedCustodyStateV1::decode(&bytes).expect("decode");
+        assert_eq!(decoded.phase, ProjectedCustodyPhaseV1::SourceFunded);
+        assert_eq!(decoded.locked_amount, 500);
+        assert_eq!(decoded.next_revision, 3);
+        // A persisted state reconstructs the exact request that produced it,
+        // which is what the Trading bootstrap route compares against.
+        assert_eq!(decoded.request, prestate.open_source);
+        // The reconstructed successor is still the terminal Lock and nothing else.
+        assert_eq!(decoded.authenticate_next(&lock, id(43)), Ok(()));
     }
 
     #[test]
@@ -1890,31 +2294,33 @@ mod tests {
             ProjectedCustodyOperationV1::RefundAndClose,
             ProjectedCustodyOperationV1::RealizeAndClose,
             ProjectedCustodyOperationV1::AbortOpenAndClose,
+            ProjectedCustodyOperationV1::OpenSourceCompartment,
         ] {
             let amount = u64::from(matches!(
                 operation,
                 ProjectedCustodyOperationV1::LockHoard
                     | ProjectedCustodyOperationV1::RefundAndClose
                     | ProjectedCustodyOperationV1::RealizeAndClose
+                    | ProjectedCustodyOperationV1::OpenSourceCompartment
             )) * 500;
             let revision = if operation == ProjectedCustodyOperationV1::Initialize {
                 0
             } else {
-                OPEN_HOARD_RESULTING_REVISION_V1
+                OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1
             };
             assert_eq!(
-                request(operation, revision, amount).founding_prestate_v1(),
+                generic_request(operation, revision, amount).founding_prestate_v1(),
                 Err(ProjectedCustodyError::NonCanonical),
                 "{operation:?} is not the terminal founding Lock"
             );
         }
 
-        // A Lock expecting any revision but two cannot be reached from a fresh
-        // replay, because Initialize is pinned to 0 -> 1 and OpenHoard is the
-        // only step to HoardOpen.
-        for revision in [3, 4, 9] {
+        // A Lock expecting any revision but three cannot be reached from a
+        // fresh replay: Initialize is pinned to 0 -> 1, OpenHoard is the only
+        // step to HoardOpen, and OpenSourceCompartment the only step past it.
+        for revision in [1, 2, 4, 9] {
             assert_eq!(
-                request(
+                generic_request(
                     ProjectedCustodyOperationV1::LockHoardAndCloseSource,
                     revision,
                     500,
@@ -1923,5 +2329,17 @@ mod tests {
                 Err(ProjectedCustodyError::Revision)
             );
         }
+
+        // A generic founding may not choose the source replay cursor: the
+        // compartment this ladder mints always carries exactly one.
+        assert_eq!(
+            request(
+                ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+                OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+                500,
+            )
+            .founding_prestate_v1(),
+            Err(ProjectedCustodyError::Revision)
+        );
     }
 }
