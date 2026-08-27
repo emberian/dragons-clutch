@@ -260,15 +260,30 @@ const UNUSED_RENT_EPOCH_BYTES: usize = 8;
 /// # Two heap reclaims that belong here and are NOT here
 ///
 /// 1. **Last-in-first-out `dealloc`.** A bump allocator can return its top
-///    block for one comparison, reclaiming every dropped temporary. It was
-///    written, built, and withdrawn: a non-empty `dealloc` cannot be optimized
-///    away at its call sites, and `hot_v3::process_hot_execution_v3` is close
-///    enough to the SBPF v0 static 4,096-byte frame limit that materializing
-///    the arguments at each drop site makes the shipped executable overwrite
-///    its own caller frame - the build says so 256 times, against zero for the
-///    version here. Per W2e, an executable that does that prints numbers that
-///    mean nothing. This is a real heap win, and its owner is whoever next
-///    gives `process_hot_execution_v3` frame headroom.
+///    block for one comparison, reclaiming every dropped temporary. It has now
+///    been written, built, run against the canonical Registry-continuation Hot
+///    bundle, and withdrawn **on its own measurement**, which is the only
+///    reason worth recording:
+///
+///    - The frame objection is gone. `hot_v3::process_hot_execution_v3` used
+///      the whole 4,096-byte SBPF v0 frame, so a non-empty `dealloc` - which
+///      cannot be folded away at its drop sites - pushed it to 4,288 and made
+///      the build report 255 calls overwriting the caller frame. Splitting that
+///      function into its authentication and execution halves took it to 3,008,
+///      and the last-in-first-out release then builds with zero diagnostics.
+///    - It is worth **44 bytes**. Measured through the profile checkpoints on a
+///      256 KiB diagnostic heap, against a byte-identical run without it: 4,696
+///      / 6,800 / 9,632 / 17,304 / 25,908 / 27,504 / 36,060 with it, against
+///      4,696 / 6,808 / 9,648 / 17,328 / 25,940 / 27,536 / 36,104 without. The
+///      whole difference is the eight-byte probe allocation each checkpoint
+///      itself makes and drops. **Not one temporary of this path is the top
+///      block when it is dropped**, so last-in-first-out never fires on it.
+///
+///    Reclaiming those temporaries needs an allocator that can free a block
+///    that is not the top one, which is a free list, not a bump. Forty-four
+///    bytes does not buy the standing hazard: with a no-op `dealloc` a
+///    use-after-free is inert, and with any real release it is corruption.
+///    Reinstate this only together with the measurement that justifies it.
 /// 2. **In-place `realloc` of the top block**, so `Vec` growth stops stranding
 ///    every previous buffer. Written, built, measured, and withdrawn on the
 ///    measurement: worth **zero bytes** at every checkpoint of the canonical
@@ -392,14 +407,17 @@ impl BumpHeapV1 {
 // every block still outstanding: the bump position only moves back past a
 // block when `dealloc` is told that block is being released.
 unsafe impl GlobalAlloc for BumpHeapV1 {
-    // `alloc` and `realloc` are out of line for the same frame reason `dealloc`
-    // is empty: measured on the canonical bundle, `#[inline]` on both costs 55
-    // frame diagnostics in `process_hot_execution_v3` and `#[inline]` on
-    // `alloc` alone still costs 55, while out of line costs zero. The price is
-    // a call per allocation, and it is the whole of this adapter's compute
-    // regression. Inlining `alloc` recovers most of that the moment
-    // `process_hot_execution_v3` has frame headroom.
-    #[inline(never)]
+    // `alloc` is inlined; it was not, and the two functions that stopped it now
+    // have the frame for it. `process_hot_execution_v3` used its whole
+    // 4,096-byte SBPF v0 frame and reported 47 calls overwriting the caller
+    // frame with `alloc` inlined; split into its authentication and execution
+    // halves it uses 3,008 and reports none. `authenticate_collateral` reported
+    // the other 8 and now mints its record through one out-of-line constructor.
+    // A call per allocation was the whole of this adapter's compute regression,
+    // and it is paid back here. `realloc` stays out of line: it is the SDK's
+    // allocate-copy-release, and nothing on the canonical path grows a `Vec` it
+    // did not reserve, so inlining it would cost frame for no measured caller.
+    #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let position = self.position();
         let Some(start) = self

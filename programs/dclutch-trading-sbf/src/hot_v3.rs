@@ -63,7 +63,7 @@ use dclutch_capability_program_contract::{
 use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
     CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1, SealedRecordRowV1,
-    SealedRoleV1,
+    SealedRoleV1, SealedStaticOwnershipV1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -1615,12 +1615,10 @@ pub fn process_hot_execution_v3(
         invocation.role_authentication,
     )?;
     let context = &root.context;
-    let immutable_root_header = &root.immutable_header;
 
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
     let product_runtime = product_runtime_v3.runtime;
-    let product_outcome_count = product_runtime.outcome_count;
     hot_cu_checkpoint!("root-product");
     let manifest_data = borrow_finalized_record(
         *frame,
@@ -1814,9 +1812,6 @@ pub fn process_hot_execution_v3(
         selected_program,
         invocation.strategy_extras_start,
     )?;
-    let strategy_extras = accounts
-        .get(invocation.strategy_extras_start..strategy_extras_end)
-        .ok_or(TradingSbfError::Content)?;
 
     let transition_data = borrow_sealed_record(
         *frame,
@@ -1877,6 +1872,113 @@ pub fn process_hot_execution_v3(
         )
         .map_err(|_| TradingSbfError::Content)?;
     hot_cu_checkpoint!("artifacts-strategy-effect");
+
+    execute_authenticated_hot_v3(AuthenticatedHotExecutionV3 {
+        program_id,
+        accounts,
+        instruction_data,
+        family_request,
+        envelope,
+        invocation,
+        frame: &frame,
+        request_digest,
+        root_prestate,
+        market: &market,
+        root: &root,
+        rent,
+        product_runtime_v3: &product_runtime_v3,
+        selected_program,
+        selected_action,
+        descriptor: &descriptor,
+        lifecycle,
+        account_profile,
+        profile_join,
+        request_profile,
+        strategy: &strategy,
+        strategy_extras_end,
+        transition,
+        effect,
+        sealed_ownership,
+    })
+}
+
+/// Everything the authentication half proved, handed to the half that executes
+/// it.
+///
+/// The boundary is not cosmetic. SBPF v0 gives every function a static
+/// 4,096-byte frame, and one function holding both halves' live values does not
+/// fit: the artifact half alone peaks at 2,176 bytes and the execution half
+/// needs 2,240 more. Splitting them also confines the nineteen `RefCell` borrow
+/// guards and five seal tokens to the half that authenticates against them --
+/// none of them crosses -- so the execution half cannot read an artifact whose
+/// seal it did not receive.
+struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
+    program_id: &'a Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    instruction_data: &'artifact [u8],
+    family_request: &'artifact [u8],
+    envelope: HotExecutionEnvelopeV3,
+    invocation: AuthenticatedHotInvocationV3,
+    frame: &'a HotFrameV3<'accounts, 'info>,
+    request_digest: [u8; 32],
+    root_prestate: [u8; 32],
+    market: &'a CoreState,
+    root: &'a AuthenticatedRootV3,
+    rent: Rent,
+    product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    selected_program: ContentId,
+    selected_action: u32,
+    descriptor: &'a CapabilityProgramV4,
+    lifecycle: StateLifecyclePolicyV5<'artifact>,
+    account_profile: AccountProfileV2<'artifact>,
+    profile_join: ValidatedProfileJoinV3<'artifact>,
+    request_profile: RequestProfileKindV3<'artifact>,
+    strategy: &'a AuthenticatedExecutionStrategyV2,
+    strategy_extras_end: usize,
+    transition: TransitionProgramV3<'artifact>,
+    effect: SelectedEffectProgramV4<'artifact>,
+    sealed_ownership: SealedStaticOwnershipV1<'artifact>,
+}
+
+/// Run the ten execution phases over artifacts that are already authenticated.
+#[inline(never)]
+fn execute_authenticated_hot_v3(
+    prepared: AuthenticatedHotExecutionV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    let AuthenticatedHotExecutionV3 {
+        program_id,
+        accounts,
+        instruction_data,
+        family_request,
+        envelope,
+        invocation,
+        frame,
+        request_digest,
+        root_prestate,
+        market,
+        root,
+        rent,
+        product_runtime_v3,
+        selected_program,
+        selected_action,
+        descriptor,
+        lifecycle,
+        account_profile,
+        profile_join,
+        request_profile,
+        strategy,
+        strategy_extras_end,
+        transition,
+        effect,
+        sealed_ownership,
+    } = prepared;
+    let context = &root.context;
+    let immutable_root_header = &root.immutable_header;
+    let product_runtime = product_runtime_v3.runtime;
+    let product_outcome_count = product_runtime.outcome_count;
+    let strategy_extras = accounts
+        .get(invocation.strategy_extras_start..strategy_extras_end)
+        .ok_or(TradingSbfError::Content)?;
 
     let provisional_scalar_count = effect
         .scalar_count(product_outcome_count)
@@ -2172,7 +2274,7 @@ pub fn process_hot_execution_v3(
     let candidate = if let Some(caller_authorities) = admitted_caller_authorities {
         execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
             program_id,
-            frame: &frame,
+            frame,
             hot_fixed_accounts: accounts
                 .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
                 .ok_or(TradingSbfError::Content)?,
@@ -2183,9 +2285,9 @@ pub fn process_hot_execution_v3(
             observations: &observations,
             envelope,
             context,
-            descriptor: &descriptor,
-            strategy: &strategy,
-            product_runtime_v3: &product_runtime_v3,
+            descriptor,
+            strategy,
+            product_runtime_v3,
             family_request,
             root_prestate,
             selected_program,
@@ -2337,14 +2439,14 @@ pub fn process_hot_execution_v3(
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
         execute_shadow_candidate_v3(ShadowCandidateViewV3 {
             program_id,
-            frame: &frame,
+            frame,
             caller_authority,
             strategy_extras,
             runtime_accounts: &runtime_accounts,
             observations: &observations,
             envelope,
-            descriptor: &descriptor,
-            strategy: &strategy,
+            descriptor,
+            strategy,
             family_request,
             root_prestate,
             selected_program,
@@ -2365,7 +2467,7 @@ pub fn process_hot_execution_v3(
     hot_cu_checkpoint!("before-commit");
     let commit_status = commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
         program_id,
-        frame: &frame,
+        frame,
         request_profile,
         effect,
         tail_count,
@@ -2385,11 +2487,11 @@ pub fn process_hot_execution_v3(
         immutable_root_header,
         root_prestate,
         strategy_execution_digest,
-        descriptor: &descriptor,
-        strategy: &strategy,
+        descriptor,
+        strategy,
         context,
-        market: &market,
-        product_runtime_v3: &product_runtime_v3,
+        market,
+        product_runtime_v3,
         product_outcome_count,
     }));
     hot_cu_checkpoint!("after-commit");
@@ -2880,6 +2982,24 @@ struct ProjectedEffectsV3 {
     requests: Vec<u8>,
 }
 
+/// One exactly-sized projection bank, refused rather than aborted when the heap
+/// cannot cover it.
+///
+/// `vec![v; n]` and `collect` allocate infallibly: on an exhausted heap they
+/// abort the whole invocation (`memory allocation failed` ->
+/// `ProgramFailedToComplete`), which is fail-closed at the transaction but is
+/// not a protocol refusal and leaves a caller nothing to read. Every bank this
+/// projection needs has its exact width before it is filled, so the same
+/// allocation can be asked for fallibly and answered with the refusal the rest
+/// of this boundary speaks.
+fn try_projection_bank_v3<T: Clone>(value: &T, len: usize) -> Result<Vec<T>, ProgramError> {
+    let mut bank = Vec::new();
+    bank.try_reserve_exact(len)
+        .map_err(|_| TradingSbfError::Content)?;
+    bank.resize(len, value.clone());
+    Ok(bank)
+}
+
 /// Account candidates and both Effect scratch banks are phase-local. Only the
 /// exact lamport projection and child-request bank survive into preflight/CPI.
 #[inline(never)]
@@ -2897,15 +3017,17 @@ fn project_hot_effects_v3(
     runtime_account_count: usize,
     request_bytes: usize,
 ) -> Result<ProjectedEffectsV3, ProgramError> {
-    let mut account_inputs = observations
-        .iter()
-        .map(|observation| AccountInput {
-            lamports: observation.lamports(),
-            data_len: observation.data().len(),
-        })
-        .collect::<Vec<_>>();
+    let mut account_inputs: Vec<AccountInput> = Vec::new();
+    account_inputs
+        .try_reserve_exact(observations.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    account_inputs.extend(observations.iter().map(|observation| AccountInput {
+        lamports: observation.lamports(),
+        data_len: observation.data().len(),
+    }));
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
-    let mut permissions = vec![AccountPermission::read_only(); runtime_account_count];
+    let mut permissions =
+        try_projection_bank_v3(&AccountPermission::read_only(), runtime_account_count)?;
     if account_profile.uses_dynamic_fixed_spans() {
         derive_effect_permissions_with_dynamic_spans(
             account_profile,
@@ -2932,13 +3054,13 @@ fn project_hot_effects_v3(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let mut scratch_lamports = vec![0_u64; effect_account_count];
-    let mut effect_output_lamports = vec![0_u64; effect_account_count];
+    let mut scratch_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
+    let mut effect_output_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
     // One bank, not two. The projection's second request bank was written once,
     // at the end, as a verbatim copy of the first; on an allocator that never
     // frees that copy cost the full declared request width for the whole
     // instruction. The single bank carries the same bytes into preflight/CPI.
-    let mut requests = vec![0_u8; request_bytes];
+    let mut requests = try_projection_bank_v3(&0_u8, request_bytes)?;
     project_effects_v4_atomic(
         effect.successor,
         tail_count,
@@ -2960,10 +3082,11 @@ fn project_hot_effects_v3(
         },
     )
     .map_err(|_| TradingSbfError::Transition)?;
-    let mut output_lamports = account_inputs
-        .iter()
-        .map(|account| account.lamports)
-        .collect::<Vec<_>>();
+    let mut output_lamports: Vec<u64> = Vec::new();
+    output_lamports
+        .try_reserve_exact(account_inputs.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    output_lamports.extend(account_inputs.iter().map(|account| account.lamports));
     output_lamports
         .get_mut(..effect_account_count)
         .ok_or(TradingSbfError::Content)?
