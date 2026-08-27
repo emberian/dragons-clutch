@@ -415,6 +415,7 @@ pub(crate) fn resolve(
     //    a finalized address lookup table as a v0 transaction, exactly as
     //    Found31 and DCLTGMF1 do, through the producer's own table publisher --
     //    one author for the routing shape rather than a second copy of it here.
+    let before_tables = transactions.len();
     let (routing, tables) = crate::market::publish_routing_table(
         rpc,
         payer,
@@ -422,7 +423,8 @@ pub(crate) fn resolve(
         std::slice::from_ref(&create.instruction),
         transactions,
     )?;
-    submitted += 2;
+    submitted += transactions.len().saturating_sub(before_tables);
+    fees = fees.saturating_add(crate::provider::fees_since(transactions, before_tables));
     let mut table_lamports = crate::provider::table_rent(&tables);
 
     // 2. The adversarial half FIRST. A second creation at the same generation
@@ -536,6 +538,7 @@ pub(crate) fn resolve(
     // fit a legacy packet. A second table rather than a reused one, because
     // the two frames route different accounts and a table extended to cover
     // both would be a routing fact this campaign invented.
+    let before_verify_tables = transactions.len();
     let (verify_routing, verify_tables) = crate::market::publish_routing_table(
         rpc,
         payer,
@@ -543,7 +546,11 @@ pub(crate) fn resolve(
         std::slice::from_ref(&verify.instruction),
         transactions,
     )?;
-    submitted += 2;
+    submitted += transactions.len().saturating_sub(before_verify_tables);
+    fees = fees.saturating_add(crate::provider::fees_since(
+        transactions,
+        before_verify_tables,
+    ));
     table_lamports = table_lamports.saturating_add(crate::provider::table_rent(&verify_tables));
     let evidence = rpc.send_v0_with_signers(
         "journey: activate the three-ledger Resolution funding of an Open Market",
@@ -934,6 +941,7 @@ pub(crate) fn retire(
             close.closure_receipt, addresses.closure_receipt
         )));
     }
+    let before_tables = transactions.len();
     let (routing, tables) = crate::market::publish_routing_table(
         rpc,
         payer,
@@ -941,7 +949,8 @@ pub(crate) fn retire(
         std::slice::from_ref(&close.instruction),
         transactions,
     )?;
-    submitted += 2;
+    submitted += transactions.len().saturating_sub(before_tables);
+    fees = fees.saturating_add(crate::provider::fees_since(transactions, before_tables));
     let table_lamports = crate::provider::table_rent(&tables);
     let beneficiary_before = rpc
         .account(addresses.rent_beneficiary)?

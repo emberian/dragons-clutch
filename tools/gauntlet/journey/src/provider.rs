@@ -446,6 +446,7 @@ pub(crate) fn resolve_through_pyth(
         &mut submitted,
         transactions,
     )?;
+    let before_tables = transactions.len();
     let (submit_routing, submit_tables) = crate::market::publish_routing_table(
         rpc,
         payer,
@@ -453,7 +454,8 @@ pub(crate) fn resolve_through_pyth(
         std::slice::from_ref(&submit.instruction),
         transactions,
     )?;
-    submitted += 2;
+    submitted += transactions.len().saturating_sub(before_tables);
+    fees = fees.saturating_add(fees_since(transactions, before_tables));
     let mut table_lamports = table_rent(&submit_tables);
     let evidence = rpc.send_v0_with_signers(
         "journey: Resolution submits one update through the real receiver ELF",
@@ -522,6 +524,7 @@ pub(crate) fn resolve_through_pyth(
         },
     )
     .map_err(|error| Error::new(format!("chain-derived Core provider execution: {error:?}")))?;
+    let before_execute_tables = transactions.len();
     let (execute_routing, execute_tables) = crate::market::publish_routing_table(
         rpc,
         payer,
@@ -529,7 +532,8 @@ pub(crate) fn resolve_through_pyth(
         std::slice::from_ref(&execute.instruction),
         transactions,
     )?;
-    submitted += 2;
+    submitted += transactions.len().saturating_sub(before_execute_tables);
+    fees = fees.saturating_add(fees_since(transactions, before_execute_tables));
     table_lamports = table_lamports.saturating_add(table_rent(&execute_tables));
     let evidence = rpc.send_v0_with_signers(
         "journey: Core admits the terminal state of an atomically founded Market",
@@ -613,6 +617,22 @@ pub(crate) fn resolve_through_pyth(
             "two address lookup tables, rent-funded to route the two oversized provider frames",
         ),
     ))
+}
+
+/// Fees paid by every transaction appended since `from`.
+///
+/// `publish_routing_table` submits between two and four transactions of its own
+/// and returns only the finalized table, so a stage that counted only the fees
+/// it paid DIRECTLY under-declared by exactly those. L7 caught it as an
+/// unaccounted residual, which is the law working; this is the fix, and it
+/// reads the fees off the evidence the publisher appended rather than assuming
+/// a count or a price.
+pub(crate) fn fees_since(transactions: &[TransactionEvidence], from: usize) -> u64 {
+    transactions
+        .iter()
+        .skip(from)
+        .map(|transaction| transaction.fee_lamports.unwrap_or(0))
+        .fold(0_u64, u64::saturating_add)
 }
 
 /// Rent held by the routing tables a stage published.
