@@ -87,6 +87,46 @@ pub fn require_safe_keypair_path(path: &Path, home: Option<&Path>) -> Result<()>
     Ok(())
 }
 
+/// Refuse a signing key any account but its owner can read.
+///
+/// `keygen` writes `0600`, but a key that arrives by any other route — an
+/// operator's `scp`, a restore from an archive, a `cat >` under a permissive
+/// umask — carries whatever mode it was given, and nothing downstream would
+/// ever notice.  A relayer's attestation key IS the provider release identity
+/// (§4.11): anyone who can read it can sign observations of mainnet that are
+/// indistinguishable from this daemon's.  So the mode is checked at load, on
+/// the deployed box, rather than trusted from the one path that happens to
+/// create it correctly.
+///
+/// Group bits are refused alongside world bits deliberately.  A shared group is
+/// exactly how a "just for the deploy user" relaxation gets made, and the key's
+/// threat model does not distinguish an unintended group member from a
+/// stranger.
+#[cfg(unix)]
+pub fn require_private_key_mode(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = std::fs::metadata(path).map_err(|source| RelayerError::io(path, source))?;
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(RelayerError::UnsafeKeypairPath {
+            path: path.to_path_buf(),
+            reason: format!(
+                "mode {mode:04o} grants access beyond the owner; a signing key must be readable \
+                 only by the account that runs the daemon (chmod 600 {})",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// No portable equivalent; the mode rules above are a Unix concept.
+#[cfg(not(unix))]
+pub fn require_private_key_mode(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 /// One loaded Ed25519 signing key, and the only handle the loop is given.
 pub struct AttestationSigner {
     key: SigningKey,
@@ -112,6 +152,7 @@ impl AttestationSigner {
     /// `None` disables only the home-relative rules, never the lexical ones.
     pub fn load(path: &Path, home: Option<&Path>) -> Result<Self> {
         require_safe_keypair_path(path, home)?;
+        require_private_key_mode(path)?;
         let text =
             std::fs::read_to_string(path).map_err(|source| RelayerError::io(path, source))?;
         let raw: Vec<u8> =
@@ -314,6 +355,40 @@ mod tests {
         let signature = signer.sign(message);
         assert!(signer.verify(message, &signature));
         assert!(!verify_detached(&public, b"other bytes", &signature));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_key_any_other_account_can_read_is_refused_at_load() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        for relaxed in [0o644, 0o640, 0o604, 0o660] {
+            let path = dir.path().join(format!("key-{relaxed:o}.json"));
+            generate_keypair_file(&path, None).expect("generate");
+            AttestationSigner::load(&path, None).expect("0600 as written by keygen loads");
+
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(relaxed))
+                .expect("relax the mode");
+            let error = AttestationSigner::load(&path, None)
+                .expect_err("a key readable beyond its owner must refuse");
+            assert!(
+                matches!(error, RelayerError::UnsafeKeypairPath { .. }),
+                "expected a path refusal for mode {relaxed:o}, got {error:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_key_refuses_with_the_path_that_was_not_there() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("absent.json");
+        let error = AttestationSigner::load(&path, None).expect_err("a missing key must refuse");
+        assert!(
+            matches!(error, RelayerError::Io { .. }),
+            "expected an io error naming the path, got {error:?}"
+        );
     }
 
     #[test]

@@ -9,10 +9,15 @@
 //!
 //! What is implemented here is the local half — an append-only JSONL file whose
 //! every line carries the exact signed bytes, the signer, the signature and the
-//! observed slot.  **Pushing that file to a public location is not implemented
-//! and is a separately authorized act.** Until it is done, this daemon does not
-//! satisfy §4.11's publication requirement, and saying otherwise would be the
-//! claim the requirement exists to prevent.
+//! observed slot.  The push half is `publish-log --to <dir>` in `main.rs`: it
+//! copies this file into a directory meant for static serving, refuses to
+//! overwrite a public copy that is not a byte-prefix of the local log, and
+//! writes a `LATEST.json` a verifier can poll for growth.
+//!
+//! **Actually SERVING that directory from a public location is a separately
+//! authorized act**, and until a release names one, this daemon satisfies
+//! §4.11's publication requirement only up to that boundary.  Saying otherwise
+//! would be the claim the requirement exists to prevent.
 //!
 //! The RPC read log exists for a different reason: `AGENTS.md` requires public
 //! RPC reads to be explicit and bounded, so every call this service makes is

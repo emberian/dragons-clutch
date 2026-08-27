@@ -99,6 +99,7 @@ struct RawKeys {
 #[serde(deny_unknown_fields)]
 struct RawSubmit {
     endpoint: String,
+    expected_genesis_hash: String,
     #[serde(default)]
     allow_public_submission: bool,
     relay_program_id: String,
@@ -223,6 +224,18 @@ impl AccountSetConfig {
 pub struct SubmitConfig {
     /// Where transactions would go.
     pub endpoint: String,
+    /// The genesis hash the SUBMIT cluster must report, checked before the
+    /// first transaction is built.
+    ///
+    /// Required, and deliberately not defaulted to the observed cluster's.  The
+    /// observed side has carried this check since the beginning (§4.6) because
+    /// nothing else distinguishes a mainnet account from a byte-identical twin;
+    /// the submit side needs it for the mirror-image reason.  Without it the
+    /// daemon's only statement about where it writes is a URL, and a URL that
+    /// silently points at mainnet-beta is exactly the copy-paste this family
+    /// exists to refuse.  Naming the cluster as a *value* makes the daemon
+    /// unable to sign toward a cluster the operator did not name.
+    pub expected_genesis_hash: [u8; ID_BYTES],
     /// Refuses a non-local endpoint unless explicitly set.
     ///
     /// Defaults to false.  Setting it true is an assertion that a current
@@ -445,7 +458,7 @@ impl Config {
 
         let submit = match raw.submit {
             None => None,
-            Some(submit) => Some(resolve_submit(submit)?),
+            Some(submit) => Some(resolve_submit(submit, &raw.observed_cluster.rpc_endpoints)?),
         };
 
         Ok(Self {
@@ -482,6 +495,17 @@ impl Config {
         self.rehearsal_attested_cluster_id
             .unwrap_or(self.expected_genesis_hash)
     }
+}
+
+/// A URL's host, lowercased, or `None` if it does not parse or names no host.
+///
+/// Hosts are the comparison unit for the read/write separation check: a
+/// provider URL commonly carries an API key in its query string, so two URLs
+/// that differ in every character after the host can still name one cluster.
+fn url_host(url: &str) -> Option<String> {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
 }
 
 /// Whether a URL names a loopback host, under the submission gate's own rule.
@@ -595,13 +619,56 @@ fn resolve_account_set(
     })
 }
 
-fn resolve_submit(raw: RawSubmit) -> Result<SubmitConfig> {
+fn resolve_submit(raw: RawSubmit, observed_endpoints: &[String]) -> Result<SubmitConfig> {
     reqwest::Url::parse(&raw.endpoint).map_err(|error| {
         RelayerError::config(format!(
             "submit.endpoint {:?} is not a URL: {error}",
             raw.endpoint
         ))
     })?;
+
+    // THE COPY-PASTE PATH TO WRITING AT THE OBSERVED CLUSTER DIES HERE.
+    //
+    // The read side and the write side are separate clients built from separate
+    // config fields, so nothing in this daemon *routes* a transaction to the
+    // observed cluster.  But that separation is positional: it holds because
+    // two strings happen to differ, and the most likely way they stop differing
+    // is an operator duplicating the observed endpoint into `submit.endpoint`
+    // while wiring a provider — one line, no error, and the daemon would then
+    // aim its transactions at the cluster it is supposed to only ever read.
+    //
+    // Hosts, not whole URLs: a provider URL carries an API key and a path, so
+    // two spellings of the same mainnet host must collide even when the query
+    // strings differ.
+    // ONE EXEMPTION, AND IT IS THE REHEARSAL: a loopback host on both sides is
+    // a single local validator standing in for both clusters, which is the
+    // supported development shape (§4.11's rehearsal twin *requires* every
+    // observed endpoint be loopback).  There is no public cluster in that
+    // configuration, so there is nothing for a write to escape to.  The rule
+    // exists to stop writes aimed at a real observed cluster, and a loopback
+    // address is by construction not one.
+    let submit_host = url_host(&raw.endpoint).filter(|host| !crate::submit::is_local_host(host));
+    if let Some(submit_host) = submit_host.as_deref() {
+        for observed in observed_endpoints {
+            if url_host(observed).as_deref() == Some(submit_host) {
+                return Err(RelayerError::config(format!(
+                    "submit.endpoint host {submit_host:?} is also an \
+                     observed_cluster.rpc_endpoints host: the observed cluster is READ-ONLY for \
+                     this daemon, and a submit endpoint pointing at it would send transactions to \
+                     the cluster whose bytes are being attested. Name the devnet endpoint the \
+                     submissions belong to."
+                )));
+            }
+        }
+    }
+
+    let expected_genesis_hash =
+        parse_id32("submit.expected_genesis_hash", &raw.expected_genesis_hash)?;
+    if is_zero(&expected_genesis_hash) {
+        return Err(RelayerError::config(
+            "submit.expected_genesis_hash must not be all zero",
+        ));
+    }
     let address_lookup_table = match raw.address_lookup_table {
         None => None,
         Some(table) => {
@@ -623,6 +690,7 @@ fn resolve_submit(raw: RawSubmit) -> Result<SubmitConfig> {
     };
     Ok(SubmitConfig {
         endpoint: raw.endpoint,
+        expected_genesis_hash,
         allow_public_submission: raw.allow_public_submission,
         relay_program_id: parse_id32("submit.relay_program_id", &raw.relay_program_id)?,
         market: parse_id32("submit.market", &raw.market)?,
@@ -806,8 +874,57 @@ admitted_data_lens = [40]
         assert!(!open.admits_data_len(4));
     }
 
+    /// A `[submit]` table naming `endpoint`, with the devnet genesis hash.
+    fn submit_table(endpoint: &str, extra: &str) -> String {
+        format!(
+            "\n[submit]\nendpoint = \"{endpoint}\"\n\
+             expected_genesis_hash = \"{devnet}\"\n\
+             {extra}\
+             relay_program_id = \"11111111111111111111111111111112\"\n\
+             market = \"11111111111111111111111111111113\"\ngeneration = 1\n\
+             relayer_key_set = \"11111111111111111111111111111114\"\n\
+             relayer_key_set_staging_vacancy = \"11111111111111111111111111111115\"\n",
+            devnet = base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
+        )
+    }
+
     #[test]
     fn allow_public_submission_defaults_to_false() {
+        let text = format!(
+            "{}{}",
+            minimal(""),
+            submit_table("http://127.0.0.1:8899", "")
+        );
+        let config = load(&text).expect("config");
+        let submit = config.submit.expect("submit");
+        assert!(!submit.allow_public_submission);
+        assert_eq!(
+            submit.expected_genesis_hash,
+            dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1
+        );
+    }
+
+    #[test]
+    fn one_loopback_validator_may_stand_on_both_sides() {
+        // The deliberate exemption to the host-collision rule: a local
+        // validator IS both clusters during a rehearsal, and there is no public
+        // cluster for a write to escape to.
+        let text = format!(
+            "{}{}",
+            minimal(""),
+            submit_table("http://127.0.0.1:8899", "")
+        );
+        assert!(
+            load(&text).is_ok(),
+            "the loopback rehearsal shape must stay legal"
+        );
+    }
+
+    #[test]
+    fn a_submit_table_without_an_expected_genesis_hash_refuses() {
+        // The daemon must be UNABLE to sign toward a cluster the operator did
+        // not name.  A URL alone is a routing detail; the genesis hash is the
+        // cluster's identity, and omitting it must not default to anything.
         let text = format!(
             "{}\n[submit]\nendpoint = \"http://127.0.0.1:8899\"\n\
              relay_program_id = \"11111111111111111111111111111112\"\n\
@@ -816,9 +933,85 @@ admitted_data_lens = [40]
              relayer_key_set_staging_vacancy = \"11111111111111111111111111111115\"\n",
             minimal("")
         );
-        let config = load(&text).expect("config");
-        let submit = config.submit.expect("submit");
-        assert!(!submit.allow_public_submission);
+        assert!(
+            load(&text).is_err(),
+            "submit.expected_genesis_hash is required, never defaulted"
+        );
+    }
+
+    /// THE HOSTILE FIXTURE: the mainnet copy-paste.
+    ///
+    /// An operator wiring a real provider duplicates the observed endpoint into
+    /// `submit.endpoint` and sets the flag that admits a public host.  Every
+    /// other gate in this file is satisfied — the URL parses, the host is
+    /// public, `allow_public_submission` asserts an authorization exists — and
+    /// the daemon would aim its transactions at the mainnet cluster whose bytes
+    /// it is supposed to only ever read.  Config load is where that dies.
+    #[test]
+    fn a_submit_endpoint_on_an_observed_host_refuses() {
+        let mainnet = "https://mainnet.helius-rpc.com/?api-key=AAAA";
+        let text = format!(
+            "{}{}",
+            minimal("").replace(
+                "rpc_endpoints = [\"http://127.0.0.1:8899\"]",
+                &format!("rpc_endpoints = [\"{mainnet}\"]"),
+            ),
+            // A DIFFERENT URL, THE SAME HOST: a second API key and no query
+            // string still names one cluster, which is why hosts are compared
+            // rather than URLs.
+            submit_table(
+                "https://mainnet.helius-rpc.com/?api-key=BBBB",
+                "allow_public_submission = true\n"
+            )
+        );
+        let error = load(&text).expect_err("writing at the observed cluster must refuse");
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("mainnet.helius-rpc.com") && rendered.contains("READ-ONLY"),
+            "the refusal must name the host and the reason, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_submit_endpoint_on_a_different_host_is_admitted() {
+        // The control for the test above: the intended production shape, one
+        // provider serving both clusters under two DIFFERENT hosts.
+        let text = format!(
+            "{}{}",
+            minimal("").replace(
+                "rpc_endpoints = [\"http://127.0.0.1:8899\"]",
+                "rpc_endpoints = [\"https://mainnet.helius-rpc.com/?api-key=AAAA\"]",
+            ),
+            submit_table(
+                "https://devnet.helius-rpc.com/?api-key=AAAA",
+                "allow_public_submission = true\n"
+            )
+        );
+        let config = load(&text).expect("distinct hosts are the intended shape");
+        assert!(config.submit.is_some());
+    }
+
+    #[test]
+    fn the_observed_host_check_ignores_case_and_scans_every_cross_check() {
+        // The collision must be caught on a SECONDARY endpoint too: a
+        // cross-check endpoint is just as much the observed cluster as the
+        // primary, and host comparison is case-insensitive.
+        let text = format!(
+            "{}{}",
+            minimal("").replace(
+                "rpc_endpoints = [\"http://127.0.0.1:8899\"]",
+                "rpc_endpoints = [\"https://api.devnet.solana.com\", \
+                 \"https://API.Mainnet-Beta.Solana.com\"]",
+            ),
+            submit_table(
+                "https://api.mainnet-beta.solana.com",
+                "allow_public_submission = true\n"
+            )
+        );
+        assert!(
+            load(&text).is_err(),
+            "a cross-check endpoint's host must collide exactly as the primary's does"
+        );
     }
 
     #[test]
@@ -883,12 +1076,14 @@ admitted_data_lens = [40]
             "{}\n[observed_cluster.rehearsal_twin]\n\
              attested_cluster_id = \"{}\"\n\n\
              [submit]\nendpoint = \"https://api.devnet.solana.com\"\n\
+             expected_genesis_hash = \"{}\"\n\
              allow_public_submission = true\n\
              relay_program_id = \"11111111111111111111111111111112\"\n\
              market = \"11111111111111111111111111111113\"\ngeneration = 1\n\
              relayer_key_set = \"11111111111111111111111111111114\"\n\
              relayer_key_set_staging_vacancy = \"11111111111111111111111111111115\"\n",
             minimal(""),
+            base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
             base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
         );
         assert!(load(&text).is_err());

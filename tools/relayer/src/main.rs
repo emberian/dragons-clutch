@@ -271,7 +271,7 @@ async fn run(args: &RunArgs) -> Result<()> {
     // endpoint must be refused on its own terms, not incidentally because some
     // earlier read happened to fail first.
     let submitter = if args.submit {
-        Some(prepare_submission(&config)?)
+        Some(prepare_submission(&config).await?)
     } else {
         println!("dry run: nothing will be submitted");
         None
@@ -417,7 +417,7 @@ struct Submitter {
     lookup_tables: Vec<AddressLookupTableAccount>,
 }
 
-fn prepare_submission(config: &Config) -> Result<Submitter> {
+async fn prepare_submission(config: &Config) -> Result<Submitter> {
     let submit = config.submit.as_ref().ok_or_else(|| {
         RelayerError::MissingCapability(
             "--submit needs a [submit] table in the config file".to_owned(),
@@ -455,9 +455,24 @@ fn prepare_submission(config: &Config) -> Result<Submitter> {
         .into_iter()
         .collect();
 
+    let rpc = RpcClient::new(&submit.endpoint, config.request_timeout, None)?
+        .logging_to(&config.output_dir)?;
+
+    // THE SUBMIT CLUSTER IS NAMED AS A VALUE, AND CHECKED, exactly as the
+    // observed cluster is at the top of `run`.  A URL is a routing detail an
+    // operator can mistype into pointing anywhere; a genesis hash is the
+    // cluster's identity, and checking it makes the daemon UNABLE to sign a
+    // transaction toward a cluster the config did not name.  This runs before
+    // the fee payer is even reported and long before a transaction is built.
+    rpc.require_expected_genesis(submit.expected_genesis_hash)
+        .await?;
+    println!(
+        "verified submit-cluster genesis hash {}",
+        base58(&submit.expected_genesis_hash)
+    );
+
     Ok(Submitter {
-        rpc: RpcClient::new(&submit.endpoint, config.request_timeout, None)?
-            .logging_to(&config.output_dir)?,
+        rpc,
         fee_payer,
         relay_program_id: submit.relay_program_id,
         market: submit.market,
@@ -659,7 +674,7 @@ impl Submitter {
 /// Submit the append and seal routes from one dry-run artifact directory.
 async fn submit_artifacts(args: &SubmitArtifactsArgs) -> Result<()> {
     let config = Config::load(&args.config, home().as_deref())?;
-    let submitter = prepare_submission(&config)?;
+    let submitter = prepare_submission(&config).await?;
 
     let manifest_path = args.slot_dir.join("manifest.json");
     let manifest_text = std::fs::read_to_string(&manifest_path)
