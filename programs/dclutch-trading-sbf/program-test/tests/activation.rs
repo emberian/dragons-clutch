@@ -47,10 +47,16 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
+use dclutch_trading_sbf::TradingSbfError;
+use solana_program::instruction::InstructionError;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
+use solana_sdk::transaction::TransactionError;
 use solana_sdk_ids::system_program;
 use solana_transaction::Transaction;
+
+/// `TradingSbfError::Root`, the refusal the composite-root plan carries.
+const TRADING_ROOT_REFUSAL_CODE: u32 = TradingSbfError::Root as u32;
 
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x72; 32]);
@@ -58,7 +64,21 @@ const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x73; 32]);
 const WRONG_REGISTRY_ID: Pubkey = Pubkey::new_from_array([0x74; 32]);
 const GENERATION: u64 = 7;
 const ROOT_INITIAL_DUST: u64 = 1;
-const ROOT_TAIL_BYTES: usize = 8;
+/// Family root-tail width: one projected scalar then one projected identity.
+///
+/// The outer never decodes a family tail, so this fixture stands in for a real
+/// family root the only way the seam can observe one -- as the exact width the
+/// descriptor declares and the exact bytes the effect program's request buffer
+/// projects.
+const ROOT_TAIL_BYTES: usize = 40;
+/// Tail offset of the projected generation scalar (common scalar register 1).
+const TAIL_GENERATION_OFFSET: u32 = 0;
+/// Tail offset of the projected Market identity (common identity register 4).
+const TAIL_MARKET_OFFSET: u32 = 8;
+/// Common scalar register seeded with the Market generation.
+const GENERATION_SCALAR_REGISTER: u16 = 1;
+/// Common identity register seeded with the Market address.
+const MARKET_IDENTITY_REGISTER: u16 = 4;
 
 const PROFILE_RULE_BYTES: usize = 16;
 const PROFILE_OPERATION_BYTES: usize = 16;
@@ -83,6 +103,10 @@ struct Fixture {
 enum Campaign {
     Success,
     LateEffectRefusal,
+    /// Declares the tail width and projects nothing into it.
+    UnwrittenTail,
+    /// Projects the whole tail into a request buffer wider than the tail.
+    MismatchedTailWidth,
 }
 
 fn id(byte: u8) -> ContentId {
@@ -210,9 +234,15 @@ fn transition_program() -> Vec<u8> {
 }
 
 fn effect_program(campaign: Campaign) -> Vec<u8> {
-    let instruction_count = match campaign {
-        Campaign::Success => 1_u16,
-        Campaign::LateEffectRefusal => 2_u16,
+    // Instruction 0 is always the funding transfer. The two request writes that
+    // compose the family root tail follow it, except in `UnwrittenTail`. The late
+    // requirement, when present, is last so it runs after the transfer.
+    let tail_writes = u16::from(!matches!(campaign, Campaign::UnwrittenTail)) * 2;
+    let late = u16::from(matches!(campaign, Campaign::LateEffectRefusal));
+    let instruction_count = 1 + tail_writes + late;
+    let request_bytes = match campaign {
+        Campaign::MismatchedTailWidth => ROOT_TAIL_BYTES + 8,
+        _ => ROOT_TAIL_BYTES,
     };
     let mut output = vec![0_u8; 16 + usize::from(instruction_count) * 16];
     put(&mut output, 0, b"DCE2");
@@ -221,15 +251,33 @@ fn effect_program(campaign: Campaign) -> Vec<u8> {
     put_u16(&mut output, 8, PROFILE_ACCOUNT_COUNT);
     put_u16(&mut output, 10, SCALAR_COUNT);
     put_u16(&mut output, 12, IDENTITY_COUNT);
+    put_u16(
+        &mut output,
+        14,
+        u16::try_from(request_bytes).expect("request width"),
+    );
     // Transfer projected Funding Rent scalar[6] from FundingState to root.
     put_u16(&mut output, 18, 1);
     put_u16(&mut output, 20, 0);
     put_u16(&mut output, 22, 6);
-    if matches!(campaign, Campaign::LateEffectRefusal) {
+    let mut next = 32_usize;
+    if tail_writes != 0 {
+        // Tail[0..8] = the projected Market generation.
+        *output.get_mut(next).expect("request scalar opcode") = 4;
+        put_u16(&mut output, next + 6, GENERATION_SCALAR_REGISTER);
+        put_u32(&mut output, next + 8, TAIL_GENERATION_OFFSET);
+        next += 16;
+        // Tail[8..40] = the projected Market address.
+        *output.get_mut(next).expect("request identity opcode") = 5;
+        put_u16(&mut output, next + 6, MARKET_IDENTITY_REGISTER);
+        put_u32(&mut output, next + 8, TAIL_MARKET_OFFSET);
+        next += 16;
+    }
+    if late != 0 {
         // After the transfer, root lamports cannot still equal prestate scalar[7].
-        *output.get_mut(32).expect("late requirement opcode") = 3;
-        put_u16(&mut output, 34, 0);
-        put_u16(&mut output, 38, 7);
+        *output.get_mut(next).expect("late requirement opcode") = 3;
+        put_u16(&mut output, next + 2, 0);
+        put_u16(&mut output, next + 6, 7);
     }
     output
 }
@@ -712,12 +760,28 @@ async fn assert_rollback(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
     instruction: Instruction,
-) {
+) -> BanksClientError {
     let root_before = account(context, fixture.root).await;
     let funding_before = account(context, fixture.funding).await;
-    assert!(submit(context, instruction).await.is_err());
+    let error = submit(context, instruction)
+        .await
+        .expect_err("activation refuses");
     assert_eq!(account(context, fixture.root).await, root_before);
     assert_eq!(account(context, fixture.funding).await, funding_before);
+    error
+}
+
+/// The custom program code the refusal carried, so a test can name it.
+fn refusal_code(error: &BanksClientError) -> Option<u32> {
+    let transaction = match error {
+        BanksClientError::TransactionError(value) => value,
+        BanksClientError::SimulationError { err, .. } => err,
+        _ => return None,
+    };
+    match transaction {
+        TransactionError::InstructionError(_, InstructionError::Custom(code)) => Some(*code),
+        _ => None,
+    }
 }
 
 #[tokio::test]
@@ -734,7 +798,13 @@ async fn common_outer_activates_root_and_funding_commit_last() {
     let descriptor = CapabilityProgramV1::decode(&descriptor_account.data).expect("descriptor");
     let decoded = CapabilityRootAccountV1::decode(&root.data, descriptor).expect("root account");
     assert_eq!(decoded.header().market(), fixture.market.to_bytes());
-    assert!(decoded.state().iter().all(|byte| *byte == 0));
+    // The family tail is the effect program's projected request buffer, exactly.
+    // Before this was so, the seam wrote `vec![0; root_state_bytes]` and no family
+    // root -- General's or Direct's -- could be decoded out of what it created.
+    let mut expected_tail = vec![0_u8; ROOT_TAIL_BYTES];
+    put(&mut expected_tail, 0, &GENERATION.to_le_bytes());
+    put(&mut expected_tail, 8, &fixture.market.to_bytes());
+    assert_eq!(decoded.state(), expected_tail.as_slice());
     let funding = account(&mut context, fixture.funding).await;
     assert_eq!(funding.lamports, fixture.funding_rent);
     let funding = FundingStateV1::decode(&funding.data).expect("funding poststate");
@@ -777,4 +847,27 @@ async fn late_effect_refusal_rolls_back_the_projected_transfer() {
     let (test, fixture) = build_fixture(Campaign::LateEffectRefusal);
     let mut context = test.start_with_context().await;
     assert_rollback(&mut context, &fixture, fixture.instruction.clone()).await;
+}
+
+/// Reversion control for the tail channel, both directions.
+///
+/// `UnwrittenTail` is the exact prior behaviour of this seam -- a declared tail
+/// width with nothing projected into it -- and it now refuses instead of
+/// creating a root no family can decode. `MismatchedTailWidth` projects the
+/// whole tail into a request buffer eight bytes wider than the descriptor's
+/// `root_state_bytes`, which the outer refuses rather than truncating.
+#[tokio::test]
+async fn a_tail_that_is_unwritten_or_the_wrong_width_refuses() {
+    for campaign in [Campaign::UnwrittenTail, Campaign::MismatchedTailWidth] {
+        let (test, fixture) = build_fixture(campaign);
+        let mut context = test.start_with_context().await;
+        let error = assert_rollback(&mut context, &fixture, fixture.instruction.clone()).await;
+        assert_eq!(
+            refusal_code(&error).expect("custom refusal code"),
+            TRADING_ROOT_REFUSAL_CODE
+        );
+        let root = account(&mut context, fixture.root).await;
+        assert_eq!(root.owner, system_program::ID);
+        assert!(root.data.is_empty());
+    }
 }

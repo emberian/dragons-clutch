@@ -4,6 +4,13 @@
 //! finalized content records, and an interpreted account/effect profile. It
 //! does not dispatch on a capability kind. All physical mutation is projected
 //! first and committed only after the complete activation plan accepts.
+//!
+//! The created root is `CapabilityRootHeaderV1 || <family tail>`. The outer owns
+//! the header and never decodes the tail; the tail is exactly the effect
+//! program's projected request buffer, whose width the descriptor pins to
+//! `root_state_bytes`. That keeps the family's initial state an artifact the
+//! family authors and the Market's manifest entry binds, with no family decoder
+//! and no kind branch on this path.
 
 extern crate alloc;
 
@@ -655,12 +662,23 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         root_header: CapabilityRootHeaderV1,
         descriptor: CapabilityProgramV1<'_>,
     ) -> Result<ActivationPlanV2, ProgramError> {
+        let root_state_bytes =
+            usize::try_from(descriptor.root_state_bytes()).map_err(|_| TradingSbfError::Root)?;
         if usize::from(effect.account_count()) != self.accounts.len()
             || effect.scalar_count() != profile.scalar_count()
             || effect.identity_count() != profile.identity_count()
             || usize::from(effect.request_bytes()) > MAX_ROLE_REQUEST_BYTES_V2
         {
             return Err(TradingSbfError::Content.into());
+        }
+        // The effect program's projected request buffer IS the family root tail.
+        // The activation outer never decodes a family root -- it has no family
+        // decoder and must not acquire one -- so the only family-neutral channel
+        // for the initial tail is an artifact the family already authors and the
+        // manifest entry already binds. Declaring a different width is refused
+        // rather than truncated or zero-padded.
+        if usize::from(effect.request_bytes()) != root_state_bytes {
+            return Err(TradingSbfError::Root.into());
         }
         let account_inputs = self
             .accounts
@@ -764,18 +782,20 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         if output_lamports.first().copied() != Some(root_rent) {
             return Err(TradingSbfError::Root.into());
         }
+        // An activation that projects no family state at all creates a root whose
+        // tail no family can decode -- every in-tree family root refuses all-zero
+        // at its magic. That is a bricked capability, not a successful activation,
+        // so it refuses here instead of committing.
+        if root_state_bytes != 0 && output_request.iter().all(|byte| *byte == 0) {
+            return Err(TradingSbfError::Root.into());
+        }
         let mut root_data = vec![
             0_u8;
             descriptor
                 .root_account_bytes()
                 .map_err(|_| TradingSbfError::Root)?
         ];
-        let tail = vec![
-            0_u8;
-            usize::try_from(descriptor.root_state_bytes())
-                .map_err(|_| TradingSbfError::Root)?
-        ];
-        initialize_root_account_v1(&mut root_data, root_header, descriptor, &tail)
+        initialize_root_account_v1(&mut root_data, root_header, descriptor, &output_request)
             .map_err(|_| TradingSbfError::Root)?;
         CapabilityRootAccountV1::decode(&root_data, descriptor)
             .map_err(|_| TradingSbfError::Root)?;
@@ -825,7 +845,14 @@ fn require_activation_local_effects(
             ResolvedEffect::InvokeRole { enabled: true, .. } => {
                 return Err(TradingSbfError::UnsupportedContent.into());
             }
-            _ => {}
+            // A request write composes the family root tail; a lamport move and a
+            // balance requirement are the funding semantics. A disabled invoke is
+            // a no-op the projection already resolved away.
+            ResolvedEffect::WriteRequestScalar { .. }
+            | ResolvedEffect::WriteRequestIdentity { .. }
+            | ResolvedEffect::TransferLamports { .. }
+            | ResolvedEffect::RequireLamportsEq { .. }
+            | ResolvedEffect::InvokeRole { enabled: false, .. } => {}
         }
         index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
