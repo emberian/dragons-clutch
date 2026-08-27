@@ -403,3 +403,16 @@ parked (vs ~25 bespoke). Parked-by-ember: deep assurance beyond fail-closed labe
 corpus-based. (An earlier revision of this line said 'FRI/STARK floor' — that
 was contamination from an unrelated project's doctrine; dClutch has no
 STARK/FRI component anywhere.)
+
+## Doctrine, distilled by the Fable derpage review from the whole board
+
+1. Never-executed is the default: a route/guard/PDA domain ships with the
+   census row that executes it, or ships marked NEVER-EXECUTED.
+2. The fixture is never the authority: a fixture field chosen to make a test
+   pass carries a derivation or citation; address-vs-digest gets a newtype.
+3. One fact, one author — and a guard's other side is a different author.
+4. Sweep the siblings before you close (including the one that fails the
+   opposite way).
+5. No estimate is a total; no silence is a result.
+Anti-finding, recorded: entrypoint_adapter.rs is the named standard for an
+unsafe membrane (every SAFETY audited and holding).
