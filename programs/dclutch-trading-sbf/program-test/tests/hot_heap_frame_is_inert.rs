@@ -22,6 +22,12 @@
 //!
 //! Either way the change is deliberate and visible here, rather than a
 //! doctrine living only in a doc comment.
+//!
+//! **The second one happened (W2p, 2026-08-27).** The Hot tail now executes to
+//! completion at the protocol default 32 KiB heap, so what this test asserts is
+//! success with the grant still inert. Hot stays off the extended-heap list and
+//! the packet assertion below still records why -- but nothing rides on it any
+//! more, which is the outcome the decision was holding out for.
 
 use dclutch_trading_sbf::TradingSbfError;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
@@ -165,28 +171,46 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
         .await
         .expect("execution completed");
     let metadata = processed.metadata.expect("transaction metadata");
-    let refusal = processed
-        .result
-        .expect_err("Hot cannot yet execute its tail at the protocol default heap");
-    // `TradingSbfError::Content` is the named heap refusal -- fail-closed, never
-    // an abort. If this ever becomes an access violation, the grant has gone
-    // live without the packet room to carry it and the allocator is writing
-    // past a region the runtime did not map.
+    // THE SECOND OF THE TWO CHANGES THIS TEST'S HEADER NAMES HAS HAPPENED
+    // (W2p, 2026-08-27). The Hot tail's heap demand was closed structurally --
+    // the observation bank, the borrow guards and every register bank of the
+    // request/preplan/replan phases now come off the program heap's scratch
+    // end and are released before the child walk -- so the whole question is
+    // moot and this test's refusal has become success.
     //
-    // Matched as a value, not as a substring of the Debug rendering. The
-    // substring form said `contains("Custom(3)")`, which also matches
-    // `Custom(30)`, `Custom(300)` and -- after decision 0007 renumbered
-    // Trading into band 4 -- nothing at all.
-    let TransactionError::InstructionError(_, InstructionError::Custom(code)) = refusal else {
-        panic!("Hot refused outside its own error taxonomy: {refusal:?}");
-    };
-    assert_eq!(
-        code,
-        TradingSbfError::Content as u32,
-        "Hot refused something other than its own heap refusal",
-    );
+    // What it now pins is stronger than what it pinned before: the canonical
+    // Direct continuation EXECUTES TO COMPLETION at the protocol default 32
+    // KiB heap, with the `RequestHeapFrame(262_144)` above still inert. That
+    // is the same inertness as before -- Hot is not on
+    // `declares_extended_heap_profile_v1`'s list and the packet assertion
+    // above still says why it cannot be -- but now with nothing riding on it.
+    //
+    // If this ever becomes a refusal again, read the code before assuming a
+    // regression in the heap: `TradingSbfError::Content` is the named heap
+    // refusal, fail-closed and never an abort, and it is what a heap
+    // regression would produce.
+    if let Err(refusal) = processed.result {
+        let TransactionError::InstructionError(_, InstructionError::Custom(code)) = refusal else {
+            panic!("Hot refused outside its own error taxonomy: {refusal:?}");
+        };
+        assert_ne!(
+            code,
+            TradingSbfError::Content as u32,
+            "the Hot tail no longer fits the protocol default heap -- this is \
+             the structural closure of W2p coming undone, not a new refusal",
+        );
+        panic!("Hot refused at the protocol default heap with Custom({code})");
+    }
     assert!(
         metadata.compute_units_consumed <= 1_400_000,
         "the protocol ceiling is the ceiling",
+    );
+    // Printed, not asserted: the margin is the lane's evidence and a single
+    // figure off this path is codegen noise of about +-20,000 CU. What is
+    // asserted is the ceiling.
+    println!(
+        "hot tail at the protocol default heap: {} CU of 1,400,000 ({} spare)",
+        metadata.compute_units_consumed,
+        1_400_000_u64.saturating_sub(metadata.compute_units_consumed),
     );
 }
