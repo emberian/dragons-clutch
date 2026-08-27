@@ -8,7 +8,7 @@
 
 extern crate alloc;
 
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -518,7 +518,7 @@ fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    let mut output = vec![];
+    let mut output = accounts.invocation_frame(invocation)?;
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))

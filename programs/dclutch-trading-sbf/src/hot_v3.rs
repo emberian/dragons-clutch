@@ -4025,6 +4025,54 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
             .count())
     }
 
+    /// One child account vector, allocated ONCE at the exact width this
+    /// invocation will fill plus the child program every composition pushes on
+    /// the end.
+    ///
+    /// Every composition started this buffer empty and grew it through
+    /// `extend_window`. On the SBF bump allocator, which never frees, that is
+    /// the whole doubling ladder AND a final reallocation for the push, and
+    /// every buffer it walked through stays charged for the rest of the
+    /// instruction. Measured on the canonical Direct bundle at the moment the
+    /// heap is scarcest -- inside the child-route walk, past the projection --
+    /// **7,195 bytes for one Claims invocation and 5,691 for one Custody
+    /// invocation**, against a live width of 48 bytes per account.
+    ///
+    /// The width is a fact about the resolved invocation, known before the
+    /// first window is appended: the fixed frame, plus one item subframe per
+    /// repeated item, plus the program. `extend_window`'s own `try_reserve` is
+    /// then satisfied and never grows.
+    ///
+    /// It is bounded by the logical frame because a hostile geometry must
+    /// refuse rather than ask the allocator for the refusal.
+    pub fn invocation_frame(
+        self,
+        invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
+        let items = usize::try_from(invocation.repeated_item_count)
+            .map_err(|_| TradingSbfError::Content)?
+            .checked_mul(usize::from(invocation.item_account_count))
+            .ok_or(TradingSbfError::Content)?;
+        let exact = usize::from(invocation.fixed_account_count)
+            .checked_add(items)
+            .and_then(|total| total.checked_add(1))
+            .ok_or(TradingSbfError::Content)?;
+        if exact
+            > self
+                .logical
+                .len()
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(exact)
+            .map_err(|_| TradingSbfError::Content)?;
+        Ok(output)
+    }
+
     /// Append one contiguous window's child views to a caller-owned buffer.
     ///
     /// This is the only shape any consumer ever needed: each composition's

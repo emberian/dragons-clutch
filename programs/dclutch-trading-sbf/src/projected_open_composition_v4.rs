@@ -432,7 +432,7 @@ fn invocation_accounts<'info>(
     let end = start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    let mut output = Vec::new();
+    let mut output = accounts.invocation_frame(invocation)?;
     accounts.extend_window(
         &mut output,
         start,
