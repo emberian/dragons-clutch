@@ -47,6 +47,7 @@ use crate::{
         pubkey, validate_program_ids,
     },
     rpc::{Rpc, account_evidence, validate_loopback_url},
+    seed::{KeyForge, role},
 };
 
 const RUN_SPEC_SCHEMA_V2: &str = "dclutch-local-successor-run-spec-v2";
@@ -189,6 +190,9 @@ pub(crate) struct OpenMarketSessionV1 {
     pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, crate::model::AccountEvidence>,
     pub(crate) completed: Vec<String>,
+    /// The campaign's key source, kept so a post-Open campaign draws its keys
+    /// from the same forge and inherits the same reproducibility.
+    pub(crate) forge: KeyForge,
 }
 
 impl OpenMarketSessionV1 {
@@ -202,6 +206,12 @@ impl OpenMarketSessionV1 {
             plan_sha256: self.plan_sha256.clone(),
             core_upgrade_authority_pubkey: self.authority.pubkey().to_string(),
             private_key_persisted: false,
+            // A seeded campaign persists no key either -- but its keys are
+            // REPRODUCIBLE from a seed somebody else holds, which is a
+            // different claim from "unreproducible", and the evidence has to
+            // make that difference visible rather than let one bool cover both.
+            keypair_derivation: self.forge.derivation_label().into(),
+            keypair_seed_sha256: self.forge.seed_sha256(),
             completed: self.completed.clone(),
             transactions: self.transactions.clone(),
             accounts: self.accounts.clone(),
@@ -211,8 +221,8 @@ impl OpenMarketSessionV1 {
 }
 
 /// Own the complete authority lifetime and leave the ledger as evidence.
-pub(crate) fn execute(spec_path: &Path) -> Result<()> {
-    let session = found_through_open(spec_path)?;
+pub(crate) fn execute(spec_path: &Path, keypair_seed: Option<&str>) -> Result<()> {
+    let session = found_through_open(spec_path, keypair_seed)?;
     let evidence = session.evidence();
     write_evidence(Path::new(&session.spec.output), &evidence)?;
     let mut stdout = std::io::stdout();
@@ -227,13 +237,22 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
 /// so that a longer campaign - one that lives the Market's life after Open -
 /// runs against the same validator, the same activation cache, and the same
 /// in-memory founder, instead of reconstructing a founding it cannot sign for.
-pub(crate) fn found_through_open(spec_path: &Path) -> Result<OpenMarketSessionV1> {
+pub(crate) fn found_through_open(
+    spec_path: &Path,
+    keypair_seed: Option<&str>,
+) -> Result<OpenMarketSessionV1> {
     validate_existing_canonical_file(spec_path, "--spec")?;
     let spec: SuccessorRunSpec = serde_json::from_slice(&fs::read(spec_path)?)?;
     validate_spec(&spec)?;
+    // The seed gate reads the SPEC's declared origin, and it runs before any
+    // key exists. `validate_spec` has already pinned that origin to the
+    // launcher's loopback one; the gate does not assume that, because a
+    // TEST-ONLY affordance whose safety depends on an unrelated check upstream
+    // is one refactor away from not being safe at all.
+    let forge = KeyForge::parse(keypair_seed, &spec.rpc_url)?;
     ensure_rpc_port_free()?;
 
-    let authority = Keypair::new();
+    let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
     let plan = crate::plan::prepare(prepare_args(&spec, authority.pubkey())?)?;
     validate_plan(&plan)?;
     if plan.core_bootstrap.upgrade_authority != authority.pubkey().to_string() {
@@ -250,7 +269,7 @@ pub(crate) fn found_through_open(spec_path: &Path) -> Result<OpenMarketSessionV1
         return Err(Error::new("healthy RPC origin changed after launch"));
     }
 
-    let hostile = Keypair::new();
+    let hostile = forge.keypair(role::HOSTILE_AUTHORITY);
     let mut transactions = vec![
         rpc.airdrop(
             "fund ephemeral Core authority",
@@ -380,6 +399,7 @@ pub(crate) fn found_through_open(spec_path: &Path) -> Result<OpenMarketSessionV1
         &plan,
         &spec.market,
         &authority,
+        &forge,
         &mut transactions,
     )?;
 
@@ -423,6 +443,7 @@ pub(crate) fn found_through_open(spec_path: &Path) -> Result<OpenMarketSessionV1
         transactions,
         accounts,
         completed,
+        forge,
     })
 }
 
@@ -1675,6 +1696,7 @@ mod tests {
             &plan,
             &market_input,
             &authority,
+            &KeyForge::random(),
             &mut publication_transactions,
         )
         .expect("real-SBF RentV2 and Found31 campaign");

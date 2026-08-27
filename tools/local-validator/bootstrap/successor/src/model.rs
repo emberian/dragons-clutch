@@ -179,6 +179,18 @@ pub(crate) struct SuccessorRunEvidence {
     pub(crate) plan_sha256: String,
     pub(crate) core_upgrade_authority_pubkey: String,
     pub(crate) private_key_persisted: bool,
+    /// `"random-per-run"` or `"seeded-deterministic"`.
+    ///
+    /// `private_key_persisted` answers "did this tool write a key to disk", and
+    /// the answer is always no. It does NOT answer "can anyone else produce
+    /// these keys", and under `--keypair-seed` the answer to that becomes yes.
+    /// The two claims are separate fields because collapsing them would let a
+    /// seeded run read as an unreproducible one.
+    pub(crate) keypair_derivation: String,
+    /// SHA-256 of the seed, absent for a random campaign. The digest, not the
+    /// seed: enough to say which seed produced a run's compute-unit numbers,
+    /// not enough to sign as it.
+    pub(crate) keypair_seed_sha256: Option<String>,
     pub(crate) completed: Vec<String>,
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,

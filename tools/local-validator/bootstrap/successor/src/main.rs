@@ -9,6 +9,7 @@ mod model;
 mod plan;
 mod rpc;
 mod runtime;
+mod seed;
 
 type Result<T> = core::result::Result<T, Error>;
 
@@ -71,6 +72,7 @@ fn run() -> Result<()> {
 
 fn run_runtime(arguments: Vec<String>) -> Result<()> {
     let mut spec = None;
+    let mut keypair_seed = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -78,13 +80,16 @@ fn run_runtime(arguments: Vec<String>) -> Result<()> {
             .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
         let slot = match argument.as_str() {
             "--spec" => &mut spec,
+            // Optional and TEST-ONLY. Absent is a fresh unreproducible key per
+            // request, which is what this command did before the flag existed.
+            "--keypair-seed" => &mut keypair_seed,
             _ => return Err(Error::new(format!("unknown run argument: {argument}"))),
         };
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
     }
-    runtime::execute(&absolute(spec, "--spec")?)
+    runtime::execute(&absolute(spec, "--spec")?, keypair_seed.as_deref())
 }
 
 fn run_demo_market(arguments: Vec<String>) -> Result<()> {
@@ -290,6 +295,6 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256 [--record-publication genesis|transaction]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration."
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256 [--record-publication genesis|transaction]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration.\n\n--keypair-seed is a TEST-ONLY affordance and is REFUSED unless the spec's RPC endpoint is on localhost or 127.0.0.1. With it, every signing key the campaign generates is derived deterministically as SHA-256(domain || 0 || seed || 0 || role-name || 0 || per-role index) read as an ed25519 secret seed, which collapses the find_program_address bump-search noise the gauntlet's compute budgets have to tolerate. It also makes every one of those private keys reproducible by anyone who can read the seed off a command line, a shell history or a checked-in script, so on any public cluster it would hand a stranger the campaign's funded accounts, mint authorities and upgrade authorities. Default is a fresh unreproducible key per request."
     );
 }

@@ -80,6 +80,51 @@ spec contains semantic market inputs—not account addresses or caller-authored
 digests. The Rust compiler and chain-derived operators own every record digest,
 PDA, instruction frame, and next publication action.
 
+## `--keypair-seed`: deterministic keys, loopback only
+
+`run` takes an optional `--keypair-seed <64 lowercase hex>`. Default is absent,
+and absent is exactly what this command did before the flag existed: one fresh
+`Keypair::new()` per request.
+
+**Why.** A different public key changes how many iterations
+`find_program_address` needs to find an off-curve bump, and every extra
+iteration is one `sol_create_program_address` syscall at 1,500 CU. That is the
+entire source of the run-to-run compute noise `tools/gauntlet/CU_BUDGETS.md`
+measures — 58,494 CU of band on `DCLTGMF1`, 79,500 on `DCLTPCB1` *within one
+campaign* — and a tolerance wide enough to absorb it cannot also catch a
+regression smaller than it. With a seed the band is zero.
+
+**The derivation**, in `src/seed.rs`:
+
+```text
+index    = keys already issued for this role in this campaign, u32 little-endian
+material = SHA-256( "dclutch/local-successor-bootstrap/keypair-seed/v1"
+                    || 0x00 || seed[32] || 0x00 || role || 0x00 || index )
+keypair  = the ed25519 keypair whose 32-byte secret seed is `material`
+```
+
+The campaign is strictly sequential — one transaction, waited to finalized,
+then the next derived from it — so "the n-th key under this role" is itself a
+deterministic coordinate. Every 32-byte string is a valid ed25519 secret seed,
+so the derivation is total. Role names are listed in `seed::role` and are part
+of the derivation: renaming one moves its keys and the compute numbers with
+them, which is a budget re-pin and not a refactor.
+
+**The safety gate is not optional.** The flag is REFUSED unless the spec's
+`rpc_url` is a loopback origin, and it is refused before any key is derived. A
+seed is a command-line argument: it lives in a shell history and in a checked-in
+script, so every private key it derives is reproducible by anyone who can read
+either. On a public cluster that hands a stranger the campaign's funded
+accounts, mint authorities and upgrade authorities. `--keypair-seed` is a
+TEST-ONLY affordance and this tool treats it as one.
+
+The evidence document says which mode ran: `keypair_derivation` is
+`"random-per-run"` or `"seeded-deterministic"`, and `keypair_seed_sha256`
+carries the seed's digest — enough to identify which seed produced a run's
+numbers, not enough to sign as it. `private_key_persisted` stays `false` either
+way, because it answers a different question ("did this tool write a key to
+disk") than the one a seed changes ("can anyone else produce these keys").
+
 ## What the campaign reaches: an Open Market
 
 Measured on a real localhost validator with all seven real artifacts bound into

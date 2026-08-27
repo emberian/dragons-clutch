@@ -90,6 +90,7 @@ use crate::{
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, RpcAccount, account_evidence},
     runtime::{PublishedRecord, decode_hex, publish_product_graph, publish_record, record},
+    seed::{KeyForge, role},
 };
 
 pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign reaches an OPEN Market. It publishes the Realm/Product/ResultDomain/Portfolio/Source/RecoveryPolicy/capability-manifest graph and the canonical ProductBasisV3 the Product declares as its liability basis, creates a real lifecycle RentCreditV2, creates a Market through canonical Core Found31 at 223,540 compute units, stages the complete projected-Custody prestate through DCLTPCB1 at its own generation - all four stages, 754,119 CU, in one rollback domain - pre-funds the five accounts the protocol allocates but never funds, and then founds a second Market atomically through DCLTGMF1: Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open LAST, five stages in one rollback domain and one transaction, at 1,184,132 CU or 84.6% of the per-transaction maximum. This string used to say that DCLTPCB1 was heap-bound and that no runner could fix it, because RequestHeapFrame enlarges the region the runtime grants while the stock solana-program-entrypoint allocator is built with the compile-time constant HEAP_LENGTH = 32 KiB. That was true of the tree that measured it. Trading now owns its entrypoint and its allocator and re-derives the grant from the instructions sysvar, and the grant reaches the two founding routes because they present that sysvar in their own frames - it was a wire fact, not a transaction fact. DCLTPCB1 completes with 645,581 CU unspent; it is neither heap-bound nor compute-bound. What is left is not a seam in this path. The Market is Open, the Claims liability aggregate and the founder Position and the admission record exist at their derived addresses and runtime-derived widths, the Hoard holds the exact founding principal, the source compartment is closed and the one-shot permit consumed, and the projection is realized in place as the Market's normal Custody replay. The projected-Custody family still has no AbortSourceAndClose terminal, so a founder who bootstraps and never founds has principal that can only move forward through Lock; that is deliberate and it is queued. See docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md.";
@@ -285,6 +286,7 @@ pub(crate) fn execute_found_market(
     plan: &SuccessorPlan,
     input: &MarketRunInput,
     payer: &Keypair,
+    forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<MarketExecutionEvidence> {
     validate_market_input(input)?;
@@ -295,6 +297,7 @@ pub(crate) fn execute_found_market(
     let (mint, collateral_wallet) = create_real_collateral(
         rpc,
         payer,
+        forge,
         token_program,
         input.collateral_display_decimals,
         input.initial_collateral_atoms,
@@ -524,6 +527,7 @@ pub(crate) fn execute_found_market(
             market,
             lane,
             payer,
+            forge,
             transactions,
             &mut accounts,
             &mut completed,
@@ -796,6 +800,7 @@ fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {
 fn create_real_collateral(
     rpc: &mut Rpc,
     payer: &Keypair,
+    forge: &KeyForge,
     token_program: Pubkey,
     decimals: u8,
     atoms: u64,
@@ -804,8 +809,8 @@ fn create_real_collateral(
     if atoms == 0 {
         return Err(Error::new("initial collateral raw atoms must be positive"));
     }
-    let mint = Keypair::new();
-    let wallet = Keypair::new();
+    let mint = forge.keypair(role::COLLATERAL_MINT);
+    let wallet = forge.keypair(role::COLLATERAL_WALLET);
     let mint_rent = rpc.minimum_balance(MINT_BYTES)?;
     let wallet_rent = rpc.minimum_balance(ACCOUNT_BYTES)?;
     let mut initialize_mint = Vec::with_capacity(70);
@@ -1767,6 +1772,7 @@ fn execute_projected_custody_bootstrap(
     found31_market: Pubkey,
     lane: PrestateLaneV1,
     payer: &Keypair,
+    forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
@@ -1780,9 +1786,9 @@ fn execute_projected_custody_bootstrap(
     // The principal supplier is not the rent payer. Custody requires the
     // funding source's owner to sign and to be non-writable, while the rent
     // payer must be writable, and a transaction grants privileges per key.
-    let beneficiary = Keypair::new();
-    let founder = Keypair::new();
-    let projection_witness = Keypair::new();
+    let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY);
+    let founder = forge.keypair(role::FOUNDING_FOUNDER);
+    let projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS);
     let market_rent = rpc.minimum_balance(STATE_BYTES)?;
     let expiry_slot = rpc
         .finalized_slot()?
@@ -1806,7 +1812,7 @@ fn execute_projected_custody_bootstrap(
     let principal = coordinates.lock.amount;
 
     // One Token-2022 account owned by the party the principal is refundable to.
-    let source_funder = Keypair::new();
+    let source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER);
     let wallet_rent = rpc.minimum_balance(ACCOUNT_BYTES)?;
     let mut initialize_wallet = Vec::with_capacity(33);
     initialize_wallet.push(18);
@@ -2140,6 +2146,7 @@ fn execute_projected_custody_bootstrap(
             lock_record.raw,
             claim_count,
             payer,
+            forge,
             transactions,
             accounts,
             completed,
@@ -2586,6 +2593,7 @@ fn derive_founding_outer_v1(
     product: ProductContentId,
     founder: Pubkey,
     claim_count: u32,
+    forge: &KeyForge,
 ) -> Result<FoundingOuterV1> {
     let core = pubkey(&plan.core.program_id)?;
     let claims_program = pubkey(&plan.claims.program_id)?;
@@ -2823,7 +2831,7 @@ fn derive_founding_outer_v1(
     // digest it carries, is the honest founding's. The outer's cross-request
     // join is the only thing between a substituted Claims record and a Position
     // minted to somebody else.
-    let substituted_founder = Keypair::new().pubkey();
+    let substituted_founder = forge.keypair(role::SUBSTITUTED_FOUNDER).pubkey();
     let substituted_claims_raw = ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
         founder: substituted_founder.to_bytes(),
         ..claims_input
@@ -3183,6 +3191,7 @@ fn execute_generic_market_founding(
     lock_raw_account: Pubkey,
     claim_count: u32,
     payer: &Keypair,
+    forge: &KeyForge,
     transactions: &mut Vec<TransactionEvidence>,
     accounts: &mut BTreeMap<String, AccountEvidence>,
     completed: &mut Vec<String>,
@@ -3203,6 +3212,7 @@ fn execute_generic_market_founding(
         product,
         founder,
         claim_count,
+        forge,
     )?;
 
     // The founding artifact and the terminal Lock are the records the
