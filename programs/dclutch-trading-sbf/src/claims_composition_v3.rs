@@ -44,8 +44,6 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -53,7 +51,7 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
-    hot_v3::DowngradedEffectAccountsV3,
+    hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
 /// Exact receipt returned by one canonical Claims route.
@@ -91,6 +89,7 @@ pub fn execute_claims_route_v3<'info>(
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
+    buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if effect
@@ -110,9 +109,10 @@ pub fn execute_claims_route_v3<'info>(
         return Err(TradingSbfError::Content.into());
     }
     let request = invocation_request(invocation, request_bank, family_request)?;
-    let mut child_accounts = invocation_accounts(invocation, effect_accounts)?;
-    if child_accounts.is_empty()
-        || child_accounts
+    gather_invocation_accounts(&mut buffers.accounts, invocation, effect_accounts)?;
+    if buffers.accounts.is_empty()
+        || buffers
+            .accounts
             .iter()
             .filter(|account| account.key == claims_program.key)
             .count()
@@ -123,76 +123,60 @@ pub fn execute_claims_route_v3<'info>(
     let (authority_seeds, receipt_kind) = route_authority(request, invocation.kind)?;
     let (expected_authority, bump) =
         Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
-    if child_accounts
+    if buffers
+        .accounts
         .first()
         .is_none_or(|account| account.key != &expected_authority)
     {
         return Err(TradingSbfError::Release.into());
     }
 
-    let mut metas = Vec::with_capacity(child_accounts.len());
-    for (index, account) in child_accounts.iter().enumerate() {
-        metas.push(child_account_meta_v3(index, account));
-    }
-    let mut child_data = request.to_vec();
+    buffers.fill_metas()?;
+    buffers.set_wire(request)?;
     deliver_receipt_dependency_v3(
         invocation,
-        &mut child_data,
+        &mut buffers.data,
         prior_receipt,
         receipt_kind.delivery(),
     )?;
-    let instruction = Instruction {
-        program_id: *claims_program.key,
-        accounts: metas,
-        data: child_data,
-    };
-    child_accounts.push(claims_program.clone());
+    buffers.push_callee(claims_program)?;
     let bump_seed = [bump];
     let [domain, release, market, role, context, digest] = authority_seeds.as_slices();
-    invoke_signed(
-        &instruction,
-        &child_accounts,
-        &[&[domain, release, market, role, context, digest, &bump_seed]],
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
-    let (producer, receipt) = get_return_data().ok_or(TradingSbfError::Transition)?;
-    if producer != *claims_program.key {
+    buffers
+        .invoke(
+            claims_program.key,
+            &[&[domain, release, market, role, context, digest, &bump_seed]],
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+    buffers.capture_return()?;
+    if buffers.producer != *claims_program.key {
         return Err(TradingSbfError::Transition.into());
     }
     let post_resources = match receipt_kind {
         ReceiptKindV3::SignedDelta => {
             PostResourceEvidenceV3::Single(signed_delta_post_resource_digest(
-                &child_accounts,
+                &buffers.accounts,
                 SignedDeltaPlanV3::decode(request)
                     .map_err(|_| TradingSbfError::Content)?
                     .position_count(),
             )?)
         }
         ReceiptKindV3::SparseNativeTransfer => {
-            PostResourceEvidenceV3::Single(sparse_native_post_resource_digest(&child_accounts)?)
+            PostResourceEvidenceV3::Single(sparse_native_post_resource_digest(&buffers.accounts)?)
         }
         ReceiptKindV3::Founding => {
-            PostResourceEvidenceV3::Founding(founding_post_resource_digests(&child_accounts)?)
+            PostResourceEvidenceV3::Founding(founding_post_resource_digests(&buffers.accounts)?)
         }
         _ => PostResourceEvidenceV3::None,
     };
     verify_route_receipt(
         receipt_kind,
         request,
-        &receipt,
+        &buffers.returned,
         claims_program.key.to_bytes(),
         program_id.to_bytes(),
         post_resources,
     )
-}
-
-fn child_account_meta_v3(index: usize, account: &AccountInfo<'_>) -> AccountMeta {
-    let signer = index == 0 || account.is_signer;
-    if account.is_writable {
-        AccountMeta::new(*account.key, signer)
-    } else {
-        AccountMeta::new_readonly(*account.key, signer)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -294,17 +278,23 @@ fn invocation_request<'a>(
     }
 }
 
-fn invocation_accounts<'info>(
+/// Gather this invocation's account windows into a caller-owned buffer.
+///
+/// The buffer is cleared and reserved at the exact width the windows fill, so
+/// the appends below never grow it -- and on a second invocation the capacity
+/// the first one bought already satisfies the reservation.
+fn gather_invocation_accounts<'info>(
+    output: &mut Vec<AccountInfo<'info>>,
     invocation: ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    let mut output = accounts.invocation_frame(invocation)?;
+) -> Result<(), ProgramError> {
+    accounts.reserve_invocation_frame(output, invocation)?;
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
     accounts.extend_window(
-        &mut output,
+        output,
         fixed_start,
         fixed_end
             .checked_sub(fixed_start)
@@ -322,7 +312,7 @@ fn invocation_accounts<'info>(
                 .ok_or(TradingSbfError::Content)?;
             let end = start.checked_add(count).ok_or(TradingSbfError::Content)?;
             accounts.extend_window(
-                &mut output,
+                output,
                 start,
                 end.checked_sub(start).ok_or(TradingSbfError::Content)?,
             )?;
@@ -331,7 +321,7 @@ fn invocation_accounts<'info>(
     } else if invocation.item_account_count != 0 || invocation.repeated_item_count != 0 {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(output)
+    Ok(())
 }
 
 fn route_authority(

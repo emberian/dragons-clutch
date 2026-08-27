@@ -26,8 +26,6 @@ use dclutch_resolution_codec::{
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -35,7 +33,7 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
-    hot_v3::DowngradedEffectAccountsV3,
+    hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
 const RESOLUTION_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-resolution-receipt:v3";
@@ -73,7 +71,7 @@ pub struct ResolutionCompositionParentV3 {
 
 /// Preflight one exact active Resolution invocation without external mutation.
 #[allow(clippy::too_many_arguments)]
-pub fn preflight_resolution_route_v3(
+pub fn preflight_resolution_route_v3<'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
     route_index: u16,
@@ -81,9 +79,11 @@ pub fn preflight_resolution_route_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
+    frame: &mut Vec<AccountInfo<'info>>,
+    wire: &mut Vec<u8>,
     resolution_program: &AccountInfo<'_>,
     parent: ResolutionCompositionParentV3,
 ) -> Result<(), ProgramError> {
@@ -98,6 +98,8 @@ pub fn preflight_resolution_route_v3(
         effect_accounts,
         request_bank,
         family_request,
+        frame,
+        wire,
         resolution_program,
         parent,
     )?;
@@ -118,10 +120,14 @@ pub fn execute_resolution_route_v3<'info>(
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
+    buffers: &mut ChildInvocationBuffersV3<'info>,
     resolution_program: &AccountInfo<'info>,
     parent: ResolutionCompositionParentV3,
 ) -> Result<[u8; 32], ProgramError> {
-    let mut prepared = prepare(
+    // `prepare` leaves the authenticated frame and the child wire IN the walk's
+    // buffers rather than building a set of its own for the execute half to
+    // duplicate.
+    let prepared = prepare(
         program_id,
         effect,
         route_index,
@@ -132,6 +138,8 @@ pub fn execute_resolution_route_v3<'info>(
         effect_accounts,
         request_bank,
         family_request,
+        &mut buffers.accounts,
+        &mut buffers.data,
         resolution_program,
         parent,
     )?;
@@ -141,40 +149,53 @@ pub fn execute_resolution_route_v3<'info>(
     // `post_params_body_digest`. There is no receipt suffix in that ABI.
     deliver_receipt_dependency_v3(
         prepared.invocation,
-        &mut prepared.child_data,
+        &mut buffers.data,
         prior_receipt,
         ReceiptDeliveryV3::VerifiedOnly,
     )?;
-    let mut child_accounts = invocation_accounts(prepared.invocation, effect_accounts)?;
-    let mut metas = Vec::with_capacity(child_accounts.len());
-    for (index, account) in child_accounts.iter().enumerate() {
-        let signer = index == CALLER_AUTHORITY_ACCOUNT_V3 || account.is_signer;
-        metas.push(if account.is_writable {
-            AccountMeta::new(*account.key, signer)
-        } else {
-            AccountMeta::new_readonly(*account.key, signer)
-        });
-    }
-    let instruction = Instruction {
-        program_id: *resolution_program.key,
-        accounts: metas,
-        data: prepared.child_data,
-    };
-    child_accounts.push(resolution_program.clone());
+    // `fill_metas`'s signer rule is `index == 0`, which is
+    // `CALLER_AUTHORITY_ACCOUNT_V3` for this frame.
+    const _: () = assert!(CALLER_AUTHORITY_ACCOUNT_V3 == 0);
+    buffers.fill_metas()?;
+    buffers.push_callee(resolution_program)?;
     let bump_seed = [prepared.bump];
     let [domain, release, market, role, context, digest] = prepared.authority_seeds.as_slices();
-    invoke_signed(
-        &instruction,
-        &child_accounts,
-        &[&[domain, release, market, role, context, digest, &bump_seed]],
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
-    if producer != *resolution_program.key {
+    buffers
+        .invoke(
+            resolution_program.key,
+            &[&[domain, release, market, role, context, digest, &bump_seed]],
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+    buffers.capture_return()?;
+    if buffers.producer != *resolution_program.key {
         return Err(TradingSbfError::Transition.into());
     }
-    let receipt = ProviderExecutionReceiptV3::decode(&receipt_bytes)
-        .map_err(|_| TradingSbfError::Transition)?;
+    verify_and_chain(
+        &prepared,
+        route_index,
+        invocation_index,
+        &buffers.returned,
+        &buffers.accounts,
+    )
+}
+
+/// Verify the immediate provider receipt and chain the post-state commitments.
+///
+/// Out of line from [`execute_resolution_route_v3`], which is the widest frame
+/// on this path: a decoded `ProviderExecutionReceiptV3` is 672 bytes on the
+/// wire and a `ProviderUpdateLifecycleV3` is another block again, against an
+/// SBPF v0 static frame of 4,096 that already holds the prepared request. Both
+/// belong to THIS frame, which nothing else shares.
+#[inline(never)]
+fn verify_and_chain(
+    prepared: &PreparedResolutionInvocationV3,
+    route_index: u16,
+    invocation_index: u32,
+    returned: &[u8],
+    child_accounts: &[AccountInfo<'_>],
+) -> Result<[u8; 32], ProgramError> {
+    let receipt =
+        ProviderExecutionReceiptV3::decode(returned).map_err(|_| TradingSbfError::Transition)?;
     verify_receipt(prepared.request, prepared.request_digest, receipt)?;
     let lifecycle = decode_lifecycle(
         child_accounts
@@ -203,7 +224,7 @@ pub fn execute_resolution_route_v3<'info>(
         &invocation_index.to_le_bytes(),
         &prepared.request_digest,
         &prepared.post_body_digest,
-        &receipt_bytes,
+        returned,
         &prepared.lifecycle_pre_digest,
         &lifecycle_digest,
         &source_digest,
@@ -215,7 +236,6 @@ pub fn execute_resolution_route_v3<'info>(
 struct PreparedResolutionInvocationV3 {
     invocation: ResolvedInvocationV3,
     request: ProviderExecutionRequestV3,
-    child_data: Vec<u8>,
     request_digest: [u8; 32],
     post_body_digest: [u8; 32],
     lifecycle_pre_digest: [u8; 32],
@@ -223,8 +243,13 @@ struct PreparedResolutionInvocationV3 {
     bump: u8,
 }
 
+// Out of line, deliberately: `PreparedResolutionInvocationV3` carries a decoded
+// `ProviderExecutionRequestV3`, and inlining `prepare` puts the decoder's
+// working set on `execute_resolution_route_v3`'s frame, which is already the
+// widest on this path against the SBPF v0 4,096-byte static bound.
 #[allow(clippy::too_many_arguments)]
-fn prepare(
+#[inline(never)]
+fn prepare<'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
     route_index: u16,
@@ -232,9 +257,11 @@ fn prepare(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
+    frame: &mut Vec<AccountInfo<'info>>,
+    wire: &mut Vec<u8>,
     resolution_program: &AccountInfo<'_>,
     parent: ResolutionCompositionParentV3,
 ) -> Result<PreparedResolutionInvocationV3, ProgramError> {
@@ -290,15 +317,18 @@ fn prepare(
     if post_body.is_empty() || hash(post_body).to_bytes() != request.post_params_body_digest {
         return Err(TradingSbfError::Content.into());
     }
-    let mut child_data = Vec::with_capacity(
+    wire.clear();
+    wire.try_reserve(
         request_bytes
             .len()
             .checked_add(post_body.len())
             .ok_or(TradingSbfError::Content)?,
-    );
-    child_data.extend_from_slice(request_bytes);
-    child_data.extend_from_slice(post_body);
-    let child_accounts = invocation_accounts(invocation, effect_accounts)?;
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    wire.extend_from_slice(request_bytes);
+    wire.extend_from_slice(post_body);
+    gather_invocation_accounts(frame, invocation, effect_accounts)?;
+    let child_accounts = &*frame;
     if child_accounts.len() != PROVIDER_RESOLUTION_TRADING_ACCOUNT_COUNT_V3
         || child_accounts
             .get(RESOLVER_ACCOUNT_V3)
@@ -398,7 +428,6 @@ fn prepare(
     Ok(PreparedResolutionInvocationV3 {
         invocation,
         request,
-        child_data,
         request_digest: hash(request_bytes).to_bytes(),
         post_body_digest: hash(post_body).to_bytes(),
         lifecycle_pre_digest: account_data_digest(lifecycle_account)?,
@@ -407,6 +436,7 @@ fn prepare(
     })
 }
 
+#[inline(never)]
 fn decode_lifecycle(account: &AccountInfo<'_>) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
     if account.data_len() != PROVIDER_UPDATE_LIFECYCLE_BYTES_V3 {
         return Err(TradingSbfError::Transition.into());
@@ -417,6 +447,7 @@ fn decode_lifecycle(account: &AccountInfo<'_>) -> Result<ProviderUpdateLifecycle
     ProviderUpdateLifecycleV3::decode(&bytes).map_err(|_| TradingSbfError::Transition.into())
 }
 
+#[inline(never)]
 fn verify_consumed_lifecycle(
     request: ProviderExecutionRequestV3,
     receipt: ProviderExecutionReceiptV3,
@@ -462,6 +493,7 @@ fn validate_parent(
     }
 }
 
+#[inline(never)]
 fn verify_receipt(
     request: ProviderExecutionRequestV3,
     request_digest: [u8; 32],
@@ -514,17 +546,19 @@ fn invocation_request(
         .ok_or_else(|| TradingSbfError::Content.into())
 }
 
-fn invocation_accounts<'info>(
+/// Gather this invocation's account window into a caller-owned buffer.
+fn gather_invocation_accounts<'info>(
+    output: &mut Vec<AccountInfo<'info>>,
     invocation: ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    let mut output = accounts.invocation_frame(invocation)?;
+) -> Result<(), ProgramError> {
+    accounts.reserve_invocation_frame(output, invocation)?;
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
     accounts.extend_window(
-        &mut output,
+        output,
         fixed_start,
         fixed_end
             .checked_sub(fixed_start)
@@ -536,7 +570,7 @@ fn invocation_accounts<'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]

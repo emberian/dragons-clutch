@@ -167,10 +167,14 @@ use core::{
     ptr::null_mut,
     slice,
 };
+use std::vec::Vec;
 
+#[cfg(not(target_os = "solana"))]
+use solana_program::instruction::Instruction;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::{BPF_ALIGN_OF_U128, HEAP_LENGTH, MAX_PERMITTED_DATA_INCREASE},
+    instruction::AccountMeta,
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -701,6 +705,221 @@ fn lift_declared_heap_profile_v1(accounts: &[AccountInfo<'_>], instruction_data:
     };
     let _ = admit_heap_frame_v1(instructions);
 }
+
+// ---------------------------------------------------------------------------
+// Child invocation
+// ---------------------------------------------------------------------------
+
+/// Invoke a child program from an instruction this program ALREADY OWNS.
+///
+/// # Why this is here rather than a call to `invoke_signed`
+///
+/// `solana_cpi::invoke_signed_unchecked` builds the runtime's stable layout
+/// with `StableInstruction::from(instruction.clone())`. It clones because it
+/// only holds a `&Instruction` and `StableInstruction::from` MOVES both `Vec`s
+/// out of the instruction it is given; an owner therefore pays nothing, and
+/// every caller in this executable owns its metas and its wire outright. On the
+/// SBF bump allocator, whose `dealloc` is a no-op, that clone is not a
+/// transient: **2,322 bytes for the two child CPIs of the canonical Direct
+/// bundle** stay charged for the rest of the instruction, measured at the point
+/// the heap is scarcest.
+///
+/// So this takes the two buffers by `&mut`, moves them into the SDK's OWN
+/// `StableInstruction` through the SDK's OWN `From<Vec<T>> for StableVec<T>`,
+/// makes the syscall the SDK makes with the arguments the SDK passes, and moves
+/// them back out through the SDK's OWN `From<StableVec<T>> for Vec<T>`. The
+/// caller's buffers come back with their allocation, length and capacity
+/// unchanged, ready to be cleared and refilled for the next invocation. Nothing
+/// about the layout the runtime reads is restated here.
+///
+/// # What is reproduced, and why it is reproduced rather than skipped
+///
+/// `invoke_signed` is `invoke_signed_unchecked` plus a `RefCell` consistency
+/// pre-check, and that pre-check is a runtime guarantee, not an optimisation:
+/// it is what turns a callee's write to an account this program is holding
+/// borrowed into a returned [`ProgramError::AccountBorrowFailed`] instead of
+/// undefined behaviour. [`require_cpi_borrowable_v1`] is that loop, conjunct
+/// for conjunct, over the metas that are about to become the instruction's
+/// account list. `child_invocation_borrow_check_matches_the_sdk` in this
+/// module's corpus runs both against the same frames and asserts they agree, on
+/// acceptance and on every borrow conflict.
+///
+/// The `_unchecked` variants are NOT what this replaces and their bargain is
+/// not taken: this is `invoke_signed`, minus a clone the caller does not need.
+///
+/// `#[inline(never)]`, and both halves below with it: the 80-byte
+/// `StableInstruction` and the syscall's five arguments belong to THIS frame,
+/// not to a composition's. Inlined, it put `execute_resolution_route_v3` 512
+/// bytes over the SBPF v0 4,096-byte static frame bound.
+#[inline(never)]
+pub fn invoke_signed_owned_v1(
+    program_id: &Pubkey,
+    metas: &mut Vec<AccountMeta>,
+    data: &mut Vec<u8>,
+    account_infos: &[AccountInfo<'_>],
+    signers_seeds: &[&[&[u8]]],
+) -> Result<(), ProgramError> {
+    require_cpi_borrowable_v1(metas, account_infos)?;
+    invoke_signed_owned_unchecked_v1(program_id, metas, data, account_infos, signers_seeds)
+}
+
+/// Refuse a child invocation whose account frame this program still holds
+/// borrowed in a way the callee's access would violate.
+///
+/// Sourced to `solana_cpi::invoke_signed` (3.1.0, `src/lib.rs:252`), whose
+/// whole body ahead of the syscall is this loop. It is reproduced rather than
+/// called because `invoke_signed` takes a `&Instruction` -- the very thing this
+/// module exists not to build -- and the loop reads only the account list.
+///
+/// The semantics that must survive the reproduction, all of them observable:
+///
+/// - the metas are walked in ORDER, and the FIRST `AccountInfo` whose key
+///   matches is the one checked (`break`), so a frame carrying the same account
+///   twice is checked once per meta against its first occurrence;
+/// - a writable meta demands BOTH mutable borrows, a readonly meta both shared
+///   borrows, and the borrow is released immediately (`let _ =`, never a
+///   binding that would hold it across the syscall);
+/// - a meta naming an account absent from `account_infos` is NOT an error here.
+///   The runtime refuses that, and refusing it earlier would be a different
+///   program.
+#[inline(never)]
+fn require_cpi_borrowable_v1(
+    metas: &[AccountMeta],
+    account_infos: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    for account_meta in metas.iter() {
+        for account_info in account_infos.iter() {
+            if account_meta.pubkey == *account_info.key {
+                if account_meta.is_writable {
+                    let _ = account_info.try_borrow_mut_lamports()?;
+                    let _ = account_info.try_borrow_mut_data()?;
+                } else {
+                    let _ = account_info.try_borrow_lamports()?;
+                    let _ = account_info.try_borrow_data()?;
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The syscall half of [`invoke_signed_owned_v1`], on the SBF target.
+///
+/// Sourced to `solana_cpi::invoke_signed_unchecked` (3.1.0, `src/lib.rs:301`).
+/// The four pointer/length arguments are formed exactly as that function forms
+/// them, and the success discriminant is its `_SUCCESS`.
+#[cfg(target_os = "solana")]
+#[inline(never)]
+fn invoke_signed_owned_unchecked_v1(
+    program_id: &Pubkey,
+    metas: &mut Vec<AccountMeta>,
+    data: &mut Vec<u8>,
+    account_infos: &[AccountInfo<'_>],
+    signers_seeds: &[&[&[u8]]],
+) -> Result<(), ProgramError> {
+    #[allow(deprecated)]
+    use solana_program::{
+        stable_layout::{stable_instruction::StableInstruction, stable_vec::StableVec},
+        syscalls::sol_invoke_signed_rust,
+    };
+
+    let account_info_count =
+        u64::try_from(account_infos.len()).map_err(|_| TradingSbfError::Content)?;
+    let signers_seeds_count =
+        u64::try_from(signers_seeds.len()).map_err(|_| TradingSbfError::Content)?;
+    // `StableVec::from` is `Vec::into_raw_parts` under a `ManuallyDrop`: the
+    // caller's allocation, length and capacity, reinterpreted. No copy, no
+    // allocation, and the buffers are handed back below through the inverse
+    // conversion the same crate defines.
+    let stable = StableInstruction {
+        accounts: StableVec::from(core::mem::take(metas)),
+        data: StableVec::from(core::mem::take(data)),
+        program_id: *program_id,
+    };
+    // SAFETY: this is `solana_cpi::invoke_signed_unchecked`'s own call, with
+    // its own arguments, and the obligations it discharges are discharged here:
+    //
+    // 1. `&stable` points at a live `StableInstruction` -- the runtime's pinned
+    //    `#[repr(C)]` layout, built by the SDK's own conversions -- which is a
+    //    local binding of this function and so outlives the call.
+    // 2. `account_infos as *const _ as *const u8` is the slice's DATA address,
+    //    which is what the runtime reads `account_info_count` elements from;
+    //    the slice is borrowed for the whole call, so those elements are live.
+    // 3. `signers_seeds` likewise: the address of the first `&[&[u8]]`, and the
+    //    borrow keeps the seeds and everything they point at alive.
+    // 4. The `RefCell` consistency pre-check `invoke_signed` performs has
+    //    already run (`require_cpi_borrowable_v1`), so the runtime's writes
+    //    through these accounts cannot alias a borrow this program is holding.
+    // 5. The counts are the slices' own lengths, converted losslessly above.
+    let result = unsafe {
+        sol_invoke_signed_rust(
+            &stable as *const _ as *const u8,
+            account_infos as *const _ as *const u8,
+            account_info_count,
+            signers_seeds as *const _ as *const u8,
+            signers_seeds_count,
+        )
+    };
+    // Unconditionally, ahead of the result: on the error path these buffers are
+    // still the caller's, and `StableInstruction` carries no `Drop` of its own,
+    // so destructuring hands each `StableVec`'s release obligation to the `Vec`
+    // it came from.
+    let StableInstruction {
+        accounts,
+        data: invoked_data,
+        program_id: _,
+    } = stable;
+    *metas = Vec::from(accounts);
+    *data = Vec::from(invoked_data);
+    if result == CPI_SUCCESS_V1 {
+        Ok(())
+    } else {
+        Err(ProgramError::from(result))
+    }
+}
+
+/// The syscall half of [`invoke_signed_owned_v1`], off the SBF target.
+///
+/// Host builds have no syscall to make, so this is
+/// `solana_program::program::invoke_signed_unchecked` -- the stub path -- with
+/// the buffers moved in and back out so the two targets agree on what the
+/// caller's `metas` and `data` hold when the call returns.
+#[cfg(not(target_os = "solana"))]
+#[inline(never)]
+fn invoke_signed_owned_unchecked_v1(
+    program_id: &Pubkey,
+    metas: &mut Vec<AccountMeta>,
+    data: &mut Vec<u8>,
+    account_infos: &[AccountInfo<'_>],
+    signers_seeds: &[&[&[u8]]],
+) -> Result<(), ProgramError> {
+    let instruction = Instruction {
+        program_id: *program_id,
+        accounts: core::mem::take(metas),
+        data: core::mem::take(data),
+    };
+    let result = solana_program::program::invoke_signed_unchecked(
+        &instruction,
+        account_infos,
+        signers_seeds,
+    );
+    let Instruction {
+        program_id: _,
+        accounts,
+        data: invoked_data,
+    } = instruction;
+    *metas = accounts;
+    *data = invoked_data;
+    result
+}
+
+/// Syscall return value the CPI syscalls use for success.
+///
+/// Chain-derived: `solana_cpi`'s `_SUCCESS`, itself a copy of
+/// `solana_program_entrypoint::SUCCESS`.
+#[cfg_attr(not(target_os = "solana"), allow(dead_code))]
+const CPI_SUCCESS_V1: u64 = 0;
 
 // ---------------------------------------------------------------------------
 // Loader input deserialization

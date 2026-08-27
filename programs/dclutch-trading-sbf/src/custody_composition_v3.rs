@@ -17,8 +17,6 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -26,7 +24,7 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
-    hot_v3::DowngradedEffectAccountsV3,
+    hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
 const CUSTODY_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-custody-receipt:v3";
@@ -49,7 +47,7 @@ pub struct CustodyCompositionParentV3 {
 
 /// Preflight one exact active Custody invocation without external mutation.
 #[allow(clippy::too_many_arguments)]
-pub fn preflight_custody_route_v3(
+pub fn preflight_custody_route_v3<'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
     route_index: u16,
@@ -57,8 +55,9 @@ pub fn preflight_custody_route_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
+    frame: &mut Vec<AccountInfo<'info>>,
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
 ) -> Result<(), ProgramError> {
@@ -72,6 +71,7 @@ pub fn preflight_custody_route_v3(
         identities,
         effect_accounts,
         request_bank,
+        frame,
         custody_program,
         parent,
     )?;
@@ -92,9 +92,14 @@ pub fn execute_custody_route_v3<'info>(
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     prior_receipt: Option<&[u8]>,
+    buffers: &mut ChildInvocationBuffersV3<'info>,
     custody_program: &AccountInfo<'info>,
     parent: CustodyCompositionParentV3,
 ) -> Result<[u8; 32], ProgramError> {
+    // `prepare` leaves the authenticated frame IN the walk's buffer. It used to
+    // build a frame of its own for the shape check and then be handed a second,
+    // identical one here -- 727 bytes plus 728, on a heap that never gives
+    // either back.
     let prepared = prepare(
         program_id,
         effect,
@@ -105,20 +110,12 @@ pub fn execute_custody_route_v3<'info>(
         identities,
         effect_accounts,
         request_bank,
+        &mut buffers.accounts,
         custody_program,
         parent,
     )?;
-    let mut child_accounts = invocation_accounts(prepared.invocation, effect_accounts)?;
-    let mut metas = Vec::with_capacity(child_accounts.len());
-    for (index, account) in child_accounts.iter().enumerate() {
-        let signer = index == 0 || account.is_signer;
-        metas.push(if account.is_writable {
-            AccountMeta::new(*account.key, signer)
-        } else {
-            AccountMeta::new_readonly(*account.key, signer)
-        });
-    }
-    let mut child_data = prepared.request_bytes.to_vec();
+    buffers.fill_metas()?;
+    buffers.set_wire(prepared.request_bytes)?;
     // `custody-sbf::process_instruction` dispatches on EXACT LENGTH -- 776
     // delegated V2, 768 projected V1, 672 V1, or 800 V1 plus the 128-byte
     // Registry continuation -- and nothing behind any of those four reads a
@@ -126,29 +123,25 @@ pub fn execute_custody_route_v3<'info>(
     // and verification only, and the wire Custody receives is its request.
     deliver_receipt_dependency_v3(
         prepared.invocation,
-        &mut child_data,
+        &mut buffers.data,
         prior_receipt,
         ReceiptDeliveryV3::VerifiedOnly,
     )?;
-    let instruction = Instruction {
-        program_id: *custody_program.key,
-        accounts: metas,
-        data: child_data,
-    };
-    child_accounts.push(custody_program.clone());
+    buffers.push_callee(custody_program)?;
     let bump_seed = [prepared.bump];
     let [domain, release, market, role, context, digest] = prepared.authority_seeds.as_slices();
-    invoke_signed(
-        &instruction,
-        &child_accounts,
-        &[&[domain, release, market, role, context, digest, &bump_seed]],
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
-    if producer != *custody_program.key {
+    buffers
+        .invoke(
+            custody_program.key,
+            &[&[domain, release, market, role, context, digest, &bump_seed]],
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+    buffers.capture_return()?;
+    if buffers.producer != *custody_program.key {
         return Err(TradingSbfError::Transition.into());
     }
-    let replay = child_accounts
+    let replay = buffers
+        .accounts
         .get(CUSTODY_REPLAY_FRAME_COORDINATE_V1)
         .ok_or(TradingSbfError::Transition)?;
     let replay_digest = {
@@ -159,7 +152,7 @@ pub fn execute_custody_route_v3<'info>(
     };
     verify_custody_receipt_v3(
         prepared.request,
-        &receipt_bytes,
+        &buffers.returned,
         prepared.request_digest,
         replay_digest,
     )?;
@@ -168,7 +161,7 @@ pub fn execute_custody_route_v3<'info>(
         &route_index.to_le_bytes(),
         &invocation_index.to_le_bytes(),
         &prepared.request_digest,
-        &receipt_bytes,
+        &buffers.returned,
     ])
     .to_bytes())
 }
@@ -198,7 +191,7 @@ impl CustodyRequestKindV3 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare<'a>(
+fn prepare<'a, 'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
     route_index: u16,
@@ -206,8 +199,9 @@ fn prepare<'a>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &'a [u8],
+    frame: &mut Vec<AccountInfo<'info>>,
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
 ) -> Result<PreparedCustodyInvocationV3<'a>, ProgramError> {
@@ -257,8 +251,8 @@ fn prepare<'a>(
     .map_err(|_| TradingSbfError::Content)?;
     let (expected_authority, bump) =
         Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
-    let child_accounts = invocation_accounts(invocation, effect_accounts)?;
-    require_custody_frame_shape_v3(&child_accounts, custody_program.key, &expected_authority)?;
+    gather_invocation_accounts(frame, invocation, effect_accounts)?;
+    require_custody_frame_shape_v3(frame, custody_program.key, &expected_authority)?;
     Ok(PreparedCustodyInvocationV3 {
         invocation,
         request,
@@ -403,17 +397,23 @@ fn invocation_request(
         .ok_or_else(|| TradingSbfError::Content.into())
 }
 
-fn invocation_accounts<'info>(
+/// Gather this invocation's account windows into a caller-owned buffer.
+///
+/// The buffer is cleared and reserved at the exact width the windows fill, so
+/// the appends below never grow it -- and on a second invocation the capacity
+/// the first one bought already satisfies the reservation.
+fn gather_invocation_accounts<'info>(
+    output: &mut Vec<AccountInfo<'info>>,
     invocation: ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    let mut output = accounts.invocation_frame(invocation)?;
+) -> Result<(), ProgramError> {
+    accounts.reserve_invocation_frame(output, invocation)?;
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
     accounts.extend_window(
-        &mut output,
+        output,
         fixed_start,
         fixed_end
             .checked_sub(fixed_start)
@@ -435,7 +435,7 @@ fn invocation_accounts<'info>(
                 .checked_add(item_count)
                 .ok_or(TradingSbfError::Content)?;
             accounts.extend_window(
-                &mut output,
+                output,
                 invocation.item_account_start,
                 end.checked_sub(invocation.item_account_start)
                     .ok_or(TradingSbfError::Content)?,
@@ -458,7 +458,7 @@ fn invocation_accounts<'info>(
                     .checked_add(item_count)
                     .ok_or(TradingSbfError::Content)?;
                 accounts.extend_window(
-                    &mut output,
+                    output,
                     start,
                     end.checked_sub(start).ok_or(TradingSbfError::Content)?,
                 )?;
@@ -466,7 +466,7 @@ fn invocation_accounts<'info>(
             }
         }
     }
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]

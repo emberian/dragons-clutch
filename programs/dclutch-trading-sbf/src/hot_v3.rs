@@ -4045,10 +4045,18 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
     ///
     /// It is bounded by the logical frame because a hostile geometry must
     /// refuse rather than ask the allocator for the refusal.
-    pub fn invocation_frame(
+    ///
+    /// It takes the buffer by `&mut` rather than returning a fresh one so the
+    /// walk can hand the SAME buffer to every invocation: on this allocator a
+    /// per-invocation frame is a per-invocation charge, and an `Each` route
+    /// over N items charged N of them. Clearing keeps the capacity, so the
+    /// reservation is satisfied by whatever the widest invocation so far
+    /// already bought.
+    pub fn reserve_invocation_frame(
         self,
+        output: &mut Vec<AccountInfo<'info>>,
         invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
-    ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
+    ) -> Result<(), ProgramError> {
         let items = usize::try_from(invocation.repeated_item_count)
             .map_err(|_| TradingSbfError::Content)?
             .checked_mul(usize::from(invocation.item_account_count))
@@ -4066,11 +4074,11 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
         {
             return Err(TradingSbfError::Content.into());
         }
-        let mut output = Vec::new();
+        output.clear();
         output
             .try_reserve_exact(exact)
             .map_err(|_| TradingSbfError::Content)?;
-        Ok(output)
+        Ok(())
     }
 
     /// Append one contiguous window's child views to a caller-owned buffer.
@@ -4097,6 +4105,153 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
             coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         Ok(())
+    }
+}
+
+/// ONE set of child-CPI buffers, owned by a child walk and reused by every
+/// invocation on that walk.
+///
+/// # The measurement this exists for
+///
+/// Nothing in the child walk used to be reused across invocations. Each
+/// invocation allocated its own account frame, its own meta vector, its own
+/// copy of the child wire and its own return-data vector, and the SBF bump
+/// allocator returns none of them: two invocations charged two of everything,
+/// and an `Each` route over N items charged N. Measured on the canonical Direct
+/// bundle at the moment the heap is scarcest -- inside the child walk, past the
+/// six lifecycle creates -- the Claims invocation charged 6,160 bytes and the
+/// Custody invocation 5,379, against live widths of 1,104 and 720.
+///
+/// So the walk owns one set, sized by whatever the widest invocation so far
+/// needed, and every composition fills it instead of allocating. `clear()`
+/// keeps capacity, so the second invocation's reservations are already
+/// satisfied and charge nothing at all.
+///
+/// # The one buffer that is NOT reused, and why
+///
+/// [`Self::returned`] is refilled from the return-data syscall each time,
+/// because its bytes do not die with the invocation: they are MOVED into the
+/// receipt bank, where a later route resolves its declared dependency against
+/// them. Reusing that allocation would hand the bank a buffer the next
+/// invocation overwrites. What this type does own about it is that the syscall
+/// is read EXACTLY ONCE per child -- the composition verifies the receipt and
+/// the walk banks it out of the same vector, where before each read the syscall
+/// again into a second vector of its own.
+pub struct ChildInvocationBuffersV3<'info> {
+    /// The resolved child account frame, with the callee appended last.
+    pub accounts: Vec<AccountInfo<'info>>,
+    /// The child instruction's account list, in frame order.
+    pub metas: Vec<AccountMeta>,
+    /// The child instruction's wire.
+    pub data: Vec<u8>,
+    /// Producer the return-data syscall named for the last invocation.
+    pub producer: Pubkey,
+    /// Bytes the last invocation returned, read from the syscall exactly once.
+    pub returned: Vec<u8>,
+}
+
+impl<'info> ChildInvocationBuffersV3<'info> {
+    /// An empty set. Every buffer buys its capacity at its first invocation.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            accounts: Vec::new(),
+            metas: Vec::new(),
+            data: Vec::new(),
+            producer: Pubkey::new_from_array([0; 32]),
+            returned: Vec::new(),
+        }
+    }
+
+    /// Replace the child wire with `request`, reusing the buffer's capacity.
+    pub fn set_wire(&mut self, request: &[u8]) -> Result<(), ProgramError> {
+        self.data.clear();
+        self.data
+            .try_reserve(request.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        self.data.extend_from_slice(request);
+        Ok(())
+    }
+
+    /// Derive the child's account list from the frame gathered so far.
+    ///
+    /// The privilege rule is the one every composition on this walk applied
+    /// for itself: the account's own declared writability, and signer for the
+    /// release-pinned caller authority at coordinate 0 or wherever the frame
+    /// already declares one. Call this BEFORE the callee is appended -- the
+    /// callee is not a member of the child's account list.
+    #[inline(never)]
+    pub fn fill_metas(&mut self) -> Result<(), ProgramError> {
+        self.metas.clear();
+        self.metas
+            .try_reserve(self.accounts.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        for (index, account) in self.accounts.iter().enumerate() {
+            let signer = index == 0 || account.is_signer;
+            self.metas.push(if account.is_writable {
+                AccountMeta::new(*account.key, signer)
+            } else {
+                AccountMeta::new_readonly(*account.key, signer)
+            });
+        }
+        Ok(())
+    }
+
+    /// Append the callee to the account frame the CPI passes to the runtime.
+    pub fn push_callee(&mut self, callee: &AccountInfo<'info>) -> Result<(), ProgramError> {
+        self.accounts
+            .try_reserve(1)
+            .map_err(|_| TradingSbfError::Content)?;
+        self.accounts.push(callee.clone());
+        Ok(())
+    }
+
+    /// Invoke the callee with the buffers this set holds.
+    ///
+    /// The buffers are handed to the membrane by `&mut` and come back with
+    /// their allocations intact; see
+    /// [`crate::entrypoint_adapter::invoke_signed_owned_v1`] for what that
+    /// saves and what it reproduces.
+    #[inline(never)]
+    pub fn invoke(
+        &mut self,
+        callee: &Pubkey,
+        signers_seeds: &[&[&[u8]]],
+    ) -> Result<(), ProgramError> {
+        let Self {
+            accounts,
+            metas,
+            data,
+            ..
+        } = self;
+        crate::entrypoint_adapter::invoke_signed_owned_v1(
+            callee,
+            metas,
+            data,
+            accounts,
+            signers_seeds,
+        )
+    }
+
+    /// Read the return-data syscall ONCE for the invocation just made.
+    #[inline(never)]
+    pub fn capture_return(&mut self) -> Result<(), ProgramError> {
+        let (producer, returned) = get_return_data().ok_or(TradingSbfError::Transition)?;
+        self.producer = producer;
+        self.returned = returned;
+        Ok(())
+    }
+
+    /// Move the captured return data out, for the receipt bank to own.
+    #[must_use]
+    pub fn take_returned(&mut self) -> Vec<u8> {
+        core::mem::take(&mut self.returned)
+    }
+}
+
+impl Default for ChildInvocationBuffersV3<'_> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -6114,6 +6269,11 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     let resolution_program = resolved.roles.resolution.as_ref();
 
     hot_cu_checkpoint!("pf-role-programs");
+    // ONE frame for the whole preflight walk, for the same reason the execution
+    // walk has one: a per-invocation frame is a per-invocation charge on an
+    // allocator that never gives one back.
+    let mut preflight_frame: Vec<AccountInfo<'info>> = Vec::new();
+    let mut preflight_wire: Vec<u8> = Vec::new();
     let mut route = 0_u16;
     while route < effect.route_count() {
         let count = effect
@@ -6141,6 +6301,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     effect_accounts,
                     request_bank,
                     family_request,
+                    &mut preflight_frame,
+                    &mut preflight_wire,
                     frame.core_program,
                     CoreCompositionParentV3 {
                         release_set: envelope.release_set(),
@@ -6194,6 +6356,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         identities,
                         effect_accounts,
                         request_bank,
+                        &mut preflight_frame,
                         custody_program.ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
                             release_set: envelope.release_set(),
@@ -6223,6 +6386,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         effect_accounts,
                         request_bank,
                         family_request,
+                        &mut preflight_frame,
+                        &mut preflight_wire,
                         resolution_program.ok_or(TradingSbfError::Release)?,
                         ResolutionCompositionParentV3 {
                             release_set: envelope.release_set(),
@@ -6249,18 +6414,24 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     Ok(())
 }
 
-struct ChildExecutionStateV3 {
+struct ChildExecutionStateV3<'info> {
     transcript: [u8; 32],
     receipt_bank: ChildReceiptBankV3,
     prior_receipt_bytes: Vec<u8>,
+    // The walk's ONE set of child-CPI buffers. It lives inside this boxed
+    // header rather than on the walk's frame because `execute_child_routes_v3`
+    // is against the SBPF v0 4,096-byte static frame bound; only the box
+    // pointer is on the frame either way.
+    buffers: ChildInvocationBuffersV3<'info>,
     route: u16,
 }
 
 // The sole additional allocation introduced by the verifier-frame split is
-// this bounded 88-byte header. Receipt payloads already lived in Vec-backed
-// storage before this split; no authenticated fact or commit authority moves
-// from account data into the heap.
-const _: [(); 88] = [(); core::mem::size_of::<ChildExecutionStateV3>()];
+// this bounded header. Receipt payloads already lived in Vec-backed storage
+// before this split; no authenticated fact or commit authority moves from
+// account data into the heap. The child-CPI buffer set added 128 bytes of
+// header to save thousands of bytes of per-invocation duplication.
+const _: [(); 216] = [(); core::mem::size_of::<ChildExecutionStateV3<'_>>()];
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -6299,6 +6470,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
         receipt_bank: ChildReceiptBankV3::new(),
         prior_receipt_bytes: Vec::new(),
+        buffers: ChildInvocationBuffersV3::new(),
         route: 0,
     });
     hot_heap_mark!("child-execution-state");
@@ -6401,10 +6573,20 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     .ok_or(TradingSbfError::Content)?;
             }
             hot_heap_mark!("child-dependencies");
-            let prior_receipt = if execution.prior_receipt_bytes.is_empty() {
+            // Split the boxed header once, so the composition can hold the
+            // walk's buffer set mutably while the prior receipt is still
+            // borrowed out of the same header.
+            let ChildExecutionStateV3 {
+                transcript,
+                receipt_bank,
+                prior_receipt_bytes,
+                buffers,
+                route: _,
+            } = &mut *execution;
+            let prior_receipt = if prior_receipt_bytes.is_empty() {
                 None
             } else {
-                Some(execution.prior_receipt_bytes.as_slice())
+                Some(prior_receipt_bytes.as_slice())
             };
             let (role, child_digest, child_program) = match resolved.role {
                 FixedRole::Core => (
@@ -6421,6 +6603,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         request_bank,
                         family_request,
                         prior_receipt,
+                        buffers,
                         frame.core_program,
                         CoreCompositionParentV3 {
                             release_set: envelope.release_set(),
@@ -6452,6 +6635,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
+                            buffers,
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )?;
                         (
@@ -6485,6 +6669,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             prior_receipt,
+                            buffers,
                             custody_program.ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
@@ -6522,6 +6707,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
+                            buffers,
                             resolution_program.ok_or(TradingSbfError::Release)?,
                             ResolutionCompositionParentV3 {
                                 release_set: envelope.release_set(),
@@ -6545,7 +6731,14 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 }
             };
             hot_heap_mark!("child-invoked");
-            let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
+            // The return-data syscall was read ONCE, by the composition that
+            // verified the receipt against its own request. It used to be read
+            // a second time here, into a second vector this allocator never
+            // gave back -- 938 bytes across the two child CPIs of the canonical
+            // Direct bundle. The bytes the composition already owns are moved
+            // straight into the bank instead.
+            let producer = buffers.producer;
+            let receipt_bytes = buffers.take_returned();
             hot_heap_mark!("child-return-data");
             if producer != *child_program.key {
                 return Err(TradingSbfError::Transition.into());
@@ -6570,7 +6763,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 .try_into()
                 .map_err(|_| TradingSbfError::Transition)?;
             let receipt_digest = hash(&receipt_bytes).to_bytes();
-            execution.receipt_bank.record_exact(
+            receipt_bank.record_exact(
                 role,
                 route,
                 invocation,
@@ -6581,9 +6774,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 receipt_kind,
                 receipt_bytes,
             )?;
-            execution.transcript = hashv(&[
+            *transcript = hashv(&[
                 CHILD_EXECUTION_DIGEST_DOMAIN_V3,
-                &execution.transcript,
+                &*transcript,
                 &[fixed_role_tag_v3(role)],
                 &route.to_le_bytes(),
                 &invocation.to_le_bytes(),

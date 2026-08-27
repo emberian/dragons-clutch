@@ -23,8 +23,6 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -32,7 +30,7 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
-    hot_v3::DowngradedEffectAccountsV3,
+    hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
 const CORE_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-core-receipt:v3";
@@ -52,7 +50,7 @@ pub struct CoreCompositionParentV3 {
 
 /// Preflight one exact active Core invocation without external mutation.
 #[allow(clippy::too_many_arguments)]
-pub fn preflight_core_route_v3(
+pub fn preflight_core_route_v3<'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
     route_index: u16,
@@ -60,9 +58,11 @@ pub fn preflight_core_route_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
+    frame: &mut Vec<AccountInfo<'info>>,
+    wire: &mut Vec<u8>,
     core_program: &AccountInfo<'_>,
     parent: CoreCompositionParentV3,
 ) -> Result<(), ProgramError> {
@@ -77,6 +77,8 @@ pub fn preflight_core_route_v3(
         effect_accounts,
         request_bank,
         family_request,
+        frame,
+        wire,
         core_program,
         parent,
     )?;
@@ -97,10 +99,14 @@ pub fn execute_core_route_v3<'info>(
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
+    buffers: &mut ChildInvocationBuffersV3<'info>,
     core_program: &AccountInfo<'info>,
     parent: CoreCompositionParentV3,
 ) -> Result<[u8; 32], ProgramError> {
-    let mut prepared = prepare(
+    // `prepare` leaves the authenticated frame and the child wire IN the walk's
+    // buffers. It used to build both for its own authority check and then be
+    // handed a second copy of each here.
+    let prepared = prepare(
         program_id,
         effect,
         route_index,
@@ -111,6 +117,8 @@ pub fn execute_core_route_v3<'info>(
         effect_accounts,
         request_bank,
         family_request,
+        &mut buffers.accounts,
+        &mut buffers.data,
         core_program,
         parent,
     )?;
@@ -122,40 +130,26 @@ pub fn execute_core_route_v3<'info>(
     // Trading convenience, so it stays.
     deliver_receipt_dependency_v3(
         prepared.invocation,
-        &mut prepared.child_data,
+        &mut buffers.data,
         prior_receipt,
         ReceiptDeliveryV3::ExactSuffix,
     )?;
-    let mut child_accounts = invocation_accounts(prepared.invocation, effect_accounts)?;
-    let mut metas = Vec::with_capacity(child_accounts.len());
-    for (index, account) in child_accounts.iter().enumerate() {
-        let signer = index == 0 || account.is_signer;
-        metas.push(if account.is_writable {
-            AccountMeta::new(*account.key, signer)
-        } else {
-            AccountMeta::new_readonly(*account.key, signer)
-        });
-    }
-    let instruction = Instruction {
-        program_id: *core_program.key,
-        accounts: metas,
-        data: prepared.child_data.clone(),
-    };
-    child_accounts.push(core_program.clone());
+    buffers.fill_metas()?;
+    buffers.push_callee(core_program)?;
     let bump_seed = [prepared.bump];
     let [domain, release, market, role, context, digest] = prepared.authority_seeds.as_slices();
-    invoke_signed(
-        &instruction,
-        &child_accounts,
-        &[&[domain, release, market, role, context, digest, &bump_seed]],
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
-    if producer != *core_program.key {
+    buffers
+        .invoke(
+            core_program.key,
+            &[&[domain, release, market, role, context, digest, &bump_seed]],
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+    buffers.capture_return()?;
+    if buffers.producer != *core_program.key {
         return Err(TradingSbfError::Transition.into());
     }
     let receipt =
-        SeriesCoreAckV1::decode(&receipt_bytes).map_err(|_| TradingSbfError::Transition)?;
+        SeriesCoreAckV1::decode(&buffers.returned).map_err(|_| TradingSbfError::Transition)?;
     receipt
         .validate_for(
             prepared.request,
@@ -168,8 +162,8 @@ pub fn execute_core_route_v3<'info>(
         CORE_EXECUTION_DIGEST_DOMAIN_V3,
         &route_index.to_le_bytes(),
         &invocation_index.to_le_bytes(),
-        &hash(&prepared.child_data).to_bytes(),
-        &receipt_bytes,
+        &hash(&buffers.data).to_bytes(),
+        &buffers.returned,
     ])
     .to_bytes())
 }
@@ -177,14 +171,13 @@ pub fn execute_core_route_v3<'info>(
 struct PreparedCoreInvocationV3 {
     invocation: ResolvedInvocationV3,
     request: SeriesCoreRequestV1,
-    child_data: Vec<u8>,
     request_digest: [u8; 32],
     authority_seeds: CallerAuthoritySeedsV1,
     bump: u8,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare(
+fn prepare<'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
     route_index: u16,
@@ -192,9 +185,11 @@ fn prepare(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
+    frame: &mut Vec<AccountInfo<'info>>,
+    wire: &mut Vec<u8>,
     core_program: &AccountInfo<'_>,
     parent: CoreCompositionParentV3,
 ) -> Result<PreparedCoreInvocationV3, ProgramError> {
@@ -254,14 +249,16 @@ fn prepare(
         .ok_or(TradingSbfError::Content)?
         .slice(family_request)
         .map_err(|_| TradingSbfError::Content)?;
-    let mut child_data = Vec::with_capacity(
+    wire.clear();
+    wire.try_reserve(
         request_bytes
             .len()
             .checked_add(witness.len())
             .ok_or(TradingSbfError::Content)?,
-    );
-    child_data.extend_from_slice(request_bytes);
-    child_data.extend_from_slice(witness);
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    wire.extend_from_slice(request_bytes);
+    wire.extend_from_slice(witness);
     let request_digest = hash(request_bytes).to_bytes();
     let authority_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(parent.release_set).map_err(|_| TradingSbfError::Content)?,
@@ -273,8 +270,8 @@ fn prepare(
     .map_err(|_| TradingSbfError::Content)?;
     let (expected_authority, bump) =
         Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
-    let child_accounts = invocation_accounts(invocation, effect_accounts)?;
-    if child_accounts
+    gather_invocation_accounts(frame, invocation, effect_accounts)?;
+    if frame
         .first()
         .is_none_or(|account| account.key != &expected_authority)
     {
@@ -283,28 +280,28 @@ fn prepare(
     Ok(PreparedCoreInvocationV3 {
         invocation,
         request,
-        child_data,
         request_digest,
         authority_seeds,
         bump,
     })
 }
 
-fn invocation_accounts<'info>(
+/// Gather this invocation's account window into a caller-owned buffer.
+fn gather_invocation_accounts<'info>(
+    output: &mut Vec<AccountInfo<'info>>,
     invocation: ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
+) -> Result<(), ProgramError> {
     let start = usize::from(invocation.fixed_account_start);
     let end = start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    let mut output = accounts.invocation_frame(invocation)?;
+    accounts.reserve_invocation_frame(output, invocation)?;
     accounts.extend_window(
-        &mut output,
+        output,
         start,
         end.checked_sub(start).ok_or(TradingSbfError::Content)?,
-    )?;
-    Ok(output)
+    )
 }
 
 #[cfg(test)]
