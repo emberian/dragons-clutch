@@ -278,3 +278,9 @@ question with a recommended answer, not an inventory row.
 - Small batch: core-sbf tests.rs:141 packet claim (13 accounts narrow);
   resume-validator.sh unsupervised exec; family runners' shared ledger.json
   defaults; --keep-elf stale diagnostics re-stamp.
+
+- Dead-vocabulary web tests (SN4): ECONOMIC_* width tests assert a banished
+  wire schema; PRODUCT_EVALUATOR/ADMISSION account counts describe
+  instructions NO program implements. Delete-or-succeed decisions for the
+  Fable wave (what else in apps/dclutch-web speaks to programs that no longer
+  exist?).
