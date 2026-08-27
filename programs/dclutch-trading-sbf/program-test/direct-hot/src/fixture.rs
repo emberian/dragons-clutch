@@ -1110,11 +1110,7 @@ fn custody_request_bytes(
         destination_compartment: CompartmentV1::External,
         release_set: input.release_set,
         market: state.market.to_bytes(),
-        // `project_key(REALM_ACCOUNT, IDENTITY_REALM_V3)` projects the Realm
-        // ACCOUNT ADDRESS, not the finalized record digest. Seeding this field
-        // with the digest produced a request whose bytes -- and therefore whose
-        // caller-authority PDA -- no chain execution could ever reproduce.
-        realm: realm.realm.raw.to_bytes(),
+        realm: realm.realm.digest,
         context: capability.buyer_maker.to_bytes(),
         caller_program: input.trading_program.to_bytes(),
         semantic: ContextV1 {
@@ -1210,7 +1206,8 @@ fn custody_route_authorities(
         request_digest: [0; 32],
     }; 4];
     for (slot, route) in derived.iter_mut().zip(CUSTODY_ROUTES_V3) {
-        let bytes = custody_request_bytes(route, input, product, state, capability, realm, request)?;
+        let bytes =
+            custody_request_bytes(route, input, product, state, capability, realm, request)?;
         let request_digest = hash(&bytes).to_bytes();
         let seeds = CallerAuthoritySeedsV1::new(
             core_content(input.release_set)?,
@@ -1538,17 +1535,18 @@ fn logical_accounts(
     request: &[u8],
     custody_routes: &[CustodyRouteAuthorityV3; 4],
 ) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
-    let custody_route_account = |index: usize| -> Result<ChainAccount, DirectHotChainFixtureErrorV5> {
-        Ok(external_empty(
-            custody_routes
-                .get(index)
-                .ok_or(DirectHotChainFixtureErrorV5::Encoding)?
-                .authority,
-            system_program::ID,
-            false,
-            false,
-        ))
-    };
+    let custody_route_account =
+        |index: usize| -> Result<ChainAccount, DirectHotChainFixtureErrorV5> {
+            Ok(external_empty(
+                custody_routes
+                    .get(index)
+                    .ok_or(DirectHotChainFixtureErrorV5::Encoding)?
+                    .authority,
+                system_program::ID,
+                false,
+                false,
+            ))
+        };
     let mut logical = (0..usize::from(DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3))
         .map(|index| {
             ordinary(

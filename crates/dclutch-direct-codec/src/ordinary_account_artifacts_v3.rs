@@ -568,7 +568,24 @@ fn operations()
             LiabilityBasisPositionLayoutV2::REVISION,
             SCALAR_BUYER_POSITION_REVISION_V3,
         )?,
-        project_key(REALM_ACCOUNT, IDENTITY_REALM_V3)?,
+        // `CustodyRequestV1.realm` is the Realm record's CONTENT DIGEST, not the
+        // Realm ACCOUNT ADDRESS: Custody requires
+        // `market.identity.realm_id == request.realm` twice and then DERIVES the
+        // account as `find_program_address([RAW_RECORD_PDA_SEED_V1,
+        // REALM_SCHEMA_RELEASE_ID_V1, request.realm], registry)`. The address is
+        // downstream of the digest, so projecting the key here emitted a request
+        // no chain execution could satisfy.
+        //
+        // The digest is projected out of the Custody replay record, whose width
+        // this profile already declares and out of which it already projects the
+        // next revision. The replay is not the authority and is not trusted to
+        // be one: Custody still checks `request.realm` against the Core Market's
+        // `identity.realm_id`, so a replay disagreeing with the Market refuses.
+        project_identity(
+            CUSTODY_REPLAY_ACCOUNT,
+            CustodyReplayLayoutV1::REALM_OFFSET,
+            IDENTITY_REALM_V3,
+        )?,
         // The collateral mint and the token program are authenticated immutable
         // facts of the Realm, so the profile PROJECTS them out of the Realm
         // record and never re-requires them against a coordinate.
@@ -1380,6 +1397,11 @@ mod tests {
         }
 
         fn project(&self) -> Result<(), ProfileError> {
+            self.project_identities().map(|_| ())
+        }
+
+        /// Project and hand back the OUTPUT identity bank the Effect reads.
+        fn project_identities(&self) -> Result<Vec<[u8; 32]>, ProfileError> {
             let bytes = emit(&lengths(256));
             let profile = AccountProfileV2::decode(&bytes).expect("decode");
             let observations = self.observations();
@@ -1412,7 +1434,8 @@ mod tests {
                     output_scalars: &mut output_scalars,
                     output_identities: &mut output_identities,
                 },
-            )
+            )?;
+            Ok(output_identities)
         }
     }
 
@@ -1564,6 +1587,37 @@ mod tests {
     #[test]
     fn the_canonical_live_direct_topology_projects_at_the_real_tail() {
         assert_eq!(direct_observations().project(), Ok(()));
+    }
+
+    /// `CustodyRequestV1.realm` is a CONTENT DIGEST, so the register the Effect
+    /// writes into `CustodyRequestLayoutV1::REALM` must never be the Realm
+    /// ACCOUNT ADDRESS.
+    ///
+    /// Custody requires `market.identity.realm_id == request.realm` twice
+    /// (`custody-sbf/src/lib.rs:276,457`) and then DERIVES the account from that
+    /// digest, so an address here is a request no chain execution can satisfy.
+    /// The two are seeded with distinct values on purpose: the assertion below
+    /// fails if the projection is moved back onto the account key.
+    #[test]
+    fn the_realm_register_is_the_record_digest_and_never_the_account_address() {
+        const REALM_DIGEST: [u8; 32] = [0x5e; 32];
+        const REALM_ADDRESS: [u8; 32] = [0xa9; 32];
+        let mut observations = direct_observations();
+        observations.set_key(usize::from(REALM_ACCOUNT), REALM_ADDRESS);
+        observations.write_data(
+            usize::from(CUSTODY_REPLAY_ACCOUNT),
+            CustodyReplayLayoutV1::REALM_OFFSET,
+            &REALM_DIGEST,
+        );
+        // Every other Custody route observes the same Realm and the same replay
+        // through a route alias, so the views follow their representative.
+        for (account, representative) in ROUTE_ALIASES {
+            observations.copy_alias(usize::from(*account), usize::from(*representative));
+        }
+        let identities = observations.project_identities().expect("projection");
+        let realm = *identities.get(IDENTITY_REALM_V3).expect("realm register");
+        assert_eq!(realm, REALM_DIGEST);
+        assert_ne!(realm, REALM_ADDRESS);
     }
 
     #[test]
