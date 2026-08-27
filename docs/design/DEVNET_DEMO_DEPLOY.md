@@ -334,10 +334,11 @@ Measured in the §6 dry run, at the exact ELF sizes in [§4.1](#41-per-artifact-
 | Claims | 1,073,376 | 582,441 | 0.543 |
 | **Trading** | **1,384,680** | **730,945** | **0.528** |
 | Resolution | 527,504 | 299,713 | 0.568 |
+| Custody | 355,760 | 233,603 | 0.657 |
 
 Trading is the worst and sits at **52% of the 1,400,000 maximum** — comfortable,
-and the five together would be ~2.16M, which is why one role per transaction is
-a requirement rather than a preference. Trading is also the artifact most likely
+and the five together are **2,396,686 CU**, which is why one role per
+transaction is a requirement rather than a preference. Trading is also the artifact most likely
 to keep growing, so this is the number to re-measure at the deploy commit.
 
 ### 3.4 Market lifecycle
