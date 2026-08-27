@@ -14,7 +14,7 @@ dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 
 [dev-dependencies]
-sha2 = "=0.10.9"
+sha2 = { version = "=0.10.9", default-features = false }
 
 [lints.rust]
 missing_docs = "deny"

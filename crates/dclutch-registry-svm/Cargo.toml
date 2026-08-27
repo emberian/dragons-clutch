@@ -14,7 +14,7 @@ dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 
 [dev-dependencies]
-sha2 = "=0.10.9"
+sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]
 workspace = true
