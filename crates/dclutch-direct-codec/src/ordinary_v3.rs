@@ -15,7 +15,7 @@
 //! after hostile decoding; it holds no admission relation of its own.
 
 use dclutch_transition_vm::v3::ProgramV3;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 pub use crate::generated_ordinary_v3::*;
 use crate::{execution_v3::DirectInlineOrdinaryRequestV3, successor::DirectExecutionConfigV1};
@@ -156,7 +156,7 @@ pub fn project_direct_ordinary_registers_v3(
         return Err(DirectOrdinaryRegisterErrorV3::InvalidLength);
     }
     let encoded_config = context.config.encode();
-    let encoded_config_id: [u8; 32] = Sha256::digest(encoded_config).into();
+    let encoded_config_id: [u8; 32] = digest(&encoded_config);
     if context.config_content_id == [0; 32] || context.config_content_id != encoded_config_id {
         return Err(DirectOrdinaryRegisterErrorV3::ConfigContentMismatch);
     }
@@ -417,7 +417,7 @@ mod tests {
     fn context(config: DirectExecutionConfigV1) -> DirectOrdinaryAuthenticatedContextV3 {
         DirectOrdinaryAuthenticatedContextV3 {
             parent_request_digest: id(30),
-            config_content_id: Sha256::digest(config.encode()).into(),
+            config_content_id: digest(&config.encode()),
             config,
             market: id(1),
             generation: 7,

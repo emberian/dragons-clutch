@@ -14,7 +14,7 @@ use dclutch_capability_program_contract::{
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::{
     execution_v3::{DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3, DirectExecutionActionV3},
@@ -170,10 +170,6 @@ fn program_set_entry(
         entry.action as u32,
         CapabilityDescriptorReferenceV2::new(schema, descriptor),
     ))
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
 }
 
 #[cfg(test)]

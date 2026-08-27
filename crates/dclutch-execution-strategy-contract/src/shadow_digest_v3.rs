@@ -7,6 +7,7 @@
 use core::convert::TryFrom;
 
 use dclutch_core_contract::ContentId;
+use dclutch_sha256_adapter::digestv;
 use sha2::{Digest, Sha256};
 
 /// Domain for complete family request bytes.
@@ -172,22 +173,61 @@ pub fn receipt_dependencies_digest_v4(
     {
         return Err(ShadowDigestErrorV3::InvalidRoutePresence);
     }
+    if dependencies.len() > MAX_RECEIPT_DEPENDENCIES_V4 {
+        return Err(ShadowDigestErrorV3::CountOverflow);
+    }
     let count =
         u16::try_from(dependencies.len()).map_err(|_| ShadowDigestErrorV3::CountOverflow)?;
-    let mut hasher = begin(RECEIPT_DEPENDENCIES_DIGEST_DOMAIN_V4);
-    hasher.update(count.to_le_bytes());
-    for dependency in dependencies {
-        hasher.update([dependency.producer_role as u8]);
-        hasher.update(dependency.producer_route.to_le_bytes());
-        hasher.update(dependency.producer_invocation.to_le_bytes());
-        hasher.update(dependency.expected_receipt_bytes.to_le_bytes());
+    // Every dependency field is a fixed-width scalar, so the whole list is one
+    // contiguous run and the preimage is three slices regardless of the count.
+    let mut tail = [0_u8; RECEIPT_DEPENDENCY_BYTES_V4 * MAX_RECEIPT_DEPENDENCIES_V4];
+    for (index, dependency) in dependencies.iter().enumerate() {
+        let mut entry = [0_u8; RECEIPT_DEPENDENCY_BYTES_V4];
+        put(&mut entry, 0, &[dependency.producer_role as u8])?;
+        put(&mut entry, 1, &dependency.producer_route.to_le_bytes())?;
+        put(&mut entry, 3, &dependency.producer_invocation.to_le_bytes())?;
+        put(&mut entry, 7, &dependency.expected_receipt_bytes.to_le_bytes())?;
+        put(&mut tail, index * RECEIPT_DEPENDENCY_BYTES_V4, &entry)?;
     }
-    let digest: [u8; 32] = hasher.finalize().into();
+    let written = dependencies.len() * RECEIPT_DEPENDENCY_BYTES_V4;
+    let digest = digestv(&[
+        RECEIPT_DEPENDENCIES_DIGEST_DOMAIN_V4,
+        &[0_u8],
+        &count.to_le_bytes(),
+        tail.get(..written).ok_or(ShadowDigestErrorV3::CountOverflow)?,
+    ]);
     if digest == [0; 32] {
         Err(ShadowDigestErrorV3::ZeroDigest)
     } else {
         Ok(digest)
     }
+}
+
+/// Bytes one receipt dependency contributes to the dependency-list preimage.
+const RECEIPT_DEPENDENCY_BYTES_V4: usize = 1 + 2 + 4 + 2;
+
+/// Largest ordered receipt-dependency list this transcript will commit to.
+///
+/// PROVISIONAL, measured-profile. The widest dependency list any shipped
+/// artifact declares is two (`SERIES_CLAIMS_RECEIPT_DEPENDENCIES_V3`); the
+/// decoder's own ceiling is the `u16` the effect artifact carries. This bound
+/// exists because the runtime hashes a slice list rather than a stream, so the
+/// preimage needs a declared width. Lifting plan: it rises with the widest
+/// shipped artifact, and the arithmetic is nine bytes per dependency -- raising
+/// it to 512 would still be under five kilobytes.
+pub const MAX_RECEIPT_DEPENDENCIES_V4: usize = 32;
+
+fn put(output: &mut [u8], offset: usize, bytes: &[u8]) -> Result<()> {
+    output
+        .get_mut(
+            offset
+                ..offset
+                    .checked_add(bytes.len())
+                    .ok_or(ShadowDigestErrorV3::CountOverflow)?,
+        )
+        .ok_or(ShadowDigestErrorV3::CountOverflow)?
+        .copy_from_slice(bytes);
+    Ok(())
 }
 
 /// Complete interpreted effect projection before physical CPI or mutation.
@@ -223,10 +263,18 @@ pub struct ShadowInvocationContextV3 {
 }
 
 /// Digest the exact complete family request.
+///
+/// The request bytes are the largest thing on this path and they are borrowed,
+/// not copied: the preimage is four slices over memory that already exists.
 pub fn family_request_digest_v3(bytes: &[u8]) -> Result<ContentId> {
-    let mut hasher = begin(FAMILY_REQUEST_DIGEST_DOMAIN_V3);
-    absorb_bytes(&mut hasher, bytes)?;
-    finish(hasher)
+    let length = u32::try_from(bytes.len()).map_err(|_| ShadowDigestErrorV3::CountOverflow)?;
+    ContentId::new(digestv(&[
+        FAMILY_REQUEST_DIGEST_DOMAIN_V3,
+        &[0_u8],
+        &length.to_le_bytes(),
+        bytes,
+    ]))
+    .map_err(|_| ShadowDigestErrorV3::ZeroDigest)
 }
 
 /// Digest exact runtime observations in AccountProfile logical order.
@@ -324,16 +372,22 @@ pub fn effect_digest_v3(projection: ShadowEffectProjectionV3<'_>) -> Result<Cont
 }
 
 /// Digest one action-selected invocation context.
+///
+/// Every field is fixed-width and every identity is borrowed where it sits.
 pub fn invocation_context_digest_v3(context: ShadowInvocationContextV3) -> Result<ContentId> {
-    let mut hasher = begin(INVOCATION_DIGEST_DOMAIN_V3);
-    hasher.update(context.release_set.as_bytes());
-    hasher.update(context.market.as_bytes());
-    hasher.update(context.root.as_bytes());
-    hasher.update(context.capability_program.as_bytes());
-    hasher.update(context.selected_action.to_le_bytes());
-    hasher.update(context.family_request_digest.as_bytes());
-    hasher.update(context.root_prestate_digest.as_bytes());
-    finish(hasher)
+    let selected_action = context.selected_action.to_le_bytes();
+    ContentId::new(digestv(&[
+        INVOCATION_DIGEST_DOMAIN_V3,
+        &[0_u8],
+        context.release_set.as_bytes(),
+        context.market.as_bytes(),
+        context.root.as_bytes(),
+        context.capability_program.as_bytes(),
+        &selected_action,
+        context.family_request_digest.as_bytes(),
+        context.root_prestate_digest.as_bytes(),
+    ]))
+    .map_err(|_| ShadowDigestErrorV3::ZeroDigest)
 }
 
 fn begin(domain: &[u8]) -> Sha256 {

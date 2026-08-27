@@ -7,7 +7,7 @@
 
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digestv;
 
 /// Domain for one authoritative admitted-AOT invocation context.
 pub const ADMITTED_INVOCATION_CONTEXT_DOMAIN_V3: &[u8] = b"dclutch:admitted-invocation-context:v3";
@@ -128,49 +128,55 @@ pub struct AdmittedInvocationContextV3 {
 pub fn admitted_invocation_context_digest_v3(
     context: AdmittedInvocationContextV3,
 ) -> Result<ContentId, AdmittedTranscriptErrorV3> {
-    let mut hasher = Sha256::new();
-    hasher.update(ADMITTED_INVOCATION_CONTEXT_DOMAIN_V3);
-    for identity in [
-        context.release_set,
-        context.market,
-        context.root,
-        context.registry_program,
-        context.trading_program,
-        context.accelerator_program,
-        context.capability_program,
-        context.account_profile,
-        context.request_profile,
-        context.transition,
-        context.effect,
-        context.lifecycle,
-        context.strategy,
-        context.certificate,
-        context.admission,
-    ] {
-        hasher.update(identity.as_bytes());
-    }
-    hasher.update(context.artifact_release.to_bytes());
-    for identity in [
-        context.config,
-        context.product,
-        context.portfolio,
-        context.linked_basis,
-        context.family_request_digest,
-        context.runtime_observations_digest,
-        context.root_prestate_digest,
-    ] {
-        hasher.update(identity.as_bytes());
-    }
-    for value in [
+    // Every field is fixed-width, so the preimage is a fixed slice list. The
+    // identities are borrowed where they sit; only the release id and the five
+    // counts are materialized, and they are materialized contiguously so they
+    // cost one slice rather than six.
+    let artifact_release = context.artifact_release.to_bytes();
+    let mut counts = [0_u8; 5 * 4];
+    for (index, value) in [
         context.selected_action,
         context.tail_count,
         context.account_count,
         context.scalar_count,
         context.identity_count,
-    ] {
-        hasher.update(value.to_le_bytes());
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        counts
+            .get_mut(index * 4..index * 4 + 4)
+            .ok_or(AdmittedTranscriptErrorV3::ZeroDigest)?
+            .copy_from_slice(&value.to_le_bytes());
     }
-    ContentId::new(hasher.finalize().into()).map_err(|_| AdmittedTranscriptErrorV3::ZeroDigest)
+    let preimage: [&[u8]; 25] = [
+        ADMITTED_INVOCATION_CONTEXT_DOMAIN_V3,
+        context.release_set.as_bytes(),
+        context.market.as_bytes(),
+        context.root.as_bytes(),
+        context.registry_program.as_bytes(),
+        context.trading_program.as_bytes(),
+        context.accelerator_program.as_bytes(),
+        context.capability_program.as_bytes(),
+        context.account_profile.as_bytes(),
+        context.request_profile.as_bytes(),
+        context.transition.as_bytes(),
+        context.effect.as_bytes(),
+        context.lifecycle.as_bytes(),
+        context.strategy.as_bytes(),
+        context.certificate.as_bytes(),
+        context.admission.as_bytes(),
+        &artifact_release,
+        context.config.as_bytes(),
+        context.product.as_bytes(),
+        context.portfolio.as_bytes(),
+        context.linked_basis.as_bytes(),
+        context.family_request_digest.as_bytes(),
+        context.runtime_observations_digest.as_bytes(),
+        context.root_prestate_digest.as_bytes(),
+        &counts,
+    ];
+    ContentId::new(digestv(&preimage)).map_err(|_| AdmittedTranscriptErrorV3::ZeroDigest)
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@
 use core::convert::TryInto;
 
 use dclutch_product_runtime_v2::ResultDomainV2;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::{digest, digestv};
 
 use crate::runtime_v3::{
     BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
@@ -413,7 +413,7 @@ pub fn admit_authenticated_graded_basis_v3(
     let certificate_digest = digest(certificate_bytes);
     let semantic =
         semantic_basis_preimage_v3(linked_basis_bytes).map_err(|_| Error::InvalidRecord)?;
-    let semantic_basis_id = digest_fragments(&[
+    let semantic_basis_id = digestv(&[
         SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
         semantic.prefix(),
         semantic.suffix(),
@@ -471,7 +471,7 @@ pub fn derive_graded_basis_admission_v3(
         domain.product_id().to_bytes(),
         domain.coordinate_domain_id().to_bytes(),
         domain.result_unit_id().to_bytes(),
-        digest_fragments(&[
+        digestv(&[
             SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
             semantic.prefix(),
             semantic.suffix(),
@@ -496,18 +496,6 @@ pub fn derive_graded_basis_admission_v3(
 /// SHA-256 digest of one exact Registry raw body.
 pub fn raw_record_digest_v3(bytes: &[u8]) -> [u8; 32] {
     digest(bytes)
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
-}
-
-fn digest_fragments(fragments: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    for fragment in fragments {
-        hasher.update(fragment);
-    }
-    hasher.finalize().into()
 }
 
 fn require_nonzero(value: [u8; 32]) -> Result<()> {
