@@ -408,7 +408,7 @@ mod tests {
     }
 
     fn fixed() -> Vec<AccountMeta> {
-        let mut fixed = (0_u8..38)
+        let mut fixed = (0_u8..u8::try_from(HOT_FIXED_ACCOUNT_COUNT_V3).expect("fixed hot prefix"))
             .map(|index| AccountMeta::new_readonly(key(150_u8.wrapping_add(index)), false))
             .collect::<Vec<_>>();
         *fixed.get_mut(HOT_MARKET_ACCOUNT_V3).expect("Market") =
@@ -470,7 +470,7 @@ mod tests {
                 !result
                     .instruction
                     .accounts
-                    .get(38)
+                    .get(HOT_FIXED_ACCOUNT_COUNT_V3)
                     .expect("caller")
                     .is_signer
             );

@@ -220,7 +220,9 @@ fn builder_wraps_exact_hot_bytes_and_fixed_admission_boundary() {
         report.instruction.program_id,
         fixture.state.registry_program.key
     );
-    assert_eq!(report.instruction.accounts.len(), 45);
+    // 44 wrapper+frame accounts plus the validated-artifact seal at fixed hot
+    // coordinate 38 (Decision 0005).
+    assert_eq!(report.instruction.accounts.len(), 46);
     assert_eq!(
         report.instruction.data.len(),
         REGISTRY_CONTINUATION_REQUEST_BYTES_V1 + fixture.hot.data.len()
