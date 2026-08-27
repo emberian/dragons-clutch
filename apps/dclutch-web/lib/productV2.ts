@@ -33,11 +33,12 @@ import {
  *
  * Live Product admission is `programs/dclutch-product-runtime-v2-sbf` over
  * `dclutch-product-runtime-v2-admission`, a different wire (DCLTPRM2 / DCLTPRQ2 at
- * 112 bytes / DCLTPRA2). Note before anyone mirrors it here: DCLTPRQ2 names two
- * incompatible 112-byte requests, the dead evaluator request and the live admission
- * request, and the dead encoder wrote 1 at byte 10 where the live decoder requires
- * zero. A browser-side Runtime V2 admission surface is real work against the live
- * crate, not a rename of what was here.
+ * 112 bytes / DCLTPRA2). That surface now exists, as
+ * `lib/productRuntimeV2Admission.ts` — built against the live decoder, with every
+ * coordinate generated out of the two live source files, because DCLTPRQ2 names two
+ * incompatible 112-byte requests: the dead evaluator request wrote 1 at byte 10
+ * where the live decoder requires zero. It is a separate module on purpose. This
+ * one owns authored semantic data; that one owns a wire.
  *
  * Superseded source: ~/dev/dclutch-legacy/dclutch-web-product-v2-liability/.
  */

@@ -27,6 +27,8 @@
     "abi:rational-terminal-v3:verify": "node scripts/generate-rational-terminal-hot-v3.mjs --check",
     "abi:product-v2-payoff": "node scripts/generate-product-v2-payoff.mjs",
     "abi:product-v2-payoff:verify": "node scripts/generate-product-v2-payoff.mjs --check",
+    "abi:product-runtime-v2-admission": "node scripts/generate-product-runtime-v2-admission.mjs",
+    "abi:product-runtime-v2-admission:verify": "node scripts/generate-product-runtime-v2-admission.mjs --check",
     "abi:realm-position": "node scripts/lean-emit.mjs DClutchSemantics.RealmPositionAbi EmitRealmPositionAbiTs.lean lib/generated/realmPositionV1.ts",
     "abi:realm-position:verify": "node scripts/lean-emit.mjs DClutchSemantics.RealmPositionAbi EmitRealmPositionAbiTs.lean lib/generated/realmPositionV1.ts --check",
     "abi:capability-manifest": "node scripts/lean-emit.mjs DClutchSemantics.CapabilityManifestV1Abi EmitCapabilityManifestV1AbiTs.lean lib/generated/capabilityManifestV1.ts",
