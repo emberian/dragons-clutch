@@ -216,6 +216,23 @@ pub fn process_instruction(
             instruction_data,
         );
     }
+    // The way back out of a staged prestate whose founding never happened. A
+    // projection that reached `SourceFunded` and did not found before its
+    // expiry slot holds collateral that the forward direction can no longer
+    // move, because Core's Found and Open stages both refuse an expired
+    // artifact. Without this route that collateral is stranded permanently.
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if projected_custody_bootstrap_v1::is_projected_custody_abort_v1(instruction_data) {
+        return projected_custody_bootstrap_v1::process_projected_custody_abort_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     // Decision 0005. The validated-artifact seal is written by its own outer,
     // once per (descriptor, action, Trading interpreter release, Registry).
     // It creates one PDA under this Program, signs nothing else, and can only

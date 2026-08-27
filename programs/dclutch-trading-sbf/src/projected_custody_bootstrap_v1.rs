@@ -40,11 +40,11 @@ use dclutch_capability_contract::{
 };
 use dclutch_custody_contract::{
     FoundingPrestateStageV1, INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
-    OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
-    ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
-    ProjectedCustodyRequestV1, ProjectedCustodyStateV1,
+    OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
+    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1,
+    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV1,
 };
 use dclutch_market_core_codec::{
     GENERIC_FOUNDING_MAX_FUNDING_STATES_V1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
@@ -119,6 +119,7 @@ const COMMON_STATE: usize = 1;
 const COMMON_CACHE: usize = 2;
 const COMMON_REGISTRY: usize = 3;
 const COMMON_CALLER_PROGRAM: usize = 4;
+const COMMON_RENT_CREDIT: usize = 6;
 
 // Initialize-specific indices.
 const INITIALIZE_CORE_PROGRAM: usize = 7;
@@ -160,6 +161,140 @@ const OPEN_SOURCE_WRITABLE: [usize; 5] = [
     OPEN_SOURCE_PAYER,
 ];
 const OPEN_SOURCE_SIGNERS: [usize; 2] = [OPEN_SOURCE_FUNDER_OWNER, OPEN_SOURCE_PAYER];
+
+/// Sole top-level projected-Custody founding-abort instruction.
+pub const PROJECTED_CUSTODY_ABORT_MAGIC_V1: [u8; 8] = *b"DCLTPCA1";
+/// Exact outer instruction width. All economic bytes live in a readonly account.
+pub const PROJECTED_CUSTODY_ABORT_INSTRUCTION_BYTES_V1: usize = 8;
+
+const ABORT_LOCK_RAW: usize = 0;
+const ABORT_CUSTODY_PROGRAM: usize = 1;
+const ABORT_SUB_FRAME_START: usize = 2;
+
+/// Exact total physical frame width for one founding-source abort.
+pub const PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1: usize =
+    ABORT_SUB_FRAME_START + PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1;
+
+// Custody's own abort sub-frame indices, restated so this route can assert the
+// privileges the child will need instead of failing opaquely inside it.
+const ABORT_SOURCE_VAULT: usize = 7;
+const ABORT_SOURCE_REPLAY: usize = 8;
+const ABORT_SOURCE_HOARD: usize = 9;
+const ABORT_SOURCE_DESTINATION: usize = 10;
+const ABORT_SOURCE_REFUND_OWNER: usize = 11;
+
+const ABORT_WRITABLE: [usize; 6] = [
+    COMMON_STATE,
+    COMMON_RENT_CREDIT,
+    ABORT_SOURCE_VAULT,
+    ABORT_SOURCE_REPLAY,
+    ABORT_SOURCE_HOARD,
+    ABORT_SOURCE_DESTINATION,
+];
+const ABORT_SIGNERS: [usize; 1] = [ABORT_SOURCE_REFUND_OWNER];
+
+/// Return whether bytes select the sole projected-Custody abort route.
+#[must_use]
+pub fn is_projected_custody_abort_v1(instruction_data: &[u8]) -> bool {
+    instruction_data == PROJECTED_CUSTODY_ABORT_MAGIC_V1
+}
+
+/// Unwind an expired founding's funded source compartment.
+///
+/// `OpenSourceCompartment` puts real principal under a projected authority
+/// against a Market that does not exist. The only way forward from there is the
+/// Lock stage of an atomic founding whose Core Found and Open stages both
+/// refuse once `expiry_slot` has passed — so before this route existed, a
+/// founder who staged a prestate and did not found in time held collateral that
+/// no route could move, ever. This is the way back out.
+///
+/// It carries **the same 768 bytes the founding's Lock stage carries**, and the
+/// abort request is that request with exactly one field changed. Deriving it
+/// rather than accepting a second artifact is what stops the unwind from being
+/// a separate authority over the same funds.
+///
+/// **This route deliberately does not require the founding artifact**, which
+/// `DCLTPCB1` does. There, the artifact is load-bearing: the bootstrap is
+/// creating a prestate and must bind it to the founding it is for. Here the
+/// persisted projection is already that binding — Custody's `authenticate_next`
+/// compares the request against every coordinate of the request the state was
+/// created with — so a Lock request that is not this projection's simply fails
+/// to authenticate. Demanding the artifact as well would make reclaiming
+/// principal depend on the founder still holding a record they no longer need.
+///
+/// **It is also deliberately not on the extended-heap list.** One CPI, one
+/// request, one sixteen-account sub-frame. A route that does not need the grant
+/// does not declare it, which is what keeps that list meaningful.
+#[inline(never)]
+pub fn process_projected_custody_abort_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    if !is_projected_custody_abort_v1(instruction_data) {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    if accounts.len() != PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let raw_account = account(accounts, ABORT_LOCK_RAW)?;
+    if raw_account.is_signer
+        || raw_account.is_writable
+        || raw_account.executable
+        || raw_account.data_len() != PROJECTED_CUSTODY_REQUEST_BYTES_V1
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let lock_raw = raw_account
+        .try_borrow_data()
+        .map(|data| data.to_vec())
+        .map_err(|_| TradingSbfError::Content)?;
+    // Only the terminal Lock, which is what `decode_projected_request` admits.
+    // A prestate request in this slot would name a different cursor and could
+    // not authenticate against the projection anyway; refusing here says so.
+    let lock = decode_projected_request(&lock_raw)?;
+    let custody_program = account(accounts, ABORT_CUSTODY_PROGRAM)?;
+    let sub_frame = subslice(
+        accounts,
+        ABORT_SUB_FRAME_START,
+        PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
+    )?;
+    authenticate_abort_programs_v1(program_id, custody_program, sub_frame, &lock)?;
+    let abort = lock.founding_source_abort_v1();
+    let raw = encode_projected_request_boxed(&abort)?;
+    invoke_projected_child(
+        program_id,
+        custody_program,
+        sub_frame,
+        &abort,
+        raw.as_slice(),
+        &ABORT_WRITABLE,
+        &ABORT_SIGNERS,
+    )
+}
+
+/// Authenticate every Program identity the abort route hands a signature to.
+#[inline(never)]
+fn authenticate_abort_programs_v1(
+    program_id: &Pubkey,
+    custody_program: &AccountInfo<'_>,
+    sub_frame: &[AccountInfo<'_>],
+    lock: &ProjectedCustodyRequestV1,
+) -> Result<(), ProgramError> {
+    let registry = account(sub_frame, COMMON_REGISTRY)?;
+    let caller_program = account(sub_frame, COMMON_CALLER_PROGRAM)?;
+    if !custody_program.executable
+        || custody_program.is_signer
+        || custody_program.is_writable
+        || !registry.executable
+        || !caller_program.executable
+        || caller_program.key != program_id
+        || caller_program.key.to_bytes() != lock.caller_program
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    Ok(())
+}
 
 /// Return whether bytes select the sole projected-Custody bootstrap route.
 #[must_use]
@@ -1309,5 +1444,80 @@ mod tests {
             authenticate_projected_lock_join_v1(&trading(), &core(), &found(), &resourced),
             Err(TradingSbfError::Content.into())
         );
+    }
+
+    #[test]
+    fn the_abort_route_is_a_distinct_tag_and_an_exact_frame() {
+        assert!(is_projected_custody_abort_v1(
+            &PROJECTED_CUSTODY_ABORT_MAGIC_V1
+        ));
+        assert!(!is_projected_custody_abort_v1(&[0; 8]));
+        // A prefix of the tag is not the tag, and the two routes in this module
+        // must never be selected by one another's bytes.
+        assert!(!is_projected_custody_abort_v1(&[
+            b'D', b'C', b'L', b'T', b'P', b'C', b'A', b'1', 0
+        ]));
+        assert!(!is_projected_custody_abort_v1(
+            &PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1
+        ));
+        assert!(!is_projected_custody_bootstrap_v1(
+            &PROJECTED_CUSTODY_ABORT_MAGIC_V1
+        ));
+        assert_eq!(PROJECTED_CUSTODY_ABORT_INSTRUCTION_BYTES_V1, 8);
+        // Two readonly-and-program accounts, then Custody's own abort frame.
+        assert_eq!(PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1, 18);
+        // Unlike the bootstrap, this frame is a CONSTANT: the abort closes the
+        // projection and touches no FundingState, so there is no tail whose
+        // length a founding artifact would have to pin.
+        assert_eq!(
+            PROJECTED_CUSTODY_ABORT_ACCOUNT_COUNT_V1,
+            ABORT_SUB_FRAME_START + PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1
+        );
+    }
+
+    #[test]
+    fn the_abort_derives_the_terminal_lock_at_the_same_cursor() {
+        let lock = lock();
+        let abort = lock.founding_source_abort_v1();
+        // One field. The abort is the Lock's own decision point taken the other
+        // way, so it cannot name a coordinate the founding does not.
+        assert_eq!(
+            abort,
+            ProjectedCustodyRequestV1 {
+                operation: ProjectedCustodyOperationV1::AbortSourceAndClose,
+                ..lock
+            }
+        );
+        assert_eq!(abort.amount, lock.amount);
+        assert_eq!(abort.refund_owner, lock.refund_owner);
+        assert_eq!(abort.rent_credit, lock.rent_credit);
+        assert_eq!(abort.expiry_slot, lock.expiry_slot);
+        assert_eq!(abort.expected_revision, lock.expected_revision);
+        assert_eq!(abort.resulting_revision, lock.resulting_revision);
+    }
+
+    #[test]
+    fn the_abort_route_privileges_are_exactly_what_the_child_needs() {
+        // Six writable slots and one signer, and no overlap between them: the
+        // principal's owner signs while staying non-writable, which is what
+        // stops it from being the rent payer, and every account that is closed
+        // or credited is writable.
+        for writable in ABORT_WRITABLE {
+            assert!(
+                !ABORT_SIGNERS.contains(&writable),
+                "slot {writable} cannot be both the signing owner and writable"
+            );
+            assert!(writable < PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1);
+        }
+        for signer in ABORT_SIGNERS {
+            assert!(signer < PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1);
+        }
+        assert!(ABORT_WRITABLE.contains(&COMMON_STATE));
+        assert!(ABORT_WRITABLE.contains(&COMMON_RENT_CREDIT));
+        assert_eq!(ABORT_SIGNERS, [ABORT_SOURCE_REFUND_OWNER]);
+        // The caller PDA is never in either list: it signs only inside the CPI,
+        // under `invoke_signed`, exactly as every other stage in this module.
+        assert!(!ABORT_WRITABLE.contains(&COMMON_CALLER));
+        assert!(!ABORT_SIGNERS.contains(&COMMON_CALLER));
     }
 }
