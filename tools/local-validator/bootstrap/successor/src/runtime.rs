@@ -640,6 +640,12 @@ fn role_deployment_input(input: &RunProgramInput) -> RoleDeploymentInputV1 {
     RoleDeploymentInputV1 {
         observed_programdata: input.observed_programdata.as_deref().map(PathBuf::from),
         genesis_deployment_slot: input.genesis_deployment_slot.unwrap_or(0),
+        // The supervised `run` substrate is the genesis install this campaign
+        // materializes and then revokes, so there is no mutable deployment for
+        // a caller to declare here. Decision 0012's mutable roles arrive
+        // through `prepare` for the external driver, and a plan built from them
+        // is one this supervisor deliberately refuses.
+        expected_upgrade_authority: None,
     }
 }
 
