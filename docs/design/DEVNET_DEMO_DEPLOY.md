@@ -43,10 +43,11 @@ the protocol rather than by convenience:
 The third is done. The first two are what this runbook adds, and writing them
 down surfaced three blockers that no local run could have found, because a local
 run is handed exactly the substrate that devnet does not have. They are
-[§7](#7-what-is-still-blocking-deploy-day). **A and B are now closed** —
-observed deployment slots are minted, driven and exercised, and a checked
-manifest can describe a deployed-then-revoked program. C, the frontend's
-Core/Registry conflation, is open.
+[§7](#7-what-is-still-blocking-deploy-day). **All three are now closed** —
+observed deployment slots are minted, driven and exercised, a checked
+manifest can describe a deployed-then-revoked program, and the frontend's
+Core/Registry conflation is removed (`3645eed`) and exercised against a real
+chain (`5129362`).
 
 ---
 
@@ -809,9 +810,10 @@ present in both, and the per-stage CU differ only by bump-seed noise
 Three, all found by writing this document rather than by running anything,
 because each is invisible to a local run by construction.
 
-**Two of them are now closed.** A and B were killed on 2026-08-27 (`993a9ec`,
-`c5d791e`, `09d7884`); the sections below keep the diagnosis, which is still
-the reason the code has the shape it has, and say what closed it. C is open.
+**All three are now closed.** A and B were killed on 2026-08-27 (`993a9ec`,
+`c5d791e`, `09d7884`); C was killed the same day (`3645eed`, exercised against
+a real chain at `5129362`). The sections below keep the diagnosis, which is
+still the reason the code has the shape it has, and say what closed it.
 
 ### Blocker A: the bootstrap hardcodes `deployment_slot = 0` — CLOSED
 
@@ -926,14 +928,37 @@ come from reading the account. **So a deploy-day manifest set built this way is
 no longer a prediction of the deployment — it quotes an observation of it**,
 which is the rung up the evidence ladder this section asked for.
 
-### Blocker C: the frontend still conflates Core with the Registry program
+### Blocker C: the frontend conflated Core with the Registry program — CLOSED
 
-Unchanged and already specified: `lib/releaseRegistry.ts`'s
-`prepareRegistryActivation` throws unless `releaseSet.roles.core.program ===
-registryProgram`, which is the opposite of what `lib/infrastructure.ts` and the
-on-chain contracts require. Any honest seven-program release set — including a
-devnet one — is refused today. Contract items 1–5 in
-`docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md` specify the fix.
+`lib/releaseRegistry.ts`'s `prepareRegistryActivation` threw unless
+`releaseSet.roles.core.program === registryProgram`, which was the opposite of
+what `lib/infrastructure.ts` and the on-chain contracts require. Any honest
+seven-program release set — including a devnet one — was refused. Contract
+items 1–5 in `docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md` specified
+the fix.
+
+**Closed by `3645eed`,** which removed both the `core.program === registryProgram`
+throw and the matching conflation in `parseCache`, per the contract's own
+statement of the boundary at `initialize_activation_cache_v1`: "Registry
+identity is an account-ownership boundary, not a Core-selection input; the
+finalized release set binds Core when that role is activated." Registry
+identity is still authenticated, as ownership — the finalized records and the
+activation cache must be Registry-owned at the release-derived PDA, and the
+Registry program must itself be current Loader-v3 executable state.
+`prepareRegistryActivation` also stopped emitting the single 26-account,
+five-role activation packet `RegistryInstructionV1` cannot express, and instead
+returns the five-transaction, one-role-per-packet walk the operator builds
+(`activationCacheProgressV1` reports mid-walk progress instead of refusing).
+
+`5129362` then exercised the un-gated path against a real chain — a successor
+campaign's own deployment, with its checked-release manifests loaded into a
+real browser — and fixed four further defects the fixture had been hiding
+(semantic-kind decoding, the 4 MiB RPC read wall, the non-empty System Program
+body, and the malformed `SYSVAR_OWNER_ID` string), landing on a fifth, correct
+refusal: a revoked Core's retained-authority bytes differ from the release
+tool's all-zero offline construction, which is a release-tool question, not a
+frontend one. `lib/releaseRegistry.ts` carries no Core/Registry conflation
+today.
 
 ---
 
