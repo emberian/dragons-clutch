@@ -29,6 +29,10 @@ export * from './lib/activity';
 // Refusals by name: band arithmetic over the registered code space.
 export * from './lib/refusals';
 
+// The funded failure walk: the permissionless deadline route, paid from the
+// escrow the market funded at founding.
+export * from './lib/failureWalk';
+
 // The Direct trading path: chain-derived inline buy/sell construction.
 export * from './lib/directTransaction';
 export * from './lib/directInlineV3';
