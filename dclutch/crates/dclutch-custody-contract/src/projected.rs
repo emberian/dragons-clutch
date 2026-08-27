@@ -26,6 +26,12 @@ pub const PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1: usize = 42;
 pub const PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact projected-Custody source-compartment-creation physical frame width.
 pub const PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1: usize = 18;
+/// Exact projected-Custody funded-source-abort physical frame width.
+///
+/// Seven common accounts, then the source Vault and its replay, the empty
+/// Hoard Vault, the refund destination and its signing owner, the Custody
+/// authority, the Mint, the token program, and the vacant Market.
+pub const PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1: usize = 16;
 /// Exact projected-Custody lock-and-source-close physical frame width.
 pub const PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1: usize = 14;
 /// Exact projected-Custody realization physical frame width.
@@ -115,6 +121,9 @@ pub enum ProjectedCustodyOperationV1 {
     LockHoardAndCloseSource = 6,
     /// Create and fund the normal source compartment a founding Lock consumes.
     OpenSourceCompartment = 7,
+    /// After expiry, return the source principal and close the whole
+    /// projection: source Vault, source replay, empty Hoard Vault, and state.
+    AbortSourceAndClose = 8,
 }
 
 impl ProjectedCustodyOperationV1 {
@@ -128,6 +137,7 @@ impl ProjectedCustodyOperationV1 {
             5 => Ok(Self::AbortOpenAndClose),
             6 => Ok(Self::LockHoardAndCloseSource),
             7 => Ok(Self::OpenSourceCompartment),
+            8 => Ok(Self::AbortSourceAndClose),
             _ => Err(ProjectedCustodyError::NonCanonical),
         }
     }
@@ -151,10 +161,19 @@ pub enum ProjectedCustodyPhaseV1 {
     /// custodied compartment — Series escrow, for one — never enters this phase
     /// and reaches Lock straight from [`Self::HoardOpen`], exactly as before.
     ///
-    /// No terminal accepts this phase. That is deliberate: `AbortOpenAndClose`
-    /// admits only [`Self::HoardOpen`], so once real principal is under this
-    /// authority the authority over it cannot be destroyed, and the principal
-    /// can only move forward through Lock.
+    /// Exactly two transitions accept this phase, and they are the only two:
+    /// [`ProjectedCustodyOperationV1::LockHoardAndCloseSource`] forward into a
+    /// founding, and — after `expiry_slot` —
+    /// [`ProjectedCustodyOperationV1::AbortSourceAndClose`] back out.
+    ///
+    /// It used to be the forward one alone, on the reasoning that refusing the
+    /// abort was the safe direction because closing a funded projection out
+    /// from under itself would strand the principal. That reasoning had the
+    /// hazard backwards. Lock is reachable only as the first stage of an
+    /// atomic founding whose Core Found and Open stages both refuse once
+    /// `expiry_slot` has passed, so a projection that reached this phase and
+    /// did not found in time held principal **no route could ever move**. The
+    /// abort is what makes the forward direction safe to enter.
     SourceFunded = 4,
 }
 
@@ -388,6 +407,7 @@ impl ProjectedCustodyRequestV1 {
                 | ProjectedCustodyOperationV1::RealizeAndClose
                 | ProjectedCustodyOperationV1::LockHoardAndCloseSource
                 | ProjectedCustodyOperationV1::OpenSourceCompartment
+                | ProjectedCustodyOperationV1::AbortSourceAndClose
         );
         if self.operation == ProjectedCustodyOperationV1::OpenSourceCompartment
             && self.funding_source_replay_revision != SOURCE_COMPARTMENT_REPLAY_REVISION_V1
@@ -401,6 +421,28 @@ impl ProjectedCustodyRequestV1 {
             return Err(ProjectedCustodyError::NonCanonical);
         }
         Ok(())
+    }
+
+    /// Derive the expiry unwind of the founding this terminal Lock describes.
+    ///
+    /// The abort replaces the Lock **at the same cursor**: it is this request
+    /// with exactly one field changed, its operation. Same expected revision,
+    /// same resulting revision, same amount, same everything else — because it
+    /// is the same decision point, taken the other way. A founding that has
+    /// reached `SourceFunded` either Locks forward into Core's Found stage or,
+    /// once `expiry_slot` has passed and Found can no longer accept it, unwinds
+    /// back to the party who supplied the principal.
+    ///
+    /// Deriving it from the terminal Lock rather than accepting it as a
+    /// separate artifact is what stops the unwind from being a second authority
+    /// over the same funds: the same 768 bytes that authorise the founding
+    /// authorise its abort, and neither can name coordinates the other does not.
+    #[must_use]
+    pub const fn founding_source_abort_v1(self) -> Self {
+        Self {
+            operation: ProjectedCustodyOperationV1::AbortSourceAndClose,
+            ..self
+        }
     }
 
     /// Derive the exact ordered prestate requests this terminal request needs.
@@ -1007,6 +1049,72 @@ impl ProjectedCustodyStateV1 {
         {
             return Err(ProjectedCustodyError::Expiry);
         }
+        ProjectedCustodyReceiptV1::terminal(&self, &request, request_digest, false, false, [0; 32])
+    }
+
+    /// Authorize expiry return of the source principal and close the whole
+    /// projection: source Vault, source replay, empty Hoard Vault, and state.
+    ///
+    /// This is the terminal `SourceFunded` did not have. `OpenSourceCompartment`
+    /// put real principal under this authority against a Market that does not
+    /// exist, and the only way forward from there is
+    /// [`Self::lock_hoard_and_close_source`], which is reachable only as the
+    /// first stage of an atomic founding that must also complete Core's Found
+    /// and Open stages. Both of those refuse once `expiry_slot` has passed. So
+    /// before this operation existed, a projection that reached `SourceFunded`
+    /// and did not found before expiry held principal **no route could ever
+    /// move** — not stranded rent, stranded collateral, permanently.
+    ///
+    /// It is deliberately NOT an extension of [`Self::abort_open_and_close`].
+    /// That terminal admits `HoardOpen` holding nothing, Series drives it, and
+    /// its frame width is fixed; widening it would reshape a live family's
+    /// route to serve a different one, and would put a principal transfer on a
+    /// path whose whole contract is that there is no principal.
+    ///
+    /// The principal goes back to a token account owned by
+    /// `request.refund_owner` — the same party `OpenSourceCompartment` required
+    /// to sign as the funder's owner, and the same party
+    /// [`Self::refund_and_close`] pays a locked Hoard back to. Whoever supplied
+    /// the principal is exactly who may reclaim it, and no new identity
+    /// coordinate enters. Every closed account's rent goes to
+    /// `request.rent_credit`, which is where all four were always going.
+    #[allow(clippy::too_many_arguments)]
+    pub fn abort_source_and_close(
+        self,
+        request: ProjectedCustodyRequestV1,
+        request_digest: [u8; 32],
+        current_slot: u64,
+        source_before: u64,
+        source_after: u64,
+        hoard_balance: u64,
+        destination_before: u64,
+        destination_after: u64,
+        rent_credit: [u8; 32],
+        market_vacant: bool,
+    ) -> Result<ProjectedCustodyReceiptV1, ProjectedCustodyError> {
+        self.authenticate_next(&request, request_digest)?;
+        // `SourceFunded` and nothing else. The phase is the whole admission:
+        // it is a value no previously reachable state can hold, so this admits
+        // nothing that was refused before it existed.
+        if self.phase != ProjectedCustodyPhaseV1::SourceFunded
+            || request.operation != ProjectedCustodyOperationV1::AbortSourceAndClose
+            || current_slot <= self.request.expiry_slot
+            || request.amount != self.locked_amount
+            || source_before != self.locked_amount
+            || source_after != 0
+            // The Hoard at `SourceFunded` was created empty and never credited.
+            // A non-empty one means this is not the state it claims to be.
+            || hoard_balance != 0
+            || destination_before.checked_add(self.locked_amount) != Some(destination_after)
+            || rent_credit != self.request.rent_credit
+            || !market_vacant
+        {
+            return Err(ProjectedCustodyError::Expiry);
+        }
+        // `aborted_open` is false here and true in `abort_open_and_close`, and
+        // the receipt constructor pins that to `locked_amount == 0` rather than
+        // to the operation. The flag means "aborted with nothing under this
+        // authority"; this abort returns principal, so it is not that.
         ProjectedCustodyReceiptV1::terminal(&self, &request, request_digest, false, false, [0; 32])
     }
 
@@ -2423,6 +2531,346 @@ mod tests {
             )
             .founding_prestate_v1(),
             Err(ProjectedCustodyError::Revision)
+        );
+    }
+
+    /// Build the exact `SourceFunded` state a generic founding rests at.
+    fn source_funded_state(principal: u64) -> ProjectedCustodyStateV1 {
+        let lock = generic_request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            principal,
+        );
+        let open_source = lock
+            .founding_prestate_stage_v1(FoundingPrestateStageV1::OpenSourceCompartment)
+            .expect("open source prestate");
+        ProjectedCustodyStateV1 {
+            bump: 254,
+            phase: ProjectedCustodyPhaseV1::SourceFunded,
+            request: open_source,
+            next_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            locked_amount: principal,
+            last_request_digest: id(60),
+        }
+    }
+
+    fn abort_source_request(state: &ProjectedCustodyStateV1) -> ProjectedCustodyRequestV1 {
+        ProjectedCustodyRequestV1 {
+            operation: ProjectedCustodyOperationV1::AbortSourceAndClose,
+            expected_revision: state.next_revision,
+            resulting_revision: state.next_revision + 1,
+            amount: state.locked_amount,
+            ..state.request
+        }
+    }
+
+    #[test]
+    fn a_funded_source_can_be_aborted_after_expiry_and_returns_its_principal() {
+        let state = source_funded_state(500);
+        let request = abort_source_request(&state);
+        let receipt = state
+            .abort_source_and_close(request, id(61), 101, 500, 0, 0, 40, 540, id(15), true)
+            .expect("abort source and close");
+        // The principal is accounted for on the receipt, and the abort is NOT
+        // an `aborted_open`: that flag means "nothing was under this authority",
+        // and something was.
+        assert_eq!(receipt.amount, 500);
+        assert!(!receipt.realized);
+        assert!(!receipt.aborted_open);
+        assert_eq!(receipt.market_state_digest, [0; 32]);
+        assert_eq!(receipt.rent_credit, id(15));
+        assert_eq!(receipt.resulting_revision, state.next_revision + 1);
+    }
+
+    #[test]
+    fn the_source_abort_refuses_every_coordinate_it_is_supposed_to() {
+        let state = source_funded_state(500);
+        let request = abort_source_request(&state);
+        let expiry = state.request.expiry_slot;
+
+        // Before expiry. The founding is still satisfiable, so the authority
+        // over funded principal may not be destroyed yet.
+        assert_eq!(
+            state
+                .abort_source_and_close(request, id(61), expiry, 500, 0, 0, 40, 540, id(15), true)
+                .unwrap_err(),
+            ProjectedCustodyError::Expiry
+        );
+
+        // A live Market. The whole projected family is admitted by the inverse
+        // of a live Market and this terminal is no exception.
+        assert_eq!(
+            state
+                .abort_source_and_close(
+                    request,
+                    id(61),
+                    expiry + 1,
+                    500,
+                    0,
+                    0,
+                    40,
+                    540,
+                    id(15),
+                    false
+                )
+                .unwrap_err(),
+            ProjectedCustodyError::Expiry
+        );
+
+        // A source that was not fully drained, and one that was not the size
+        // the state says it is.
+        for (before, after) in [(500_u64, 1_u64), (499, 0)] {
+            assert_eq!(
+                state
+                    .abort_source_and_close(
+                        request,
+                        id(61),
+                        expiry + 1,
+                        before,
+                        after,
+                        0,
+                        40,
+                        540,
+                        id(15),
+                        true
+                    )
+                    .unwrap_err(),
+                ProjectedCustodyError::Expiry
+            );
+        }
+
+        // A Hoard holding anything. At `SourceFunded` it was created empty and
+        // never credited, so a non-empty one is not this state.
+        assert_eq!(
+            state
+                .abort_source_and_close(
+                    request,
+                    id(61),
+                    expiry + 1,
+                    500,
+                    0,
+                    1,
+                    40,
+                    540,
+                    id(15),
+                    true
+                )
+                .unwrap_err(),
+            ProjectedCustodyError::Expiry
+        );
+
+        // A destination that did not receive exactly the principal - short,
+        // over, and untouched.
+        for (before, after) in [(40_u64, 539_u64), (40, 541), (40, 40)] {
+            assert_eq!(
+                state
+                    .abort_source_and_close(
+                        request,
+                        id(61),
+                        expiry + 1,
+                        500,
+                        0,
+                        0,
+                        before,
+                        after,
+                        id(15),
+                        true
+                    )
+                    .unwrap_err(),
+                ProjectedCustodyError::Expiry
+            );
+        }
+
+        // A substituted RentCredit: the rent of four closed accounts may only
+        // go where the request always said it would.
+        assert_eq!(
+            state
+                .abort_source_and_close(
+                    request,
+                    id(61),
+                    expiry + 1,
+                    500,
+                    0,
+                    0,
+                    40,
+                    540,
+                    id(99),
+                    true
+                )
+                .unwrap_err(),
+            ProjectedCustodyError::Expiry
+        );
+
+        // An amount that disagrees with the state moves the request off the
+        // replay cursor, so it refuses before the terminal is even considered.
+        let wrong_amount = ProjectedCustodyRequestV1 {
+            amount: 499,
+            ..request
+        };
+        assert!(
+            state
+                .abort_source_and_close(
+                    wrong_amount,
+                    id(61),
+                    expiry + 1,
+                    499,
+                    0,
+                    0,
+                    40,
+                    539,
+                    id(15),
+                    true
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_source_abort_admits_only_the_funded_phase() {
+        let request_at = |state: &ProjectedCustodyStateV1| abort_source_request(state);
+        let base = source_funded_state(500);
+        for phase in [
+            ProjectedCustodyPhaseV1::Initialized,
+            ProjectedCustodyPhaseV1::HoardOpen,
+            ProjectedCustodyPhaseV1::HoardLocked,
+        ] {
+            let state = ProjectedCustodyStateV1 { phase, ..base };
+            let request = request_at(&state);
+            assert_eq!(
+                state
+                    .abort_source_and_close(
+                        request,
+                        id(61),
+                        state.request.expiry_slot + 1,
+                        500,
+                        0,
+                        0,
+                        40,
+                        540,
+                        id(15),
+                        true
+                    )
+                    .unwrap_err(),
+                ProjectedCustodyError::Expiry,
+                "{phase:?} must not reach the source abort"
+            );
+        }
+    }
+
+    #[test]
+    fn the_source_abort_does_not_widen_any_other_terminal() {
+        // The two pre-existing terminals must still refuse `SourceFunded`.
+        // This operation exists precisely because they do, and a fix that
+        // quietly relaxed one of them would be a different, worse change.
+        let state = source_funded_state(500);
+        let expiry = state.request.expiry_slot;
+
+        let refund = ProjectedCustodyRequestV1 {
+            operation: ProjectedCustodyOperationV1::RefundAndClose,
+            expected_revision: state.next_revision,
+            resulting_revision: state.next_revision + 1,
+            amount: state.locked_amount,
+            ..state.request
+        };
+        assert_eq!(
+            state
+                .refund_and_close(refund, id(61), expiry + 1, 500, 0, id(15), true)
+                .unwrap_err(),
+            ProjectedCustodyError::Expiry
+        );
+
+        let abort_open = ProjectedCustodyRequestV1 {
+            operation: ProjectedCustodyOperationV1::AbortOpenAndClose,
+            expected_revision: state.next_revision,
+            resulting_revision: state.next_revision + 1,
+            amount: 0,
+            ..state.request
+        };
+        assert_eq!(
+            state
+                .abort_open_and_close(abort_open, id(61), expiry + 1, 0, id(15), true)
+                .unwrap_err(),
+            ProjectedCustodyError::Expiry
+        );
+
+        // And the forward direction is untouched: a founding that arrives
+        // before expiry still Locks exactly as it did.
+        let lock = generic_request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            500,
+        );
+        assert!(
+            state
+                .lock_hoard_and_close_source(
+                    lock,
+                    id(62),
+                    id(50),
+                    // The source replay a generic founding's own
+                    // `OpenSourceCompartment` minted: its cursor is pinned to
+                    // `SOURCE_COMPARTMENT_REPLAY_REVISION_V1`, not to whatever
+                    // an already-existing family source happened to reach.
+                    CustodyReplayV1 {
+                        next_revision: SOURCE_COMPARTMENT_REPLAY_REVISION_V1,
+                        ..source_replay()
+                    },
+                    500,
+                    0,
+                    0,
+                    500,
+                    lock.funding_source_vault_rent_lamports,
+                    lock.funding_source_state_rent_lamports,
+                    lock.rent_credit,
+                    true,
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_source_abort_is_the_terminal_lock_with_one_field_changed() {
+        let lock = generic_request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            500,
+        );
+        let abort = lock.founding_source_abort_v1();
+        assert_eq!(
+            abort,
+            ProjectedCustodyRequestV1 {
+                operation: ProjectedCustodyOperationV1::AbortSourceAndClose,
+                ..lock
+            }
+        );
+        // Same cursor, same principal: it is the same decision point taken the
+        // other way, not a second authority over the same funds.
+        assert_eq!(abort.expected_revision, lock.expected_revision);
+        assert_eq!(abort.resulting_revision, lock.resulting_revision);
+        assert_eq!(abort.amount, lock.amount);
+        assert_eq!(abort.refund_owner, lock.refund_owner);
+        assert_eq!(abort.rent_credit, lock.rent_credit);
+        abort.validate().expect("the derived abort is canonical");
+
+        // And the state that admits the Lock admits the abort, at the same
+        // cursor, so a founder never has to choose between them in advance.
+        let state = source_funded_state(500);
+        assert_eq!(state.authenticate_next(&lock, id(70)), Ok(()));
+        assert_eq!(state.authenticate_next(&abort, id(70)), Ok(()));
+        assert!(
+            state
+                .abort_source_and_close(
+                    abort,
+                    id(71),
+                    abort.expiry_slot + 1,
+                    500,
+                    0,
+                    0,
+                    0,
+                    500,
+                    abort.rent_credit,
+                    true
+                )
+                .is_ok()
         );
     }
 }

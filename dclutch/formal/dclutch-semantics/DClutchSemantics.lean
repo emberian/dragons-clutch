@@ -4,6 +4,7 @@ import DClutchSemantics.DirectLifecycle
 import DClutchSemantics.DirectLifecycleProgram
 import DClutchSemantics.DirectLifecycleAbi
 import DClutchSemantics.RegisteredPhysical
+import DClutchSemantics.RelayedMainnetStateV1Abi
 import DClutchSemantics.RegisteredControllerAbi
 import DClutchSemantics.DirectProofs
 import DClutchSemantics.Codec

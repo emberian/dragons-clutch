@@ -1,0 +1,106 @@
+# dclutch-relayer example configuration.
+#
+# EVERY address below marked PLACEHOLDER must be replaced with the real,
+# founding-time pinned value before this file describes anything.  The relayer
+# chooses none of these: it echoes them and the on-devnet adapter compares.
+#
+# `account_set_id` is deliberately absent, and cannot be written here.  It is
+# derived from the ordered positions and printed by `show-config`; pin the
+# printed value into the release.
+
+# Root for dry-run artifacts, the publication log and the RPC read log.
+output_dir = "./out"
+
+# Seconds between observation cycles.  There is no schedule beyond this.
+poll_interval_seconds = 30
+
+# One paged body read, in bytes.  Must be at least 448 (the release inline
+# ceiling), because the first page has to contain the whole pinned inline
+# prefix so it can be checked against the batch read.
+body_page_bytes = 262144
+
+[observed_cluster]
+# The cluster whose account bytes are being observed.  The first endpoint is
+# primary; any others are cross-checks, and a disagreement stops the set.
+rpc_endpoints = ["http://127.0.0.1:8899"]
+
+# Verified against `getGenesisHash` at startup.  A mismatch is fatal: nothing
+# else distinguishes a mainnet account from a byte-identical twin on another
+# cluster.  This is Solana mainnet-beta.
+expected_genesis_hash = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+
+request_timeout_seconds = 30
+
+[keys]
+# The release identity.  Generate it with `dclutch-relayer keygen --out <path>`.
+# The daemon refuses any path inside ~/.config, ~/.ssh, or a .config/solana
+# directory, and never looks for a key anywhere it was not explicitly told to.
+attestation_keypair_path = "./keys/attestation.json"
+
+# The fee payer: hot, replaceable, and a DIFFERENT file from the attestation
+# key.  Only needed for --submit.
+fee_payer_keypair_path = "./keys/fee-payer.json"
+
+# Submission is code-complete and execution-gated.  Without this table the
+# daemon can only run --dry-run.
+[submit]
+# A non-loopback host is REFUSED unless allow_public_submission is true.
+endpoint = "http://127.0.0.1:8899"
+
+# Defaults to false.  Setting it true asserts that a current authorization
+# names devnet or mainnet submission.  Nothing in this service can grant that.
+allow_public_submission = false
+
+relay_program_id = "11111111111111111111111111111112"                 # PLACEHOLDER
+market = "11111111111111111111111111111113"                           # PLACEHOLDER
+generation = 1
+relayer_key_set = "11111111111111111111111111111114"                  # PLACEHOLDER
+relayer_key_set_staging_vacancy = "11111111111111111111111111111115"  # PLACEHOLDER
+
+compute_unit_limit = 200000
+compute_unit_price_micro_lamports = 1
+
+# [submit.address_lookup_table]
+# key = "1111111111111111111111111111111B"                            # PLACEHOLDER
+# addresses = ["1111111111111111111111111111111C"]                    # PLACEHOLDER
+
+# The §4.2 four-account DBC set, in the order the release pins.  The ORDER is
+# part of the identity: reordering these produces a different account_set_id.
+[[account_sets]]
+name = "dbc-graduation"
+relay_family_id = "095d90fce8c9ae83f08c4e379ffd73a8ef768e3030d2f9080c835bcbb7e6f50f"
+decoding_rules_id = "9c68c8b943616bba40ad6190cba6be11a803afe75ea3bc1a8b1a8e11e329c26b"  # PLACEHOLDER
+
+# 1. the venue Program account (Loader V3, 36 bytes), which yields the observed
+#    programdata_link — read out of the account, never supplied.
+[[account_sets.positions]]
+key = "11111111111111111111111111111117"                              # PLACEHOLDER
+expected_owner = "BPFLoaderUpgradeab1e11111111111111111111111"
+inline_len = 36
+admitted_data_lens = [36]
+
+# 2. the venue ProgramData, first 45 bytes inline.  Its tail digest IS the
+#    registry contract's elf_digest.  This position is the one whose digest is
+#    cached under (pubkey, deployment_slot).
+[[account_sets.positions]]
+key = "11111111111111111111111111111118"                              # PLACEHOLDER
+expected_owner = "BPFLoaderUpgradeab1e11111111111111111111111"
+inline_len = 45
+# Left open: a ProgramData's width tracks the deployed ELF and is not a
+# founding-time constant.  A redeploy is caught by deployment_slot instead.
+
+# 3. the venue state account, the subject of the claim, carried fully inline.
+[[account_sets.positions]]
+key = "11111111111111111111111111111119"                              # PLACEHOLDER
+expected_owner = "1111111111111111111111111111111A"                   # PLACEHOLDER
+inline_len = 416
+admitted_data_lens = [416]
+
+# 4. the observed cluster's Clock sysvar, so that cluster's wall time is an
+#    ordinary decoded field of an ordinary attested account rather than
+#    something the relayer asserts.
+[[account_sets.positions]]
+key = "SysvarC1ock11111111111111111111111111111111"
+expected_owner = "Sysvar1111111111111111111111111111111111111"
+inline_len = 40
+admitted_data_lens = [40]

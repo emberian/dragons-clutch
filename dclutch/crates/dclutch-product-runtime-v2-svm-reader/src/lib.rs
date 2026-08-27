@@ -9,12 +9,26 @@
 //! authenticates and returns the independently finalized raw coordinate rather
 //! than adding a raw-record digest to ProductRecordV2.
 //!
-//! Follow-on convergence is mechanically limited to the remaining legacy
-//! `LinkedBasisRecordV2` Claims consumers:
-//! `src/{affine_batch_v2,liability_basis_v2,rational_representation_v2}.rs`
-//! and `program-test/affine-batch/src/lib.rs` under `dclutch-claims-sbf`, plus
-//! `dclutch-liability-basis-v2-kernel::{src,tests}/product_claims.rs`. They must
-//! consume this V3 authentication result rather than add another basis decoder.
+//! That convergence is done for every live Claims consumer. `affine_batch_v2`
+//! now consumes [`authenticate_product_basis_v3`] through the single shared
+//! `authenticate_runtime_product_basis_core_v3` boundary, which is the basis
+//! authority for all four live routes — `founding_v5`, `affine_batch_v2`,
+//! `signed_delta_v3` and `protocol_position_v2` — so Claims founding
+//! authenticates exactly the Registry-owned record Core commits into a
+//! founding permit. `rational_representation_v2` reaches the same authority
+//! through `rational_product_v3`, and `sparse_native_transfer_v1` and
+//! `terminal_settlement_v3` already called this reader directly. The
+//! superseded Core-owned `LinkedBasisRecordV2` expectation was deleted from
+//! each of those paths in the same cycle; no parallel decode fallback remains.
+//!
+//! One legacy consumer is deliberately left, with its reason recorded in
+//! `dclutch-claims-sbf::liability_basis_v2`: the `DCLLBX02` route. It has no
+//! producer anywhere in the tree and nothing on chain finalizes a `DCLTLNK2`
+//! raw record, so it is unreachable rather than a competing authority, and
+//! converging it is a port of the V2 kernel's evaluator plus an account-frame
+//! widening rather than a basis swap. It is queued behind the retirement of
+//! `dclutch-liability-basis-v2-kernel::product_claims`, which still defines
+//! `LinkedBasisRecordV2` for its own tests.
 
 #![no_std]
 #![forbid(unsafe_code)]

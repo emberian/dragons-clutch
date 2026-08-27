@@ -218,8 +218,28 @@ pub struct Binding {
     /// Census refusal id the chain must report, when `outcome` is `refused`.
     #[serde(default)]
     pub refusal: Option<String>,
+    /// A refusal raised by a program the census does not enumerate.
+    ///
+    /// A campaign may deliberately end a transaction inside a test-only caller
+    /// -- refusing after the child committed, to prove rollback across the CPI
+    /// boundary. The chain then reports THAT program's code, which can collide
+    /// numerically with a first-party refusal it has nothing to do with, and a
+    /// census that credited the collision would be a mirror. A binding says so
+    /// here instead: the code is still checked against the chain, and no
+    /// first-party refusal is credited.
+    #[serde(default)]
+    pub unnamed_refusal: Option<UnnamedRefusal>,
     /// Why this transaction exercises these routes.
     pub note: String,
+}
+
+/// A checked refusal that belongs to no enumerated program.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UnnamedRefusal {
+    /// The custom program error code the chain must report.
+    pub code: u32,
+    /// Which program raised it and why it is not a first-party refusal.
+    pub reason: String,
 }
 
 // ------------------------------------------------------------------ blocked

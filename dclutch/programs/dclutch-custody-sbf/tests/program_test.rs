@@ -1,6 +1,12 @@
 //! Real-ELF ProgramTest campaign for canonical multiprogram Custody.
+//!
+//! With `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR` set the campaign also emits the
+//! finalized transactions the gauntlet's census folds into the execution
+//! ledger. See `tools/gauntlet/claims-custody/README.md`.
 
 use std::{env, fs, path::PathBuf, vec::Vec};
+
+use dclutch_program_test_evidence::TransactionEvidence;
 
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
@@ -29,7 +35,12 @@ use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TokenAccount,
 };
 use solana_account::Account;
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table,
+};
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
+    clock::Clock,
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -40,7 +51,7 @@ use solana_program_pack::Pack;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
-use solana_transaction::Transaction;
+use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
@@ -64,6 +75,14 @@ impl Profile {
         match self {
             Self::Legacy => Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
             Self::Token2022 => Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+        }
+    }
+
+    /// Stable census label stem for this token profile.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Token2022 => "token-2022",
         }
     }
 
@@ -96,6 +115,7 @@ struct Fixture {
     vault: Pubkey,
     external_source: Pubkey,
     external_destination: Pubkey,
+    rent_refund: Pubkey,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -417,6 +437,12 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
     .0;
     let external_source = Pubkey::new_unique();
     let external_destination = Pubkey::new_unique();
+    // The rent-refund beneficiary is deliberately NOT the transaction payer.
+    // CustodyFrameSpecV1 gives `RentRefund` WRITABLE, non-signer privileges, and
+    // the SVM reports the fee payer as a signer in every instruction it appears
+    // in, so a campaign that refunds to the payer can never satisfy the frame.
+    let rent_refund = Pubkey::new_unique();
+    add_protocol_account(&mut test, rent_refund, system_program::ID, Vec::new());
     add_protocol_account(
         &mut test,
         external_source,
@@ -452,6 +478,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
             vault,
             external_source,
             external_destination,
+            rent_refund,
         },
     )
 }
@@ -513,7 +540,7 @@ fn initialize_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
         fixture.mint,
     );
     request.payer = payer.to_bytes();
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.mint = [0; 32];
     request.token_program = [0; 32];
     request.rent_lamports =
@@ -534,7 +561,7 @@ fn open_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request.destination = fixture.vault.to_bytes();
     request.destination_vault_context = CONTEXT;
     request.payer = payer.to_bytes();
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = 1;
     request.resulting_revision = 2;
     request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
@@ -588,7 +615,7 @@ fn withdraw_request(fixture: &Fixture, expected_revision: u64) -> CustodyRequest
     request
 }
 
-fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
+fn close_request(fixture: &Fixture) -> CustodyRequestV1 {
     let mut request = request_base(
         fixture.profile,
         fixture.release_set,
@@ -600,7 +627,7 @@ fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request.source_compartment = CompartmentV1::HoardPrincipal;
     request.source = fixture.vault.to_bytes();
     request.source_vault_context = CONTEXT;
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = 5;
     request.resulting_revision = 6;
     request.rent_lamports = Rent::default().minimum_balance(dclutch_token_svm::ACCOUNT_BYTES);
@@ -608,11 +635,7 @@ fn close_request(fixture: &Fixture, payer: Pubkey) -> CustodyRequestV1 {
     request
 }
 
-fn close_replay_request(
-    fixture: &Fixture,
-    payer: Pubkey,
-    expected_revision: u64,
-) -> CustodyRequestV1 {
+fn close_replay_request(fixture: &Fixture, expected_revision: u64) -> CustodyRequestV1 {
     let mut request = request_base(
         fixture.profile,
         fixture.release_set,
@@ -623,7 +646,7 @@ fn close_replay_request(
     request.operation = OperationV1::CloseReplay;
     request.mint = [0; 32];
     request.token_program = [0; 32];
-    request.rent_refund = payer.to_bytes();
+    request.rent_refund = fixture.rent_refund.to_bytes();
     request.expected_revision = expected_revision;
     request.resulting_revision = expected_revision + 1;
     request.rent_lamports =
@@ -642,7 +665,7 @@ fn common_metas_for_bytes(
     request: CustodyRequestV1,
     request_bytes: &[u8],
 ) -> Vec<AccountMeta> {
-    let digest = hash(&request_bytes).to_bytes();
+    let digest = hash(request_bytes).to_bytes();
     let authority = Pubkey::find_program_address(
         &CallerAuthoritySeedsV1::new(
             ContentId::new(request.release_set).expect("release set"),
@@ -730,9 +753,11 @@ fn wrapper_instruction(
             AccountMeta::new(fixture.vault, false),
             AccountMeta::new_readonly(fixture.custody_authority, false),
             AccountMeta::new_readonly(fixture.profile.token_program(), false),
-            AccountMeta::new(payer, false),
+            AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false),
         ]),
-        OperationV1::CloseReplay => accounts.push(AccountMeta::new(payer, false)),
+        OperationV1::CloseReplay => {
+            accounts.push(AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false));
+        }
     }
     let mut data = Vec::with_capacity(dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 + 1);
     data.push(u8::from(fail_after));
@@ -770,11 +795,63 @@ fn delegated_wrapper_instruction(
     }
 }
 
-async fn submit(
-    context: &mut ProgramTestContext,
-    instruction: Instruction,
-) -> Result<(bool, u64), BanksClientError> {
-    let blockhash = context.banks_client.get_latest_blockhash().await?;
+/// Solana's legacy packet maximum. ProgramTest submits no packet and therefore
+/// cannot enforce it, so this campaign MEASURES every transaction against it:
+/// Found31 was a frame ten bytes past this limit and it survived every fixture
+/// test in the tree.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The exact wire extent of one signed transaction.
+///
+/// One shortvec byte for the signature count, 64 bytes per signature, then the
+/// serialised message. This is what a validator would receive.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's \
+         {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
+/// Every stable address the campaign names.
+///
+/// The release-scoped caller-authority PDA is deliberately absent: it is
+/// derived from each request's own digest, so there is one per transaction and
+/// it stays in the message's static keys. So do the payer and every invoked
+/// program -- `v0::Message::try_compile` will not move those whatever this list
+/// says.
+fn campaign_addresses(fixture: &Fixture) -> Vec<Pubkey> {
+    vec![
+        CUSTODY_PROGRAM_ID,
+        CALLER_PROGRAM_ID,
+        REGISTRY_PROGRAM_ID,
+        fixture.market,
+        fixture.activation_cache,
+        fixture.caller_programdata,
+        fixture.realm_key,
+        fixture.realm_staging,
+        fixture.replay,
+        fixture.mint,
+        fixture.vault,
+        fixture.custody_authority,
+        fixture.external_source,
+        fixture.external_destination,
+        fixture.rent_refund,
+        fixture.profile.token_program(),
+        system_program::ID,
+        sysvar::rent::ID,
+    ]
+}
+
+/// Submit one legacy transaction that must commit, for lookup-table lifecycle.
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("legacy blockhash");
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&context.payer.pubkey()),
@@ -784,12 +861,106 @@ async fn submit(
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
+        .await
+        .expect("lookup-table lifecycle processing");
+    assert!(processed.result.is_ok(), "lookup-table lifecycle must commit");
+}
+
+/// Create and activate one lookup table carrying every campaign address.
+async fn create_live_lookup_table(
+    context: &mut ProgramTestContext,
+    addresses: &[Pubkey],
+) -> Pubkey {
+    let clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("Clock sysvar");
+    context
+        .warp_to_slot(clock.slot + 1)
+        .expect("make the lookup-table slot recent");
+    let payer = context.payer.pubkey();
+    let (create, table) = create_lookup_table(payer, payer, clock.slot);
+    process_legacy(context, create).await;
+    for chunk in addresses.chunks(20) {
+        process_legacy(
+            context,
+            extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+        )
+        .await;
+    }
+    let extension = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-extension Clock");
+    context
+        .warp_to_slot(extension.slot + 1)
+        .expect("activate the lookup addresses");
+    table
+}
+
+async fn submit(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    lookup: &AddressLookupTableAccount,
+    label: &str,
+) -> Result<(bool, u64), BanksClientError> {
+    let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let payer = context.payer.pubkey();
+    // Every Custody frame but CloseReplay and InitializeReplay is past Solana's
+    // legacy packet maximum with its keys inline -- the delegated wire by 178
+    // bytes -- so the campaign routes them the way a caller would have to.
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            &payer,
+            &[instruction],
+            std::slice::from_ref(lookup),
+            blockhash,
+        )
+        .expect("v0 message"),
+    );
+    let transaction =
+        VersionedTransaction::try_new(message, &[&context.payer]).expect("transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map(|clock| clock.slot)
+        .unwrap_or_default();
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
         .await?;
-    let units = processed
+    let accepted = processed.result.is_ok();
+    let metadata = processed
         .metadata
-        .ok_or(BanksClientError::ClientError("missing metadata"))?
-        .compute_units_consumed;
-    Ok((processed.result.is_ok(), units))
+        .clone()
+        .ok_or(BanksClientError::ClientError("missing metadata"))?;
+    let units = metadata.compute_units_consumed;
+    // The refusal is rendered from what the RUNTIME returned, never from what
+    // the campaign expected.
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &metadata.log_messages,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Ok((accepted, units))
 }
 
 async fn observed(context: &mut ProgramTestContext, key: Pubkey) -> Account {
@@ -820,10 +991,18 @@ async fn campaign(profile: Profile) {
     let (test, fixture) = fixture(profile);
     let mut context = test.start_with_context().await;
     let payer = context.payer.pubkey();
+    let step = |name: &str| format!("custody {}: {name}", profile.label());
+    let addresses = campaign_addresses(&fixture);
+    let lookup = AddressLookupTableAccount {
+        key: create_live_lookup_table(&mut context, &addresses).await,
+        addresses,
+    };
 
     let (accepted, initialize_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, initialize_request(&fixture, payer), payer, false),
+        &lookup,
+        &step("initialize replay"),
     )
     .await
     .expect("initialize transaction");
@@ -832,6 +1011,8 @@ async fn campaign(profile: Profile) {
     let (accepted, open_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, open_request(&fixture, payer), payer, false),
+        &lookup,
+        &step("open vault"),
     )
     .await
     .expect("open transaction");
@@ -848,10 +1029,12 @@ async fn campaign(profile: Profile) {
         &mut context,
         wrapper_instruction(
             &fixture,
-            close_replay_request(&fixture, payer, 2),
+            close_replay_request(&fixture, 2),
             payer,
             false,
         ),
+        &lookup,
+        &step("close replay under a live vault"),
     )
     .await
     .expect("early replay-close transaction");
@@ -866,6 +1049,8 @@ async fn campaign(profile: Profile) {
             payer,
             false,
         ),
+        &lookup,
+        &step("V1 external debit without a delegate"),
     )
     .await
     .expect("legacy external-debit transaction");
@@ -884,6 +1069,8 @@ async fn campaign(profile: Profile) {
             ),
             false,
         ),
+        &lookup,
+        &step("delegated external transfer"),
     )
     .await
     .expect("distinct-owner external transfer");
@@ -905,6 +1092,8 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, wrong_delegate, 1, 1),
             false,
         ),
+        &lookup,
+        &step("delegated transfer with a substituted delegate"),
     )
     .await
     .expect("delegate-substitution transaction");
@@ -924,6 +1113,8 @@ async fn campaign(profile: Profile) {
     let (accepted, late_failure_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, terminal_deposit, true),
+        &lookup,
+        &step("caller refuses after the token effect"),
     )
     .await
     .expect("late-failure transaction");
@@ -937,6 +1128,8 @@ async fn campaign(profile: Profile) {
     let (accepted, deposit_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, terminal_deposit, false),
+        &lookup,
+        &step("delegated terminal deposit"),
     )
     .await
     .expect("terminal deposit transaction");
@@ -958,6 +1151,8 @@ async fn campaign(profile: Profile) {
     let (accepted, stale_cu) = submit(
         &mut context,
         delegated_wrapper_instruction(&fixture, delegated_request(&fixture, stale, 1, 1), false),
+        &lookup,
+        &step("delegated transfer at a stale replay revision"),
     )
     .await
     .expect("stale replay transaction");
@@ -973,6 +1168,8 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, substituted_source_owner, 1, 1),
             false,
         ),
+        &lookup,
+        &step("delegated transfer with a substituted source owner"),
     )
     .await
     .expect("source-owner-substitution transaction");
@@ -988,6 +1185,8 @@ async fn campaign(profile: Profile) {
             delegated_request(&fixture, substituted_destination_owner, 5, 5),
             false,
         ),
+        &lookup,
+        &step("delegated transfer with a substituted destination owner"),
     )
     .await
     .expect("destination-owner-substitution transaction");
@@ -1000,6 +1199,8 @@ async fn campaign(profile: Profile) {
     let (accepted, withdraw_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, withdraw_request(&fixture, 4), payer, false),
+        &lookup,
+        &step("transfer vault to external destination"),
     )
     .await
     .expect("withdraw transaction");
@@ -1011,7 +1212,9 @@ async fn campaign(profile: Profile) {
 
     let (accepted, close_cu) = submit(
         &mut context,
-        wrapper_instruction(&fixture, close_request(&fixture, payer), payer, false),
+        wrapper_instruction(&fixture, close_request(&fixture), payer, false),
+        &lookup,
+        &step("close vault"),
     )
     .await
     .expect("close transaction");
@@ -1037,10 +1240,12 @@ async fn campaign(profile: Profile) {
         &mut context,
         wrapper_instruction(
             &fixture,
-            close_replay_request(&fixture, payer, 5),
+            close_replay_request(&fixture, 5),
             payer,
             false,
         ),
+        &lookup,
+        &step("close replay at a stale revision"),
     )
     .await
     .expect("stale replay-close transaction");
@@ -1050,11 +1255,13 @@ async fn campaign(profile: Profile) {
         replay_before_close
     );
 
-    let mut foreign = close_replay_request(&fixture, payer, 6);
+    let mut foreign = close_replay_request(&fixture, 6);
     foreign.caller_role = CallerRoleV1::Claims;
     let (accepted, foreign_close_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, foreign, payer, false),
+        &lookup,
+        &step("close replay under a foreign caller role"),
     )
     .await
     .expect("foreign-role replay-close transaction");
@@ -1068,10 +1275,12 @@ async fn campaign(profile: Profile) {
         &mut context,
         wrapper_instruction(
             &fixture,
-            close_replay_request(&fixture, payer, 6),
+            close_replay_request(&fixture, 6),
             payer,
             false,
         ),
+        &lookup,
+        &step("close replay"),
     )
     .await
     .expect("close replay transaction");
@@ -1092,6 +1301,8 @@ async fn campaign(profile: Profile) {
     let (accepted, reopen_cu) = submit(
         &mut context,
         wrapper_instruction(&fixture, reopen, payer, false),
+        &lookup,
+        &step("open vault after the replay is closed"),
     )
     .await
     .expect("reopen-without-replay transaction");

@@ -181,3 +181,38 @@ pool prices, majors). Cross-cluster truth transport:
   Solana account reads, verifiable against the devnet core bridge) — MR lane
   owns pinning whether this actually supports what we need.
 - Later hardening path: multi-relayer quorum, TEE-attested signer.
+
+## Close-out doctrine (ember, 2026-08-27)
+
+1. **Holistic over combinatorial.** The census answered "does each route run at
+   all." The next evidence tier is JOURNEYS: whole flows and use cases under
+   simulated load (create → many traders → resolve → redeem → retire; replay
+   pressure; concurrency), orchestrated at high abstraction. Route-level tiers
+   remain as regression floors; new testing effort goes to journeys.
+2. **Subagents yield.** A lane collects context, implements, commits, and
+   YIELDS. Campaigns, integration, and cross-lane convergence happen at the
+   orchestrator or in a dedicated integrator lane. No do-everything marathons.
+3. **Commit early and often.** A commit does not need to be a tested or
+   integrated unit. Git is the safety net; use it liberally.
+4. **No more re-measuring into tables.** Record verdicts and deltas; a number
+   is written down only when it is load-bearing for a decision.
+5. **The purge**: reference/stale/superseded code is banished to
+   ~/dev/dclutch-legacy (copy for grep convenience; git history is the
+   authoritative record). Banished so far: the gen-2 monolith
+   (programs/dclutch-sbf), series-sbf, effect-sbf, economic-sbf,
+   product-payoff-sbf, product-evidence-sbf. In progress (integrator lane):
+   the verticals live/dead split, dealer/general contracts, the remaining
+   gen-2 cascade, and the census denominator correction. The repo's contents
+   converge to ONLY the active built system.
+
+## MILESTONE: THE MARKET IS OPEN (2026-08-27, run 6, 67e441d)
+
+DCLTGMF1 executes end-to-end on a real validator: 1,189,823 CU, reproduced
+three times, whole-chain rollback hostile case green, gauntlet 23/23 witnesses,
+42/~119 routes executed. Eight founding blockers found and killed across six
+runs. AbortSourceAndClose landed + executed (was a stranded-collateral hazard).
+Remaining to the joined trading gate: hot tail heap (2,383 over at phase 7,
+tail >=39,521 vs 32,768) + first-ever phase-8+ child CPI territory (W2i lane).
+URGENT unowned->now owned: DCLTGMF1 CU grew 84.6%->91.3% of ceiling in one
+evening from unrelated changes; CU-BUDGET lane adds checked-in budgets.
+The monolith is fully deleted (legacy copy removed; git history only).

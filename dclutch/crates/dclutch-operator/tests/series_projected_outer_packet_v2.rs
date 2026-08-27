@@ -57,9 +57,10 @@ fn maximum_complete_outer_frame_fits_v0_with_compute_budget_and_alt() {
     let runtime_physical = PROFILE13_PHYSICAL_ACCOUNT_BASE + MAXIMUM_FUNDING_COUNT;
     let runtime_suffix = runtime_physical - SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2;
     let complete_frame = SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2 + runtime_suffix;
-    assert_eq!(SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2, 45);
+    // 45 / 120 before the validated-artifact seal joined the fixed hot prefix.
+    assert_eq!(SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2, 46);
     assert_eq!(runtime_physical, 80);
-    assert_eq!(complete_frame, 120);
+    assert_eq!(complete_frame, 121);
 
     let payer = Pubkey::new_from_array([1; 32]);
     let trading_program = Pubkey::new_from_array([2; 32]);
@@ -118,7 +119,9 @@ fn maximum_complete_outer_frame_fits_v0_with_compute_budget_and_alt() {
     assert_eq!(loaded, complete_frame);
     let required_signatures = usize::from(message.header.num_required_signatures);
     let wire_bytes = 1 + required_signatures * 64 + VersionedMessage::V0(message).serialize().len();
-    assert_eq!(wire_bytes, 930);
+    // 930 before the validated-artifact seal joined the fixed hot prefix: one
+    // ALT-routed key costs one index byte in each of the two account lists.
+    assert_eq!(wire_bytes, 932);
     assert!(
         wire_bytes + REQUIRED_PACKET_MARGIN <= SOLANA_PACKET_BYTES,
         "{wire_bytes}B complete-frame packet leaves less than {REQUIRED_PACKET_MARGIN}B margin"

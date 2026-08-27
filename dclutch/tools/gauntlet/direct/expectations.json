@@ -1,0 +1,104 @@
+{
+  "campaign": "direct-aot-programtest",
+  "note": "The second derivation. Every gross and fee below was worked out by hand from the stated Direct quote equation, NOT read out of the program, the AOT contract, or the campaign's own output. `tools/gauntlet/tier2/witnesses.json` compares this list against what the real SBF ELF published on chain; neither file reads the other, which is what makes the comparison a witness rather than a mirror. If a number here is wrong, the witness fails and someone has to decide which side is wrong \u2014 that is the point.",
+  "equation": {
+    "gross": "gross = fill * execution_price / price_scale, EXACT integer division. A nonzero remainder is a refusal, not a rounding; Direct has no rounding boundary here.",
+    "fee": "fee = floor(gross * policy_fee_bps / 10000). The floor is the one named rounding boundary, and it rounds toward the makers, never toward the venue.",
+    "denominator": "10000, the Direct V2 fee denominator.",
+    "provenance": "docs/evidence/COMPILED_SIGNED_DIRECT_2026_08_25.md, 'the frame's exact gross quote; and the frame's named floor fee'; the Lean theorem DClutch.DirectProgram.admitted_program_refines states the same two outputs for every Admissible frame."
+  },
+  "canonical_frame": {
+    "fill": 2000,
+    "execution_price": 500000,
+    "price_scale": 1000000,
+    "policy_fee_bps": 25,
+    "seller_limit": 400000,
+    "buyer_limit": 600000,
+    "seller_maximum": 2000,
+    "buyer_maximum": 2000,
+    "seller_claims": 5000,
+    "buyer_collateral": 2000,
+    "seller_validity": [
+      90,
+      110
+    ],
+    "buyer_validity": [
+      95,
+      120
+    ]
+  },
+  "quotes": [
+    {
+      "label": "Direct AOT admits the canonical fill-or-kill fill",
+      "gross": 1000,
+      "fee": 2,
+      "derivation": "2000 * 500000 = 1000000000; / 1000000 = 1000 exactly. 1000 * 25 = 25000; / 10000 = 2.5; floor 2."
+    },
+    {
+      "label": "Direct AOT admits a partial fill under a resting lifecycle",
+      "gross": 500,
+      "fee": 1,
+      "derivation": "1000 * 500000 = 500000000; / 1000000 = 500 exactly. 500 * 25 = 12500; / 10000 = 1.25; floor 1."
+    },
+    {
+      "label": "Direct AOT admits the minimal fill whose floor fee rounds to zero",
+      "gross": 1,
+      "fee": 0,
+      "derivation": "2 * 500000 = 1000000; / 1000000 = 1 exactly. 1 * 25 = 25; / 10000 = 0.0025; floor 0. A zero fee is an admitted quote."
+    },
+    {
+      "label": "Direct AOT admits a price exactly at the signed seller limit",
+      "gross": 800,
+      "fee": 2,
+      "derivation": "2000 * 400000 = 800000000; / 1000000 = 800 exactly. 800 * 25 = 20000; / 10000 = 2 exactly."
+    },
+    {
+      "label": "Direct AOT admits a price exactly at the signed buyer limit",
+      "gross": 1200,
+      "fee": 3,
+      "derivation": "2000 * 600000 = 1200000000; / 1000000 = 1200 exactly. 1200 * 25 = 30000; / 10000 = 3 exactly."
+    },
+    {
+      "label": "Direct AOT admits a buyer holding exactly gross plus fee",
+      "gross": 1000,
+      "fee": 2,
+      "derivation": "The canonical quote. The buyer holds 1002, which is exactly gross + fee; one unit less is the refusal twin."
+    },
+    {
+      "label": "Direct AOT admits a seller holding exactly the filled claims",
+      "gross": 1000,
+      "fee": 2,
+      "derivation": "The canonical quote. The seller holds exactly 2000 claims against a 2000 fill; one claim less is the refusal twin."
+    },
+    {
+      "label": "Direct AOT admits a slot exactly at the tightest window open",
+      "gross": 1000,
+      "fee": 2,
+      "derivation": "The canonical quote at slot 95, the later of the two valid_from coordinates."
+    },
+    {
+      "label": "Direct AOT admits a slot exactly at the tightest window close",
+      "gross": 1000,
+      "fee": 2,
+      "derivation": "The canonical quote at slot 110, the earlier of the two valid_through coordinates."
+    },
+    {
+      "label": "Direct AOT admits a fee rate exactly at the denominator",
+      "gross": 1000,
+      "fee": 1000,
+      "derivation": "1000 * 10000 = 10000000; / 10000 = 1000 exactly. The whole gross becomes fee. Admissible, and the buyer's 2000 covers 1000 + 1000."
+    },
+    {
+      "label": "Direct AOT admits an execution price exactly at the price scale",
+      "gross": 2000,
+      "fee": 5,
+      "derivation": "2000 * 1000000 = 2000000000; / 1000000 = 2000 exactly. 2000 * 25 = 50000; / 10000 = 5 exactly."
+    },
+    {
+      "label": "Direct AOT admits the last outcome coordinate in the Market",
+      "gross": 1000,
+      "fee": 2,
+      "derivation": "The canonical quote on outcome 2 of a 3-outcome Market; the quote does not depend on which outcome was selected."
+    }
+  ]
+}

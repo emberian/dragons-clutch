@@ -588,7 +588,10 @@ mod tests {
     }
 
     fn fixed() -> Vec<AccountMeta> {
-        let mut fixed = (0_u8..38)
+        let mut fixed = (0_u8..u8::try_from(
+            dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3,
+        )
+        .expect("fixed hot prefix"))
             .map(|index| AccountMeta::new_readonly(key(100_u8.wrapping_add(index)), false))
             .collect::<Vec<_>>();
         *fixed.get_mut(HOT_MARKET_ACCOUNT_V3).expect("Market") =
@@ -720,7 +723,8 @@ mod tests {
         )
         .expect("compact K3 instruction");
         assert_eq!(instruction.instruction.data.len(), 528);
-        assert_eq!(instruction.instruction.accounts.len(), 70);
+        // 70 before the validated-artifact seal joined the fixed hot prefix.
+        assert_eq!(instruction.instruction.accounts.len(), 71);
         assert!(instruction.requires_v0_address_lookup);
         assert!(instruction.required_wallet_signers.is_empty());
         let (_, family) = HotExecutionEnvelopeV3::split_instruction(&instruction.instruction.data)

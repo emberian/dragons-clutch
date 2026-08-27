@@ -1,0 +1,54 @@
+{
+  "campaign": "custody-family-programtest",
+  "witnesses": [
+    {
+      "id": "custody-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it."
+    },
+    {
+      "id": "custody-drives-the-published-legacy-token-program",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"custody legacy: \")) | .logs[] | select(startswith(\"Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke\"))] | length | (. > 0) | tostring",
+      "expect": "true",
+      "provenance": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA is the SPL Token program address on every Solana cluster: a published protocol fact, not a value read out of dClutch. The campaign's claim to drive real token custody is worth nothing unless the chain's own logs show that program invoked."
+    },
+    {
+      "id": "custody-drives-the-published-token-2022-program",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"custody token-2022: \")) | .logs[] | select(startswith(\"Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb invoke\"))] | length | (. > 0) | tostring",
+      "expect": "true",
+      "provenance": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb is the SPL Token-2022 program address on every Solana cluster. A published protocol fact, not a value read out of dClutch."
+    },
+    {
+      "id": "the-late-failure-let-custody-return-first",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | endswith(\": caller refuses after the token effect\")) | select(.error != null) | select([.logs[] | select(. == \"Program E3M3d7sy8ZKivUGxBexL9wxE7ebqzGWFqkdeFMedCJFS success\")] | length > 0)] | length | tostring",
+      "expect": "2",
+      "provenance": "One per token profile. A rollback case is only evidence if the thing being rolled back actually happened: this asserts, from the runtime's own log, that a transaction the ledger records as FAILED contains a completed Custody invocation. Both the `.error != null` and the success-line conditions must hold, so a campaign that accidentally let either transaction commit fails this witness."
+    },
+    {
+      "id": "every-custody-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line. Every refusal this campaign claims is a program decision, so a bare runtime refusal appearing here would mean a hostile case stopped being about the program."
+    },
+    {
+      "id": "custody-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign therefore MEASURES rather than asks: it serialises every transaction it submits (one shortvec byte for the signature count, 64 bytes per signature, then the message) and records the extent, and this witness checks the largest against the stated limit."
+    },
+    {
+      "id": "custody-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured, so the maximum above is over ALL of them rather than over whichever ones happened to be instrumented."
+    }
+  ]
+}

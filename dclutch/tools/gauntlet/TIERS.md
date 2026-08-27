@@ -141,6 +141,76 @@ The three admissible provenance kinds, from `DESIGN.md`:
 Reading a value out of the code under test and asserting it equals itself is
 not a witness, however many lines it takes.
 
+## The tiers that exist
+
+| tier | directory | backing | what it drives |
+|---|---|---|---|
+| 1 | `tier1/` | localhost validator | the infrastructure floor: seven-artifact bootstrap through Found31 |
+| 4 | `tier4/` | `solana-program-test` | the Series occurrence waist (numbered before the rule below) |
+| Claims/Custody | `claims-custody/` | `solana-program-test` | the protocol Position lifecycle, the composed Admit -> SparseNativeTransfer -> Close chain, and ordinary plus delegated Custody against real SPL Token and Token-2022 |
+| Dealer | `dealer/` | `solana-program-test` | the Dealer equity pool's rounding boundary |
+| Direct | `direct/` | `solana-program-test` | the stateless Direct V2 AOT accelerator |
+
+**Numbered directories turned out to be a bad idea.** `tier<N>` is a global
+namespace with no allocator, and on 2026-08-27 three lanes claimed the same two
+numbers inside twenty minutes, each silently overwriting the previous lane's
+`bindings.json`. One of those collisions produced a green-looking run that
+evaluated one campaign's evidence against another campaign's bindings. **Name a
+new tier's directory after its family, not after a number.** A family name
+cannot collide, and it tells a reader what the tier is for.
+
+The witness evaluator `tier1/check-witnesses.sh` is SHARED, not tier-1-specific;
+it only lives there for historical reasons. Call it, do not fork it — a second
+copy is a parallel authority path under `AGENTS.md`, and the two copies will
+diverge on the day one of them learns something. Its third argument is
+whatever CONTEXT file the tier wants `expect_from` to read; tier 1 passes the
+bootstrap plan, `direct/` passes a hand-derived expectations file merged with
+its build stage's artifact record.
+
+## What a family lane owns
+
+A family lane owns a `run-<family>.sh` that builds its ELFs, runs its campaigns,
+folds the evidence, checks its witnesses and calls `census observe` itself. It
+does NOT add a stage to `run.sh`: `run.sh` owns tier 1 and the census, and a
+shared script every family edits is the numbered-directory race one level down.
+Render the report afterwards with `run.sh --mode census`, which is cheap and
+reads the accumulated ledger.
+
+A family lane may carry more than one census campaign, and has to when its
+campaigns disagree about an address: a census campaign has ONE program map, and
+`claims-custody` pins different `registry` addresses in its two families. One
+`run-<family>.sh` then loops the groups, each with its own bindings, program map
+and witness file.
+
+## A refusal the census cannot name
+
+A campaign that proves rollback does it by refusing AFTER the child committed,
+and the program that refuses is a test-only caller the census does not
+enumerate. The chain reports THAT program's code, which can collide numerically
+with a first-party refusal it has nothing to do with -- `DeliberateLateFailure
+= 3` is also `claims/ClaimsSbfError::Release` and
+`custody/CustodySbfError::CallerAuthority`.
+
+Naming the first-party refusal in that binding is a lie the census cannot
+detect, because the numbers match. Such a binding instead carries:
+
+```json
+{
+  "outcome": "refused",
+  "unnamed_refusal": {
+    "code": 3,
+    "reason": "the test-only caller's DeliberateLateFailure, raised after the child committed"
+  }
+}
+```
+
+The code is still checked against what the chain reported, so a campaign whose
+claim and chain disagree is still refused; the observation simply credits no
+enumerated taxonomy. Exactly one of `refusal` and `unnamed_refusal` is
+admissible per binding, and an empty reason is refused: an uncredited refusal
+with no account of where it came from is how a real refusal launders itself out
+of the taxonomy.
+
 ## Adding a family tier
 
 1. **Check the census first.** `run.sh --mode census` takes seconds and prints
@@ -151,12 +221,15 @@ not a witness, however many lines it takes.
    reason and the owning lane. A route with no entry and no observation shows up
    in the report's "NO stated reason at all" row, which is the row that should
    make someone uncomfortable.
-3. **Add a producer** under `tools/gauntlet/tier<N>/`, emitting the evidence
-   shape above.
-4. **Extend `run.sh`** with a `tier<N>` stage. Follow tier 1's staging: a stamp
-   keyed on the stage's exact inputs, outputs under `$WORK`, never in the repo.
-   Do not key a campaign stage on its bindings file — authoring a binding must
-   never cost a campaign re-run.
+3. **Add a producer** under `tools/gauntlet/<family>/`, emitting the evidence
+   shape above. A ProgramTest campaign gets there through
+   `tools/gauntlet/program-test-evidence`: one `record` call per submitted
+   transaction, a no-op unless `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR` is set, and
+   `fold-program-test-evidence` to assemble the document.
+4. **Add a `run-<family>.sh`**, not a `run.sh` stage. Outputs under a `--work`
+   root, never in the repo; the ledger and inventory default to the shared
+   `run.sh` output so campaigns accumulate. A campaign must never be keyed on
+   its bindings file — authoring a binding must never cost a campaign re-run.
 5. **Bind, witness, observe.** `census observe` is called once per campaign; the
    ledger accumulates across tiers.
 
@@ -182,6 +255,26 @@ census` is the cheap mode; it does static enumeration only and says so.
 A fast lane is always **additional** evidence, never a substitute: a route whose
 only observation came from a fast lane is recorded with that campaign name, and
 the report shows the campaign.
+
+`direct/` is the worked example of a tier that meets all four. It answers them
+one at a time inside its own evidence document, in a `fast_lane` block beside
+the numbers they qualify, rather than in prose in a file nobody opens next to
+the table. Copy that habit: a fast-lane claim asserted in aggregate ("this tier
+satisfies TIERS.md") is unfalsifiable, and four separate sentences are not.
+
+Two of its answers are worth stealing. **The packet limit**: ProgramTest submits
+no packet, so the producer serialises every transaction itself and records
+`wire_bytes`, and a witness checks the measured extent against Solana's stated
+1,232 bytes. The tier does not depend on the runtime to enforce the limit; it
+measures against it. **Frame diagnostics**: `cargo build-sbf` exits ZERO when
+the SBF backend reports that a call overwrites its own stack frame, so the
+tier's build stage counts them and refuses to run the campaign at all if the
+count is nonzero. An artifact the toolchain calls potentially-undefined should
+not be producing evidence, and only the build stage is in a position to say so.
+
+One honest gap no ProgramTest tier can close: **ProgramTest has no finalized
+commitment.** `slot` orders a campaign and proves nothing about finality. Say
+that in the tier rather than letting the field's name imply otherwise.
 
 ## Extension points in the census tool
 
@@ -217,3 +310,13 @@ tools/gauntlet/run.sh --from campaign
 
 On hbox, `run.sh` routes every build through `swarm-build` automatically when it
 is on `PATH`. hbox is co-tenant with codex's HOL build; keep waves small.
+
+`--mode full` is a **single global slot per machine**: the successor launcher is
+pinned to `127.0.0.1:20890` and refuses to start while anything else listens
+there, whatever `--work` root you pass. Coordinate on the wave board before a
+full run, and never kill a `solana-test-validator` whose `--ledger` is not under
+your own `--work` root. `--mode census` needs no port and may run concurrently.
+
+And never edit `run.sh` while a run is in flight — bash reads a script
+incrementally by byte offset, so a mid-run edit makes it re-execute or skip a
+block.

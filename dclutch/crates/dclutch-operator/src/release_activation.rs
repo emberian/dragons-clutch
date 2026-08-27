@@ -15,8 +15,7 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::registry::{
     Error as RegistryError, RegistryActivationReport, RegistryActivationState,
-    RegistryPacketPlanV0, build_registry_activation_v1,
-    compile_registry_role_activation_packet_v0,
+    RegistryPacketPlanV0, build_registry_activation_v1, compile_registry_role_activation_packet_v0,
 };
 
 const ROLES: [ExecutionRoleV1; EXECUTION_ROLE_COUNT_V1] = [

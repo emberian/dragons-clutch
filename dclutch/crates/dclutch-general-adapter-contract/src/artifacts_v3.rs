@@ -948,9 +948,6 @@ mod tests {
             claims_programdata_prefix: 45,
             core_programdata_prefix: 45,
             realm_record: 112,
-            token_mint: 82,
-            token_account: 165,
-            token_program: 36,
             rent_credit: 48,
         };
         let action = Action::Freeze;

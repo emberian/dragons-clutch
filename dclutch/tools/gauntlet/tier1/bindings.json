@@ -1,6 +1,6 @@
 {
   "campaign": "tier1",
-  "note": "Tier 1 is the infrastructure floor: transaction-only bootstrap of the seven successor artifacts on a fresh localhost ledger, through infrastructure init, Loader-v3 revocation, per-role immutable release activation, bounded Registry record and Product-graph publication, the Market-scoped LifecycleRentCreditV2, and canonical Core Found31 — plus every hostile case the runner submits. These bindings are authored by the GAUNTLET, never by the campaign, so that a label change breaks loudly instead of quietly dropping coverage. `program: \"\"` with `routes: []` is the explicit form for a transaction that drives no dClutch route: an airdrop, a Loader SetAuthority, an SPL Token-2022 call, an Address Lookup Table call.",
+  "note": "Tier 1 is the infrastructure floor: transaction-only bootstrap of the seven successor artifacts on a fresh localhost ledger, through infrastructure init, Loader-v3 revocation, per-role immutable release activation, bounded Registry record and Product-graph publication, the Market-scoped LifecycleRentCreditV2, and canonical Core Found31 \u2014 plus every hostile case the runner submits. These bindings are authored by the GAUNTLET, never by the campaign, so that a label change breaks loudly instead of quietly dropping coverage. `program: \"\"` with `routes: []` is the explicit form for a transaction that drives no dClutch route: an airdrop, a Loader SetAuthority, an SPL Token-2022 call, an Address Lookup Table call.",
   "bindings": [
     {
       "label": "fund *",
@@ -18,7 +18,7 @@
       "program": "core",
       "outcome": "refused",
       "refusal": "core/CoreSbfError::Infrastructure",
-      "note": "HOSTILE. A wrong signer attempts the sole Core infrastructure-profile initialization. Refuses Infrastructure (15) — 'Core bootstrap profile, artifact, Loader, or immutability authority refused' — which is the right refusal for a wrong immutability authority. The runner additionally asserts that no profile account exists afterwards."
+      "note": "HOSTILE. A wrong signer attempts the sole Core infrastructure-profile initialization. Refuses Infrastructure (15) \u2014 'Core bootstrap profile, artifact, Loader, or immutability authority refused' \u2014 which is the right refusal for a wrong immutability authority. The runner additionally asserts that no profile account exists afterwards."
     },
     {
       "label": "initialize Core infrastructure profile",
@@ -67,7 +67,7 @@
       "program": "registry",
       "outcome": "refused",
       "refusal": "registry/RegistryError::Deployment",
-      "note": "HOSTILE, and the strongest rollback case in tier 1: a lamport transfer is placed FIRST in the same transaction as an activation whose role ProgramData coordinate has been substituted. Refuses Deployment (3) — 'Loader Program, ProgramData, linkage, slot, ELF, or authority refused' — which is exactly the substituted coordinate. The runner asserts the recipient account does not exist afterwards and that the payer's delta is EXACTLY the transaction fee: byte-exact rollback, not merely 'it failed'."
+      "note": "HOSTILE, and the strongest rollback case in tier 1: a lamport transfer is placed FIRST in the same transaction as an activation whose role ProgramData coordinate has been substituted. Refuses Deployment (3) \u2014 'Loader Program, ProgramData, linkage, slot, ELF, or authority refused' \u2014 which is exactly the substituted coordinate. The runner asserts the recipient account does not exist afterwards and that the payer's delta is EXACTLY the transaction fee: byte-exact rollback, not merely 'it failed'."
     },
     {
       "label": "create real Token-2022 collateral and raw-atom wallet",
@@ -187,7 +187,7 @@
       "program": "core",
       "outcome": "refused",
       "refusal": "core/CoreSbfError::AccountFrame",
-      "note": "HOSTILE. The lifecycle rent-credit coordinate is substituted. Refuses AccountFrame (1) — 'account count, order, privilege, executable flag, or alias refused' — at 6,958 CU, before any protocol work: the substitution collides with another frame coordinate and the alias check catches it first. Recorded here rather than assumed: the refusal a hostile case ACTUALLY raises is a fact about the program, not a preference."
+      "note": "HOSTILE. The lifecycle rent-credit coordinate is substituted. Refuses AccountFrame (1) \u2014 'account count, order, privilege, executable flag, or alias refused' \u2014 at 6,958 CU, before any protocol work: the substitution collides with another frame coordinate and the alias check catches it first. Recorded here rather than assumed: the refusal a hostile case ACTUALLY raises is a fact about the program, not a preference."
     },
     {
       "label": "Found31 refuses a substituted Market coordinate and rolls the transaction back",
@@ -198,7 +198,7 @@
       "program": "core",
       "outcome": "refused",
       "refusal": "core/CoreSbfError::RentCredit",
-      "note": "HOSTILE, and the sharpest one: a substituted Market coordinate under attacker-chosen address-lookup-table routing, in a multi-instruction transaction that must roll back to a fee-only debit. Refuses RentCredit (6) — 'RentCredit owner, bytes, PDA, or persisted beneficiary refused'. Worth reading carefully: the Market substitution is caught by the rent-credit-to-Market PDA binding, not by a Market check, because the lifecycle credit is a PDA of [domain, market, generation]. Substituting the Market therefore breaks the credit's derivation before anything looks at the Market itself."
+      "note": "HOSTILE, and the sharpest one: a substituted Market coordinate under attacker-chosen address-lookup-table routing, in a multi-instruction transaction that must roll back to a fee-only debit. Refuses RentCredit (6) \u2014 'RentCredit owner, bytes, PDA, or persisted beneficiary refused'. Worth reading carefully: the Market substitution is caught by the rent-credit-to-Market PDA binding, not by a Market check, because the lifecycle credit is a PDA of [domain, market, generation]. Substituting the Market therefore breaks the credit's derivation before anything looks at the Market itself."
     },
     {
       "label": "create canonical Found31 Market",
@@ -209,6 +209,147 @@
       "program": "core",
       "outcome": "executed",
       "note": "The canonical 31-account Core Found31, submitted as a v0 transaction over a finalized address lookup table because the frame does not fit a legacy packet with its keys inline. This is the route that ~2,300 unit tests could not tell you had never been submitted."
+    },
+    {
+      "label": "create the founding generation's lifecycle RentCreditV2",
+      "routes": [
+        "rent/process_create_v2#Create",
+        "rent/process_instruction"
+      ],
+      "program": "rent",
+      "outcome": "executed",
+      "note": "The generic founding runs at its own generation against a Market that does not exist yet, so it needs its own Market-scoped LifecycleRentCreditV2. Its refund wallet is the founding's beneficiary, which Core's Found stage requires to equal the artifact's own `beneficiary`."
+    },
+    {
+      "label": "DCLTPCB1 refuses a non-terminal projected-Custody request",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "HOSTILE. The bootstrap admits exactly one request: the terminal LockHoardAndCloseSource its founding artifact determines. A well-formed but NON-TERMINAL prestate request in that slot refuses in `decode_projected_request`, before any CPI and nowhere near the allocator."
+    },
+    {
+      "label": "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "HOSTILE. The FundingState tail is the manifest binding: reordering it derives an address the manifest entry at that position does not name, and the ordered-list digest cannot equal the artifact's `funding_list_id`. The whole four-stage bootstrap must roll back with no funded account left behind, and the runner asserts a fee-only debit. NOTE, 2026-08-27: this case was recorded as NOT attributable in runs 2 and 3, because it refused within a few hundred CU of an out-of-memory death at the same point. It is attributable now: the honest transaction succeeds with an identical frame shape, and the refusal is 68,921 CU short of it."
+    },
+    {
+      "label": "create the projected-Custody founding prestate (DCLTPCB1)",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/initialize#Initialize",
+        "custody/open_hoard#OpenHoard",
+        "custody/open_source_compartment#OpenSourceCompartment",
+        "core/process_instruction",
+        "core/found::project",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "Four projected-Custody transitions in one rollback domain against a Market that does not exist: Initialize (with Core's ProjectFound projection CPI), OpenHoard, OpenSourceCompartment, and the FundingState staging Trading performs itself. This is the route commit 328fead measured dying out of memory entering its third stage; it completes here because the transaction carries ComputeBudget::RequestHeapFrame and the route presents the instructions sysvar its own entrypoint adapter re-derives the grant from."
+    },
+    {
+      "label": "pre-fund the founding's five program-allocated accounts",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Five System transfers. Core allocates the Market and the one-shot founding permit and Claims allocates the aggregate, the founder Position, and the admission with `allocate` and `assign` only, never a transfer, so each must already hold its rent. The Market and the permit are compared for EXACT equality with their rent minima, and all three Claims balances are folded byte-exactly into the Claims request Core commits to inside the permit."
+    },
+    {
+      "label": "DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back",
+      "routes": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v1",
+        "trading/process_instruction"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "refusal": "trading/TradingSbfError::Content",
+      "note": "HOSTILE, and the one this campaign existed to reach. The substituted readonly Claims request record names a DIFFERENT FOUNDER and is otherwise byte-identical, so the Position and the admission it would mint belong to somebody else. The outer's cross-request join is the only thing between that record and a stolen Position; it refuses before its first CPI, and the refusal has to take Lock, Found, Realize, and Claims with it. The runner asserts a fee-only debit and that all five allocated accounts are still vacant."
+    },
+    {
+      "label": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
+      "routes": [
+        "trading/generic_market_founding_v1::process_generic_market_founding_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/lock_hoard_and_close_source#LockHoardAndCloseSource",
+        "custody/realize_and_close#RealizeAndClose",
+        "core/process_instruction",
+        "core/generic_founding_v1::process",
+        "core/process_found#FoundAndPermit",
+        "core/process_open#Open",
+        "claims/process_instruction",
+        "claims/founding_v5::process",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The first Open Market. Five stages in one rollback domain and one transaction: Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open LAST so that any late refusal rolls the whole chain back. It creates the Market, mints the liability aggregate, the founder Position, and the admission, moves the collateral into the Hoard, closes the source compartment, realizes the projection into the Market's normal Custody replay, and consumes the one-shot permit."
+    },
+    {
+      "label": "stage a second projected-Custody prestate for the expiry abort (DCLTPCB1)",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/initialize#Initialize",
+        "custody/open_hoard#OpenHoard",
+        "custody/open_source_compartment#OpenSourceCompartment",
+        "core/process_instruction",
+        "core/found::project",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The same four-stage ladder as the founding lane, at its own generation and with a SHORT expiry. It exists to be abandoned: the campaign stages it, proves it cannot be unwound while its founding is still satisfiable, waits for the expiry, and then unwinds it. Every projected-Custody stage asserts the inverse of a live Market, so each lane needs its own still-vacant Market PDA and therefore its own generation."
+    },
+    {
+      "label": "DCLTPCA1 refuses to abort a funded source before expiry",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/abort_source_and_close#AbortSourceAndClose",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "refused",
+      "note": "HOSTILE, and the boundary this route is judged on. While the founding remains satisfiable the authority over funded principal may not be destroyed; an unwind that let anyone empty a live founding would be a worse defect than the permanent stranding it was written to fix. The refusal is Custody's own transition, not the Trading outer's, and it is credited to `Expiry` rather than `Replay` because the kernel has always distinguished the two and this program stopped flattening them - a terminal whose entire safety property is that it refuses at the wrong time has to be able to say that is what happened. The runner requires the whole multi-instruction transaction to roll back to a fee-only debit and then re-authenticates the prestate to prove the refusal moved nothing.",
+      "refusal": "custody/CustodySbfError::Expiry"
+    },
+    {
+      "label": "unwind an expired founding's funded source compartment (DCLTPCA1)",
+      "routes": [
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1",
+        "trading/process_instruction",
+        "custody/process_instruction",
+        "custody/projected::process",
+        "custody/abort_source_and_close#AbortSourceAndClose",
+        "registry/process_instruction",
+        "registry/process_reauthenticate#Reauthenticate"
+      ],
+      "program": "trading",
+      "outcome": "executed",
+      "note": "The only route out of a funded projection whose founding expired. Before it existed the forward direction was the sole exit, and it runs through Core's Found and Open stages, which both refuse an expired artifact - so the collateral could not be moved by anything. It returns the principal to a token account owned by the party that supplied it and closes the source vault, the source replay, the empty Hoard vault, and the projection to the lifecycle credit, whose balance the runner requires to have risen by exactly those four rents."
     }
   ]
 }

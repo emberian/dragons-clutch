@@ -1,0 +1,14 @@
+[package]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Census evidence emitter for solana-program-test fast-lane campaigns"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true

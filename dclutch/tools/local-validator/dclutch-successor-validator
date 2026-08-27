@@ -8,6 +8,31 @@ readonly ROUTER_ID="HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
 readonly RPC_PORT="20890"
 readonly FAUCET_PORT="20892"
 readonly GOSSIP_PORT="20893"
+
+# Ticks per slot, which is the campaign's wall-clock cost and nothing else.
+#
+# A campaign is ~84 transactions submitted strictly in sequence, and the runner
+# waits for each one to reach FINALIZED before deriving the next from it - that
+# discipline is the campaign's whole epistemic claim and is not what this
+# changes. What it changes is how long a slot takes. At the stock 64 ticks per
+# slot a slot is 400 ms, finality is ~32 slots, and the campaign spends about
+# twenty-five minutes waiting for a clock. At 16 it is 100 ms and the same
+# eighty-four transactions, in the same order, with the same finality rule, take
+# about a quarter of that.
+#
+# 16 rather than 8: a validator that cannot keep up with its own tick rate
+# starts skipping slots, and a skipped slot IS a semantic difference - it moves
+# what "finalized" means underneath a campaign that reads finalized state. This
+# box is co-tenant with other lanes' builds. Four times is worth having and
+# eight is not worth risking.
+#
+# Nothing in the campaign reads a slot as a duration. Expiry slots are derived
+# as `finalized_slot + 500_000`, which is fifty thousand seconds of headroom at
+# this rate against a six-minute campaign; the Pyth freshness window is computed
+# from the observed wall clock, not from slots; and address-lookup-table
+# admission needs its recent slot within 512 slots, which the runner satisfies
+# by deriving and creating in the same step.
+readonly TICKS_PER_SLOT="${DCLUTCH_TICKS_PER_SLOT:-16}"
 readonly DYNAMIC_PORT_RANGE="20900-20931"
 readonly MINT_PUBKEY="11111111111111111111111111111111"
 
@@ -378,6 +403,7 @@ start() {
     --ledger "$ledger" \
     --account-dir "$account_dir" \
     --mint "$MINT_PUBKEY" \
+    --ticks-per-slot "$TICKS_PER_SLOT" \
     --bind-address 127.0.0.1 \
     --rpc-port "$RPC_PORT" \
     --faucet-port "$FAUCET_PORT" \

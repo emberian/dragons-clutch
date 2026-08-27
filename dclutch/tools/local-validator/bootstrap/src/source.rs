@@ -19,7 +19,7 @@ use dclutch_operator::foundation::{
     build_open_collateral_vault_v1, compile_terminal_pyth_artifacts_v1,
     compile_terminal_pyth_creation_v1,
 };
-use dclutch_operator::verticals::{
+use dclutch_operator::source_resolution::{
     SourceAcceptPrimaryInlineState, SourceCreateResolutionState,
     build_source_accept_primary_inline_v1, build_source_create_resolution_v1,
 };

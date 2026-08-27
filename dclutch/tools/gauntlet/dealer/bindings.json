@@ -1,0 +1,196 @@
+{
+  "campaign": "dealer-family-programtest",
+  "note": "The Dealer family route, driven as a real ELF under solana-program-test rather than on a validator. This is a FAST LANE: read tools/gauntlet/dealer/README.md for which of the TIERS.md fast-lane conditions it satisfies before reading any row it produces as validator evidence. The campaign lives in programs/dclutch-dealer-sbf/program-test/tests/family.rs. EVERY transaction in it is a refusal and the tier claims NO executed row: the Dealer route cannot accept a transition without an activated release set, an admitting Core Market phase, and Claims/Custody prestate, none of which this tier builds. What it does evidence is that all eight canonical actions reach the Registry reauthentication CPI against the real ELF, and that six of the ten DealerSbfError codes are raised by the chain rather than asserted by a unit test.",
+  "bindings": [
+    {
+      "label": "dealer family refuses a request that is not REQUEST_BYTES wide",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Instruction",
+      "note": "The width guard. A Dealer request is exactly 144 bytes; a 143-byte one is refused before any account is read, so no shorter encoding can reach the frame checks and be interpreted as a shorter action."
+    },
+    {
+      "label": "dealer family refuses an action tag outside the eight canonical actions",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Instruction",
+      "note": "There are exactly eight actions (tags 0..7). Tag 8 is refused at decode. This is the closure property of the action space: a ninth tag cannot be smuggled past the interpreter by a client that knows the rest of the encoding."
+    },
+    {
+      "label": "dealer family refuses a common frame narrower than 23 accounts",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountFrame",
+      "note": "COMMON_ACCOUNT_COUNT_V1 is 23 and it is a floor, not a hint: a 22-account frame is refused before Policy is read, so no role can be silently absent and later re-derived from a neighbour."
+    },
+    {
+      "label": "dealer family refuses an actor that did not sign",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountFrame",
+      "note": "The actor slot must carry a signature at the outer level. Without this, every actor-bound action would be assertable by anyone who could name the actor's address."
+    },
+    {
+      "label": "dealer family refuses a writable immutable Policy",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountFrame",
+      "note": "Policy is immutable for the life of the Market. Presenting it writable is refused at the frame, before its bytes are read, so the refusal cannot depend on the Policy body being well formed."
+    },
+    {
+      "label": "dealer family refuses a read-only State it is required to commit",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountFrame",
+      "note": "The mirror of the Policy case. State is the one account this route commits; a read-only State would make a transition that appeared to succeed persist nothing."
+    },
+    {
+      "label": "dealer family refuses a proposed Candidate outside ScheduleReplacement",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountFrame",
+      "note": "The proposed-Candidate slot is admissible only under ScheduleReplacement; absence is encoded by aliasing the Trading program key. A Fill that presents a real Candidate there is a frame refusal, which is what keeps the optional-slot encoding unambiguous."
+    },
+    {
+      "label": "dealer family refuses a Policy body owned by another program",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountIdentity",
+      "note": "The same canonical Policy bytes at an account another program owns. Ownership is what makes the body a protocol fact rather than user data, and it is checked before the PDA join."
+    },
+    {
+      "label": "dealer family refuses a Candidate body at another identity's address",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountIdentity",
+      "note": "The substitution the Candidate PDA join exists to refuse: a well-formed Candidate whose own encoded identity does not derive the address it was presented at. Without this a caller could point the active-Candidate slot at any Candidate the program had ever written."
+    },
+    {
+      "label": "dealer family refuses a State body that is not the Market's State PDA",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::AccountIdentity",
+      "note": "A State-shaped, program-owned, correctly-sized account that is not the State PDA for this Policy's Market. This is the account the route commits to, so a substituted one would write a real transition into the wrong Market."
+    },
+    {
+      "label": "dealer family refuses a scheduling request that names another actor",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Signature",
+      "note": "ScheduleReplacement is actor-bound: the request must name the signer. A well-formed request naming somebody else reaches the signature stage only because instruction shape, the 23-account frame, and Policy/Candidate/State identity all passed, so the refusal is credited to the check it names."
+    },
+    {
+      "label": "dealer family refuses a Fill bound to a slot that is not the current one",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Clock",
+      "note": "Time-sensitive actions bind to the Clock the runtime serialized, not to a slot the caller asserts. A Fill priced against a stale slot would be executed against a Candidate whose validity window the caller chose."
+    },
+    {
+      "label": "dealer family refuses AddLiquidity at the shape-canonical now=0",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Clock",
+      "note": "The first half of the liquidity unreachability witness. The request shape requires now == 0 for AddLiquidity, and authenticate_clock requires now == clock.slot for every action except Retire, so the shape-canonical form refuses on the Clock."
+    },
+    {
+      "label": "dealer family refuses RemoveLiquidity at the clock-canonical now=slot",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Instruction",
+      "note": "The second half. The slot-bound form the Clock rule demands is not a shape the request encoder will even produce, so it refuses at decode. Together with the previous transaction this proves both liquidity actions are unreachable at every slot the chain can offer."
+    },
+    {
+      "label": "dealer family drives Fill into the real Registry reauthentication",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Release",
+      "note": "Fill, having passed shape, frame, identity, actor and Clock, reaches the Registry Reauthenticate CPI and is refused there because no release set was ever activated. The chain's log shows the Registry invocation at depth 2, which is what makes this a release refusal rather than Dealer's own opinion of the activation cache."
+    },
+    {
+      "label": "dealer family drives ActivateReplacement into the real Registry reauthentication",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Release",
+      "note": "The same depth for the permissionless activation action."
+    },
+    {
+      "label": "dealer family drives EnterTerminal into the real Registry reauthentication",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Release",
+      "note": "The same depth for terminal entry, whose actor rule admits any signer and defers identity to the Core Market phase join."
+    },
+    {
+      "label": "dealer family drives Unwind into the real Registry reauthentication",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Release",
+      "note": "The same depth for terminal inventory unwinding."
+    },
+    {
+      "label": "dealer family drives Retire into the real Registry reauthentication",
+      "routes": [
+        "dealer/process_dealer_family_instruction"
+      ],
+      "program": "dealer",
+      "outcome": "refused",
+      "refusal": "dealer/DealerSbfError::Release",
+      "note": "The same depth for retirement, which is the ONLY action whose now == 0 rule the Clock check exempts and therefore the only one of the three now == 0 actions that is reachable at a slot the chain can offer."
+    }
+  ]
+}

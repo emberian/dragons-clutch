@@ -22,16 +22,40 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, immutable_release_elf_digest_v1,
+    ArtifactUpgradePolicyV1,
 };
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
+use dclutch_shadow_accelerator_auth_v4::{ShadowAcceleratorAuthErrorV4, deployment};
 use solana_program::{
     account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_sdk_ids::{system_program, sysvar};
 
 use crate::{TradingSbfError, dispatch::TradingFamilyContextV1};
+
+/// The extracted callback boundary raises Trading's own refusal codes.
+///
+/// `dclutch-shadow-accelerator-auth-v4` is Trading's published boundary, so its
+/// refusals must be indistinguishable from the ones this crate would have
+/// raised. These assertions are the binding: the two definitions cannot drift
+/// apart without failing the build.
+const _: () = assert!(
+    ShadowAcceleratorAuthErrorV4::Release as u32 == TradingSbfError::Release as u32,
+    "the published Shadow callback boundary must raise Trading's Release code"
+);
+const _: () = assert!(
+    ShadowAcceleratorAuthErrorV4::Content as u32 == TradingSbfError::Content as u32,
+    "the published Shadow callback boundary must raise Trading's Content code"
+);
+
+impl From<ShadowAcceleratorAuthErrorV4> for TradingSbfError {
+    fn from(value: ShadowAcceleratorAuthErrorV4) -> Self {
+        match value {
+            ShadowAcceleratorAuthErrorV4::Release => Self::Release,
+            ShadowAcceleratorAuthErrorV4::Content => Self::Content,
+        }
+    }
+}
 
 /// Exact record-account count for the interpreted disposition.
 pub const INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2: usize = 4;
@@ -507,12 +531,17 @@ fn authenticate_immutable_artifact(
 /// path always hashes the complete observed ELF.  Use
 /// `authenticate_activated_current_deployment` only where the Registry
 /// activation cache already carries that binding.
+///
+/// The implementation lives in `dclutch-shadow-accelerator-auth-v4` because an
+/// external Shadow accelerator needs exactly this check and nothing else in
+/// this crate; Trading calls the same code rather than keeping a second copy.
 pub(crate) fn authenticate_current_deployment(
     release: ArtifactReleaseV1,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), TradingSbfError> {
-    authenticate_deployment_v2(release, program, programdata, false)
+    deployment::authenticate_current_deployment(release, program, programdata)
+        .map_err(TradingSbfError::from)
 }
 
 /// Reauthenticate one activated role's current deployment without re-hashing.
@@ -534,74 +563,8 @@ pub(crate) fn authenticate_activated_current_deployment(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<(), TradingSbfError> {
-    authenticate_deployment_v2(release, program, programdata, true)
-}
-
-fn authenticate_deployment_v2(
-    release: ArtifactReleaseV1,
-    program: &AccountInfo<'_>,
-    programdata: &AccountInfo<'_>,
-    activation_bound_elf: bool,
-) -> Result<(), TradingSbfError> {
-    if program.is_signer
-        || program.is_writable
-        || !program.executable
-        || programdata.is_signer
-        || programdata.is_writable
-        || programdata.executable
-        || program.key == programdata.key
-        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
-        || program.key.to_bytes() != release.program().to_bytes()
-        || programdata.key.to_bytes() != release.programdata()
-        || program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-    {
-        return Err(TradingSbfError::Content);
-    }
-    let program_bytes = program
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Content)?;
-    let program_view =
-        ProgramV3View::parse(&program_bytes).map_err(|_| TradingSbfError::Content)?;
-    let expected_programdata =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata() != release.programdata()
-        || programdata.key != &expected_programdata
-    {
-        return Err(TradingSbfError::Content);
-    }
-    drop(program_bytes);
-    let programdata_bytes = programdata
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Content)?;
-    let programdata_view =
-        ProgramDataV3View::parse(&programdata_bytes).map_err(|_| TradingSbfError::Content)?;
-    if programdata_view.upgrade_authority().is_some() {
-        return Err(TradingSbfError::Content);
-    }
-    let elf_digest = activation_bound_elf
-        .then(|| {
-            immutable_release_elf_digest_v1(release, programdata_view.upgrade_authority()).ok()
-        })
-        .flatten()
-        .unwrap_or_else(|| hash(programdata_view.elf()).to_bytes());
-    let observation = DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        program_view.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        programdata_view.deployment_slot(),
-        elf_digest,
-        programdata_view.upgrade_authority(),
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    release
-        .authenticate_deployment(observation)
-        .map_err(|_| TradingSbfError::Content)
+    deployment::authenticate_activated_current_deployment(release, program, programdata)
+        .map_err(TradingSbfError::from)
 }
 
 fn authenticate_common_frame(

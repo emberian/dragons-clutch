@@ -75,6 +75,8 @@ pub mod activation;
 pub mod controller;
 /// Runtime-width candidate selection and settlement dispatch.
 pub mod hot_controller;
+/// The General arm of the common hot outer: account bytes to bound semantics.
+pub mod hot_slice;
 /// Authenticated action routing and exact account-derived settlement inputs.
 pub mod route;
 /// Atomic two-pass settlement preparation and exact fixed-role child packets.

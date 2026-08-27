@@ -327,7 +327,10 @@ impl Fixture {
             system,
             rent,
         ];
-        assert_eq!(accounts.len(), dclutch_registry_svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1);
+        assert_eq!(
+            accounts.len(),
+            dclutch_registry_svm::REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1
+        );
         accounts
     }
 
@@ -870,10 +873,7 @@ fn retired_five_role_activation_frame_refuses() {
     // 26-account frame cannot reach the ten-account route.
     let mut retired_frame = fixture.role_activation_accounts(fixture.empty_cache_account());
     for _ in 0..4 {
-        retired_frame.insert(
-            8,
-            fixture.artifact_raw.clone(),
-        );
+        retired_frame.insert(8, fixture.artifact_raw.clone());
         retired_frame.insert(9, fixture.artifact_staging.clone());
         retired_frame.insert(10, fixture.program.clone());
         retired_frame.insert(11, fixture.programdata.clone());

@@ -4,11 +4,12 @@
 //! Chain-derived unsigned construction for canonical affine Claims batches.
 //!
 //! This host projection authenticates a same-snapshot activation cache, open
-//! Core Market, Product Runtime V2 graph, exact linked LBV2 raw record, Claims
-//! aggregate, and ordered Position accounts before it emits an instruction.
-//! It is not authority: the Claims program independently repeats every check.
+//! Core Market, Product Runtime V2 graph, the Registry-owned `ProductBasisV3`
+//! record that graph selects, the Claims aggregate, and ordered Position
+//! accounts before it emits an instruction. It is not authority: the Claims
+//! program independently repeats every check.
 
-/// Shared canonical Product Runtime V2/LBV2 real-SBF fixture compiler.
+/// Shared canonical Product Runtime V3/LBV2 real-SBF fixture compiler.
 pub mod fixture;
 
 use dclutch_claims_svm::{
@@ -19,11 +20,16 @@ use dclutch_claims_svm::{
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
-use dclutch_liability_basis_v2_kernel::product_claims::LinkedBasisRecordV2;
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
-use dclutch_product_runtime_v2::ContentId;
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
+    },
+};
+use dclutch_product_runtime_v2::{ContentId, ProductJoinV2, ResultDomainV2};
 use dclutch_product_runtime_v2_admission::{
     AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
@@ -45,10 +51,6 @@ const ABI_VERSION_V2: u16 = 2;
 const LIABILITY_BASIS_MARKET_HEADER_BYTES_V2: usize = 256;
 const LIABILITY_BASIS_POSITION_HEADER_BYTES_V2: usize = 128;
 const LIABILITY_BASIS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
-const LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0x5c, 0x84, 0x2a, 0xe9, 0xe9, 0x15, 0x51, 0xd1, 0xaf, 0x99, 0xcf, 0x99, 0xfd, 0x53, 0x7f, 0x64,
-    0xfb, 0x8d, 0xbf, 0x6a, 0x4e, 0x88, 0x3f, 0x22, 0xd9, 0x0b, 0xd5, 0xf3, 0x24, 0x5f, 0x6e, 0x2e,
-];
 const MARKET_CLAIM_COUNT_OFFSET: usize = 12;
 const MARKET_REVISION_OFFSET: usize = 16;
 const MARKET_LOGICAL_ID_OFFSET: usize = 24;
@@ -62,9 +64,6 @@ const POSITION_REVISION_OFFSET: usize = 16;
 const POSITION_MARKET_OFFSET: usize = 24;
 const POSITION_OWNER_OFFSET: usize = 56;
 const POSITION_BASIS_OFFSET: usize = 88;
-const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
-const BASIS_PRODUCT_LINK_OFFSET_V2: usize = 32;
-const BASIS_PRODUCT_LINK_END_V2: usize = 64;
 
 /// Stable unsigned-builder refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -248,12 +247,7 @@ pub fn construct_affine_batch_v2(
     {
         return Err(Error::InvalidProduct);
     }
-    let linked_basis_digest = authenticate_basis(
-        observation,
-        roles.core,
-        market,
-        product.join.product_id.to_bytes(),
-    )?;
+    let linked_basis_digest = authenticate_basis(observation, market, product.join)?;
     let positions = authenticate_positions(observation, roles.claims, market)?;
     let position_count = u32::try_from(positions.len()).map_err(|_| Error::InvalidPosition)?;
     let mut rows = Vec::with_capacity(mutations.len());
@@ -529,34 +523,43 @@ fn authenticate_product(
     .map_err(|_| Error::InvalidProduct)
 }
 
+/// Independently reproduce the Claims basis authority: the canonical
+/// Registry-owned `ProductBasisV3` record, content-addressed under
+/// `GRADED_BASIS_RECORD_SCHEMA_ID_V3`, whose semantic identity and Product
+/// links must join the authenticated Product graph.
 fn authenticate_basis(
     observation: AffineBatchObservationV2<'_>,
-    core_program: Pubkey,
     market: MarketProjectionV2,
-    product_id: [u8; 32],
+    join: ProductJoinV2,
 ) -> Result<[u8; 32]> {
     let digest = hash(observation.linked_basis.raw.data).to_bytes();
     authenticate_record(
         observation.linked_basis,
-        core_program,
-        LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
+        observation.registry_program,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         digest,
         observation.rent,
         Error::InvalidBasis,
     )?;
-    let linked = LinkedBasisRecordV2::decode(observation.linked_basis.raw.data)
+    let basis =
+        ProductBasisV3::decode(observation.linked_basis.raw.data).map_err(|_| Error::InvalidBasis)?;
+    let semantic = semantic_basis_preimage_v3(observation.linked_basis.raw.data)
         .map_err(|_| Error::InvalidBasis)?;
-    let embedded = linked.basis_record();
-    let prefix = embedded
-        .get(..BASIS_PRODUCT_LINK_OFFSET_V2)
-        .ok_or(Error::InvalidBasis)?;
-    let suffix = embedded
-        .get(BASIS_PRODUCT_LINK_END_V2..)
-        .ok_or(Error::InvalidBasis)?;
-    let semantic = hashv(&[BASIS_SEMANTIC_ID_DOMAIN_V2, prefix, suffix]).to_bytes();
-    if linked.product_instance_id().to_bytes() != product_id
-        || linked.semantic_basis_id().to_bytes() != market.basis_id
-        || semantic != market.basis_id
+    let semantic_basis_id = hashv(&[
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic.prefix(),
+        semantic.suffix(),
+    ])
+    .to_bytes();
+    let domain = ResultDomainV2::decode(observation.product.result_domain.raw.data)
+        .map_err(|_| Error::InvalidBasis)?;
+    if semantic_basis_id != market.basis_id
+        || semantic_basis_id != join.liability_basis_id.to_bytes()
+        || basis.product_id() != join.product_id.to_bytes()
+        || basis.result_domain_id() != join.result_domain_id.to_bytes()
+        || basis.coordinate_domain_id() != domain.coordinate_domain_id().to_bytes()
+        || basis.result_unit_id() != domain.result_unit_id().to_bytes()
+        || basis.basis_width() != market.outcome_count
     {
         return Err(Error::InvalidBasis);
     }

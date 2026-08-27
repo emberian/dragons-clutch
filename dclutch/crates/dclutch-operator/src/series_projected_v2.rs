@@ -42,9 +42,11 @@ pub const SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2: usize =
 /// Number of authenticated fixed Hot accounts injected into Profile13 runtime.
 pub const SERIES_PROJECTED_INJECTED_RUNTIME_ACCOUNT_COUNT_V2: usize = 5;
 
-const _: () = assert!(HOT_FIXED_ACCOUNT_COUNT_V3 == 38);
-const _: () = assert!(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 == 44);
-const _: () = assert!(SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2 == 45);
+// The fixed hot prefix gained the read-only validated-artifact seal at index 38
+// (Decision 0005), so every Shadow coordinate after it moved by exactly one.
+const _: () = assert!(HOT_FIXED_ACCOUNT_COUNT_V3 == 39);
+const _: () = assert!(HOT_SHADOW_CALLER_AUTHORITY_ACCOUNT_V3 == 45);
+const _: () = assert!(SERIES_PROJECTED_HOT_PREFIX_ACCOUNT_COUNT_V2 == 46);
 
 /// Stable refusal from compact projected-Series data construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -786,9 +788,10 @@ mod tests {
             &logical,
         )
         .expect("complete projected Hot frame");
+        // 104 before the validated-artifact seal joined the fixed hot prefix.
         assert_eq!(
             packed.len(),
-            104 + usize::try_from(FUNDING_COUNT).expect("count")
+            105 + usize::try_from(FUNDING_COUNT).expect("count")
         );
         assert!(packed[HOT_MARKET_ACCOUNT_V3].is_writable);
         assert!(packed[HOT_ROOT_ACCOUNT_V3].is_writable);

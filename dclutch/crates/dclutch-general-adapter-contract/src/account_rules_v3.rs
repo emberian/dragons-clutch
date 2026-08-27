@@ -55,6 +55,12 @@ pub const GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3: u16 = 1;
 /// Every value is either an exact fixed width or a checked nonzero prefix for
 /// an adapter-authenticated variable record. The selected release builder gets
 /// these values from the named semantic owner; no runtime caller controls them.
+///
+/// The Realm-selected collateral Mint, token Account and Token Program widths
+/// are deliberately absent: those three belong to the token program the Realm
+/// selected and to the loader that deployed it, never to General. Their
+/// coordinates are emitted opaque, so there is no value here for a caller to
+/// supply and no width for this profile to assert.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralExternalAccountWidthsV3 {
     /// Checked nonzero linked-basis prefix.
@@ -77,12 +83,6 @@ pub struct GeneralExternalAccountWidthsV3 {
     pub core_programdata_prefix: u32,
     /// Immutable Realm record width.
     pub realm_record: u32,
-    /// Realm-selected collateral Mint width.
-    pub token_mint: u32,
-    /// Realm-selected token Account width.
-    pub token_account: u32,
-    /// Realm-selected Token or Token-2022 Program width.
-    pub token_program: u32,
     /// Canonical RentCredit width.
     pub rent_credit: u32,
 }
@@ -99,9 +99,6 @@ impl GeneralExternalAccountWidthsV3 {
             || self.claims_programdata_prefix == 0
             || self.core_programdata_prefix == 0
             || self.realm_record == 0
-            || self.token_mint == 0
-            || self.token_account == 0
-            || self.token_program == 0
             || self.rent_credit == 0
         {
             Err(GeneralAccountRuleErrorV3::ExternalWidth)
@@ -173,7 +170,7 @@ pub fn general_account_profile_rule_v3(
     if coordinate == GENERAL_PRIMARY_STATE_ACCOUNT_V3
         || (action == Action::Close && coordinate == GENERAL_TERMINAL_STATE_ACCOUNT_V3)
     {
-        return local_state_rule(action);
+        return local_state_rule(action, coordinate);
     }
     let payer = if action == Action::Close {
         GENERAL_CLOSE_PAYER_ACCOUNT_V3
@@ -263,12 +260,20 @@ fn common_rule(
     }
 }
 
-fn local_state_rule(action: Action) -> Result<AccountRuleWithPrestateInputV2> {
+fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPrestateInputV2> {
     let semantic_header = if matches!(action, Action::Consider | Action::Freeze) {
         RUNTIME_SELECTION_CURSOR_BYTES_V2
     } else {
         SETTLEMENT_CURSOR_HEADER_BYTES_V2
     };
+    // `LifecycleBound` admits either vacant data or the declared live width,
+    // and that is the truth for every coordinate a lifecycle plan may create.
+    // Close creates only the terminal record. Its settlement cursor is the
+    // account being closed: the Close plan and the operator both require it
+    // live at exactly this width, so declaring it possibly-vacant was a
+    // weaker refusal than the transition it guards.
+    let closed_settlement_state =
+        action == Action::Close && coordinate == GENERAL_PRIMARY_STATE_ACCOUNT_V3;
     Ok(AccountRuleWithPrestateInputV2 {
         rule: AccountRuleInputV2 {
             privileges: AccountPrivilegesV2::new(false, true, false),
@@ -286,7 +291,11 @@ fn local_state_rule(action: Action) -> Result<AccountRuleWithPrestateInputV2> {
                 8
             },
         },
-        prestate: AccountPrestateV2::LifecycleBound,
+        prestate: if closed_settlement_state {
+            AccountPrestateV2::Exact
+        } else {
+            AccountPrestateV2::LifecycleBound
+        },
     })
 }
 
@@ -683,14 +692,24 @@ fn custody_data_rule(
             0,
             AccountPrestateV2::Exact,
         )),
-        CustodyFrameDataV1::UpgradeableProgram | CustodyFrameDataV1::TokenProgram => {
-            let bytes = if matches!(data, CustodyFrameDataV1::TokenProgram) {
-                widths.token_program
-            } else {
-                widths.upgradeable_program
-            };
-            Ok(rule(privileges, bytes, 0, AccountPrestateV2::Exact))
-        }
+        CustodyFrameDataV1::UpgradeableProgram => Ok(rule(
+            privileges,
+            widths.upgradeable_program,
+            0,
+            AccountPrestateV2::Exact,
+        )),
+        // A Realm-selected token program owns the byte width of its own mint
+        // and token accounts -- a Token-2022 mint carrying extensions is not
+        // 82 bytes and an ImmutableOwner account is not 165 -- and the loader
+        // that deployed that program owns the program record's width. None of
+        // those three widths is General's to assert, and Custody independently
+        // authenticates all three accounts against the authenticated Realm, so
+        // the outer restatement was strictly weaker than the child's own
+        // check. This is ee1dc7d's collateral-width ruling applied to the
+        // General child frames.
+        CustodyFrameDataV1::TokenProgram
+        | CustodyFrameDataV1::TokenMint
+        | CustodyFrameDataV1::TokenAccount => Ok(opaque_rule(privileges)),
         CustodyFrameDataV1::CallerProgramData => Ok(variable_rule_with(
             privileges,
             widths.trading_programdata_prefix,
@@ -704,18 +723,6 @@ fn custody_data_rule(
         CustodyFrameDataV1::RentSysvar => Ok(rule(
             privileges,
             widths.rent_sysvar,
-            0,
-            AccountPrestateV2::Exact,
-        )),
-        CustodyFrameDataV1::TokenMint => Ok(rule(
-            privileges,
-            widths.token_mint,
-            0,
-            AccountPrestateV2::Exact,
-        )),
-        CustodyFrameDataV1::TokenAccount => Ok(rule(
-            privileges,
-            widths.token_account,
             0,
             AccountPrestateV2::Exact,
         )),
@@ -816,9 +823,6 @@ mod tests {
         claims_programdata_prefix: 45,
         core_programdata_prefix: 45,
         realm_record: 112,
-        token_mint: 82,
-        token_account: 165,
-        token_program: 36,
         rent_credit: 48,
     };
 
@@ -901,12 +905,111 @@ mod tests {
     #[test]
     fn zero_external_width_refuses_before_any_rule_is_emitted() {
         let hostile = GeneralExternalAccountWidthsV3 {
-            token_account: 0,
+            realm_record: 0,
             ..WIDTHS
         };
         assert_eq!(
             general_account_profile_rule_v3(Action::Freeze, 0, hostile),
             Err(GeneralAccountRuleErrorV3::ExternalWidth)
         );
+    }
+
+    /// Every Realm-selected collateral coordinate emits no width claim.
+    ///
+    /// A Token-2022 mint carrying extensions is not 82 bytes, an
+    /// ImmutableOwner token account is not 165, and the width of a program
+    /// record belongs to the loader that deployed it. This test names those
+    /// coordinates through the Custody FrameSpec that owns them, so a rule
+    /// that went back to asserting any of the three fails here rather than on
+    /// a validator.
+    #[test]
+    fn realm_selected_collateral_coordinates_assert_no_width() {
+        let mut observed = 0_usize;
+        for action in ACTIONS {
+            let count = general_account_profile_fixed_count_v3(action).expect("fixed count");
+            let child_start = crate::state_artifacts_v3::general_child_account_start_v3(action);
+            for coordinate in child_start..count {
+                let (frame, relative) = match child_coordinate(action, coordinate) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let GeneralChildFrameV3::Custody(operation) = frame else {
+                    continue;
+                };
+                let data = CustodyFrameSpecV1::new(operation)
+                    .data(relative)
+                    .expect("custody frame data");
+                if !matches!(
+                    data,
+                    CustodyFrameDataV1::TokenMint
+                        | CustodyFrameDataV1::TokenAccount
+                        | CustodyFrameDataV1::TokenProgram
+                ) {
+                    continue;
+                }
+                let rule = general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                    .expect("collateral rule");
+                // A repeated semantic role is an authenticated route alias and
+                // carries no second truth of any kind; every other appearance
+                // is the physical coordinate and must be opaque.
+                if rule.prestate != AccountPrestateV2::AuthenticatedRouteAlias {
+                    observed += 1;
+                    assert_eq!(
+                        rule.prestate,
+                        AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+                        "{action:?} coordinate {coordinate} restates a width General does not own"
+                    );
+                }
+                assert_eq!(rule.rule.data_length, 0);
+                assert_eq!(rule.rule.data_item_stride, 0);
+            }
+        }
+        assert!(
+            observed >= 3,
+            "fixture must reach every collateral data kind"
+        );
+    }
+
+    /// The account Close destroys must be live, never possibly vacant.
+    ///
+    /// `LifecycleBound` admits vacant data. The Close plan closes the
+    /// settlement cursor and the operator requires it live at exactly the
+    /// declared width, so a `LifecycleBound` settlement coordinate is a
+    /// weaker prestate than the transition it guards -- and, since a
+    /// LifecycleBound coordinate must carry an AuthenticateOrCreate plan, it
+    /// also refuses the policy/profile join outright.
+    #[test]
+    fn close_binds_only_the_terminal_record_it_creates() {
+        let settlement = general_account_profile_rule_v3(
+            Action::Close,
+            GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+            WIDTHS,
+        )
+        .expect("Close settlement rule");
+        assert_eq!(settlement.prestate, AccountPrestateV2::Exact);
+        let terminal = general_account_profile_rule_v3(
+            Action::Close,
+            GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+            WIDTHS,
+        )
+        .expect("Close terminal rule");
+        assert_eq!(terminal.prestate, AccountPrestateV2::LifecycleBound);
+        assert_eq!(settlement.rule.data_length, terminal.rule.data_length);
+        assert_eq!(
+            settlement.rule.data_item_stride,
+            terminal.rule.data_item_stride
+        );
+        for action in ACTIONS {
+            if action == Action::Close {
+                continue;
+            }
+            assert_eq!(
+                general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)
+                    .expect("primary state rule")
+                    .prestate,
+                AccountPrestateV2::LifecycleBound,
+                "{action:?} creates its own primary state"
+            );
+        }
     }
 }

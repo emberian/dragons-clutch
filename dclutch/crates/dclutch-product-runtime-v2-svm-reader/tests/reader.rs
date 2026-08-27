@@ -813,6 +813,56 @@ fn v3_refuses_schema_raw_and_product_link_substitution() {
 }
 
 #[test]
+fn v3_refuses_a_basis_whose_finalization_cursor_is_still_present() {
+    // A ProductBasisV3 raw body is only finalized once its staging cursor is a
+    // vacant System-owned PDA. A live cursor means the record is mid-write and
+    // is never admissible evidence, whichever continuation reads it.
+    for kind in [
+        BasisKindV3::CategoricalQ1,
+        BasisKindV3::GradedExactComplement,
+    ] {
+        let mut occupied_cursor = compiled_runtime_v3(kind, 0x61);
+        occupied_cursor.basis.staging.data = vec![0_u8; 1];
+        assert!(matches!(
+            authenticate_v3(&mut occupied_cursor),
+            Err(Error::LinkedBasisRecord)
+        ));
+        assert!(matches!(
+            authenticate_v3_continuation(&mut occupied_cursor),
+            Err(Error::LinkedBasisRecord)
+        ));
+
+        let mut hijacked_cursor = compiled_runtime_v3(kind, 0x62);
+        hijacked_cursor.basis.staging.owner = REGISTRY;
+        assert!(matches!(
+            authenticate_v3(&mut hijacked_cursor),
+            Err(Error::LinkedBasisRecord)
+        ));
+        assert!(matches!(
+            authenticate_v3_continuation(&mut hijacked_cursor),
+            Err(Error::LinkedBasisRecord)
+        ));
+    }
+}
+
+#[test]
+fn v3_refuses_a_basis_raw_account_owned_outside_the_registry() {
+    // The V3 basis is a Registry-owned record. The superseded Claims path
+    // expected a Core-owned LinkedBasisRecordV2 at the same coordinate; no
+    // continuation may admit a foreign owner at the canonical Registry PDA.
+    let mut foreign_owner = compiled_runtime_v3(BasisKindV3::CategoricalQ1, 0x63);
+    foreign_owner.basis.raw.owner = Pubkey::new_from_array([0x92; 32]);
+    assert!(matches!(
+        authenticate_v3(&mut foreign_owner),
+        Err(Error::LinkedBasisRecord)
+    ));
+    assert!(matches!(
+        authenticate_v3_continuation(&mut foreign_owner),
+        Err(Error::LinkedBasisRecord)
+    ));
+}
+
+#[test]
 fn v3_refuses_canonical_wrong_semantic_basis() {
     for kind in [
         BasisKindV3::CategoricalQ1,

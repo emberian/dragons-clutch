@@ -1497,3 +1497,216 @@ Wormhole, verified-from-source at `wormhole-foundation/wormhole`
 - https://wormhole.com/docs/products/queries/reference/supported-networks/
 - https://github.com/anza-xyz/agave `program-runtime/src/execution_budget.rs`
   (`secp256k1_recover_cost = 25_000`)
+
+---
+
+## 10. Implementation amendments (MB build lane, 2026-08-27)
+
+This section records what changed when §4 was built and executed, so the next
+reader is not misled by a number this document pins that the implementation had
+to move. It amends §4 and §7; it does not supersede them, and it closes no
+`docs/OMISSION_INDEX.md` row.
+
+### 10.1 The venue account is 424 bytes, not 416, and it is not `PoolState`
+
+*verified-from-source (`MeteoraAg/dynamic-bonding-curve` @ `3b540e94`,
+`programs/dynamic-bonding-curve/src/state/virtual_pool.rs`), confirmed against
+live mainnet bytes.* §2.6 of the dossier and §4.2/§6.3/§7 of this document call
+the account `PoolState` at 416 bytes. `PoolState` is real but is the **inner
+body**: the account type is `#[account(zero_copy)] VirtualPool { pool_state:
+PoolState }`, allocated `space = 8 + VirtualPool::INIT_SPACE`, so **on-chain
+data length is 424**. The Anchor discriminator is
+`d5 e0 05 d1 62 45 77 5c` (`sha256("account:VirtualPool")[..8]`), agreeing with
+the deployed on-chain IDL and a live pool account. A `decoding_rules_id` minted
+from the 416 figure would truncate the record by eight bytes.
+
+Two further facts the decoding-rules record should carry, both *chain-derived*:
+
+- **The admitted length set is the singleton `{424}`.** The program contains no
+  `realloc`; there is no pump.fun-style growth path.
+- **Field offsets, into account data** (the graduation fields are
+  prefix-contiguous and end at 352, so a release may pin `inline_len = 352` and
+  let the remainder ride in the tail digest): `volatility_tracker` 8..72,
+  `config` 72, `base_reserve` 232, `quote_reserve` 240, `sqrt_price` 280
+  (Q64.64; price = `sqrt_price² / 2^128` in quote atoms per base atom),
+  `pool_type` 304, `is_migrated` 305, `migration_progress` 308,
+  `finish_curve_timestamp` 344. `MigrationProgress` is `0 PreBondingCurve,
+  1 PostBondingCurve, 2 LockedVesting, 3 CreatedPool`, and the flow is **not
+  monotone per step**: without locked vesting it jumps 0 → 2 → 3.
+  `is_migrated` is written only at `CreatedPool`, and
+  `finish_curve_timestamp == 0` is the pre-completion sentinel.
+
+Deployed mainnet is version **0.1.10** while repository main is 0.2.0; every
+field above lies in the byte-stable 8..368 prefix and is unchanged across both.
+After the 0.2.0 upgrade a **second** discriminator, `TransferHookPool`
+(`ed db b8 17 2a bd a9 23`), will share the identical 424-byte body — the dual
+of the dossier's §1.3 warning, and a decoder pinned to `VirtualPool` alone will
+silently stop seeing transfer-hook pools.
+
+**This closes §7 items 1 and 2**, and it opens one: §4.2's four-account set
+supports the graduation proposition it states, but **cannot support any
+price-shaped one**. The quote mint, the base decimals and the migration
+threshold all live in `PoolConfig`, not in the pool
+(`is_curve_complete(threshold) = quote_reserve >= migration_quote_threshold`).
+`PoolConfig`'s pubkey is read out of the pool at account offset 72 — exactly the
+read-it-from-the-account discipline §6.3 clause 3 already requires — so adding
+it as account 5 is the fix if a longtail price product is ever wanted.
+
+### 10.2 `RelayedAdapterConfigV1` is 80 bytes and is named by `decoding_rules_id`
+
+§4.3 draws it as 64 bytes beginning directly with `account_set_id`, named by
+`SourceSpecV1.adapter_config_id`. Both had to move, for two independent reasons.
+
+**80, not 64.** Every other content-addressed record in the repository opens
+with an 8-byte magic and a schema version, and that header is what stops a
+64-byte raw record of a *different* family from decoding in the same slot. The
+semantic field set is unchanged; the record is 16 bytes wider.
+
+**`decoding_rules_id`, not `adapter_config_id`.** The V1 Source material binds
+`adapter_config_id` to the digest of its **own inline 64-byte slot** — the
+adapter-owned content link `(544, 1568, 64)` that `dclutch-sbf` re-checks on
+every material authentication. An external record cannot be named there at all.
+`decoding_rules_id` is in any case the better home: the pinned ordered account
+set names, per position, the expected owning program and the pinned inline
+width, and those are decoding-rules facts by §4.6's own definition. The inline
+slot keeps a canonical placeholder; a V2 Source material would drop it.
+
+This sharpens §4.10 rather than weakening it. `account_set_id`'s preimage binds
+`relay_family_id` and `observed_cluster_id`, both of which are constant across
+the PoA → m-of-n → TEE rows, so `decoding_rules_id` is byte-identical across
+every row that has an occupant. The tripwire is now an executed test:
+`crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs::
+two_disjoint_relayer_key_sets_share_one_decoding_rules_identity`.
+
+### 10.3 `RelayedObservationSetV1` is not implemented
+
+The `DCLTRMS1` one-transaction message kind of §4.3 has no implementation. The
+only venue this family exists for does not qualify for that profile, so an
+acceptance path with no consumer would be the parallel-authority shape
+`AGENTS.md` forbids. Its transport-profile identity is still minted, because
+§4.10's table is about release identities rather than about code. Also corrected
+while re-deriving: the DBC set needs **1,149** bytes against the 743-byte
+message budget, not 1,141 — the difference is §10.1's eight bytes — and it does
+not fit even at the tighter 352-byte graduation-prefix carriage (1,077).
+
+### 10.4 The record is runtime-width
+
+§4.4 sizes the record at a fixed `312 + 8 × 560 = 4,792` bytes. The
+implementation is runtime-width in `set_count`: an exact-length decoder is
+strictly more hostile than a padded fixed one, and the four-account DBC set
+costs **2,552** bytes instead of 4,792. Rent at the same
+`solana-rent` constants is therefore
+`(128 + 2552) × 3480 × 2 = 18,652,800` lamports = **0.0186528 SOL**
+(*mathematical*), against §6.3's 0.0342432 SOL figure for the widest record.
+Both remain unmeasured against a real cluster.
+
+### 10.5 The Source-side seams that opened, and the one that did not
+
+- `SourceAccessProfile` gained `RelayedObservationRecord`, and
+  `accept_provider_output_view` admits it under the same one-evidence rule the
+  Pyth one-transaction profile uses. It **cannot** take the record's view as a
+  parameter: `dclutch-relay-contract` depends on `dclutch-source-contract`, so
+  the reverse is circular. Authenticating the sealed record is the relay
+  adapter's obligation; binding normalized evidence to the material stays the
+  Source contract's.
+- The V1 material's provider-extension gate is now a closed set of **two**
+  (`PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 |
+  RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1`), in both the encoder and the byte
+  validator. Closed, deliberately.
+- **`RecoveryMaterialSlotV1::new` is still Pyth-only, and that is the gap in
+  §4.8's headline.** The property "relayer liveness failure degrades to a named
+  alternative source, not to a stuck market" needs a *relayed* recovery leg —
+  a disjoint key set as recovery 0 — and a relayed source cannot currently
+  occupy a recovery slot. Until that lift lands, a silent relayer walks to the
+  Product's failure outcome directly rather than through an alternative trust
+  root. The walk itself is unchanged and was verified from source:
+  with no recovery policy it is `Primary --Exhaust--> Exhausted
+  --CommitFailure--> FailureCommitted --RetireResolution-->`, with `Exhaust`
+  requiring `devnet_now > window.end_unix_seconds + window.max_age_seconds`
+  strictly and `FailNext` refusing outright (`LinkageMismatch`) when no recovery
+  policy exists. §4.8's count of six funded transitions at
+  `MAX_RECOVERY_ATTEMPTS = 4` is correct: `fail_next` advances Primary → R0 →
+  R1 → R2 → R3 and then refuses with `RecoveryNotExhausted`, so four `FailNext`
+  plus one `Exhaust` plus one `CommitFailure`.
+
+### 10.6 Where the two-clock rules are actually enforced
+
+`RelayedAdapterConfigV1::require_window_admits_skew` runs at **record
+creation**, against the window reached through the authenticated material — so
+`window.max_age_seconds >= config.max_cluster_skew_seconds` is a precondition
+for a record existing at all, not a resolution-time surprise.
+`require_observation_freshness` is **not** an append-time check and cannot be:
+the attested mainnet time is `unix_timestamp` decoded from the attested `Clock`
+sysvar account under the decoding rules, which is a resolution-time operation.
+Filling only moves bytes the signer committed to. For the same reason the
+attestation's `decoding_rules_id` is not compared at append: a relayer that
+echoes the wrong rules identity has signed a statement no resolution will
+accept.
+
+## 11. Where the adapter lives (RELAY-REHOME lane, 2026-08-27)
+
+§10 was written against `programs/dclutch-sbf`. That program was banished to
+`~/dev/dclutch-legacy` hours later with the rest of the gen-2 monolith, so this
+section records the successor address and the two facts that moved with it. It
+amends §4 and §10; the wire, the corpus and the refusals are unchanged.
+
+### 11.1 The home is the Resolution role, not a new Program
+
+`programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs`.
+
+The relayed observation record is provider evidence. It is to
+`RelayedMainnetStateV1` what a Receiver-owned `PriceUpdateV2` is to Pyth, and
+the only structural difference is that no external program on this cluster will
+hold it — so dClutch must, and Resolution is the role that already does.
+`provider_transport_v3.rs` in the same program owns exactly that class of
+object for the Pyth family: a Resolution-owned, permissionlessly created,
+permissionlessly reclaimed account holding one Market's provider evidence until
+a resolution consumes it. A second owner for provider-transport custody would
+be a second authority over the same fact.
+
+A dedicated Program was the alternative and Decision 0003 refuses it in terms:
+the release set describes exactly five replaceable execution roles, and a
+genuinely state-owning sixth requires a new measured release-set profile and its
+own authority decision. This record needs neither. It is read by Resolution,
+held by Resolution, and reclaimed by Resolution, and the family's semantics stay
+content-addressed data either way.
+
+### 11.2 The record is transport, not a Market child
+
+The gen-2 adapter owned the Market account and incremented its outstanding-child
+counter in the same instruction that created a child. The successor `CoreState`
+is Core-owned, its counter counts capabilities, and Resolution holds no write
+authority over it, so `expected_market_child_count` is gone from the create and
+retire wires (136 and 24 bytes) and the Market is read-only in all four routes.
+
+What §4 attributed to the child-count bound is really the record's address: it
+is seeded by the observed slot, so one account set at one slot has exactly one
+place to live, and the worker who creates it funds it. Returned rent goes to
+`CoreState.rent_beneficiary` — the account Core already persists for this
+Market — which is the same destination Resolution's own funding closures use.
+The adapter therefore needs no RentCredit derivation and no Rent-program
+identity of its own.
+
+### 11.3 What creation proves, stated exactly
+
+Creation authenticates the Market as Core-owned state at its own
+`MarketCoreStateSeedsV2` address, and requires the Registry activation cache for
+**that Market's selected release set** to name the executing Program as its
+Resolution role. It does not hash this Program's ELF: whole-artifact
+authentication is what the Registry activation already performed, and repeating
+it per record would put a megabyte of SHA-256 on a permissionless route.
+
+Creation is otherwise permissionless and self-funded, and that is the honest
+bound rather than a gap. A caller who builds a record against a substituted
+Market spends their own rent on an account at an address no resolution will read,
+because the record's PDA is derived from the Market it names.
+
+The V1 material's inline component slots are gone with it. The compact V2
+material names `SourceSpecV1`, `WindowSpecV1` and (through the spec)
+`ProviderReleaseV1` by content identity, so the create frame carries each as its
+own Registry-owned raw record plus its staging vacancy: 21 accounts, against the
+gen-2 adapter's 13. Fill, seal and retire are unchanged at 8, 8 and 4, which
+keeps the §4 message budget where it was.
+
+Executable evidence: `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`
+against the compiled Core and Resolution ELFs.

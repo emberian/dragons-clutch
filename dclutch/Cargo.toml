@@ -11,16 +11,13 @@ members = [
     "crates/dclutch-core-contract",
     "crates/dclutch-custody-contract",
     "crates/dclutch-dealer-codec",
-    "crates/dclutch-dealer-contract",
     "crates/dclutch-dealer-scenario-kernel",
     "crates/dclutch-direct-contract",
     "crates/dclutch-direct-codec",
-    "crates/dclutch-economic-adapter-contract",
     "crates/dclutch-economic-kernel",
     "crates/dclutch-economic-slice-kernel",
     "crates/dclutch-effect-kernel",
     "crates/dclutch-execution-strategy-contract",
-    "crates/dclutch-general-contract",
     "crates/dclutch-general-config-contract",
     "crates/dclutch-general-adapter-contract",
     "crates/dclutch-general-codec",
@@ -56,6 +53,7 @@ members = [
     "crates/dclutch-rational-lifecycle-hot-v3",
     "crates/dclutch-registry-contract",
     "crates/dclutch-registry-svm",
+    "crates/dclutch-relay-contract",
     "crates/dclutch-release-set-contract",
     "crates/dclutch-release-tool",
     "crates/dclutch-resolution-codec",
@@ -64,14 +62,13 @@ members = [
     "crates/dclutch-rent-contract",
     "crates/dclutch-representation-composition-v3-kernel",
     "crates/dclutch-representation-composition-v3-operator",
-    "crates/dclutch-series-contract",
     "crates/dclutch-series-v3-kernel",
+    "crates/dclutch-shadow-accelerator-auth-v4",
     "crates/dclutch-source-contract",
     "crates/dclutch-terminal-contract",
     "crates/dclutch-token-svm",
     "crates/dclutch-transition-vm",
     "crates/dclutch-versioned-message-operator",
-    "programs/dclutch-effect-sbf",
     "programs/dclutch-controller-proof-sbf",
     "programs/dclutch-rent-sbf",
     "programs/dclutch-product-runtime-v2-sbf",
@@ -81,12 +78,8 @@ members = [
     "programs/dclutch-claims-sbf",
     "programs/dclutch-claims-proof-sbf",
     "programs/dclutch-custody-proof-sbf",
-    "programs/dclutch-economic-sbf",
     "programs/dclutch-resolution-proof-sbf",
     "programs/dclutch-registry-sbf",
-    "programs/dclutch-product-payoff-sbf",
-    "programs/dclutch-product-evidence-sbf",
-    "programs/dclutch-sbf",
     "programs/dclutch-trading-sbf",
     "crates/dclutch-claims-representation-codec",
     "crates/dclutch-direct-aot-contract",
@@ -95,29 +88,14 @@ members = [
     "crates/dclutch-fractional-claim-kernel",
     "crates/dclutch-fractional-claim-operator",
     "crates/dclutch-fractional-claims-kernel",
-    "crates/dclutch-series-codec",
     "crates/dclutch-structured-v2-contract",
     "crates/dclutch-structured-v2-kernel",
     "crates/dclutch-structured-v2-operator",
     "programs/dclutch-dealer-accelerator-sbf",
     "programs/dclutch-dealer-sbf",
     "programs/dclutch-general-accelerator-sbf",
-    "programs/dclutch-series-sbf",
-]
-exclude = [
-    # blocked: this crate's own Cargo.toml requests dclutch-trading-sbf's
-    # "shadow-accelerator-auth-only" feature, which cfg-gates out hot_v3
-    # (and other modules) in dclutch-trading-sbf. Under root `cargo check
-    # --workspace`, Cargo unions every requested feature of dclutch-trading-sbf
-    # across all workspace members onto the ONE dclutch-trading-sbf build, so
-    # this feature collides with dclutch-trading-sbf's own dealer module
-    # (programs/dclutch-trading-sbf/src/dealer/v3_accelerator_accounts.rs
-    # uses crate::hot_v3 unconditionally), which is never a problem in a real
-    # per-package `cargo build-sbf` invocation. Fixing it means editing the
-    # cfg-gating around hot_v3 in dclutch-trading-sbf, which is active W2
-    # lane territory (hot_v3.rs itself is on this task's do-not-touch list)
-    # -- left for that lane's owner rather than guessed at here.
     "programs/dclutch-series-shadow-sbf",
+    "tools/gauntlet/program-test-evidence",
 ]
 resolver = "2"
 

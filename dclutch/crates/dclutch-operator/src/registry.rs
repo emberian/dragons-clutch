@@ -399,16 +399,15 @@ pub fn build_registry_activation_v1(
             .iter()
             .position(|candidate| *candidate == role)
             .ok_or(Error::Encoding)?;
-        let elf_bytes = authenticated
-            .get(index)
-            .ok_or(Error::Encoding)?
-            .elf_bytes;
+        let elf_bytes = authenticated.get(index).ok_or(Error::Encoding)?.elf_bytes;
         roles.push(RegistryRoleActivationPlanV1 {
             role,
             instruction: Instruction {
                 program_id: registry_program,
                 accounts,
-                data: RegistryInstructionV1::ActivateRole(role).to_bytes().to_vec(),
+                data: RegistryInstructionV1::ActivateRole(role)
+                    .to_bytes()
+                    .to_vec(),
             },
             already_activated: progress.is_some_and(|progress| progress.is_written(role)),
             compute: RegistryComputeEvidenceV1 {
@@ -420,8 +419,7 @@ pub fn build_registry_activation_v1(
             },
         });
     }
-    let roles: [RegistryRoleActivationPlanV1; 5] =
-        roles.try_into().map_err(|_| Error::Encoding)?;
+    let roles: [RegistryRoleActivationPlanV1; 5] = roles.try_into().map_err(|_| Error::Encoding)?;
 
     let elf_bytes_hashed = authenticated
         .iter()

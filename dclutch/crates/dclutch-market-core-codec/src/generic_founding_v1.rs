@@ -196,7 +196,11 @@ impl GenericFoundingRequestV1 {
         )?;
         if read_u16(input, 8)? != VERSION_V1
             || nonzero(input, 12, 4)?
-            || nonzero(input, REQUEST_TAIL_RESERVED_OFFSET, REQUEST_TAIL_RESERVED_BYTES)?
+            || nonzero(
+                input,
+                REQUEST_TAIL_RESERVED_OFFSET,
+                REQUEST_TAIL_RESERVED_BYTES,
+            )?
         {
             return Err(Error::NonzeroReserved);
         }
@@ -721,8 +725,8 @@ mod tests {
             GenericFoundingRequestV1::decode(&bytes[..399]),
             Err(Error::InvalidLength)
         );
-        for offset in REQUEST_TAIL_RESERVED_OFFSET
-            ..REQUEST_TAIL_RESERVED_OFFSET + REQUEST_TAIL_RESERVED_BYTES
+        for offset in
+            REQUEST_TAIL_RESERVED_OFFSET..REQUEST_TAIL_RESERVED_OFFSET + REQUEST_TAIL_RESERVED_BYTES
         {
             let mut tail = request.encode().expect("encode");
             *tail.get_mut(offset).expect("reserved byte") = 1;

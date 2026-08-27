@@ -18,8 +18,8 @@ use dclutch_account_profile_contract::{
         CoordinateScopeV3, LifecycleContextV3, LifecycleOperationV3,
         LifecycleProtectedRegisterBuffersV3, LifecycleRegisterKindV3, LifecycleRegisterTargetV3,
         LifecycleRegistersV3, LifecycleRentQuoteBuffersV5, LifecycleSeedInputValueV3,
-        StateLifecyclePlanV3, StateLifecyclePolicyV5, ValidatedProfileJoinV3,
-        plan_lifecycle_with_protected_outputs_atomic,
+        PlannedObservationsV3, StateLifecyclePlanV3, StateLifecyclePolicyV5,
+        ValidatedProfileJoinV3, plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
         AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2, RouteAccountPrivilegesV2,
@@ -63,7 +63,7 @@ use dclutch_capability_program_contract::{
 use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
     CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1, SealedRecordRowV1,
-    SealedRoleV1,
+    SealedRoleV1, SealedStaticOwnershipV1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
@@ -162,7 +162,8 @@ use crate::{
         authenticate_activated_current_deployment, authenticate_execution_strategy_v2,
     },
     native_signature::{
-        load_current_top_level_instruction, seed_native_signatures_at_authenticated_instruction,
+        SysvarInstructionV1, borrow_authenticated_instructions_v1,
+        seed_native_signatures_at_authenticated_instruction,
     },
     shadow_composition_v3::{ShadowCpiFrameV3, execute_shadow_aot_v3},
 };
@@ -945,13 +946,14 @@ fn authenticate_accelerator_top_level_v4(
     caller_authority: &AccountInfo<'_>,
     request: AcceleratorRequestV2<'_>,
 ) -> Result<Vec<u8>, ProgramError> {
-    let (_, observed) = load_current_top_level_instruction(frame.instructions)?;
+    let (current_index, sysvar) = borrow_authenticated_instructions_v1(frame.instructions)?;
+    let observed = SysvarInstructionV1::read(current_index, &sysvar)?;
     let (hot_instruction, fixed_start, strategy_start, caller_start, registry_mode) = if observed
-        .program_id
-        == *frame.trading_program.key
+        .program_id()
+        == frame.trading_program.key.as_array()
     {
         (
-            observed.data.clone(),
+            observed.data().to_vec(),
             0_usize,
             HOT_FIXED_ACCOUNT_COUNT_V3,
             HOT_FIXED_ACCOUNT_COUNT_V3
@@ -959,8 +961,8 @@ fn authenticate_accelerator_top_level_v4(
                 .ok_or(TradingSbfError::Content)?,
             false,
         )
-    } else if observed.program_id == *frame.registry.key {
-        let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&observed.data)
+    } else if observed.program_id() == frame.registry.key.as_array() {
+        let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(observed.data())
             .map_err(|_| TradingSbfError::NativeSignature)?;
         let activation_digest = {
             let data = frame
@@ -972,15 +974,12 @@ fn authenticate_accelerator_top_level_v4(
         let continuation = RegistryContinuationRequestV1::new_core_trading_hot(
             ContentId::new(envelope.release_set()).map_err(|_| TradingSbfError::NativeSignature)?,
             activation_digest,
-            ContentId::new(hash(&observed.data).to_bytes())
+            ContentId::new(hash(observed.data()).to_bytes())
                 .map_err(|_| TradingSbfError::NativeSignature)?,
-            u32::try_from(observed.data.len()).map_err(|_| TradingSbfError::NativeSignature)?,
+            u32::try_from(observed.data().len()).map_err(|_| TradingSbfError::NativeSignature)?,
         )
         .map_err(|_| TradingSbfError::NativeSignature)?;
-        let outer = observed
-            .accounts
-            .get(..REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)
-            .ok_or(TradingSbfError::NativeSignature)?;
+        let outer = observed.metas_range(0, REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
         let expected_outer = [
             frame.activation_cache.key,
             frame.core_program.key,
@@ -992,7 +991,7 @@ fn authenticate_accelerator_top_level_v4(
             .iter()
             .take(expected_outer.len())
             .zip(expected_outer)
-            .any(|(meta, key)| meta.pubkey != *key || meta.is_signer || meta.is_writable)
+            .any(|(meta, key)| meta.pubkey != key.as_array() || meta.is_signer || meta.is_writable)
         {
             return Err(TradingSbfError::NativeSignature.into());
         }
@@ -1027,7 +1026,7 @@ fn authenticate_accelerator_top_level_v4(
         )
         .0;
         let admission_meta = outer.get(5).ok_or(TradingSbfError::NativeSignature)?;
-        if admission_meta.pubkey != expected_admission
+        if admission_meta.pubkey != expected_admission.as_array()
             || admission_meta.is_signer
             || admission_meta.is_writable
         {
@@ -1042,7 +1041,7 @@ fn authenticate_accelerator_top_level_v4(
             .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
             .ok_or(TradingSbfError::Content)?;
         (
-            observed.data.clone(),
+            observed.data().to_vec(),
             fixed_start,
             strategy_start,
             caller_start,
@@ -1053,10 +1052,7 @@ fn authenticate_accelerator_top_level_v4(
     };
     let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
         .map_err(|_| TradingSbfError::NativeSignature)?;
-    let fixed_metas = observed
-        .accounts
-        .get(fixed_start..fixed_start + HOT_FIXED_ACCOUNT_COUNT_V3)
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let fixed_metas = observed.metas_range(fixed_start, HOT_FIXED_ACCOUNT_COUNT_V3)?;
     let fixed_accounts = [
         frame.market,
         frame.root,
@@ -1100,23 +1096,23 @@ fn authenticate_accelerator_top_level_v4(
     for (index, (meta, info)) in fixed_metas.iter().zip(fixed_accounts).enumerate() {
         let expected_writable =
             index == HOT_ROOT_ACCOUNT_V3 || (registry_mode && index == HOT_MARKET_ACCOUNT_V3);
-        if meta.pubkey != *info.key || meta.is_signer || meta.is_writable != expected_writable {
+        if meta.pubkey != info.key.as_array()
+            || meta.is_signer
+            || meta.is_writable != expected_writable
+        {
             return Err(TradingSbfError::NativeSignature.into());
         }
     }
-    let strategy_metas = observed
-        .accounts
-        .get(
-            strategy_start
-                ..strategy_start
-                    .checked_add(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
-                    .ok_or(TradingSbfError::Content)?,
-        )
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let strategy_metas = observed.metas_range(
+        strategy_start,
+        ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4,
+    )?;
     if strategy_metas
         .iter()
         .zip(strategy_evidence)
-        .any(|(meta, info)| meta.pubkey != *info.key || meta.is_signer || meta.is_writable)
+        .any(|(meta, info)| {
+            meta.pubkey != info.key.as_array() || meta.is_signer || meta.is_writable
+        })
     {
         return Err(TradingSbfError::NativeSignature.into());
     }
@@ -1131,16 +1127,16 @@ fn authenticate_accelerator_top_level_v4(
         .checked_add(usize::try_from(request.chunk_index()).map_err(|_| TradingSbfError::Content)?)
         .ok_or(TradingSbfError::Content)?;
     let caller_meta = observed
-        .accounts
+        .metas()
         .get(caller_index)
         .ok_or(TradingSbfError::NativeSignature)?;
-    if caller_meta.pubkey != *caller_authority.key
+    if caller_meta.pubkey != caller_authority.key.as_array()
         || caller_meta.is_signer
         || caller_meta.is_writable
         || caller_start
             .checked_add(caller_count)
             .ok_or(TradingSbfError::Content)?
-            > observed.accounts.len()
+            > observed.account_count()
         || envelope.market() == [0; 32]
     {
         return Err(TradingSbfError::NativeSignature.into());
@@ -1433,12 +1429,27 @@ fn authenticate_hot_invocation_v3(
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<AuthenticatedHotInvocationV3, ProgramError> {
     let instructions = account(accounts, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)?;
-    let (current_instruction, observed) = load_current_top_level_instruction(instructions)?;
-    if observed.program_id == *program_id {
-        if observed.data.as_slice() != instruction_data
-            || observed.accounts.len() != accounts.len()
-            || observed.accounts.iter().zip(accounts).any(|(meta, info)| {
-                meta.pubkey != *info.key
+    // The sysvar is compared in place under one borrow guard. Nothing read here
+    // outlives the guard, and the whole comparison is complete before it is
+    // dropped, so the bytes authenticated are exactly the bytes observed. A
+    // nested self-CPI presents different data and metas than the top-level
+    // record and is refused by the same two comparisons that authenticate the
+    // direct case.
+    // The sysvar record is compared in place, under one borrow guard held for
+    // as long as any view read from it is alive. Nothing below performs a CPI,
+    // so no reentrant invocation can run between the comparison that
+    // authenticates these bytes and the admission they authorize; the guard
+    // makes that structural rather than a comment. A nested self-CPI is refused
+    // by the same two comparisons that authenticate the direct case, because
+    // the sysvar record describes the top-level instruction and a nested
+    // invocation presents different data and metas.
+    let (current_instruction, sysvar) = borrow_authenticated_instructions_v1(instructions)?;
+    let observed = SysvarInstructionV1::read(current_instruction, &sysvar)?;
+    if observed.program_id() == program_id.as_array() {
+        if observed.data() != instruction_data
+            || observed.account_count() != accounts.len()
+            || observed.metas().iter().zip(accounts).any(|(meta, info)| {
+                meta.pubkey != info.key.as_array()
                     || meta.is_signer != info.is_signer
                     || meta.is_writable != info.is_writable
             })
@@ -1455,10 +1466,10 @@ fn authenticate_hot_invocation_v3(
     }
 
     let registry = account(accounts, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?;
-    if observed.program_id != *registry.key {
+    if observed.program_id() != registry.key.as_array() {
         return Err(TradingSbfError::NativeSignature.into());
     }
-    if observed.data.as_slice() != instruction_data {
+    if observed.data() != instruction_data {
         return Err(TradingSbfError::NativeSignature.into());
     }
     let activation = account(accounts, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?;
@@ -1524,10 +1535,7 @@ fn authenticate_hot_invocation_v3(
         return Err(TradingSbfError::Release.into());
     }
 
-    let outer = observed
-        .accounts
-        .get(..REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let outer = observed.metas_range(0, REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
     let expected_outer = [
         account(accounts, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.key,
         account(accounts, HOT_CORE_PROGRAM_ACCOUNT_V3)?.key,
@@ -1539,21 +1547,18 @@ fn authenticate_hot_invocation_v3(
     if outer
         .iter()
         .zip(expected_outer)
-        .any(|(meta, key)| meta.pubkey != *key || meta.is_signer || meta.is_writable)
+        .any(|(meta, key)| meta.pubkey != key.as_array() || meta.is_signer || meta.is_writable)
     {
         return Err(TradingSbfError::NativeSignature.into());
     }
-    let observed_nested = observed
-        .accounts
-        .get(REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1..)
-        .ok_or(TradingSbfError::NativeSignature)?;
+    let observed_nested = observed.metas_from(REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
     if observed_nested.len() != accounts.len()
         || observed_nested
             .iter()
             .zip(accounts)
             .enumerate()
             .any(|(index, (meta, info))| {
-                meta.pubkey != *info.key
+                meta.pubkey != info.key.as_array()
                     || meta.is_writable != info.is_writable
                     || if index == HOT_FIXED_ACCOUNT_COUNT_V3 {
                         meta.is_signer
@@ -1610,12 +1615,10 @@ pub fn process_hot_execution_v3(
         invocation.role_authentication,
     )?;
     let context = &root.context;
-    let immutable_root_header = &root.immutable_header;
 
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
     let product_runtime = product_runtime_v3.runtime;
-    let product_outcome_count = product_runtime.outcome_count;
     hot_cu_checkpoint!("root-product");
     let manifest_data = borrow_finalized_record(
         *frame,
@@ -1809,9 +1812,6 @@ pub fn process_hot_execution_v3(
         selected_program,
         invocation.strategy_extras_start,
     )?;
-    let strategy_extras = accounts
-        .get(invocation.strategy_extras_start..strategy_extras_end)
-        .ok_or(TradingSbfError::Content)?;
 
     let transition_data = borrow_sealed_record(
         *frame,
@@ -1872,6 +1872,113 @@ pub fn process_hot_execution_v3(
         )
         .map_err(|_| TradingSbfError::Content)?;
     hot_cu_checkpoint!("artifacts-strategy-effect");
+
+    execute_authenticated_hot_v3(AuthenticatedHotExecutionV3 {
+        program_id,
+        accounts,
+        instruction_data,
+        family_request,
+        envelope,
+        invocation,
+        frame: &frame,
+        request_digest,
+        root_prestate,
+        market: &market,
+        root: &root,
+        rent,
+        product_runtime_v3: &product_runtime_v3,
+        selected_program,
+        selected_action,
+        descriptor: &descriptor,
+        lifecycle,
+        account_profile,
+        profile_join,
+        request_profile,
+        strategy: &strategy,
+        strategy_extras_end,
+        transition,
+        effect,
+        sealed_ownership,
+    })
+}
+
+/// Everything the authentication half proved, handed to the half that executes
+/// it.
+///
+/// The boundary is not cosmetic. SBPF v0 gives every function a static
+/// 4,096-byte frame, and one function holding both halves' live values does not
+/// fit: the artifact half alone peaks at 2,176 bytes and the execution half
+/// needs 2,240 more. Splitting them also confines the nineteen `RefCell` borrow
+/// guards and five seal tokens to the half that authenticates against them --
+/// none of them crosses -- so the execution half cannot read an artifact whose
+/// seal it did not receive.
+struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
+    program_id: &'a Pubkey,
+    accounts: &'accounts [AccountInfo<'info>],
+    instruction_data: &'artifact [u8],
+    family_request: &'artifact [u8],
+    envelope: HotExecutionEnvelopeV3,
+    invocation: AuthenticatedHotInvocationV3,
+    frame: &'a HotFrameV3<'accounts, 'info>,
+    request_digest: [u8; 32],
+    root_prestate: [u8; 32],
+    market: &'a CoreState,
+    root: &'a AuthenticatedRootV3,
+    rent: Rent,
+    product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
+    selected_program: ContentId,
+    selected_action: u32,
+    descriptor: &'a CapabilityProgramV4,
+    lifecycle: StateLifecyclePolicyV5<'artifact>,
+    account_profile: AccountProfileV2<'artifact>,
+    profile_join: ValidatedProfileJoinV3<'artifact>,
+    request_profile: RequestProfileKindV3<'artifact>,
+    strategy: &'a AuthenticatedExecutionStrategyV2,
+    strategy_extras_end: usize,
+    transition: TransitionProgramV3<'artifact>,
+    effect: SelectedEffectProgramV4<'artifact>,
+    sealed_ownership: SealedStaticOwnershipV1<'artifact>,
+}
+
+/// Run the ten execution phases over artifacts that are already authenticated.
+#[inline(never)]
+fn execute_authenticated_hot_v3(
+    prepared: AuthenticatedHotExecutionV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    let AuthenticatedHotExecutionV3 {
+        program_id,
+        accounts,
+        instruction_data,
+        family_request,
+        envelope,
+        invocation,
+        frame,
+        request_digest,
+        root_prestate,
+        market,
+        root,
+        rent,
+        product_runtime_v3,
+        selected_program,
+        selected_action,
+        descriptor,
+        lifecycle,
+        account_profile,
+        profile_join,
+        request_profile,
+        strategy,
+        strategy_extras_end,
+        transition,
+        effect,
+        sealed_ownership,
+    } = prepared;
+    let context = &root.context;
+    let immutable_root_header = &root.immutable_header;
+    let product_runtime = product_runtime_v3.runtime;
+    let product_outcome_count = product_runtime.outcome_count;
+    let strategy_extras = accounts
+        .get(invocation.strategy_extras_start..strategy_extras_end)
+        .ok_or(TradingSbfError::Content)?;
 
     let provisional_scalar_count = effect
         .scalar_count(product_outcome_count)
@@ -2121,12 +2228,27 @@ pub fn process_hot_execution_v3(
             transition.bytes(),
         )
         .map_err(|_| TradingSbfError::Content)?;
+    // Every register bank the rest of this execution needs is now already on
+    // the heap. The projection rotated through three pairs and kept one; the
+    // preplan arena takes the two it finished with, the interpreted transition
+    // takes the request output once the preplan has copied it, and the replan
+    // takes the preplan's own output once the candidate has consumed it. Under
+    // an allocator whose `dealloc` is a no-op, each of those rentals is a whole
+    // pair of `scalar_count` and `identity_count` banks that is never charged.
     let mut preplan_scratch = LifecyclePreplanScratchV4::new(
         &observations,
         &runtime_accounts,
         scalar_count,
         identity_count,
+        projected_request.spare_scalars,
+        projected_request.spare_identities,
     )?;
+    // The one pair this phase genuinely has to allocate: the preplan's input is
+    // the request output and the arena holds the other two, so nothing dead is
+    // available to rent yet. It is handed to the replan later rather than
+    // dropped.
+    let preplan_output_scalars = vec![0_u64; scalar_count];
+    let preplan_output_identities = vec![[0_u8; 32]; identity_count];
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2143,14 +2265,17 @@ pub fn process_hot_execution_v3(
         &rent,
         &aliases,
         profile_join,
+        None,
         &mut preplan_scratch,
+        preplan_output_scalars,
+        preplan_output_identities,
     )?;
     hot_cu_checkpoint!("request-lifecycle-preplan");
 
     let candidate = if let Some(caller_authorities) = admitted_caller_authorities {
         execute_admitted_candidate_v3(AdmittedCandidateViewV3 {
             program_id,
-            frame: &frame,
+            frame,
             hot_fixed_accounts: accounts
                 .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
                 .ok_or(TradingSbfError::Content)?,
@@ -2161,9 +2286,9 @@ pub fn process_hot_execution_v3(
             observations: &observations,
             envelope,
             context,
-            descriptor: &descriptor,
-            strategy: &strategy,
-            product_runtime_v3: &product_runtime_v3,
+            descriptor,
+            strategy,
+            product_runtime_v3,
             family_request,
             root_prestate,
             selected_program,
@@ -2173,20 +2298,32 @@ pub fn process_hot_execution_v3(
             identities: &preplanned_lifecycle.identities,
         })?
     } else {
+        // The request-profile banks have been copied into the independently
+        // prepared lifecycle batch, so they are dead here and are moved in as
+        // the fold's scratch. Moving them, rather than dropping them and
+        // cloning the input again, is what keeps the SBF caller frame from
+        // retaining two register-bank owners across this noinline semantic
+        // boundary and keeps the allocator from being asked for a pair it
+        // already handed out.
         execute_interpreted_transition_v3(
             transition,
             tail_count,
             &preplanned_lifecycle.scalars,
             &preplanned_lifecycle.identities,
+            request_output_scalars,
+            request_output_identities,
         )?
     };
     hot_cu_checkpoint!("candidate");
-    // The request-profile banks have been copied into the independently
-    // prepared lifecycle batch.  End their lifetime before the candidate and
-    // Effect phases so the SBF caller frame cannot retain two register-bank
-    // owners across the next noinline semantic boundary.
-    drop(request_output_scalars);
-    drop(request_output_identities);
+    // The preplan's own output banks are dead the moment the candidate has
+    // consumed them, and the replan needs exactly one pair of that width. It
+    // rents these; only `plans` is still read after this point, by the replan
+    // agreement.
+    let PreparedLifecycleBatchV4 {
+        plans: preplanned_plans,
+        scalars: replan_output_scalars,
+        identities: replan_output_identities,
+    } = preplanned_lifecycle;
     let transition_output_scalars = candidate.scalars;
     let transition_output_identities = candidate.identities;
     let admitted_execution_digest = candidate.transcript_digest;
@@ -2225,7 +2362,7 @@ pub fn process_hot_execution_v3(
         &transition_output_scalars,
         &transition_output_identities,
         &observations,
-        &preplanned_lifecycle.plans,
+        &preplanned_plans,
         account_profile,
         &dynamic_spans.widths,
         &aliases,
@@ -2235,7 +2372,8 @@ pub fn process_hot_execution_v3(
     let output_lamports = projected_effects.lamports;
     let output_requests = projected_effects.requests;
 
-    preflight_local_effects(
+    let locally_mutated = require_local_effect_discipline_v5(
+        &preplanned_plans,
         effect,
         tail_count,
         &transition_output_scalars,
@@ -2258,24 +2396,21 @@ pub fn process_hot_execution_v3(
         &rent,
         &aliases,
         profile_join,
+        Some(&preplanned_plans),
         &mut preplan_scratch,
+        replan_output_scalars,
+        replan_output_identities,
     )?;
     require_lifecycle_replan_agreement_v4(
-        &preplanned_lifecycle,
         &revalidated_lifecycle,
         &transition_output_scalars,
         &transition_output_identities,
     )?;
-    require_lifecycle_effect_bindings_v4(
-        &revalidated_lifecycle.plans,
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &aliases,
-    )?;
     hot_cu_checkpoint!("effect-lifecycle-replan");
-    let lifecycle_plans = revalidated_lifecycle.plans;
+    // The replan agreed with this table invocation by invocation rather than
+    // building a duplicate of it, so the table the commit executes is the one
+    // the transition was handed and the replan reproduced.
+    let lifecycle_plans = preplanned_plans;
     let effect_accounts = downgraded_effect_accounts_v3(
         account_profile,
         tail_count,
@@ -2297,18 +2432,19 @@ pub fn process_hot_execution_v3(
         context.selection().capability_release().to_bytes(),
         selected_program.to_bytes(),
         &aliases,
+        locally_mutated.as_deref(),
     )?;
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
         execute_shadow_candidate_v3(ShadowCandidateViewV3 {
             program_id,
-            frame: &frame,
+            frame,
             caller_authority,
             strategy_extras,
             runtime_accounts: &runtime_accounts,
             observations: &observations,
             envelope,
-            descriptor: &descriptor,
-            strategy: &strategy,
+            descriptor,
+            strategy,
             family_request,
             root_prestate,
             selected_program,
@@ -2329,7 +2465,7 @@ pub fn process_hot_execution_v3(
     hot_cu_checkpoint!("before-commit");
     let commit_status = commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
         program_id,
-        frame: &frame,
+        frame,
         request_profile,
         effect,
         tail_count,
@@ -2349,11 +2485,11 @@ pub fn process_hot_execution_v3(
         immutable_root_header,
         root_prestate,
         strategy_execution_digest,
-        descriptor: &descriptor,
-        strategy: &strategy,
+        descriptor,
+        strategy,
         context,
-        market: &market,
-        product_runtime_v3: &product_runtime_v3,
+        market,
+        product_runtime_v3,
         product_outcome_count,
     }));
     hot_cu_checkpoint!("after-commit");
@@ -2801,9 +2937,18 @@ fn execute_interpreted_transition_v3(
     tail_count: u32,
     input_scalars: &[u64],
     input_identities: &[[u8; 32]],
+    // The request-projection output pair, dead since the preplan copied it.
+    // Rented as the fold's scratch rather than cloned from the input again.
+    mut scratch_scalars: Vec<u64>,
+    mut scratch_identities: Vec<[u8; 32]>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
-    let mut scratch_scalars = input_scalars.to_vec();
-    let mut scratch_identities = input_identities.to_vec();
+    if scratch_scalars.len() != input_scalars.len()
+        || scratch_identities.len() != input_identities.len()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    scratch_scalars.copy_from_slice(input_scalars);
+    scratch_identities.copy_from_slice(input_identities);
     let mut output_scalars = input_scalars.to_vec();
     let mut output_identities = input_identities.to_vec();
     execute_fold_atomic(
@@ -2835,6 +2980,24 @@ struct ProjectedEffectsV3 {
     requests: Vec<u8>,
 }
 
+/// One exactly-sized projection bank, refused rather than aborted when the heap
+/// cannot cover it.
+///
+/// `vec![v; n]` and `collect` allocate infallibly: on an exhausted heap they
+/// abort the whole invocation (`memory allocation failed` ->
+/// `ProgramFailedToComplete`), which is fail-closed at the transaction but is
+/// not a protocol refusal and leaves a caller nothing to read. Every bank this
+/// projection needs has its exact width before it is filled, so the same
+/// allocation can be asked for fallibly and answered with the refusal the rest
+/// of this boundary speaks.
+fn try_projection_bank_v3<T: Clone>(value: &T, len: usize) -> Result<Vec<T>, ProgramError> {
+    let mut bank = Vec::new();
+    bank.try_reserve_exact(len)
+        .map_err(|_| TradingSbfError::Content)?;
+    bank.resize(len, value.clone());
+    Ok(bank)
+}
+
 /// Account candidates and both Effect scratch banks are phase-local. Only the
 /// exact lamport projection and child-request bank survive into preflight/CPI.
 #[inline(never)]
@@ -2852,15 +3015,17 @@ fn project_hot_effects_v3(
     runtime_account_count: usize,
     request_bytes: usize,
 ) -> Result<ProjectedEffectsV3, ProgramError> {
-    let mut account_inputs = observations
-        .iter()
-        .map(|observation| AccountInput {
-            lamports: observation.lamports(),
-            data_len: observation.data().len(),
-        })
-        .collect::<Vec<_>>();
+    let mut account_inputs: Vec<AccountInput> = Vec::new();
+    account_inputs
+        .try_reserve_exact(observations.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    account_inputs.extend(observations.iter().map(|observation| AccountInput {
+        lamports: observation.lamports(),
+        data_len: observation.data().len(),
+    }));
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
-    let mut permissions = vec![AccountPermission::read_only(); runtime_account_count];
+    let mut permissions =
+        try_projection_bank_v3(&AccountPermission::read_only(), runtime_account_count)?;
     if account_profile.uses_dynamic_fixed_spans() {
         derive_effect_permissions_with_dynamic_spans(
             account_profile,
@@ -2887,10 +3052,13 @@ fn project_hot_effects_v3(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let mut scratch_lamports = vec![0_u64; effect_account_count];
-    let mut effect_output_lamports = vec![0_u64; effect_account_count];
-    let mut scratch_requests = vec![0_u8; request_bytes];
-    let mut output_requests = vec![0_u8; request_bytes];
+    let mut scratch_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
+    let mut effect_output_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
+    // One bank, not two. The projection's second request bank was written once,
+    // at the end, as a verbatim copy of the first; on an allocator that never
+    // frees that copy cost the full declared request width for the whole
+    // instruction. The single bank carries the same bytes into preflight/CPI.
+    let mut requests = try_projection_bank_v3(&0_u8, request_bytes)?;
     project_effects_v4_atomic(
         effect.successor,
         tail_count,
@@ -2908,22 +3076,22 @@ fn project_hot_effects_v3(
                 .ok_or(TradingSbfError::Content)?,
             scratch_lamports: &mut scratch_lamports,
             output_lamports: &mut effect_output_lamports,
-            scratch_requests: &mut scratch_requests,
-            output_requests: &mut output_requests,
+            requests: &mut requests,
         },
     )
     .map_err(|_| TradingSbfError::Transition)?;
-    let mut output_lamports = account_inputs
-        .iter()
-        .map(|account| account.lamports)
-        .collect::<Vec<_>>();
+    let mut output_lamports: Vec<u64> = Vec::new();
+    output_lamports
+        .try_reserve_exact(account_inputs.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    output_lamports.extend(account_inputs.iter().map(|account| account.lamports));
     output_lamports
         .get_mut(..effect_account_count)
         .ok_or(TradingSbfError::Content)?
         .copy_from_slice(&effect_output_lamports);
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
-        requests: output_requests,
+        requests,
     })
 }
 
@@ -4017,58 +4185,324 @@ struct PreparedLifecycleBatchV4 {
     identities: Vec<[u8; 32]>,
 }
 
-/// Rewrite one candidate observation's lamport balance in place.
+/// Where one prepared lifecycle invocation goes.
 ///
-/// Only the balance moves while a lifecycle batch is planned, so the candidate
-/// bank is built once and its two touched entries are rewritten, rather than
-/// materialising a whole new 90-coordinate bank per invocation on an allocator
-/// that never frees.
-fn set_candidate_lamports_v3<'data>(
-    index: usize,
-    value: u64,
-    observations: &[AccountObservationV1<'data>],
-    accounts: &[&AccountInfo<'_>],
-    candidate_lamports: &mut [u64],
-    candidate_observations: &mut [AccountObservationV1<'data>],
-) -> Result<(), ProgramError> {
-    *candidate_lamports
-        .get_mut(index)
-        .ok_or(TradingSbfError::Content)? = value;
-    let observation = observations.get(index).ok_or(TradingSbfError::Content)?;
-    let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
-    *candidate_observations
-        .get_mut(index)
-        .ok_or(TradingSbfError::Content)? = candidate_observation_v3(*observation, account, value);
-    Ok(())
+/// # Why the preparation runs twice, and what the second run actually has to do
+///
+/// `prepare_lifecycle_v4` is a pure function of its artifacts, the accounts,
+/// and one pair of register banks. The preplan evaluates it at the **request**
+/// registers and hands the resulting plan table to the transition. The replan
+/// evaluates it at the **transition's own output** registers, and the pair of
+/// them assert a fixed point: the transition's outputs must reproduce the plan
+/// table the transition was given, and must be unchanged by the lifecycle
+/// projection applied to them. That is not redundancy - a transition that
+/// rewrote a coordinate the plan reads would otherwise execute against a plan
+/// nobody ever validated - and there is no way to answer it except by
+/// evaluating the function at the transition's outputs.
+///
+/// What the second evaluation does **not** have to do is build a second copy of
+/// an answer it is only going to compare. So it does not: the replan verifies
+/// against the preplan's table as it goes and allocates nothing per invocation,
+/// where before it allocated a fresh plan vector, a `Vec<Vec<u8>>` of seeds and
+/// a `Vec<&[u8]>` of slices per invocation, and a binding vector - on an
+/// allocator whose `dealloc` is a no-op, all of it charged against
+/// total-ever-allocated for the lifetime of the instruction.
+///
+/// The one derivation it also skips is named at [`LifecycleSeedsV4::pending_bump`].
+enum LifecycleBatchSinkV4<'a> {
+    /// The preplan: collect the table the transition will be handed.
+    Collect(Vec<PreparedLifecycleInvocationV3>),
+    /// The replan: reproduce the table the preplan already produced.
+    Verify {
+        expected: &'a [PreparedLifecycleInvocationV3],
+        next: usize,
+    },
 }
 
-/// One candidate observation: the authenticated observation at a planned balance.
-fn candidate_observation_v3<'data>(
-    observation: AccountObservationV1<'data>,
-    account: &AccountInfo<'_>,
-    lamports: u64,
-) -> AccountObservationV1<'data> {
-    if observation.adapter_authenticated_variable_data() {
-        AccountObservationV1::new_adapter_authenticated_variable_data(
-            observation.key_bytes(),
-            observation.owner_bytes(),
-            lamports,
-            observation.data(),
-            account.is_signer,
-            account.is_writable,
-            account.executable,
-        )
-    } else {
-        AccountObservationV1::new(
-            observation.key_bytes(),
-            observation.owner_bytes(),
-            lamports,
-            observation.data(),
-            account.is_signer,
-            account.is_writable,
-            account.executable,
-        )
+impl<'a> LifecycleBatchSinkV4<'a> {
+    /// Reserve the exact table width the plan declares.
+    fn new(
+        expected: Option<&'a [PreparedLifecycleInvocationV3]>,
+        planned: usize,
+    ) -> Result<Self, ProgramError> {
+        match expected {
+            None => {
+                // Exact capacity: the plan table declares how many invocations
+                // the batch has, so the output bank does not walk the
+                // allocator's doubling ladder.
+                let mut output = Vec::new();
+                output
+                    .try_reserve_exact(planned)
+                    .map_err(|_| TradingSbfError::Content)?;
+                Ok(Self::Collect(output))
+            }
+            Some(expected) => {
+                if expected.len() != planned {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                Ok(Self::Verify { expected, next: 0 })
+            }
+        }
     }
+
+    /// The already-prepared invocation this ordinal must reproduce, if verifying.
+    fn expected(&self) -> Result<Option<&'a PreparedLifecycleInvocationV3>, ProgramError> {
+        match self {
+            Self::Collect(_) => Ok(None),
+            Self::Verify { expected, next } => Ok(Some(
+                expected.get(*next).ok_or(TradingSbfError::Transition)?,
+            )),
+        }
+    }
+
+    /// Admit one complete invocation, or refuse it against the preplan's.
+    fn admit(
+        &mut self,
+        plan: StateLifecyclePlanV3,
+        state: usize,
+        payer: Option<usize>,
+        rent_credit: Option<usize>,
+        seeds: LifecycleSeedsV4<'_>,
+        bindings: LifecycleBindingsV4<'_>,
+    ) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(output) => {
+                output.push(PreparedLifecycleInvocationV3 {
+                    plan,
+                    state,
+                    payer,
+                    rent_credit,
+                    seeds: seeds.collected()?,
+                    immutable_identity_bindings: bindings.collected()?,
+                });
+                Ok(())
+            }
+            Self::Verify { expected, next } => {
+                let prior = expected.get(*next).ok_or(TradingSbfError::Transition)?;
+                // Seeds and bindings were compared element by element as they
+                // were materialized; what is left is that every element was in
+                // fact reached.
+                seeds.exhausted()?;
+                bindings.exhausted()?;
+                if prior.plan != plan
+                    || prior.state != state
+                    || prior.payer != payer
+                    || prior.rent_credit != rent_credit
+                {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                *next = next.checked_add(1).ok_or(TradingSbfError::Transition)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// The collected table, or an empty one when this pass only verified.
+    fn finish(self, planned: usize) -> Result<Vec<PreparedLifecycleInvocationV3>, ProgramError> {
+        match self {
+            Self::Collect(output) => {
+                if output.len() != planned {
+                    return Err(TradingSbfError::Content.into());
+                }
+                Ok(output)
+            }
+            Self::Verify { expected, next } => {
+                if next != expected.len() {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                // The table this pass agreed with is the caller's own; handing
+                // back a duplicate of it is the allocation this pass exists to
+                // not make.
+                Ok(Vec::new())
+            }
+        }
+    }
+}
+
+/// One invocation's canonical seed vector, collected or verified.
+enum LifecycleSeedsV4<'a> {
+    Collect(Vec<Vec<u8>>),
+    Verify {
+        expected: &'a [Vec<u8>],
+        next: usize,
+    },
+}
+
+/// Where one invocation's canonical bump came from.
+enum LifecycleCanonicalBumpV4 {
+    /// Derived here, against the seeds this pass materialized.
+    Derived { address: Pubkey, bump: u8 },
+    /// Taken from the preplan's derivation over byte-identical seeds.
+    Reused { bump: u8 },
+}
+
+impl<'a> LifecycleSeedsV4<'a> {
+    fn new(expected: Option<&'a [Vec<u8>]>, seed_count: u8) -> Result<Self, ProgramError> {
+        match expected {
+            None => Ok(Self::Collect(Vec::with_capacity(usize::from(seed_count)))),
+            Some(expected) => {
+                if expected.len() != usize::from(seed_count) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                Ok(Self::Verify { expected, next: 0 })
+            }
+        }
+    }
+
+    /// Admit one materialized seed, or refuse it against the preplan's.
+    fn push(&mut self, bytes: &[u8]) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(seeds) => {
+                seeds.push(bytes.to_vec());
+                Ok(())
+            }
+            Self::Verify { expected, next } => {
+                if expected.get(*next).map(Vec::as_slice) != Some(bytes) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                *next = next.checked_add(1).ok_or(TradingSbfError::Transition)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// The canonical bump for the seeds pushed so far.
+    ///
+    /// The preplan derives it. **The replan does not**, and this is the one
+    /// recomputation the second pass skips outright:
+    /// [`Pubkey::try_find_program_address`] is a pure function of the seed
+    /// bytes and the program id, every one of those bytes has just been
+    /// compared byte-for-byte against the seeds the preplan derived from, and a
+    /// divergence in any of them refuses at [`Self::push`] before this is ever
+    /// reached. Re-running the SHA-256 ladder can only reproduce a value the
+    /// caller already holds, at a syscall per attempt.
+    ///
+    /// The address is not reconstructed either: the preplan checked its own
+    /// derivation against the state account's key, so the caller reads it off
+    /// that account, and the caller has already required the state coordinate
+    /// to be the preplan's.
+    fn pending_bump(&self, program_id: &Pubkey) -> Result<LifecycleCanonicalBumpV4, ProgramError> {
+        match self {
+            Self::Collect(seeds) => {
+                let seed_slices = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                let (address, bump) =
+                    Pubkey::try_find_program_address(seed_slices.as_slice(), program_id)
+                        .ok_or(TradingSbfError::Content)?;
+                Ok(LifecycleCanonicalBumpV4::Derived { address, bump })
+            }
+            Self::Verify { expected, next } => {
+                let [bump] = expected
+                    .get(*next)
+                    .ok_or(TradingSbfError::Transition)?
+                    .as_slice()
+                else {
+                    return Err(TradingSbfError::Transition.into());
+                };
+                Ok(LifecycleCanonicalBumpV4::Reused { bump: *bump })
+            }
+        }
+    }
+
+    fn collected(self) -> Result<Vec<Vec<u8>>, ProgramError> {
+        match self {
+            Self::Collect(seeds) => Ok(seeds),
+            Self::Verify { .. } => Err(TradingSbfError::Transition.into()),
+        }
+    }
+
+    fn exhausted(&self) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(_) => Err(TradingSbfError::Transition.into()),
+            Self::Verify { expected, next } => {
+                if *next == expected.len() {
+                    Ok(())
+                } else {
+                    Err(TradingSbfError::Transition.into())
+                }
+            }
+        }
+    }
+}
+
+/// One invocation's immutable identity bindings, collected or verified.
+enum LifecycleBindingsV4<'a> {
+    Collect(Vec<PreparedImmutableIdentityBindingV4>),
+    Verify {
+        expected: &'a [PreparedImmutableIdentityBindingV4],
+        next: usize,
+    },
+}
+
+impl<'a> LifecycleBindingsV4<'a> {
+    fn new(
+        expected: Option<&'a [PreparedImmutableIdentityBindingV4]>,
+        count: u16,
+    ) -> Result<Self, ProgramError> {
+        match expected {
+            None => Ok(Self::Collect(Vec::with_capacity(usize::from(count)))),
+            Some(expected) => {
+                if expected.len() != usize::from(count) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                Ok(Self::Verify { expected, next: 0 })
+            }
+        }
+    }
+
+    fn push(&mut self, binding: PreparedImmutableIdentityBindingV4) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(output) => {
+                output.push(binding);
+                Ok(())
+            }
+            Self::Verify { expected, next } => {
+                if expected.get(*next) != Some(&binding) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                *next = next.checked_add(1).ok_or(TradingSbfError::Transition)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn collected(self) -> Result<Vec<PreparedImmutableIdentityBindingV4>, ProgramError> {
+        match self {
+            Self::Collect(output) => Ok(output),
+            Self::Verify { .. } => Err(TradingSbfError::Transition.into()),
+        }
+    }
+
+    fn exhausted(&self) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(_) => Err(TradingSbfError::Transition.into()),
+            Self::Verify { expected, next } => {
+                if *next == expected.len() {
+                    Ok(())
+                } else {
+                    Err(TradingSbfError::Transition.into())
+                }
+            }
+        }
+    }
+}
+
+/// Rewrite one coordinate's planned lamport balance.
+///
+/// Only the balance moves while a lifecycle batch is planned, so the candidate
+/// the next invocation reads is the authenticated observation bank under a
+/// lamport overlay, and one planned invocation rewrites the two entries it
+/// touches. Materialising a whole 90-coordinate observation bank per batch cost
+/// 4,320 bytes of a 32,768-byte heap on an allocator that never frees, to carry
+/// 720 bytes of balance and 3,600 bytes of exact duplicate.
+fn set_candidate_lamports_v3(
+    index: usize,
+    value: u64,
+    planned_lamports: &mut [u64],
+) -> Result<(), ProgramError> {
+    *planned_lamports
+        .get_mut(index)
+        .ok_or(TradingSbfError::Content)? = value;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4078,12 +4512,11 @@ fn candidate_observation_v3<'data>(
 /// request-projected registers to give the transition its plan, and once from
 /// the transition's outputs to prove the plan it saw is the plan its outputs
 /// produce. The SBF allocator never frees, so a second pass otherwise charged a
-/// fresh 90-coordinate candidate bank, four register banks and a state
+/// fresh 90-coordinate planned-balance overlay, four register banks and a state
 /// reservation bank against total-ever-allocated for a pass whose only purpose
 /// is to agree with the first.
-struct LifecyclePreplanScratchV4<'a> {
-    candidate_lamports: Vec<u64>,
-    candidate_observations: Vec<AccountObservationV1<'a>>,
+struct LifecyclePreplanScratchV4 {
+    planned_lamports: Vec<u64>,
     scalar_scratch: Vec<u64>,
     identity_scratch: Vec<[u8; 32]>,
     next_scalars: Vec<u64>,
@@ -4091,41 +4524,62 @@ struct LifecyclePreplanScratchV4<'a> {
     used_states: Vec<bool>,
 }
 
-impl<'a> LifecyclePreplanScratchV4<'a> {
+impl LifecyclePreplanScratchV4 {
+    /// Build the arena, renting the two register-bank pairs the request
+    /// projection finished with instead of allocating two fresh ones.
+    ///
+    /// The planned-balance overlay starts at the authenticated balances, which
+    /// is exactly the candidate state before any invocation is planned.
+    ///
+    /// The rented banks arrive holding whatever the projection rotation left in
+    /// them, so they are zeroed here: this is the same initial state
+    /// `vec![0; n]` produced, reached without asking an allocator that never
+    /// frees for a second copy of a buffer that already exists.
     fn new(
-        observations: &[AccountObservationV1<'a>],
+        observations: &[AccountObservationV1<'_>],
         accounts: &[&AccountInfo<'_>],
         scalar_count: usize,
         identity_count: usize,
-    ) -> Result<Self, ProgramError> {
+        spare_scalars: [Vec<u64>; 2],
+        spare_identities: [Vec<[u8; 32]>; 2],
+    ) -> Result<Box<Self>, ProgramError> {
         if observations.len() != accounts.len() {
             return Err(TradingSbfError::Content.into());
         }
-        let mut candidate_lamports = Vec::new();
-        candidate_lamports
-            .try_reserve_exact(observations.len())
-            .map_err(|_| TradingSbfError::Content)?;
-        let mut candidate_observations = Vec::new();
-        candidate_observations
-            .try_reserve_exact(observations.len())
-            .map_err(|_| TradingSbfError::Content)?;
-        for (observation, account) in observations.iter().zip(accounts) {
-            candidate_lamports.push(observation.lamports());
-            candidate_observations.push(candidate_observation_v3(
-                *observation,
-                account,
-                observation.lamports(),
-            ));
+        let [mut scalar_scratch, mut next_scalars] = spare_scalars;
+        let [mut identity_scratch, mut next_identities] = spare_identities;
+        if scalar_scratch.len() != scalar_count
+            || next_scalars.len() != scalar_count
+            || identity_scratch.len() != identity_count
+            || next_identities.len() != identity_count
+        {
+            return Err(TradingSbfError::Content.into());
         }
-        Ok(Self {
-            candidate_lamports,
-            candidate_observations,
-            scalar_scratch: vec![0_u64; scalar_count],
-            identity_scratch: vec![[0_u8; 32]; identity_count],
-            next_scalars: vec![0_u64; scalar_count],
-            next_identities: vec![[0_u8; 32]; identity_count],
+        scalar_scratch.fill(0);
+        next_scalars.fill(0);
+        identity_scratch.fill([0_u8; 32]);
+        next_identities.fill([0_u8; 32]);
+        let mut planned_lamports = Vec::new();
+        planned_lamports
+            .try_reserve_exact(observations.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        for observation in observations {
+            planned_lamports.push(observation.lamports());
+        }
+        // Boxed, and boxed here rather than at the call site: seven register
+        // and observation banks are 168 bytes of `Vec` headers, and
+        // `process_hot_execution_v3` is close enough to the 4KB SBF frame limit
+        // that carrying them as caller locals makes a later call overwrite the
+        // frame. Behind one pointer the caller pays 8 bytes and the headers
+        // live in this constructor's frame instead.
+        Ok(Box::new(Self {
+            planned_lamports,
+            scalar_scratch,
+            identity_scratch,
+            next_scalars,
+            next_identities,
             used_states: vec![false; observations.len()],
-        })
+        }))
     }
 }
 
@@ -4147,12 +4601,21 @@ fn prepare_lifecycle_v4<'a>(
     rent: &Rent,
     aliases: &[usize],
     profile_join: ValidatedProfileJoinV3<'_>,
-    scratch: &mut LifecyclePreplanScratchV4<'a>,
+    // `None` on the preplan, which collects the table. `Some` on the replan,
+    // which reproduces it: see [`LifecycleBatchSinkV4`] for why the second
+    // evaluation is not redundant and why it allocates nothing.
+    expected: Option<&[PreparedLifecycleInvocationV3]>,
+    scratch: &mut LifecyclePreplanScratchV4,
+    // Rented, never allocated. Both preplan passes want a working copy of the
+    // register banks they were handed, and on an allocator that never frees a
+    // `to_vec()` per pass charges the heap two whole pairs for two copies that
+    // are never live at the same time as the bank they came from.
+    mut output_scalars: Vec<u64>,
+    mut output_identities: Vec<[u8; 32]>,
 ) -> Result<PreparedLifecycleBatchV4, ProgramError> {
     if observations.len() != accounts.len()
         || aliases.len() != accounts.len()
-        || scratch.candidate_lamports.len() != accounts.len()
-        || scratch.candidate_observations.len() != accounts.len()
+        || scratch.planned_lamports.len() != accounts.len()
         || scratch.used_states.len() != accounts.len()
         || scratch.scalar_scratch.len() != scalars.len()
         || scratch.next_scalars.len() != scalars.len()
@@ -4161,16 +4624,18 @@ fn prepare_lifecycle_v4<'a>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let mut output_scalars = scalars.to_vec();
-    let mut output_identities = identities.to_vec();
+    if output_scalars.len() != scalars.len() || output_identities.len() != identities.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    output_scalars.copy_from_slice(scalars);
+    output_identities.copy_from_slice(identities);
     // Every working bank is rented from one arena that outlives both passes.
     // The SBF allocator never frees, so a second preplan otherwise charged a
     // fresh 90-coordinate candidate bank, four register banks and a state
     // reservation bank against total-ever-allocated purely to agree with the
     // first. They are reset here rather than reallocated.
     let LifecyclePreplanScratchV4 {
-        candidate_lamports,
-        candidate_observations,
+        planned_lamports,
         scalar_scratch,
         identity_scratch,
         next_scalars,
@@ -4178,26 +4643,12 @@ fn prepare_lifecycle_v4<'a>(
         used_states,
     } = scratch;
     used_states.fill(false);
-    for ((slot, observation), account) in candidate_lamports
-        .iter_mut()
-        .zip(observations)
-        .zip(accounts.iter())
-    {
+    for (slot, observation) in planned_lamports.iter_mut().zip(observations) {
         *slot = observation.lamports();
-        let _ = account;
-    }
-    for ((slot, observation), account) in candidate_observations
-        .iter_mut()
-        .zip(observations)
-        .zip(accounts.iter())
-    {
-        *slot = candidate_observation_v3(*observation, account, observation.lamports());
     }
     let plan_count = policy
         .action_plan_count(action)
         .map_err(|_| TradingSbfError::Content)?;
-    // Exact capacity: the plan table declares how many invocations the batch
-    // has, so the output bank does not walk the allocator's doubling ladder.
     let mut planned = 0_usize;
     let mut counted = 0_u16;
     while counted < plan_count {
@@ -4215,10 +4666,7 @@ fn prepare_lifecycle_v4<'a>(
             .ok_or(TradingSbfError::Content)?;
         counted = counted.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(planned)
-        .map_err(|_| TradingSbfError::Content)?;
+    let mut sink = LifecycleBatchSinkV4::new(expected, planned)?;
     let mut ordinal = 0_u16;
     while ordinal < plan_count {
         let selected = policy
@@ -4243,6 +4691,7 @@ fn prepare_lifecycle_v4<'a>(
             {
                 return Err(TradingSbfError::Content.into());
             }
+            let prior = sink.expected()?;
             let indices = selected
                 .project_account_indices(account_profile, tail_count, item)
                 .map_err(|_| TradingSbfError::Content)?;
@@ -4260,7 +4709,8 @@ fn prepare_lifecycle_v4<'a>(
             let seed_count = selected
                 .seed_count()
                 .map_err(|_| TradingSbfError::Content)?;
-            let mut seeds = Vec::with_capacity(usize::from(seed_count));
+            let mut seeds =
+                LifecycleSeedsV4::new(prior.map(|prior| prior.seeds.as_slice()), seed_count)?;
             let mut derived = None;
             let mut canonical_bump = None;
             let mut seed = 0_u8;
@@ -4273,18 +4723,29 @@ fn prepare_lifecycle_v4<'a>(
                         if canonical_bump.is_some() {
                             return Err(TradingSbfError::Content.into());
                         }
-                        seeds.push(value.as_slice().to_vec());
+                        seeds.push(value.as_slice())?;
                     }
                     LifecycleSeedInputValueV3::CanonicalBump => {
                         if seed.checked_add(1) != Some(seed_count) || canonical_bump.is_some() {
                             return Err(TradingSbfError::Content.into());
                         }
-                        let seed_slices = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
-                        let (address, bump) =
-                            Pubkey::try_find_program_address(seed_slices.as_slice(), program_id)
-                                .ok_or(TradingSbfError::Content)?;
-                        seeds.push(vec![bump]);
-                        derived = Some(address);
+                        let bump = match seeds.pending_bump(program_id)? {
+                            LifecycleCanonicalBumpV4::Derived { address, bump } => {
+                                derived = Some(address);
+                                bump
+                            }
+                            LifecycleCanonicalBumpV4::Reused { bump } => {
+                                // The preplan derived this address from these
+                                // exact seed bytes and checked it against this
+                                // exact account; `admit` refuses below unless
+                                // the state coordinate is the preplan's too.
+                                derived = Some(
+                                    *accounts.get(state).ok_or(TradingSbfError::Content)?.key,
+                                );
+                                bump
+                            }
+                        };
+                        seeds.push(&[bump])?;
                         canonical_bump = Some(bump);
                     }
                 }
@@ -4303,7 +4764,7 @@ fn prepare_lifecycle_v4<'a>(
                     authenticate_lifecycle_credit_v3(
                         accounts,
                         index,
-                        *candidate_lamports
+                        *planned_lamports
                             .get(index)
                             .ok_or(TradingSbfError::Content)?,
                         rent,
@@ -4339,7 +4800,8 @@ fn prepare_lifecycle_v4<'a>(
                     account_profile,
                     tail_count,
                     item_index: item,
-                    accounts: candidate_observations,
+                    accounts: PlannedObservationsV3::planned(observations, planned_lamports)
+                        .map_err(|_| TradingSbfError::Content)?,
                     registers: LifecycleRegistersV3 {
                         scalars: &output_scalars,
                         identities: &output_identities,
@@ -4359,11 +4821,20 @@ fn prepare_lifecycle_v4<'a>(
                 },
             )
             .map_err(|_| TradingSbfError::Content)?;
-            let immutable_identity_bindings = prepare_immutable_identity_bindings_v4(
+            let binding_count = selected
+                .immutable_identity_binding_count()
+                .map_err(|_| TradingSbfError::Content)?;
+            let mut immutable_identity_bindings = LifecycleBindingsV4::new(
+                prior.map(|prior| prior.immutable_identity_bindings.as_slice()),
+                binding_count,
+            )?;
+            absorb_immutable_identity_bindings_v4(
                 selected,
                 account_profile,
                 item,
                 next_identities,
+                binding_count,
+                &mut immutable_identity_bindings,
             )?;
             match plan {
                 StateLifecyclePlanV3::Authenticate(_) => {}
@@ -4372,14 +4843,7 @@ fn prepare_lifecycle_v4<'a>(
                         (state, value.state_after),
                         (payer.ok_or(TradingSbfError::Content)?, value.payer_after),
                     ] {
-                        set_candidate_lamports_v3(
-                            index,
-                            balance,
-                            observations,
-                            accounts,
-                            candidate_lamports,
-                            candidate_observations,
-                        )?;
+                        set_candidate_lamports_v3(index, balance, planned_lamports)?;
                     }
                 }
                 StateLifecyclePlanV3::Close(value) => {
@@ -4390,25 +4854,18 @@ fn prepare_lifecycle_v4<'a>(
                             value.rent_credit_after,
                         ),
                     ] {
-                        set_candidate_lamports_v3(
-                            index,
-                            balance,
-                            observations,
-                            accounts,
-                            candidate_lamports,
-                            candidate_observations,
-                        )?;
+                        set_candidate_lamports_v3(index, balance, planned_lamports)?;
                     }
                 }
             }
-            output.push(PreparedLifecycleInvocationV3 {
+            sink.admit(
                 plan,
                 state,
                 payer,
                 rent_credit,
                 seeds,
                 immutable_identity_bindings,
-            });
+            )?;
             output_scalars.copy_from_slice(next_scalars);
             output_identities.copy_from_slice(next_identities);
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
@@ -4416,22 +4873,25 @@ fn prepare_lifecycle_v4<'a>(
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(PreparedLifecycleBatchV4 {
-        plans: output,
+        plans: sink.finish(planned)?,
         scalars: output_scalars,
         identities: output_identities,
     })
 }
 
-fn prepare_immutable_identity_bindings_v4(
+/// Materialize one invocation's immutable identity bindings into `output`.
+///
+/// Streaming rather than returning a vector: the replan's `output` compares
+/// each binding against the preplan's and keeps nothing, so on the second pass
+/// this allocates zero.
+fn absorb_immutable_identity_bindings_v4(
     selected: dclutch_account_profile_contract::lifecycle_v3::SelectedLifecycleV3<'_>,
     profile: AccountProfileV2<'_>,
     item: Option<u32>,
     identities: &[[u8; 32]],
-) -> Result<Vec<PreparedImmutableIdentityBindingV4>, ProgramError> {
-    let count = selected
-        .immutable_identity_binding_count()
-        .map_err(|_| TradingSbfError::Content)?;
-    let mut output = Vec::with_capacity(usize::from(count));
+    count: u16,
+    output: &mut LifecycleBindingsV4<'_>,
+) -> Result<(), ProgramError> {
     let mut ordinal = 0_u16;
     while ordinal < count {
         let binding = selected
@@ -4460,20 +4920,30 @@ fn prepare_immutable_identity_bindings_v4(
         output.push(PreparedImmutableIdentityBindingV4 {
             data_offset: binding.data_offset(),
             canonical,
-        });
+        })?;
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(output)
+    Ok(())
 }
 
+/// Require the transition's own outputs to be a fixed point of the lifecycle
+/// projection.
+///
+/// The other half of the agreement - that the replan reproduces the preplan's
+/// plan table - is decided invocation by invocation inside the replan itself,
+/// at [`LifecycleBatchSinkV4::admit`], so it refuses at the first divergence
+/// instead of after building a whole second table to compare. What is left here
+/// is the half that is about the transition rather than the plan: the registers
+/// the replan projects out of the transition's outputs must be those outputs.
+///
+/// The preplan's own register banks are rented out to the replan by the time
+/// this runs and were never part of this agreement.
 fn require_lifecycle_replan_agreement_v4(
-    preplanned: &PreparedLifecycleBatchV4,
     revalidated: &PreparedLifecycleBatchV4,
     transition_scalars: &[u64],
     transition_identities: &[[u8; 32]],
 ) -> Result<(), ProgramError> {
-    if preplanned.plans != revalidated.plans
-        || revalidated.scalars != transition_scalars
+    if revalidated.scalars != transition_scalars
         || revalidated.identities != transition_identities
     {
         Err(TradingSbfError::Transition.into())
@@ -4482,23 +4952,52 @@ fn require_lifecycle_replan_agreement_v4(
     }
 }
 
-/// Require every created state's immutable identity binding to be written
-/// exactly once by the Effect program, and never overlapped by anything else.
+/// Require every local Effect operation to leave the root header alone and to
+/// write each created state's immutable identity binding exactly once, never
+/// overlapped by anything else.
 ///
-/// The scan is over the Effect, not over the bindings: resolving one effect
-/// operation costs orders of magnitude more than comparing a resolved write
-/// against a binding's coordinate and offset, and there are far more operations
-/// than bindings. Asking each binding separately re-resolved the entire program
-/// once per binding.
+/// Two predicates, one resolution pass. Resolving one Effect operation costs
+/// orders of magnitude more than either predicate applied to the result, and
+/// both predicates have to see every operation of the same program at the same
+/// registers, so running them as two passes resolved the whole program twice to
+/// answer two questions about the same object. Measured on the canonical Direct
+/// bundle at full depth: the second pass was **110,284 CU, 7.9% of the
+/// 1,400,000 ceiling**, and it computed nothing the first pass had not already
+/// produced and discarded.
+///
+/// The scan is over the Effect, not over the bindings: there are far more
+/// operations than bindings, and asking each binding separately re-resolved the
+/// entire program once per binding.
+///
+/// Each operation is checked completely before the next is resolved, so an
+/// operation that both writes the root header and collides with a binding
+/// refuses on the root header. Neither refusal is reachable-only-after the
+/// other; there is no precedence to preserve between two operations, and both
+/// are fail-closed.
+///
+/// `plans` is the **preplan's** table rather than the replan's. The replan
+/// agreement that follows proves the two are equal, so answering binding
+/// coverage against one and register identity against the other is the same
+/// conjunction written in the other order - and the agreement still refuses
+/// first-class if they ever disagree.
+///
+/// The third question rides along for the same reason: when the Effect has
+/// child routes at all, every route's accounts must be disjoint from what the
+/// local effects mutate, and deciding that needs one `bool` per representative
+/// folded out of exactly these resolved operations. Asking it in its own walk
+/// cost a further **108,759 CU** on the canonical Direct bundle - a third of a
+/// million compute units, across the three walks, to resolve one program three
+/// times. Returns `None` when the Effect declares no route, which is precisely
+/// when the answer has no consumer.
 #[inline(never)]
-fn require_lifecycle_effect_bindings_v4(
+fn require_local_effect_discipline_v5(
     plans: &[PreparedLifecycleInvocationV3],
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
     aliases: &[usize],
-) -> Result<(), ProgramError> {
+) -> Result<Option<Vec<bool>>, ProgramError> {
     let mut binding_count = 0_usize;
     for prepared in plans {
         binding_count = binding_count
@@ -4510,13 +5009,26 @@ fn require_lifecycle_effect_bindings_v4(
         .try_reserve_exact(binding_count)
         .map_err(|_| TradingSbfError::Transition)?;
     written.resize(binding_count, false);
+    let mut locally_mutated = if effect.route_count() == 0 {
+        None
+    } else {
+        let mut bank = Vec::new();
+        bank.try_reserve_exact(aliases.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        bank.resize(aliases.len(), false);
+        Some(bank)
+    };
 
     let mut fixed = 0_u16;
     while fixed < effect.fixed_operation_count() {
         let resolved = effect
             .resolved_fixed_effect(fixed, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Transition)?;
+        require_root_write_is_state_only(resolved, aliases)?;
         inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
+        if let Some(bank) = locally_mutated.as_deref_mut() {
+            mark_local_mutation(resolved, aliases, bank)?;
+        }
         fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
     }
     let mut item = 0_u32;
@@ -4526,7 +5038,11 @@ fn require_lifecycle_effect_bindings_v4(
             let resolved = effect
                 .resolved_item_effect(item, operation, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Transition)?;
+            require_root_write_is_state_only(resolved, aliases)?;
             inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
+            if let Some(bank) = locally_mutated.as_deref_mut() {
+                mark_local_mutation(resolved, aliases, bank)?;
+            }
             operation = operation
                 .checked_add(1)
                 .ok_or(TradingSbfError::Transition)?;
@@ -4545,7 +5061,7 @@ fn require_lifecycle_effect_bindings_v4(
             ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Transition)?;
         }
     }
-    Ok(())
+    Ok(locally_mutated)
 }
 
 /// Fold one resolved Effect write against every planned binding.
@@ -4982,6 +5498,10 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     capability_program_set: [u8; 32],
     selected_capability_program: [u8; 32],
     aliases: &[usize],
+    // Folded out of the one walk over this Effect that
+    // `require_local_effect_discipline_v5` already makes, at these exact
+    // registers. `None` only when that walk saw no route to answer for.
+    locally_mutated: Option<&[bool]>,
 ) -> Result<(), ProgramError> {
     #[cfg(not(feature = "families"))]
     let _ = (
@@ -4992,8 +5512,10 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     if effect.route_count() == 0 {
         return Ok(());
     }
-    let locally_mutated =
-        local_mutation_representatives(effect, tail_count, scalars, identities, aliases)?;
+    let locally_mutated = locally_mutated.ok_or(TradingSbfError::Content)?;
+    if locally_mutated.len() != aliases.len() {
+        return Err(TradingSbfError::Content.into());
+    }
     #[cfg(any(
         feature = "families",
         feature = "series-family",
@@ -5079,7 +5601,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                 .map_err(|_| TradingSbfError::Content)?;
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
-            require_child_disjoint_from_local(invocation, aliases, &locally_mutated)?;
+            require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
             match invocation.role {
                 FixedRole::Core => preflight_core_route_v3(
                     program_id,
@@ -5692,43 +6214,6 @@ fn has_active_role(
         route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(false)
-}
-
-fn local_mutation_representatives(
-    effect: SelectedEffectProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
-    aliases: &[usize],
-) -> Result<Vec<bool>, ProgramError> {
-    let mut output = vec![false; aliases.len()];
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        mark_local_mutation(
-            effect
-                .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Content)?,
-            aliases,
-            &mut output,
-        )?;
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            mark_local_mutation(
-                effect
-                    .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                    .map_err(|_| TradingSbfError::Content)?,
-                aliases,
-                &mut output,
-            )?;
-            operation = operation.checked_add(1).ok_or(TradingSbfError::Content)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    Ok(output)
 }
 
 fn mark_local_mutation(
@@ -6438,9 +6923,20 @@ fn require_projected_tail_count_agreement_v3(
     Ok(())
 }
 
+/// The projected request registers, together with the two register-bank pairs
+/// the rotation left holding stale values.
+///
+/// The SBF bump allocator's `dealloc` is a no-op, so a bank that goes out of
+/// scope is still charged against total-ever-allocated for the rest of the
+/// execution. Dropping the two spare pairs here and allocating two more in the
+/// preplan arena therefore costs the heap two whole pairs to obtain buffers
+/// that already exist and are already dead. They are handed back instead of
+/// dropped, and the phases downstream rent them rather than allocate.
 struct ProjectedRequestRegistersV3 {
     scalars: Vec<u64>,
     identities: Vec<[u8; 32]>,
+    spare_scalars: [Vec<u64>; 2],
+    spare_identities: [Vec<[u8; 32]>; 2],
 }
 
 /// Keep the transient Account/Request projection banks in one noinline phase.
@@ -6608,6 +7104,8 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     Ok(ProjectedRequestRegistersV3 {
         scalars: current_scalars,
         identities: current_identities,
+        spare_scalars: [scratch_scalars, next_scalars],
+        spare_identities: [scratch_identities, next_identities],
     })
 }
 
@@ -6785,43 +7283,6 @@ fn shadow_routes_v3(
         route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(output)
-}
-
-#[inline(never)]
-fn preflight_local_effects(
-    effect: SelectedEffectProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
-    aliases: &[usize],
-) -> Result<(), ProgramError> {
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        require_root_write_is_state_only(
-            effect
-                .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Transition)?,
-            aliases,
-        )?;
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            require_root_write_is_state_only(
-                effect
-                    .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                    .map_err(|_| TradingSbfError::Transition)?,
-                aliases,
-            )?;
-            operation = operation
-                .checked_add(1)
-                .ok_or(TradingSbfError::Transition)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-    Ok(())
 }
 
 fn require_root_write_is_state_only(
@@ -8967,6 +9428,210 @@ mod tests {
                 &aliases,
             ),
             Ok(false)
+        );
+    }
+
+    fn preplanned_invocation(state: usize, seed: u8, canonical: u8) -> PreparedLifecycleInvocationV3 {
+        PreparedLifecycleInvocationV3 {
+            plan: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+                state: [seed; 32],
+                data_bytes: 64,
+                lamports: 1,
+                bump: 254,
+            }),
+            state,
+            payer: None,
+            rent_credit: None,
+            seeds: alloc::vec![alloc::vec![seed, seed], alloc::vec![254]],
+            immutable_identity_bindings: alloc::vec![PreparedImmutableIdentityBindingV4 {
+                data_offset: 16,
+                canonical: [canonical; 32],
+            }],
+        }
+    }
+
+    /// A replan that materializes a different seed byte refuses at that seed,
+    /// before it can reach a derivation it is no longer entitled to reuse.
+    #[test]
+    fn a_replan_seed_that_differs_from_the_preplan_refuses() {
+        let prior = preplanned_invocation(1, 0x11, 0x63);
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(seeds.push(&[0x11, 0x11]).is_ok());
+        let mut diverged =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(diverged.push(&[0x11, 0x12]).is_err());
+        // A seed of the right bytes but the wrong width is not the same seed.
+        let mut short = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(short.push(&[0x11]).is_err());
+        // And a table of a different seed width never opens at all.
+        assert!(LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 3).is_err());
+    }
+
+    /// The replan reuses the preplan's bump rather than deriving it, and takes
+    /// it from the preplan's own final seed.
+    #[test]
+    fn the_replan_reuses_the_preplan_bump_and_refuses_a_malformed_one() {
+        let prior = preplanned_invocation(1, 0x11, 0x63);
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        let program = Pubkey::new_from_array([0x77; 32]);
+        assert!(matches!(
+            seeds.pending_bump(&program).expect("reused bump"),
+            LifecycleCanonicalBumpV4::Reused { bump: 254 }
+        ));
+        // A preplan whose final seed is not a single bump byte is not a bump.
+        let malformed = PreparedLifecycleInvocationV3 {
+            seeds: alloc::vec![alloc::vec![0x11, 0x11], alloc::vec![254, 254]],
+            ..preplanned_invocation(1, 0x11, 0x63)
+        };
+        let mut seeds =
+            LifecycleSeedsV4::new(Some(malformed.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        assert!(seeds.pending_bump(&program).is_err());
+    }
+
+    /// The preplan derives the bump for real; the two modes are not
+    /// interchangeable in either direction.
+    #[test]
+    fn the_preplan_derives_and_never_borrows_a_verified_answer() {
+        let mut seeds = LifecycleSeedsV4::new(None, 2).expect("collect");
+        seeds.push(&[0x11, 0x11]).expect("collected");
+        let program = Pubkey::new_from_array([0x77; 32]);
+        assert!(matches!(
+            seeds.pending_bump(&program).expect("derived"),
+            LifecycleCanonicalBumpV4::Derived { .. }
+        ));
+        // A collecting cursor is never "exhausted", and a verifying one never
+        // yields a collected vector: the two modes cannot be confused silently.
+        assert!(seeds.exhausted().is_err());
+        let prior = preplanned_invocation(1, 0x11, 0x63);
+        let verifying =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(verifying.collected().is_err());
+    }
+
+    /// Every difference the replan can produce in one invocation refuses, and
+    /// the plan table it agrees with is never a duplicate it allocated.
+    #[test]
+    fn a_replan_invocation_that_differs_anywhere_refuses() {
+        let expected = alloc::vec![preplanned_invocation(1, 0x11, 0x63)];
+        let prior = expected.first().expect("one preplanned invocation");
+        let program = Pubkey::new_from_array([0x77; 32]);
+        let agreeing = |state: usize, canonical: u8| {
+            let sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
+            let mut seeds =
+                LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+            seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+            let LifecycleCanonicalBumpV4::Reused { bump } =
+                seeds.pending_bump(&program).expect("reused")
+            else {
+                return Err(TradingSbfError::Content.into());
+            };
+            seeds.push(&[bump]).expect("bump agrees");
+            let mut bindings = LifecycleBindingsV4::new(
+                Some(prior.immutable_identity_bindings.as_slice()),
+                1,
+            )
+            .expect("verify");
+            bindings
+                .push(PreparedImmutableIdentityBindingV4 {
+                    data_offset: 16,
+                    canonical: [canonical; 32],
+                })
+                .map(|()| (sink, seeds, bindings, state))
+        };
+        // The faithful replan is admitted and hands back no second table.
+        let (mut sink, seeds, bindings, state) = agreeing(1, 0x63).expect("faithful bindings");
+        sink.admit(prior.plan, state, None, None, seeds, bindings)
+            .expect("faithful replan agrees");
+        assert!(sink.finish(1).expect("verified").is_empty());
+        // A different state coordinate refuses.
+        let (mut sink, seeds, bindings, _) = agreeing(1, 0x63).expect("faithful bindings");
+        assert!(
+            sink.admit(prior.plan, 2, None, None, seeds, bindings)
+                .is_err()
+        );
+        // A different payer coordinate refuses.
+        let (mut sink, seeds, bindings, state) = agreeing(1, 0x63).expect("faithful bindings");
+        assert!(
+            sink.admit(prior.plan, state, Some(4), None, seeds, bindings)
+                .is_err()
+        );
+        // A different plan refuses.
+        let (mut sink, seeds, bindings, state) = agreeing(1, 0x63).expect("faithful bindings");
+        assert!(
+            sink.admit(
+                StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+                    state: [0x11; 32],
+                    data_bytes: 64,
+                    lamports: 2,
+                    bump: 254,
+                }),
+                state,
+                None,
+                None,
+                seeds,
+                bindings,
+            )
+            .is_err()
+        );
+        // A different immutable identity binding refuses at the binding.
+        assert!(agreeing(1, 0x64).is_err());
+    }
+
+    /// A replan table of the wrong width, or one that stops early, refuses.
+    #[test]
+    fn a_replan_table_of_the_wrong_width_refuses() {
+        let expected = alloc::vec![
+            preplanned_invocation(1, 0x11, 0x63),
+            preplanned_invocation(3, 0x21, 0x64),
+        ];
+        assert!(LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).is_err());
+        assert!(LifecycleBatchSinkV4::new(Some(expected.as_slice()), 3).is_err());
+        // Two invocations were declared; admitting none is not agreement.
+        let sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 2).expect("verify");
+        assert!(sink.finish(2).is_err());
+        // Nor is a preplan that collected fewer rows than it declared.
+        let sink = LifecycleBatchSinkV4::new(None, 2).expect("collect");
+        assert!(sink.finish(2).is_err());
+    }
+
+    /// Seeds and bindings the replan never reached are not agreement either:
+    /// a short walk must refuse rather than pass by silence.
+    #[test]
+    fn a_replan_that_skips_a_seed_or_a_binding_refuses() {
+        let expected = alloc::vec![preplanned_invocation(1, 0x11, 0x63)];
+        let prior = expected.first().expect("one preplanned invocation");
+        let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
+        let mut seeds =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        // The bump seed was never pushed.
+        let mut bindings =
+            LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
+                .expect("verify");
+        bindings
+            .push(PreparedImmutableIdentityBindingV4 {
+                data_offset: 16,
+                canonical: [0x63; 32],
+            })
+            .expect("binding agrees");
+        assert!(
+            sink.admit(prior.plan, 1, None, None, seeds, bindings)
+                .is_err()
+        );
+        // And the mirror: every seed reached, no binding reached.
+        let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
+        let mut seeds =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        seeds.push(&[254]).expect("bump agrees");
+        let bindings =
+            LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
+                .expect("verify");
+        assert!(
+            sink.admit(prior.plan, 1, None, None, seeds, bindings)
+                .is_err()
         );
     }
 

@@ -244,6 +244,14 @@ struct FunctionFact {
     name: String,
     block: Block,
     relative: String,
+    /// The function exists only when compiling for the SBF target.
+    ///
+    /// `#[cfg(target_os = "solana")]` is this tree's marker for loader
+    /// plumbing: a function that vanishes on the host cannot be protocol
+    /// dispatch, because every route is reachable from a host test. It is what
+    /// lets [`unwrap_forwarding_shim`] tell a deserialization adapter apart
+    /// from a program whose whole body is one route.
+    machine_boundary: bool,
 }
 
 /// A parsed program crate: every function in it, indexed for call resolution.
@@ -324,6 +332,9 @@ fn collect_functions(items: &[Item], module: &str, relative: &str, out: &mut Vec
                 name: function.sig.ident.to_string(),
                 block: (*function.block).clone(),
                 relative: relative.to_string(),
+                machine_boundary: cfg_texts(&function.attrs)
+                    .iter()
+                    .any(|text| text.contains("target_os = \"solana\"")),
             }),
             Item::Mod(inner) => {
                 // Skip `#[cfg(test)]` modules: test code is not a public entry.
@@ -708,6 +719,7 @@ impl DispatchWalk<'_> {
                         name: function.name.clone(),
                         block: function.block.clone(),
                         relative: function.relative.clone(),
+                        machine_boundary: function.machine_boundary,
                     };
                     self.walk_function(&function, depth + 1, Some(&route_id), &[], cfg);
                 }
@@ -751,9 +763,21 @@ impl DispatchWalk<'_> {
             | Expr::Break(_)
             | Expr::Continue(_)
             | Expr::Closure(_) => {}
-            Expr::Unsafe(_) => {
-                self.report(context, expr, relative, "unsafe block in dispatch position");
-            }
+            // An `unsafe` block is a lexical scope, not a dispatch decision.
+            // Refusing to look through one told the census that
+            // `dclutch-claims-proof-sbf`'s entire account-count/replay-width
+            // dispatch did not exist, and that Trading's entrypoint forwarded
+            // nowhere. Whether a block asserts obligations the compiler cannot
+            // check has nothing to do with which route the wire selected.
+            Expr::Unsafe(block) => self.walk_block(
+                &block.block,
+                relative,
+                context,
+                depth,
+                parent,
+                selectors,
+                cfg,
+            ),
             _ => self.report(
                 context,
                 expr,
@@ -1218,9 +1242,30 @@ pub fn enumerate(
             visited: BTreeSet::new(),
         };
 
+        // The entrypoint does not have to live in `lib.rs`. `9abed0c` moved
+        // Trading's SBF entrypoint, its loader-input deserializer, and its
+        // allocator into a named machine-boundary module, and a scan restricted
+        // to the crate root then reported that the whole program "exposes no
+        // dispatch surface" - which silently dropped every Trading route from
+        // this census while W1f was executing two of them on a validator. A
+        // program's public entry is a fact about the crate, not about one file.
+        let mut discovered = find_entrypoints(&file.items, &lib_relative);
+        for path in rust_sources(&crate_src)? {
+            if path == lib {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(parsed) = syn::parse_file(&text) else {
+                continue;
+            };
+            discovered.extend(find_entrypoints(&parsed.items, &relative(root, &path)));
+        }
+        discovered.dedup_by(|left, right| left.1 == right.1);
+
         let mut entrypoints = Vec::new();
-        for (macro_name, function_name, provenance) in find_entrypoints(&file.items, &lib_relative)
-        {
+        for (macro_name, function_name, provenance) in discovered {
             let resolved = index.resolve(&function_name).is_some();
             entrypoints.push(Entrypoint {
                 macro_name,
@@ -1244,20 +1289,12 @@ pub fn enumerate(
                 name: function.name.clone(),
                 block: function.block.clone(),
                 relative: function.relative.clone(),
+                machine_boundary: function.machine_boundary,
             };
             // The entrypoint shim usually forwards straight to
             // `process_instruction`. Walking it at depth 0 makes that forward a
             // route; unwrap it so the real dispatch branches are the entries.
-            let forwarded = single_forward(&function.block);
-            let dispatch = match forwarded.as_deref().and_then(|name| index.resolve(name)) {
-                Some(inner) => FunctionFact {
-                    module: inner.module.clone(),
-                    name: inner.name.clone(),
-                    block: inner.block.clone(),
-                    relative: inner.relative.clone(),
-                },
-                None => function,
-            };
+            let dispatch = unwrap_forwarding_shim(&index, function);
             // The entrypoint itself is always a route. A program whose dispatch
             // has no internal branch structure still has exactly one public
             // entry, and the census must be able to say whether it has ever
@@ -1290,6 +1327,96 @@ pub fn enumerate(
     })
 }
 
+/// How many forwarding hops the enumerator will unwrap before the entrypoint.
+///
+/// Three is what the deepest real shim needs (`entrypoint` -> width arm ->
+/// `dispatch` -> `process_instruction`); the bound exists so a cycle the
+/// resolver cannot see cannot loop here.
+const MAX_FORWARD_HOPS: usize = 4;
+
+/// Unwrap a machine-boundary shim down to the function it dispatches from.
+///
+/// A shim is not a route. `dclutch-trading-sbf` deserializes the loader's input
+/// region itself so that up to `ADAPTER_STACK_SLOTS_V1` accounts cost no heap,
+/// which puts three functions between the loader symbol and
+/// `process_instruction`: `entrypoint` branches on the account count,
+/// `entrypoint_on_stack`/`entrypoint_on_heap` deserialize, and `dispatch` lifts
+/// the heap ceiling. Walking from the loader symbol spends the whole
+/// `MAX_DISPATCH_DEPTH` budget on those three and enumerates none of the routes
+/// underneath, so the census reported one route for a program with five.
+///
+/// Two shapes are unwrapped, and neither is a dispatch decision:
+///
+/// - one dispatch-position call, however many `let`s, `unsafe` blocks or
+///   `match`-on-the-result wrappers surround it; and
+/// - a fan-out whose every branch reconverges on the same single function. The
+///   branch selected a physical frame shape, not a route: both arms run the
+///   identical program. Recording the arms as routes would be strictly worse
+///   than saying nothing, because it would name two ids for one wire surface
+///   and push the real routes past the depth budget.
+///
+/// A function whose branches do NOT reconverge is a dispatcher and is where
+/// unwrapping stops.
+fn unwrap_forwarding_shim(index: &CrateIndex, start: FunctionFact) -> FunctionFact {
+    let mut current = start;
+    for _ in 0..MAX_FORWARD_HOPS {
+        let Some(name) = forwarding_target(index, &current) else {
+            break;
+        };
+        let Some(next) = index.resolve(&name) else {
+            break;
+        };
+        if next.name == current.name && next.module == current.module {
+            break;
+        }
+        current = FunctionFact {
+            module: next.module.clone(),
+            name: next.name.clone(),
+            block: next.block.clone(),
+            relative: next.relative.clone(),
+            machine_boundary: next.machine_boundary,
+        };
+    }
+    current
+}
+
+/// The one function every dispatch path in `function` reaches, if there is one.
+fn forwarding_target(index: &CrateIndex, function: &FunctionFact) -> Option<String> {
+    // A body that is exactly one call is a shim wherever it appears: this is
+    // the rule that has always unwrapped `entrypoint!(process_instruction)`
+    // shims, and it stays unconditional.
+    if let Some(single) = single_forward(&function.block) {
+        return Some(single);
+    }
+    // Everything below is loader plumbing only. Without the gate the rules
+    // would also unwrap `dclutch-dealer-sbf`'s single-route body into whichever
+    // helper it finishes with, renaming a route the ledger already names.
+    if !function.machine_boundary {
+        return None;
+    }
+    if let Some(sole) = sole_forward_target(index, function) {
+        return Some(sole);
+    }
+    let branches = resolvable_forward_targets(index, &function.block);
+    if branches.len() < 2 {
+        return None;
+    }
+    let mut common: Option<String> = None;
+    for branch in &branches {
+        let inner = index.resolve(branch)?;
+        if !inner.machine_boundary {
+            return None;
+        }
+        let reached = sole_forward_target(index, inner)?;
+        match &common {
+            None => common = Some(reached),
+            Some(seen) if seen == &reached => {}
+            Some(_) => return None,
+        }
+    }
+    common
+}
+
 /// If a block is exactly one call `f(a, b, c)`, return `f`.
 fn single_forward(block: &Block) -> Option<String> {
     if block.stmts.len() != 1 {
@@ -1302,6 +1429,82 @@ fn single_forward(block: &Block) -> Option<String> {
         return None;
     };
     Some(render_path(&path.path))
+}
+
+/// The single function a body forwards to, or `None` if it forwards to none or
+/// to several.
+fn sole_forward_target(index: &CrateIndex, function: &FunctionFact) -> Option<String> {
+    let mut targets = resolvable_forward_targets(index, &function.block);
+    if targets.len() == 1 {
+        Some(targets.remove(0))
+    } else {
+        None
+    }
+}
+
+/// Every dispatch-position call in a body that resolves to a function of this
+/// crate, deduplicated. Terminal wrappers (`Ok`, `u64::from`, `X::decode`) are
+/// not forwards and are excluded by the same rule the walker uses.
+fn resolvable_forward_targets(index: &CrateIndex, block: &Block) -> Vec<String> {
+    let mut targets = Vec::new();
+    collect_forward_targets(block, &mut targets);
+    targets.retain(|target| index.resolve(target).is_some());
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn collect_forward_targets(block: &Block, out: &mut Vec<String>) {
+    let count = block.stmts.len();
+    for (position, statement) in block.stmts.iter().enumerate() {
+        if let Stmt::Expr(expr, semi) = statement {
+            if position + 1 == count || semi.is_none() || is_control(expr) {
+                collect_forward_expr(expr, out);
+            }
+        }
+    }
+}
+
+fn collect_forward_expr(expr: &Expr, out: &mut Vec<String>) {
+    match expr {
+        Expr::Unsafe(block) => collect_forward_targets(&block.block, out),
+        Expr::Block(block) => collect_forward_targets(&block.block, out),
+        Expr::Paren(inner) => collect_forward_expr(&inner.expr, out),
+        Expr::Group(inner) => collect_forward_expr(&inner.expr, out),
+        Expr::Try(inner) => collect_forward_expr(&inner.expr, out),
+        Expr::Return(ret) => {
+            if let Some(inner) = &ret.expr {
+                collect_forward_expr(inner, out);
+            }
+        }
+        Expr::If(branch) => {
+            collect_forward_targets(&branch.then_branch, out);
+            if let Some((_, otherwise)) = &branch.else_branch {
+                collect_forward_expr(otherwise, out);
+            }
+        }
+        // `match f(x) { Ok(..) => .., Err(e) => .. }` forwards to `f` when the
+        // arms only re-wrap its result; the arms are checked first so a real
+        // dispatch on a decoded discriminant is never mistaken for a forward.
+        Expr::Match(matched) => {
+            let before = out.len();
+            for arm in &matched.arms {
+                collect_forward_expr(&arm.body, out);
+            }
+            if out.len() == before {
+                collect_forward_expr(&matched.expr, out);
+            }
+        }
+        Expr::Call(call) => {
+            if let Expr::Path(path) = call.func.as_ref() {
+                let target = render_path(&path.path);
+                if !is_terminal_call(&target) {
+                    out.push(target);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// A short, line-stable fingerprint of a route's most specific wire

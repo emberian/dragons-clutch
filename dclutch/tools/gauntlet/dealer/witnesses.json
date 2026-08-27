@@ -1,0 +1,47 @@
+{
+  "campaign": "dealer-family-programtest",
+  "witnesses": [
+    {
+      "id": "every-transaction-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it, so a transaction that did not fit would fail rather than be re-run with headroom. The direction matters: this is a chain limit the campaign must live under, not a measurement of ours restated as a target."
+    },
+    {
+      "id": "no-transaction-exceeds-the-runtime-cpi-depth",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].logs[] | capture(\"invoke \\\\[(?<depth>[0-9]+)\\\\]\") | .depth | tonumber] | max | (. <= 5) | tostring",
+      "expect": "true",
+      "provenance": "Solana's MAX_INSTRUCTION_STACK_DEPTH is 5, counting the top-level instruction as depth 1, so the deepest admissible `invoke [n]` line any program can produce is [5]. A complete Dealer transition runs Dealer -> Registry, Dealer -> Claims and Dealer -> Custody, and the Claims and Custody children invoke further; this witness is what would catch a composition change that put the family one hop from the runtime's hard stop."
+    },
+    {
+      "id": "every-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. TIERS.md draws exactly this distinction and records a pre-taxonomy refusal as an unnamed one, because crediting it would overstate what the program proved. Every transaction in this tier is a refusal, so this witness is the whole tier's admissibility: it asserts that not one of them was bounced by the runtime before the Dealer ELF ran."
+    },
+    {
+      "id": "this-tier-claims-no-executed-row",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A route is EXECUTED in this census only on a succeeding transaction. This tier deliberately builds no activated release set, no admitting Core Market phase, and no Claims/Custody prestate, so nothing in it may succeed. Pinning that to zero rather than leaving it unsaid means a future change that made one of these hostile cases pass would fail the tier instead of quietly flipping a census row on the strength of a weakened refusal, which is the failure mode AGENTS.md names: do not weaken a refusal to make an integration test pass."
+    },
+    {
+      "id": "the-release-cases-actually-invoked-the-registry",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"into the real Registry\")) | select([.logs[] | select(test(\"invoke \\\\[2\\\\]\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "A DealerSbfError::Release refusal is only evidence about release authentication if a Registry CPI actually happened; Dealer maps a failed `invoke` and a missing/foreign return value to the same code, so the code alone cannot distinguish 'the Registry refused' from 'Dealer refused before calling it'. The chain's own `invoke [2]` line is the discriminator, and this witness requires it on every transaction whose label claims that depth. Cross-checked against the census's independent corroboration of the same logs."
+    },
+    {
+      "id": "both-liquidity-actions-are-unreachable-at-every-offered-slot",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"Liquidity at the\")) | .error] | sort | join(\"|\")",
+      "expect": "InstructionError(0, Custom(0))|InstructionError(0, Custom(4))",
+      "provenance": "Two protocol rules with no common solution. `Request::validate_shape` (crates/dclutch-dealer-codec/src/lib.rs) refuses AddLiquidity and RemoveLiquidity unless `now == 0`; `authenticate_clock` (programs/dclutch-dealer-sbf/src/lib.rs) refuses unless `now == clock.slot` for every action except Retire. A submitted transaction never executes in the genesis slot, so the shape-canonical form refuses on the Clock (code 4) and the clock-canonical form refuses at decode (code 0). This witness pins BOTH halves, which is what makes the unreachability a chain observation rather than an argument about two files. It is expected to fail the day the contradiction is fixed, and that is the point: it is the marker for a defect, not a specification of one."
+    }
+  ]
+}

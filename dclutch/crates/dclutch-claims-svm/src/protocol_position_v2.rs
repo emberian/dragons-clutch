@@ -103,6 +103,12 @@ const CLOSE_RESERVED_OFFSET: usize = 400;
 pub struct ProtocolPositionRequestLayoutV2;
 
 impl ProtocolPositionRequestLayoutV2 {
+    /// Selected lifecycle action tag.
+    pub const ACTION: usize = ACTION_OFFSET;
+    /// Position owner-kind tag.
+    pub const OWNER_KIND: usize = OWNER_KIND_OFFSET;
+    /// Declared PDA presence tag.
+    pub const PRESENCE: usize = PRESENCE_OFFSET;
     /// Selected execution release-set identity.
     pub const RELEASE_SET: usize = RELEASE_SET_OFFSET;
     /// Logical Core Market identity.

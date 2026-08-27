@@ -1,0 +1,61 @@
+{
+  "campaign": "claims-family-programtest",
+  "witnesses": [
+    {
+      "id": "claims-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaigns set ProgramTest's ceiling to exactly that value and never raise it, so a transaction that did not fit would fail rather than be re-run with headroom."
+    },
+    {
+      "id": "the-admission-receipt-the-runtime-logged-is-512-bytes",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"claims position: admit\") | [.logs[] | select(startswith(\"Program return: CxeKLJRofna6h2GqCsjdVwc2D7EdDFX8uDy9KGw3Ey68 \"))] | last | split(\" \")[3] | ((length * 3 / 4) - (if endswith(\"==\") then 2 elif endswith(\"=\") then 1 else 0 end)) | tostring",
+      "expect": "512",
+      "provenance": "PROTOCOL_POSITION_ADMISSION_BYTES_V2 = 512 (crates/dclutch-claims-svm/src/protocol_position_v2.rs:15) is the exact backward receipt dependency the sparse composition requires (commit 78bda05). This checks it against a SECOND, independent derivation: the base64 the RUNTIME wrote into the transaction's own `Program return:` log line, decoded by length arithmetic here rather than by any dClutch code."
+    },
+    {
+      "id": "the-three-receipt-widths-the-runtime-logged",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"claims sparse: admit, transfer and close\") | [.logs[] | select(startswith(\"Program return: CxeKLJRofna6h2GqCsjdVwc2D7EdDFX8uDy9KGw3Ey68 \")) | split(\" \")[3] | (length * 3 / 4) - (if endswith(\"==\") then 2 elif endswith(\"=\") then 1 else 0 end)] | tostring",
+      "expect": "[512,448,416]",
+      "provenance": "The composition of commit 78bda05 is keyed on three exact receipt widths: PROTOCOL_POSITION_ADMISSION_BYTES_V2 = 512, SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1 = 448 and PROTOCOL_POSITION_CLOSE_RECEIPT_BYTES_V2 = 416 (crates/dclutch-claims-svm/src/{protocol_position_v2,sparse_native_transfer_v1}.rs). This checks all three, IN ORDER, against a second and independent derivation: the base64 the RUNTIME wrote into the transaction's own `Program return:` lines, decoded by length arithmetic here rather than by any dClutch code. A stage that stopped running, or one whose receipt changed width, moves this list."
+    },
+    {
+      "id": "the-composed-chain-really-ran-three-claims-stages",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"claims sparse: admit, transfer and close\") | [.logs[] | select(. == \"Program CxeKLJRofna6h2GqCsjdVwc2D7EdDFX8uDy9KGw3Ey68 success\")] | length | tostring",
+      "expect": "3",
+      "provenance": "The runtime writes `Program <address> success` once per returning invocation. Three of them inside one transaction is the chain's own account of Admit -> SparseNativeTransfer -> Close, and it is what distinguishes an executed composition from a campaign that merely submitted one instruction."
+    },
+    {
+      "id": "the-late-failure-let-all-three-stages-return-first",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"claims sparse: caller refuses after the complete chain\") | (if .error == null then \"committed\" else ([.logs[] | select(. == \"Program CxeKLJRofna6h2GqCsjdVwc2D7EdDFX8uDy9KGw3Ey68 success\")] | length | tostring) end)",
+      "expect": "3",
+      "provenance": "A rollback case is only evidence if the thing being rolled back actually happened. This asserts, from the runtime's own log, that a transaction the ledger records as FAILED contains three completed Claims invocations. The `if .error == null` guard makes a campaign that accidentally let the transaction commit fail this witness rather than pass it."
+    },
+    {
+      "id": "every-claims-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this campaign claims is a program decision, so a bare runtime refusal appearing here would mean a hostile case stopped being about the program."
+    },
+    {
+      "id": "claims-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign therefore MEASURES rather than asks: it serialises every transaction it submits (one shortvec byte for the signature count, 64 bytes per signature, then the message) and records the extent, and this witness checks the largest against the stated limit."
+    },
+    {
+      "id": "claims-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured, so the maximum above is over ALL of them rather than over whichever ones happened to be instrumented."
+    }
+  ]
+}

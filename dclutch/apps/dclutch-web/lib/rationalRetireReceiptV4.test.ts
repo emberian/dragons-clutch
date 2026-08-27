@@ -1,6 +1,7 @@
 import { AddressLookupTableAccount, PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import { HOT_FIXED_ACCOUNT_COUNT_V3 } from './generated/directInlineV3';
 import {
   buildRationalRetireReceiptCandidateV4,
   decodeRationalRepresentationDescriptorV3,
@@ -69,8 +70,11 @@ describe('compact Rational RetireReceipt V4', () => {
     await expect(deriveRationalRetireReceiptChildDigestV4(request, [])).rejects.toThrow(/wrong exact width/);
   });
 
-  it('compiles the exact fixed38 plus Claims20+4K v0 candidate while refusing execution', async () => {
-    const fixed = Array.from({ length: 38 }, (_, index) => Object.freeze({ address: address(40 + index), isSigner: false, isWritable: index === 1 }));
+  it('compiles the exact Hot fixed frame plus Claims20+4K v0 candidate while refusing execution', async () => {
+    // The Hot fixed frame width is a protocol fact, not a number this test may
+    // pin: hard-coding it left the candidate a frame short of what the chain
+    // requires the moment the frame grew.
+    const fixed = Array.from({ length: HOT_FIXED_ACCOUNT_COUNT_V3 }, (_, index) => Object.freeze({ address: address(40 + index), isSigner: false, isWritable: index === 1 }));
     const decoded = decodeRationalRepresentationDescriptorV3(descriptor(), bytes(21));
     const support = deriveRationalRetireReceiptSupportV4(address(30), bytes(21), decoded.support, address(31));
     const claims = Array.from({ length: 20 + 4 * support.length }, (_, index) => Object.freeze({ address: address(90 + index), isSigner: false, isWritable: index === 12 || index === 14 }));
@@ -91,7 +95,7 @@ describe('compact Rational RetireReceipt V4', () => {
     }) satisfies RationalRetireReceiptInspectionV4;
     const plan = buildRationalRetireReceiptCandidateV4(inspection, address(206));
     expect(plan.outerBytes).toHaveLength(528);
-    expect(plan.accountCount).toBe(70);
+    expect(plan.accountCount).toBe(HOT_FIXED_ACCOUNT_COUNT_V3 + 20 + 4 * support.length);
     expect(plan.supportCount).toBe(3);
     expect(plan.loadedAddresses).toBeGreaterThan(0);
     expect(plan.wireBytes.length).toBeLessThanOrEqual(1232);

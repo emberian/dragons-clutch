@@ -249,20 +249,8 @@ fn activation_derives_exact_per_role_frames_cache_rent_and_packet_geometry() {
         );
         assert_eq!(plan.compute.elf_bytes_hashed, 96);
         assert!(!plan.already_activated);
-        assert!(
-            plan.instruction
-                .accounts
-                .first()
-                .expect("payer")
-                .is_signer
-        );
-        assert!(
-            plan.instruction
-                .accounts
-                .get(1)
-                .expect("cache")
-                .is_writable
-        );
+        assert!(plan.instruction.accounts.first().expect("payer").is_signer);
+        assert!(plan.instruction.accounts.get(1).expect("cache").is_writable);
         assert!(
             plan.instruction
                 .accounts

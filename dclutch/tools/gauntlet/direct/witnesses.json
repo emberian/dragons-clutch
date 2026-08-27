@@ -1,0 +1,83 @@
+{
+  "campaign": "direct-aot-programtest",
+  "note": "Witnesses for the Direct stateless AOT campaign. Evaluated by tools/gauntlet/tier1/check-witnesses.sh, which is the gauntlet's SHARED witness evaluator and only happens to live under tier1/; this tier calls it rather than forking a second copy. The third file it is handed is not a bootstrap plan but this tier's run-time CONTEXT: tools/gauntlet/direct/expectations.json (a hand-derived second derivation of every quote, which never reads the campaign output) merged with the build stage's recorded artifact digest. `expect_from` therefore cross-checks the chain's own numbers against something derived independently of them.",
+  "witnesses": [
+    {
+      "id": "quotes-match-the-hand-derivation",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.ack != null and .ack.disposition == \"accepted\") | {label: .label, gross: .ack.gross, fee: .ack.fee}] | sort_by(.label) | tojson",
+      "expect_from": "[.quotes[] | {label: .label, gross: .gross, fee: .fee}] | sort_by(.label) | tojson",
+      "provenance": "Cross-check against a second derivation. tools/gauntlet/direct/expectations.json works every gross and fee out by hand from the stated Direct quote equation - exact-integer gross, floor fee over a 10,000 denominator - and never reads the campaign output. The equation itself is stated in docs/evidence/COMPILED_SIGNED_DIRECT_2026_08_25.md and is what the Lean theorem DClutch.DirectProgram.admitted_program_refines proves the generated program returns for every Admissible frame."
+    },
+    {
+      "id": "floor-fee-rounds-toward-the-makers",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"Direct AOT admits the minimal fill whose floor fee rounds to zero\") | .ack.fee",
+      "expect": "0",
+      "provenance": "The named rounding boundary. floor(1 * 25 / 10000) = 0: on a gross of one unit the 25 bps venue fee rounds to nothing, and it rounds toward the makers rather than toward the venue. A fee that rounded up here would be the venue taking a unit the makers never signed for, so the boundary is asserted as its own witness rather than being left inside the aggregate."
+    },
+    {
+      "id": "a-full-rate-fee-consumes-the-whole-gross",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"Direct AOT admits a fee rate exactly at the denominator\") | .ack.fee",
+      "expect": "1000",
+      "provenance": "The other end of the same boundary: bps == denominator makes fee == gross exactly, with no overflow and no off-by-one, and the admission relation permits it (policy_fee_bps <= FEE_DENOMINATOR_V2 is <=, not <). Hand-derived: 1000 * 10000 / 10000 = 1000."
+    },
+    {
+      "id": "every-transaction-fits-a-solana-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes] | max < 1232",
+      "expect": "true",
+      "provenance": "Solana runtime limit: PACKET_DATA_SIZE is 1,232 bytes (1280-byte IPv6 MTU minus a 40-byte header and an 8-byte fragment header). ProgramTest submits no packet and so cannot enforce this - that is exactly the defect class Found31 hit, per docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md - so the producer serialises each transaction itself and this witness checks the measured extent against the stated limit."
+    },
+    {
+      "id": "accepted-acknowledgement-is-the-lean-register-width",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.ack != null and .ack.disposition == \"accepted\") | .ack.ack_bytes] | unique | tojson",
+      "expect": "[616]",
+      "provenance": "Arithmetic on Lean-emitted widths: the Direct V2 descriptor has 41 scalars and 4 identities (DIRECT_PROGRAM_V2_SCALARS / _IDENTITIES in the generated crates/dclutch-direct-aot-contract/src/generated.rs), so the register bank is 41*8 + 4*32 = 456 bytes, and the V1 accelerator acknowledgement header is 160 bytes: 616. A changed register partition moves this number, which is the point."
+    },
+    {
+      "id": "semantic-refusal-carries-no-candidate-bank",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.ack != null and .ack.disposition == \"refused\") | .ack.ack_bytes] | unique | tojson",
+      "expect": "[160]",
+      "provenance": "The V1 acknowledgement header alone, ACCELERATOR_ACK_HEADER_BYTES_V1 = 160. A refused acknowledgement must carry no candidate output bank at all: the decoder additionally refuses any refusal whose scalar count, identity count, or bank digest is nonzero, so a 160-byte refusal is the only shape that decodes."
+    },
+    {
+      "id": "the-campaign-stayed-under-the-protocol-compute-ceiling",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed] | max < 1400000",
+      "expect": "true",
+      "provenance": "The protocol compute ceiling this project gates on, 1,400,000 CU - Solana's per-transaction maximum. The producer sets exactly this limit and never adjusts it; TIERS.md forbids satisfying a gate with a diagnostic budget."
+    },
+    {
+      "id": "the-chain-raised-the-non-stateless-frame-refusal",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.logs[]? | contains(\"custom program error: 0x0\"))] | length",
+      "expect": "1",
+      "provenance": "Read from the chain's own finalized log messages, not from the campaign's belief about what it submitted. DirectAotSbfError::NonStatelessFrame is discriminant 0, enumerated by the census from programs/dclutch-direct-aot-sbf/src/lib.rs:53. Exactly one campaign transaction presents an account."
+    },
+    {
+      "id": "the-chain-raised-the-invalid-request-refusal-seven-times",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.logs[]? | contains(\"custom program error: 0x1\"))] | length",
+      "expect": "7",
+      "provenance": "Read from the chain's own finalized log messages. DirectAotSbfError::InvalidRequest is discriminant 1, enumerated by the census from programs/dclutch-direct-aot-sbf/src/lib.rs:55. Seven distinct hostile wires reach it: empty, short by one, long by one, foreign magic, dirty reserved span, and two foreign declared bank widths."
+    },
+    {
+      "id": "no-hostile-wire-was-bounced-before-the-programs-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null)] | length",
+      "expect": "8",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. TIERS.md draws exactly this distinction and records a pre-taxonomy refusal as an UNNAMED one, because crediting it would overstate what the program proved. Eight campaign transactions fail, and the two witnesses above account for all eight by name (1 + 7): every hostile wire in this tier was decided by the dClutch program, none was bounced by the runtime."
+    },
+    {
+      "id": "the-campaign-ran-the-artifact-the-build-stage-produced",
+      "kind": "evidence-jq",
+      "query": ".artifact.elf_sha256",
+      "expect_from": ".artifact.elf_sha256",
+      "provenance": "Cross-check against the build stage. run-direct.sh records the SHA-256 of the ELF it built from the archived revision into the context file; the campaign independently hashes the ELF file it actually loaded and records that in its own evidence. A campaign that quietly ran a stale artifact from a previous build fails here rather than reporting numbers for the wrong bytes."
+    }
+  ]
+}

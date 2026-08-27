@@ -16,6 +16,29 @@ refusal on a specific input, not a proof over all inputs. The CU figures are
 measured on this validator with these exact artifacts, and are labelled
 measured-profile, not mathematical.
 
+## Superseded on 2026-08-27 by the W1f lane — READ THIS FIRST
+
+**The Market is OPEN.** `DCLTGMF1` executed on a localhost validator at
+1,184,132 compute units — Custody `LockHoardAndCloseSource`, Core
+Found-and-permit, Custody `RealizeAndClose`, Claims `FoundingV5`, and Core Open
+last, five stages in one rollback domain and one transaction — after `DCLTPCB1`
+completed all four projected-Custody prestate stages at 754,119 CU.
+
+Everything below this heading is the historical record of six earlier campaigns
+and is kept verbatim, because the reasoning is what located each blocker. Three
+of its conclusions are refuted by measurement and one of its counts was wrong
+every time it was stated. The current truth, the current numbers, the current
+artifact digests, and the current transcript are in
+[the W1f supersession](#w1f-supersession-2026-08-27--the-market-is-open) at the
+end of this document.
+
+| The record below says | 2026-08-27 |
+|---|---|
+| `DCLTPCB1` is heap-bound and no runner can fix it | it completes; the grant had to reach the route through its **frame**, not its transaction |
+| requesting a heap frame "was measured to change nothing" | it is the reason the third stage runs at all |
+| the Market is Found, not Open | the Market is **Open** |
+| the runner must pre-fund three (W1d) / four (W1e) accounts | **five**, two of them compared for exact equality |
+
 ## Superseded in part on 2026-08-26 by the W1b lane
 
 **The Market is now Found.** Everything below the "Headline" heading is the
@@ -1241,3 +1264,823 @@ fails on pre-existing test-target lints this lane did not touch
 integration tests). Recorded rather than fixed: they are not this lane's and
 fixing them would put another lane's files in this lane's commits.
 
+## W1e supersession 2026-08-27
+
+**W1d's verdict was refuted, and the gap it missed has since been closed by
+another lane.** A fifth structural blocker did remain — Core's Found stage and
+Claims `FoundingV5` required the same account to be two different records — and
+it is recorded below as this lane found it, because the reasoning is what
+located it. **It is fixed at `dba22b5`/`712490d`/`d163c32` by the Claims lane**,
+along exactly the line the V3 reader's own documentation prescribed, and this
+campaign already publishes the record the fixed path wants.
+
+What this lane leaves behind: `DCLTPCB1` built chain-derived and executed on a
+real localhost validator — the first on-chain evidence the four-stage
+projected-Custody bootstrap has ever had — plus a measured heap bound on it that
+no static reading had found. `DCLTGMF1` is **still not built**. That is now a
+runner gap and no longer a protocol gap.
+
+| W1d said | W1e |
+|---|---|
+| no protocol gap remains on the path to an Open Market; only the runner does not exist | **false at the time**: Core's Found stage and Claims `FoundingV5` required the same account to be two different records. Fixed since, at `dba22b5` |
+| the runner has to build two transactions | one of them is built and executed; the other is now satisfiable and still unbuilt |
+| (unrecorded) | `DCLTPCB1` is **heap-bound, not compute-bound**, and no static reading found it |
+| the runner must pre-fund three vacant Claims addresses | **four**: the Found caller-authority PDA is also the Core Found payer |
+| `DCLTPCB1` at 81 accounts, 49 distinct keys | confirmed by construction |
+| (unrecorded) | the founding cannot reuse the Found31 Market; it needs its own generation |
+| (unrecorded) | the principal supplier cannot be the rent payer |
+| (unrecorded) | the demo Market never published the liability basis its Product declares |
+
+### Blocker E — the liability basis has two incompatible authorities
+
+Found by building the Claims stage's request bytes and discovering that the
+record Core commits to and the record Claims demands cannot be the same file.
+
+Core's generic Found stage authenticates the suffix `linked_basis_raw` /
+`linked_basis_staging` pair through `authenticate_product_basis_v3`
+(`crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs:377-434`), called at
+`programs/dclutch-core-sbf/src/generic_founding_v1.rs:891-900`:
+
+```text
+raw PDA      [b"dclutch-raw-record-v1", GRADED_BASIS_RECORD_SCHEMA_ID_V3, sha256(raw)]  under REGISTRY
+raw owner    the Registry program
+body         ProductBasisV3, magic DCLTPAY3
+identity     sha256(b"dclutch/product-basis/semantic/v3" || raw[..32] || raw[96..])
+             must equal the Product record's liability_basis_id
+```
+
+Core then writes **both of those** into the `ClaimsFoundingRequestV5` it
+commits to inside the one-shot permit
+(`generic_founding_v1.rs:919-920`, `:1426-1427`):
+`linked_basis_record_digest = sha256(that V3 account's data)`, and
+`semantic_basis_id =` that V3 semantic identity.
+
+Claims `FoundingV5` authenticates its own account 8/9 pair through
+`authenticate_runtime_product_basis_core_v2`
+(`programs/dclutch-claims-sbf/src/founding_v5.rs:736-761` into
+`affine_batch_v2.rs:557-590`, whose record check is
+`liability_basis_v2.rs:925-984`):
+
+```text
+raw PDA      [b"dclutch-raw-record-v1", LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, digest]  under CORE
+raw owner    the Core program
+digest       must equal request.linked_basis_record_digest()  -- the V3 digest above
+body         LinkedBasisRecordV2, magic DCLTLNK2, length exactly 224 or 248
+identity     sha256(b"dclutch/lbv2/semantic-id/v2" || v2prefix || v2suffix)
+             must equal request.semantic_basis_id()  -- the V3 identity above
+```
+
+Equal digests mean equal bytes. Those bytes would have to begin with
+`DCLTPAY3` and `DCLTLNK2`, be 256 bytes and 224-or-248 bytes, live at a
+Registry-derived address and a Core-derived one, and satisfy two
+domain-separated SHA-256 identities — all at once. **Unsatisfiable.** No frame,
+no lookup table, and no compute budget reaches Core's commit-last Open through
+this pair.
+
+### Blocker E is fixed
+
+`dba22b5` (with `712490d` and `d163c32`) makes Claims `FoundingV5` and its three
+sibling routes authenticate the basis through `authenticate_product_basis_v3`
+against the Registry-owned V3 record — exactly what Core commits — and deletes
+the legacy `LinkedBasisRecordV2` path from the founding route. No identity and
+no frame width moved, and this campaign was already publishing the right record,
+so nothing in the bootstrap had to change.
+
+That is the direction this section argued for, and it is worth being explicit
+that it is the *only* terminating direction: a `LinkedBasisRecordV2` is a
+**Core-owned** raw record at a Core-derived PDA, and nothing in the repo creates
+one for a founding. Teaching Core to admit V2 would have required inventing a
+creator for a record type the successor had already replaced.
+
+**It was already named as debt, with an owner and a remedy.** From the V3
+reader's own module documentation
+(`crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs:12-17`), verbatim:
+
+> Follow-on convergence is mechanically limited to the remaining legacy
+> `LinkedBasisRecordV2` Claims consumers:
+> `src/{affine_batch_v2,liability_basis_v2,rational_representation_v2}.rs`
+> and `program-test/affine-batch/src/lib.rs` under `dclutch-claims-sbf`, plus
+> `dclutch-liability-basis-v2-kernel::{src,tests}/product_claims.rs`. They must
+> consume this V3 authentication result rather than add another basis decoder.
+
+So this is exactly the parallel legacy/current authority path the project
+method forbids, surfaced by the first route that needs both halves inside one
+transaction. Generic founding is that route. **The remedy is the one the reader
+already prescribes** — `affine_batch_v2` consumes `authenticate_product_basis_v3`
+against the Registry-owned V3 record and stops deriving a Core-owned V2 record —
+and it belongs to a Claims lane. This lane owns the runner,
+`generic_market_founding_v1.rs`, and the bootstrap tree, and deliberately did
+not widen either side: **the fix deletes the V2 basis path from the founding
+route; it does not teach Core to admit V2.**
+
+Named consequence for whoever takes it: `LinkedBasisRecordV2` records are
+**Core-owned** raw records at Core-derived PDAs, and nothing in the repo
+creates one for a founding. Even if the two decoders agreed, that record has no
+creator — so the convergence is the only direction that terminates.
+
+### Defect 5 — the demo Market's liability basis did not exist
+
+Upstream of Blocker E and repaired here at `4b12ee1`, because Core requires it
+under either resolution.
+
+The Product record has always carried a `liability_basis_id`, and the demo
+Market has always filled it with a domain-separated *name*. Found31 does not
+read it, so nothing noticed. Core's generic Found stage reads it and refuses
+unless a canonical `ProductBasisV3` exists whose semantic identity is exactly
+that value **and** whose Product, result-domain, coordinate-domain, and
+result-unit links match the authenticated graph.
+
+The run spec now carries the record itself. The join is acyclic rather than a
+fixed point: the V3 semantic preimage omits the Product and result-domain links
+(`raw[..32] || raw[96..]`), so the identity is derivable before the Product that
+declares it exists. The demo derives it from a placeholder-linked record,
+compiles the Product against it, recompiles the record with both real links, and
+asserts the identity did not move. `CategoricalQ1` is forced, not chosen: a
+categorical Product admits unit payout scale, no knots, no graded terms, and one
+basis claim per outcome, and Core separately requires
+`basis.payout_scale == request.basis_scale`.
+
+### Four corrections to W1d's runner brief, each paid for by building against it
+
+1. **The Found sub-frame's index 0 is the payer *and* the Trading caller PDA.**
+   `FoundAccounts::parse` requires index 0 signer-and-writable, and the outer's
+   `invoke_child` marks index 0 signer-and-writable — one slot, both roles. So
+   the pre-funding list is four, not three. The bite is small in practice
+   (`market.lamports()` must equal `rent.minimum_balance(352)` exactly, so the
+   Found rent top-up is zero) but the slot is still a real payer.
+2. **`DCLTPCB1`'s `ProjectFound` sub-frame payer slot cannot be the bootstrap
+   payer.** `parse_project` requires that slot non-signer and non-writable while
+   the bootstrap payer is a transaction-level signer and writable, and Solana
+   grants privileges per key, not per index. It must be a distinct funded
+   readonly key, and it must actually hold at least the Market rent, because the
+   kernel debits `payer_lamports` by the Market rent top-up even in projection
+   mode (`crates/dclutch-market-core-codec/src/generated.rs:809-815`).
+3. **The founding cannot run against the Market Found31 created.** Every
+   projected-Custody stage asserts `require_vacant_market`, and Core's `project`
+   requires the Market vacant. A campaign that keeps the Found31 evidence must
+   found at a **different generation**, whose Market PDA is a different, still
+   vacant address, with its own `LifecycleRentCreditV2`.
+4. **The principal supplier cannot be the rent payer.** `OpenSourceCompartment`
+   requires `funder_owner.is_signer && !funder_owner.is_writable` while
+   `payer` must be writable. Same key, contradictory privileges. So the founding
+   names a separate beneficiary — which is also what
+   `credit.refund_wallet() == request.beneficiary()` and
+   `lock.refund_owner == found.beneficiary()` already required — with its own
+   Token-2022 source wallet.
+
+Also confirmed, against FT's report: **`cargo build-sbf` on
+`dclutch-trading-sbf` at `ff02df0` emits zero `overwrites values in the frame`
+diagnostics**, both from an isolated `git archive HEAD` tree with a dedicated
+target directory and in the gauntlet's own shared-target build log. The two
+diagnostics FT saw in `authenticate_and_project` do not reproduce at this
+revision.
+
+### Blocker F — `DCLTPCB1` does not execute, and no runner can make it
+
+**This is the new on-chain result of this lane, and it is a refusal to execute,
+not an execution.** Three campaigns were run on a real
+`solana-test-validator 4.0.2`. The third reached `DCLTPCB1` with every
+prerequisite satisfied and the route failed:
+
+```text
+Program log: Error: memory allocation failed, out of memory
+Program <trading> consumed 561,101 of 1,399,700 compute units
+Program <trading> failed: SBF program panicked
+```
+
+The inner logs place it exactly. Two of the four stages complete first:
+
+| stage | CU | outcome |
+|---|---:|---|
+| Custody `Initialize`, including the Core `ProjectFound` CPI | 340,799 | **executed** |
+| Custody `OpenHoard`, including Token-2022 `InitializeAccount3` | 109,545 | **executed** |
+| Custody `OpenSourceCompartment` | — | **never started — heap exhausted** |
+| Trading total at death | 561,101 of 1,399,700 | 838,599 CU unspent |
+
+So the four-stage ladder is **heap-bound, not compute-bound**, with sixty
+percent of the compute budget untouched. That is a fact no static reading found:
+W1d's frame-diagnostic gate was clean, the SBF verifier is satisfied, and
+`cargo build-sbf` emits zero diagnostics. The bound only appears at run time.
+
+**The obvious workaround does not work, and this was measured rather than
+assumed.** Requesting a 256 KiB heap frame changed nothing: the transaction
+carried the instruction, the runtime accepted it — the failing instruction index
+moved from 1 to 2, so both compute-budget instructions were processed — and the
+route died at the same place. The two halves of "the heap" are not connected:
+
+```text
+solana-program-entrypoint-3.1.1/src/lib.rs:39   pub const HEAP_LENGTH: usize = 32 * 1024;
+solana-program-entrypoint-3.1.1/src/lib.rs:226  BumpAllocator { ... len: $crate::HEAP_LENGTH }
+```
+
+`RequestHeapFrame` enlarges the region the runtime grants; the stock
+`BumpAllocator` is constructed with the **compile-time constant** and never asks
+how much it was actually given. Every dClutch program uses that entrypoint, so
+**no transaction-level declaration can move this bound for any route in this
+repository.** The request was withdrawn rather than left in place — it cost
+compute on every transaction, shifted every measured figure, and looked like a
+fix.
+
+**Owner and remedy.** This belongs to
+`programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs`. The route
+holds three stages' worth of allocations live against an allocator that never
+frees — each stage's encoded 768-byte request, its CPI meta vector, and a
+forwarded `AccountInfo` vector for a 42-account sub-frame — so its peak is the
+sum, not the maximum. It is the same shape as the verifier-frame pressure W1d
+split across three functions, one level up in the heap. Either the route
+allocates less, or the program supplies its own global allocator over the
+granted heap. **`DCLTGMF1` drives five stages through the same allocator over a
+wider frame, so it should be assumed to have the same bound until measured.**
+
+### Campaign transcript
+
+Three runs, all on one `solana-test-validator 4.0.2` bound to 127.0.0.1 from a
+fresh genesis, driven by `tools/gauntlet/run.sh --mode full`. Wall-clock timings
+are not reported: a concurrent workspace test held the machine at load ~48
+throughout, which distorts duration and not compute.
+
+| run | commit | transactions | outcome |
+|---|---|---:|---|
+| 1 | `a99ffbb` | 60 | died in this lane's own hostile path: both adversarial cases reused the honest frame, which needs the principal supplier's signature, but went through an expected-failure path with no signer list, so they failed to sign locally and never reached the chain. Fixed at `792496e`. |
+| 2 | `792496e` | 62 | both hostile cases reached the chain and refused; honest `DCLTPCB1` died out-of-memory at 527,665 CU |
+| 3 | `51e40aa` | 62 | identical failure with a 256 KiB heap frame requested — the measurement that withdrew the workaround |
+
+Measured compute, run 3 (the Claims ELF differs from runs 1-2, which carry the
+pre-`dba22b5` basis path):
+
+| transaction | CU | % of maximum |
+|---|---:|---:|
+| Core infrastructure profile initialization | 232,831 | 16.6% |
+| release activation — Trading | 717,496 | 51.3% |
+| release activation — Claims | 573,649 | 41.0% |
+| release activation — Core | 551,626 | 39.4% |
+| release activation — Resolution | 264,956 | 18.9% |
+| release activation — Custody | 229,491 | 16.4% |
+| canonical Found31 Market creation | 232,537 | 16.6% |
+| founding generation's `LifecycleRentCreditV2` | 7,327 | 0.5% |
+| `DCLTPCB1` refuses a non-terminal request | 16,396 | 1.2% |
+| `DCLTPCB1` refuses a reordered FundingState tail | 561,607 | 40.1% |
+| `DCLTPCB1`, honest | — | **failed, out of memory at 561,101** |
+
+**Found31 is no longer the obstacle it was.** It creates the Market at 232,537
+CU, 16.6% of the maximum; earlier prose in the bootstrap README and
+`REMAINING_OPEN_SEAM` said "about 247,000" and, before that, that it exhausted
+the maximum outright. Corrected to the measurement.
+
+### One adversarial case was passing for the wrong reason
+
+The reordered-FundingState-tail case refuses, and its refusal is **not yet
+attributable to the manifest binding it claims to test.** In run 2 it consumed
+527,965 CU against an out-of-memory death at 527,665; in run 3, 561,607 against
+561,101. It is refusing on the allocator, in the same place the honest
+transaction dies, and it would have read as evidence for the funding-tail check.
+
+Recorded rather than quietly repaired, because the failure mode generalises:
+**a refusal whose compute profile matches an unrelated crash is not evidence
+about the coordinate under test.** The discriminator this case needs is the
+honest transaction succeeding with an identical frame shape, which cannot happen
+until Blocker F is fixed.
+
+The other case is sound and is genuine on-chain evidence:
+**`DCLTPCB1` refuses a well-formed but non-terminal projected-Custody request**
+at 16,396 CU, refusing in `decode_projected_request` before any CPI and nowhere
+near the allocator.
+
+### What tranche-A family campaigns may now assume on chain
+
+**Nothing new.** The Claims aggregate, the founder Position, the Hoard, the
+projected replay, and the funded source compartment still do not exist on any
+chain. What is now known, rather than assumed:
+
+- the demo Market's Product declares a liability basis that **exists** and is
+  published (`4b12ee1`) — it never did before, and Found31 does not read it, so
+  nothing had noticed;
+- Core's `ProjectFound` CPI and Custody's `Initialize` and `OpenHoard` execute
+  against a vacant Market, at 340,799 and 109,545 CU;
+- the 81-account `DCLTPCB1` frame is real: it assembles, routes through a
+  three-page address lookup table at ~52 distinct keys, and is accepted by the
+  runtime;
+- `DCLTPCB1` cannot complete, for a reason that is neither compute nor frame
+  width nor a missing prestate.
+
+## W1f supersession 2026-08-27 — the Market is OPEN
+
+Same evidence boundary as everything above and no other: one
+`solana-test-validator 4.0.2` bound to 127.0.0.1 from a fresh genesis, driven by
+`tools/gauntlet/run.sh --mode full` at `cd05331`, **local-validator evidence
+only**, not devnet, not mainnet, not a deployment. No formal verification is
+claimed and every refusal below is an executed refusal on a specific input, not
+a proof over all inputs. Every CU figure is measured-profile on this validator
+with these exact artifacts.
+
+Read this section for what is true now. Everything above it is kept verbatim as
+the record of how it was found, including the three verdicts this run refutes.
+
+| Then | Now |
+|---|---|
+| `DCLTPCB1` is heap-bound and **no runner can fix it** (W1e) | it completes all four stages, **754,119** CU |
+| `RequestHeapFrame` "was tried and measured to change nothing" | it is the reason the third stage runs at all |
+| `DCLTGMF1` is satisfiable and unbuilt; the Market is Found, not Open | **the Market is Open**, in one transaction, **1,184,132** CU |
+| the pre-funding list is four (W1e), three (W1d) | it is **five** |
+| the reordered-FundingState case refuses for the wrong reason | it refuses **68,921 CU short** of a succeeding honest transaction |
+
+### Blocker F is gone, and it was never program-side
+
+W1e's diagnosis of the out-of-memory death was right about the wall and wrong
+about the remedy, in a way worth stating precisely because the reasoning was
+sound at the time. It concluded:
+
+> `RequestHeapFrame` enlarges the region the runtime grants; the stock
+> `BumpAllocator` is constructed with the **compile-time constant** and never
+> asks how much it was actually given. Every dClutch program uses that
+> entrypoint, so **no transaction-level declaration can move this bound for any
+> route in this repository.**
+
+Both sentences were true of the tree that measured them. `9abed0c` then gave
+Trading its own entrypoint and its own allocator, one that bumps upward against
+a ceiling it re-derives from the instructions sysvar under agave's own
+`sanitize_requested_heap_size`, and put exactly two routes on the list allowed
+to lift it: `DCLTGMF1` and `DCLTPCB1`.
+
+That still did nothing, and the reason is the finding this lane contributes
+before any measurement. `admit_heap_frame_v1` is reached only from
+`lift_declared_heap_profile_v1`, which locates the instructions sysvar by
+**scanning the top-level instruction's own account list**
+(`entrypoint_adapter.rs:660-666`). Neither founding route presented it. The
+adapter's own documentation had already named the consequence — without the
+sysvar in the frame "the declaration is inert and the route keeps the default
+ceiling" — and both frames are exact-width, so an appended account is a refusal
+rather than a no-op. **The grant was a wire fact, not a transaction fact.**
+
+`9d45056` adds one authenticated readonly slot to each route's fixed prefix,
+ahead of the variable tail, with one shared authenticator so the two cannot
+drift about what it holds. It is not a security boundary — the adapter
+re-derives the grant from the sysvar's own bytes and a wrong account there
+simply means no lift — it is a fail-closed frame assertion, so a frame that
+cannot deliver the heap the route is declared to need refuses up front instead
+of running out of memory partway through a rollback domain. Frame widths move
+by one: `DCLTPCB1` 78 → 79 fixed (82 for the demo Market), `DCLTGMF1`
+`134 + funding_count` → `135 + funding_count` (138).
+
+### Measured: `DCLTPCB1` completes, and it is neither heap-bound nor compute-bound
+
+Run 4 (`0ca334d`) put the grant in front of the route for the first time. The
+third stage executed 104,029 CU of real work where it had previously never
+started, and refused on something else entirely — see the next section. Run 5
+(`cd05331`) is the honest completion:
+
+| stage | run 3 | run 4 | run 5 |
+|---|---|---:|---:|
+| Custody `Initialize`, incl. Core `ProjectFound` | 340,799 | 370,696 | executed |
+| Custody `OpenHoard`, incl. Token-2022 `InitializeAccount3` | 109,545 | 107,958 | executed |
+| Custody `OpenSourceCompartment` | **OOM, never started** | 104,029, refused | executed |
+| Trading `FundingState` staging × 3 | never reached | never reached | executed |
+| **whole route** | died at 561,101 | died at 702,864 | **754,119 of 1,399,700** |
+
+645,581 CU of the budget is unspent at completion.
+
+### Blocker G — the seventh layer, and it had been hiding under the heap wall
+
+Run 4's third stage refused `Custom(1)` = `CustodySbfError::AccountFrame` after
+104,029 CU. `authenticate_source_creation_frame` returns `Replay` or
+`TokenState`, and `require_vacant_market` was satisfied, so one conjunct is left:
+`funder_owner.key.to_bytes() != request.refund_owner`
+(`programs/dclutch-custody-sbf/src/projected.rs:1027`).
+
+The frame presented the **beneficiary** as the principal's owner while
+`derive_founding_coordinates` set `refund_owner` to the **payer**. W1e's own
+correction 4 had already established that these must be different keys —
+Custody requires the owner to sign while staying non-writable and the creation
+payer to be writable, and Solana grants privileges per key — but the artifact
+was still built with the payer in the beneficiary slot. It could not have been
+found before this run: the route never reached the stage that checks it.
+
+`cd05331` names the beneficiary once and threads it through all four places
+that were already required to agree: the founding artifact's `beneficiary`, the
+terminal Lock's `refund_owner`, the owner of the Token-2022 wallet the principal
+comes from, and the lifecycle credit's `refund_wallet`.
+
+Two further defects in the same commit, found by reading what the founding has
+to *predict* rather than by running it:
+
+- **The Market identity the campaign carries has a placeholder `market_id`**,
+  because `market_id` is not one of the nine `MarketCoreStateSeedsV2` seeds.
+  Harmless everywhere it was used before. Not harmless for a founding, which
+  must commit to the digest of the Core state the Found stage will write **two
+  stages before that state exists**. The placeholder is replaced as soon as the
+  address is known and the derivation is required not to have moved.
+- **The runtime outcome width is now chain-derived**, from `project_found_v2`'s
+  authenticated projection rather than recomputed from the run spec's cut list,
+  and the two are cross-checked. It fixes the widths of the three accounts
+  Claims allocates and therefore the rents Core folds into the request it
+  commits to inside the permit, so a spec that disagreed with what it published
+  refuses at derivation instead of moving a digest three stages later.
+
+### The pre-funding list is five
+
+W1d said three. W1e corrected it to four. It is **five**, and two of the five
+are compared for **exact** equality, so over-funding refuses as surely as
+under-funding:
+
+| account | requirement | source |
+|---|---|---|
+| Market | `lamports == rent.minimum_balance(352)` **exactly** | `core-sbf/src/generic_founding_v1.rs:775-777` |
+| one-shot permit | `lamports == request.permit_rent()` **exactly**, and that must equal `rent.minimum_balance(608)` | `:778-779`, `:1135` |
+| Claims aggregate | `>= rent.minimum_balance(256 + 8·claim_count)` | `claims-sbf/src/founding_v5.rs:795-801` |
+| founder Position | `>= rent.minimum_balance(128 + 8·claim_count)` | same |
+| Claims admission | `>= rent.minimum_balance(512)` | same |
+
+Core allocates the Market and the permit and Claims allocates its three with
+`allocate` + `assign` only; **neither program ever transfers a lamport into
+them.** W1e's fourth entry, the Found caller-authority PDA, needs nothing after
+all: the Market being exactly rent-funded makes the kernel's `rent_top_up` zero,
+and `found.rs:571` skips the payer transfer entirely.
+
+And all three Claims balances are **digest-bearing**. Core reads
+`aggregate.lamports()`, `position.lamports()`, and `admission.lamports()` at the
+Found stage and folds them into the `ClaimsFoundingRequestV5` it commits to
+inside the permit (`generic_founding_v1.rs:1228-1230`). A pre-funding one
+lamport off does not overpay; it moves a digest and refuses at Claims. That
+makes the pre-funding transaction part of the founding's authenticated prestate
+rather than a convenience.
+
+### What the runner had to derive, and how it avoided authoring a digest
+
+The founding commits to values that do not exist yet, and the discipline this
+campaign has kept — the compiler and chain-derived operators own every digest —
+had to survive that. It does, in this order:
+
+1. The **Lock receipt** comes from running the Custody kernel's own
+   `lock_hoard_and_close_source` over the chain's actual `SourceFunded`
+   projection and its actual normal source replay, both read back from the
+   accounts `DCLTPCB1` left.
+2. The **Realize request** is the terminal Lock with exactly its operation and
+   its two revisions moved — the same derivation the outer's
+   `authenticate_projected_sequence` evaluates.
+3. The **Realize receipt** needs the candidate Core state the Found stage will
+   write. Every field of that state is fixed by the kernel's `found` — phase
+   `Founding`, readiness `Prepaid`, zero terminal winner, zero outstanding
+   capabilities, the identity, the rent credit — so it is constructed, and the
+   encoding is cross-checked by re-encoding the Found31 Market's own decoded
+   state and requiring the bytes the chain is holding.
+4. The **permit intent**, assembled exactly as Core's `build_permit_plan`
+   assembles it, and its digest.
+5. The **Claims request**, which carries that digest, and whose own digest is a
+   seed of the Claims caller PDA.
+
+Acyclic throughout, and every step consumes only what the previous ones
+produced.
+
+### Measured: `DCLTGMF1`, five stages, one rollback domain
+
+**1,184,132 CU, 84.6% of the 1,400,000 maximum.** Per stage, from the inner
+logs:
+
+| stage | program | CU |
+|---|---|---:|
+| Lock — `LockHoardAndCloseSource` (Registry reauth 27,562; Token-2022 `TransferChecked` 1,720 and `CloseAccount` 1,275) | Custody | **105,722** |
+| Found and permit (Registry reauth 48,071; four System calls) | Core | **414,957** |
+| Realize — `RealizeAndClose` (Registry reauth 27,562) | Custody | **87,222** |
+| Claims `FoundingV5` (four Registry reauths; six System calls) | Claims | **260,279** |
+| Open, commit-last, plus the outer's own five joins | Core + Trading | **315,652** |
+
+The last row is **arithmetic, not measurement**: the RPC truncated the log
+before the Open stage's own accounting line, so it is
+`1,184,132 − 300 (two ComputeBudget instructions) − 868,180 (the four measured
+stages)`. The Registry reauthentication inside the Open stage is visible at
+48,071 and is part of it.
+
+There is no per-stage **heap** figure and this document will not invent one.
+Neither founding route carries heap checkpoints — the `hot_cu_checkpoint!`
+instrumentation is `hot_v3`'s — so what is measured about the heap here is
+exactly one thing, and it is decisive: with the grant reaching the route, two
+stages that had never executed do, and nothing anywhere in the chain reports
+`memory allocation failed`.
+
+### The founding-outer hostile case
+
+**`DCLTGMF1` refuses a substituted Claims request and rolls the whole founding
+back**, 33,594 CU, `InstructionError [3, Custom(3)]` =
+`TradingSbfError::Content`, raised inside Trading at 33,088 CU **before its
+first CPI**.
+
+The substituted readonly record is a well-formed `ClaimsFoundingRequestV5` that
+differs from the honest one in exactly one coordinate — the **founder** whose
+Position and admission the founding mints — and is otherwise byte-identical,
+carrying the honest founding's own permit-intent digest. It is published as an
+ordinary content-addressed Registry record, so substituting the request is
+substituting an address. The outer's cross-request join is the only thing
+between that record and a Position minted to somebody else.
+
+The refusal had to take Lock, Found, Realize, and Claims with it, because a
+chain that committed the Market and then refused would be worse than one that
+never ran. The transaction carries a prepended one-lamport System transfer, and
+the runner requires afterwards that the recipient does not exist, that the payer
+is debited by the fee and nothing else, and that all five program-allocated
+accounts are still vacant, System-owned, and empty.
+
+### The reordered-FundingState case is attributable now
+
+W1e recorded this case as refusing for the wrong reason and refused to count it,
+which was the right call: in run 2 it consumed 527,965 CU against an
+out-of-memory death at 527,665, and in run 3, 561,607 against 561,101. Run 4
+reproduced the coincidence at the new wall — 703,405 against 703,220 — because
+the honest transaction was still failing, just later.
+
+**Run 5 supplies the discriminator W1e named**: the honest transaction succeeds
+with an identical frame shape, at 754,119 CU, and the hostile one refuses at
+**685,198** — 68,921 CU short of it, and 68,921 CU short of anywhere the honest
+path ends. The refusal is now attributable to the manifest binding it tests: a
+reordered tail derives an address the manifest entry at that position does not
+name, so the ordered-list digest cannot equal the artifact's `funding_list_id`.
+
+The other bootstrap case remains sound and is unchanged in kind:
+**`DCLTPCB1` refuses a well-formed but non-terminal projected-Custody request**
+at 22,860 CU, inside `decode_projected_request`, before any CPI. It cost 16,396
+in run 3; the difference is the heap-frame instruction and the sysvar account.
+
+### Final Market state, and the three Claims accounts
+
+Reacquired from the finalized chain after the founding, and checked field by
+field by the runner before the campaign was allowed to succeed:
+
+| account | owner | bytes | contents |
+|---|---|---:|---|
+| Market | Core | 352 | phase **`Open`**, readiness **`Consumed`**, terminal receipt **none**, terminal winner 0, identity equal to the derived founding identity, rent beneficiary the founding generation's `LifecycleRentCreditV2` |
+| Claims aggregate | Claims | **288** | `256 + 8×4`, non-zero; the liability-basis market vector for a four-outcome Product |
+| founder Position | Claims | **160** | `128 + 8×4`, non-zero |
+| Claims admission | Claims | **512** | non-zero |
+| Hoard vault | Token-2022 | 165 | mint equal to the campaign's collateral mint, **amount equal to the founding principal exactly**, state `Initialized` |
+| normal Custody replay | Custody | **288** | was the 808-byte projection; realized in place, `open_vault_count == 1`, `next_revision == 1`, market and generation equal to the founded Market's |
+| source vault, source replay | — | — | **closed**; both returned to the lifecycle credit by the Lock stage |
+| one-shot permit | — | — | **consumed** by the commit-last Open stage; its lamports returned to the lifecycle credit |
+
+The Hoard's 165 bytes hash to the same digest as the source vault did before the
+founding, which is the arithmetic being visible: same mint, same Custody
+authority, and the same principal, moved.
+
+### Campaign transcript
+
+Eighty-four transactions on one validator at `cd05331`. Six lines are hostile
+cases; each was required to fail and required to leave no poststate behind.
+Every witness in `tools/gauntlet/tier1/witnesses.json` passed (14 checked, 0
+failed).
+
+```text
+slot=35   cu=5778     wrong authority cannot initialize infrastructure          REFUSED
+slot=67   cu=231335   initialize Core infrastructure profile
+slot=99   cu=532863   immutable release activation refuses pre-revocation Core  REFUSED
+slot=131  cu=2520     revoke Core Loader-v3 upgrade authority
+slot=163  cu=543920   activate immutable release-set role: Core
+slot=195  cu=565941   activate immutable release-set role: Claims
+slot=227  cu=710601   activate immutable release-set role: Trading
+slot=259  cu=260249   activate immutable release-set role: Resolution
+slot=291  cu=226491   activate immutable release-set role: Custody
+slot=323  cu=21478    late activation substitution rolls back prior transfer    REFUSED
+slot=355  cu=5263     create real Token-2022 collateral and raw-atom wallet
+...       ...         26 bounded Registry record and Product-graph publications
+slot=451  cu=7686     publish record: substituted refund wallet refuses         REFUSED
+slot=1251 cu=8621     create Market-scoped lifecycle RentCreditV2
+slot=1283 cu=10661    create Found31 routing address lookup table
+slot=1380 cu=6958     Found31 refuses substituted lifecycle credit              REFUSED
+slot=1412 cu=141899   Found31 refuses a substituted Market coordinate and rolls back  REFUSED
+slot=1444 cu=223540   create canonical Found31 Market
+slot=1476 cu=3655     fund the founding principal supplier and its rent-capacity witness
+slot=1508 cu=10121    create the founding generation's lifecycle RentCreditV2
+...       ...         9 readonly request-record publications for the founding
+slot=1957 cu=22860    DCLTPCB1 refuses a non-terminal projected-Custody request REFUSED
+slot=1989 cu=685198   DCLTPCB1 refuses a reordered FundingState tail and rolls back   REFUSED
+slot=2021 cu=754119   create the projected-Custody founding prestate (DCLTPCB1)
+slot=2053 cu=900      pre-fund the founding's five program-allocated accounts
+...       ...         12 record publications and 5 routing-table transactions
+slot=2598 cu=33594    DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back  REFUSED
+slot=2630 cu=1184132  found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)
+```
+
+### Artifacts
+
+Built by the gauntlet from an isolated `git archive cd05331` tree with the
+pinned toolchain (`cargo-build-sbf 4.0.0`, `platform-tools v1.53`,
+`rustc 1.89.0`), default release profile. **Zero frame diagnostics on every
+program.** These contain other lanes' concurrent work; only the Trading and
+runner changes in this section are this lane's.
+
+| Program | Bytes | SHA-256 |
+|---|---:|---|
+| `dclutch_registry_sbf.so` | 220,728 | `0033c6b55e8277dcd1c8f90ddcd100106b7c50d665758afee8af8a802c3a7058` |
+| `dclutch_core_sbf.so` | 1,007,096 | `65803d559431e8bcd86276bad9a685bdc82c6b6ab90450625ba3bbe404952e75` |
+| `dclutch_claims_sbf.so` | 1,073,376 | `ca3bcf4dafd353f157017ca4cd11a03e30445e1c68c7ce83b10090bef0a8d6cd` |
+| `dclutch_trading_sbf.so` | 1,349,992 | `f977951484df61d7b74637efe87f9bdb3481c050408d84d6cb854f7607ada3dd` |
+| `dclutch_resolution_proof_sbf.so` | 463,576 | `39a367ee6b60c771bf2c286557c5a6f01fcabd628d0f642292f19d363bf366ac` |
+| `dclutch_custody_sbf.so` | 347,536 | `83eb5121559f1d41f75a9e47a4cdfd7cb8927236d8079ba42c8eee032b0195f9` |
+| `dclutch_rent_sbf.so` | 152,312 | `3486a8197af492317a756e2fce659d399c5e32ff16323edac34fc1f1cafa7b8b` |
+
+### The frame, for whoever builds the next one
+
+`DCLTGMF1` is `135 + funding_count` accounts, **138** for the demo Market's
+three-entry manifest, eight bytes of instruction data, ALT-routed as a v0
+transaction over the same `publish_routing_table` machinery `DCLTPCB1` uses.
+
+- **65 distinct keys**, the fee payer included. W1d's brief assumed the limit
+  was 64; it is **128**, because agave raises `MAX_TX_ACCOUNT_LOCKS` under
+  `increase_tx_account_lock_limit`, which `solana-test-validator` activates.
+- **Eleven distinct writable keys**: the projected replay, the rent credit, the
+  Hoard vault, the source vault, the source replay, the Found caller PDA, the
+  Market, the permit, and the Claims aggregate, Position, and admission.
+- **No account in the frame is a transaction-level signer** — every stage's
+  signer is a PDA the outer signs for under `invoke_signed` — so the fee payer
+  is the one key that appears nowhere in it.
+- **Privileges are unioned per key before sending.** Solana grants them per key,
+  not per index, so an account writable in one stage is writable in every stage
+  that names it; the outer downgrades it back to readonly in each child's metas,
+  which is where the children's own non-writability requirements are enforced.
+  The Market is the clearest case: Custody's Lock stage requires it
+  **non-writable and vacant**, and Core's Found stage creates it.
+- Order: four readonly request records, the instructions sysvar, Lock (14),
+  Found (`34 + funding_count + 15`), Realize (12), Claims (32), Open (23).
+
+### What tranche-A family campaigns may now assume on chain
+
+For the first time, something.
+
+- **An Open Market exists**, Core-owned, 352 bytes, phase `Open`, readiness
+  `Consumed`, with its identity and its rent beneficiary checked against the
+  coordinates the campaign derived before it was created.
+- **A liability-basis aggregate, a founder Position, and an admission record
+  exist**, Claims-owned, at the PDA addresses both Core and Claims re-derive,
+  at the runtime-derived widths for a four-outcome Product.
+- **A Hoard exists holding the exact founding principal**, under the Market's
+  normal Custody authority, with no delegate, no native reserve, and no close
+  authority.
+- **A normal `CustodyReplayV1` exists for that Market**, realized in place from
+  the projection, at `next_revision == 1` with one open vault — which is the
+  prestate every ordinary Custody route for this Market starts from.
+- The projected-Custody source compartment is **gone**: both accounts closed to
+  the lifecycle credit, which is the only place their rent was ever going.
+- The one-shot founding permit is **consumed**, so this founding cannot be run
+  twice.
+
+The census corroborates the routes rather than taking the campaign's word for
+them: fifteen `blocked.json` entries were deleted because their routes executed,
+including Claims `FoundingV5`, Core's generic founding with its Found-and-permit
+and Open stages, Custody's projected dispatch with `Initialize`, `OpenHoard`,
+`OpenSourceCompartment`, `LockHoardAndCloseSource` and `RealizeAndClose`, and
+Registry reauthentication.
+
+### Reproduced at a different revision, on different bytes
+
+The campaign was run again at `67e441d`, and this is a reproduction rather than
+a re-run: other lanes' work landed in between, so **the Trading and Resolution
+ELFs are different bytes** (`6343ddf5247c37ec88387d8e54358b7b96bd2addea563901b347e6f5a56609b1`
+and `18dcc4a2a3375fe49c0aee3d332d7c7fa8b1cd69bb96606ca77c466facf89969`; the
+other five are byte-identical). Eighty-four transactions again, and the whole
+gauntlet green: `observe` admits every binding, and **20 witnesses checked, 0
+failed**.
+
+| | run 5 (`cd05331`) | run 6 (`67e441d`) |
+|---|---:|---:|
+| `DCLTPCB1`, honest | 754,119 | **774,639** |
+| `DCLTPCB1` refuses a reordered FundingState tail | 685,198 | **708,934** |
+| — margin below the honest transaction | 68,921 | **65,705** |
+| `DCLTPCB1` refuses a non-terminal request | 22,860 | **22,161** |
+| `DCLTGMF1`, honest | 1,184,132 | **1,189,823** |
+| `DCLTGMF1` refuses a substituted Claims request | 33,594 | **32,680** |
+| Found31 | 223,540 | 253,537 |
+
+The census corroborates it rather than taking the campaign's word: **38 of 100
+enumerated routes executed**, up from 25 before this lane, and the two blocking
+entries still flagged stale are `trading/hot_v3::process_hot_execution_v3` and
+`trading/outer::process_activation#else` — other lanes' entries, flagged for the
+census-enumeration limit named below and **not** because their routes ran. They
+were deliberately left alone.
+
+### Blocker H — a funded source compartment could not be unwound, ever
+
+Found by asking what the census would say about the route this lane had just
+made reachable, and closed rather than queued.
+
+`OpenSourceCompartment` puts real collateral under a projected authority against
+a Market that does not exist. **No terminal accepted the phase it leaves
+behind.** `RefundAndClose` admits `HoardLocked`; `AbortOpenAndClose` admits
+`HoardOpen`. That was deliberate, and its stated reason had the hazard exactly
+backwards — refusing the abort was called the safe direction because closing a
+funded projection would strand the principal:
+
+> once real principal is under this authority the authority over it cannot be
+> destroyed, and the principal can only move forward through Lock.
+
+The forward direction is the Lock stage of an atomic founding, and that
+founding's Core Found stage refuses at `clock.slot > request.expiry_slot()`
+(`core-sbf/src/generic_founding_v1.rs:409`) and its Open stage at
+`current_slot > intent.expiry_slot()` (`:1594`). So past expiry the principal
+could **not move at all**, in any direction, by any route. Not stranded rent —
+stranded collateral, permanently. W1d named it, chose it, and queued it; W1e did
+not touch it; this lane is the one that made the prestate routinely reachable,
+which is why it is the one that closed it.
+
+`AbortSourceAndClose` (`d43536d`) admits `SourceFunded` and nothing else, after
+expiry, against a vacant Market. The principal returns to a token account owned
+by `request.refund_owner` — the party `OpenSourceCompartment` required to sign
+as the funder's owner — and the source Vault, the source replay, the empty Hoard
+Vault, and the projection all close to `request.rent_credit`. The RentCredit
+postcondition is **exact**, not a lower bound: those four are the complete set
+this ladder creates.
+
+It is deliberately **not** an extension of `AbortOpenAndClose`, which was the
+tempting shortcut: that terminal admits `HoardOpen` holding nothing, Series
+drives it, its frame width is fixed, and widening it would put a principal
+transfer on a path whose whole contract is that there is no principal. A test
+pins that both pre-existing terminals still refuse `SourceFunded`, so the fix
+cannot later be "simplified" into the relaxation it was avoiding.
+
+The request is **derived, not supplied**: it is the terminal Lock with exactly
+one field changed, at the same cursor, same amount, same refund owner. The same
+768 bytes that authorise a founding authorise its unwind, and neither can name a
+coordinate the other does not. `DCLTPCA1` carries only those bytes and — unlike
+`DCLTPCB1` — does not require the founding artifact, because the persisted
+projection is already that binding and demanding the artifact would make
+reclaiming principal depend on the founder still holding a record they no longer
+need. It is also not on the extended-heap list: one CPI, one request, one
+sixteen-account frame.
+
+**Three defects surfaced by executing it, each of a kind worth naming:**
+
+1. **A list that was exhaustive by intent and not by the compiler.** Custody
+   decided whether the RentCredit may be writable with a `matches!` over three
+   operations. The new terminal closes four accounts into it and was silently
+   absent, so the route refused `AccountFrame` 5,364 CU in, with nothing in the
+   logs naming a conjunct. It is an exhaustive `match` now (`df81ce4`): the next
+   operation added to that enum is a compile error rather than a mystery.
+2. **Ordering between manual lamport moves and CPIs.** Every closure is
+   individually balanced, but zeroing an account's lamports and assigning it to
+   the System program by hand and *then* performing another CPI fails the
+   runtime's own before-and-after check with `UnbalancedInstruction`, which names
+   no account and no sum. The two older terminals never met it because each
+   performs its single manual close last. This one does both token closures
+   first and both manual closures after (`fe9fced`).
+3. **A refusal that could not say what it was.** The kernel has always
+   distinguished `Expiry` from every other replay refusal; this program flattened
+   both into `Replay`, so the pre-expiry refusal reported "replay PDA, owner,
+   bytes, or revision refused" when the PDA, owner, bytes and revision were all
+   correct and the transaction was merely early. `CustodySbfError::Expiry` is
+   added and all three expiry-gated terminals map through it (`d9f79bb`). **The
+   census is what caught this**: it refused to record coverage for a bound
+   refusal that named no code, which is exactly how a real refusal launders
+   itself out of a taxonomy.
+
+### Measured: the abort, on a validator
+
+The campaign now stages **two** prestates. Both run the identical four-stage
+ladder; they differ in generation, in how long their founding stays satisfiable,
+and in which exit out of `SourceFunded` they take. The second exists to be
+abandoned. Run at `d9f79bb`, 100-transaction campaign, **whole gauntlet green:
+23 witnesses checked, 0 failed; 0 unclassified positions; 0 stale blocking
+entries.**
+
+| transaction | CU |
+|---|---:|
+| stage the second prestate (`DCLTPCB1`) | 765,807 |
+| **`DCLTPCA1` refuses to abort before expiry** | **134,666** |
+| **`DCLTPCA1` unwinds the expired compartment** | **148,996** |
+
+The refusal is the half that matters: while the founding is still satisfiable
+the authority over funded principal may not be destroyed, and an unwind that let
+anyone empty a live founding would be a worse defect than the stranding it was
+written to fix. It refuses with `custody/CustodySbfError::Expiry`, the runner
+requires the whole multi-instruction transaction to roll back to a fee-only
+debit, and it then re-authenticates the entire prestate to prove the refusal
+moved nothing. The honest abort, 419 slots later, returns exactly the principal
+to the party that supplied it, leaves all four staged accounts closed, and
+raises the lifecycle credit by exactly their four rents.
+
+### A margin that is closing, and belongs to nobody yet
+
+`DCLTGMF1` cost **1,184,132** CU at `cd05331` and **1,278,747** at `d9f79bb` —
+84.6% to **91.3%** of the 1,400,000 per-transaction maximum, in one evening,
+from other lanes' concurrent changes to Core, Claims, and Trading. Nothing in
+this lane moved it and nothing is watching it.
+
+There is no headroom to buy: the campaign already requests the maximum. At the
+current rate the atomic founding stops fitting, and it will stop fitting the way
+Found31 did — as a hard refusal at the ceiling with no partial result. **A
+per-transaction CU budget for `DCLTGMF1`, checked in CI against a measured
+figure, is the thing that would turn that into a caught regression instead of a
+campaign that stops working.** Naming it as an owner-decision because this lane
+found it by measurement and did not build it.
+
+### Owner-decisions this lane surfaced and did not take
+
+- **The census cannot see through an `unsafe` block in a dispatch position.**
+  Trading's entrypoint is now found (`4a37374` — it had been invisible since
+  `9abed0c`, with the report claiming the program "exposes no dispatch surface"),
+  but the walker refuses to follow the two arms of the adapter's entrypoint, so
+  Trading enumerates one route and two honestly-named unclassified positions
+  instead of its real dispatch branches. Teaching the walker to follow a forward
+  through an `unsafe` block belongs to the census owner.
+- **`AbortSourceAndClose` is still not implemented**, and this run makes it
+  matter more, not less: the `SourceFunded` resting state holds real principal
+  and no terminal accepts it. W1d named it, chose it deliberately, and queued it
+  for the next projected-Custody lane. It is still queued.
+- **The founding capability root is derived and never created**, per ADR 0004,
+  so `core/capability::process#ActivateCapability` remains undriven even now
+  that a Market exists.

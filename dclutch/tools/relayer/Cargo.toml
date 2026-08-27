@@ -1,0 +1,73 @@
+[package]
+name = "dclutch-relayer"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+publish = false
+description = "RelayedMainnetStateV1 observation daemon: signs observations of a foreign cluster's account bytes, never interpretations."
+
+# Deliberately its own workspace.  This service needs `std`, tokio, an HTTP
+# stack and Solana message construction; the protocol workspace is `no_std`
+# kernel/contract crates whose lock is being realigned by other lanes, and a
+# heavy dependency tree added there would collide.  Adding this crate to the
+# root `members` list is a separate integration decision, not this lane's.
+[workspace]
+
+[lib]
+name = "dclutch_relayer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dclutch-relayer"
+path = "src/main.rs"
+
+[dependencies]
+# The wire codec.  Every encoded byte this daemon signs comes from here; the
+# daemon reimplements no encoding.
+dclutch-relay-contract = { path = "../../crates/dclutch-relay-contract" }
+
+base64 = "0.22"
+bincode = "1.3"
+bs58 = "0.5"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls-webpki-roots",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+toml = "0.8"
+
+# Solana message construction for the (execution-gated) submit path.  These are
+# transaction primitives only: no venue IDL, SDK, or layout crate.  See
+# DEPENDENCY_CLOSURE.md.
+solana-address = { version = "2", features = ["curve25519"] }
+solana-hash = "4"
+solana-instruction = { version = "3", default-features = false, features = ["std"] }
+solana-message = { version = "=4.4.1", features = ["serde", "wincode"] }
+solana-signature = "3"
+solana-transaction = { version = "=4.1.6", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["net", "io-util"] }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

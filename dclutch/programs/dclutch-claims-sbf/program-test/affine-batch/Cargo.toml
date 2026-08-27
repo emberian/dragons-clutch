@@ -11,8 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
-dclutch-liability-basis-v2-kernel = { path = "../../../../crates/dclutch-liability-basis-v2-kernel" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
+dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-product-runtime-v2-operator = { path = "../../../../crates/dclutch-product-runtime-v2-operator" }

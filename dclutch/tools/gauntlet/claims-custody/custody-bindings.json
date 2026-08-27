@@ -1,0 +1,181 @@
+{
+  "campaign": "custody-family-programtest",
+  "note": "Tier 2, Custody family fast lane. One ordinary-Custody campaign per token profile (legacy SPL Token and Token-2022) against the real Custody, test-caller and Registry ELFs and the runtime's real token programs, with the Core Market, Realm record, activation cache and token state INSTALLED directly. Refusal bindings deliberately claim only the entrypoint route: this lane asserts which refusal the chain reported, not which handler raised it, and a route claim the campaign cannot substantiate would be a mirror. Every refusal here is also asserted in the campaign by byte-exact pre/post account comparison, which the census does not model.",
+  "bindings": [
+    {
+      "label": "custody *: initialize replay",
+      "routes": [
+        "custody/process_instruction",
+        "custody/initialize_replay#InitializeReplay"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Creates the per-context CustodyReplayV1 PDA and pins its immutable rent-refund beneficiary."
+    },
+    {
+      "label": "custody *: open vault",
+      "routes": [
+        "custody/process_instruction",
+        "custody/open_vault#OpenVault"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Creates the Hoard-principal token vault under the Custody authority PDA, through a real token-program CPI."
+    },
+    {
+      "label": "custody *: close replay under a live vault",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::Replay",
+      "note": "HOSTILE. One vault is open, so the replay cannot be retired. Refuses Replay (5)."
+    },
+    {
+      "label": "custody *: V1 external debit without a delegate",
+      "routes": [
+        "custody/process_instruction",
+        "custody/execute_transfer#Transfer"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::Instruction",
+      "note": "HOSTILE. An external source debit on the V1 wire is refused outright so an apparently correct balance delta cannot leave delegated spending authority behind (programs/dclutch-custody-sbf/src/lib.rs, execute_transfer)."
+    },
+    {
+      "label": "custody *: delegated external transfer",
+      "routes": [
+        "custody/process_instruction",
+        "custody/delegated::process"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "The DCLCUDQ2 delegated wire: an external source debit with the exact delegate allowance accounted before and after."
+    },
+    {
+      "label": "custody *: delegated terminal deposit",
+      "routes": [
+        "custody/process_instruction",
+        "custody/delegated::process"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "The terminal delegated debit. Exhausts the delegate: the source account's delegate is None and delegated_amount is zero afterwards."
+    },
+    {
+      "label": "custody *: delegated transfer with a substituted delegate",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::TokenState",
+      "note": "HOSTILE. Source and destination are swapped so the debited account carries no matching delegate. Refuses TokenState (6)."
+    },
+    {
+      "label": "custody *: delegated transfer at a stale replay revision",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::TokenState",
+      "note": "HOSTILE replay. The delegate was exhausted by the terminal deposit, so the token state refuses before the revision does."
+    },
+    {
+      "label": "custody *: delegated transfer with a substituted source owner",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::TokenState",
+      "note": "HOSTILE. The semantic source owner is substituted; the physical token state refuses."
+    },
+    {
+      "label": "custody *: delegated transfer with a substituted destination owner",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::TokenState",
+      "note": "HOSTILE. The semantic destination owner is substituted; the physical token state refuses."
+    },
+    {
+      "label": "custody *: caller refuses after the token effect",
+      "routes": [
+        "custody/process_instruction",
+        "custody/delegated::process"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 3,
+        "reason": "The test-only caller's DeliberateLateFailure, raised AFTER Custody returned its receipt, to prove the token CPI, the delegate exhaustion and the replay roll back together. It is not a Custody refusal, and it collides numerically with custody/CustodySbfError::CallerAuthority, which is exactly why it is not credited to one."
+      },
+      "note": "The strongest rollback case in this campaign: the campaign asserts the replay, vault, source and destination accounts are byte-identical to their prestate."
+    },
+    {
+      "label": "custody *: transfer vault to external destination",
+      "routes": [
+        "custody/process_instruction",
+        "custody/execute_transfer#Transfer"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "The ordinary (non-delegated) Transfer route: Hoard principal out to an external destination through a real token CPI."
+    },
+    {
+      "label": "custody *: close vault",
+      "routes": [
+        "custody/process_instruction",
+        "custody/close_vault#CloseVault"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Closes the zero-balance vault through a real token CloseAccount CPI and refunds its rent to the pinned beneficiary."
+    },
+    {
+      "label": "custody *: close replay at a stale revision",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::Replay",
+      "note": "HOSTILE. The revision has already advanced past the one the request names."
+    },
+    {
+      "label": "custody *: close replay under a foreign caller role",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::Replay",
+      "note": "HOSTILE. A different Registry caller role cannot retire another role's replay."
+    },
+    {
+      "label": "custody *: close replay",
+      "routes": [
+        "custody/process_instruction",
+        "custody/close_replay#CloseReplay"
+      ],
+      "program": "custody",
+      "outcome": "executed",
+      "note": "Retires the quiescent replay and refunds its rent to the pinned beneficiary."
+    },
+    {
+      "label": "custody *: open vault after the replay is closed",
+      "routes": [
+        "custody/process_instruction"
+      ],
+      "program": "custody",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::Replay",
+      "note": "HOSTILE. A retired replay cannot authorize a new vault."
+    }
+  ]
+}

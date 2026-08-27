@@ -322,10 +322,7 @@ pub struct ActivationCacheProgressV1 {
 impl ActivationCacheProgressV1 {
     /// Whether this exact role has already been admitted.
     pub fn is_written(self, role: ExecutionRoleV1) -> bool {
-        self.written
-            .get(role_index(role))
-            .copied()
-            .unwrap_or(false)
+        self.written.get(role_index(role)).copied().unwrap_or(false)
     }
 
     /// Number of roles already admitted, from zero to five.

@@ -93,12 +93,12 @@ pub mod resolution_core_v3 {
 pub mod series_hot_v3;
 /// Compact projected-Market Series Consume instruction-data construction.
 pub mod series_projected_v2;
+/// Chain-derived unsigned Source-resolution creation and evidence acceptance.
+pub mod source_resolution;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned {
     pub use dclutch_versioned_message_operator::*;
 }
-/// Chain-derived unsigned Series and Dealer workflows.
-pub mod verticals;
 
 pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
@@ -1314,7 +1314,7 @@ mod tests {
         );
         let mut rent_credit = resolution.rent_credit.clone();
         rent_credit.lamports = u64::MAX;
-        let state = verticals::SourceCreateResolutionState {
+        let state = source_resolution::SourceCreateResolutionState {
             payer: account(
                 Pubkey::new_from_array([88; 32]),
                 system_program::ID,
@@ -1329,7 +1329,7 @@ mod tests {
             system_program: system_program_account(),
             rent_sysvar: resolution.rent_sysvar.clone(),
         };
-        let report = verticals::build_source_create_resolution_v1(program, &state)
+        let report = source_resolution::build_source_create_resolution_v1(program, &state)
             .expect("chain-derived Source Create");
         assert_eq!(report.instruction.accounts.len(), 8);
         assert_eq!(report.resolution_state, destination);
@@ -1355,15 +1355,15 @@ mod tests {
             .get_mut(16)
             .expect("SourceMaterial body") ^= 1;
         assert!(matches!(
-            verticals::build_source_create_resolution_v1(program, &wrong_material),
-            Err(verticals::VerticalError::FinalizationMismatch)
-                | Err(verticals::VerticalError::ContentMismatch)
+            source_resolution::build_source_create_resolution_v1(program, &wrong_material),
+            Err(source_resolution::SourceResolutionError::FinalizationMismatch)
+                | Err(source_resolution::SourceResolutionError::ContentMismatch)
         ));
         let mut wrong_destination = state;
         wrong_destination.resolution_state_destination.key = Pubkey::new_from_array([89; 32]);
         assert_eq!(
-            verticals::build_source_create_resolution_v1(program, &wrong_destination),
-            Err(verticals::VerticalError::PdaMismatch)
+            source_resolution::build_source_create_resolution_v1(program, &wrong_destination),
+            Err(source_resolution::SourceResolutionError::PdaMismatch)
         );
     }
 

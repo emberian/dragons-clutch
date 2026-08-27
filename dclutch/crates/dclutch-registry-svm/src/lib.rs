@@ -299,11 +299,24 @@ pub struct ProgramDataV3View<'a> {
     elf: &'a [u8],
 }
 
-impl<'a> ProgramDataV3View<'a> {
-    /// Decode variant-three ProgramData at Loader V3's fixed 45-byte ELF offset.
-    pub fn parse(bytes: &'a [u8]) -> Result<Self> {
-        if bytes.len() <= LOADER_V3_PROGRAMDATA_METADATA_BYTES {
-            return Err(Error::EmptyElf);
+/// Exact Loader V3 ProgramData **metadata** view, without the ELF tail.
+///
+/// A cross-cluster observer sees only the 45-byte prefix of a `ProgramData`
+/// account — the tail is committed to by a digest rather than carried — so the
+/// metadata parse has to stand on its own. [`ProgramDataV3View::parse`]
+/// delegates to it, which keeps one owner for the variant tag, the deployment
+/// slot, and the upgrade-authority option encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProgramDataMetadataV3View {
+    deployment_slot: u64,
+    upgrade_authority: Option<[u8; 32]>,
+}
+
+impl ProgramDataMetadataV3View {
+    /// Decode the variant-three metadata prefix from at least 45 bytes.
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() < LOADER_V3_PROGRAMDATA_METADATA_BYTES {
+            return Err(Error::InvalidLength);
         }
         if read_u32(bytes, 0)? != 3 {
             return Err(Error::InvalidLoaderVariant);
@@ -320,6 +333,30 @@ impl<'a> ProgramDataV3View<'a> {
         Ok(Self {
             deployment_slot: read_u64(bytes, 4)?,
             upgrade_authority,
+        })
+    }
+
+    /// Return the last deployment slot.
+    pub const fn deployment_slot(self) -> u64 {
+        self.deployment_slot
+    }
+
+    /// Return the current optional upgrade authority.
+    pub const fn upgrade_authority(self) -> Option<[u8; 32]> {
+        self.upgrade_authority
+    }
+}
+
+impl<'a> ProgramDataV3View<'a> {
+    /// Decode variant-three ProgramData at Loader V3's fixed 45-byte ELF offset.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self> {
+        if bytes.len() <= LOADER_V3_PROGRAMDATA_METADATA_BYTES {
+            return Err(Error::EmptyElf);
+        }
+        let metadata = ProgramDataMetadataV3View::parse(bytes)?;
+        Ok(Self {
+            deployment_slot: metadata.deployment_slot(),
+            upgrade_authority: metadata.upgrade_authority(),
             elf: slice(
                 bytes,
                 LOADER_V3_PROGRAMDATA_METADATA_BYTES,

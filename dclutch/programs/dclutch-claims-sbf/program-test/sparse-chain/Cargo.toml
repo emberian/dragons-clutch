@@ -1,0 +1,41 @@
+[package]
+name = "dclutch-claims-sparse-chain-program-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+rust-version = "1.89"
+
+[dependencies]
+dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
+dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
+dclutch-claims-sbf = { path = "../.." }
+dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-claims-sparse-chain-test-caller-sbf = { path = "../../test-programs/sparse-chain-caller", default-features = false, features = ["no-entrypoint"] }
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+solana-account = "=4.3.2"
+solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
+solana-message = "=4.4.1"
+solana-program = { version = "=3.0.0" }
+solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-sdk-ids = "=3.1.0"
+solana-transaction = "=4.1.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[workspace]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

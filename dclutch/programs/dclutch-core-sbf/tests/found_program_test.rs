@@ -1461,8 +1461,18 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
     }
 }
 
+/// Submit one Series occurrence and, if the gauntlet asked, record it.
+///
+/// `label` is the census binding key. The evidence is written only when
+/// `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR` is set, so this stays an ordinary test
+/// under a bare `cargo test`. The submit goes through
+/// `process_transaction_with_metadata` rather than `process_transaction`
+/// because the census cross-checks every claimed route against the runtime's
+/// own `Program <address> invoke [n]` lines, and a producer that cannot
+/// surface those cannot be corroborated.
 async fn execute_series(
     mut fixture: SeriesFixture,
+    label: &str,
 ) -> (
     SeriesFixture,
     solana_program_test::ProgramTestContext,
@@ -1481,13 +1491,104 @@ async fn execute_series(
         &[&context.payer],
         blockhash,
     );
-    let failure = context
-        .banks_client
-        .process_transaction(transaction)
-        .await
-        .err()
-        .map(|error| format!("{error:?}"));
+    let failure = submit_and_record(&context, transaction, label).await;
     (fixture, context, failure)
+}
+
+/// Submit one already-built transaction and, if asked, record it as evidence.
+async fn submit_and_record(
+    context: &solana_program_test::ProgramTestContext,
+    transaction: Transaction,
+    label: &str,
+) -> Option<String> {
+    let signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .expect("a signed transaction has a signature")
+        .to_string();
+    let outcome = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("the bank processed the transaction");
+    let failure = outcome.result.err().map(|error| format!("{error:?}"));
+    let slot = context.banks_client.get_root_slot().await.unwrap_or_default();
+    let (logs, compute_units) = outcome.metadata.map_or_else(
+        || (Vec::new(), None),
+        |metadata| (metadata.log_messages, Some(metadata.compute_units_consumed)),
+    );
+    dclutch_program_test_evidence::record(&dclutch_program_test_evidence::TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: compute_units,
+        // This campaign does not measure its wire extent; `None` says so
+        // rather than implying the frame fits Solana's packet maximum.
+        wire_bytes: None,
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    failure
+}
+
+/// Consume one Series occurrence, then submit the SAME occurrence again.
+///
+/// The replay carries a fresh blockhash, so it is a genuinely distinct
+/// transaction rather than one the bank rejects as already processed. Anything
+/// less would prove nothing about the program: duplicate-signature rejection is
+/// the runtime declining to look, not Core declining to act twice on one
+/// ticket.
+async fn execute_series_twice(
+    mut fixture: SeriesFixture,
+    first_label: &str,
+    replay_label: &str,
+) -> (
+    SeriesFixture,
+    solana_program_test::ProgramTestContext,
+    Option<String>,
+    Option<String>,
+) {
+    let test = fixture.base.test.take().expect("ProgramTest");
+    let mut context = test.start_with_context().await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let instruction = series_instruction(&fixture);
+    let first = submit_and_record(
+        &context,
+        Transaction::new_signed_with_payer(
+            &[instruction.clone()],
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            blockhash,
+        ),
+        first_label,
+    )
+    .await;
+    let replay_blockhash = context
+        .get_new_latest_blockhash()
+        .await
+        .expect("a distinct blockhash, so the replay is a distinct transaction");
+    assert_ne!(
+        replay_blockhash, blockhash,
+        "without a new blockhash the bank would refuse the replay as already processed,          which proves nothing about Core"
+    );
+    let replay = submit_and_record(
+        &context,
+        Transaction::new_signed_with_payer(
+            &[instruction],
+            Some(&context.payer.pubkey()),
+            &[&context.payer],
+            replay_blockhash,
+        ),
+        replay_label,
+    )
+    .await;
+    (fixture, context, first, replay)
 }
 
 #[tokio::test]
@@ -1678,7 +1779,7 @@ async fn assert_series_found_rollback(
 #[tokio::test]
 async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
     let fixture = series_fixture(SeriesFault::None);
-    let (fixture, context, failure) = execute_series(fixture).await;
+    let (fixture, context, failure) = execute_series(fixture, "Series occurrence Consume founds its Market with a Core permit").await;
     assert_eq!(failure, None, "Series Found must complete under 1.4M CU");
     assert_eq!(fixture.base.outcome_count, 258);
 
@@ -1725,7 +1826,7 @@ async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
 #[tokio::test]
 async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollback() {
     let fixture = series_fixture(SeriesFault::BatchClaimsProgramdata);
-    let (fixture, context, failure) = execute_series(fixture).await;
+    let (fixture, context, failure) = execute_series(fixture, "Series Consume refuses a substituted Claims ProgramData").await;
     let failure = failure.expect("substituted Claims ProgramData must refuse");
     assert!(
         failure.contains("Custom(3)"),
@@ -1735,9 +1836,63 @@ async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollba
 }
 
 #[tokio::test]
+async fn series_consume_refuses_to_consume_the_same_ticket_twice() {
+    // The ticket is the whole point of a Series occurrence: it is the one-shot
+    // authority to found this Market at this index. If a second identical
+    // transaction could consume it again, the Series would mint a second
+    // liability from one prepayment.
+    let fixture = series_fixture(SeriesFault::None);
+    let (fixture, context, first, replay) = execute_series_twice(
+        fixture,
+        "Series occurrence Consume founds its Market with a Core permit (replay campaign)",
+        "Series Consume refuses a replayed ticket",
+    )
+    .await;
+    assert_eq!(first, None, "the first occurrence must found its Market");
+    let replay = replay.expect("a consumed ticket must not fund a second Found");
+
+    // The Market survives the refused replay exactly as the first Consume left
+    // it. A replay that refused but disturbed committed state would be a worse
+    // failure than one that succeeded, because nothing would report it.
+    let market = context
+        .banks_client
+        .get_account(fixture.base.market)
+        .await
+        .expect("Market query")
+        .expect("the Market founded by the first occurrence");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+    let state = CoreState::decode(&market.data).expect("Core state");
+    assert_eq!(state.phase, Phase::Founding);
+    assert_eq!(state.readiness, Readiness::Prepaid);
+
+    let permit = context
+        .banks_client
+        .get_account(fixture.permit)
+        .await
+        .expect("permit query")
+        .expect("the permit written by the first occurrence");
+    assert_eq!(permit.owner, CORE_PROGRAM_ID);
+    assert_eq!(permit.lamports, fixture.permit_lamports);
+    let permit = SeriesFoundingPermitV1::decode(&permit.data).expect("Series founding permit");
+    assert_eq!(
+        permit.intent().market().to_bytes(),
+        fixture.base.market.to_bytes()
+    );
+    // Pinned to the exact code, not merely "some refusal". CoreSbfError::Market
+    // is 5: the Market PDA, owner, width, phase, or generation refused. That is
+    // the honest guard for a replay -- the first Consume moved the Market out of
+    // the prestate this occurrence requires, so the second cannot proceed. A
+    // refactor that moved the refusal to a different guard has to say so here.
+    assert!(
+        replay.contains("Custom(5)"),
+        "a replayed ticket must be refused by CoreSbfError::Market, got {replay}"
+    );
+}
+
+#[tokio::test]
 async fn series_consume_late_hoard_refusal_rolls_back_found_and_all_replay_state() {
     let fixture = series_fixture(SeriesFault::LateHoardBalance);
-    let (fixture, context, failure) = execute_series(fixture).await;
+    let (fixture, context, failure) = execute_series(fixture, "Series Consume refuses a late Hoard postcondition").await;
     let failure = failure.expect("late Hoard postcondition must refuse");
     assert!(
         failure.contains("Custom(11)"),

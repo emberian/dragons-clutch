@@ -41,6 +41,7 @@ solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [dev-dependencies]
+dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
 dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2-admission = { path = "../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }

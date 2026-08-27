@@ -925,8 +925,7 @@ pub fn project_atomic(
         || projection.permissions.len() != accounts
         || projection.scratch_lamports.len() != accounts
         || projection.output_lamports.len() != accounts
-        || projection.scratch_requests.len() != request_bytes
-        || projection.output_requests.len() != request_bytes
+        || projection.requests.len() != request_bytes
     {
         return Err(ErrorV4::BaseProgram);
     }
@@ -944,7 +943,7 @@ pub fn project_atomic(
         projection.identities,
         projection.aliases,
     )?;
-    initialize_requests(program.base, tail_count, projection.scratch_requests)?;
+    initialize_requests(program.base, tail_count, projection.requests)?;
     for (output, input) in projection
         .scratch_lamports
         .iter_mut()
@@ -989,9 +988,6 @@ pub fn project_atomic(
             .get(representative(projection.aliases, index)?)
             .ok_or(ErrorV4::BaseProgram)?;
     }
-    projection
-        .output_requests
-        .copy_from_slice(projection.scratch_requests);
     Ok(())
 }
 
@@ -1555,8 +1551,7 @@ mod tests {
                 permissions: &permissions,
                 scratch_lamports: &mut scratch_lamports,
                 output_lamports: &mut output_lamports,
-                scratch_requests: &mut [],
-                output_requests: &mut [],
+                requests: &mut [],
             },
         )
         .expect("V4 shifted projection");
@@ -1577,8 +1572,7 @@ mod tests {
                     permissions: &permissions,
                     scratch_lamports: &mut hostile_scratch,
                     output_lamports: &mut hostile_output,
-                    scratch_requests: &mut [],
-                    output_requests: &mut [],
+                    requests: &mut [],
                 },
             )
             .is_err()

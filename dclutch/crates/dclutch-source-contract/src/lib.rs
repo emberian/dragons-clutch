@@ -223,6 +223,22 @@ pub const PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1: [u8; 32] = [
     0xc7, 0xec, 0xdf, 0xf1, 0x34, 0xc8, 0x92, 0x16, 0x20, 0xdd, 0x8a, 0xeb, 0xae, 0x69, 0x70, 0x6a,
     0x2b, 0x3b, 0x15, 0xd3, 0x21, 0x81, 0xb0, 0xdc, 0xb5, 0xb3, 0x15, 0x72, 0x27, 0x41, 0xf7, 0xc9,
 ];
+/// Closed second provider-extension release: the cross-cluster relayed
+/// observation record.
+///
+/// The relayed family reaches resolution through its own record routes rather
+/// than through the Pyth extension frame, so this identity names a *parser and
+/// normalizer* boundary and not a set of provider accounts.  It exists here,
+/// beside Pyth's, because the one canonical Source-material encoder has to be
+/// able to admit a second family without becoming family-agnostic: the closed
+/// set is the point.
+pub const RELAYED_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/source-provider-extension-relayed-mainnet-state/v1";
+/// SHA-256 identity of [`RELAYED_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1`].
+pub const RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1: [u8; 32] = [
+    0x4f, 0x3e, 0x60, 0xe3, 0x40, 0x89, 0x5c, 0x3e, 0xf0, 0x0c, 0x37, 0x1c, 0xeb, 0x3e, 0xf7, 0x98,
+    0xdf, 0xa5, 0x80, 0x66, 0xb6, 0x17, 0xc6, 0xde, 0x0d, 0xea, 0x87, 0x50, 0x13, 0x4c, 0x99, 0x46,
+];
 /// Closed preimage release for the canonical shared-evidence-set digest.
 pub const SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/source-shared-evidence-set/v1";
 /// SHA-256 identity of [`SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1`].
@@ -667,6 +683,18 @@ pub enum SourceAccessProfile {
     PythTerminalOneTransaction = 1,
     /// A reusable bounded observation child, shared by compatible policies.
     SharedObservationChild = 2,
+    /// A cross-cluster relayed observation record, authenticated and sealed by
+    /// its own adapter before any evidence reaches this contract.
+    ///
+    /// The record is not a parameter here and cannot be: the crate that owns it
+    /// depends on this one, so passing its view back would be circular.
+    /// Authenticating the sealed record — its program ownership, its PDA
+    /// derivation from `(market, generation, account_set_id, observed_slot)`,
+    /// its quorum, and every signature it accumulated — is the relay adapter's
+    /// obligation, discharged before it normalizes anything. What this contract
+    /// owns is unchanged: binding that normalized evidence to the immutable
+    /// material, the window, and the statistic.
+    RelayedObservationRecord = 3,
 }
 
 impl SourceAccessProfile {
@@ -674,6 +702,7 @@ impl SourceAccessProfile {
         match byte {
             1 => Ok(Self::PythTerminalOneTransaction),
             2 => Ok(Self::SharedObservationChild),
+            3 => Ok(Self::RelayedObservationRecord),
             _ => Err(Error::UnknownSourceAccess),
         }
     }
@@ -2397,11 +2426,13 @@ fn validate_source_material_input_v1(input: SourceMaterialInputV1<'_>) -> Result
         .validate_capacity(input.capacity_profile_id, *input.capacity_profile)?;
     if input.policy.capacity_profile_id() != input.capacity_profile_id
         || input.primary_source.provider_release_id() != input.primary_provider_release_id
-        || input
-            .primary_provider_release
-            .adapter_release_id()
-            .to_bytes()
-            != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        || !matches!(
+            input
+                .primary_provider_release
+                .adapter_release_id()
+                .to_bytes(),
+            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 | RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
+        )
         || input.result_domain.coordinate_domain_id().to_bytes()
             != input.primary_source.domain_id().to_bytes()
         || input.result_domain.result_unit_id().to_bytes()
@@ -2668,7 +2699,10 @@ fn validate_source_material_primary_provider_v1(
     let provider_release = ProviderReleaseV1::decode(slice(bytes, 1392, PROVIDER_RELEASE_BYTES)?)?;
     PythAdapterConfigV1::decode(slice(bytes, 1568, PYTH_ADAPTER_CONFIG_BYTES)?)?;
     if primary_source.provider_release_id() != provider_release_id
-        || provider_release.adapter_release_id().to_bytes() != PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
+        || !matches!(
+            provider_release.adapter_release_id().to_bytes(),
+            PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 | RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1
+        )
     {
         return Err(Error::LinkageMismatch);
     }
@@ -3221,7 +3255,19 @@ impl SourceResolutionStateV1 {
                 _ => return Err(Error::InvalidRecoveryTransition),
             };
         match (source.access_profile(), shared_observation) {
-            (SourceAccessProfile::PythTerminalOneTransaction, None) => {
+            // Both terminal profiles carry exactly one normalized observation
+            // whose provider-evidence identity IS the acceptance identity. For
+            // Pyth that identity digests a receiver-owned price update; for a
+            // relayed record it digests the sealed set the record folded. In
+            // both cases the provider bytes were authenticated before this
+            // contract saw a normalized integer, and in both cases a caller
+            // cannot substitute a different acceptance without producing a
+            // different identity.
+            (
+                SourceAccessProfile::PythTerminalOneTransaction
+                | SourceAccessProfile::RelayedObservationRecord,
+                None,
+            ) => {
                 if evidence.len() != 1
                     || evidence.first().map(|item| item.provider_evidence_id())
                         != Some(resolution_evidence_id)

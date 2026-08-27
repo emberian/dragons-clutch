@@ -6,12 +6,13 @@ use core::convert::TryFrom;
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
     CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
-    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
-    ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1,
-    ProjectedCustodyStateV1, normal_replay_from_realization_v1,
+    PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyError,
+    ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1,
+    ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+    normal_replay_from_realization_v1,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, ProjectFoundReceiptV1, ProjectFoundRequestV1, Request, STATE_BYTES,
@@ -109,6 +110,17 @@ const OPEN_SOURCE_RENT: usize = 15;
 const OPEN_SOURCE_SYSTEM: usize = 16;
 const OPEN_SOURCE_MARKET: usize = 17;
 
+const ABORT_SOURCE_ACCOUNTS: usize = PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1;
+const ABORT_SOURCE_VAULT: usize = 7;
+const ABORT_SOURCE_REPLAY: usize = 8;
+const ABORT_SOURCE_HOARD: usize = 9;
+const ABORT_SOURCE_DESTINATION: usize = 10;
+const ABORT_SOURCE_REFUND_OWNER: usize = 11;
+const ABORT_SOURCE_AUTHORITY: usize = 12;
+const ABORT_SOURCE_MINT: usize = 13;
+const ABORT_SOURCE_TOKEN_PROGRAM: usize = 14;
+const ABORT_SOURCE_MARKET: usize = 15;
+
 const LOCK_CLOSE_ACCOUNTS: usize = PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1;
 const LOCK_CLOSE_HOARD: usize = 7;
 const LOCK_CLOSE_SOURCE: usize = 8;
@@ -154,6 +166,9 @@ pub(crate) fn process(
         ProjectedCustodyOperationV1::OpenSourceCompartment => {
             open_source_compartment(program_id, accounts, request, request_digest)
         }
+        ProjectedCustodyOperationV1::AbortSourceAndClose => {
+            abort_source_and_close(program_id, accounts, request, request_digest)
+        }
     }
 }
 
@@ -196,12 +211,24 @@ fn authenticate_common(
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
-    let terminal = matches!(
-        request.operation,
+    // Which operations close accounts, and therefore need the RentCredit
+    // writable. Written as an exhaustive `match` rather than a `matches!` on
+    // purpose: adding an operation to this enum must be a COMPILE ERROR here,
+    // not a frame refusal 5,364 compute units into a transaction with nothing
+    // naming the cause. `AbortSourceAndClose` was added and silently omitted,
+    // which is exactly how a list that is exhaustive by intent rather than by
+    // the compiler fails.
+    let terminal = match request.operation {
         ProjectedCustodyOperationV1::RefundAndClose
-            | ProjectedCustodyOperationV1::AbortOpenAndClose
-            | ProjectedCustodyOperationV1::LockHoardAndCloseSource
-    );
+        | ProjectedCustodyOperationV1::AbortOpenAndClose
+        | ProjectedCustodyOperationV1::AbortSourceAndClose
+        | ProjectedCustodyOperationV1::LockHoardAndCloseSource => true,
+        ProjectedCustodyOperationV1::Initialize
+        | ProjectedCustodyOperationV1::OpenHoard
+        | ProjectedCustodyOperationV1::LockHoard
+        | ProjectedCustodyOperationV1::RealizeAndClose
+        | ProjectedCustodyOperationV1::OpenSourceCompartment => false,
+    };
     if rent_credit.is_writable != terminal {
         return Err(CustodySbfError::AccountFrame.into());
     }
@@ -833,7 +860,7 @@ fn refund_and_close(
             account(accounts, RENT_CREDIT)?.key.to_bytes(),
             true,
         )
-        .map_err(|_| CustodySbfError::Replay)?;
+        .map_err(expiry_or_replay)?;
     close_vault_to_rent_credit(
         vault,
         authority,
@@ -950,7 +977,7 @@ fn abort_open_and_close(
             rent_credit.key.to_bytes(),
             true,
         )
-        .map_err(|_| CustodySbfError::Replay)?;
+        .map_err(expiry_or_replay)?;
     let rent_before = rent_credit.lamports();
     close_vault_to_rent_credit(
         vault,
@@ -969,6 +996,255 @@ fn abort_open_and_close(
         return Err(CustodySbfError::Postcondition.into());
     }
     return_receipt(receipt)
+}
+
+/// Return the source principal after expiry and close the whole projection.
+///
+/// The terminal `SourceFunded` did not have. Every account this touches was
+/// created by `OpenSourceCompartment` or `OpenHoard` against a Market that
+/// still does not exist, and all four of them close to `request.rent_credit`,
+/// which is where their rent was always going. The principal goes back to a
+/// token account owned by `request.refund_owner` — the same party that had to
+/// sign as the funder's owner to put it in.
+///
+/// Split across three frames deliberately: the transfer and the four closures
+/// cannot share a stack frame with the 808-byte projected state and the
+/// 768-byte request at this program's SBPF v0 budget.
+#[inline(never)]
+fn abort_source_and_close(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: ProjectedCustodyRequestV1,
+    request_digest: [u8; 32],
+) -> Result<(), ProgramError> {
+    let source = account(accounts, ABORT_SOURCE_VAULT)?;
+    let source_replay = account(accounts, ABORT_SOURCE_REPLAY)?;
+    let hoard = account(accounts, ABORT_SOURCE_HOARD)?;
+    let destination = account(accounts, ABORT_SOURCE_DESTINATION)?;
+    let refund_owner = account(accounts, ABORT_SOURCE_REFUND_OWNER)?;
+    let authority = account(accounts, ABORT_SOURCE_AUTHORITY)?;
+    let mint = account(accounts, ABORT_SOURCE_MINT)?;
+    let token_program = account(accounts, ABORT_SOURCE_TOKEN_PROGRAM)?;
+    let rent_credit = account(accounts, RENT_CREDIT)?;
+    require_vacant_market(account(accounts, ABORT_SOURCE_MARKET)?, request)?;
+    // The Hoard is authenticated as the canonical projected Hoard and the
+    // source as the canonical source compartment. Neither derivation is
+    // relaxed for the abort: it closes exactly the accounts the ladder made.
+    authenticate_token_frame(
+        program_id,
+        hoard,
+        authority,
+        mint,
+        token_program,
+        request,
+        false,
+    )?;
+    authenticate_source_frame(program_id, source, source_replay, token_program, request)?;
+    if !hoard.is_writable
+        || !source.is_writable
+        || !destination.is_writable
+        || destination.owner != token_program.key
+        || destination.key == source.key
+        || destination.key == hoard.key
+        // The principal's owner must sign and must stay non-writable, exactly
+        // as `OpenSourceCompartment` required of the funder's owner. Whoever
+        // may reclaim the principal is whoever had to supply it.
+        || !refund_owner.is_signer
+        || refund_owner.is_writable
+        || refund_owner.executable
+        || refund_owner.key.to_bytes() != request.refund_owner
+        || source.lamports() != request.funding_source_vault_rent_lamports
+        || source_replay.lamports() != request.funding_source_state_rent_lamports
+        || hoard.lamports() != request.vault_rent_lamports
+    {
+        return Err(CustodySbfError::AccountFrame.into());
+    }
+    let balances = return_source_to_refund_owner(
+        program_id,
+        source,
+        destination,
+        authority,
+        mint,
+        token_program,
+        request,
+    )?;
+    let hoard_balance = read_vault_amount(hoard, authority, request)?;
+    let state = read_state(account(accounts, STATE)?)?;
+    let receipt = state
+        .abort_source_and_close(
+            request,
+            request_digest,
+            Clock::get().map_err(|_| CustodySbfError::Replay)?.slot,
+            balances.source_before,
+            balances.source_after,
+            hoard_balance,
+            balances.destination_before,
+            balances.destination_after,
+            rent_credit.key.to_bytes(),
+            true,
+        )
+        .map_err(expiry_or_replay)?;
+    close_aborted_source_projection(
+        accounts,
+        source,
+        source_replay,
+        hoard,
+        authority,
+        token_program,
+        rent_credit,
+        request,
+        program_id,
+    )?;
+    return_receipt(receipt)
+}
+
+/// Exact token balances observed either side of the one refund transfer.
+#[derive(Clone, Copy)]
+struct SourceRefundBalancesV1 {
+    source_before: u64,
+    source_after: u64,
+    destination_before: u64,
+    destination_after: u64,
+}
+
+/// Move the whole source principal back to the refund owner's token account.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn return_source_to_refund_owner<'info>(
+    program_id: &Pubkey,
+    source: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    request: ProjectedCustodyRequestV1,
+) -> Result<SourceRefundBalancesV1, ProgramError> {
+    let profile = collateral_profile(request)?;
+    let mint_data = mint
+        .try_borrow_data()
+        .map_err(|_| CustodySbfError::TokenState)?;
+    let decimals = profile
+        .check_mint(request.token_program, &mint_data)
+        .map_err(|_| CustodySbfError::TokenState)?
+        .decimals;
+    drop(mint_data);
+    let read_destination = || -> Result<u64, ProgramError> {
+        let bytes = destination
+            .try_borrow_data()
+            .map_err(|_| CustodySbfError::TokenState)?;
+        let token = profile
+            .check_transfer_account(request.token_program, &bytes)
+            .map_err(|_| CustodySbfError::TokenState)?;
+        // The destination is the refund owner's, not merely one they named.
+        if token.mint != request.mint || token.owner != request.refund_owner {
+            return Err(CustodySbfError::TokenState.into());
+        }
+        Ok(token.amount)
+    };
+    let source_before = read_vault_amount(source, authority, request)?;
+    let destination_before = read_destination()?;
+    let spec = transfer_checked(
+        request.token_program,
+        request.funding_source_vault,
+        request.mint,
+        destination.key.to_bytes(),
+        authority.key.to_bytes(),
+        request.amount,
+        decimals,
+    )
+    .map_err(|_| CustodySbfError::TokenState)?;
+    let authority_bump = Pubkey::find_program_address(
+        &[
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+        ],
+        program_id,
+    )
+    .1;
+    let authority_bump_seed = [authority_bump];
+    invoke_signed(
+        &token_instruction(&spec),
+        &[
+            source.clone(),
+            mint.clone(),
+            destination.clone(),
+            authority.clone(),
+            token_program.clone(),
+        ],
+        &[&[
+            CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+            &request.market,
+            &request.release_set,
+            &authority_bump_seed,
+        ]],
+    )
+    .map_err(|_| CustodySbfError::TokenCpi)?;
+    Ok(SourceRefundBalancesV1 {
+        source_before,
+        source_after: read_vault_amount(source, authority, request)?,
+        destination_before,
+        destination_after: read_destination()?,
+    })
+}
+
+/// Close all four accounts the aborted projection owns to the RentCredit.
+///
+/// The postcondition is exact rather than "at least": the source Vault, the
+/// source replay, the empty Hoard Vault, and the projection state are the
+/// complete set of accounts this ladder created, and the RentCredit must gain
+/// exactly their four rents and nothing else.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn close_aborted_source_projection<'info>(
+    accounts: &[AccountInfo<'info>],
+    source: &AccountInfo<'info>,
+    source_replay: &AccountInfo<'info>,
+    hoard: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    rent_credit: &AccountInfo<'info>,
+    request: ProjectedCustodyRequestV1,
+    program_id: &Pubkey,
+) -> Result<(), ProgramError> {
+    let rent_before = rent_credit.lamports();
+    // ORDER IS load-bearing. `close_state_to_rent_credit` zeroes an account's
+    // lamports and assigns it to the System program by hand; every token
+    // closure is a CPI. Interleaving them fails the runtime's own
+    // before-and-after balance check at the CPI boundary with
+    // `UnbalancedInstruction`, which names no conjunct and no account. The two
+    // terminals that existed never met this because each performs its single
+    // manual close last. This one closes four accounts, so it does every CPI
+    // first and every by-hand close afterwards.
+    close_specific_vault_to_rent_credit(
+        source,
+        authority,
+        token_program,
+        rent_credit,
+        request,
+        program_id,
+        request.funding_source_vault,
+    )?;
+    close_vault_to_rent_credit(
+        hoard,
+        authority,
+        token_program,
+        rent_credit,
+        request,
+        program_id,
+    )?;
+    close_state_to_rent_credit(source_replay, rent_credit, program_id)?;
+    close_state_to_rent_credit(account(accounts, STATE)?, rent_credit, program_id)?;
+    let expected = rent_before
+        .checked_add(request.funding_source_vault_rent_lamports)
+        .and_then(|value| value.checked_add(request.funding_source_state_rent_lamports))
+        .and_then(|value| value.checked_add(request.vault_rent_lamports))
+        .and_then(|value| value.checked_add(request.state_rent_lamports))
+        .ok_or(CustodySbfError::Postcondition)?;
+    if rent_credit.lamports() != expected {
+        return Err(CustodySbfError::Postcondition.into());
+    }
+    Ok(())
 }
 
 /// Create and fund the normal source compartment a founding Lock consumes.
@@ -1837,6 +2113,18 @@ fn close_specific_vault_to_rent_credit<'info>(
     .map_err(|_| CustodySbfError::TokenCpi.into())
 }
 
+/// Report an expiry-gated terminal's refusal as what it is.
+///
+/// The kernel distinguishes `Expiry` - attempted at the wrong time - from every
+/// other replay refusal. Flattening them lost exactly the distinction a reader
+/// of a refused unwind needs.
+fn expiry_or_replay(error: ProjectedCustodyError) -> CustodySbfError {
+    match error {
+        ProjectedCustodyError::Expiry => CustodySbfError::Expiry,
+        _ => CustodySbfError::Replay,
+    }
+}
+
 fn close_state_to_rent_credit(
     state: &AccountInfo<'_>,
     rent_credit: &AccountInfo<'_>,
@@ -1894,6 +2182,7 @@ fn require_count(
         ProjectedCustodyOperationV1::AbortOpenAndClose => ABORT_ACCOUNTS,
         ProjectedCustodyOperationV1::LockHoardAndCloseSource => LOCK_CLOSE_ACCOUNTS,
         ProjectedCustodyOperationV1::OpenSourceCompartment => OPEN_SOURCE_ACCOUNTS,
+        ProjectedCustodyOperationV1::AbortSourceAndClose => ABORT_SOURCE_ACCOUNTS,
     };
     if accounts.len() != expected {
         return Err(CustodySbfError::AccountFrame.into());
@@ -1925,5 +2214,16 @@ mod tests {
         assert_eq!(LOCK_CLOSE_ACCOUNTS, 14);
         assert_eq!(OPEN_SOURCE_ACCOUNTS, 18);
         assert_eq!(OPEN_SOURCE_MARKET, OPEN_SOURCE_ACCOUNTS - 1);
+        assert_eq!(ABORT_SOURCE_ACCOUNTS, 16);
+        assert_eq!(ABORT_SOURCE_MARKET, ABORT_SOURCE_ACCOUNTS - 1);
+        // The funded-source abort is the widest terminal because it is the
+        // only one that both moves principal and closes four accounts. It is
+        // NOT the same frame as any other terminal, which is the point: the
+        // two that existed admit prestates this one must not, and widening one
+        // of them would have put a principal transfer on a path whose whole
+        // contract is that there is no principal.
+        for other in [REFUND_ACCOUNTS, ABORT_ACCOUNTS, LOCK_CLOSE_ACCOUNTS] {
+            assert_ne!(ABORT_SOURCE_ACCOUNTS, other);
+        }
     }
 }

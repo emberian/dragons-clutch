@@ -31,6 +31,12 @@ use model::{Bindings, BlockedSet, Inventory, Ledger, ProgramMap};
 /// The list is explicit rather than globbed so that adding a program is a
 /// visible decision. A program in `programs/` that is missing here is reported
 /// by `inventory --check-complete`.
+///
+/// The reverse also has to stay true: a package listed here that is no longer
+/// in `programs/` is silently filtered out at run time, so a stale entry looks
+/// exactly like a live one from the report. `dclutch-general-sbf` sat here for
+/// exactly that reason, four months after `5b19626` deleted it. Delete a program's entry in the same commit that
+/// deletes the program.
 const TARGETS: &[(&str, &str)] = &[
     ("dclutch-claims-proof-sbf", "claims-proof"),
     ("dclutch-claims-sbf", "claims"),
@@ -41,18 +47,11 @@ const TARGETS: &[(&str, &str)] = &[
     ("dclutch-dealer-accelerator-sbf", "dealer-accelerator"),
     ("dclutch-dealer-sbf", "dealer"),
     ("dclutch-direct-aot-sbf", "direct-aot"),
-    ("dclutch-economic-sbf", "economic"),
-    ("dclutch-effect-sbf", "effect"),
     ("dclutch-general-accelerator-sbf", "general-accelerator"),
-    ("dclutch-general-sbf", "general"),
-    ("dclutch-product-evidence-sbf", "product-evidence"),
-    ("dclutch-product-payoff-sbf", "product-payoff"),
     ("dclutch-product-runtime-v2-sbf", "product-runtime-v2"),
     ("dclutch-registry-sbf", "registry"),
     ("dclutch-rent-sbf", "rent"),
     ("dclutch-resolution-proof-sbf", "resolution"),
-    ("dclutch-sbf", "monolith"),
-    ("dclutch-series-sbf", "series"),
     ("dclutch-series-shadow-sbf", "series-shadow"),
     ("dclutch-trading-sbf", "trading"),
 ];

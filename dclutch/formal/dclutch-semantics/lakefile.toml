@@ -88,3 +88,7 @@ root = "EmitRequestProfileV4AbiRust"
 [[lean_exe]]
 name = "emit-structured-v2-abi-rust"
 root = "EmitStructuredV2AbiRust"
+
+[[lean_exe]]
+name = "emit-relayed-mainnet-state-v1-abi-rust"
+root = "EmitRelayedMainnetStateV1AbiRust"

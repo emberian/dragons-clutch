@@ -589,6 +589,10 @@ mod tests {
         );
         assert_eq!(
             HOT_LINKED_BASIS_STAGING_ACCOUNT_V3 + 1,
+            HOT_CAPABILITY_SEAL_ACCOUNT_V3
+        );
+        assert_eq!(
+            HOT_CAPABILITY_SEAL_ACCOUNT_V3 + 1,
             HOT_FIXED_ACCOUNT_COUNT_V3
         );
         assert_eq!(

@@ -895,6 +895,31 @@ fn authenticate_collateral(
     {
         return Err(DealerScenarioAcceleratorErrorV4::Custody);
     }
+    seal_collateral_observation_v4(
+        [principal, fee, hoard, counterparty],
+        authority,
+        request.counterparty_owner,
+        realm,
+        replay,
+    )
+}
+
+/// Mint the collateral observation from four observed vaults, or refuse.
+///
+/// Out of line because it is the last act of `authenticate_collateral`, which
+/// sits close enough to the SBPF v0 static 4,096-byte frame limit that building
+/// this record inside it leaves no room: with the allocator's `alloc` inlined,
+/// the shipped build reports eight calls in that function overwriting their own
+/// caller frame, and none with the record built here.
+#[inline(never)]
+fn seal_collateral_observation_v4(
+    observed: [Option<TokenObservationV4>; 4],
+    authority: [u8; 32],
+    counterparty_owner: [u8; 32],
+    realm: RealmV1,
+    replay: CustodyReplayV1,
+) -> Result<Box<CollateralObservationV4>, DealerScenarioAcceleratorErrorV4> {
+    let [principal, fee, hoard, counterparty] = observed;
     let principal = principal.ok_or(DealerScenarioAcceleratorErrorV4::Custody)?;
     let fee = fee.ok_or(DealerScenarioAcceleratorErrorV4::Custody)?;
     let hoard = hoard.ok_or(DealerScenarioAcceleratorErrorV4::Custody)?;
@@ -902,7 +927,7 @@ fn authenticate_collateral(
     if !is_canonical_internal_vault(principal, authority)
         || !is_canonical_internal_vault(fee, authority)
         || !is_canonical_internal_vault(hoard, authority)
-        || counterparty.token.owner != request.counterparty_owner
+        || counterparty.token.owner != counterparty_owner
         || [principal.key, fee.key, hoard.key].contains(&counterparty.key)
     {
         return Err(DealerScenarioAcceleratorErrorV4::Custody);

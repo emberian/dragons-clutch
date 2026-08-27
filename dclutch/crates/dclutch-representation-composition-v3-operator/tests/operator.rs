@@ -863,10 +863,11 @@ fn k3_n258_composition_admission_builds_packet_safe_selected_hot() {
         1,
     )
     .expect("complete compact Hot packet");
-    assert_eq!(packet.wire_bytes, 899);
-    assert_eq!(packet.loaded_addresses, 55);
+    // 899 / 56 before the validated-artifact seal joined the fixed hot prefix.
+    assert_eq!(packet.wire_bytes, 901);
+    assert_eq!(packet.loaded_addresses, 56);
     assert_eq!(packet.required_signatures, 1);
-    assert_eq!(1_232 - packet.wire_bytes, 333);
+    assert_eq!(1_232 - packet.wire_bytes, 331);
 
     assert_eq!(
         build_composition_lifecycle_hot_plan_v3(
@@ -988,10 +989,11 @@ fn k3_n258_v6_keeps_capability_market_neutral_and_binds_runtime_descriptor() {
         1,
     )
     .expect("complete V6 compact Hot packet");
-    assert_eq!(packet.wire_bytes, 899);
-    assert_eq!(packet.loaded_addresses, 55);
+    // 899 / 56 before the validated-artifact seal joined the fixed hot prefix.
+    assert_eq!(packet.wire_bytes, 901);
+    assert_eq!(packet.loaded_addresses, 56);
     assert_eq!(packet.required_signatures, 1);
-    assert_eq!(1_232 - packet.wire_bytes, 333);
+    assert_eq!(1_232 - packet.wire_bytes, 331);
 
     let hostile_id = id(109);
     let hostile_descriptor = RepresentationDescriptorV2::decode(

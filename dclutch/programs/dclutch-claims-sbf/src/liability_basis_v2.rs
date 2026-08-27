@@ -5,6 +5,38 @@
 //! candidates in memory, executes one exact Registry-selected Custody request,
 //! checks its immediate return data and token/replay postconditions, and only
 //! then commits the Claims candidate bytes.
+//!
+//! # Superseded route: `DCLLBX02` is unreachable and unsatisfiable
+//!
+//! Everything below `LIABILITY_BASIS_ACTION_MAGIC_V2` is the last Claims path
+//! that still expects a Core-owned `LinkedBasisRecordV2` (`DCLTLNK2`) under
+//! `LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2`. The four live basis consumers
+//! (`founding_v5`, `affine_batch_v2`, `signed_delta_v3`, `protocol_position_v2`)
+//! converged onto `authenticate_product_basis_v3` — the Registry-owned
+//! `ProductBasisV3` record Core authenticates when it commits a founding
+//! permit. This route did not, and it is dead on both ends:
+//!
+//! - **No producer.** Nothing in the tree builds a `DCLLBX02` instruction — no
+//!   operator, no Trading composer, no frontend, no local-validator bootstrap.
+//!   Its only caller is its own ProgramTest.
+//! - **No record.** Nothing on chain finalizes a `DCLTLNK2` raw record either;
+//!   `encode_linked_basis_record_v2` is called only from tests and fixtures.
+//!   So the route cannot be driven even if an instruction were built for it.
+//!
+//! It is therefore not a parallel authority for any live path. It is not
+//! converged here because that is three independent axes, not a basis swap:
+//! the 28-account frame carries no result-domain or portfolio record pair, the
+//! Product side still decodes a legacy Core-owned `InstanceV1` under
+//! `PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1`, and the candidate engine is built
+//! on the V2 kernel's `AdmittedBasisV2`/`ClaimsCandidateV2` in
+//! `dclutch-liability-basis-v2-kernel`, which is an active lane's crate.
+//!
+//! **Queued owner:** whoever retires the V2 liability-basis kernel deletes this
+//! route, its ProgramTest, and the `liability-basis-caller` test program in the
+//! same cycle. The shared LBV2 state vocabulary this module also exports
+//! (`MarketViewV2`, `PositionViewV2`, `LIABILITY_BASIS_MARKET_SEED_V2`, the
+//! header widths, and the encoders) has eight live consumers and outlives the
+//! route; it must be preserved, not deleted with it.
 
 extern crate alloc;
 
@@ -1550,61 +1582,6 @@ fn account<'accounts, 'info>(
         .ok_or_else(|| LiabilityBasisSbfErrorV2::Accounts.into())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn retired_terminal_tag_refuses_at_construction_and_decode() {
-        let input = LiabilityBasisActionInputV2 {
-            kind: LiabilityBasisActionKindV2::TerminalRedeem,
-            custody_present: true,
-            expected_market_revision: 2,
-            expected_position_revision: 3,
-            quantity: 1,
-            claim_index: 1,
-            expected_custody_revision: 4,
-            request_nonce: 5,
-        };
-        assert_eq!(
-            LiabilityBasisActionV2::new(input),
-            Err(LiabilityBasisSbfErrorV2::Instruction)
-        );
-
-        let mut bytes = [0_u8; LIABILITY_BASIS_ACTION_BYTES_V2];
-        put_infallible(&mut bytes, 0, &LIABILITY_BASIS_ACTION_MAGIC_V2);
-        put_infallible(&mut bytes, 8, &ABI_VERSION_V2.to_le_bytes());
-        put_infallible(
-            &mut bytes,
-            ACTION_KIND_OFFSET,
-            &[LiabilityBasisActionKindV2::TerminalRedeem as u8],
-        );
-        put_infallible(&mut bytes, ACTION_CUSTODY_PRESENT_OFFSET, &[1]);
-        put_infallible(
-            &mut bytes,
-            ACTION_MARKET_REVISION_OFFSET,
-            &2_u64.to_le_bytes(),
-        );
-        put_infallible(
-            &mut bytes,
-            ACTION_POSITION_REVISION_OFFSET,
-            &3_u64.to_le_bytes(),
-        );
-        put_infallible(&mut bytes, ACTION_QUANTITY_OFFSET, &1_u64.to_le_bytes());
-        put_infallible(&mut bytes, ACTION_CLAIM_INDEX_OFFSET, &1_u32.to_le_bytes());
-        put_infallible(
-            &mut bytes,
-            ACTION_CUSTODY_REVISION_OFFSET,
-            &4_u64.to_le_bytes(),
-        );
-        put_infallible(&mut bytes, ACTION_NONCE_OFFSET, &5_u64.to_le_bytes());
-        assert_eq!(
-            LiabilityBasisActionV2::decode(&bytes),
-            Err(LiabilityBasisSbfErrorV2::Instruction)
-        );
-    }
-}
-
 fn content_id_v2(value: [u8; 32]) -> Result<ContentIdV2, ProgramError> {
     ContentIdV2::new(value).map_err(|_| LiabilityBasisSbfErrorV2::ProductLink.into())
 }
@@ -1692,5 +1669,60 @@ fn require_zero(
 fn put_infallible(output: &mut [u8], offset: usize, value: &[u8]) {
     if let Some(target) = output.get_mut(offset..offset.saturating_add(value.len())) {
         target.copy_from_slice(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_terminal_tag_refuses_at_construction_and_decode() {
+        let input = LiabilityBasisActionInputV2 {
+            kind: LiabilityBasisActionKindV2::TerminalRedeem,
+            custody_present: true,
+            expected_market_revision: 2,
+            expected_position_revision: 3,
+            quantity: 1,
+            claim_index: 1,
+            expected_custody_revision: 4,
+            request_nonce: 5,
+        };
+        assert_eq!(
+            LiabilityBasisActionV2::new(input),
+            Err(LiabilityBasisSbfErrorV2::Instruction)
+        );
+
+        let mut bytes = [0_u8; LIABILITY_BASIS_ACTION_BYTES_V2];
+        put_infallible(&mut bytes, 0, &LIABILITY_BASIS_ACTION_MAGIC_V2);
+        put_infallible(&mut bytes, 8, &ABI_VERSION_V2.to_le_bytes());
+        put_infallible(
+            &mut bytes,
+            ACTION_KIND_OFFSET,
+            &[LiabilityBasisActionKindV2::TerminalRedeem as u8],
+        );
+        put_infallible(&mut bytes, ACTION_CUSTODY_PRESENT_OFFSET, &[1]);
+        put_infallible(
+            &mut bytes,
+            ACTION_MARKET_REVISION_OFFSET,
+            &2_u64.to_le_bytes(),
+        );
+        put_infallible(
+            &mut bytes,
+            ACTION_POSITION_REVISION_OFFSET,
+            &3_u64.to_le_bytes(),
+        );
+        put_infallible(&mut bytes, ACTION_QUANTITY_OFFSET, &1_u64.to_le_bytes());
+        put_infallible(&mut bytes, ACTION_CLAIM_INDEX_OFFSET, &1_u32.to_le_bytes());
+        put_infallible(
+            &mut bytes,
+            ACTION_CUSTODY_REVISION_OFFSET,
+            &4_u64.to_le_bytes(),
+        );
+        put_infallible(&mut bytes, ACTION_NONCE_OFFSET, &5_u64.to_le_bytes());
+        assert_eq!(
+            LiabilityBasisActionV2::decode(&bytes),
+            Err(LiabilityBasisSbfErrorV2::Instruction)
+        );
     }
 }

@@ -29,9 +29,11 @@ dclutch-pyth-svm = { path = "../../crates/dclutch-pyth-svm" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-relay-contract = { path = "../../crates/dclutch-relay-contract" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-source-contract = { path = "../../crates/dclutch-source-contract" }
+solana-instructions-sysvar = "=3.0.1"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
