@@ -2007,19 +2007,13 @@ pub fn process_hot_execution_v3(
     )?;
     let request_output_scalars = projected_request.scalars;
     let request_output_identities = projected_request.identities;
-    require_trusted_environment_register_ownership_v3(
+    require_static_register_ownership_v5(StaticRegisterOwnershipV5 {
         account_profile,
-        request_profile,
+        policy: lifecycle,
+        action: selected_action,
+        request: request_profile,
         transition,
-    )?;
-    require_dynamic_span_transition_ownership_v3(account_profile, transition)?;
-
-    require_lifecycle_register_ownership_v5(
-        lifecycle,
-        selected_action,
-        request_profile,
-        transition,
-    )?;
+    })?;
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -3121,34 +3115,6 @@ struct AuthenticatedDynamicSpanWidthsV3 {
     transport_span: Option<u16>,
 }
 
-fn require_dynamic_span_transition_ownership_v3(
-    profile: AccountProfileV2<'_>,
-    transition: TransitionProgramV3<'_>,
-) -> Result<(), ProgramError> {
-    if !profile.uses_dynamic_fixed_spans() {
-        return Ok(());
-    }
-    let mut index = 0_u16;
-    while index < profile.dynamic_fixed_span_count() {
-        let scalar = profile
-            .dynamic_fixed_span(index)
-            .map_err(|_| TradingSbfError::Content)?
-            .count_scalar();
-        if transition
-            .writes_register(RegisterWriteTargetV3 {
-                kind: RegisterKindV3::Scalar,
-                space: RegisterSpaceV3::Common,
-                index: scalar,
-            })
-            .map_err(|_| TradingSbfError::Content)?
-        {
-            return Err(TradingSbfError::Content.into());
-        }
-        index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    Ok(())
-}
-
 fn require_dynamic_span_values_v3(
     profile: AccountProfileV2<'_>,
     expected: &[u32],
@@ -3659,31 +3625,158 @@ fn authenticate_current_rent_quotes_v5(
     Ok(quotes)
 }
 
-#[inline(never)]
-fn require_lifecycle_register_ownership_v5(
-    policy: StateLifecyclePolicyV5<'_>,
+/// Every artifact whose static register ownership is checked together.
+struct StaticRegisterOwnershipV5<'a> {
+    account_profile: AccountProfileV2<'a>,
+    policy: StateLifecyclePolicyV5<'a>,
     action: u32,
-    request: RequestProfileKindV3<'_>,
-    transition: TransitionProgramV3<'_>,
+    request: RequestProfileKindV3<'a>,
+    transition: TransitionProgramV3<'a>,
+}
+
+/// Require that no register the lifecycle policy, the trusted-environment
+/// observation, or a dynamic fixed span owns is also written by the request
+/// profile or by the transition program.
+///
+/// The three predicates this replaces each asked one target at a time, and
+/// both `writes_register` implementations answer a single target by decoding
+/// every operation of their whole program. Over the Direct Profile14 lifecycle
+/// that is a few dozen full passes of a 66-instruction transition and of the
+/// request profile. Every target is collected first - the structural
+/// requirements on each plan are still checked while collecting - and each
+/// artifact is then walked exactly once for the entire set. The accepted set
+/// is unchanged: a target is refused here if and only if
+/// `writes_register` would have reported it before.
+#[inline(never)]
+fn require_static_register_ownership_v5(
+    input: StaticRegisterOwnershipV5<'_>,
 ) -> Result<(), ProgramError> {
-    let mut quote = 0_u16;
-    while quote < policy.current_rent_quote_count() {
-        require_lifecycle_target_unwritten_v4(
-            policy
-                .current_rent_quote(quote)
-                .map_err(|_| TradingSbfError::Content)?
-                .scalar_destination(),
-            request,
-            transition,
-            true,
-        )?;
-        quote = quote.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    let count = policy
+    let StaticRegisterOwnershipV5 {
+        account_profile,
+        policy,
+        action,
+        request,
+        transition,
+    } = input;
+    let plan_count = policy
         .action_plan_count(action)
         .map_err(|_| TradingSbfError::Content)?;
+    // Exact upper bounds, so neither bank walks the bump allocator's doubling
+    // ladder: rent quotes and three trusted-environment registers are forbidden
+    // to both artifacts, and every per-plan lifecycle register plus every
+    // dynamic-span count scalar is additionally forbidden to the transition.
+    let shared_bound = usize::from(policy.current_rent_quote_count())
+        .checked_add(3)
+        .ok_or(TradingSbfError::Content)?;
+    let mut transition_bound = shared_bound;
+    if account_profile.uses_dynamic_fixed_spans() {
+        transition_bound = transition_bound
+            .checked_add(usize::from(account_profile.dynamic_fixed_span_count()))
+            .ok_or(TradingSbfError::Content)?;
+    }
+    let mut request_bound = shared_bound;
+    let mut counted = 0_u16;
+    while counted < plan_count {
+        let selected = policy
+            .action_plan(action, counted)
+            .map_err(|_| TradingSbfError::Content)?;
+        for width in [
+            usize::from(
+                selected
+                    .protected_observation_count()
+                    .map_err(|_| TradingSbfError::Content)?,
+            ),
+            usize::from(
+                selected
+                    .protected_output_count()
+                    .map_err(|_| TradingSbfError::Content)?,
+            ),
+        ] {
+            request_bound = request_bound
+                .checked_add(width)
+                .ok_or(TradingSbfError::Content)?;
+            transition_bound = transition_bound
+                .checked_add(width)
+                .ok_or(TradingSbfError::Content)?;
+        }
+        for width in [
+            usize::from(
+                selected
+                    .seed_count()
+                    .map_err(|_| TradingSbfError::Content)?,
+            ),
+            usize::from(
+                selected
+                    .immutable_identity_binding_count()
+                    .map_err(|_| TradingSbfError::Content)?,
+            ),
+        ] {
+            transition_bound = transition_bound
+                .checked_add(width)
+                .ok_or(TradingSbfError::Content)?;
+        }
+        counted = counted.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    let mut request_forbidden = Vec::with_capacity(request_bound);
+    let mut transition_forbidden: Vec<RegisterWriteTargetV3> = Vec::with_capacity(transition_bound);
+
+    let mut quote = 0_u16;
+    while quote < policy.current_rent_quote_count() {
+        let target = policy
+            .current_rent_quote(quote)
+            .map_err(|_| TradingSbfError::Content)?
+            .scalar_destination();
+        request_forbidden.push(lifecycle_request_target_v4(target));
+        transition_forbidden.push(lifecycle_transition_target_v4(target));
+        quote = quote.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+
+    for (index, register) in [
+        account_profile.trusted_current_slot_scalar(),
+        account_profile.trusted_current_executing_program_identity(),
+        account_profile.trusted_system_program_identity(),
+    ]
+    .into_iter()
+    .zip([
+        ProjectionRegisterKindV1::Scalar,
+        ProjectionRegisterKindV1::Identity,
+        ProjectionRegisterKindV1::Identity,
+    ]) {
+        let Some(index) = index else {
+            continue;
+        };
+        request_forbidden.push(ProjectionTargetV1 {
+            kind: register,
+            space: ProjectionRegisterSpaceV1::Common,
+            index,
+        });
+        transition_forbidden.push(RegisterWriteTargetV3 {
+            kind: match register {
+                ProjectionRegisterKindV1::Scalar => RegisterKindV3::Scalar,
+                ProjectionRegisterKindV1::Identity => RegisterKindV3::Identity,
+            },
+            space: RegisterSpaceV3::Common,
+            index,
+        });
+    }
+
+    if account_profile.uses_dynamic_fixed_spans() {
+        let mut span = 0_u16;
+        while span < account_profile.dynamic_fixed_span_count() {
+            transition_forbidden.push(RegisterWriteTargetV3 {
+                kind: RegisterKindV3::Scalar,
+                space: RegisterSpaceV3::Common,
+                index: account_profile
+                    .dynamic_fixed_span(span)
+                    .map_err(|_| TradingSbfError::Content)?
+                    .count_scalar(),
+            });
+            span = span.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+    }
+
     let mut ordinal = 0_u16;
-    while ordinal < count {
+    while ordinal < plan_count {
         let selected = policy
             .action_plan(action, ordinal)
             .map_err(|_| TradingSbfError::Content)?;
@@ -3701,14 +3794,11 @@ fn require_lifecycle_register_ownership_v5(
                 .protected_observation_count()
                 .map_err(|_| TradingSbfError::Content)?
         {
-            require_lifecycle_target_unwritten_v4(
-                selected
-                    .protected_observation_target(observation)
-                    .map_err(|_| TradingSbfError::Content)?,
-                request,
-                transition,
-                true,
-            )?;
+            let target = selected
+                .protected_observation_target(observation)
+                .map_err(|_| TradingSbfError::Content)?;
+            request_forbidden.push(lifecycle_request_target_v4(target));
+            transition_forbidden.push(lifecycle_transition_target_v4(target));
             observation = observation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         let mut output = 0_u8;
@@ -3717,14 +3807,11 @@ fn require_lifecycle_register_ownership_v5(
                 .protected_output_count()
                 .map_err(|_| TradingSbfError::Content)?
         {
-            require_lifecycle_target_unwritten_v4(
-                selected
-                    .protected_output_target(output)
-                    .map_err(|_| TradingSbfError::Content)?,
-                request,
-                transition,
-                true,
-            )?;
+            let target = selected
+                .protected_output_target(output)
+                .map_err(|_| TradingSbfError::Content)?;
+            request_forbidden.push(lifecycle_request_target_v4(target));
+            transition_forbidden.push(lifecycle_transition_target_v4(target));
             output = output.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         let mut seed = 0_u8;
@@ -3737,7 +3824,7 @@ fn require_lifecycle_register_ownership_v5(
                 .seed_register_target(seed)
                 .map_err(|_| TradingSbfError::Content)?
             {
-                require_lifecycle_target_unwritten_v4(target, request, transition, false)?;
+                transition_forbidden.push(lifecycle_transition_target_v4(target));
             }
             seed = seed.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
@@ -3747,38 +3834,25 @@ fn require_lifecycle_register_ownership_v5(
                 .immutable_identity_binding_count()
                 .map_err(|_| TradingSbfError::Content)?
         {
-            let target = selected
-                .immutable_identity_binding(binding)
-                .map_err(|_| TradingSbfError::Content)?
-                .canonical();
-            if transition
-                .writes_register(lifecycle_transition_target_v4(target))
-                .map_err(|_| TradingSbfError::Content)?
-            {
-                return Err(TradingSbfError::Content.into());
-            }
+            transition_forbidden.push(lifecycle_transition_target_v4(
+                selected
+                    .immutable_identity_binding(binding)
+                    .map_err(|_| TradingSbfError::Content)?
+                    .canonical(),
+            ));
             binding = binding.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(())
-}
 
-fn require_lifecycle_target_unwritten_v4(
-    target: LifecycleRegisterTargetV3,
-    request: RequestProfileKindV3<'_>,
-    transition: TransitionProgramV3<'_>,
-    forbid_request: bool,
-) -> Result<(), ProgramError> {
-    if (forbid_request && request.writes_register(lifecycle_request_target_v4(target))?)
+    if request.writes_any_register(&request_forbidden)?
         || transition
-            .writes_register(lifecycle_transition_target_v4(target))
+            .writes_any_register(&transition_forbidden)
             .map_err(|_| TradingSbfError::Content)?
     {
-        Err(TradingSbfError::Content.into())
-    } else {
-        Ok(())
+        return Err(TradingSbfError::Content.into());
     }
+    Ok(())
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -5645,6 +5719,18 @@ impl<'a> RequestProfileKindV3<'a> {
         }
     }
 
+    fn writes_any_register(self, targets: &[ProjectionTargetV1]) -> Result<bool, ProgramError> {
+        match self {
+            Self::RepeatedRows(profile) => profile
+                .writes_any_register(targets)
+                .map_err(|_| TradingSbfError::Content.into()),
+            Self::Unsigned(_) | Self::Signed(_) | Self::Borrowed(_) => self
+                .v1()
+                .writes_any_register(targets)
+                .map_err(|_| TradingSbfError::Content.into()),
+        }
+    }
+
     fn project_atomic(
         self,
         tail_count: u32,
@@ -6256,67 +6342,6 @@ fn require_trusted_environment_v3(
 }
 
 #[inline(never)]
-fn require_trusted_environment_register_ownership_v3(
-    profile: AccountProfileV2<'_>,
-    request: RequestProfileKindV3<'_>,
-    transition: TransitionProgramV3<'_>,
-) -> Result<(), ProgramError> {
-    let scalar = profile.trusted_current_slot_scalar().map(|index| {
-        (
-            ProjectionTargetV1 {
-                kind: ProjectionRegisterKindV1::Scalar,
-                space: ProjectionRegisterSpaceV1::Common,
-                index,
-            },
-            RegisterWriteTargetV3 {
-                kind: RegisterKindV3::Scalar,
-                space: RegisterSpaceV3::Common,
-                index,
-            },
-        )
-    });
-    let identity = profile
-        .trusted_current_executing_program_identity()
-        .map(|index| {
-            (
-                ProjectionTargetV1 {
-                    kind: ProjectionRegisterKindV1::Identity,
-                    space: ProjectionRegisterSpaceV1::Common,
-                    index,
-                },
-                RegisterWriteTargetV3 {
-                    kind: RegisterKindV3::Identity,
-                    space: RegisterSpaceV3::Common,
-                    index,
-                },
-            )
-        });
-    let builtin = profile.trusted_system_program_identity().map(|index| {
-        (
-            ProjectionTargetV1 {
-                kind: ProjectionRegisterKindV1::Identity,
-                space: ProjectionRegisterSpaceV1::Common,
-                index,
-            },
-            RegisterWriteTargetV3 {
-                kind: RegisterKindV3::Identity,
-                space: RegisterSpaceV3::Common,
-                index,
-            },
-        )
-    });
-    for (request_target, transition_target) in scalar.into_iter().chain(identity).chain(builtin) {
-        if request.writes_register(request_target)?
-            || transition
-                .writes_register(transition_target)
-                .map_err(|_| TradingSbfError::Content)?
-        {
-            return Err(TradingSbfError::Content.into());
-        }
-    }
-    Ok(())
-}
-
 fn shadow_routes_v3(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
