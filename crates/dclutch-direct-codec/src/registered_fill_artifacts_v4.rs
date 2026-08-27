@@ -428,6 +428,148 @@ mod host {
             refuses_without_output_commit(input, valid_identities());
         }
 
+        /// WHY THIS PROGRAM CANNOT YET DRIVE AN `EffectProgramV4`.
+        ///
+        /// The registered fill's missing EffectV4 has to route one Claims
+        /// transfer and two Custody transfers -- the seller's net and the
+        /// combined fee -- out of the buyer record's Vault. Neither Custody leg
+        /// is unconditional: `CustodyRequestV1::validate` refuses
+        /// `amount == 0` for `OperationV1::Transfer`, and on the CANONICAL
+        /// admitted fill the combined fee is exactly zero, because both
+        /// cumulative-difference legs floor to nothing at a hundred basis
+        /// points. An effect that routes the fee leg unconditionally therefore
+        /// refuses the ordinary case.
+        ///
+        /// A route is disabled by an `enable_common_scalar` the TRANSITION
+        /// derives -- that is how the inline-ordinary family selects among its
+        /// four Custody route declarations, with
+        /// `SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3`,
+        /// `SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3` and
+        /// `SCALAR_FEE_SOLE_ROUTE_ENABLED_V3` authored in
+        /// `DirectOrdinaryV3.lean`. This program derives no such register: its
+        /// schema has none, and `named_identities_are_the_addressed_ones` and
+        /// the emitted constants are the whole of what it exposes.
+        ///
+        /// It also advances the Custody replay revision by exactly two,
+        /// unconditionally (`incrementInto custodyRevision
+        /// custodyRevisionAfterSeller` then again into
+        /// `custodyRevisionAfterFee`), which on this same canonical bank claims
+        /// two transfers where at most one can occur.
+        ///
+        /// So authoring the fill's Effect starts in
+        /// `formal/dclutch-semantics/DClutchSemantics/DirectRegisteredFillV4.lean`,
+        /// not in Rust: the enables and the conditional revision ladder are
+        /// program semantics, and `DirectOrdinaryV3.lean`'s block is the exact
+        /// shape to mirror. Doing it moves the emitted bytes, so the
+        /// hand-written AOT twin in
+        /// `crates/dclutch-direct-aot-v3-contract/src/registered.rs` moves with
+        /// it. Recorded here rather than discovered again.
+        #[test]
+        fn the_canonical_fill_takes_a_zero_fee_that_no_unconditional_custody_route_can_carry() {
+            let mut input = valid_scalars();
+            input[FILL_SCALAR_QUANTITY_V4] = 10;
+            input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
+            let identities = valid_identities();
+            let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
+                .expect("transition");
+            let transition = ProgramV3::decode(&bytes).expect("decode");
+            let mut scalar_scratch = input;
+            let mut output = input;
+            let mut identity_scratch = identities;
+            let mut identity_output = identities;
+            execute_fold_atomic(
+                transition,
+                3,
+                RegisterInput {
+                    scalars: &input,
+                    identities: &identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scalar_scratch,
+                    identities: &mut identity_scratch,
+                },
+                RegisterOutput {
+                    scalars: &mut output,
+                    identities: &mut identity_output,
+                },
+            )
+            .expect("execute");
+
+            // The canonical admitted fill quotes five and charges nothing.
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 5);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 0);
+
+            // A Custody Transfer carrying that fee refuses on its own terms.
+            let fee_leg = fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4]);
+            assert_eq!(
+                fee_leg.to_bytes().map(|_| ()),
+                Err(dclutch_custody_contract::Error::InvalidOperationShape)
+            );
+            // The seller leg, which is nonzero here, is well formed -- so it is
+            // the ENABLE that is missing, not the envelope.
+            assert!(
+                fee_transfer_template(output[FILL_SCALAR_SELLER_NET_V4])
+                    .to_bytes()
+                    .is_ok()
+            );
+
+            // And the revision ladder claims both transfers regardless.
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 2
+            );
+        }
+
+        /// One Custody `Transfer` envelope of the shape the fill's fee leg
+        /// needs, parameterised only by the amount under test.
+        fn fee_transfer_template(amount: u64) -> dclutch_custody_contract::CustodyRequestV1 {
+            use dclutch_custody_contract::{
+                CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestV1, OperationV1,
+            };
+            let id = |value: u8| [value; 32];
+            CustodyRequestV1 {
+                operation: OperationV1::Transfer,
+                caller_role: CallerRoleV1::Trading,
+                source_compartment: CompartmentV1::TradingPrincipal,
+                destination_compartment: CompartmentV1::External,
+                release_set: id(1),
+                market: id(2),
+                realm: id(3),
+                context: id(4),
+                caller_program: id(5),
+                semantic: ContextV1 {
+                    candidate: [0; 32],
+                    source_owner: [0; 32],
+                    destination_owner: id(6),
+                    order: id(7),
+                    parent_request_digest: id(8),
+                    order_nonce: 1,
+                    generation: 1,
+                    page_index: 0,
+                    execution_index: 0,
+                    transfer_index: 1,
+                },
+                source: id(9),
+                destination: id(10),
+                source_vault_context: id(4),
+                destination_vault_context: [0; 32],
+                mint: id(11),
+                token_program: id(12),
+                payer: [0; 32],
+                rent_refund: [0; 32],
+                expected_revision: 1,
+                resulting_revision: 2,
+                amount,
+                rent_lamports: 0,
+            }
+        }
+
         /// The boundary itself stays admissible: a venue rate exactly at the
         /// denominator takes the whole quote as fee, which is a policy the
         /// makers may sign.
