@@ -726,3 +726,11 @@ ember's explicit go.
 - M-46 hunt (small batch): main sat at 18/20 somewhere in
   211079f6..a4be9a83 (~+23,000 CU unboarded); 7ead0716 MASKS it. Bisect with
   the per-phase tables and attribute — margin honesty demands the name.
+
+- DOCTRINE (STRUCT-CAMP): an artifact builder with no caller outside its own
+  crate is not landed, it is PARKED — it has no gate. (The bearer operator
+  sat at 5/20 through two sweeps; sixteen tests passed a join no chain-
+  acceptable descriptor could satisfy because the fixture was bent to the
+  wrong side.)
+- RECORDS-MIGRATE row (from 27dbcca0): root_id's dead consumer + the
+  graph_id/graph_digest double-booking in the representation descriptor.
