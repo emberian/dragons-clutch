@@ -925,14 +925,14 @@ mod tests {
 
     fn account_profile() -> Vec<u8> {
         use crate::account_rules_v3::{
-            GeneralExternalAccountWidthsV3, general_account_profile_rule_v3,
+            GeneralExternalAccountWidthsV3, general_account_profile_operation_count_v3,
+            general_account_profile_operation_v3, general_account_profile_rule_v3,
             general_scratch_page_rule_v3, general_scratch_page_span_v3,
         };
         use dclutch_account_profile_contract::v2::{
             TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
             encode::{
-                AccountCoordinateV2, AccountOperationInputV2, IdentityCoordinateV2,
-                RegisterGeometryV2, ScalarCoordinateV2,
+                RegisterGeometryV2,
                 encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
             },
         };
@@ -952,49 +952,11 @@ mod tests {
         };
         let action = Action::Freeze;
         let fixed_count = general_account_profile_fixed_count_v3(action).expect("fixed count");
-        let operations = [
-            AccountOperationInputV2::ProjectTailCountU32 {
-                account: AccountCoordinateV2::fixed(
-                    u16::try_from(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)
-                        .expect("portfolio coordinate"),
-                ),
-                destination: ScalarCoordinateV2::common(GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3),
-                data_offset: u32::try_from(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)
-                    .expect("portfolio count offset"),
-            },
-            AccountOperationInputV2::ProjectDataU8 {
-                account: AccountCoordinateV2::fixed(
-                    crate::state_artifacts_v3::GENERAL_PRIMARY_STATE_ACCOUNT_V3,
-                ),
-                destination: ScalarCoordinateV2::common(
-                    u16::try_from(crate::hot_candidate_v3::scalar::PRIMARY_BUMP_OBSERVATION)
-                        .expect("bump observation"),
-                ),
-                data_offset: crate::local_state_v3::GeneralLocalStateLayoutV3::bump(),
-            },
-            AccountOperationInputV2::ProjectDataU64 {
-                account: AccountCoordinateV2::fixed(
-                    crate::state_artifacts_v3::GENERAL_PRIMARY_STATE_ACCOUNT_V3,
-                ),
-                destination: ScalarCoordinateV2::common(
-                    u16::try_from(crate::hot_candidate_v3::scalar::PRIMARY_PRINCIPAL_OBSERVATION)
-                        .expect("principal observation"),
-                ),
-                data_offset: crate::local_state_v3::GeneralLocalStateLayoutV3::rent_principal(),
-            },
-            AccountOperationInputV2::ProjectDataIdentity {
-                account: AccountCoordinateV2::fixed(
-                    crate::state_artifacts_v3::GENERAL_PRIMARY_STATE_ACCOUNT_V3,
-                ),
-                destination: IdentityCoordinateV2::common(
-                    u16::try_from(
-                        crate::hot_candidate_v3::identity::PRIMARY_BENEFICIARY_OBSERVATION,
-                    )
-                    .expect("beneficiary observation"),
-                ),
-                data_offset: crate::local_state_v3::GeneralLocalStateLayoutV3::beneficiary(),
-            },
-        ];
+        let operations = (0..general_account_profile_operation_count_v3(action))
+            .map(|index| {
+                general_account_profile_operation_v3(action, index).expect("canonical operation")
+            })
+            .collect::<Vec<_>>();
         let bytes = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES
             + dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_ENTRY_BYTES
             + (usize::from(fixed_count) + 1) * dclutch_account_profile_contract::v2::RULE_BYTES

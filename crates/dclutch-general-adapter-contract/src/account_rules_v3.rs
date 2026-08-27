@@ -10,9 +10,15 @@
 use dclutch_account_profile_contract::v2::{
     AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE,
     encode::{
-        AccountAliasInputV2, AccountEffectPermissionsV2, AccountPrivilegesV2, AccountRuleInputV2,
-        AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2,
+        AccountAliasInputV2, AccountCoordinateV2, AccountEffectPermissionsV2,
+        AccountOperationInputV2, AccountPrivilegesV2, AccountRuleInputV2,
+        AccountRuleWithPrestateInputV2, DynamicFixedSpanInputV2, IdentityCoordinateV2,
+        ScalarCoordinateV2,
     },
+};
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1,
+    hot_v3::{HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3},
 };
 use dclutch_claims_svm::frame_spec_v1::{
     ClaimsFrameDataV1, ClaimsFrameRoleV1, ClaimsFrameSpecV1, FramePrivilegesV1,
@@ -21,18 +27,23 @@ use dclutch_custody_contract::{
     CustodyFrameDataV1, CustodyFramePrivilegesV1, CustodyFrameRoleV1, CustodyFrameSpecV1,
 };
 use dclutch_general_codec::{Action, SELECTION_POLICY_BYTES};
-use dclutch_general_config_contract::v3::GENERAL_CONFIG_BYTES_V3;
-use dclutch_product_runtime_v2::{PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES};
+use dclutch_general_config_contract::{
+    GENERAL_ROOT_LIFECYCLE_OFFSET_V2, v3::GENERAL_CONFIG_BYTES_V3,
+};
+use dclutch_product_runtime_v2::{
+    PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
+};
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 
 use crate::{
+    artifacts_v3::GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3,
     effect_artifacts_v3::{
         GeneralChildFrameV3, general_custody_callee_account_count_v3,
         general_custody_callee_coordinate_v3, general_effect_account_count_v3,
         general_effect_route_count_v3, general_effect_route_frame_v3,
     },
-    hot_candidate_v3::scalar,
-    local_state_v3::GENERAL_LOCAL_STATE_HEADER_BYTES_V3,
+    hot_candidate_v3::{identity, scalar},
+    local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_manifest::SETTLEMENT_MANIFEST_HEADER_BYTES_V2,
     runtime_selection::RUNTIME_SELECTION_CURSOR_BYTES_V2,
     runtime_verify::RUNTIME_VERIFIER_HEADER_BYTES_V2,
@@ -163,6 +174,121 @@ pub const fn general_scratch_page_rule_v3() -> AccountRuleWithPrestateInputV2 {
         },
         prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
     }
+}
+
+/// Exact count of canonical fixed AccountProfile operations for one action.
+///
+/// The operation list belongs next to the rules for the same reason the rules
+/// belong here: it is part of the artifact, and a second author will drift. It
+/// used to be hand-written once in the release builder and once again in a test
+/// fixture, with nothing able to compare them -- `AccountProfileV2::operation`
+/// is private, so admission cannot read the operations back out of the encoded
+/// bytes. That is why the root-lifecycle conjunct below is fail-closed rather
+/// than admission-checked: an artifact that omits it leaves scalar
+/// `ROOT_LIFECYCLE_OBSERVATION` at zero, which is not
+/// `GeneralLifecycleV2::Active`, and every action refuses.
+#[must_use]
+pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
+    match action {
+        Action::Close => 9,
+        _ => 5,
+    }
+}
+
+/// Generate one exact canonical fixed AccountProfile operation.
+///
+/// Order is load-bearing: these bytes are the artifact, and the artifact's
+/// digest is what the descriptor and the capability seal name.
+pub fn general_account_profile_operation_v3(
+    action: Action,
+    index: u16,
+) -> Result<AccountOperationInputV2> {
+    let primary = AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3);
+    let terminal = AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3);
+    match index {
+        // The Product-owned runtime width, from the authenticated Portfolio.
+        0 => Ok(AccountOperationInputV2::ProjectTailCountU32 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)?),
+            destination: ScalarCoordinateV2::common(GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3),
+            data_offset: width(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)?,
+        }),
+        1 => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: primary,
+            destination: common_scalar(scalar::PRIMARY_BUMP_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::bump(),
+        }),
+        2 => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: primary,
+            destination: common_scalar(scalar::PRIMARY_PRINCIPAL_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::rent_principal(),
+        }),
+        3 => Ok(AccountOperationInputV2::ProjectDataIdentity {
+            account: primary,
+            destination: common_identity(identity::PRIMARY_BENEFICIARY_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::beneficiary(),
+        }),
+        // The capability root's own lifecycle byte, out of the mutable
+        // `GeneralRootV2` tail behind the immutable common header. The header
+        // proves identity and says nothing about whether the capability still
+        // accepts work; without this projection a `Retiring` or `Retired`
+        // General capability executes hot actions exactly like a live one.
+        4 => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+            destination: common_scalar(scalar::ROOT_LIFECYCLE_OBSERVATION)?,
+            data_offset: width(
+                CAPABILITY_ROOT_HEADER_BYTES_V1
+                    .checked_add(GENERAL_ROOT_LIFECYCLE_OFFSET_V2)
+                    .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
+            )?,
+        }),
+        // Every other action creates its primary state, so its lifecycle plan is
+        // what proves the account's owner. Close destroys that account instead:
+        // its rule is Exact, not LifecycleBound, and a debiting data-writing
+        // coordinate with no lifecycle creation must anchor its owner
+        // explicitly. Close also creates the terminal record, and that plan's
+        // protected outputs are only sound when the profile itself observes the
+        // record's bump, rent principal and rent beneficiary.
+        5 if action == Action::Close => Ok(AccountOperationInputV2::RequireOwner {
+            account: primary,
+            expected: common_identity(identity::TRADING_PROGRAM)?,
+        }),
+        6 if action == Action::Close => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: terminal,
+            destination: common_scalar(scalar::TERMINAL_BUMP_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::bump(),
+        }),
+        7 if action == Action::Close => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: terminal,
+            destination: common_scalar(scalar::TERMINAL_PRINCIPAL_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::rent_principal(),
+        }),
+        8 if action == Action::Close => Ok(AccountOperationInputV2::ProjectDataIdentity {
+            account: terminal,
+            destination: common_identity(identity::TERMINAL_BENEFICIARY_OBSERVATION)?,
+            data_offset: GeneralLocalStateLayoutV3::beneficiary(),
+        }),
+        _ => Err(GeneralAccountRuleErrorV3::Geometry),
+    }
+}
+
+fn narrow(value: usize) -> Result<u16> {
+    u16::try_from(value).map_err(|_| GeneralAccountRuleErrorV3::Geometry)
+}
+
+fn width(value: usize) -> Result<u32> {
+    u32::try_from(value).map_err(|_| GeneralAccountRuleErrorV3::Geometry)
+}
+
+fn common_scalar(coordinate: u32) -> Result<ScalarCoordinateV2> {
+    Ok(ScalarCoordinateV2::common(
+        u16::try_from(coordinate).map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+    ))
+}
+
+fn common_identity(coordinate: u32) -> Result<IdentityCoordinateV2> {
+    Ok(IdentityCoordinateV2::common(
+        u16::try_from(coordinate).map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
+    ))
 }
 
 /// Generate one exact fixed rule in the action-selected General Profile13.
