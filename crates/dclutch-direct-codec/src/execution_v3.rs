@@ -62,7 +62,79 @@ pub const DIRECT_CANCEL_THROUGH_REQUEST_BYTES_V3: usize =
 /// Exact width of a permissionless expiry, invalidated close, or root close.
 pub const DIRECT_EMPTY_ACTION_REQUEST_BYTES_V3: usize = DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3;
 
+/// Every action a descriptor can actually select today.
+///
+/// A selector in [`DirectExecutionActionV3`] and not in this list decodes a
+/// request and selects nothing: no AccountProfile, no LifecycleV5, no EffectV4,
+/// no descriptor. That is a real distinction with a chain consequence, and it
+/// was invisible because both halves live in one enum. See the enum's own
+/// documentation for the per-action ruling on the twelve that are absent.
+///
+/// `RegisterBuy` is on this list because its artifact set exists, NOT because
+/// it works: no registered creation has ever executed on any chain, and the two
+/// lanes that have read the set adversarially each found defects that would have
+/// refused it outright. Presence here means "a descriptor can name it", nothing
+/// stronger.
+pub const DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3: &[DirectExecutionActionV3] = &[
+    DirectExecutionActionV3::InlineOrdinary,
+    DirectExecutionActionV3::RegisterBuy,
+];
+
 /// Descriptor selector values in strictly ascending canonical order.
+///
+/// # Which of these can execute
+///
+/// Two of the fourteen have a complete artifact set, and
+/// [`DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3`] is the checked list.
+/// Every other selector below decodes a request and selects nothing: no
+/// AccountProfile, no LifecycleV5, no EffectV4, no descriptor. A request codec
+/// is not an executable action, and the enum reads as if it were.
+///
+/// REG-ART ruled on the twelve that cannot execute (2026-08-27). None is a
+/// vestige; all twelve are unbuilt work. The rule applied, once, uniformly:
+///
+/// > An action is REAL when the family's persisted state cannot reach a
+/// > terminal, rent-reclaimed state without it, or when the family already
+/// > ships a semantic contract that only it can discharge.
+///
+/// It decides every one of them, and the deletion discipline's own test --
+/// authoring artifacts for a vestige is worse than deleting it -- is what makes
+/// the argument load-bearing rather than sentimental. The blast radius of a
+/// delete would have been near zero (no refusal codes, no census rows, one
+/// TypeScript label), so cheapness of deletion decided nothing.
+///
+/// * `RegisterSell`, `FillRegisteredOrdinary`: the registered family's reason to
+///   exist. `RegisterBuy` already creates records and reserves collateral.
+/// * `CancelRegistered`, `ExpireRegistered`: without them a GTC record is live
+///   forever. The maker's escrow is recoverable only by fill, and the record's
+///   rent is not recoverable at all. `valid_through` is already signed and the
+///   fill program already refuses past it, so after that slot a record is
+///   unfillable AND unclosable -- permanent dead state with a live liability.
+/// * `CancelThrough`, `CloseInvalidated`: the O(1) kill switch and its
+///   completion. The READING half of `CancelThrough` already ships -- the fill
+///   program enforces `minimumNonce <= nonce` today -- so raising the threshold
+///   makes records unfillable while leaving them open and counted forever.
+///   `CloseInvalidated` is the only thing that can retire them.
+/// * `CloseMakerReplay`: the ONLY action that could ever decrement
+///   `DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT`, which every artifact in
+///   the tree today only increases. Its absence is what makes `CloseDirectRoot`
+///   dead rather than merely unbuilt.
+/// * `CloseDirectRoot`: reachable exactly when `CloseMakerReplay` exists,
+///   because its precondition is a zero open-root count.
+/// * `SplitRegistered`, `MergeRegistered`, `SplitInline`, `MergeInline`: NOT
+///   encoder-only, whatever the artifact inventory says. `successor.rs` carries
+///   the complementary economic model (`ComplementaryActionV2`, its side
+///   mapping and its gross collateral debit/credit) with tests, and
+///   `artifacts_v4.rs`'s `validate_geometry` already refuses a complementary
+///   action whose artifacts lack a per-item body. The family ships a semantic
+///   contract for these four that only these four discharge.
+///
+/// The four complementary actions are ruled as one group deliberately: two are
+/// registered and two are inline, so any rule applied to the registered pair
+/// alone leaves the enum incoherent.
+///
+/// Nothing here says the twelve are cheap. It says none of them may be deleted
+/// to make the inventory look shorter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum DirectExecutionActionV3 {
@@ -697,6 +769,69 @@ mod tests {
 
     use super::*;
     use std::vec;
+
+    /// Every selector, so nothing can be added without meeting the ruling.
+    const EVERY_ACTION: &[DirectExecutionActionV3] = &[
+        DirectExecutionActionV3::InlineOrdinary,
+        DirectExecutionActionV3::RegisterSell,
+        DirectExecutionActionV3::RegisterBuy,
+        DirectExecutionActionV3::FillRegisteredOrdinary,
+        DirectExecutionActionV3::SplitRegistered,
+        DirectExecutionActionV3::MergeRegistered,
+        DirectExecutionActionV3::CancelRegistered,
+        DirectExecutionActionV3::ExpireRegistered,
+        DirectExecutionActionV3::CloseInvalidated,
+        DirectExecutionActionV3::CancelThrough,
+        DirectExecutionActionV3::CloseMakerReplay,
+        DirectExecutionActionV3::CloseDirectRoot,
+        DirectExecutionActionV3::SplitInline,
+        DirectExecutionActionV3::MergeInline,
+    ];
+
+    /// A selector is not an action, and the gap is a fact worth checking.
+    ///
+    /// Twelve of the fourteen decode a request and select no artifact set. That
+    /// distinction had no name in the tree, so an inventory could read the enum
+    /// and conclude the family was fourteen-fourteenths built. Both halves are
+    /// pinned here: the enum is exhaustive against `EVERY_ACTION` by decoding
+    /// each discriminant, and the executable subset is exactly two.
+    ///
+    /// When a lane authors one of the twelve it must add it here, which is the
+    /// point: the ruling on the enum is where it will be read at that moment.
+    #[test]
+    fn twelve_of_fourteen_selectors_select_no_artifact_set() {
+        for (ordinal, action) in EVERY_ACTION.iter().enumerate() {
+            let value = u32::try_from(ordinal + 1).expect("discriminant");
+            assert_eq!(*action as u32, value, "canonical ascending order");
+            assert_eq!(
+                DirectExecutionActionV3::decode(value),
+                Ok(*action),
+                "selector {value} does not round-trip"
+            );
+        }
+        assert_eq!(
+            DirectExecutionActionV3::decode(
+                u32::try_from(EVERY_ACTION.len() + 1).expect("past the last")
+            ),
+            Err(DirectExecutionRequestErrorV3::UnknownAction),
+            "EVERY_ACTION is not exhaustive"
+        );
+        assert_eq!(DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3.len(), 2);
+        for action in DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3 {
+            assert!(
+                EVERY_ACTION.contains(action),
+                "{action:?} is not a selector"
+            );
+        }
+        assert_eq!(
+            EVERY_ACTION
+                .iter()
+                .filter(|action| !DIRECT_ACTIONS_WITH_A_COMPLETE_ARTIFACT_SET_V3.contains(action))
+                .count(),
+            12,
+            "the count of unbuilt actions moved; the enum's ruling must move with it"
+        );
+    }
 
     fn id(byte: u8) -> [u8; 32] {
         [byte; 32]
