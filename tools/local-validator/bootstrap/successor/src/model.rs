@@ -55,6 +55,7 @@ pub(crate) struct MarketRunInput {
     pub(crate) failure_policy_release_id: String,
     pub(crate) recovery_policy_hex: String,
     pub(crate) capability_manifest_hex: String,
+    pub(crate) linked_basis_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

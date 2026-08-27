@@ -7,6 +7,13 @@ use dclutch_market_core_codec::{
 use dclutch_product_runtime_v2::{
     ContentId as ProductContentId, portfolio_record_bytes, result_domain_record_bytes,
 };
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
+    },
+};
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, FinalizedRecordObservationV2, ProductCompilationInputV2,
@@ -116,7 +123,74 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
             "capability manifest omitted the three Resolution funding entries",
         ));
     }
+    // The Product's `liability_basis_id` is the semantic identity of a real
+    // published `ProductBasisV3`. Founding reads that record and refuses any
+    // Product whose declared liability basis is not the one it links, so the
+    // run spec has to carry the exact record and not merely an opaque digest.
+    let basis = decode_hex(&input.linked_basis_hex)?;
+    let semantic = semantic_basis_identity_v3(&basis)?;
+    if semantic != product_id(&input.liability_basis_id)?.to_bytes() {
+        return Err(Error::new(
+            "linked liability basis record is not the Product's declared liability basis",
+        ));
+    }
     Ok(())
+}
+
+/// Exact semantic identity of one canonical `ProductBasisV3` record.
+///
+/// The semantic preimage deliberately omits the Product and result-domain
+/// links, so this identity exists before the Product that will declare it.
+/// That omission is what makes the join acyclic rather than a fixed point.
+fn semantic_basis_identity_v3(bytes: &[u8]) -> Result<[u8; 32]> {
+    let preimage = semantic_basis_preimage_v3(bytes)
+        .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
+    let mut hasher = Sha256::new();
+    hasher.update(SEMANTIC_BASIS_CONTENT_DOMAIN_V3);
+    hasher.update(preimage.prefix());
+    hasher.update(preimage.suffix());
+    Ok(hasher.finalize().into())
+}
+
+/// Compile the exact categorical liability basis one Product outcome vector
+/// determines.
+///
+/// `CategoricalQ1` is the only shape a categorical Product admits: unit payout
+/// scale, no knots, no graded terms, and one basis claim per outcome. Nothing
+/// here is a free parameter except the two acyclic links, and both are checked
+/// against the compiled Product graph before publication.
+fn compile_linked_basis_v3(
+    product_id: [u8; 32],
+    result_domain_id: [u8; 32],
+    coordinate_domain_id: [u8; 32],
+    result_unit_id: [u8; 32],
+    evaluator_release_id: [u8; 32],
+    outcome_count: usize,
+) -> Result<Vec<u8>> {
+    let basis_width =
+        u32::try_from(outcome_count).map_err(|_| Error::new("Product outcome width overflow"))?;
+    let width = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, outcome_count, 0, 0)
+        .map_err(|error| Error::new(format!("ProductBasisV3 width: {error:?}")))?;
+    let mut bytes = vec![0_u8; width];
+    compile_basis_v3(
+        BasisInputV3 {
+            kind: BasisKindV3::CategoricalQ1,
+            product_id,
+            result_domain_id,
+            coordinate_domain_id,
+            result_unit_id,
+            evaluator_release_id,
+            basis_width,
+            payout_scale: 1,
+            knot_denominator: 1,
+            knots: &[],
+            terms: &[],
+            failure_payouts: &[],
+        },
+        &mut bytes,
+    )
+    .map_err(|error| Error::new(format!("canonical ProductBasisV3 compiler: {error:?}")))?;
+    Ok(bytes)
 }
 
 struct MarketRecords {
@@ -127,6 +201,7 @@ struct MarketRecords {
     source: PublishedRecord,
     recovery: PublishedRecord,
     manifest: PublishedRecord,
+    basis: PublishedRecord,
 }
 
 struct FinalizedSnapshot {
@@ -461,6 +536,7 @@ fn publish_market_records(
     )
     .map_err(|error| Error::new(format!("canonical Product compiler: {error:?}")))?;
     let product_digest: [u8; 32] = Sha256::digest(product).into();
+    let domain_digest: [u8; 32] = Sha256::digest(&domain).into();
 
     let recovery_bytes = decode_hex(&input.recovery_policy_hex)?;
     let recovery = RecoveryPolicyV2::decode(&recovery_bytes)
@@ -548,6 +624,35 @@ fn publish_market_records(
         None,
         transactions,
     )?;
+    // Founding reads the liability basis the Product declares. Both of the
+    // record's links are checked against the graph that was just compiled, so
+    // a basis belonging to a different Product cannot be published as this
+    // Market's.
+    let basis_bytes = decode_hex(&input.linked_basis_hex)?;
+    let basis_state = ProductBasisV3::decode(&basis_bytes)
+        .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
+    let outcome_width =
+        u32::try_from(outcome_count).map_err(|_| Error::new("Product outcome width overflow"))?;
+    if semantic_basis_identity_v3(&basis_bytes)? != product_id(&input.liability_basis_id)?.to_bytes()
+        || basis_state.product_id() != semantic_product_id.to_bytes()
+        || basis_state.result_domain_id() != domain_digest
+        || basis_state.basis_width() != outcome_width
+        || basis_state.payout_scale() != 1
+        || basis_state.kind() != BasisKindV3::CategoricalQ1
+    {
+        return Err(Error::new(
+            "linked liability basis record did not bind the compiled Product graph",
+        ));
+    }
+    let basis = publish_record(
+        rpc,
+        registry,
+        payer,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        &basis_bytes,
+        None,
+        transactions,
+    )?;
     Ok((
         MarketRecords {
             realm,
@@ -557,6 +662,7 @@ fn publish_market_records(
             source,
             recovery,
             manifest,
+            basis,
         },
         semantic_product_id,
     ))
@@ -982,7 +1088,6 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     let coordinate_domain = demo_id("coordinate-domain/usd-cents-per-sol", &[]);
     let result_unit = demo_id("result-unit/usd-cents", &[]);
     let claim_basis = demo_id("claim-basis/unit-complete-set", &[]);
-    let liability_basis = demo_id("liability-basis/collateral-atom", &[]);
     let representation = demo_id("representation/categorical-fixed-width", &[]);
     let mapping = demo_id("mapping/scaled-integer-cut", &[&coordinate_domain]);
     let primary_source = demo_id("source-spec/pyth-price-update", &[&adapter, feed]);
@@ -998,6 +1103,20 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     let cuts: Vec<i128> = vec![12_000, 18_000];
     let coefficients: Vec<u64> = vec![1, 0, 1, 0];
     let outcome_count = coefficients.len();
+
+    // The liability basis is a real record, not a name. Its semantic identity
+    // omits the Product and result-domain links, so it is derivable before the
+    // Product that declares it exists; the record is then recompiled with both
+    // real links and must keep the same identity.
+    let evaluator_release = demo_id("liability-basis/categorical-unit-evaluator", &[]);
+    let liability_basis = semantic_basis_identity_v3(&compile_linked_basis_v3(
+        product_identity,
+        product_identity,
+        coordinate_domain,
+        result_unit,
+        evaluator_release,
+        outcome_count,
+    )?)?;
 
     let product = ProductCompilationInputV2 {
         product_id: ProductContentId::new(product_identity)
@@ -1041,6 +1160,20 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     )
     .map_err(|error| Error::new(format!("demo Product compiler: {error:?}")))?;
     let product_digest: [u8; 32] = Sha256::digest(product_bytes).into();
+    let domain_digest: [u8; 32] = Sha256::digest(&domain).into();
+    let linked_basis = compile_linked_basis_v3(
+        product_identity,
+        domain_digest,
+        coordinate_domain,
+        result_unit,
+        evaluator_release,
+        outcome_count,
+    )?;
+    if semantic_basis_identity_v3(&linked_basis)? != liability_basis {
+        return Err(Error::new(
+            "linking the demo liability basis to its Product changed its semantic identity",
+        ));
+    }
 
     let attempt = RecoveryAttemptV2::new(
         SourceContentId::new(recovery_source)
@@ -1159,6 +1292,7 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
         failure_policy_release_id: hex(&failure_policy),
         recovery_policy_hex: hex(&recovery_bytes),
         capability_manifest_hex: hex(&manifest),
+        linked_basis_hex: hex(&linked_basis),
     };
     validate_market_input(&input)?;
     Ok(input)
