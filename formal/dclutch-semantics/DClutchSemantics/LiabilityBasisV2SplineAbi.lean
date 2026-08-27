@@ -51,6 +51,21 @@ def profileTag : Nat := 2
 /-- Physical knot capacity. Not a mathematical bound on the basis. -/
 def maxKnots : Nat := 12
 
+/-! ### The admitted degree range
+
+`SplineProfile` already carries `0 < degree` and `degree ≤ 3` as fields. These
+name the same two bounds so that the physical record, the emitted ABI and the
+Rust kernel all read them from one place instead of restating `1` and `3`.
+They are load-bearing: `Request.WellFormed` and the tag-`15` decoder check are
+both stated in terms of them. -/
+def minDegree : Nat := 1
+
+def maxDegree : Nat := 3
+
+/-- The de Boor triangle's widest level: `degree + 1` locally supported claims.
+This is the physical stack capacity the kernel allocates for one evaluation. -/
+def maxSupport : Nat := maxDegree + 1
+
 /-- Widest basis this record can express: `maxKnots - degree - 1` at degree
 one. -/
 def maxWidth : Nat := 10
@@ -87,7 +102,8 @@ def Request.activeKnots (request : Request) : List Int :=
 evaluator below is a total function of the decoded record. -/
 def Request.WellFormed (request : Request) : Prop :=
   0 < request.scale ∧ 0 < request.knotDenominator ∧
-    0 < request.coordinateDenominator ∧ 0 < request.degree ∧ request.degree ≤ 3 ∧
+    0 < request.coordinateDenominator ∧
+    minDegree ≤ request.degree ∧ request.degree ≤ maxDegree ∧
     2 * request.degree + 2 ≤ request.activeKnots.length ∧
     request.knotCount ≤ maxKnots ∧ nondecreasing request.activeKnots = true
 
@@ -193,6 +209,20 @@ theorem Request.evaluate?_validPartition
   obtain ⟨wellFormed, admitted, rfl⟩ := request.evaluate?_eq_profile payouts evaluated
   exact (request.profileOf wellFormed).validPartition_evaluate ⟨request.coordinate, admitted⟩
 
+/-- **`maxSupport` is a real bound, not a decoration.** Every admitted record's
+de Boor triangle fits in `degree + 1 ≤ maxSupport` values, which is the stack
+capacity the physical kernel allocates for one evaluation. -/
+theorem Request.localNumerators_length_le_maxSupport
+    (request : Request) (wellFormed : request.WellFormed)
+    (admitted : (request.profileOf wellFormed).admits request.coordinate = true) :
+    ((request.profileOf wellFormed).localNumerators request.coordinate).length
+      ≤ maxSupport := by
+  rw [(request.profileOf wellFormed).localNumerators_length request.coordinate admitted]
+  have bound : request.degree ≤ maxDegree := wellFormed.2.2.2.2.1
+  have degreeIs : (request.profileOf wellFormed).degree = request.degree := rfl
+  simp only [maxSupport, degreeIs]
+  omega
+
 /-! ### The byte record -/
 
 open DClutch.LiabilityBasisV2.PhysicalAbi (encodeI64 decodeI64 field)
@@ -259,8 +289,8 @@ def decodeChecks (bytes : List UInt8) : List (Nat × Bool) := [
   (5, decide (0 < (projectRequest bytes).scale)),
   (6, decide (0 < (projectRequest bytes).knotDenominator) &&
       decide (0 < (projectRequest bytes).coordinateDenominator)),
-  (15, decide (0 < (projectRequest bytes).degree) &&
-      decide ((projectRequest bytes).degree ≤ 3)),
+  (15, decide (minDegree ≤ (projectRequest bytes).degree) &&
+      decide ((projectRequest bytes).degree ≤ maxDegree)),
   (16, decide (2 * (projectRequest bytes).degree + 2 ≤ (projectRequest bytes).knotCount) &&
       decide ((projectRequest bytes).knotCount ≤ maxKnots)),
   (17, (knotPadding bytes).all (fun byte => byte == 0)),
@@ -320,6 +350,17 @@ theorem decodeRequest_refuses_wrong_length
     decodeRequest bytes = .error 0 := by
   unfold decodeRequest refusal? decodeChecks
   simp [wrongLength, List.find?]
+
+/-- Every accepted record names a degree inside the admitted family. -/
+theorem decodeRequest_degree_in_range
+    (bytes : List UInt8) (request : Request)
+    (decoded : decodeRequest bytes = .ok request) :
+    minDegree ≤ request.degree ∧ request.degree ≤ maxDegree := by
+  obtain ⟨accepted, rfl⟩ := decodeRequest_ok_accepted bytes request decoded
+  have check := refusal_none_getElem bytes 7 (by simp [decodeChecks]) accepted
+  simp only [decodeChecks, List.getElem_cons_succ, List.getElem_cons_zero,
+    Bool.and_eq_true, decide_eq_true_eq] at check
+  exact check
 
 /-- Every accepted record's knots really are nondecreasing, so no accepted
 basis is a nonsense one. -/

@@ -44,16 +44,16 @@ use super::{
 ///
 /// Degree zero is the categorical one-hot basis, which `LiabilityBasisV2`
 /// already instantiates separately, so this record does not re-express it.
-pub const SPLINE_MIN_DEGREE_V2: u8 = 1;
+pub use crate::generated_spline::SPLINE_MIN_DEGREE_V2;
 
 /// Highest B-spline degree this physical profile admits.
 ///
 /// A physical capacity of the record, not a mathematical bound: `SplineProfile`
 /// itself is stated for every degree.
-pub const SPLINE_MAX_DEGREE_V2: u8 = 3;
+pub use crate::generated_spline::SPLINE_MAX_DEGREE_V2;
 
 /// Claims one coordinate can be locally supported on: `degree + 1`.
-pub const SPLINE_MAX_SUPPORT_V2: usize = 4;
+pub use crate::generated_spline::SPLINE_MAX_SUPPORT_V2;
 
 /// Weights one Cox-de-Boor level carries at most: `degree` of them.
 const LEVEL_CAPACITY: usize = SPLINE_MAX_SUPPORT_V2 - 1;
