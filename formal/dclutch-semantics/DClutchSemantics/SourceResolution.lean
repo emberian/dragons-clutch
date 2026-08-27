@@ -183,11 +183,50 @@ def ProviderRelease.valid (release : ProviderRelease) : Bool :=
   release.adapterReleaseId != 0 && release.decodingRulesId != 0 &&
   release.transportProfileId != 0 && release.scheduleId != 0
 
-/-- One canonical scheduled Source leg. -/
+/-- One canonical scheduled Source leg.
+
+## The observation window has width, and why that is not optional
+
+`windowStart` and `windowEnd` are the **closed observation window**: the period
+of foreign time the Product actually sold.  They are two fields rather than one
+instant because a real provider does not publish on demand at a second of our
+choosing.  Pyth's devnet SOL/USD feed publishes on a p50 cadence of roughly five
+minutes; a market whose window were one exact second would be resolvable only if
+a publication happened to land on that second, which is to say essentially never.
+A degenerate window (`windowStart = windowEnd`) remains legal and means exactly
+what it says — an instant — but it is a choice a market makes, not a shape the
+type forces on every market.
+
+`acceptThrough` is a different clock and answers a different question.  The
+window bounds *what the observation is about*; `acceptThrough` bounds *when this
+cluster will still act on it*.  A fresh observation of the wrong period and a
+stale observation of the right one must both refuse, so neither bound can be
+derived from the other.  `maximumPublicationAge` bounds the third relationship,
+between the provider's publication stamp and this cluster's clock.
+
+## The selection rule
+
+Widening the window admits more than one observation, so the rule that keeps
+"exactly one answer" must be stated rather than inherited from arithmetic:
+
+> The **first admissible** observation terminalizes the leg.  Admissible means
+> `windowStart ≤ observationTime ≤ windowEnd` under a live clock
+> (`windowStart ≤ now ≤ acceptThrough`) with a publication this cluster will
+> still believe.  Every later observation refuses, admissible or not, because
+> `Config.activeLeg?` is `none` at every terminal phase.  A window that closes
+> with no admissible observation reaches the Product's own failure outcome
+> through `.exhaust` and then `.commitFailure`, and by no other path.
+
+Nothing about that rule is caller-chosen and nothing about it is a race: the
+transition single-writes the phase, so "first" is decided by the ledger's own
+ordering and is checked, not assumed.  See `Leg.admits`,
+`checkEvidence_ok_is_admissible`, and
+`two_admissible_observations_cannot_both_terminalize`. -/
 structure Leg where
   release : ProviderRelease
   scheduleIndex : Nat
-  observationTime : Nat
+  windowStart : Nat
+  windowEnd : Nat
   acceptThrough : Nat
   maximumPublicationAge : Nat
   fundingAllocationId : Nat
@@ -195,12 +234,14 @@ structure Leg where
   deriving DecidableEq, Repr
 
 def Leg.Valid (leg : Leg) : Prop :=
-  leg.release.Valid ∧ leg.observationTime ≤ leg.acceptThrough ∧
+  leg.release.Valid ∧ leg.windowStart ≤ leg.windowEnd ∧
+  leg.windowEnd ≤ leg.acceptThrough ∧
   0 < leg.maximumPublicationAge ∧ leg.fundingAllocationId ≠ 0 ∧
   0 < leg.workQuote
 
 def Leg.valid (leg : Leg) : Bool :=
-  leg.release.valid && leg.observationTime <= leg.acceptThrough &&
+  leg.release.valid && leg.windowStart <= leg.windowEnd &&
+  leg.windowEnd <= leg.acceptThrough &&
   leg.maximumPublicationAge != 0 && leg.fundingAllocationId != 0 &&
   leg.workQuote != 0
 
@@ -554,6 +595,10 @@ def optionToExcept (error : Refusal) : Option α → Except Refusal α
   | some value => .ok value
   | none => .error error
 
+theorem optionToExcept_ok {error : Refusal} {value : Option α} {result : α}
+    (h : optionToExcept error value = .ok result) : value = some result := by
+  cases value <;> simp_all [optionToExcept]
+
 def releaseMatches (release : ProviderRelease) (evidence : NormalizedEvidence) : Bool :=
   evidence.sourceMaterialId == release.sourceMaterialId &&
   evidence.sourceId == release.sourceId &&
@@ -563,6 +608,29 @@ def releaseMatches (release : ProviderRelease) (evidence : NormalizedEvidence) :
   evidence.decodingRulesId == release.decodingRulesId &&
   evidence.transportProfileId == release.transportProfileId
 
+/-- The admissibility predicate for one leg: exactly the observations this leg
+is allowed to answer with.  `checkEvidence` is its refusal-labelled twin, and
+`checkEvidence_ok_is_admissible` pins them together in both directions so the
+selection rule cannot drift away from the checks that enforce it. -/
+def Leg.admits (leg : Leg) (evidence : NormalizedEvidence) (now : Nat) : Bool :=
+  evidence.adapterAuthenticated && evidence.evidenceId != 0 &&
+  releaseMatches leg.release evidence &&
+  evidence.scheduleId == leg.release.scheduleId &&
+  evidence.scheduleIndex == leg.scheduleIndex &&
+  leg.windowStart <= evidence.observationTime &&
+  evidence.observationTime <= leg.windowEnd &&
+  leg.windowStart <= now && now <= leg.acceptThrough &&
+  evidence.publicationTime <= now &&
+  now - evidence.publicationTime <= leg.maximumPublicationAge &&
+  evidence.value.denominator != 0
+
+/-- The guards behind `Leg.admits`, each carrying its own refusal.
+
+The two observation bounds are separate refusals on purpose.  An observation
+before `windowStart` is about a period the market had not started selling yet;
+one after `windowEnd` is a **late** observation, the exact case a real provider
+cadence produces when nobody submitted in time, and it must refuse rather than
+resolve the market on a price from after the question closed. -/
 def checkEvidence (leg : Leg) (evidence : NormalizedEvidence) (now : Nat) :
     Except Refusal Unit := do
   if !evidence.adapterAuthenticated || evidence.evidenceId = 0 then
@@ -572,13 +640,73 @@ def checkEvidence (leg : Leg) (evidence : NormalizedEvidence) (now : Nat) :
   if evidence.scheduleId ≠ release.scheduleId ||
       evidence.scheduleIndex ≠ leg.scheduleIndex then
     throw .wrongSchedule
-  if evidence.observationTime ≠ leg.observationTime then throw .wrongObservationTime
-  if now < leg.observationTime then throw .beforeObservationTime
+  if evidence.observationTime < leg.windowStart then throw .beforeObservationTime
+  if leg.windowEnd < evidence.observationTime then throw .wrongObservationTime
+  if now < leg.windowStart then throw .beforeObservationTime
   if leg.acceptThrough < now then throw .legExpired
   if now < evidence.publicationTime then throw .futurePublication
   if leg.maximumPublicationAge < now - evidence.publicationTime then
     throw .stalePublication
   if evidence.value.denominator = 0 then throw .invalidResult
+
+/-- **Soundness of the rule**: nothing outside the window is ever accepted.  Any
+evidence the guards let through satisfies every clause of `Leg.admits`, including
+both closed observation bounds. -/
+theorem checkEvidence_ok_implies_admissible {leg : Leg}
+    {evidence : NormalizedEvidence} {now : Nat}
+    (h : checkEvidence leg evidence now = .ok ()) :
+    leg.admits evidence now = true := by
+  unfold checkEvidence at h
+  simp only [bind, Except.bind, pure, Except.pure] at h
+  repeat' split at h
+  all_goals try contradiction
+  -- Exactly one branch survives: the one where every guard was passed.  Only
+  -- the three boolean guards need naming; the seven time bounds are ordinary
+  -- `Nat` facts that `omega` reads straight out of the context.
+  rename_i hadapter hrelease hschedule _ _ _ _ _ _ _
+  simp only [Bool.or_eq_true, Bool.not_eq_true', decide_eq_true_eq, not_or,
+    Bool.not_eq_false, ne_eq, Decidable.not_not] at hadapter hrelease hschedule
+  unfold Leg.admits
+  simp only [Bool.and_eq_true, bne_iff_ne, beq_iff_eq, decide_eq_true_eq, ne_eq]
+  repeat' apply And.intro
+  all_goals first
+    | exact hadapter.1
+    | exact hadapter.2
+    | exact hrelease
+    | exact hschedule.1
+    | exact hschedule.2
+    | omega
+
+/-- **Completeness of the rule**: the window is not secretly narrowed by some
+other guard.  Every admissible observation passes `checkEvidence`, so the two
+edges of `[windowStart, windowEnd]` are genuinely reachable rather than
+unreachable in practice — which is exactly the defect a one-instant window
+had. -/
+theorem admissible_implies_checkEvidence_ok {leg : Leg}
+    {evidence : NormalizedEvidence} {now : Nat}
+    (h : leg.admits evidence now = true) :
+    checkEvidence leg evidence now = .ok () := by
+  unfold Leg.admits at h
+  simp only [Bool.and_eq_true, bne_iff_ne, beq_iff_eq, decide_eq_true_eq,
+    ne_eq] at h
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨⟨hauth, hid⟩, hrel⟩, hsched⟩, hindex⟩, _⟩, _⟩,
+    _⟩, _⟩, _⟩, _⟩, _⟩ := h
+  unfold checkEvidence
+  simp only [bind, Except.bind, pure, Except.pure]
+  repeat' split
+  -- One branch per guard, plus the acceptance.  Every refusal branch is
+  -- refuted by the admissibility clause that guard tests: `omega` for the
+  -- seven time bounds, the named boolean facts for the other three.
+  all_goals first
+    | rfl
+    | (exfalso; omega)
+    | (exfalso; rename_i c; simp [hauth, hid, hrel, hsched, hindex] at c <;> omega)
+
+/-- The checks and the stated rule are the same set. -/
+theorem checkEvidence_ok_is_admissible (leg : Leg) (evidence : NormalizedEvidence)
+    (now : Nat) :
+    checkEvidence leg evidence now = .ok () ↔ leg.admits evidence now = true :=
+  ⟨checkEvidence_ok_implies_admissible, admissible_implies_checkEvidence_ok⟩
 
 def fundingEffects (quote : Nat) : List Effect := [
   { operation := .debit, role := .fundingState, resource := .workCapital,
@@ -942,6 +1070,90 @@ theorem wrong_provider_release_refuses
     simp [releaseMatches, hwrong]
   simp [checkEvidence, hauthenticated, hevidence, hmismatch, bind, Except.bind,
     pure, Except.pure]
+
+/-! ## Exactly one answer
+
+The three theorems below are the whole content of the selection rule.  Widening
+a terminal window from an instant to `[windowStart, windowEnd]` admits more than
+one observation, so "exactly one answer" stops being a consequence of the
+window's arithmetic and becomes a property of the transition that has to be
+proved.  It is: the phase is single-written, `Config.activeLeg?` is `none` at
+every terminal phase, and therefore no second observation can reach the
+transition at all — not a later one, not a better one, not one from a caller who
+picked it. -/
+
+/-- No leg is active once the state is terminal.  This is the mechanism; the two
+theorems after it are what it buys. -/
+@[simp] theorem activeLeg_resolved (config : Config) (selector : Nat) :
+    config.activeLeg? (.resolved selector) = none := rfl
+
+/-- A successful acceptance leaves the state resolved at Product's own selector
+for that evidence, and records that evidence as terminal. -/
+theorem accept_post_is_resolved
+    {config : Config} {state : State} {funding : FundingState}
+    {evidence : NormalizedEvidence} {now worker receiptAccountId : Nat} {plan : Plan}
+    (h : specialize config state funding
+      (.accept evidence now worker receiptAccountId) = .ok plan) :
+    plan.sourcePost.phase =
+      .resolved (config.productDomain.map (.observed evidence.value)) := by
+  unfold specialize at h
+  simp only [bind, Except.bind] at h
+  repeat' split at h
+  all_goals try contradiction
+  all_goals
+    simp only [pure, Except.pure, Except.ok.injEq] at h
+    subst plan
+    rfl
+
+/-- **One answer.**  A resolved Source refuses every acceptance, whatever the
+observation, whatever the clock, and whoever submits it.  Nothing here inspects
+the second observation: it never gets that far. -/
+theorem resolved_admits_no_second_answer
+    {config : Config} {state : State} {funding : FundingState}
+    {evidence : NormalizedEvidence} {now worker receiptAccountId selector : Nat}
+    {plan : Plan}
+    (hphase : state.phase = .resolved selector) :
+    specialize config state funding
+      (.accept evidence now worker receiptAccountId) ≠ .ok plan := by
+  unfold specialize
+  simp only [bind, Except.bind]
+  repeat' split
+  all_goals try simp
+  all_goals rw [hphase] at *
+  all_goals simp_all [Config.activeLeg?, optionToExcept]
+
+/-- **The race shape, executed.**  Two admissible observations cannot both
+terminalize: run any acceptance against the post-state of a successful one and it
+refuses.  This is the statement a last-writer race would falsify. -/
+theorem two_admissible_observations_cannot_both_terminalize
+    {config : Config} {state : State} {funding : FundingState}
+    {first second : NormalizedEvidence}
+    {nowFirst workerFirst receiptFirst : Nat}
+    {nowSecond workerSecond receiptSecond : Nat}
+    {firstPlan secondPlan : Plan}
+    (hfirst : specialize config state funding
+      (.accept first nowFirst workerFirst receiptFirst) = .ok firstPlan) :
+    specialize config firstPlan.sourcePost firstPlan.fundingPost
+      (.accept second nowSecond workerSecond receiptSecond) ≠ .ok secondPlan :=
+  resolved_admits_no_second_answer (accept_post_is_resolved hfirst)
+
+/-- The observation-free window lands in the failure path and nowhere else, and
+it may not do so early: `.exhaust` refuses while the active leg is still live, so
+the last second on which an honest observation may resolve the market and the
+first second on which it may be walked to failure are different seconds.  With
+`failure_commit_requires_exhaustion`, that makes the Product's failure outcome
+reachable only after the window it sold has actually closed. -/
+theorem exhaust_requires_the_window_to_have_closed
+    {config : Config} {state : State} {funding : FundingState}
+    {now worker receiptAccountId : Nat} {plan : Plan}
+    (h : specialize config state funding
+      (.exhaust now worker receiptAccountId) = .ok plan) :
+    ∃ leg, config.activeLeg? state.phase = some leg ∧ leg.acceptThrough < now := by
+  unfold specialize at h
+  simp only [bind, Except.bind] at h
+  repeat' split at h
+  all_goals try contradiction
+  all_goals exact ⟨_, optionToExcept_ok (by assumption), by omega⟩
 
 /-- Recovery advancement selects only the immediate canonical list successor. -/
 theorem failNext_from_recovery_advances_one

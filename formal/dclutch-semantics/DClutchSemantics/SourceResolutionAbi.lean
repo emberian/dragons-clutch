@@ -329,10 +329,14 @@ def exampleRelease (seed : Nat) : ProviderRelease := {
   scheduleId := 38 + seed
 }
 
+/-- A real-shaped leg: the window has width, and the acceptance deadline sits
+after the window closes.  A degenerate `windowStart = windowEnd` example would
+pass every check below while hiding the case a real provider cadence produces. -/
 def examplePrimary : Leg := {
   release := exampleRelease 0
   scheduleIndex := 0
-  observationTime := 1_000
+  windowStart := 1_000
+  windowEnd := 1_006
   acceptThrough := 1_010
   maximumPublicationAge := 20
   fundingAllocationId := 41
@@ -343,7 +347,8 @@ def exampleRecovery : RecoveryAttempt := {
   leg := {
     release := exampleRelease 1
     scheduleIndex := 1
-    observationTime := 1_020
+    windowStart := 1_020
+    windowEnd := 1_026
     acceptThrough := 1_030
     maximumPublicationAge := 20
     fundingAllocationId := 42
@@ -379,9 +384,20 @@ def wrongMaterialRecovery : RecoveryAttempt := {
   }
 }
 
+/-- A well-formed recovery leg that nevertheless closes before the primary does.
+The refusal is the ordering rule, not the leg's own shape, so the leg is kept
+internally valid (`windowStart ≤ windowEnd ≤ acceptThrough`). -/
 def earlyRecovery : RecoveryAttempt := {
   exampleRecovery with
-  leg := { exampleRecovery.leg with acceptThrough := 1_005 }
+  leg := { exampleRecovery.leg with
+    windowStart := 1_000, windowEnd := 1_004, acceptThrough := 1_005 }
+}
+
+/-- A leg whose window closes after this cluster stops accepting it. Nothing
+could ever submit an admissible observation for the tail of that window. -/
+def unacceptableRecovery : RecoveryAttempt := {
+  exampleRecovery with
+  leg := { exampleRecovery.leg with windowEnd := 1_031 }
 }
 
 def exampleState : State := {
@@ -421,6 +437,9 @@ def exampleFunding (allocation capital : Nat) : FundingState := {
 #guard exampleConfig.valid
 #guard !({ exampleConfig with recoveries := [wrongMaterialRecovery] }).valid
 #guard !({ exampleConfig with recoveries := [earlyRecovery] }).valid
+#guard !({ exampleConfig with recoveries := [unacceptableRecovery] }).valid
+#guard !({ exampleConfig with
+  primary := { examplePrimary with windowStart := 1_007 } }).valid
 #guard exampleState.valid
 #guard exampleDomain.map (.observed ⟨-1, 1⟩) == 0
 #guard exampleDomain.map (.observed ⟨0, 1⟩) == 1
@@ -471,5 +490,62 @@ def exhaustedState : State := {
     { exampleEvidence with providerReleaseId := 999 } 1_005 with
   | .error .wrongRelease => true
   | _ => false
+
+/-! ### The widened window, executed
+
+`examplePrimary` sells `[1_000, 1_006]`.  These guards walk the whole shape a
+one-instant window could not express: an observation strictly inside the window
+resolves, both edges resolve, one second outside each edge refuses with its own
+refusal, and a submission after `acceptThrough` refuses even though its
+observation is squarely inside the window. -/
+
+/-! An observation from the interior of the window — impossible under a
+one-instant window, and the ordinary case on a real provider cadence. -/
+#guard match specialize exampleConfig exampleState (exampleFunding 41 10)
+    (.accept { exampleEvidence with observationTime := 1_003 } 1_005 61 62) with
+  | .ok plan => plan.sourcePost.phase == .resolved 1
+  | .error _ => false
+
+/-! Both closed edges are inside. -/
+#guard match checkEvidence examplePrimary
+    { exampleEvidence with observationTime := 1_000 } 1_005 with
+  | .ok _ => true
+  | .error _ => false
+
+#guard match checkEvidence examplePrimary
+    { exampleEvidence with observationTime := 1_006 } 1_006 with
+  | .ok _ => true
+  | .error _ => false
+
+/-! One second before the window opens. -/
+#guard match checkEvidence examplePrimary
+    { exampleEvidence with observationTime := 999 } 1_005 with
+  | .error .beforeObservationTime => true
+  | _ => false
+
+/-! One second after the window closes: a *late* observation, the exact shape a
+provider cadence straddling the deadline produces. -/
+#guard match checkEvidence examplePrimary
+    { exampleEvidence with observationTime := 1_007 } 1_008 with
+  | .error .wrongObservationTime => true
+  | _ => false
+
+/-! Squarely inside the window, submitted after this cluster stopped accepting. -/
+#guard match checkEvidence examplePrimary
+    { exampleEvidence with observationTime := 1_006, publicationTime := 1_005 }
+    1_011 with
+  | .error .legExpired => true
+  | _ => false
+
+/-! Exactly one answer, executed: the post-state of a successful acceptance
+refuses a second admissible observation from elsewhere in the same window. -/
+#guard match acceptedExample with
+  | .ok plan =>
+      match specialize exampleConfig plan.sourcePost plan.fundingPost
+          (.accept { exampleEvidence with
+            observationTime := 1_004, evidenceId := 52 } 1_006 61 65) with
+        | .error .wrongPhase => true
+        | _ => false
+  | .error _ => false
 
 end DClutch.SourceResolution.Abi
