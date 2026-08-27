@@ -1,8 +1,25 @@
 //! The canonical Structured V2 physical account frame.
 //!
-//! One author for two readers: the host operator that BUILDS the instruction
-//! and the onchain adapter that PARSES it.  Neither carries a per-action
-//! account table of its own, so the two cannot drift.
+//! One author for two readers: the operator that LOWERS an action plan into
+//! candidate effects, and the candidate that JUDGES it.  Neither carries a
+//! per-action account table of its own, so the two cannot drift.
+//!
+//! # What this frame is not
+//!
+//! It is not the `AccountProfileV2` the chain expands.  Decision 0011 measures
+//! the difference: the Trading hot frame already fixes 39 accounts and injects
+//! five more at profile coordinates 0..4, so thirteen of this frame's
+//! twenty-three BASE coordinates name something already owned elsewhere --
+//! the Market, the Core and Registry programs, the activation cache, the Rent
+//! sysvar, the root itself, the role programs the child composition resolves,
+//! and the caller-authority triple the executor derives per route.  This base
+//! is the account list a Structured program with its own entrypoint would
+//! parse, and Structured has no such program.  Transcribing it into a profile
+//! would install a second authority for accounts the hot frame already fixes.
+//!
+//! The per-coordinate triple stride and the effect slot assignment below are a
+//! different matter and carry over to that profile unchanged: they describe
+//! the family's own accounts, which nothing else names.
 //!
 //! The frame is a fixed base followed by one triple per BACKED representation
 //! coordinate — the same coordinates, in the same strictly ascending Mint

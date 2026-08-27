@@ -1,10 +1,26 @@
-//! Onchain-safe Structured V2 execution candidate for common Trading Hot.
+//! Host-side adversary for one planned Structured V2 action.
 //!
 //! The candidate is opaque: it is prepared from independently authenticated
 //! inputs, revalidates every amount against the immutable coefficients, and
 //! exposes only borrowed effects plus commit-last root bytes.  It contains no
 //! Claims child, because a Structured receipt's single backing edge points at
 //! the claim-shard layer and never past it.
+//!
+//! # This is not a chain seam
+//!
+//! Every caller of [`StructuredHotCandidateV2::prepare`] and its two
+//! poststate checks is a test, and `dclutch-trading-sbf` does not depend on
+//! this crate.  Decision 0011 records why it never will: for `hot_v3.rs` to
+//! run this code it would have to link a family crate and branch on a family
+//! between Token CPIs, which is what decision 0006 forbids.  The chain reaches
+//! a family through its sealed artifact closure -- an `AccountProfileV2`, a
+//! `TransitionProgramV3`, an `EffectProgramV4` and three more, named by a
+//! `CapabilityProgramV4` -- and never through Rust the family wrote.
+//!
+//! What this module is for is the operator: `plan_structured_action_v2` builds
+//! an action, and this candidate is the independent judge of whether the plan
+//! it built is the one the immutable terms admit.  `dclutch-fractional-claim-
+//! contract`'s `FractionalHotCandidateV2` occupies exactly the same position.
 
 use dclutch_fractional_claim_kernel::FractionalExposureTermsV2;
 use dclutch_structured_v2_kernel::{
