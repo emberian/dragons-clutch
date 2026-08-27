@@ -9,10 +9,10 @@
   "tolerance_rule": {
     "formula": "tolerance = roundup(observed_band, 10000) + 10000, with a floor of 15000; budget = measured + tolerance",
     "measured_at": "the `measured` value of every entry is the HIGHEST draw this lane observed, not a single run. Pinning the highest draw is what keeps ordinary noise from producing a red row.",
-    "noise": "The CU figures on both campaigns move run to run on byte-identical artifacts, and the cause is exact: every campaign here generates fresh signing keypairs per run (`Keypair::new()` in the successor bootstrap; ProgramTest's own genesis payer in the fast lane), which changes how many iterations `find_program_address` needs to find a bump, and each iteration is one `sol_create_program_address` syscall at 1,500 CU. EVERY delta this lane measured between runs is an exact multiple of 1,500 (a handful of +-4 residuals aside), which is what makes the diagnosis a measurement rather than a story.",
-    "measured_bands": "tier 1, two campaigns 23 minutes apart whose seven ELFs are byte-identical except Trading's line-number metadata (d9f79bb at 08:27Z, 3b0c588 at 08:50Z, both 2026-08-27): DCLTGMF1 moved 58,494 CU; DCLTPCB1 moved 51,005; the reordered-tail refusal moved 55,503; per-role activation moved 1,500-9,000; Found31, the Found31 rollback case, the infrastructure profile init and the non-terminal DCLTPCB1 refusal moved by ZERO. A stronger figure needs no second run at all: the d9f79bb campaign stages TWO structurally identical DCLTPCB1 ladders at different generations, and they differ by 79,500 CU (exactly 53 iterations) inside ONE campaign on ONE binary. tier 4, six runs of the same ProgramTest campaign on the same ELFs: the founding case spans 24,000, the replay campaign 19,500, the late-Hoard refusal 15,000, the replayed-ticket refusal 4,500, the substituted-ProgramData refusal 1,500.",
-    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and — the thing W1f actually asked for — the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
-    "how_to_shrink_it": "Seed the fixtures. If the successor bootstrap derived its keypairs from a fixed seed (a `--keypair-seed` on `dclutch-local-successor-bootstrap run`) the band would collapse to zero and every tolerance here could drop to 15,000, which WOULD catch a 30,000 regression on DCLTGMF1. That file is tools/local-validator/bootstrap/successor/ and belongs to W1f; this lane is read-only toward it. Queued as an owner-decision in CU_BUDGETS.md. The same is true of ProgramTest's genesis payer for the tier-4 fast lane, in programs/dclutch-core-sbf/tests/found_program_test.rs."
+    "noise": "BOTH CAMPAIGNS ARE SEEDED NOW, and the residual is measured rather than assumed. The original cause was exact: every campaign drew fresh signing keypairs per run (Keypair::new() in the successor bootstrap; Keypair::new() and Pubkey::new_unique() in the ProgramTest fast lane), which changes how many iterations find_program_address needs for an off-curve bump, and each iteration is one sol_create_program_address syscall at 1,500 CU. Every delta measured between runs was an exact multiple of 1,500 (a handful of +-4 residuals aside), which is what made the diagnosis a measurement rather than a story. tier 4 is now band 0 on every row, proven over four runs of one compiled binary. tier 1 is NOT: 82 of its 101 transactions are byte-identical across two seeded runs at one revision and 19 are not, because A KEYPAIR SEED ONLY SEEDS KEYPAIRS -- the founding ladders carry expiry slots derived as finalized_slot + 500,000 and lookup tables derived from [authority, recent_slot], and those move with when the campaign happens to run. See CU_BUDGETS.md.",
+    "measured_bands": "SEEDED, tier 1, two campaigns at 5465341 on 2026-08-27 with one seed digest and one set of ELFs: 14 of the 24 enforced rows are band 0, including every per-role activation, Found31 and its rollback case, the infrastructure profile init, the non-terminal DCLTPCB1 refusal, the second projected-Custody prestate and both DCLTPCA1 cases. The other 10 are the two founding ladders and their stages: dcltgmf1-whole 9,004; its stages 1,500 / 2 / 2 / 1,500; dcltpcb1-whole 24,000; its stages 6,000 / 4,500 / 1,500; the reordered-tail refusal 24,000. UNSEEDED, which is what this file's pins were written against and what a real founder still pays: DCLTGMF1 58,494, DCLTPCB1 51,005 across campaigns and 79,500 within ONE campaign, the reordered-tail refusal 55,503, per-role activation 1,500-9,000. tier 4 seeded: 0 on every row over four runs; unseeded it spanned 24,000 on the founding case and 6,000 on the substituted-ProgramData refusal, which six runs had not bounded.",
+    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and \u2014 the thing W1f actually asked for \u2014 the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
+    "how_to_shrink_it": "TAKEN, 2026-08-27. dclutch-local-successor-bootstrap run takes --keypair-seed <64 hex> behind a loopback-only refusal, and programs/dclutch-core-sbf/tests/found_program_test.rs and programs/dclutch-custody-sbf/tests/program_test.rs derive their fixture keys from documented preimages. What remains is NOT a keypair: the tier-1 founding ladders hash slot- and clock-derived material into addresses, so shrinking those rows further means making the campaign's expiry and lookup-table inputs a function of the seed rather than of the wall clock. That is a change to what the campaign SUBMITS, not to how it draws keys, and it is not obviously worth it: the world is still as noisy as it ever was and a founding is exactly where a real founder pays that noise too."
   },
   "budgets": [
     {
@@ -31,7 +31,11 @@
       "campaign": "tier1",
       "scope": "stage",
       "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
-      "stage": { "index": 1, "name": "Custody LockHoardAndCloseSource", "program_role": "custody" },
+      "stage": {
+        "index": 1,
+        "name": "Custody LockHoardAndCloseSource",
+        "program_role": "custody"
+      },
       "measured": 144840,
       "tolerance": 40000,
       "budget": 184840,
@@ -43,7 +47,11 @@
       "campaign": "tier1",
       "scope": "stage",
       "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
-      "stage": { "index": 2, "name": "Core Found and one-shot permit", "program_role": "core" },
+      "stage": {
+        "index": 2,
+        "name": "Core Found and one-shot permit",
+        "program_role": "core"
+      },
       "measured": 433129,
       "tolerance": 30000,
       "budget": 463129,
@@ -55,7 +63,11 @@
       "campaign": "tier1",
       "scope": "stage",
       "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
-      "stage": { "index": 3, "name": "Custody RealizeAndClose", "program_role": "custody" },
+      "stage": {
+        "index": 3,
+        "name": "Custody RealizeAndClose",
+        "program_role": "custody"
+      },
       "measured": 103858,
       "tolerance": 20000,
       "budget": 123858,
@@ -67,7 +79,11 @@
       "campaign": "tier1",
       "scope": "stage",
       "transaction": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
-      "stage": { "index": 4, "name": "Claims FoundingV5", "program_role": "claims" },
+      "stage": {
+        "index": 4,
+        "name": "Claims FoundingV5",
+        "program_role": "claims"
+      },
       "measured": 267951,
       "tolerance": 20000,
       "budget": 287951,
@@ -113,7 +129,11 @@
       "campaign": "tier1",
       "scope": "stage",
       "transaction": "create the projected-Custody founding prestate (DCLTPCB1)",
-      "stage": { "index": 1, "name": "Custody Initialize, including Core ProjectFound", "program_role": "custody" },
+      "stage": {
+        "index": 1,
+        "name": "Custody Initialize, including Core ProjectFound",
+        "program_role": "custody"
+      },
       "measured": 354337,
       "tolerance": 30000,
       "budget": 384337,
@@ -125,7 +145,11 @@
       "campaign": "tier1",
       "scope": "stage",
       "transaction": "create the projected-Custody founding prestate (DCLTPCB1)",
-      "stage": { "index": 2, "name": "Custody OpenHoard, including Token-2022 InitializeAccount3", "program_role": "custody" },
+      "stage": {
+        "index": 2,
+        "name": "Custody OpenHoard, including Token-2022 InitializeAccount3",
+        "program_role": "custody"
+      },
       "measured": 115594,
       "tolerance": 20000,
       "budget": 135594,
@@ -137,12 +161,16 @@
       "campaign": "tier1",
       "scope": "stage",
       "transaction": "create the projected-Custody founding prestate (DCLTPCB1)",
-      "stage": { "index": 3, "name": "Custody OpenSourceCompartment", "program_role": "custody" },
+      "stage": {
+        "index": 3,
+        "name": "Custody OpenSourceCompartment",
+        "program_role": "custody"
+      },
       "measured": 159108,
       "tolerance": 50000,
       "budget": 209108,
       "enforced": true,
-      "provenance": "The third inner stage's own `consumed` line. This is the stage that had never executed at all before run 4 — it died out-of-memory under the heap wall — so a budget on it is a regression floor on a route with barely any history."
+      "provenance": "The third inner stage's own `consumed` line. This is the stage that had never executed at all before run 4 \u2014 it died out-of-memory under the heap wall \u2014 so a budget on it is a regression floor on a route with barely any history."
     },
     {
       "id": "dcltpcb1-second-prestate-whole",
@@ -164,7 +192,7 @@
       "tolerance": 70000,
       "budget": 851102,
       "enforced": true,
-      "provenance": "The hostile case W1e refused to count until run 5 supplied a discriminator. It matters that it stays BELOW the honest transaction it shadows: when the two were within 300 CU of each other the refusal was indistinguishable from an out-of-memory death at the same point. This budget does not check that relation — it is a ceiling on one number — but a red row here is the first sign that the two have converged again."
+      "provenance": "The hostile case W1e refused to count until run 5 supplied a discriminator. It matters that it stays BELOW the honest transaction it shadows: when the two were within 300 CU of each other the refusal was indistinguishable from an out-of-memory death at the same point. This budget does not check that relation \u2014 it is a ceiling on one number \u2014 but a red row here is the first sign that the two have converged again."
     },
     {
       "id": "dcltpcb1-non-terminal-refusal",
@@ -219,7 +247,7 @@
       "tolerance": 20000,
       "budget": 566984,
       "enforced": true,
-      "provenance": "Per-role activation of the immutable release set. Before the immutability-argument fast path this whole family hashed whole ELFs on chain — five-role activation with real artifacts exceeded 1,400,000 outright — so each role gets its own row and the worst role is the one that decides whether activation is reachable at all."
+      "provenance": "Per-role activation of the immutable release set. Before the immutability-argument fast path this whole family hashed whole ELFs on chain \u2014 five-role activation with real artifacts exceeded 1,400,000 outright \u2014 so each role gets its own row and the worst role is the one that decides whether activation is reachable at all."
     },
     {
       "id": "activation-role-claims",
@@ -307,7 +335,7 @@
       "tolerance": 15000,
       "budget": 737142,
       "enforced": true,
-      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit — the same Core code that costs stage 2 of DCLTGMF1 — with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
+      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit \u2014 the same Core code that costs stage 2 of DCLTGMF1 \u2014 with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
     },
     {
       "id": "series-consume-founds-with-permit-replay-campaign",
@@ -373,6 +401,153 @@
         "cumulative_to_mid_preplan_refusal_after": 568486
       },
       "provenance": "Recorded from ADR 0005's own measured table rather than re-measured, per the close-out doctrine's `no more re-measuring into tables`. It becomes an enforced entry the day W2i's heap gate goes green, and the entry to write then is the whole-bundle transaction CU plus the phase subtotals from a `--features hot-cu-profile` run."
+    },
+    {
+      "id": "claims-sparse-admit-transfer-close",
+      "campaign": "claims-family-programtest",
+      "scope": "transaction",
+      "transaction": "claims sparse: admit, transfer and close",
+      "measured": 561881,
+      "tolerance": 15000,
+      "budget": 576881,
+      "enforced": true,
+      "provenance": "The heaviest transaction in either family campaign and the one the composed Claims chain exists for: Admit -> SparseNativeTransfer -> Close, three Claims stages inside one rollback domain, driven by a real test caller through CPI. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [561881, 561881], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "claims-sparse-stage-1-admit",
+      "campaign": "claims-family-programtest",
+      "scope": "stage",
+      "transaction": "claims sparse: admit, transfer and close",
+      "measured": 207719,
+      "tolerance": 15000,
+      "budget": 222719,
+      "enforced": true,
+      "provenance": "Stage budgets are where the 15,000-scale teeth are: a regression localised to one Claims stage is red here even when the whole-transaction row is not. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [207719, 207719], band 0. Band 0, so the tolerance is the 15,000 floor.",
+      "stage": {
+        "index": 1,
+        "name": "Claims Admit",
+        "program_role": "claims"
+      }
+    },
+    {
+      "id": "claims-sparse-stage-2-sparse-native-transfer",
+      "campaign": "claims-family-programtest",
+      "scope": "stage",
+      "transaction": "claims sparse: admit, transfer and close",
+      "measured": 178046,
+      "tolerance": 15000,
+      "budget": 193046,
+      "enforced": true,
+      "provenance": "The middle stage, and the only one whose cost scales with the transfer's own sparse extent rather than with the admission. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [178046, 178046], band 0. Band 0, so the tolerance is the 15,000 floor.",
+      "stage": {
+        "index": 2,
+        "name": "Claims SparseNativeTransfer",
+        "program_role": "claims"
+      }
+    },
+    {
+      "id": "claims-sparse-stage-3-close",
+      "campaign": "claims-family-programtest",
+      "scope": "stage",
+      "transaction": "claims sparse: admit, transfer and close",
+      "measured": 117315,
+      "tolerance": 15000,
+      "budget": 132315,
+      "enforced": true,
+      "provenance": "The terminal stage. Its cost is the one that must stay small for a Position to be closable in the same transaction that empties it. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [117315, 117315], band 0. Band 0, so the tolerance is the 15,000 floor.",
+      "stage": {
+        "index": 3,
+        "name": "Claims Close",
+        "program_role": "claims"
+      }
+    },
+    {
+      "id": "claims-position-admit",
+      "campaign": "claims-family-programtest",
+      "scope": "transaction",
+      "transaction": "claims position: admit",
+      "measured": 236191,
+      "tolerance": 15000,
+      "budget": 251191,
+      "enforced": true,
+      "provenance": "The protocol Position lifecycle's single-stage admission, which is the Claims code DCLTGMF1's stage 4 (Claims FoundingV5) shares. A Claims regression shows up here in seconds instead of after a six-minute validator campaign. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [236191, 236191], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "claims-sparse-substituted-admission-receipt-refusal",
+      "campaign": "claims-family-programtest",
+      "scope": "transaction",
+      "transaction": "claims sparse: transfer under a substituted admission receipt",
+      "measured": 362405,
+      "tolerance": 15000,
+      "budget": 377405,
+      "enforced": true,
+      "provenance": "A hostile case, budgeted because a refusal that gets more expensive is a refusal that can stop fitting: the cost of REFUSING must stay far from the ceiling or an attacker picks the transaction that cannot complete either way. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [362405, 362405], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "custody-legacy-open-vault",
+      "campaign": "custody-family-programtest",
+      "scope": "transaction",
+      "transaction": "custody legacy: open vault",
+      "measured": 143015,
+      "tolerance": 15000,
+      "budget": 158015,
+      "enforced": true,
+      "provenance": "Opening the vault against the real SPL Token program. Custody is one of the three programs whose changes moved DCLTGMF1 toward the ceiling, and the Lock and Realize stages of DCLTGMF1 are this code. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [143015, 143015], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "custody-token-2022-open-vault",
+      "campaign": "custody-family-programtest",
+      "scope": "transaction",
+      "transaction": "custody token-2022: open vault",
+      "measured": 134082,
+      "tolerance": 15000,
+      "budget": 149082,
+      "enforced": true,
+      "provenance": "The same transaction against real Token-2022, budgeted separately because the token program is a different program with a different cost, and because a budget must name exactly one transaction: 'custody *: open vault' is a bindings wildcard and would be AMBIGUOUS here. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [134082, 134082], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "custody-legacy-delegated-external-transfer",
+      "campaign": "custody-family-programtest",
+      "scope": "transaction",
+      "transaction": "custody legacy: delegated external transfer",
+      "measured": 142811,
+      "tolerance": 15000,
+      "budget": 157811,
+      "enforced": true,
+      "provenance": "The delegated path, which is the one that carries a replay revision and an external counterparty -- the most account-heavy Custody transaction here. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [142811, 142811], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "custody-token-2022-delegated-external-transfer",
+      "campaign": "custody-family-programtest",
+      "scope": "transaction",
+      "transaction": "custody token-2022: delegated external transfer",
+      "measured": 131260,
+      "tolerance": 15000,
+      "budget": 146260,
+      "enforced": true,
+      "provenance": "The delegated path against Token-2022. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [131260, 131260], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "custody-legacy-close-vault",
+      "campaign": "custody-family-programtest",
+      "scope": "transaction",
+      "transaction": "custody legacy: close vault",
+      "measured": 131566,
+      "tolerance": 15000,
+      "budget": 146566,
+      "enforced": true,
+      "provenance": "Closing the vault, which is the transaction a stranded-collateral hazard would make unaffordable first. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [131566, 131566], band 0. Band 0, so the tolerance is the 15,000 floor."
+    },
+    {
+      "id": "custody-token-2022-close-vault",
+      "campaign": "custody-family-programtest",
+      "scope": "transaction",
+      "transaction": "custody token-2022: close vault",
+      "measured": 125533,
+      "tolerance": 15000,
+      "budget": 140533,
+      "enforced": true,
+      "provenance": "Closing the vault against Token-2022. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [125533, 125533], band 0. Band 0, so the tolerance is the 15,000 floor."
     }
   ]
 }

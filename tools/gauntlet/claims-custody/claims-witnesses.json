@@ -56,6 +56,12 @@
       "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
       "expect": "0",
       "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured, so the maximum above is over ALL of them rather than over whichever ones happened to be instrumented."
+    },
+    {
+      "id": "the-claims-family-transactions-are-inside-their-cu-budgets",
+      "kind": "cu-budget",
+      "campaign": "claims-family-programtest",
+      "provenance": "The budgets live in tools/gauntlet/CU_BUDGETS.json; this witness carries no number of its own. The independent value is Solana's 1,400,000 per-transaction MAX_COMPUTE_UNIT_LIMIT, which is the chain's and not ours. Claims is one of the three programs whose changes moved DCLTGMF1 84.6% -> 91.3% of that ceiling in a single evening with nothing watching, and this campaign is the fast lane that sees a Claims regression in seconds instead of after a six-minute validator campaign. Every label a budget row names is a LITERAL string the recorder emits; the wildcards in claims-bindings.json are the census's and must never be copied into a budget, which would make the row AMBIGUOUS."
     }
   ]
 }

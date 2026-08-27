@@ -49,6 +49,12 @@
       "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
       "expect": "0",
       "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured, so the maximum above is over ALL of them rather than over whichever ones happened to be instrumented."
+    },
+    {
+      "id": "the-custody-family-transactions-are-inside-their-cu-budgets",
+      "kind": "cu-budget",
+      "campaign": "custody-family-programtest",
+      "provenance": "The budgets live in tools/gauntlet/CU_BUDGETS.json; this witness carries no number of its own. The independent value is Solana's 1,400,000 per-transaction MAX_COMPUTE_UNIT_LIMIT. Custody is the other of the three programs whose changes moved DCLTGMF1 toward that ceiling, and both of its profile campaigns are deterministic since their four fixture addresses stopped coming from Pubkey::new_unique(), which reads a process-global counter two concurrent campaigns were both drawing from. Budget rows name LITERAL labels -- 'custody legacy: open vault' and 'custody token-2022: open vault' separately, never the bindings' 'custody *: open vault', which would be AMBIGUOUS."
     }
   ]
 }
