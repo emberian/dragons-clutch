@@ -293,6 +293,11 @@ Measured offline against the real HEAD artifacts (`plan-tx.json`, this lane):
 | 7 × `<role>_artifact_release` | 216 each | 0.002394240 SOL each |
 | **total** | **2,288** | **0.023942400 SOL** |
 
+**Measured on chain** by the §6 dry run: exactly **27 transactions** — nine
+`Begin → Append → Finalize` triples, every body fitting in a single Append —
+**510,387 CU** in total and **135,000 lamports** of fees. The whole phase costs
+about 0.024 SOL of rent and 0.000135 SOL of fees, and takes 27 finalized slots.
+
 `tools/local-validator/bootstrap/successor` gained
 `--record-publication transaction` for exactly this (`fab6aaf`). Under it the
 nine bodies leave genesis, the supervisor publishes each through the same
