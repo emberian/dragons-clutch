@@ -189,6 +189,18 @@ reasoning as a stale binding.
 | Claims/Custody | `claims-custody/` | `solana-program-test` | the protocol Position lifecycle, the composed Admit -> SparseNativeTransfer -> Close chain, and ordinary plus delegated Custody against real SPL Token and Token-2022 |
 | Dealer | `dealer/` | `solana-program-test` | the Dealer equity pool's rounding boundary |
 | Direct | `direct/` | `solana-program-test` | the stateless Direct V2 AOT accelerator |
+| Journey | `journey/` | localhost validator | JRNY-1: one Market's whole life, tier 1's founding continued in-process into post-Open collateral distribution to N holders, a holder ring, and rent recovery — under one conservation ledger |
+
+`journey/` is the first tier that is a **superset** of another rather than a
+sibling. It compiles the tier-1 producer's own source files into its binary by
+`#[path]` and calls `runtime::found_through_open`, so its evidence document
+carries every tier-1 transaction before its own. Two things follow, and both are
+in `journey/run-journey.sh` rather than in a second copy of anything: the
+bindings handed to `census observe` are tier 1's merged with the journey's at
+run time, and the shared witness evaluator is called twice against the same
+evidence with two different context files. A tier that continues another one
+should copy that shape; a tier that forks the other's bindings will discover the
+census failing on somebody else's change.
 
 **Numbered directories turned out to be a bad idea.** `tier<N>` is a global
 namespace with no allocator, and on 2026-08-27 three lanes claimed the same two
