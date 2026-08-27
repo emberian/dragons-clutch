@@ -276,11 +276,11 @@
       "campaign": "tier1",
       "scope": "transaction",
       "transaction": "activate immutable release-set role: Resolution",
-      "measured": 293713,
+      "measured": 330385,
       "tolerance": 20000,
-      "budget": 313713,
+      "budget": 350385,
       "enforced": true,
-      "provenance": "Per-role activation; see activation-role-core."
+      "provenance": "Per-role activation. Re-pinned 2026-08-27 after 87e4590 grew the Resolution artifact 18,944 B (the funded failure walk, load-bearing demo function) -> activation +16,672 CU at ~1.13 CU/byte. Accepted by the orchestrator; activation headroom remains ~75%. Band noise is 1,500-multiples; see tolerance_rule.measured_bands."
     },
     {
       "id": "activation-role-custody",
