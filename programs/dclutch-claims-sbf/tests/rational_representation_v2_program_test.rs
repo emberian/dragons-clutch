@@ -111,6 +111,10 @@ use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
+use dclutch_rational_representation_v2_request_contract::{
+    Error as RationalRequestError,
+    generated::{ASSET_COEFFICIENT_OFFSET, ASSET_SHARD_MINT_OFFSET},
+};
 use dclutch_structured_v2_operator::Error as StructuredOperatorError;
 use structured_lowering::StructuredBasis;
 
@@ -428,6 +432,8 @@ struct Fixture {
     receipt_mint: Pubkey,
     actor_receipt: Pubkey,
     assets: [AssetFixture; K],
+    /// The Structured basis this Market's descriptor was DERIVED from.
+    basis: StructuredBasis,
     terminal_accounts: Option<TerminalFixture>,
 }
 
@@ -996,7 +1002,34 @@ fn mint_data(authority: COption<Pubkey>, supply: u64, decimals: u8) -> Vec<u8> {
     bytes
 }
 
+/// Which Token-2022 roles one founding configured on the receipt Mint.
+///
+/// Decision 0011 §3b, third cost: the representation authority is adopted in
+/// TWO Token-2022 roles, not one. It is the Mint authority for `MintReceipt`
+/// (`mint_to_checked`) AND the permissioned-burn authority for `BurnReceipt`
+/// (`permissioned_burn_instruction::burn_checked`, where the PDA is the burn
+/// authority and the ACTOR is the token owner). "Founding must configure both
+/// roles on the receipt Mint, or `BurnReceipt` fails at the Token program with
+/// the descriptor already committed." That sentence is a claim until a founding
+/// configures one role and a real Token-2022 refuses the other.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReceiptMintRoles {
+    /// Mint authority and permissioned-burn authority: a correct founding.
+    Both,
+    /// Only the Mint authority: §3b's under-configured founding.
+    MintAuthorityOnly,
+}
+
 fn claim_mint_data(authority: Pubkey, supply: u64, decimals: u8) -> Vec<u8> {
+    mint_with_roles(authority, supply, decimals, ReceiptMintRoles::Both)
+}
+
+fn mint_with_roles(
+    authority: Pubkey,
+    supply: u64,
+    decimals: u8,
+    roles: ReceiptMintRoles,
+) -> Vec<u8> {
     const BASE_ACCOUNT_BYTES: usize = 165;
     const ACCOUNT_TYPE_OFFSET: usize = BASE_ACCOUNT_BYTES;
     const TLV_START_OFFSET: usize = 166;
@@ -1021,7 +1054,9 @@ fn claim_mint_data(authority: Pubkey, supply: u64, decimals: u8) -> Vec<u8> {
         &[spl_token_2022_interface::extension::AccountType::Mint as u8],
     );
     append_mint_authority_extension(&mut bytes, MINT_CLOSE_AUTHORITY_EXTENSION, authority);
-    append_mint_authority_extension(&mut bytes, PERMISSIONED_BURN_EXTENSION, authority);
+    if roles == ReceiptMintRoles::Both {
+        append_mint_authority_extension(&mut bytes, PERMISSIONED_BURN_EXTENSION, authority);
+    }
     bytes
 }
 
@@ -1248,11 +1283,27 @@ fn outer_caller_authority(request_bytes: &[u8], market: Pubkey, release_set: [u8
     let header = request.header();
     assert_eq!(header.market, market.to_bytes());
     assert_eq!(header.release_set, release_set);
+    caller_authority_for_digest(request_bytes, market, release_set, header.parent_context)
+}
+
+/// The Trading caller authority for request bytes the canonical decoder REFUSES.
+///
+/// The wrapper derives its signing PDA from the request digest without ever
+/// decoding the request, so a hostile whose bytes the grammar rejects still has
+/// a well-defined authority and can still be submitted. Without this, a hostile
+/// the request grammar catches could never be driven to the chain at all, and
+/// the campaign would be asserting the host decoder against itself.
+fn caller_authority_for_digest(
+    request_bytes: &[u8],
+    market: Pubkey,
+    release_set: [u8; 32],
+    parent_context: [u8; 32],
+) -> Pubkey {
     let seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(release_set).expect("release set"),
         market.to_bytes(),
         ExecutionRoleV1::Trading,
-        header.parent_context,
+        parent_context,
         hash(request_bytes).to_bytes(),
     )
     .expect("Trading caller seeds");
@@ -1531,6 +1582,10 @@ fn replay_admissible_from_creation(transfer: CustodyRequestV1, payer: Pubkey) {
 }
 
 fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
+    fixture_with(terminal, ReceiptMintRoles::Both)
+}
+
+fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -1841,7 +1896,12 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         &mut test,
         receipt_mint,
         TOKEN_PROGRAM_ID,
-        claim_mint_data(representation_authority, RECEIPT_SUPPLY, RECEIPT_DECIMALS),
+        mint_with_roles(
+            representation_authority,
+            RECEIPT_SUPPLY,
+            RECEIPT_DECIMALS,
+            receipt_roles,
+        ),
     );
     add_account(
         &mut test,
@@ -1908,6 +1968,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         receipt_mint,
         actor_receipt,
         assets,
+        basis,
         terminal_accounts: None,
     };
 
@@ -3236,6 +3297,353 @@ request-profile-ceiling-K=3",
     );
 }
 
+/// Build the wrapper instruction for request bytes the campaign MUTATED.
+///
+/// The Trading caller authority is derived from the request digest
+/// (`CallerAuthoritySeedsV1`), so a mutated request names a different PDA and
+/// the wrapper signs that one. Everything else in the frame is the canonical
+/// account list, which is what makes these hostiles hostile: only the bytes
+/// moved.
+fn wrapper_instruction_from_request(
+    fixture: &Fixture,
+    action: RepresentationActionV2,
+    representation_revision: u64,
+    request: &[u8],
+) -> Instruction {
+    let mut accounts = vec![AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false)];
+    accounts.extend(claims_accounts_for_selected(
+        fixture,
+        action,
+        representation_revision,
+        WINNER,
+        None,
+        None,
+    ));
+    *accounts.get_mut(1).expect("caller authority meta") = AccountMeta::new_readonly(
+        caller_authority_for_digest(
+            request,
+            fixture.market,
+            fixture.release_set,
+            fixture.parent_context,
+        ),
+        false,
+    );
+    let mut data = Vec::with_capacity(request.len() + 1);
+    data.push(0_u8);
+    data.extend_from_slice(request);
+    Instruction {
+        program_id: TEST_CALLER_PROGRAM_ID,
+        accounts,
+        data,
+    }
+}
+
+/// One coordinate's backing skewed by exactly one shard atom.
+///
+/// `K_i = S * c_i` is recomputed by the callee as
+/// `asset.coefficient * header.quantity` (`plan.rs:263`), and the campaign basis
+/// is pairwise coprime and coprime to the denominator precisely so a one-atom
+/// skew at coordinate `i` cannot be presented as a legitimate quantity at any
+/// other coordinate. It has to fail, visibly, at exactly one `i`.
+fn one_atom_skew_request(fixture: &Fixture, coordinate: usize) -> Vec<u8> {
+    let mut request = request_bytes(fixture, RepresentationActionV2::IssueStructured, 0);
+    let skewed = COEFFICIENTS
+        .get(coordinate)
+        .copied()
+        .expect("coefficient")
+        .checked_add(1)
+        .expect("one-atom skew");
+    put_u64(
+        &mut request,
+        REQUEST_HEADER_BYTES_V2 + coordinate * ASSET_BYTES_V2 + ASSET_COEFFICIENT_OFFSET,
+        skewed,
+    );
+    request
+}
+
+/// A coordinate backed by the RECEIPT Mint: a receipt backed by itself.
+fn receipt_backed_by_receipt_request(fixture: &Fixture) -> Vec<u8> {
+    let mut request = request_bytes(fixture, RepresentationActionV2::IssueStructured, 0);
+    put(
+        &mut request,
+        REQUEST_HEADER_BYTES_V2 + ASSET_SHARD_MINT_OFFSET,
+        fixture.receipt_mint.as_ref(),
+    );
+    request
+}
+
+/// THE STRUCTURED FAMILY HOSTILES, every one of them through the real wire.
+///
+/// Each is submitted as a real transaction against the real ELFs, must refuse,
+/// and must leave the complete resource snapshot byte-identical to its
+/// prestate. A hostile that refuses while moving one lamport is not a refusal.
+#[tokio::test]
+async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
+    let (test, fixture) = fixture(false);
+    let mut context = test.start_with_context().await;
+
+    // FOUNDING-TIME, before a byte reaches a chain: the rank rule. A receipt can
+    // never be backed by itself, so a lowering whose receipt Mint aliases a
+    // shard Mint cannot produce terms at all.
+    assert_eq!(
+        structured_lowering::decode_terms_with_receipt_aliasing_a_shard_mint(&fixture.basis).err(),
+        Some(dclutch_structured_v2_kernel::Error::DuplicateIdentity),
+        "a receipt Mint that aliases a shard Mint must not survive bind_shard_terms"
+    );
+
+    // DIRECTION ONE: the exposure record where the descriptor belongs.
+    let exposure_as_descriptor = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        Some((fixture.graph_raw, fixture.graph_staging)),
+        None,
+    );
+    // DIRECTION TWO: the descriptor record where the exposure belongs.
+    let descriptor_as_exposure = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        None,
+        Some((fixture.descriptor_raw, fixture.descriptor_staging)),
+    );
+    // A same-width descriptor whose recipe is the canonical one PERMUTED.
+    let permuted_recipe = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        Some((
+            fixture.alternate_descriptor_raw,
+            fixture.alternate_descriptor_staging,
+        )),
+        None,
+    );
+    let receipt_backed = {
+        let request = receipt_backed_by_receipt_request(&fixture);
+        // The REQUEST GRAMMAR already refuses it: a shard Mint may not alias the
+        // receipt Mint, so these bytes are not a decodable request at all. The
+        // chain is still made to say so below, because a host decoder asserting
+        // against itself is not evidence.
+        assert_eq!(
+            RepresentationRequestV2::decode(&request).err(),
+            Some(RationalRequestError::AccountAlias),
+            "the request grammar must refuse a receipt backed by itself"
+        );
+        let mut instruction = wrapper_instruction_from_request(
+            &fixture,
+            RepresentationActionV2::IssueStructured,
+            0,
+            &request,
+        );
+        let coordinate = fixture.assets.first().expect("first asset").mint;
+        for meta in &mut instruction.accounts {
+            if meta.pubkey == coordinate {
+                meta.pubkey = fixture.receipt_mint;
+            }
+        }
+        instruction
+    };
+    let skews: Vec<Instruction> = (0..K)
+        .map(|coordinate| {
+            wrapper_instruction_from_request(
+                &fixture,
+                RepresentationActionV2::IssueStructured,
+                0,
+                &one_atom_skew_request(&fixture, coordinate),
+            )
+        })
+        .collect();
+
+    let payer = context.payer.pubkey();
+    let mut instructions = vec![
+        exposure_as_descriptor.clone(),
+        descriptor_as_exposure.clone(),
+        permuted_recipe.clone(),
+        receipt_backed.clone(),
+    ];
+    instructions.extend(skews.iter().cloned());
+    let addresses = lookup_addresses(payer, fixture.actor.pubkey(), &instructions);
+    let (table, _) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: family hostiles",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let mut labelled = vec![
+        (
+            "the finalized exposure record in the descriptor's slot",
+            "cross-schema substitution: exposure as descriptor",
+            exposure_as_descriptor,
+        ),
+        (
+            "the immutable descriptor in the exposure record's slot",
+            "cross-schema substitution: descriptor as exposure",
+            descriptor_as_exposure,
+        ),
+        (
+            "a same-width descriptor whose coefficients are the canonical ones permuted",
+            "recipe substitution: permuted coefficients",
+            permuted_recipe,
+        ),
+        (
+            "a coordinate backed by the receipt Mint itself",
+            "receipt backed by receipt",
+            receipt_backed,
+        ),
+    ];
+    for (coordinate, instruction) in skews.into_iter().enumerate() {
+        labelled.push((
+            "one shard atom of backing skew at a single coordinate",
+            match coordinate {
+                0 => "one-atom K_i skew at coordinate 0",
+                1 => "one-atom K_i skew at coordinate 1",
+                _ => "one-atom K_i skew at coordinate 2",
+            },
+            instruction,
+        ));
+    }
+
+    for (why, label, instruction) in labelled {
+        let result = submit_v0(
+            &mut context,
+            &fixture,
+            instruction,
+            table,
+            &addresses,
+            &format!("claims rational-representation-v2: {label}"),
+        )
+        .await
+        .expect("hostile transaction");
+        assert!(!result.accepted, "{why} must refuse");
+        assert_eq!(
+            snapshot(&mut context, &fixture).await,
+            before,
+            "{why} must leave every resource byte-identical"
+        );
+        eprintln!(
+            "Rational V2 hostile: {label} refused at {} CU, v0={} bytes",
+            result.compute_units, result.wire_bytes,
+        );
+    }
+}
+
+/// §3b's TWO Token-2022 roles, made executable — and the ruling's failure mode
+/// does not happen.
+///
+/// The receipt Mint here carries the representation authority as its Mint
+/// authority and NOT as its permissioned-burn authority: 0011 §3b's
+/// under-configured founding. The ruling predicted that `IssueStructured` would
+/// commit (`mint_to_checked` needs only the first role) and `BurnReceipt` would
+/// then fail "at the Token program with the descriptor already committed",
+/// stranding outstanding receipts against a Mint that can never burn them.
+///
+/// MEASURED: that cannot happen. `parse_behavior_mint` reads the receipt Mint's
+/// Token-2022 behavior profile on EVERY action and requires the permissioned-burn
+/// authority to be present and pinned to the representation authority, so the
+/// FIRST `IssueStructured` refuses `ClaimsSbfError::Token` (0x5009) before any
+/// Token-2022 CPI is issued at all. The two-role requirement is enforced by the
+/// adapter up front, not discovered at unwrap time. §3b's cost is real —
+/// founding must configure both roles — but its consequence is a founding that
+/// can never issue, not a representation that can never be unwound.
+#[tokio::test]
+async fn a_receipt_mint_missing_its_burn_role_refuses_at_the_first_issue() {
+    let (test, fixture) = fixture_with(false, ReceiptMintRoles::MintAuthorityOnly);
+    let mut context = test.start_with_context().await;
+    let issue = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        None,
+        None,
+    );
+    let unwrap = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::UnwrapStructured,
+        1,
+        false,
+        None,
+        None,
+    );
+    let payer = context.payer.pubkey();
+    let addresses = lookup_addresses(
+        payer,
+        fixture.actor.pubkey(),
+        &[issue.clone(), unwrap.clone()],
+    );
+    let (table, _) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: single-role receipt Mint",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let issued = submit_v0(
+        &mut context,
+        &fixture,
+        issue,
+        table,
+        &addresses,
+        "claims rational-representation-v2: issue against a receipt Mint with only the Mint role",
+    )
+    .await
+    .expect("IssueStructured transaction");
+    assert!(
+        !issued.accepted,
+        "a receipt Mint missing its burn role must not be issued against"
+    );
+    assert!(
+        issued.logs.iter().any(|log| log
+            == &format!("Program {CLAIMS_PROGRAM_ID} failed: custom program error: 0x5009")),
+        "the refusal must be ClaimsSbfError::Token: {}",
+        issued.logs.join("\n")
+    );
+    assert!(
+        !issued
+            .logs
+            .iter()
+            .any(|log| log.starts_with(&format!("Program {TOKEN_PROGRAM_ID} invoke"))),
+        "the adapter must refuse BEFORE any Token-2022 CPI, so no receipt is ever \
+         minted against a Mint that could not burn it"
+    );
+    assert_eq!(
+        snapshot(&mut context, &fixture).await,
+        before,
+        "nothing may commit against an under-configured receipt Mint"
+    );
+
+    let unwrapped = submit_v0(
+        &mut context,
+        &fixture,
+        unwrap,
+        table,
+        &addresses,
+        "claims rational-representation-v2: unwrap against a receipt Mint with only the Mint role",
+    )
+    .await
+    .expect("UnwrapStructured transaction");
+    assert!(
+        !unwrapped.accepted,
+        "BurnReceipt must refuse without the permissioned-burn role"
+    );
+    assert_eq!(
+        snapshot(&mut context, &fixture).await,
+        before,
+        "the refused unwrap must leave every resource byte-identical"
+    );
+    eprintln!(
+        "Rational V2 two-Token-2022-roles: issue-refusal-CU={}, unwrap-refusal-CU={}, \
+Token-2022 CPIs issued=0",
+        issued.compute_units, unwrapped.compute_units,
+    );
+}
+
 #[tokio::test]
 async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
     let (test, fixture) = fixture(true);
@@ -3472,6 +3880,51 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         mint_supply(after.shard_mints.get(WINNERS).expect("winner Mint"))
     );
     assert_eq!(mint_supply(&after.receipt_mint), RECEIPT_SUPPLY);
+
+    // DOUBLE REDEEM. The identical request, resubmitted. It is a genuinely
+    // different transaction -- a later slot means a different blockhash and
+    // therefore a different signature, so the runtime's own duplicate-signature
+    // dedup is NOT what refuses it. The assertion that it is the protocol is the
+    // log: Claims itself must fail, having already consumed the representation
+    // replay's revision and the Custody replay's cursor.
+    let redeemed_slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("post-redemption Clock")
+        .slot;
+    context
+        .warp_to_slot(redeemed_slot + 1)
+        .expect("a later slot for the replayed redemption");
+    let replayed = submit_v0(
+        &mut context,
+        &fixture,
+        positive.clone(),
+        table,
+        &addresses,
+        "claims rational-representation-v2: the winning terminal redemption replayed",
+    )
+    .await
+    .expect("replayed terminal transaction");
+    assert!(!replayed.accepted, "a redemption must not be replayable");
+    assert!(
+        replayed
+            .logs
+            .iter()
+            .any(|log| log.starts_with(&format!("Program {CLAIMS_PROGRAM_ID} failed"))),
+        "the replay must be refused by Claims, not deduplicated by the runtime: {}",
+        replayed.logs.join("\n")
+    );
+    assert_eq!(
+        snapshot(&mut context, &fixture).await,
+        after,
+        "the refused replay must leave the settled state byte-identical"
+    );
+    eprintln!(
+        "Rational V2 double redeem: refused at {} CU",
+        replayed.compute_units
+    );
+
     let custody_replay = after.custody_replay.as_ref().expect("Custody replay");
     assert_eq!(
         CustodyReplayV1::decode(&custody_replay.data)

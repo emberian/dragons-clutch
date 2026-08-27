@@ -86,6 +86,7 @@ fn admission(id: [u8; 32], record_digest: [u8; 32]) -> RecordAdmissionV3 {
 ///
 /// The two graph identities are deliberately separate fields; see the module
 /// doc for the conflation that made them one.
+#[derive(Clone)]
 pub struct StructuredBasis {
     /// Logical Core Market.
     pub market: [u8; 32],
@@ -511,4 +512,37 @@ pub fn lower_against_root(
     )
     .expect("authenticated exposure bundle");
     derive_structured_representation_descriptor_v2(terms, composition.bundle(), exposure_bundle)
+}
+
+/// Decode Structured terms whose receipt Mint ALIASES coordinate zero's shard Mint.
+///
+/// The physical form of the rank rule, enforced by
+/// `StructuredTermsV2::bind_shard_terms`: a receipt can never be backed by
+/// itself. This is the founding-time half of the campaign's
+/// receipt-backed-by-receipt hostile; the chain-side half substitutes the
+/// receipt Mint into a coordinate's asset row and account frame, where it is
+/// refused for a different and independent reason (a shard Mint is a
+/// descriptor-keyed PDA and the receipt Mint is not).
+pub fn decode_terms_with_receipt_aliasing_a_shard_mint(
+    basis: &StructuredBasis,
+) -> core::result::Result<(), dclutch_structured_v2_kernel::Error> {
+    let mut aliased = basis.clone();
+    aliased.receipt_mint = *basis.shard_mints.first().expect("shard Mint");
+    let terms_source = terms_bytes(&aliased, &aliased.coefficients);
+    let shard_source = shard_terms_bytes(&aliased);
+    let content = digest(&terms_source);
+    StructuredTermsV2::decode(
+        &terms_source,
+        StructuredTermsAdmissionV2 {
+            selected_schema_id: STRUCTURED_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: STRUCTURED_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: content,
+            finalized_terms_id: content,
+            recomputed_terms_digest: content,
+            finalized_terms_digest: content,
+            record_authenticated: true,
+        },
+        shard_terms(&shard_source),
+    )
+    .map(|_| ())
 }

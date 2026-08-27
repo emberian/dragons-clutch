@@ -52,6 +52,7 @@ dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evid
 # is DERIVED (decision 0011 §3c/§3d) rather than a sixth hand-written preimage.
 # DEV only: none of these reach the cdylib, and the ELF digest is the control.
 dclutch-fractional-claim-kernel = { path = "../../crates/dclutch-fractional-claim-kernel" }
+dclutch-rational-representation-v2-request-contract = { path = "../../crates/dclutch-rational-representation-v2-request-contract" }
 dclutch-structured-v2-kernel = { path = "../../crates/dclutch-structured-v2-kernel" }
 dclutch-structured-v2-operator = { path = "../../crates/dclutch-structured-v2-operator" }
 solana-account = "=4.6.0"
