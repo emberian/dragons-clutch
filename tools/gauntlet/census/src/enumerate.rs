@@ -1218,9 +1218,30 @@ pub fn enumerate(
             visited: BTreeSet::new(),
         };
 
+        // The entrypoint does not have to live in `lib.rs`. `9abed0c` moved
+        // Trading's SBF entrypoint, its loader-input deserializer, and its
+        // allocator into a named machine-boundary module, and a scan restricted
+        // to the crate root then reported that the whole program "exposes no
+        // dispatch surface" - which silently dropped every Trading route from
+        // this census while W1f was executing two of them on a validator. A
+        // program's public entry is a fact about the crate, not about one file.
+        let mut discovered = find_entrypoints(&file.items, &lib_relative);
+        for path in rust_sources(&crate_src)? {
+            if path == lib {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(parsed) = syn::parse_file(&text) else {
+                continue;
+            };
+            discovered.extend(find_entrypoints(&parsed.items, &relative(root, &path)));
+        }
+        discovered.dedup_by(|left, right| left.1 == right.1);
+
         let mut entrypoints = Vec::new();
-        for (macro_name, function_name, provenance) in find_entrypoints(&file.items, &lib_relative)
-        {
+        for (macro_name, function_name, provenance) in discovered {
             let resolved = index.resolve(&function_name).is_some();
             entrypoints.push(Entrypoint {
                 macro_name,

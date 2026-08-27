@@ -102,11 +102,6 @@
       "owner": "TA-CL claims/custody lane, next element"
     },
     {
-      "route": "claims/founding_v5::process",
-      "reason": "No ProgramTest drives it, and the validator campaign that would has never reached it. The 32-account frame consumes BOTH a ProjectedCustodyLockReceiptV1 and a ProjectedCustodyReceiptV1 in its instruction tail plus a Core SeriesFoundingPermitV1, a Custody replay and a Hoard token account -- so its prestate is the projected-Custody one that W1d owns and that no live route can create yet (see the DCLTPCB1 and DCLTGMF1 entries here). A Claims-family ProgramTest can install that prestate directly, which is the cheapest way to reach the route; nobody has.",
-      "owner": "TA-CL for the ProgramTest; W1d for the live prestate"
-    },
-    {
       "route": "claims/market_closure_v1::process",
       "reason": "No campaign drives it. Closure requires a zero-supply Claims aggregate and the RentCredit identities behind it, which is a terminal prestate no fixture builds.",
       "owner": "cycle-2 tranche A, Claims"
@@ -132,48 +127,8 @@
       "owner": "DP2, then W2d"
     },
     {
-      "route": "trading/generic_market_founding_v1::process_generic_market_founding_v1",
-      "reason": "DCLTGMF1, the atomic Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core Open-last outer. Blocked on the Lock stage's funding source: LockHoardAndCloseSource consumes a normal CustodyReplayV1 whose market field is the Market being founded while requiring that Market account to be VACANT, and every route that writes a normal replay goes through custody-sbf's authenticate_market, which requires live Core-owned state at that address. The fix is a new projected-family Custody operation that opens a SOURCE compartment against a vacant Market. Also needs the DCLTGMF1 builder plus address-lookup-table routing for its 137 account references in the bootstrap.",
-      "owner": "W1d (board 2026-08-27, 'Blocker C: the source compartment, then the Open gate')"
-    },
-    {
-      "route": "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
-      "reason": "DCLTPCB1 exists (28d2da6): a 60-account Trading route driving projected-Custody Initialize and OpenHoard under their single-use ProjectedCustodyCallerSeedsV1 signers. No campaign stage drives it yet. NOTE for whoever adds that stage: f30d087 fixed a 35-byte caller PDA seed domain against Solana's 32-byte cap, which means no projected-Custody transition could ever have signed before it \u2014 precisely the class of defect the census exists to make visible.",
-      "owner": "W1d"
-    },
-    {
-      "route": "custody/projected::process",
-      "reason": "The projected-Custody family is reachable only through DCLTPCB1 and DCLTGMF1, neither of which any tier drives yet.",
-      "owner": "W1d"
-    },
-    {
-      "route": "custody/initialize#Initialize",
-      "reason": "Projected-Custody action; reachable only through DCLTPCB1.",
-      "owner": "W1d"
-    },
-    {
-      "route": "custody/open_hoard#OpenHoard",
-      "reason": "Projected-Custody action; reachable only through DCLTPCB1.",
-      "owner": "W1d"
-    },
-    {
-      "route": "custody/open_source_compartment#OpenSourceCompartment",
-      "reason": "The new projected-family Custody operation that opens a source compartment against a vacant Market \u2014 the operation W1d added for the Open gate. No campaign drives it yet.",
-      "owner": "W1d"
-    },
-    {
       "route": "custody/lock_hoard#LockHoard",
-      "reason": "Projected-Custody Lock action; reachable only through the DCLTGMF1 Lock stage.",
-      "owner": "W1d"
-    },
-    {
-      "route": "custody/lock_hoard_and_close_source#LockHoardAndCloseSource",
-      "reason": "Projected-Custody Lock action; reachable only through the DCLTGMF1 Lock stage, and itself the operation whose vacant-Market prestate is the Open gate's blocker.",
-      "owner": "W1d"
-    },
-    {
-      "route": "custody/realize_and_close#RealizeAndClose",
-      "reason": "Projected-Custody Realize action; reachable only through the DCLTGMF1 Realize stage.",
+      "reason": "Projected-Custody `LockHoard`, the Series-shaped Lock that admits a `HoardOpen` prestate holding nothing. It is NOT the operation DCLTGMF1 drives - that is `LockHoardAndCloseSource`, which has executed. Reachable through the Series family tier. CORRECTED 2026-08-27 (W1f): the first Open Market exists. `DCLTGMF1` executed on a localhost validator at 1,184,132 CU - Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open last, one rollback domain - after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU. Any part of this entry's reason that rested on the Open-last chain being unreachable is superseded.",
       "owner": "W1d"
     },
     {
@@ -188,27 +143,12 @@
     },
     {
       "route": "core/open_market::process#OpenMarket",
-      "reason": "Core Open-last. Reachable only as the final stage of DCLTGMF1, which is blocked on the Lock stage's funding source.",
-      "owner": "W1d"
-    },
-    {
-      "route": "core/process_found#FoundAndPermit",
-      "reason": "Generic-founding stage inside the DCLTGMF1 chain.",
-      "owner": "W1d"
-    },
-    {
-      "route": "core/process_open#Open",
-      "reason": "Generic-founding stage inside the DCLTGMF1 chain.",
-      "owner": "W1d"
-    },
-    {
-      "route": "core/generic_founding_v1::process",
-      "reason": "DCLTGFQ1, the Core side of generic founding. Reachable only from Trading's DCLTGMF1 outer.",
+      "reason": "The standalone `Action::OpenMarket` route. It is NOT the founding's Open stage: DCLTGMF1's commit-last stage is `core/process_open#Open` inside the generic-founding route, which has executed. This entry is the separate ordinary OpenMarket action, and no tier drives it yet. CORRECTED 2026-08-27 (W1f): the first Open Market exists. `DCLTGMF1` executed on a localhost validator at 1,184,132 CU - Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open last, one rollback domain - after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU. Any part of this entry's reason that rested on the Open-last chain being unreachable is superseded.",
       "owner": "W1d"
     },
     {
       "route": "core/capability::process#ActivateCapability",
-      "reason": "ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. Tier 1 stops at Found and never runs that activation.",
+      "reason": "ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. Tier 1 now reaches Open and still never runs that activation. CORRECTED 2026-08-27 (W1f): the first Open Market exists. `DCLTGMF1` executed on a localhost validator at 1,184,132 CU - Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open last, one rollback domain - after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU. Any part of this entry's reason that rested on the Open-last chain being unreachable is superseded.",
       "owner": "W1d (ADR 0004 fallout), then cycle-2"
     },
     {
@@ -277,11 +217,6 @@
       "owner": "cycle-2 (WAVE.md), retirement"
     },
     {
-      "route": "core/found::project",
-      "reason": "DCLTPFQ1, the host-side Found projection request route. Tier 1 computes the Found projection with the operator crate off finalized RPC state rather than asking Core for it, so this on-chain route is unexercised.",
-      "owner": "UNASSIGNED \u2014 needs a decision on whether the on-chain projection route is still wanted now that the operator derives it"
-    },
-    {
       "route": "rent/process_create#Create",
       "reason": "RentCreditV1 Create. Superseded on the live path by the Market-scoped LifecycleRentCreditV2 that tier 1 does exercise; AGENTS.md forbids preserving parallel legacy/current authority paths, so this is a supersession decision, not a missing test.",
       "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
@@ -312,24 +247,14 @@
       "owner": "W1d for the Open chain; cycle-2 tranche A"
     },
     {
-      "route": "registry/process_reauthenticate#Reauthenticate",
-      "reason": "Registry role reauthentication, invoked by CPI from a Market-creating instruction. Tier 1's Found31 path reaches Core but the reauthentication CPI is on the generic-founding path.",
-      "owner": "W1d"
-    },
-    {
       "route": "core/process_instruction#CloseCapability",
       "reason": "The inline arm of Core's capability dispatch. Same blocker as core/capability::process#CloseCapability: it needs an activated capability root, which tier 1 never creates because it stops at Found.",
       "owner": "W1d (ADR 0004 fallout), then cycle-2"
     },
     {
       "route": "trading/outer::process_activation#else",
-      "reason": "Trading child-root activation, the fallthrough branch of Trading's dispatch. Tier 1 activates the five REGISTRY release-set roles, which is a different thing: it never activates a Trading capability child. Reachable once a Market exists and a capability child is activated against it.",
+      "reason": "Trading child-root activation, the fallthrough branch of Trading's dispatch. Tier 1 activates the five REGISTRY release-set roles, which is a different thing: it never activates a Trading capability child. A live Market is no longer what it waits on. CORRECTED 2026-08-27 (W1f): the first Open Market exists. `DCLTGMF1` executed on a localhost validator at 1,184,132 CU - Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open last, one rollback domain - after `DCLTPCB1` completed all four projected-Custody prestate stages at 754,119 CU. Any part of this entry's reason that rested on the Open-last chain being unreachable is superseded.",
       "owner": "W1d for the Open path; W2d owns outer.rs"
-    },
-    {
-      "route": "trading/process_instruction",
-      "reason": "The Trading ELF is bound into the release set and activated by tier 1, but no tier-1 transaction ever invokes Trading: every Trading route needs either a Market (DCLTGMF1), the projected-Custody bootstrap (DCLTPCB1), or a Hot execution. The activation transaction hashes Trading's ProgramData; it does not run it.",
-      "owner": "W1d (DCLTGMF1, DCLTPCB1); DP2 + W2d (Hot)"
     }
   ]
 }
