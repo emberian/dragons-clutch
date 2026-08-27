@@ -104,7 +104,12 @@ pub fn encode_rational_terminal_account_profile_v3(
 fn rule(index: usize, lengths: &[u32]) -> Result<AccountRuleWithPrestateInputV2> {
     let writable = matches!(index, 0 | 16 | 17 | 37 | 38 | 39 | 48 | 50 | 51);
     let signer = index == 8;
-    let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 26 | 27 | 28 | 42 | 53);
+    // A route alias carries NO privileges of its own: `authenticate` takes
+    // `representative_privileges` for any coordinate whose representative is
+    // another (v2.rs:2360-2369), and cc228cdd made a nonzero privilege on an
+    // alias a refusal because it is dead weight that reads as authority.
+    // The aliased coordinate is the executable one.
+    let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 27 | 42);
     let alias = match index {
         // Claims program placeholders for absent receipt/Position accounts.
         26 | 28 => AccountAliasInputV2::Fixed(19),

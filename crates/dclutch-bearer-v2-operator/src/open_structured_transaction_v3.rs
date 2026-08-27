@@ -432,11 +432,18 @@ mod tests {
             !built
                 .instruction
                 .accounts
-                .get(38)
+                .get(HOT_FIXED_ACCOUNT_COUNT_V3)
                 .expect("caller")
                 .is_signer
         );
-        assert!(built.instruction.accounts.get(41).expect("actor").is_signer);
+        assert!(
+            built
+                .instruction
+                .accounts
+                .get(HOT_FIXED_ACCOUNT_COUNT_V3 + 3)
+                .expect("actor")
+                .is_signer
+        );
         let (envelope, family) =
             HotExecutionEnvelopeV3::split_instruction(&built.instruction.data).expect("envelope");
         assert_eq!(envelope.market(), key(2).to_bytes());

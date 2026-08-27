@@ -128,8 +128,19 @@ const ITEM_SCALAR_SHARD_SUPPLY: usize = 1;
 const ITEM_SCALAR_ACTOR_SHARDS: usize = 2;
 const ITEM_SCALAR_STRUCTURED_SHARDS: usize = 3;
 
-const REQUEST_BASE_INSTRUCTIONS: usize = 29;
-const REQUEST_ROW_INSTRUCTIONS: usize = 8;
+/// Prefix projection operations in one structured RequestProfile, before rows.
+///
+/// Public because this pair, with `REQUEST_PROFILE_MAX_BYTES_V1`, IS the
+/// executable width ceiling: a profile is `32 + operations * 24` bytes, so
+/// `K = 3` is 53 operations and 1,304 bytes and `K = 4` is 61 and 1,496, which
+/// the encoder refuses. A consumer that wants to state that cliff must import
+/// the arithmetic rather than restate the numbers.
+pub const RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3: usize = 29;
+/// Projection operations one descriptor coordinate adds to the RequestProfile.
+pub const RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3: usize = 8;
+
+use RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3 as REQUEST_BASE_INSTRUCTIONS;
+use RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3 as REQUEST_ROW_INSTRUCTIONS;
 const TRANSITION_BASE_INSTRUCTIONS: usize = 4;
 const TRANSITION_ROW_INSTRUCTIONS: usize = 1;
 const EFFECT_BASE_INSTRUCTIONS: usize = 17;
@@ -417,7 +428,12 @@ fn encode_account_profile(
     for index in 0..input.fixed_data_lengths.len() {
         let writable = matches!(index, 0 | 16 | 25 | 26);
         let signer = index == 8;
-        let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 27 | 28);
+        // A route alias carries NO privileges of its own: `authenticate` takes
+        // `representative_privileges` for any coordinate whose representative is
+        // another (v2.rs:2360-2369), and cc228cdd made a nonzero privilege on an
+        // alias a refusal because it is dead weight that reads as authority.
+        // The aliased coordinate is the executable one.
+        let executable = matches!(index, 6 | 15 | 19 | 21 | 23 | 27);
         let alias = match index {
             28 => AccountAliasInputV2::Fixed(19),
             29 => AccountAliasInputV2::Fixed(4),
@@ -1227,6 +1243,77 @@ mod tests {
                 action as u8
             );
         }
+    }
+
+    /// A route alias states no privilege, and its representative still states
+    /// the one the runtime enforces.
+    ///
+    /// `cc228cdd` made a nonzero privilege on an `AuthenticatedRouteAlias` a
+    /// refusal, because `authenticate` takes `representative_privileges` for any
+    /// coordinate that aliases another (`v2.rs:2360-2369`) and never the alias's
+    /// own field. That sweep fixed the Direct producer and stopped there; this
+    /// crate's three emitters kept marking their Claims/Token-program aliases
+    /// `executable` and were refused at encode from 2026-08-26 until the
+    /// STRUCT-CAMP lane found them, which is why this test is a PROPERTY of the
+    /// emitted artifact rather than one more fixture.
+    ///
+    /// The second half is the one that matters: removing the bit must not have
+    /// removed the authority. Coordinate 28 aliases 19, and 19 is still
+    /// executable, so the runtime still requires an executable account there.
+    #[test]
+    fn a_route_alias_states_no_privilege_and_its_representative_states_it_instead() {
+        let basis = basis(258);
+        let lengths = lengths(&basis);
+        let bundle = build_rational_open_structured_hot_bundle_v3(input(
+            RepresentationActionV2::IssueStructured,
+            &basis,
+            &lengths,
+        ))
+        .expect("structured bundle");
+        let profile = AccountProfileV2::decode(&bundle.account_profile).expect("profile13");
+        let logical = profile
+            .logical_account_count_with_dynamic_spans(258, &[])
+            .expect("logical width");
+        let mut aliases = 0_usize;
+        for coordinate in 0..logical {
+            let representative = profile
+                .representative_with_dynamic_spans(258, &[], coordinate)
+                .expect("representative");
+            if representative == coordinate {
+                continue;
+            }
+            aliases += 1;
+            let rule = profile
+                .rule(false, u16::try_from(coordinate).expect("coordinate"))
+                .expect("alias rule");
+            assert_eq!(
+                rule.prestate(),
+                AccountPrestateV2::AuthenticatedRouteAlias,
+                "coordinate {coordinate} aliases {representative} without saying so"
+            );
+            assert_eq!(
+                rule.privileges(),
+                0,
+                "coordinate {coordinate} restates a privilege the runtime reads from {representative}"
+            );
+        }
+        assert_eq!(aliases, 4);
+        // The authority did not move: it was removed from the coordinate that
+        // was being ignored, and stays on the one that is read.
+        assert!(
+            profile
+                .rule(false, 19)
+                .expect("Claims program rule")
+                .route_privileges()
+                .executable()
+        );
+        assert!(
+            !profile
+                .rule(false, 28)
+                .expect("Claims placeholder rule")
+                .route_privileges()
+                .executable()
+        );
     }
 
     #[test]
