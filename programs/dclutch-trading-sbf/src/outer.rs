@@ -144,26 +144,29 @@ impl CapabilityReleaseGenerationV1 {
 }
 
 /// Decide the release generation from the supplied raw record's own address.
+///
+/// It returns the canonical raw bump alongside the generation because it has
+/// just paid for it: the search that identifies the generation IS the search
+/// the record authentication would otherwise repeat from identical seeds.
 fn select_release_generation(
     registry: &Pubkey,
     release_raw: &AccountInfo<'_>,
     capability_release: [u8; 32],
-) -> Result<CapabilityReleaseGenerationV1, ProgramError> {
+) -> Result<(CapabilityReleaseGenerationV1, (Pubkey, u8)), ProgramError> {
     for generation in [
         CapabilityReleaseGenerationV1::FlatDescriptor,
         CapabilityReleaseGenerationV1::ProgramSet,
     ] {
-        let expected = Pubkey::find_program_address(
+        let coordinate = Pubkey::find_program_address(
             &[
                 RAW_RECORD_PDA_SEED_V1,
                 &generation.release_schema(),
                 &capability_release,
             ],
             registry,
-        )
-        .0;
-        if release_raw.key == &expected {
-            return Ok(generation);
+        );
+        if release_raw.key == &coordinate.0 {
+            return Ok((generation, coordinate));
         }
     }
     Err(TradingSbfError::Content.into())
@@ -196,7 +199,7 @@ pub fn process_activation(
     let framed = TradingActivationAccountsV1::parse(accounts, request.funding())?;
     let family_accounts = framed.family_accounts();
     let capability_release = request.selection().capability_release().to_bytes();
-    let generation = select_release_generation(
+    let (generation, release_raw_coordinate) = select_release_generation(
         get(family_accounts, REGISTRY_PROGRAM)?.key,
         get(family_accounts, RELEASE_RAW)?,
         capability_release,
@@ -212,14 +215,24 @@ pub fn process_activation(
     // Activation is the one route entitled to SEARCH for these coordinates. It
     // hands what it finds to the root it is about to write, and every hot
     // reader derives from that instead. See `hot_v3::borrow_finalized_record_at`.
-    let release_record_bumps = authenticate_finalized_record(
+    //
+    // The raw bump is NOT searched for again: `select_release_generation` has
+    // already found it, from these exact seeds, and matched the account.
+    let release_staging_coordinate = finalized_staging_coordinate(
+        suffix.registry.key,
+        generation.release_schema(),
+        capability_release,
+    );
+    let release_record_bumps = (release_raw_coordinate.1, release_staging_coordinate.1);
+    authenticate_finalized_record_against(
         suffix.registry.key,
         suffix.release_raw,
         suffix.release_staging,
         &rent,
-        generation.release_schema(),
         capability_release,
         &release_data,
+        release_raw_coordinate.0,
+        release_staging_coordinate.0,
     )?;
     let set_descriptor_data = authenticate_set_descriptor(
         &suffix,
@@ -239,22 +252,44 @@ pub fn process_activation(
     let root_bytes = descriptor
         .root_account_bytes()
         .map_err(|_| TradingSbfError::Root)?;
-    // The manifest record is authenticated by content here, never by address --
-    // the activation frame carries no staging cursor for it -- so its two bumps
-    // are DERIVED rather than observed. That is sound because a bump is a pure
-    // function of the seeds: what the root records is a memo of a computation,
-    // and the hot reader still requires the account it is handed to sit at the
-    // address that memo reproduces, Registry-owned, hashing to this digest.
-    let manifest_record_bumps = finalized_record_bumps(
+    // The manifest raw record had NO address authentication on this route at
+    // all -- it was admitted on `hash(bytes) == selection.manifest()` alone.
+    // Deriving its coordinate for the root's sake makes that check free, so it
+    // is taken: the account this activation reads and the account every later
+    // hot action will read are now required to be the same one.
+    let (expected_manifest_raw, manifest_raw_bump) = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            &request.selection().manifest().to_bytes(),
+        ],
         suffix.registry.key,
-        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-        request.selection().manifest().to_bytes(),
     );
-    let config_record_bumps = finalized_record_bumps(
+    if framed.manifest().key != &expected_manifest_raw
+        || framed.manifest().owner != suffix.registry.key
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    // The staging cursor is not in this frame, so its bump is derived and not
+    // observed. That is sound because a bump is a pure function of the seeds:
+    // what the root records is a memo of a computation, and the hot reader
+    // still requires the account it is handed to sit at the address that memo
+    // reproduces, Registry-owned, with a closed cursor beside it.
+    let manifest_record_bumps = (
+        manifest_raw_bump,
+        finalized_staging_coordinate(
+            suffix.registry.key,
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            request.selection().manifest().to_bytes(),
+        )
+        .1,
+    );
+    let (config_raw_coordinate, config_staging_coordinate) = finalized_record_coordinates(
         suffix.registry.key,
         descriptor.config_schema().to_bytes(),
         request.selection().config().to_bytes(),
     );
+    let config_record_bumps = (config_raw_coordinate.1, config_staging_coordinate.1);
     let root_header = CapabilityRootHeaderV1::new(
         content(envelope.release_set().to_bytes())?,
         envelope.market().to_bytes(),
@@ -308,15 +343,15 @@ pub fn process_activation(
         .config_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    authenticate_finalized_record_at(
+    authenticate_finalized_record_against(
         suffix.registry.key,
         suffix.config_raw,
         suffix.config_staging,
         &rent,
-        descriptor.config_schema().to_bytes(),
         request.selection().config().to_bytes(),
         &config_data,
-        config_record_bumps,
+        config_raw_coordinate.0,
+        config_staging_coordinate.0,
     )?;
     let descriptor = authenticate_activation_program(
         context,
@@ -749,35 +784,38 @@ fn authenticate_vacant_root(
 /// exist. Activation calls this so the root it writes can carry what it found,
 /// and every later reader derives with `create_program_address` instead of
 /// searching. See `hot_v3::borrow_finalized_record_at`.
-fn finalized_record_bumps(registry: &Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (u8, u8) {
+fn finalized_record_coordinates(
+    registry: &Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> ((Pubkey, u8), (Pubkey, u8)) {
     (
-        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry).1,
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry).1,
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry),
+        finalized_staging_coordinate(registry, schema, digest),
     )
 }
 
-/// Authenticate one finalized record at bumps the caller already derived.
+/// The canonical address and bump of one finalized record's staging cursor.
+fn finalized_staging_coordinate(
+    registry: &Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry)
+}
+
+/// Authenticate one finalized record against coordinates the caller derived.
 #[allow(clippy::too_many_arguments)]
-fn authenticate_finalized_record_at(
+fn authenticate_finalized_record_against(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     rent: &Rent,
-    schema: [u8; 32],
     digest: [u8; 32],
     bytes: &[u8],
-    bumps: (u8, u8),
+    expected_raw: Pubkey,
+    expected_staging: Pubkey,
 ) -> Result<(), ProgramError> {
-    let expected_raw = Pubkey::create_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[bumps.0]],
-        registry,
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    let expected_staging = Pubkey::create_program_address(
-        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest, &[bumps.1]],
-        registry,
-    )
-    .map_err(|_| TradingSbfError::Content)?;
     if raw.key != &expected_raw
         || raw.owner != registry
         || raw.is_writable
@@ -809,9 +847,19 @@ fn authenticate_finalized_record(
     digest: [u8; 32],
     bytes: &[u8],
 ) -> Result<(u8, u8), ProgramError> {
-    let bumps = finalized_record_bumps(registry, schema, digest);
-    authenticate_finalized_record_at(registry, raw, staging, rent, schema, digest, bytes, bumps)?;
-    Ok(bumps)
+    let (raw_coordinate, staging_coordinate) =
+        finalized_record_coordinates(registry, schema, digest);
+    authenticate_finalized_record_against(
+        registry,
+        raw,
+        staging,
+        rent,
+        digest,
+        bytes,
+        raw_coordinate.0,
+        staging_coordinate.0,
+    )?;
+    Ok((raw_coordinate.1, staging_coordinate.1))
 }
 
 struct RuntimeFrameV2<'accounts, 'info> {
