@@ -224,7 +224,7 @@ impl<'accounts, 'info> SeriesOpenAccounts<'accounts, 'info> {
             trading_program: self.trading_program,
             claims_program: self.claims_program,
             custody_program: self.custody_program,
-            capability_root: self.root,
+            capability_root: self.root.key.to_bytes(),
             custody_replay: self.custody_replay,
             hoard: self.hoard,
             funding_source: self.funding_source,

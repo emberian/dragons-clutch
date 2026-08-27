@@ -10,9 +10,7 @@ use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
 };
-use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
-};
+use dclutch_capability_program_contract::CapabilityRootHeaderV1;
 use dclutch_claims_svm::founding_v5::{
     CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
     ClaimsFoundingReceiptV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
@@ -44,7 +42,9 @@ use dclutch_market_core_codec::{
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, authenticate_product_basis_v3,
 };
-use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_release_set_contract::{
+    CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
+};
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
@@ -71,13 +71,12 @@ pub use dclutch_market_core_codec::{
     GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
 };
 
-const _: () = assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == FOUND_ACCOUNT_COUNT_V2 + 4);
+const _: () = assert!(GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 == FOUND_ACCOUNT_COUNT_V2 + 3);
 
 struct GenericFoundAccounts<'accounts, 'info> {
     found: FoundAccounts<'accounts, 'info>,
     trading_program: &'accounts AccountInfo<'info>,
     trading_programdata: &'accounts AccountInfo<'info>,
-    capability_root: &'accounts AccountInfo<'info>,
     clock: &'accounts AccountInfo<'info>,
     funding: &'accounts [AccountInfo<'info>],
     suffix: GenericFoundSuffix<'accounts, 'info>,
@@ -127,8 +126,7 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
         )?;
         let trading_program = account(accounts, FOUND_ACCOUNT_COUNT_V2)?;
         let trading_programdata = account(accounts, FOUND_ACCOUNT_COUNT_V2 + 1)?;
-        let capability_root = account(accounts, FOUND_ACCOUNT_COUNT_V2 + 2)?;
-        let clock = account(accounts, FOUND_ACCOUNT_COUNT_V2 + 3)?;
+        let clock = account(accounts, FOUND_ACCOUNT_COUNT_V2 + 2)?;
         let funding_start = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1;
         let suffix_start = funding_start
             .checked_add(funding_count)
@@ -147,9 +145,6 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
             || trading_programdata.is_signer
             || trading_programdata.is_writable
             || trading_programdata.executable
-            || capability_root.is_signer
-            || capability_root.is_writable
-            || capability_root.executable
             || clock.key != &sysvar::clock::ID
             || clock.is_signer
             || clock.is_writable
@@ -161,7 +156,6 @@ impl<'accounts, 'info> GenericFoundAccounts<'accounts, 'info> {
             found,
             trading_program,
             trading_programdata,
-            capability_root,
             clock,
             funding,
             suffix,
@@ -241,7 +235,6 @@ struct GenericOpenFrame<'accounts, 'info> {
     custody_programdata: &'accounts AccountInfo<'info>,
     core_program: &'accounts AccountInfo<'info>,
     core_programdata: &'accounts AccountInfo<'info>,
-    capability_root: &'accounts AccountInfo<'info>,
     custody_replay: &'accounts AccountInfo<'info>,
     hoard: &'accounts AccountInfo<'info>,
     funding_source: &'accounts AccountInfo<'info>,
@@ -277,15 +270,14 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             custody_programdata: account(accounts, 12)?,
             core_program: account(accounts, 13)?,
             core_programdata: account(accounts, 14)?,
-            capability_root: account(accounts, 15)?,
-            custody_replay: account(accounts, 16)?,
-            hoard: account(accounts, 17)?,
-            funding_source: account(accounts, 18)?,
-            aggregate: account(accounts, 19)?,
-            position: account(accounts, 20)?,
-            admission: account(accounts, 21)?,
-            clock: account(accounts, 22)?,
-            rent: account(accounts, 23)?,
+            custody_replay: account(accounts, 15)?,
+            hoard: account(accounts, 16)?,
+            funding_source: account(accounts, 17)?,
+            aggregate: account(accounts, 18)?,
+            position: account(accounts, 19)?,
+            admission: account(accounts, 20)?,
+            clock: account(accounts, 21)?,
+            rent: account(accounts, 22)?,
         };
         if !value.caller.is_signer
             || value.caller.is_writable
@@ -323,7 +315,6 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             value.claims_programdata,
             value.custody_programdata,
             value.core_programdata,
-            value.capability_root,
             value.custody_replay,
             value.hoard,
             value.funding_source,
@@ -340,7 +331,7 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
         Ok(value)
     }
 
-    fn common(&self) -> GenericFoundingOpenAccounts<'_, 'info> {
+    fn common(&self, capability_root: [u8; 32]) -> GenericFoundingOpenAccounts<'_, 'info> {
         GenericFoundingOpenAccounts {
             market: self.market,
             permit: self.permit,
@@ -349,7 +340,7 @@ impl<'accounts, 'info> GenericOpenFrame<'accounts, 'info> {
             trading_program: self.trading_program,
             claims_program: self.claims_program,
             custody_program: self.custody_program,
-            capability_root: self.capability_root,
+            capability_root,
             custody_replay: self.custody_replay,
             hoard: self.hoard,
             funding_source: self.funding_source,
@@ -478,9 +469,8 @@ fn authenticate_generic_core_found_references(
     prepared: &PreparedFound,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
-    authenticate_root(frame.capability_root, frame.trading_program, request)?;
     authenticate_found_request(frame, request, request_bytes, prepared, rent)?;
-    authenticate_generic_funding(frame, request, prepared, rent)
+    authenticate_generic_funding_and_capability_root(frame, request, prepared, rent)
 }
 
 #[inline(never)]
@@ -556,9 +546,13 @@ fn process_open(
     let clock = Clock::from_account_info(frame.clock).map_err(|_| CoreSbfError::Creation)?;
     let roles = authenticate_generic_open_roles(&frame, request)?;
     let mut state = authenticate_generic_market(program_id, &frame, request)?;
-    authenticate_root(frame.capability_root, frame.trading_program, request)?;
     authenticate_generic_caller(frame.caller, frame.trading_program, request, request_bytes)?;
-    let common = frame.common();
+    // Decision 0004: the Found stage derived this address from the Market's own
+    // authenticated capability manifest and Core persisted it in the Core-owned
+    // permit. `authenticate_permit` requires the permit's `parent_root` to equal
+    // it and `authenticate_open_request` requires the request to carry it, so an
+    // Open stage that disagreed with its own Found stage cannot be constructed.
+    let common = frame.common(request.capability_root().to_bytes());
     let permit = authenticate_permit(
         program_id,
         &common,
@@ -677,25 +671,34 @@ fn authenticate_generic_open_roles(
     )
 }
 
-fn authenticate_root(
-    root: &AccountInfo<'_>,
+/// Derive the sole founding capability root and require the request to name it.
+///
+/// Decision 0004. No root account exists while a Market is being founded: the
+/// only route that creates one requires the Market to already be `Open`, which
+/// is the last thing this same transaction does. Core therefore rebuilds
+/// `CapabilityRootHeaderV1` from facts it has already authenticated and
+/// derives the address under the Trading program.
+///
+/// This is strictly stronger than reading the account was. Every header field
+/// is a function of the request plus the Market's capability manifest, so the
+/// account never proved anything the request had not already fixed — while
+/// `manifest`, `entry_index`, `kind`, and `capability_release` were supplied
+/// entirely by the founder and checked only for self-consistency. Nothing
+/// bound the selection to the Market's own authenticated manifest. Here the
+/// manifest identity is the one Found authenticated, and the kind and release
+/// come from that manifest's own indexed entry, exactly as Decision 0003
+/// requires of the ordinary route.
+fn authenticate_derived_capability_root(
     trading_program: &AccountInfo<'_>,
     request: &GenericFoundingRequestV1,
+    manifest: CapabilityManifestV1<'_>,
+    manifest_id: CapabilityContentId,
 ) -> Result<(), CoreSbfError> {
-    if root.key.to_bytes() != request.capability_root().to_bytes()
-        || root.owner != trading_program.key
-        || root.data_len() < CAPABILITY_ROOT_HEADER_BYTES_V1
-    {
-        return Err(CoreSbfError::Reference);
-    }
-    let data = root
-        .try_borrow_data()
+    // The authenticated manifest's actual entry count is the sole bound on the
+    // index; `entry` refuses anything at or past it.
+    let entry = manifest
+        .entry(request.capability_entry_index())
         .map_err(|_| CoreSbfError::Reference)?;
-    let header = CapabilityRootHeaderV1::decode(
-        data.get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
-            .ok_or(CoreSbfError::Reference)?,
-    )
-    .map_err(|_| CoreSbfError::Reference)?;
     // The root PDA commits to the selected config identity, so the selected
     // config identity may not commit back to the root address. The codec owns
     // the sole root-free selection preimage; hashing the whole request here
@@ -703,11 +706,26 @@ fn authenticate_root(
     let selected = request
         .selection_preimage()
         .map_err(|_| CoreSbfError::Instruction)?;
-    if Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key).0 != *root.key
-        || header.release_set().to_bytes() != request.release_set().to_bytes()
-        || header.market() != request.market().to_bytes()
-        || header.generation() != request.generation()
-        || header.selection().config().to_bytes() != hash(&selected).to_bytes()
+    let selection = CapabilityExecutionSelectionV1::from_bytes(
+        request.capability_entry_index(),
+        manifest_id.to_bytes(),
+        entry.kind_id().to_bytes(),
+        entry.release_id().to_bytes(),
+        hash(&selected).to_bytes(),
+    )
+    .map_err(|_| CoreSbfError::Reference)?;
+    let header = CapabilityRootHeaderV1::new(
+        CapabilityContentId::new(request.release_set().to_bytes())
+            .map_err(|_| CoreSbfError::Reference)?,
+        request.market().to_bytes(),
+        request.generation(),
+        selection,
+    )
+    .map_err(|_| CoreSbfError::Reference)?;
+    if Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key)
+        .0
+        .to_bytes()
+        != request.capability_root().to_bytes()
     {
         return Err(CoreSbfError::Reference);
     }
@@ -782,7 +800,12 @@ fn authenticate_found_request(
     Ok(())
 }
 
-fn authenticate_generic_funding(
+/// Authenticate the ordered FundingState span and the derived capability root.
+///
+/// Both consume the Market-selected capability manifest, so they share its one
+/// decode. Splitting them would buy nothing and pay for a second decode inside
+/// the founding transaction's compute budget.
+fn authenticate_generic_funding_and_capability_root(
     frame: &GenericFoundAccounts<'_, '_>,
     request: &GenericFoundingRequestV1,
     prepared: &PreparedFound,
@@ -802,6 +825,7 @@ fn authenticate_generic_funding(
     }
     let manifest_id =
         CapabilityContentId::new(prepared.manifest_id).map_err(|_| CoreSbfError::Funding)?;
+    authenticate_derived_capability_root(frame.trading_program, request, manifest, manifest_id)?;
     let mut keys = [Identity::new([1; 32]).map_err(|_| CoreSbfError::Funding)?;
         GENERIC_FOUNDING_MAX_FUNDING_STATES_V1];
     for (index, funding_account) in frame.funding.iter().enumerate() {
@@ -1510,7 +1534,12 @@ pub(crate) struct GenericFoundingOpenAccounts<'accounts, 'info> {
     pub(crate) trading_program: &'accounts AccountInfo<'info>,
     pub(crate) claims_program: &'accounts AccountInfo<'info>,
     pub(crate) custody_program: &'accounts AccountInfo<'info>,
-    pub(crate) capability_root: &'accounts AccountInfo<'info>,
+    /// Address of the sole Trading capability root for this Market generation.
+    ///
+    /// Decision 0004: no root account exists during generic founding, so this
+    /// is the address the Found stage derived and the permit persisted. The
+    /// Series route still passes its live root account's key.
+    pub(crate) capability_root: [u8; 32],
     pub(crate) custody_replay: &'accounts AccountInfo<'info>,
     pub(crate) hoard: &'accounts AccountInfo<'info>,
     pub(crate) funding_source: &'accounts AccountInfo<'info>,
@@ -1554,7 +1583,7 @@ pub(crate) fn authenticate_permit(
         || intent.founder().to_bytes() != founder
         || intent.product_record().to_bytes() != state.identity.product_record.to_bytes()
         || intent.source().to_bytes() != state.identity.resolution_policy.to_bytes()
-        || intent.parent_root().to_bytes() != frame.capability_root.key.to_bytes()
+        || intent.parent_root().to_bytes() != frame.capability_root
         || intent.projected_replay().to_bytes() != frame.custody_replay.key.to_bytes()
         || intent.funding_source().to_bytes() != frame.funding_source.key.to_bytes()
         || intent.hoard().to_bytes() != frame.hoard.key.to_bytes()

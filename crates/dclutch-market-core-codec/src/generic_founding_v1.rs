@@ -17,11 +17,11 @@ pub const GENERIC_FOUNDING_REQUEST_BYTES_V1: usize = 400;
 /// Exact fixed acknowledgement width.
 pub const GENERIC_FOUNDING_ACK_BYTES_V1: usize = 248;
 /// Fixed Core accounts before the exact ordered FundingState span.
-pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = 35;
+pub const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1: usize = 34;
 /// Fixed Core accounts after the exact ordered FundingState span.
 pub const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact Core final-Open account count.
-pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 24;
+pub const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1: usize = 23;
 /// Domain for the exact ordered generic FundingState account list.
 pub const GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1: &[u8] =
     b"dclutch/generic-founding-funding-list/v1";
@@ -38,6 +38,9 @@ const VERSION_V1: u16 = 1;
 const REQUEST_IDENTITIES_OFFSET: usize = 16;
 const REQUEST_CAPABILITY_ROOT_OFFSET: usize = REQUEST_IDENTITIES_OFFSET + 2 * 32;
 const REQUEST_GENERATION_OFFSET: usize = 336;
+const REQUEST_ENTRY_INDEX_OFFSET: usize = 392;
+const REQUEST_TAIL_RESERVED_OFFSET: usize = 394;
+const REQUEST_TAIL_RESERVED_BYTES: usize = 6;
 const ACK_IDENTITIES_OFFSET: usize = 16;
 const ACK_GENERATION_OFFSET: usize = 240;
 
@@ -109,6 +112,7 @@ pub struct GenericFoundingRequestV1 {
     market_rent: u64,
     permit_rent: u64,
     projected_resulting_revision: u64,
+    capability_entry_index: u16,
 }
 
 impl GenericFoundingRequestV1 {
@@ -134,6 +138,7 @@ impl GenericFoundingRequestV1 {
         market_rent: u64,
         permit_rent: u64,
         projected_resulting_revision: u64,
+        capability_entry_index: u16,
     ) -> Result<Self, Error> {
         let value = Self {
             stage,
@@ -155,6 +160,7 @@ impl GenericFoundingRequestV1 {
             market_rent,
             permit_rent,
             projected_resulting_revision,
+            capability_entry_index,
         };
         value.validate()?;
         Ok(value)
@@ -188,7 +194,10 @@ impl GenericFoundingRequestV1 {
             GENERIC_FOUNDING_REQUEST_BYTES_V1,
             &GENERIC_FOUNDING_REQUEST_MAGIC_V1,
         )?;
-        if read_u16(input, 8)? != VERSION_V1 || nonzero(input, 12, 4)? {
+        if read_u16(input, 8)? != VERSION_V1
+            || nonzero(input, 12, 4)?
+            || nonzero(input, REQUEST_TAIL_RESERVED_OFFSET, REQUEST_TAIL_RESERVED_BYTES)?
+        {
             return Err(Error::NonzeroReserved);
         }
         let ids = read_identities::<10>(input, REQUEST_IDENTITIES_OFFSET)?;
@@ -212,6 +221,7 @@ impl GenericFoundingRequestV1 {
             read_u64(input, REQUEST_GENERATION_OFFSET + 32)?,
             read_u64(input, REQUEST_GENERATION_OFFSET + 40)?,
             read_u64(input, REQUEST_GENERATION_OFFSET + 48)?,
+            read_u16(input, REQUEST_ENTRY_INDEX_OFFSET)?,
         )
     }
 
@@ -256,6 +266,11 @@ impl GenericFoundingRequestV1 {
                 &value.to_le_bytes(),
             )?;
         }
+        put(
+            &mut output,
+            REQUEST_ENTRY_INDEX_OFFSET,
+            &self.capability_entry_index.to_le_bytes(),
+        )?;
         Ok(output)
     }
 
@@ -335,6 +350,15 @@ impl GenericFoundingRequestV1 {
     pub const fn projected_resulting_revision(self) -> u64 {
         self.projected_resulting_revision
     }
+    /// Return the selected Market capability-manifest entry index.
+    ///
+    /// Core reads the Market's own authenticated capability manifest at this
+    /// index and takes the entry's exact kind and capability release. The
+    /// index is not independently bounded: the authenticated manifest's actual
+    /// entry count is the sole bound, exactly as in Decision 0003.
+    pub const fn capability_entry_index(self) -> u16 {
+        self.capability_entry_index
+    }
     /// Return exact Hoard principal with checked multiplication.
     pub fn hoard_principal(self) -> Result<u64, Error> {
         self.quantity
@@ -391,6 +415,7 @@ impl GenericFoundingRequestV1 {
             self.market_rent,
             self.permit_rent,
             self.projected_resulting_revision,
+            self.capability_entry_index,
         )
     }
 }
@@ -655,6 +680,7 @@ mod tests {
             15,
             16,
             2,
+            5,
         )
         .expect("request")
     }
@@ -695,6 +721,17 @@ mod tests {
             GenericFoundingRequestV1::decode(&bytes[..399]),
             Err(Error::InvalidLength)
         );
+        for offset in REQUEST_TAIL_RESERVED_OFFSET
+            ..REQUEST_TAIL_RESERVED_OFFSET + REQUEST_TAIL_RESERVED_BYTES
+        {
+            let mut tail = request.encode().expect("encode");
+            tail[offset] = 1;
+            assert_eq!(
+                GenericFoundingRequestV1::decode(&tail),
+                Err(Error::NonzeroReserved),
+                "reserved byte {offset} must refuse"
+            );
+        }
         assert!(
             GenericFoundingRequestV1::new(
                 GenericFoundingStageV1::FoundAndPermit,
@@ -716,6 +753,7 @@ mod tests {
                 15,
                 16,
                 2,
+                5,
             )
             .is_err()
         );
@@ -740,6 +778,7 @@ mod tests {
                 15,
                 16,
                 2,
+                5,
             )
             .is_err()
         );
@@ -804,12 +843,54 @@ mod tests {
                 projected_resulting_revision: 3,
                 ..found
             },
+            GenericFoundingRequestV1 {
+                capability_entry_index: 6,
+                ..found
+            },
         ] {
             assert_ne!(
                 mutated.selection_config_id().expect("mutated config"),
                 found.selection_config_id().expect("found config")
             );
         }
+    }
+
+    #[test]
+    fn capability_entry_index_occupies_the_former_unchecked_tail() {
+        let found = request(GenericFoundingStageV1::FoundAndPermit);
+        assert_eq!(found.capability_entry_index(), 5);
+        let bytes = found.encode().expect("encode");
+        assert_eq!(
+            bytes
+                .get(REQUEST_ENTRY_INDEX_OFFSET..REQUEST_ENTRY_INDEX_OFFSET + 2)
+                .expect("entry span"),
+            5_u16.to_le_bytes().as_slice()
+        );
+        assert_eq!(
+            bytes
+                .get(
+                    REQUEST_TAIL_RESERVED_OFFSET
+                        ..REQUEST_TAIL_RESERVED_OFFSET + REQUEST_TAIL_RESERVED_BYTES
+                )
+                .expect("tail span"),
+            [0; REQUEST_TAIL_RESERVED_BYTES].as_slice()
+        );
+        assert_eq!(GenericFoundingRequestV1::decode(&bytes), Ok(found));
+        assert_eq!(
+            found
+                .with_stage(GenericFoundingStageV1::Open)
+                .expect("open")
+                .capability_entry_index(),
+            5
+        );
+        // u16::MAX is representable on the wire; the authenticated manifest's
+        // actual entry count is the sole bound, so the codec does not guess one.
+        let wide = GenericFoundingRequestV1 {
+            capability_entry_index: u16::MAX,
+            ..found
+        };
+        let wide_bytes = wide.encode().expect("encode wide");
+        assert_eq!(GenericFoundingRequestV1::decode(&wide_bytes), Ok(wide));
     }
 
     #[test]

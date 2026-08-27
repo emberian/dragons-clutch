@@ -2074,6 +2074,7 @@ dependencies = [
 name = "dclutch-market-founding-v1-operator"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
  "dclutch-market-core-codec",

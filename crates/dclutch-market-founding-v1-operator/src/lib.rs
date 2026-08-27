@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use dclutch_capability_contract::CapabilityManifestV1;
 use dclutch_capability_program_contract::CapabilityRootHeaderV1;
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
@@ -30,6 +31,8 @@ pub enum GenericMarketFoundingOperatorErrorV1 {
     Derivation,
     /// The supplied capability selection coordinates refused.
     Selection,
+    /// The supplied Market-selected capability manifest refused.
+    Manifest,
 }
 
 /// Authenticated artifact whose private fields cannot be caller-authored.
@@ -105,22 +108,33 @@ pub struct GenericFoundingRootSelectionV1 {
 /// `template` supplies every artifact coordinate except the capability root;
 /// its own `capability_root` field is a placeholder and is discarded. The
 /// returned `request` is the finalized artifact.
+///
+/// Decision 0004: the manifest, kind, and capability release are not caller
+/// parameters. They are read from the Market-selected capability manifest at
+/// the entry index the template names, which is exactly what Core rebuilds
+/// before it derives the root, so an operator cannot construct a request Core
+/// will refuse and cannot name a selection the Market does not contain.
+/// `manifest_bytes` must be the exact content-addressed manifest record the
+/// Found frame carries; its identity is the digest of those bytes.
 pub fn construct_generic_founding_root_selection_v1(
     trading_program: Pubkey,
     template: GenericFoundingRequestV1,
-    manifest: [u8; 32],
-    entry_index: u16,
-    kind: [u8; 32],
-    capability_release: [u8; 32],
+    manifest_bytes: &[u8],
 ) -> Result<GenericFoundingRootSelectionV1, GenericMarketFoundingOperatorErrorV1> {
+    let manifest = CapabilityManifestV1::decode(manifest_bytes)
+        .map_err(|_| GenericMarketFoundingOperatorErrorV1::Manifest)?;
+    let entry_index = template.capability_entry_index();
+    let entry = manifest
+        .entry(entry_index)
+        .map_err(|_| GenericMarketFoundingOperatorErrorV1::Manifest)?;
     let config = template
         .selection_config_id()
         .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
     let selection = CapabilityExecutionSelectionV1::from_bytes(
         entry_index,
-        manifest,
-        kind,
-        capability_release,
+        hash(manifest_bytes).to_bytes(),
+        entry.kind_id().to_bytes(),
+        entry.release_id().to_bytes(),
         config.to_bytes(),
     )
     .map_err(|_| GenericMarketFoundingOperatorErrorV1::Selection)?;
@@ -155,6 +169,7 @@ pub fn construct_generic_founding_root_selection_v1(
         template.market_rent(),
         template.permit_rent(),
         template.projected_resulting_revision(),
+        entry_index,
     )
     .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
     if request
@@ -279,10 +294,59 @@ fn content(bytes: [u8; 32]) -> Result<ContentId, GenericMarketFoundingOperatorEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    };
     use dclutch_market_core_codec::Identity;
+
+    const MANIFEST_ENTRIES: usize = 2;
+    const MANIFEST_BYTES: usize = MANIFEST_HEADER_BYTES + MANIFEST_ENTRIES * CAPABILITY_ENTRY_BYTES;
 
     fn id(byte: u8) -> Identity {
         Identity::new([byte; 32]).expect("identity")
+    }
+
+    fn coordinate(byte: u8) -> ContentId {
+        ContentId::new([byte; 32]).expect("coordinate")
+    }
+
+    fn entry(kind: u8, release: u8) -> CapabilityEntryV1 {
+        CapabilityEntryV1::new(
+            coordinate(kind),
+            coordinate(release),
+            coordinate(0x60),
+            coordinate(0x61),
+            coordinate(0x62),
+            coordinate(0x63),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(
+                FundingAmountsV1::new(
+                    CompartmentFundingV1::native_lamports(1).expect("rent"),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                    CompartmentFundingV1::not_applicable(),
+                )
+                .expect("amounts"),
+                None,
+            )
+            .expect("quote"),
+        )
+        .expect("entry")
+    }
+
+    /// Two ordered entries, so a substitution can borrow a sibling's exact
+    /// kind and release rather than only an invented one.
+    fn manifest(storage: &mut [u8; MANIFEST_BYTES]) -> &[u8] {
+        CapabilityManifestV1::encode_into(&[entry(0x30, 0x40), entry(0x31, 0x41)], storage)
+            .expect("manifest");
+        storage.as_slice()
     }
 
     fn artifact() -> [u8; GENERIC_FOUNDING_REQUEST_BYTES_V1] {
@@ -306,6 +370,7 @@ mod tests {
             15,
             16,
             2,
+            1,
         )
         .expect("artifact")
         .encode()
@@ -340,10 +405,25 @@ mod tests {
     fn capability_root_selection_is_acyclic_and_satisfies_core_authentication() {
         let trading = Pubkey::new_from_array([21; 32]);
         let template = GenericFoundingRequestV1::decode(&artifact()).expect("template");
-        let selected = construct_generic_founding_root_selection_v1(
-            trading, template, [0x71; 32], 3, [0x72; 32], [0x73; 32],
-        )
-        .expect("acyclic root selection");
+        let mut storage = [0_u8; MANIFEST_BYTES];
+        let manifest_bytes = manifest(&mut storage);
+        let selected =
+            construct_generic_founding_root_selection_v1(trading, template, manifest_bytes)
+                .expect("acyclic root selection");
+
+        // Decision 0004: the selection is the Market's own manifest identity and
+        // the exact indexed entry, not four caller-chosen coordinates.
+        assert_eq!(selected.request.capability_entry_index(), 1);
+        assert_eq!(selected.selection.entry_index(), 1);
+        assert_eq!(
+            selected.selection.manifest().to_bytes(),
+            hash(manifest_bytes).to_bytes()
+        );
+        assert_eq!(selected.selection.kind().to_bytes(), [0x31; 32]);
+        assert_eq!(
+            selected.selection.capability_release().to_bytes(),
+            [0x41; 32]
+        );
 
         // Exactly the conjunction Core's authenticate_root evaluates.
         let header = selected.header;
@@ -416,11 +496,114 @@ mod tests {
                 .projected_resulting_revision()
                 .checked_add(1)
                 .expect("revision"),
+            selected.request.capability_entry_index(),
         )
         .expect("hostile request");
         assert_ne!(
             header.selection().config().to_bytes(),
             hash(&hostile.selection_preimage().expect("hostile preimage")).to_bytes()
+        );
+    }
+
+    #[test]
+    fn root_selection_refuses_a_foreign_manifest_index_or_borrowed_entry() {
+        let trading = Pubkey::new_from_array([21; 32]);
+        let template = GenericFoundingRequestV1::decode(&artifact()).expect("template");
+        let mut storage = [0_u8; MANIFEST_BYTES];
+        let manifest_bytes = manifest(&mut storage).to_vec();
+        let honest =
+            construct_generic_founding_root_selection_v1(trading, template, &manifest_bytes)
+                .expect("honest selection");
+
+        // A manifest other than the Market's own moves the derived root, so
+        // Core's own derivation refuses the resulting request.
+        let mut other_storage = [0_u8; MANIFEST_BYTES];
+        CapabilityManifestV1::encode_into(
+            &[entry(0x30, 0x40), entry(0x32, 0x42)],
+            &mut other_storage,
+        )
+        .expect("other manifest");
+        let foreign =
+            construct_generic_founding_root_selection_v1(trading, template, &other_storage)
+                .expect("foreign selection");
+        assert_ne!(foreign.capability_root, honest.capability_root);
+
+        // An index the authenticated manifest does not contain is refused; the
+        // manifest's own entry count is the sole bound.
+        for index in [2, 3, u16::MAX] {
+            let wide = GenericFoundingRequestV1::new(
+                GenericFoundingStageV1::FoundAndPermit,
+                template.funding_count(),
+                template.release_set(),
+                template.market(),
+                template.capability_root(),
+                template.context(),
+                template.founder(),
+                template.beneficiary(),
+                template.funding_source(),
+                template.hoard(),
+                template.projected_replay(),
+                template.funding_list_id(),
+                template.generation(),
+                template.quantity(),
+                template.basis_scale(),
+                template.expiry_slot(),
+                template.market_rent(),
+                template.permit_rent(),
+                template.projected_resulting_revision(),
+                index,
+            )
+            .expect("wide template");
+            assert_eq!(
+                construct_generic_founding_root_selection_v1(trading, wide, &manifest_bytes),
+                Err(GenericMarketFoundingOperatorErrorV1::Manifest),
+                "entry index {index} is outside the manifest"
+            );
+        }
+
+        // A kind or release borrowed from a different entry of the same
+        // manifest is unreachable: the operator no longer accepts either, and
+        // the sibling entry's coordinates derive a different root.
+        let sibling = GenericFoundingRequestV1::new(
+            GenericFoundingStageV1::FoundAndPermit,
+            template.funding_count(),
+            template.release_set(),
+            template.market(),
+            template.capability_root(),
+            template.context(),
+            template.founder(),
+            template.beneficiary(),
+            template.funding_source(),
+            template.hoard(),
+            template.projected_replay(),
+            template.funding_list_id(),
+            template.generation(),
+            template.quantity(),
+            template.basis_scale(),
+            template.expiry_slot(),
+            template.market_rent(),
+            template.permit_rent(),
+            template.projected_resulting_revision(),
+            0,
+        )
+        .expect("sibling template");
+        let sibling = construct_generic_founding_root_selection_v1(
+            trading,
+            sibling,
+            &manifest_bytes,
+        )
+        .expect("sibling selection");
+        assert_eq!(sibling.selection.kind().to_bytes(), [0x30; 32]);
+        assert_ne!(sibling.capability_root, honest.capability_root);
+
+        // Manifest bytes that are not a canonical manifest refuse outright.
+        assert_eq!(
+            construct_generic_founding_root_selection_v1(
+                trading,
+                template,
+                &manifest_bytes[..manifest_bytes.len() - 1],
+            ),
+            Err(GenericMarketFoundingOperatorErrorV1::Manifest)
         );
     }
 
