@@ -700,13 +700,23 @@ substrate is mutable and iterated** (decision 0012 — the slot pin replaces
 revocation in the fast path's soundness; iteration by Upgrade at fee-cost;
 ~31.7 SOL parked, never burned; the immutable ceremony is reserved for the
 final public demo substrate). The devnet PythReleaseV1 row is MINTED
-(11f249ff + the 9b08090d nibble fix). In flight at this writing: the 0012
-core (registry-contract/activation-auth — un-named lane, boarded via SMOKE-0
-cession), the 0012 producer shape (plan.rs, DEVNET-DRIVER), run-external
-(DRIVER), the dealer-accelerator 82-diagnostic regression (ACCEL-FRAME).
-Still unowned from 0012's site map: core-sbf init gate, the five family
-mirrors, three host mirrors. The charter below otherwise stands, with
-"recycled at the end" now meaning: closeable because never revoked.
+(11f249ff + the 9b08090d nibble fix). ALL LANDED by 18:50: the 0012
+admission tree-wide (PIN-0012, 0e34c036 — eight ReleaseSuperseded bands,
+census 209), the producer minting policy from observation (DEVNET-DRIVER,
+636230ef), the external campaign driver (DRIVER, d94dc438..1040e918 — W3
+closed; publication+init proven locally, Pyth row re-authenticated 8/8 on
+devnet read-only, W1 measured as a live 0x1004 refusal pre-admission), the
+82-diagnostic frame regression (DIAG-82, 9dc2a6bb + the d1378427 gate;
+root-caused to 3071fbe8 by ACCEL-FRAME's independent bisection), the
+checked-release candidate green again (7c12af9c), and the kappa carried-cap
+kernel with its equivalence theorem (KAPPA-ENFORCE, c953b640..74275738;
+storage ruled onto CoreState with profile floor_content_id, RECORDS-MIGRATE
+rows). **DEPLOY-1's two triggers are both met.** Its named debts: the 0012
+CU claim needs the 20-seed re-measure; founding-stage spec-vs-plan wiring;
+journey externalization + the persistent-founder decision; the explicitly-
+unbounded V5 founding declaration before a fail-closed kappa check can land.
+The charter below otherwise stands, with "recycled at the end" now meaning:
+closeable because never revoked.
 
 ## DEVNET-SMOKE charter (expanded scope, awaiting ember's go)
 

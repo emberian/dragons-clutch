@@ -1,12 +1,22 @@
 # Decision 0012: the devnet substrate is mutable and iterated, and the slot pin replaces the revocation
 
-Status: **direction ruled by ember, 2026-08-27, live during SMOKE-0** — and
-implementation began the same hour: the contract core
-(`slot_pinned_release_elf_digest_v1` + the pinned-Registry rewrite in
-`crates/dclutch-registry-contract`) and the activation-auth arm are in flight
-as this is written, the producer shape is boarded (DEVNET-DRIVER), and the
-external driver is DRIVER's. The site map in §4 was verified against
-`11f249ff`; consult the wave board for current per-site ownership.
+Status: **direction ruled by ember 2026-08-27; LANDED the same evening.**
+The admission is live at `0e34c036` (lane PIN-0012): no wire change, one
+greppable admission predicate (`require_slot_pinned_release_v1`), one digest
+owner (`slot_pinned_release_elf_digest_v1`), eight banded
+`ReleaseSuperseded` refusal discriminants, and the census regenerated at 209
+codes. The producer mints policy from observation at `636230ef`
+(DEVNET-DRIVER); the external campaign driver exists at `d94dc438`..`1040e918`
+(DRIVER), which also measured this record's W1 as a live refusal (activation
+on a mutable substrate, custom error 0x1004) before the admission landed.
+PIN-0012's yield flags three deviations for ember's veto (the Pinned*
+renames of zero-caller symbols, host relaxation by named sibling rather than
+flag, and release-tool's strict gate left strict deliberately) and one site
+this record's §4 map MISSED: `crates/dclutch-shadow-accelerator-auth-v4`
+carried its own unconditional authority refusal AND a silent hash fallback —
+without converting it the fast path was dead for Trading. Named debt: the
+CU claim (the life fits a mutable substrate) is argued and unit-tested, not
+end-to-end measured — DEPLOY-1 re-measures the 20-seed sweep.
 
 A sharpening found in the tree itself while implementing: the contract
 already anticipated this design. `ArtifactReleaseV1::slot_mismatch_refusal`
