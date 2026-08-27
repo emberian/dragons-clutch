@@ -201,6 +201,39 @@ poststate behind.
   inside `decode_projected_request` before any CPI.
 - plus the three Found31 and Registry cases this file already described.
 
+### The way back out of a prestate that never founded
+
+The campaign stages **two** prestates. Both run the identical four-stage ladder;
+they differ in generation, in how long their founding stays satisfiable, and in
+which of the two exits out of `SourceFunded` they take. The second exists to be
+abandoned.
+
+`OpenSourceCompartment` puts real collateral under a projected authority against
+a Market that does not exist, and until `d43536d` nothing accepted the phase it
+left behind. The forward direction is an atomic founding whose Core Found and
+Open stages both refuse an expired artifact, so past `expiry_slot` that
+collateral could not be moved in any direction by any route.
+
+```text
+slot=3083 cu=765807  stage a second projected-Custody prestate for the expiry abort (DCLTPCB1)
+slot=3180 cu=134666  DCLTPCA1 refuses to abort a funded source before expiry     REFUSED
+slot=3599 cu=148996  unwind an expired founding's funded source compartment (DCLTPCA1)
+```
+
+The refusal is the half that matters: while the founding is still satisfiable
+the authority over funded principal may not be destroyed. It refuses with
+`CustodySbfError::Expiry`, rolls the whole multi-instruction transaction back to
+a fee-only debit, and the runner then re-authenticates the entire prestate to
+prove it moved nothing. The honest abort, 419 slots later, returns exactly the
+principal to the party that supplied it, closes the source vault, the source
+replay, the empty Hoard vault, and the projection, and raises the lifecycle
+credit by exactly those four rents.
+
+The abort lane's expiry is squeezed from both sides — `initialize` refuses once
+`current_slot > expiry_slot`, so it must outlast staging, and every slot past
+that is dead waiting. The runner does not trust the arithmetic: it checks the
+remaining margin before staging and waits for the real slot afterwards.
+
 ### What the frame forced
 
 - The founding runs at **its own generation**: every projected-Custody stage

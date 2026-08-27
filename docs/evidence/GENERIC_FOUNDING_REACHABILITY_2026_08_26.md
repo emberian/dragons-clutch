@@ -1954,6 +1954,120 @@ entries still flagged stale are `trading/hot_v3::process_hot_execution_v3` and
 census-enumeration limit named below and **not** because their routes ran. They
 were deliberately left alone.
 
+### Blocker H — a funded source compartment could not be unwound, ever
+
+Found by asking what the census would say about the route this lane had just
+made reachable, and closed rather than queued.
+
+`OpenSourceCompartment` puts real collateral under a projected authority against
+a Market that does not exist. **No terminal accepted the phase it leaves
+behind.** `RefundAndClose` admits `HoardLocked`; `AbortOpenAndClose` admits
+`HoardOpen`. That was deliberate, and its stated reason had the hazard exactly
+backwards — refusing the abort was called the safe direction because closing a
+funded projection would strand the principal:
+
+> once real principal is under this authority the authority over it cannot be
+> destroyed, and the principal can only move forward through Lock.
+
+The forward direction is the Lock stage of an atomic founding, and that
+founding's Core Found stage refuses at `clock.slot > request.expiry_slot()`
+(`core-sbf/src/generic_founding_v1.rs:409`) and its Open stage at
+`current_slot > intent.expiry_slot()` (`:1594`). So past expiry the principal
+could **not move at all**, in any direction, by any route. Not stranded rent —
+stranded collateral, permanently. W1d named it, chose it, and queued it; W1e did
+not touch it; this lane is the one that made the prestate routinely reachable,
+which is why it is the one that closed it.
+
+`AbortSourceAndClose` (`d43536d`) admits `SourceFunded` and nothing else, after
+expiry, against a vacant Market. The principal returns to a token account owned
+by `request.refund_owner` — the party `OpenSourceCompartment` required to sign
+as the funder's owner — and the source Vault, the source replay, the empty Hoard
+Vault, and the projection all close to `request.rent_credit`. The RentCredit
+postcondition is **exact**, not a lower bound: those four are the complete set
+this ladder creates.
+
+It is deliberately **not** an extension of `AbortOpenAndClose`, which was the
+tempting shortcut: that terminal admits `HoardOpen` holding nothing, Series
+drives it, its frame width is fixed, and widening it would put a principal
+transfer on a path whose whole contract is that there is no principal. A test
+pins that both pre-existing terminals still refuse `SourceFunded`, so the fix
+cannot later be "simplified" into the relaxation it was avoiding.
+
+The request is **derived, not supplied**: it is the terminal Lock with exactly
+one field changed, at the same cursor, same amount, same refund owner. The same
+768 bytes that authorise a founding authorise its unwind, and neither can name a
+coordinate the other does not. `DCLTPCA1` carries only those bytes and — unlike
+`DCLTPCB1` — does not require the founding artifact, because the persisted
+projection is already that binding and demanding the artifact would make
+reclaiming principal depend on the founder still holding a record they no longer
+need. It is also not on the extended-heap list: one CPI, one request, one
+sixteen-account frame.
+
+**Three defects surfaced by executing it, each of a kind worth naming:**
+
+1. **A list that was exhaustive by intent and not by the compiler.** Custody
+   decided whether the RentCredit may be writable with a `matches!` over three
+   operations. The new terminal closes four accounts into it and was silently
+   absent, so the route refused `AccountFrame` 5,364 CU in, with nothing in the
+   logs naming a conjunct. It is an exhaustive `match` now (`df81ce4`): the next
+   operation added to that enum is a compile error rather than a mystery.
+2. **Ordering between manual lamport moves and CPIs.** Every closure is
+   individually balanced, but zeroing an account's lamports and assigning it to
+   the System program by hand and *then* performing another CPI fails the
+   runtime's own before-and-after check with `UnbalancedInstruction`, which names
+   no account and no sum. The two older terminals never met it because each
+   performs its single manual close last. This one does both token closures
+   first and both manual closures after (`fe9fced`).
+3. **A refusal that could not say what it was.** The kernel has always
+   distinguished `Expiry` from every other replay refusal; this program flattened
+   both into `Replay`, so the pre-expiry refusal reported "replay PDA, owner,
+   bytes, or revision refused" when the PDA, owner, bytes and revision were all
+   correct and the transaction was merely early. `CustodySbfError::Expiry` is
+   added and all three expiry-gated terminals map through it (`d9f79bb`). **The
+   census is what caught this**: it refused to record coverage for a bound
+   refusal that named no code, which is exactly how a real refusal launders
+   itself out of a taxonomy.
+
+### Measured: the abort, on a validator
+
+The campaign now stages **two** prestates. Both run the identical four-stage
+ladder; they differ in generation, in how long their founding stays satisfiable,
+and in which exit out of `SourceFunded` they take. The second exists to be
+abandoned. Run at `d9f79bb`, 100-transaction campaign, **whole gauntlet green:
+23 witnesses checked, 0 failed; 0 unclassified positions; 0 stale blocking
+entries.**
+
+| transaction | CU |
+|---|---:|
+| stage the second prestate (`DCLTPCB1`) | 765,807 |
+| **`DCLTPCA1` refuses to abort before expiry** | **134,666** |
+| **`DCLTPCA1` unwinds the expired compartment** | **148,996** |
+
+The refusal is the half that matters: while the founding is still satisfiable
+the authority over funded principal may not be destroyed, and an unwind that let
+anyone empty a live founding would be a worse defect than the stranding it was
+written to fix. It refuses with `custody/CustodySbfError::Expiry`, the runner
+requires the whole multi-instruction transaction to roll back to a fee-only
+debit, and it then re-authenticates the entire prestate to prove the refusal
+moved nothing. The honest abort, 419 slots later, returns exactly the principal
+to the party that supplied it, leaves all four staged accounts closed, and
+raises the lifecycle credit by exactly their four rents.
+
+### A margin that is closing, and belongs to nobody yet
+
+`DCLTGMF1` cost **1,184,132** CU at `cd05331` and **1,278,747** at `d9f79bb` —
+84.6% to **91.3%** of the 1,400,000 per-transaction maximum, in one evening,
+from other lanes' concurrent changes to Core, Claims, and Trading. Nothing in
+this lane moved it and nothing is watching it.
+
+There is no headroom to buy: the campaign already requests the maximum. At the
+current rate the atomic founding stops fitting, and it will stop fitting the way
+Found31 did — as a hard refusal at the ceiling with no partial result. **A
+per-transaction CU budget for `DCLTGMF1`, checked in CI against a measured
+figure, is the thing that would turn that into a caught regression instead of a
+campaign that stops working.** Naming it as an owner-decision because this lane
+found it by measurement and did not build it.
+
 ### Owner-decisions this lane surfaced and did not take
 
 - **The census cannot see through an `unsafe` block in a dispatch position.**
