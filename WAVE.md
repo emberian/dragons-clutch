@@ -416,3 +416,34 @@ STARK/FRI component anywhere.)
 5. No estimate is a total; no silence is a result.
 Anti-finding, recorded: entrypoint_adapter.rs is the named standard for an
 unsafe membrane (every SAFETY audited and holding).
+
+## Fable-wave verdicts, remaining dispositions (2026-08-27)
+
+DISPATCHED: HOARD (ADR-0007, custody-namespace owner — ruled, ember veto
+window open), STRATUM (CAT1 world + DCLLBX02 burial with carve-outs), REFCODE,
+DELDEC, LEANGUARD, WEBGHOST-pending (economic/generalSuccessor deletion +
+productV2 split + DCLTPRQ2 collision + abi:verify into npm test — launches
+when DELDEC yields to avoid productV2.ts collision).
+QUEUED with owners:
+- Tranche-A Dealer: v3_accelerator_accounts.rs:499 decodes bare MarketRoot
+  where the chain holds CoreState — the campaign is representation-broken
+  before it starts (Fable P5a).
+- U-014 owner: the Direct AOT inversion — deployed accelerator accelerates
+  the superseded V2 descriptor; the V3 AOT is selectable by nothing and
+  carries one recorded admission disagreement (P5g).
+- Post-W2 decomposition lane: hot_v3 palimpsest split (accelerator auth out
+  to a contract crate, seal to its own module) BEFORE GEN-HOT lands (derp 8).
+- Static-assert genus lane: import-don't-restate + asserts at every literal
+  pin; controller-proof's length-only dispatch gets a magic tag (derp 9).
+- Islands needing owner decisions, sized (P5f): product-admission island,
+  representation-composition-v3-operator + rational-lifecycle-hot-v3 (9,448
+  LOC), fractional-claim-operator (8,582 LOC), market-retirement-v1-operator,
+  dclutch-svm-harness CAT1-era tests (~15k, mostly stratum).
+- Renames (small batch): resolution-proof-sbf -> resolution-sbf;
+  fractional-claims-kernel doc-rename; DEMO_ACTIVATION profile id (verdict
+  settled, P6).
+- Docs pattern-5 opener: the REPRESENTATION MAP (fact -> live magic -> owner
+  -> writer) — the highest-value artifact for every future reviewer (P5i);
+  ARCHITECTURE.md still narrates the MarketRoot era.
+- Banish checklist gains: sweep apps/dclutch-web for the deleted program's
+  vocabulary in the same commit; abi:*:verify wired into npm test.
