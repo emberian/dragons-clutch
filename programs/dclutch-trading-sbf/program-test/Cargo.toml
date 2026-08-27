@@ -18,6 +18,7 @@ dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
 dclutch-direct-hot-program-test-support = { path = "direct-hot" }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
+dclutch-general-config-contract = { path = "../../../crates/dclutch-general-config-contract" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2 = { path = "../../../crates/dclutch-product-runtime-v2" }

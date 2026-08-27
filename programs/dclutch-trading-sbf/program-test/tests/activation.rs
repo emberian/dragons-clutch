@@ -19,9 +19,10 @@ use dclutch_capability_contract::{
 };
 use dclutch_capability_program_contract::{
     activation_registers_v2::{
-        ACTIVATION_ACTION_SCALAR_V2, ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
-        ACTIVATION_GENERATION_SCALAR_V2, ACTIVATION_MARKET_IDENTITY_V2, ACTIVATION_ROOT_ACCOUNT_V2,
-        ACTIVATION_ROOT_IDENTITY_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        ACTIVATION_ACTION_SCALAR_V2, ACTIVATION_CONFIG_IDENTITY_V2,
+        ACTIVATION_FIRST_FUNDING_ACCOUNT_V2, ACTIVATION_GENERATION_SCALAR_V2,
+        ACTIVATION_MARKET_IDENTITY_V2, ACTIVATION_ROOT_ACCOUNT_V2, ACTIVATION_ROOT_IDENTITY_V2,
+        ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
     },
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
@@ -36,6 +37,18 @@ use dclutch_capability_program_contract::{
         CapabilityProgramSetEntryV2, SelectorWidthV2, encode_program_set_v2,
         encoded_program_set_bytes_v2,
     },
+};
+use dclutch_general_config_contract::{
+    root::{
+        GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_ACTIVE_HEADER_WORD_V2, GENERAL_ROOT_BYTES_V2,
+        GENERAL_ROOT_CONFIG_ID_OFFSET_V2, GENERAL_ROOT_GENERATION_OFFSET_V2,
+        GENERAL_ROOT_HEADER_WORD_OFFSET_V2, GENERAL_ROOT_INITIAL_REVISION_V2,
+        GENERAL_ROOT_MAGIC_OFFSET_V2, GENERAL_ROOT_MAGIC_WORD_V2, GENERAL_ROOT_MARKET_OFFSET_V2,
+        GENERAL_ROOT_REVISION_OFFSET_V2, GENERAL_ROOT_SCHEMA_ID_V2, GeneralRootV2,
+        general_root_creation_tail_v2,
+    },
+    root_v3::activate_general_owned_v3,
+    v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
 use dclutch_effect_kernel::v2::{
     SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA,
@@ -116,6 +129,52 @@ const PROFILE_ACCOUNT_COUNT: u16 = 2;
 const SCALAR_COUNT: u16 = 8;
 const IDENTITY_COUNT: u16 = 12;
 
+/// Scalar bank a General activation declares.
+///
+/// Eight common slots the seam seeds, one the profile projects the Rent quote
+/// into, and three the transition loads with the constants an EffectProgram has
+/// no way to produce -- it can only move a register.
+const GENERAL_SCALAR_COUNT: u16 = 12;
+/// Scalar the General profile projects the FundingState's Rent quote into.
+const GENERAL_FUNDING_RENT_SCALAR: u16 = 8;
+/// Scalar the General transition loads with `GENERAL_ROOT_MAGIC_WORD_V2`.
+const GENERAL_MAGIC_SCALAR: u16 = 9;
+/// Scalar the General transition loads with `GENERAL_ROOT_ACTIVE_HEADER_WORD_V2`.
+const GENERAL_HEADER_WORD_SCALAR: u16 = 10;
+/// Scalar the General transition loads with `GENERAL_ROOT_INITIAL_REVISION_V2`.
+const GENERAL_REVISION_SCALAR: u16 = 11;
+
+/// Which family's activation artifacts a campaign carries.
+///
+/// The seam is family-neutral and this is not a kind branch inside it: it is
+/// the fixture choosing which family's real artifacts to publish, exactly as a
+/// release author would.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Family {
+    /// The neutral fixture: one projected scalar then one projected identity.
+    Fixture,
+    /// General: a real `GeneralRootV2` composed from its published coordinates.
+    General,
+}
+
+impl Family {
+    /// Exact family root-tail width the descriptor declares.
+    const fn root_tail_bytes(self) -> usize {
+        match self {
+            Self::Fixture => ROOT_TAIL_BYTES,
+            Self::General => GENERAL_ROOT_BYTES_V2,
+        }
+    }
+
+    /// Exact scalar bank the profile, transition and effect program share.
+    const fn scalars(self) -> u16 {
+        match self {
+            Self::Fixture => SCALAR_COUNT,
+            Self::General => GENERAL_SCALAR_COUNT,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Fixture {
     instruction: Instruction,
@@ -129,6 +188,22 @@ struct Fixture {
     market: Pubkey,
     root_rent: u64,
     funding_rent: u64,
+    /// Which family's artifacts this fixture published.
+    family: Family,
+    /// Exact family root-tail width the descriptor declared.
+    root_tail_bytes: usize,
+    /// Content identity of the config record the selection names.
+    config_id: ContentId,
+    /// Decoded General config, for the campaign that publishes one.
+    general_config: Option<GeneralConfigV3>,
+    /// Exact capability-manifest bytes the seam authenticated.
+    manifest: Vec<u8>,
+    /// Content identity of those bytes.
+    manifest_id: ContentId,
+    /// Exact FundingState prestate the seam observed.
+    funding_prestate: FundingStateV1,
+    /// Exact FundingState lamport prestate the seam observed.
+    funding_prestate_lamports: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -145,6 +220,8 @@ enum Campaign {
     ProgramSetWrongSchema,
     /// No set entry admits the selector the family activation request carries.
     ProgramSetMissingSelector,
+    /// General's own three activation artifacts, creating a real `GeneralRootV2`.
+    General,
 }
 
 impl Campaign {
@@ -152,8 +229,19 @@ impl Campaign {
     const fn program_set(self) -> bool {
         matches!(
             self,
-            Self::ProgramSetRelease | Self::ProgramSetWrongSchema | Self::ProgramSetMissingSelector
+            Self::ProgramSetRelease
+                | Self::ProgramSetWrongSchema
+                | Self::ProgramSetMissingSelector
+                | Self::General
         )
+    }
+
+    /// Which family's artifacts this campaign publishes.
+    const fn family(self) -> Family {
+        match self {
+            Self::General => Family::General,
+            _ => Family::Fixture,
+        }
     }
 }
 
@@ -182,6 +270,31 @@ fn program_set(descriptor_id: ContentId, campaign: Campaign) -> Vec<u8> {
 
 fn id(byte: u8) -> ContentId {
     ContentId::new([byte; 32]).expect("nonzero content")
+}
+
+/// One immutable `GeneralConfigV3` bound to the release it is activated under.
+///
+/// `require_entry` joins the manifest entry to exactly two of these fields --
+/// `program_set_id` and `capacity_profile_id` -- so the config cannot be a
+/// placeholder if `activate_general_owned_v3` is to accept the same manifest the
+/// seam read. The remaining capacities are plausible and unread by activation.
+fn general_config(capacity_profile_id: [u8; 32], program_set_id: [u8; 32]) -> GeneralConfigV3 {
+    GeneralConfigV3::new(GeneralConfigV3Input {
+        capacity_profile_id,
+        claim_basis_id: [0x51; 32],
+        program_set_id,
+        generation: GENERATION,
+        price_scale: 1,
+        collection_slots: 1,
+        selection_slots: 1,
+        settlement_slots: 1,
+        max_orders_per_candidate: 8,
+        max_pages_per_candidate: 8,
+        continuation_reward_lamports: 1,
+        selection_policy_id: [0x52; 32],
+        quote_surplus_beneficiary: [0x53; 32],
+    })
+    .expect("General config")
 }
 
 fn identity(bytes: [u8; 32]) -> Identity {
@@ -226,8 +339,13 @@ where
     output
 }
 
-fn account_profile() -> Vec<u8> {
-    let rules = [
+/// The two account rules every activation in this file declares.
+///
+/// The seam pins their order itself: the composite root is
+/// `ACTIVATION_ROOT_ACCOUNT_V2` and the FundingStates follow from
+/// `ACTIVATION_FIRST_FUNDING_ACCOUNT_V2`, in role-request order.
+fn activation_rules() -> [AccountRuleInputV1; 2] {
+    [
         // The composite root: vacant, credited by the funding transfer.
         AccountRuleInputV1 {
             privileges: AccountPrivilegesV1::new(false, true, false),
@@ -242,8 +360,13 @@ fn account_profile() -> Vec<u8> {
             alias: AccountAliasInputV1::SelfRepresentative,
             data_length: u32::try_from(FUNDING_STATE_BYTES).expect("funding width"),
         },
-    ];
-    let operations = [
+    ]
+}
+
+/// Encode one `AccountProfileV1` over the family's declared register bank.
+fn account_profile(family: Family) -> Vec<u8> {
+    let rules = activation_rules();
+    let mut operations = vec![
         AccountOperationInputV1::RequireKey {
             account: ACTIVATION_ROOT_ACCOUNT_V2,
             expected: ACTIVATION_ROOT_IDENTITY_V2,
@@ -252,25 +375,33 @@ fn account_profile() -> Vec<u8> {
             account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
             expected: ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
         },
-        AccountOperationInputV1::ProjectDataU64 {
-            account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
-            data_offset: u32::try_from(FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1)
-                .expect("rent quote offset"),
-            destination: FUNDING_RENT_SCALAR_REGISTER,
+    ];
+    // An EffectProgram has no arithmetic over account data -- it can only move a
+    // register's worth of lamports -- so a funded activation MUST project the
+    // live FundingState's remaining Rent quote into a scalar here.
+    operations.push(AccountOperationInputV1::ProjectDataU64 {
+        account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
+        data_offset: u32::try_from(FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1)
+            .expect("rent quote offset"),
+        destination: match family {
+            Family::Fixture => FUNDING_RENT_SCALAR_REGISTER,
+            Family::General => GENERAL_FUNDING_RENT_SCALAR,
         },
+    });
+    if family == Family::Fixture {
         // Observe vacant-root dust for the late effect check.
-        AccountOperationInputV1::ProjectLamports {
+        operations.push(AccountOperationInputV1::ProjectLamports {
             account: ACTIVATION_ROOT_ACCOUNT_V2,
             destination: ROOT_PRESTATE_SCALAR_REGISTER,
-        },
-    ];
+        });
+    }
     let width = account_profile_v1_bytes(rules.len(), operations.len()).expect("profile width");
     encoded(width, |scratch, output| {
         encode_account_profile_v1_atomic(
             &rules,
             &operations,
             RegisterGeometryV1 {
-                scalars: SCALAR_COUNT,
+                scalars: family.scalars(),
                 identities: IDENTITY_COUNT,
             },
             scratch,
@@ -279,17 +410,35 @@ fn account_profile() -> Vec<u8> {
     })
 }
 
-fn transition_program() -> Vec<u8> {
-    // loadConst scalar[0] = activation action. Other projected registers survive.
-    let instructions = [TransitionInstructionV2::load_const(
-        ACTIVATION_ACTION_SCALAR_V2,
-        CoreEffectActionV1::ActivateCapability as u64,
-    )];
+/// Encode one transition `ProgramV2` over the family's declared register bank.
+fn transition_program(family: Family) -> Vec<u8> {
+    let instructions = match family {
+        // loadConst scalar[0] = activation action. Other projected registers survive.
+        Family::Fixture => vec![TransitionInstructionV2::load_const(
+            ACTIVATION_ACTION_SCALAR_V2,
+            CoreEffectActionV1::ActivateCapability as u64,
+        )],
+        // The three words a `GeneralRootV2` tail needs that are neither a
+        // register the seam seeds nor a value any account carries: the magic,
+        // the active header word, and the initial revision. Market, config and
+        // generation are already common registers, so they are not loaded here.
+        Family::General => vec![
+            TransitionInstructionV2::load_const(GENERAL_MAGIC_SCALAR, GENERAL_ROOT_MAGIC_WORD_V2),
+            TransitionInstructionV2::load_const(
+                GENERAL_HEADER_WORD_SCALAR,
+                GENERAL_ROOT_ACTIVE_HEADER_WORD_V2,
+            ),
+            TransitionInstructionV2::load_const(
+                GENERAL_REVISION_SCALAR,
+                GENERAL_ROOT_INITIAL_REVISION_V2,
+            ),
+        ],
+    };
     let width = transition_program_v2_bytes(instructions.len()).expect("transition width");
     encoded(width, |scratch, output| {
         encode_transition_program_v2_atomic(
             TransitionRegisterGeometryV2 {
-                scalars: SCALAR_COUNT,
+                scalars: family.scalars(),
                 identities: IDENTITY_COUNT,
             },
             &instructions,
@@ -299,26 +448,72 @@ fn transition_program() -> Vec<u8> {
     })
 }
 
+/// Request writes that compose the family root tail, in tail order.
+///
+/// For General every offset and both constant scalars come from
+/// `dclutch-general-config-contract`'s published creation coordinates, and the
+/// Market, config and generation come from `activation_registers_v2`. Nothing
+/// about `GeneralRootV2`'s layout is restated here.
+fn tail_writes(family: Family) -> Vec<EffectInstructionV2> {
+    match family {
+        Family::Fixture => vec![
+            EffectInstructionV2::write_request_u64(
+                TAIL_GENERATION_OFFSET,
+                ACTIVATION_GENERATION_SCALAR_V2,
+            ),
+            EffectInstructionV2::write_request_identity(
+                TAIL_MARKET_OFFSET,
+                ACTIVATION_MARKET_IDENTITY_V2,
+            ),
+        ],
+        Family::General => vec![
+            EffectInstructionV2::write_request_u64(
+                tail_offset(GENERAL_ROOT_MAGIC_OFFSET_V2),
+                GENERAL_MAGIC_SCALAR,
+            ),
+            EffectInstructionV2::write_request_u64(
+                tail_offset(GENERAL_ROOT_HEADER_WORD_OFFSET_V2),
+                GENERAL_HEADER_WORD_SCALAR,
+            ),
+            EffectInstructionV2::write_request_identity(
+                tail_offset(GENERAL_ROOT_MARKET_OFFSET_V2),
+                ACTIVATION_MARKET_IDENTITY_V2,
+            ),
+            EffectInstructionV2::write_request_identity(
+                tail_offset(GENERAL_ROOT_CONFIG_ID_OFFSET_V2),
+                ACTIVATION_CONFIG_IDENTITY_V2,
+            ),
+            EffectInstructionV2::write_request_u64(
+                tail_offset(GENERAL_ROOT_GENERATION_OFFSET_V2),
+                ACTIVATION_GENERATION_SCALAR_V2,
+            ),
+            EffectInstructionV2::write_request_u64(
+                tail_offset(GENERAL_ROOT_REVISION_OFFSET_V2),
+                GENERAL_REVISION_SCALAR,
+            ),
+        ],
+    }
+}
+
+fn tail_offset(offset: usize) -> u32 {
+    u32::try_from(offset).expect("tail offset")
+}
+
 fn effect_program(campaign: Campaign) -> Vec<u8> {
-    // Instruction 0 is always the funding transfer. The two request writes that
+    let family = campaign.family();
+    // Instruction 0 is always the funding transfer. The request writes that
     // compose the family root tail follow it, except in `UnwrittenTail`. The late
     // requirement, when present, is last so it runs after the transfer.
     let mut instructions = vec![EffectInstructionV2::transfer_lamports(
         ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
         ACTIVATION_ROOT_ACCOUNT_V2,
-        FUNDING_RENT_SCALAR_REGISTER,
+        match family {
+            Family::Fixture => FUNDING_RENT_SCALAR_REGISTER,
+            Family::General => GENERAL_FUNDING_RENT_SCALAR,
+        },
     )];
     if !matches!(campaign, Campaign::UnwrittenTail) {
-        // Tail[0..8] = the projected Market generation.
-        instructions.push(EffectInstructionV2::write_request_u64(
-            TAIL_GENERATION_OFFSET,
-            ACTIVATION_GENERATION_SCALAR_V2,
-        ));
-        // Tail[8..40] = the projected Market address.
-        instructions.push(EffectInstructionV2::write_request_identity(
-            TAIL_MARKET_OFFSET,
-            ACTIVATION_MARKET_IDENTITY_V2,
-        ));
+        instructions.extend(tail_writes(family));
     }
     if matches!(campaign, Campaign::LateEffectRefusal) {
         // After the transfer, root lamports cannot still equal prestate scalar[7].
@@ -328,15 +523,15 @@ fn effect_program(campaign: Campaign) -> Vec<u8> {
         ));
     }
     let request_bytes = match campaign {
-        Campaign::MismatchedTailWidth => ROOT_TAIL_BYTES + 8,
-        _ => ROOT_TAIL_BYTES,
+        Campaign::MismatchedTailWidth => family.root_tail_bytes() + 8,
+        _ => family.root_tail_bytes(),
     };
     let width = effect_program_v2_bytes(instructions.len()).expect("effect width");
     encoded(width, |scratch, output| {
         encode_effect_program_v2_atomic(
             EffectGeometryV2 {
                 accounts: PROFILE_ACCOUNT_COUNT,
-                scalars: SCALAR_COUNT,
+                scalars: family.scalars(),
                 identities: IDENTITY_COUNT,
                 request_bytes: u16::try_from(request_bytes).expect("request width"),
             },
@@ -347,7 +542,9 @@ fn effect_program(campaign: Campaign) -> Vec<u8> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn descriptor(
+    family: Family,
     profile_id: [u8; 32],
     effect_id: [u8; 32],
     kind: ContentId,
@@ -356,7 +553,7 @@ fn descriptor(
     derivation: ContentId,
     config_schema: ContentId,
 ) -> Vec<u8> {
-    let transition = transition_program();
+    let transition = transition_program(family);
     let mut output = vec![0_u8; CAPABILITY_PROGRAM_HEADER_BYTES_V1 + transition.len()];
     put(&mut output, 0, &CAPABILITY_PROGRAM_MAGIC_V1);
     put_u16(&mut output, 8, 1);
@@ -395,7 +592,7 @@ fn descriptor(
     put_u32(
         &mut output,
         CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
-        u32::try_from(ROOT_TAIL_BYTES).expect("tail width"),
+        u32::try_from(family.root_tail_bytes()).expect("tail width"),
     );
     put(&mut output, CAPABILITY_PROGRAM_HEADER_BYTES_V1, &transition);
     CapabilityProgramV1::decode(&output).expect("descriptor");
@@ -531,17 +728,27 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     );
 
     let rent = Rent::default();
-    let root_rent = rent.minimum_balance(232 + ROOT_TAIL_BYTES);
+    let family = campaign.family();
+    let root_rent = rent.minimum_balance(232 + family.root_tail_bytes());
     let funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
-    let profile = account_profile();
+    let profile = account_profile(family);
     let effect = effect_program(campaign);
-    let kind = id(0x11);
+    // General's kind and root schema are its own published protocol facts, not
+    // fixture bytes: `require_entry` in `root_v3.rs` refuses a manifest entry
+    // that names anything else, so a General campaign that invented them could
+    // not be checked against General's own activation function.
+    let (kind, root_schema) = match family {
+        Family::Fixture => (id(0x11), id(0x13)),
+        Family::General => (
+            ContentId::new(GENERAL_CAPABILITY_KIND_ID_V1).expect("General kind"),
+            ContentId::new(GENERAL_ROOT_SCHEMA_ID_V2).expect("General root schema"),
+        ),
+    };
     let capacity = id(0x12);
-    let root_schema = id(0x13);
     let derivation = id(0x14);
     let config_schema = id(0x15);
-    let config = vec![0x61; 32];
     let descriptor = descriptor(
+        family,
         hash(&profile).to_bytes(),
         hash(&effect).to_bytes(),
         kind,
@@ -559,6 +766,16 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     let release_id = match &program_set_bytes {
         Some(bytes) => ContentId::new(hash(bytes).to_bytes()).expect("release ID"),
         None => descriptor_id,
+    };
+    // The config record is real for General, because the root's tail carries its
+    // identity and `activate_general_owned_v3` decodes it. It names the release
+    // it is activated under, which is why it is built after the set identity.
+    let (config, general_config) = match family {
+        Family::Fixture => (vec![0x61; 32], None),
+        Family::General => {
+            let config = general_config(capacity.to_bytes(), release_id.to_bytes());
+            (config.to_bytes().to_vec(), Some(config))
+        }
     };
     let config_id = ContentId::new(hash(&config).to_bytes()).expect("config ID");
     let amounts = FundingAmountsV1::new(
@@ -721,7 +938,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         manifest_raw,
         REGISTRY_PROGRAM_ID,
         rent.minimum_balance(manifest.len()),
-        manifest,
+        manifest.clone(),
     );
 
     let mut role_request = selection.to_bytes().to_vec();
@@ -813,6 +1030,14 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             market,
             root_rent,
             funding_rent,
+            family,
+            root_tail_bytes: family.root_tail_bytes(),
+            config_id,
+            general_config,
+            manifest,
+            manifest_id,
+            funding_prestate: funding_state,
+            funding_prestate_lamports: funding_rent + root_rent - ROOT_INITIAL_DUST,
         },
     )
 }
@@ -869,7 +1094,13 @@ fn refusal_code(error: &BanksClientError) -> Option<u32> {
 }
 
 /// Submit one campaign and require the exact created root and funding poststate.
-async fn assert_activation_succeeds(context: &mut ProgramTestContext, fixture: &Fixture) {
+///
+/// Returns the created family tail and the FundingState poststate, which the
+/// General campaign checks further against General's own activation function.
+async fn assert_activation_succeeds(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> (Vec<u8>, FundingStateV1) {
     submit(context, fixture.instruction.clone())
         .await
         .expect("activation succeeds");
@@ -880,12 +1111,28 @@ async fn assert_activation_succeeds(context: &mut ProgramTestContext, fixture: &
     let descriptor = CapabilityProgramV1::decode(&descriptor_account.data).expect("descriptor");
     let decoded = CapabilityRootAccountV1::decode(&root.data, descriptor).expect("root account");
     assert_eq!(decoded.header().market(), fixture.market.to_bytes());
+    assert_eq!(decoded.state().len(), fixture.root_tail_bytes);
     // The family tail is the effect program's projected request buffer, exactly.
     // Before this was so, the seam wrote `vec![0; root_state_bytes]` and no family
     // root -- General's or Direct's -- could be decoded out of what it created.
-    let mut expected_tail = vec![0_u8; ROOT_TAIL_BYTES];
-    put(&mut expected_tail, 0, &GENERATION.to_le_bytes());
-    put(&mut expected_tail, 8, &fixture.market.to_bytes());
+    let expected_tail = match fixture.family {
+        Family::Fixture => {
+            let mut tail = vec![0_u8; ROOT_TAIL_BYTES];
+            put(&mut tail, 0, &GENERATION.to_le_bytes());
+            put(&mut tail, 8, &fixture.market.to_bytes());
+            tail
+        }
+        // General's own oracle, from the type that owns the layout. Whatever the
+        // artifacts projected has to equal this or the capability the seam
+        // created is one no General action can authenticate.
+        Family::General => general_root_creation_tail_v2(
+            fixture.market.to_bytes(),
+            fixture.config_id.to_bytes(),
+            GENERATION,
+        )
+        .expect("General creation tail")
+        .to_vec(),
+    };
     assert_eq!(decoded.state(), expected_tail.as_slice());
     let funding = account(context, fixture.funding).await;
     assert_eq!(funding.lamports, fixture.funding_rent);
@@ -893,6 +1140,7 @@ async fn assert_activation_succeeds(context: &mut ProgramTestContext, fixture: &
     assert_eq!(funding.status(), FundingStatus::Active);
     assert!(funding.activation_slot() > 0);
     assert_eq!(funding.remaining().rent().amount(), 0);
+    (decoded.state().to_vec(), funding)
 }
 
 #[tokio::test]
@@ -900,6 +1148,66 @@ async fn common_outer_activates_root_and_funding_commit_last() {
     let (test, fixture) = build_fixture(Campaign::Success);
     let mut context = test.start_with_context().await;
     assert_activation_succeeds(&mut context, &fixture).await;
+}
+
+/// General's three activation artifacts create a real `GeneralRootV2`.
+///
+/// This is the first composite root in the tree whose family tail a family can
+/// actually decode. The three artifacts are authored against published
+/// coordinates only -- `activation_registers_v2` for the seam's registers,
+/// `GENERAL_ROOT_*_OFFSET_V2` plus the two constant words for the tail, and
+/// `FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1` for the Rent quote -- so no
+/// General layout is restated in an artifact author.
+///
+/// The three claims, in strengthening order: the projected tail is
+/// `general_root_creation_tail_v2`; `GeneralRootV2::decode` accepts it and it
+/// equals `GeneralRootV2::active`; and General's own
+/// `activate_general_owned_v3`, run over the same manifest, config, funding and
+/// slot the chain used, agrees with the interpreted artifacts byte for byte on
+/// BOTH the root tail and the FundingState poststate. That last one is what
+/// makes this an activation of General rather than a coincidence of widths: two
+/// independent authorities -- three data artifacts run by a family-neutral seam,
+/// and a Rust function that knows what a General root is -- produce the same
+/// hundred and twenty-eight bytes.
+#[tokio::test]
+async fn general_activation_artifacts_create_a_real_general_root() {
+    let (test, fixture) = build_fixture(Campaign::General);
+    let mut context = test.start_with_context().await;
+    let (tail, funding_after) = assert_activation_succeeds(&mut context, &fixture).await;
+
+    let market = fixture.market.to_bytes();
+    let config_id = fixture.config_id.to_bytes();
+    let root = GeneralRootV2::decode(&tail).expect("General root decodes");
+    assert_eq!(
+        root,
+        GeneralRootV2::active(market, config_id, GENERATION).expect("active root")
+    );
+
+    let config = fixture.general_config.expect("General config");
+    let manifest = CapabilityManifestV1::decode(&fixture.manifest).expect("manifest");
+    let custody = FundingCustodyObservationV1::native_only(
+        fixture.funding_prestate_lamports,
+        fixture.funding_rent,
+    )
+    .expect("funding custody");
+    let activation = activate_general_owned_v3(
+        market,
+        GENERATION,
+        fixture.manifest_id,
+        manifest,
+        0,
+        fixture.config_id,
+        config,
+        fixture.funding_prestate,
+        custody,
+        funding_after.activation_slot(),
+        fixture.root_rent - ROOT_INITIAL_DUST,
+        ROOT_INITIAL_DUST,
+        None,
+    )
+    .expect("General owned activation");
+    assert_eq!(activation.root_state().to_bytes().as_slice(), tail.as_slice());
+    assert_eq!(activation.funding_after(), funding_after);
 }
 
 /// A `CapabilityProgramSetV2` at `capability_release` activates the same root.
@@ -1042,8 +1350,14 @@ fn the_public_encoders_reproduce_the_prior_artifact_bytes() {
         0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00,
     ];
-    assert_eq!(account_profile().as_slice(), PROFILE.as_slice());
-    assert_eq!(transition_program().as_slice(), TRANSITION.as_slice());
+    assert_eq!(
+        account_profile(Family::Fixture).as_slice(),
+        PROFILE.as_slice()
+    );
+    assert_eq!(
+        transition_program(Family::Fixture).as_slice(),
+        TRANSITION.as_slice()
+    );
     assert_eq!(
         effect_program(Campaign::Success).as_slice(),
         EFFECT.as_slice()
