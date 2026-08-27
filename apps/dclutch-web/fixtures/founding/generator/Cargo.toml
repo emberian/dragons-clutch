@@ -1,0 +1,19 @@
+[package]
+name = "dclutch-web-founding-vector-generator"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Emits the browser's DCLTGMF1 golden vectors from the first-party Rust encoders"
+
+# Deliberately NOT a workspace member. It is a one-shot emitter run by hand, and
+# folding it into the workspace would make every `cargo` invocation in the tree
+# carry a fixture generator.
+[workspace]
+
+[dependencies]
+dclutch-market-core-codec = { path = "../../../../../crates/dclutch-market-core-codec" }
+
+[[bin]]
+name = "dclutch-web-founding-vector-generator"
+path = "src/main.rs"

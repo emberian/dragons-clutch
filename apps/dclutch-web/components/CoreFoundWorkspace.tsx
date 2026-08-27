@@ -11,7 +11,7 @@ type AddressField = Exclude<keyof CoreFoundInputV2, 'generation'>;
 type AddressValues = Record<AddressField, string>;
 type BuildState =
   | Readonly<{ kind: 'idle' | 'loading' | 'error'; message: string }>
-  | Readonly<{ kind: 'ready'; plan: CoreFoundPlanV2; rentBase64: string; foundBase64: string }>;
+  | Readonly<{ kind: 'ready'; plan: CoreFoundPlanV2; rentBase64: string | null; foundBase64: string | null }>;
 
 const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string }>> = Object.freeze([
   { field: 'payer', label: 'Payer' },
@@ -81,7 +81,7 @@ export default function CoreFoundWorkspace() {
         ...addresses,
         generation: canonicalU64(generation),
       });
-      setState({ kind: 'ready', plan, rentBase64: encodeBase64(plan.rentCreateWireBytes), foundBase64: encodeBase64(plan.wireBytes) });
+      setState({ kind: 'ready', plan, rentBase64: plan.rentCreateWireBytes === null ? null : encodeBase64(plan.rentCreateWireBytes), foundBase64: plan.wireBytes === null ? null : encodeBase64(plan.wireBytes) });
     } catch (error) {
       setState({ kind: 'error', message: `Refused: ${failure(error)}` });
     }
@@ -110,12 +110,25 @@ export default function CoreFoundWorkspace() {
     {ready === null ? <section className="direct-card found-empty"><div className="radar"><span /></div><div><p className="eyebrow">No inferred authority</p><h2>Construction stops at the first broken join.</h2><p>Missing records, stale ELF bytes, mutable infrastructure, same-width Product substitution, account aliases, insufficient rent, and packet overflow are refusals—not warnings. No signing or submission occurs in this UI.</p></div></section> : <>
       <section className="direct-card found-result">
         <header className="direct-card-heading"><span>02</span><div><h2>Two unsigned transactions ready</h2><p>Neither has been signed, funded, simulated, or submitted. The payer is the sole signer; lifecycle Create must confirm before Found.</p></div></header>
-        <div className="found-verdict"><span>{ready.plan.infrastructureRecognition.kind}</span><strong>{ready.plan.outcomeCount.toLocaleString()} outcomes · Rent {ready.plan.rentCreateWireBytes.length} / Found {ready.plan.wireBytes.length} bytes</strong><p>An internally consistent release is not an official dClutch release unless it matches a separately supplied checked manifest.</p></div>
+        <div className="found-verdict"><span>{ready.plan.infrastructureRecognition.kind}</span><strong>{ready.plan.outcomeCount.toLocaleString()} outcomes · Rent {ready.plan.rentCreateWireBytes === null ? 'already created' : `${ready.plan.rentCreateWireBytes.length} bytes`} / Found {ready.plan.wireBytes === null ? 'unroutable' : `${ready.plan.wireBytes.length} bytes`}</strong><p>An internally consistent release is not an official dClutch release unless it matches a separately supplied checked manifest.</p></div>
         <dl className="found-facts"><div><dt>Derived Market</dt><dd>{ready.plan.market}</dd></div><div><dt>Lifecycle RentCredit</dt><dd>{ready.plan.rentCredit}</dd></div><div><dt>Product identity</dt><dd>{ready.plan.productId}</dd></div><div><dt>Product record digest</dt><dd>{ready.plan.productRecordDigest}</dd></div><div><dt>Execution release set</dt><dd>{ready.plan.executionReleaseSetId}</dd></div><div><dt>Infrastructure profile</dt><dd>{ready.plan.infrastructureProfile}</dd></div><div><dt>Core / Registry / Rent</dt><dd>{compact(ready.plan.coreProgram)} · {compact(ready.plan.registryProgram)} · {compact(ready.plan.rentProgram)}</dd></div><div><dt>Rent debit</dt><dd>{ready.plan.rentCreditRentDebit} credit + {ready.plan.marketRentTopUp} Market lamports</dd></div><div><dt>Blockhash validity</dt><dd>through block height {ready.plan.lastValidBlockHeight}</dd></div></dl>
-        <label><span>1 · unsigned lifecycle RentCredit Create · base64</span><textarea className="found-packet" readOnly value={ready.rentBase64} /></label>
-        <div className="found-export"><a download={`dclutch-rent-create-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.rentBase64}`}>Download Rent Create packet</a><span>Confirm this packet before Found.</span></div>
-        <label><span>2 · unsigned Core Found · base64</span><textarea className="found-packet" readOnly value={ready.foundBase64} /></label>
-        <div className="found-export"><a download={`dclutch-found-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.foundBase64}`}>Download Found packet</a><span>No signing or submission occurs in this UI.</span></div>
+        {ready.rentBase64 === null
+          ? <p className="direct-refusal">The Market-scoped lifecycle RentCredit already exists at {ready.plan.rentCredit} for this generation, so there is nothing to create. Found31 names it as a precondition.</p>
+          : <>
+              <label><span>1 · unsigned lifecycle RentCredit Create · base64</span><textarea className="found-packet" readOnly value={ready.rentBase64} /></label>
+              <div className="found-export"><a download={`dclutch-rent-create-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.rentBase64}`}>Download Rent Create packet</a><span>Confirm this packet before Found.</span></div>
+            </>}
+        {ready.foundBase64 === null
+          ? <div className="direct-refusal">
+              <strong>Found31 is not downloadable from this route.</strong> {ready.plan.foundRefusal} Its {ready.plan.routableAddresses.length} routable
+              addresses are derived and available; building the table and submitting through a wallet is what the
+              <Link href="/create"> create wizard</Link> does. This route emits unsigned packets only, and an unsigned
+              packet that cannot be assembled is better said than silently truncated.
+            </div>
+          : <>
+              <label><span>2 · unsigned Core Found · base64</span><textarea className="found-packet" readOnly value={ready.foundBase64} /></label>
+              <div className="found-export"><a download={`dclutch-found-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.foundBase64}`}>Download Found packet</a><span>No signing or submission occurs in this UI.</span></div>
+            </>}
       </section>
 
       <section className="direct-card found-accounts">
