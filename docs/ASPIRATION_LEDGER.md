@@ -1019,3 +1019,1553 @@ Everything else is checkable.
 
 *The ledger is honest. It just outran its own index — and the index was never
 the founding.*
+
+---
+
+# GITSCAN-2 — the pre-successor commit sweep, 2026-08-27
+
+Status: an addendum to the audit above, answering the one question it named and
+did not run. `WAVE.md:169`'s GIT-SCAN swept gen-3's 1,509 commits. **M-13** says
+Dragons-Clutch's history "ha[s] never been swept by anything." This is that
+sweep: every pre-successor commit message read for a **named-but-deferred
+claim**, and each distinct claim verdicted against the live tree.
+
+Verdicts here are **ACTIONED** (the successor carries it — cited),
+**OBSOLETE** (an architecture decision made it meaningless — the decision
+cited), or **STILL OPEN** (the intention transfers and nothing carries it).
+Gen-1's systems are dead; the test is never whether the *code* survives, only
+whether the **intention** does. New rows are numbered `G-*` so they cannot
+collide with the `M-*`/`D-*` above.
+
+**Written under the standing rulings at the head of this file**, which landed
+after ARCH-EOL and while this sweep was running:
+
+- *"dark-FHE is NOT a near/medium-term ambition… its Tier-0 rows are
+  DROPPED-BY-DECISION for this horizon."* Everything this sweep found about the
+  confidential-energy programme is therefore recorded as **provenance for a
+  parked row** — where it was written down, and what the next step was if the
+  horizon ever changes — not as an open obligation. That is **C-2** and **G-6**.
+- *"The monolith-vs-split benchmark is CLOSED — the five-role partition stands,
+  no benchmark owed."* So **§C.1** locates M-14's missing originals as a
+  provenance repair to a **closed** row. What survives it is the *class*: 42
+  other never-run gates, which the ruling does not reach.
+- *"Weigh this ledger as evidence, not obligation: a mention is not a
+  commitment."* Taken literally throughout. §H is what this evidence would
+  support if someone wanted it, not a queue. Several rows below are recorded
+  precisely so that a future *"we never wrote that down"* is answerable, and for
+  no other purpose.
+
+## The corrected arithmetic
+
+`M-13` and this addendum's charter both quote **5,106** unswept commits. That
+number is `git -C ~/dev/dragons-clutch rev-list --all --count`, and it already
+contains the grafted dclutch subtree. The honest split:
+
+| | |
+|---|---|
+| dragons-clutch `rev-list --all` | 5,108 (5,106 at ARCH-EOL) |
+| — of which the grafted dclutch lineage (already swept as gen-3) | 1,604 |
+| **Never-swept pre-successor commits** | **3,504** |
+| — reachable from `main` | 1,974 |
+| — only on the ~364 `agent/*` branches | 1,530 |
+
+## What the corpus turned out to be
+
+| date | commits | with any body | body > 400 chars |
+|---|---:|---:|---:|
+| 08-18 → 08-22 (**gen-1**) | 764 | 474 | 244 |
+| 08-23 → 08-24 (**gen-2**) | 2,729 | **107** | **9** |
+| 08-25 → 08-27 (host-side) | 11 | 3 | 2 |
+
+**This reframes M-13, twice.** Gen-2 is 78% of the never-swept set and is
+*message-less*: 2,729 commits (1,568 unique non-merge subjects, the rest
+cross-merge noise across ~364 branches) carry 107 bodies between them. So
+**M-13's "5,106 unswept" is really 764 commits of dense prose and 1,568 subject
+lines**, and a commit sweep is close to the wrong instrument for the larger half.
+
+The second reframing is better news and is §D of this addendum. Gen-2 did not
+write its intentions in commits because it wrote them **in a machine-readable
+catalogue**: `~/dev/dragons-clutch/programs/solana-layout/src/registry.rs`, 3,649
+lines, **nine populated action enums carrying 129 named action coordinates, every
+one with a doc comment** — plus the 62-variant legacy `Intent` in the sibling
+`lib.rs`. Gen-2's intentions are not lost to **M-7**'s encrypted charters. They
+are enumerated, in one file, in the compost repository, and nobody has read them
+since 2026-08-24.
+
+Against gen-1's 764 the instrument works well, because gen-1 wrote in a
+declarative past tense that makes a deferral conspicuous: across all 3,504
+commits, `"will be"` occurs **zero** times and `"should"` on **three** lines.
+This project has never promised anything in a commit message. It *records* debt
+instead, in a vocabulary it invented: `owed`, `queued`, `flagged`, `residual`,
+`blocker`, `parked`, `out of scope`, `not measured`. That vocabulary is what was
+swept.
+
+## Counts
+
+| | |
+|---|---:|
+| Pre-successor commits read | **3,504** |
+| Commits carrying a debt token | 137 |
+| Commits carrying a deferral *claim*, read in full | 113 |
+| Secondary corpus: measurement/gate vocabulary, body > 300 chars | 85 |
+| Gen-1 planning/review documents opened because a commit pointed at them | ~40 |
+| Gen-2 branches enumerated | 361 |
+
+Three corpora, counted separately because they behave differently:
+
+| corpus | claims | ACTIONED | OBSOLETE | **STILL OPEN** |
+|---|---:|---:|---:|---:|
+| **§A/§B** — gen-1 commit prose and the documents its commits added | 118 | 44 | 33 | **41** |
+| **§C** — measurement-as-decision-gate commitments, both generations (the **M-14** class) | 78 | 11 *ran* | 24 | **43** |
+| **§D** — gen-2's named action coordinates in `registry.rs` | 129 | ~57 have successors | 62-variant `Intent` namespace, by `O-002`/ADR 0003 | **72, in 16 capability families** |
+
+| | |
+|---|---:|
+| New numbered rows (`G-*`) | 26 |
+| Never-run gates (`N-*`) | 22 |
+| Existing `M-*` rows sharpened | 24 |
+| **Corrections to the audit above** | **4** |
+
+Not one of the 43 never-run gates, and not one of the 72 vanished coordinates,
+was retired by a decision record.
+
+---
+
+# §A. Four corrections to this ledger
+
+These come first because three of them move the audit's own top recommendation.
+
+## C-1. Tier 0 is not "recorded nowhere." It was recorded, in gen-1, five days before this audit.
+
+The audit's headline finding is that the founding intentions "were never written
+down at all" (`:64`), and its second recommendation is to write them down
+because "everything else in this ledger is recoverable from artifacts and
+**these are recoverable only from `cv`**" (`:912`).
+
+**Verified: false.** Gen-1 committed a 137-line intent archaeology on the same
+corpus, from the same sessions, on 2026-08-22:
+
+> `~/dev/dragons-clutch/docs/reviews/PROJECT_INTENT_ARCHAEOLOGY_2026-08-22.md`
+> — commit `6b9fd37f`, *"This review reconstructs Dragon's Clutch from the human
+> messages that created and directed it. It is a requirements source."*
+
+Its method section is the same method (`cv index` / `cv search` / `cv show`),
+and it names the same primary sessions, `01a00a3d` (cwd `~/dev/joshibot`)
+included. It then lists **fourteen recovered product requirements**. Against the
+audit's Tier 0:
+
+| Audit row | Where gen-1 already wrote it |
+|---|---|
+| **M-4** the B-spline requirement | requirement 4: *"distributions over bounded outcomes rather than a **toy handful of fixed bands**… a compact smooth basis with exact partition-of-unity semantics"* |
+| **M-1** / **M-3 item 11** Clear/Shielded/Dark | requirement 8: *"**Design Clear, Shielded, and Dark modes as modalities of one relation**, while keeping the public Solana system independently useful. **Do not turn privacy research into an oppression tool.**"* |
+| **M-6** "no minimal demo" | requirement 12: *"The user repeatedly rejected 'minimal demo' or isolated-slice completion framing; a working bounded transition family is substrate, not the end state."* |
+| **M-6** "choose the weakest" | requirement 14: *"Prefer the least constraining and most general sound choice when several designs are viable."* |
+| **M-6** "audits are not work" | requirement 9: *"do not let an **evidence bureaucracy substitute for product capability** or honest runtime integration."* |
+| **M-3** the one-sentence thesis | *"compile objective state and path predicates into fully collateralized payoff bases, clear bounded portfolio programs through interchangeable checked venues, and settle proof-carrying evidence without an operator"* — the same sentence, and the doc calls it *"the most compact original thesis, written by the user."* |
+| **M-3 item 12** agent coordination surface | requirement 11 names *"increasingly capable machine traders"* as a first-class audience; §9 of its sibling review specifies the six artifacts (see **G-14**) |
+| **D-18** / `O-006` no DREGG branch | requirement 3: *"DREGG is a dogfood Realm, not required collateral or a hard-coded branch."* |
+
+And its closing verdict is a gen-1 statement of the audit's own Tier 1:
+
+> *"It did not finish the complete recovered product thesis. In particular, the
+> payoff compiler remains a research crate rather than a market-creation path;
+> **Clear/Shielded/Dark do not share a deployed relation**; capacity is one
+> fixed profile; **the current adapter is not actually collateral-program-
+> generic**; source identity is not production-pinned; and nothing is deployed.
+> 'Cycle-G capability-complete' must therefore be read as 'the bounded Cycle-G
+> capability matrix has no unimplemented transition,' not 'Dragon's Clutch is
+> complete.'"*
+
+Two siblings carry the rest:
+
+- `docs/reviews/INSTRUMENT_AND_MARKET_DESIGN_REVIEW_2026-08-22.md` (785 lines,
+  `ae09e06e`) — *"whether the instrument, market structure, and surrounding
+  product are worth having… It deliberately proposes an ambitious continuation
+  rather than a smaller 'shipping' subset."* §9 enumerates five sophisticated
+  extensions; §10 is titled **"Relationship to the original Dark energy
+  intent"**; §11 is **"Scar tissue: keep, replace, and reframe"** — gen-3's
+  `likely scar` vocabulary, one generation early.
+- `docs/reviews/SOPHISTICATION_GAP_2026-08-19.md` (`5ef1edfa`) — the two-move
+  strategy (**G-2**, **M-55**) and a four-line "Absent layers" inventory.
+
+**The correction changes the recommended action.** Recommendation 2 asks for an
+hour of `cv` archaeology that has already been done. The actual owed work is a
+**port**: three committed gen-1 documents did not cross the generation boundary
+on 2026-08-24, and nothing in `COMPOST.md`'s allowed-use rule (*"recover user
+intent and product requirements"*, `:10`) stopped them. **Copy them, do not
+re-derive them.**
+
+## C-2. M-1's absence sweep is wrong on the dragons-clutch half.
+
+M-1 states: *"`dark`, `FHE`, `shielded`, `Shielded`, `DrEX`, `zkML` — **zero
+occurrences** in `/Users/ember/dev/dclutch` outside `node_modules`. **Also zero
+in dragons-clutch's `docs/` and `research/`.**"*
+
+The dclutch half re-verifies. The dragons-clutch half does not:
+
+- `docs/SWARM_ROADMAP_2026-08-19.md:55` — a **"Confidential energy"** row in the
+  live-surface snapshot: *"Clear bounded optimum relation plus a real CPU TFHE
+  candidate predicate for feasibility and settlement conservation | Global
+  optimality, vFHE, private settlement, custody, and production remain absent."*
+- the same file `:278`, `:349`, `:386`, `:415`, and its §5 **"Confidential-energy
+  work"** lane (see **G-6**).
+- `docs/OPEN_QUESTIONS.md:151` — *"Commit/reveal, MPC, FHE, vFHE, or
+  proof-carrying confidential orders"*, filed under *"Explicit future research,
+  not V1 dependencies."*
+- `docs/SPECIALIZED_BATCH_RELATION.md:18` — the standing disclaimer that the
+  relation *"provides order confidentiality, front-running resistance, FHE, MPC,
+  a TEE, or a…"* [negated].
+- `docs/design/SUCCINCT_CLEARING_FEASIBILITY.md:105` — the Zama FHE-crate
+  patent-encumbrance analysis.
+
+**This changes the diagnosis, not the disposition.** Ember has since ruled
+dark-FHE out of the near/medium-term horizon and dropped M-1's Tier-0 rows by
+decision, so nothing here is owed. What is worth correcting is *why* it looked
+forgotten. The dark platform was not lost because nobody wrote it down; it was
+written down — a snapshot row, a research lane with a next gate, an anti-goal
+protecting the ordering, and a four-stage relation — and then it did not cross a
+subtree merge. Recorded here so that the park is a park over a **known** body of
+work rather than over a blank, and so that if the horizon ever changes, the next
+step is a lookup and not an archaeology (see **G-6**).
+
+## C-3. `3c0eb2ca`'s four workstreams are not "named in a subject line and nowhere else."
+
+M-13 cites `3c0eb2ca` *"Chart the next wave: maturation, sophistication,
+optimization, assurance"* as *"four workstreams named in a subject line and
+nowhere else."* The commit's body is indeed empty. Its **diff is an 85-line
+roadmap**: `docs/design/NEXT_WAVE_ROADMAP_2026-08-20.md`, four phases with 15
+numbered items, each naming the decision it assumes, plus a dependency
+paragraph. It was amended once more at `7150a012`.
+
+That roadmap is the single densest source of still-open gen-1 intent in this
+sweep — **G-3**, **G-9**, **G-13**, **N-13**, **N-15** and three sharpened `M-*`
+rows all come out of it.
+
+**This generalizes into the method note that matters most for the next sweep.**
+A full-text search of all 3,504 pre-successor commit messages for the words a
+gate is written with — `nonnegotiable`, `only after`, `acceptance condition`,
+`before we delete`, `monolith`, `split release set` — returns **zero hits**.
+Every one of the twenty-two never-run gates in §C is in a document that a commit
+*added* or *amended*, and several of the sharpest are in a commit whose body is
+empty. Commit-message sweeps are the wrong instrument for this project on their
+own: **in this repository the promise is in the diff.** A future GIT-SCAN should
+run `git log --diff-filter=A --name-only` over `docs/` and read what arrived,
+not only what was said about it.
+
+## C-4. M-16's `κ` has an older parent than the research doc.
+
+M-16 dates the capacity bound to `CHAIN_STATE_SOURCES_2026_08.md:1041`. Its
+gen-1 ancestor is a **P1 register row**, `docs/OPEN_QUESTIONS.md:94`:
+
+> *"Security tiers, **per-feed exposure limits**, and multi-source aggregation."*
+
+filed under *"P1: before accumulator implementation"* and never retired — the
+row carries no `Decided`/`Retired` marker, unlike its four siblings in the same
+list. So the Mango lesson has now survived **two** generations unactioned, not
+one, and it was a stated *precondition* in gen-1 rather than a provisional bound
+in a research annex. See also **G-8**.
+
+---
+
+# §B. STILL OPEN — new rows, ranked by transfer-worthiness
+
+Ranked by how much of the intention survives the death of the system that
+stated it. Ids are allocation order; the section is in rank order.
+
+**Read `N-1` in §C first.** The single highest-consequence open row this sweep
+found is a never-run gate rather than a lost intention — the fee base's promotion
+criteria never closed, and the successor ships the arm a delegated decision
+record named *eliminated*. It sits in §C with its siblings rather than here.
+
+`G-1` is deliberately first below and is deliberately *not* claimed as new: the
+`LB-SPLINE` lane found that gap independently this afternoon and wrote it up
+better. It is kept because the pre-successor history adds three things a
+gen-1-versus-gen-3 comparison cannot see.
+
+## G-1. The degree-≥2 price gate — already found and owned; what this sweep adds is that **gen-2 built it too, over integers**
+
+**Do not read this as a new finding.** The `LB-SPLINE` lane found the same gap
+independently while this sweep was running and documented it better than this
+addendum would have, in
+`docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md:74` — *"Degree ≥ 2
+arbitrage gate | gen-1: built (moment cone V1b)… | this lane: **absent** |
+**gen-1 ahead — the largest gap**"* — with the executable arbitrage written out
+(`3·1 − 4·e_j` at `p = S·e_j`, since interior degree-2 basis functions peak at
+`3/4`), the trigger stated as a precondition (*"it must be closed **before** a
+Market can select degree ≥ 2, not after"*), and the honesty that gen-1's own gate
+was **provably incomplete** on multi-span grids with a pinned false acceptance.
+That row is owned. This entry exists only to add three things it could not know,
+because they are in the pre-successor history rather than in gen-1's tree.
+
+**1. Gen-2 built the gate as well, independently, and over integers.**
+`clutch-price-measure` (8,843 Rust lines) carries a Bernstein-moment continuous
+checker **and a quantized checker over bounded integer atom mixtures** — a
+certificate that an admitted price vector comes from a nonnegative measure —
+with the branch `general-v2-action10-closed-tuple` requiring *"quantized
+admission before General ranking work"*, plus
+`quantized-atom-mixture-certificate` and `exact-quantized-atom-solver`.
+**Verified: `atom mixture`, `quantized admission`, `price admission` — zero in
+the successor.**
+
+This bears directly on the scorecard's stated dilemma — *"port a
+sound-but-incomplete gate, or do the per-span Hausdorff witness generation one
+designed and never built"*. **There is a third option and nobody has looked at
+it**, and it is the one already written for exact integers, which is the posture
+`LiabilityBasisV2` is in. Whether the quantized checker is sound, complete, or
+cheap is not something this sweep can say; that it exists, and that no one
+comparing gen-1 to gen-3 would ever have seen it, is.
+
+**2. Gen-1's wire half is not in the scorecard's table.** The comparison covers
+the gate as mathematics. The pre-successor history also carries its *binding*:
+`EpochAccount` gained `basis_degree: u8` at `cc14bcce`, copied from
+`TermsAccount` at `InitEpoch` under `binds_terms`, with `clear_walk` refusing
+`UnsupportedBasisDegree` rather than falling back — *"an ungated clearing above
+degree one is precisely what the gate exists to stop, so an unreadable degree is
+a refusal, not a shrug."* The account grew 328 → 329 bytes and the byte's offset,
+the three shifted fields, and the two Direct record widths that carry it are all
+recorded. **Verified: `basis_degree`, `BasisDegree` — zero in the successor.**
+If the gate is ever ported, that is the layout half of it, already costed.
+
+**3. The pattern has now happened three times, not twice.** The scorecard says
+gen-1 shipped the claim plane ahead of the price plane and this lane did the same.
+Gen-1 named the hole first at `5847a3f9`, 2026-08-21, and the sentence is worth
+keeping because it names the mechanism exactly:
+
+> The clearing sees a basis only through partition of unity and **no gate in
+> front of the relation restricts a market's degree, so nothing distinguishes a
+> simplex point from a moment vector.** The moment-body admission test is open
+> and not built.
+
+That is a description of `LiabilityBasisV2.Basis` today, written eleven months
+of project-time before it existed. Its structure is `exactWidth`,
+`payoutBounded`, `partitionUnity` — nonnegativity, boundedness, partition of
+unity, no degree — which is precisely *"a basis only through partition of
+unity"*.
+
+**One thing this sweep does contradict.** `O-013` is repeatedly discussed, here
+and in **M-4**, as the decision that substituted for the B-spline requirement.
+On the price side it substituted for nothing: it is a decision about a *basis*,
+and the gate is a *price-admission* rule. Two generations built the gate and no
+decision in any generation retired it. The scorecard's trigger — write it down
+now rather than rediscover it — is the right closure, and `O-013` is not where
+it goes.
+
+## G-2. The compute ceiling is gen-1's *scaling* verdict, and its named answer is in no queue
+
+`5ef1edfa` (2026-08-19) is the gen-1 assessment that set direction:
+
+> *"…records the compute ceiling as an architectural verdict rather than a
+> tuning problem… and sets **two strategic moves**: V3 to make the spline claims
+> tradeable, then succinct verification to answer the compute wall by joining
+> the consumerless breadstuffs STARK stack."*
+
+The doc corrects itself honestly the same day (§3, *"The verdict this section
+originally drew was wrong… the cost was a software SHA-256"*), and the surviving
+claim is narrower and still load-bearing:
+
+> **What survives is the scaling argument only: growth in book width still goes
+> through staging (V3) or succinct verification — a design preference now, not a
+> measured wall.**
+
+> **Move 2 — answer the compute wall with succinct verification.** The reason V2
+> died is that the chain must re-execute a clearing to trust it… **Joining them
+> is the single highest-leverage architectural move available.**
+
+Both moves are open in gen-3. Move 1 is **M-4**/`LB-SPLINE`, opened today. Move
+2 is **M-55**, in no queue — and **M-24**, the fourteenth wall, is a book-width
+CU problem being worked as a record-layout problem. This does not say the layout
+work is wrong; it says gen-1 wrote down, and gen-3 has not re-decided, that the
+width axis is the one that staging or succinctness answers and shaving does not.
+
+Sharpens **M-24** and **M-55**: the Groth16 scout was not a stray idea, it was
+**move 2 of exactly two**, and move 1 is now in flight without it.
+
+## G-3. Per-order cancellation: parked in gen-1 behind a trigger that fired, and never lifted
+
+`docs/design/NEXT_WAVE_ROADMAP_2026-08-20.md:73`, Phase S item 5:
+
+> **Per-order cancellation / continuous-claims scouting** stays parked **until
+> the above land** (design complection deferred per the directive).
+
+"The above" is Phase S items 1–4. **All four landed inside gen-1**:
+PartialFillLedger retired at `47c7a77a`, VirtualPot at `cd54bb72`,
+VirtualMergeCredit at `41c231f6`, fee plumbing to the boundary at `525ec13f`,
+wider campaigns sealed at `df1d99e1`. The trigger fired on 2026-08-21 and the
+park was never lifted.
+
+Cancellation was already a *named product gap* three days earlier:
+
+> …the newly named product gap that **V4 has no per-order cancellation**: the
+> legacy CancelOrder epoch role admits only legacy lengths, so a V4 order can be
+> retired only by aborting the whole unfrozen Epoch. — `e43fbe8e`
+
+**Verified in gen-3:** Direct *does* carry cancellation —
+`DirectExecutionActionV3::CancelRegistered` and `::CancelThrough`, with a signed
+`CancelThroughV2` intent. `dclutch-general-codec::Action` carries **seven**
+verbs and none of them cancels: `Consider`, `Freeze`, `InitializeSettlement`,
+`Collect`, `Materialize`, `Distribute`, `Close`.
+
+**Updated the same afternoon.** `85c279ec` landed ADR 0009 and rewrote M-12
+above: the collection half now has an ownership ruling and three named capability
+actions — **`OpenBatch`, `PlaceOrder`, `CloseBatch`** — and M-12's own closing
+list names *"cancellation"* among five items still open. So this row is no longer
+unnoticed, and what it adds is provenance that argues for its placement: **the
+three-route set has no cancel in it**, and cancellation is not a nice-to-have
+that follows placement. It was a named product gap in gen-1 (`e43fbe8e`), a
+separately parked roadmap item whose trigger fired (`N-13`), a live verb in
+gen-2's catalogue (`GeneralV2Action::CancelOrder`, tag 5, sitting between
+`PlaceOrder` at 4 and `FreezeEpoch` at 6), and it is *implemented today in
+Direct*. Four generations of evidence say it belongs in the same artifact
+regeneration as the other three, not after it — which matters because ADR 0009's
+own cost line is *"one batched identity regeneration"*, and a fourth tag is
+cheapest inside that batch.
+
+So the honest verdict is **half ACTIONED, half STILL OPEN**, and the open half
+is the batch venue. **M-12** names `CancelOrder` inside the vanished front half
+of gen-2's 25 verbs and frames the whole loss as *collection*. This sharpens it:
+cancellation is a separate, separately-named, separately-parked product
+requirement, it was flagged in gen-1 *and* built in gen-2 *and* dropped in
+gen-3, and Direct's implementation is the proof that the intention transfers —
+it is the same protocol, one venue over.
+
+`continuous-claims` — the other half of that parked item — is **zero
+occurrences** in gen-3 and has no successor at all.
+
+## G-4. The dependency/licence/SBOM review: gen-1 had a green gate and three families owed human eyes; gen-3 has no gate at all
+
+Gen-1 ran a real SBOM:
+
+> 36 manifests, 2,129 unique rows, 0 failures, status=PASS, and the committed
+> catalog is byte-equal to a fresh run… **The open release item is unchanged:
+> the previously flagged MPL-2.0 family, CDLA roots, and one license-file-only
+> crate still want human eyes.** — `31ede419`, 2026-08-22
+
+and a second, narrower human item:
+
+> One vendored crate (solana-define-syscall 5.1.0, verbatim Apache-2.0,
+> checksummed in vendor/PROVENANCE.md) **flagged for user provenance review**.
+> — `d936eaa6`
+
+Both sit under a P3 register row, `docs/OPEN_QUESTIONS.md:141`, *"before public
+release"*: **"Dependency, license, AGPL source-offer, and SBOM review."**
+
+**Verified in gen-3:** `SBOM` — **zero occurrences**. No `cargo-deny`, no
+`cargo-about`, no licence job; `tools/` holds ten entries and none of them is a
+dependency gate. `apps/dclutch-web/package-lock.json` now carries an MPL-2.0
+dependency that no first-party process has ever looked at, and the workspace is
+AGPL-3.0-or-later, whose **source-offer obligation attaches on distribution** —
+which is what publishing the repo and serving the frontend both are.
+
+**This is the only row in this sweep that is a regression rather than a
+carry-over.** Gen-1 had the instrument, ran it, and left three named items for a
+human. Gen-3 deleted the instrument and inherited the items without knowing it.
+The intention transfers completely and the surface it applies to is strictly
+larger (an npm tree gen-1 never had).
+
+## G-5. Upgrade posture — the one decision gen-1 explicitly deferred to ember, with no successor
+
+`docs/decisions/ADOPTED_2026-08-20.md` has a section with exactly one entry:
+
+> ## Deferred with the tension named
+> - **Reference-deployment upgrade posture**: the report recommended
+>   immutable-at-first-deployment; **ember's weakest-choice principle favors
+>   upgradeable-then-burn (burn is always available; un-burn never is)**.
+>   Deferred — mainnet is gated regardless, and the devnet posture is settled by
+>   item 5.
+
+and the register row it points at states the actual obligation
+(`docs/OPEN_QUESTIONS.md:51`):
+
+> Decide whether the reference deployment has a time-bounded audited beta
+> authority followed by irrevocable removal, or is immutable at first
+> deployment. **Source code must support either deployment without pretending
+> the former is the latter.**
+
+**Verified in gen-3:** `upgrade posture`, `upgrade governance`,
+`immutable-at-first` — **zero occurrences**. `upgrade_authority` appears in 65
+files as *runtime mechanics* (the checked-release pipeline), and ADR 0005
+discusses upgrade only as a thing that invalidates seals. There is no ratified
+posture and no record that one is owed.
+
+This belongs in the audit's **TIER 3** and is a sixth member of it: it is
+ember's, it was formally deferred rather than forgotten, it has a written
+recommendation *and* a written counter-recommendation in ember's own principle,
+and its second sentence is an **architectural** requirement that binds today —
+source that supports both postures is a design constraint, not a deployment-day
+choice. `D-2` gates mainnet; it does not answer this.
+
+## G-6. PARKED BY RULING — but the confidential-energy programme had a specified next gate, and it was not a backend
+
+**Disposition: DROPPED-BY-DECISION for this horizon**, per the ruling at the head
+of this file. Recorded as provenance only.
+
+**M-1** reports the dark platform as unstarted. Gen-1's `SWARM_ROADMAP` §5
+(`R5 — Close formal, confidential, and governance boundaries`) says otherwise —
+it is a three-step lane with step 1 claimed done:
+
+> **Confidential-energy work:**
+> - Keep encrypted feasibility, settlement conservation, and global optimality
+>   as **three separate predicates**.
+> - **Next build a fixed-topology end-to-end leakage and failure-recovery test
+>   plan**: malicious input, inclusion/non-equivocation, encrypted owner
+>   allocation, settlement commitment/note ledger, selective decryption, key
+>   rotation, abort/recovery, and proof/dispute.
+> - **Only then** compare vFHE/MPC/proof backends. More accelerator browsing or
+>   a universal encrypted VM is not the next gate.
+
+§7 *Attractive distractions* makes the ordering enforceable: *"another FHE
+backend or accelerator survey **before** the leakage/recovery plan"* is listed
+as a thing not to do. And §2 records step 1's artifact: *"a real CPU TFHE
+candidate predicate for feasibility and settlement conservation."*
+
+`INSTRUMENT_AND_MARKET_DESIGN_REVIEW` §10 then writes the relation down:
+
+```text
+private provider bids and operational constraints
+  -> specialized confidential optimization relation
+  -> efficient feasible plan and settlement quantities
+  -> bounded public disclosures and correctness certificate
+```
+
+> *That relation may include cost curves, ramp limits, outages, inventory,
+> commitment constraints, hedge books, or network constraints which providers do
+> not wish to reveal.*
+
+**Verified in gen-3:** zero, as M-1 says. The thing worth keeping across the park
+is that the next action was **known, cheap, and not a backend**: an
+eight-component leakage and failure-recovery test plan, with an explicit
+anti-goal against surveying backends first. M-1's *"steps 2, 3 and 4 never
+started"* is better read as *"step 2 has a written first task."* If the park ever
+lifts, that sentence is the whole handoff.
+
+## G-7. Candidate withholding, proposer bond, and best-submitted-versus-optimal — gen-3 ships the identical mechanism with the identical hole
+
+`docs/OPEN_QUESTIONS.md:125`, P2, *"before simplex-auction freeze"*:
+
+> Candidate replacement window, **proposer bond, withholding resistance**, and
+> the distinction between **best submitted and globally optimal**.
+
+> Candidate public score and whether small-book exact-rational or primal/dual
+> certificates can establish optimality for a restricted fragment.
+
+Gen-1 recovered the requirement in ember's own voice too
+(`PROJECT_INTENT_ARCHAEOLOGY` requirement 6): *"Keep price formation pluggable
+and permissionless. **Say 'best valid submitted candidate' unless a checked
+optimality certificate exists.**"*
+
+**The honesty half is ACTIONED, verbatim.** `dclutch-general-codec::Action`:
+`Freeze` = *"Close selection around the current **best valid submitted
+candidate**."* That phrase is the requirement, kept for three generations.
+
+**The mechanism half is STILL OPEN.** `Consider` = *"Submit an authenticated
+candidate for deterministic comparison"* — permissionless, no bond. `proposer`,
+`globally optimal`, `Dutch`, `pro-rata` — **zero occurrences** in gen-3;
+`withholding` occurs five times and every one is fee-withholding or byte-
+withholding, none is a solver refusing to submit.
+
+**And gen-1's answer is the sharpest part.** Gen-1 did not leave this at the
+register row — it wrote two ADRs about it, in `~/dev/dragons-clutch/docs/adr/`,
+and *adopted* a mitigation:
+
+> The successor uses individually funded reverse-linked nodes and a
+> **commit/reveal subdivision of `[F,S)`**; `[S,V)` verification and
+> deterministic best-valid-submitted selection are unchanged at the semantic
+> boundary. — ADR 0006, `:96`
+
+with its cost and its limit stated honestly in the same family:
+
+> commit/reveal adds one boundary and at least one transaction per candidate…
+> **Commit and reveal throughout the same interval.** Once one reveal is public,
+> **a later commit can copy it with a new reward destination.**
+> **Claim commit/reveal solves MEV.** It only blocks the simple reward-copy path
+> described above. — ADR 0008, `:249`, `:275`
+
+**Verified in gen-3:** `commit/reveal` — **zero occurrences**. Gen-3's General
+carries the two-window shape (`Consider` → `Freeze`) and not the subdivision, and
+no record says why. So a *ratified gen-1 ADR decision* did not cross the
+generation boundary, and the honest reward-copy analysis that came with it —
+which is real mechanism-design work, correctly scoped, with its own limits named
+— would have to be re-derived from scratch.
+
+A solver who computes the best candidate and withholds it, or submits a worse one
+it can profit from, faces no bond and no detection in either generation.
+Sharpens **M-50** (the permissionless work economy): gen-3 has prepaid
+`bounty_lamports` and no solver, and this row is *why* the solver half is hard —
+it was known to be an unanswered mechanism-design question, not an
+implementation task. And **§D.1 item 7**: gen-2 allocated the whole verb set —
+`ClaimCandidateBond`, `ClaimCandidateWork`, `ClaimSolver`, `ClaimEpochUnused`,
+`MarkWorkClosed` — every one of which is zero in the successor.
+
+## G-8. The collateral-genericity demonstration was specified as a two-instance proof and never ran
+
+`docs/OPEN_QUESTIONS.md:74` (Realm admission, retired-in-part 2026-08-20):
+
+> Still open and *not* covered by that item: pinning the exact Token-2022 program
+> artifact (register F5), and **the two-synthetic-Realm demonstration** below.
+> … **Demonstrate generic semantics with two synthetic Realms; DREGG must not
+> create a special branch.**
+
+Gen-1 then delivered its own verdict against it: *"**the current adapter is not
+actually collateral-program-generic**"* (`PROJECT_INTENT_ARCHAEOLOGY`), against
+recovered requirement 3, *"Make the system genuinely general."*
+
+**Verified in gen-3:** `two-synthetic`, `collateral-generic`, `generic
+collateral`, `second collateral` — **zero occurrences**. `O-006` forbids
+token-name branches, which is the *prohibition*; the **demonstration** — two
+independent collateral instances proving no branch exists — has no successor.
+`F-6` (token behavior profiles) is the nearest gen-3 row and the audit already
+verdicts it **MISSING** (`M-10`), noting the one lift happened *"as a hardcoded
+`Token2022BehaviorProfileV2` struct, not the versioned selectable profile record
+the frontier specified"* — which is exactly the failure the two-Realm demo
+exists to catch.
+
+This is a **never-run gate** as well as an open intention; it appears again as
+**N-10**.
+
+## G-9. Continuous integration: gen-1 named it, gen-3 has no workflows at all
+
+`NEXT_WAVE_ROADMAP` Phase M item 5:
+
+> **Housekeeping with teeth**: … **CI adoption (register F8 — the manifest gates
+> are the CI; wiring them into an Actions matrix is now cheap** and the Pages
+> workflow broke the no-workflows seal).
+
+**Verified:** `~/dev/dclutch/.github/workflows/` **does not exist**. Every gate
+in the successor — the gauntlet, the census, `genref --check`, the ABI byte
+comparisons, the six-verify sweep — runs only when a lane remembers to run it.
+The `GENREF` yield hours ago says so in its own words: *"GATE WIRING OPEN:
+genref --check is freestanding — wire into gauntlet census stage or CI at
+convergence."*
+
+The audit's finding **2** (*"the board has no route from 'named' to 'owned'"*)
+and its board `:8158` quote (*"it is the only generated web ABI with no `abi:*`
+wrapper script, so it is not in the six-verify sweep and **nothing notices**"*)
+are both instances of the same missing organ. Gen-1 named the organ and priced
+it as cheap.
+
+## G-10. The seven pre-filing gates
+
+`SWARM_ROADMAP` §5, *Governance/regulatory work*:
+
+> **Before any filing: fact lock, claim-provenance review, privacy review,
+> redaction/public-record review, entity/control/deployment facts, qualified
+> legal review, and a separate explicit user authorization.**
+> No roadmap item authorizes filing, ex parte contact, or regulator outreach.
+
+`ADOPTED_2026-08-20.md:70` then reserves the acts themselves to ember:
+
+> **Reserved to ember (unchanged by this record):** **Filing submissions (Aug
+> 24/26/27)**; the E2 freeze act; the E3 registry flip (ember's explicit go at
+> the 12-gate table, never pre-authorized); the treasury pubkey;
+> **counsel/security/license engagements**; mainnet; L0.
+
+This sharpens **M-5** on two points. First, the audit recovers the Aug 24/26/27
+filing calendar *"from the transcripts, not from any repo"* — it is in a
+committed gen-1 decision record, dated 2026-08-20, four days ahead. Second, the
+seven pre-filing gates are a checklist nobody has claimed: gen-3 has no
+regulatory workstream, and `degg-research` is named in **M-5** as the place the
+October compute-derivatives RFC should live and doesn't.
+
+It also sharpens **M-26** (`treasury pubkey`) and **D-3** (`security
+engagement`), and it supplies the missing owner for **G-4**: *license
+engagement* is on ember's reserved list, so the SBOM's three flagged families
+have a named decider and have simply never been put to him.
+
+## G-11. Bounty economics were to be measured; they never were, in either generation
+
+`docs/OPEN_QUESTIONS.md:102`, P1:
+
+> **Reverse-Dutch bounty step count and measured SOL cost quantiles.**
+> Whether any historical provider dependency is acceptable for repair.
+
+**Verified in gen-3:** `Dutch` — **zero occurrences**. Gen-3 replaced the
+mechanism with prepaid `bounty_lamports` (**M-50**), which is a defensible
+simplification and does not answer the row: what a repair or resolution actually
+costs in SOL, at what quantiles, is unmeasured in both generations, while
+**M-51**'s zero-volume survivability claim and `WAVE.md`'s prepaid-capability
+story both rest on the answer. Also a never-run gate (**N-17**).
+
+## G-12. Archive paging: page size, retention horizon, recycling proof, and Window cache identity
+
+`docs/OPEN_QUESTIONS.md:96`, P1, one of the few rows carrying its own status
+note:
+
+> **Archive page size, retention horizon, recycling proof, and Window cache
+> identity.** Still open. Note that the R4 §8 reference-ownership fork that would
+> consume a retention horizon is **explicitly deferred** until the
+> provider-horizon evidence exists (`ADOPTED_2026-08-20` item 7), so this row is
+> not blocking a decided design.
+
+**Verified in gen-3:** `retention horizon`, `provider horizon`, `recycling
+proof`, `archive page size`, `Window cache` — **zero occurrences each**. The
+deferral's trigger (*"until the provider-horizon evidence exists"*) was never
+gathered, so the fork is still deferred by a condition nothing is watching —
+also **N-14**.
+
+This is the register ancestor of **M-10**'s `F-8` verdict (*"width erasure done
+at N=258; **paging MISSING**"*). The paging half was an open P1 question in
+gen-1 and is a missing frontier half in gen-3; nothing between them decided it.
+
+## G-13. External assurance: four human items, one parked by decision and three unowned
+
+`NEXT_WAVE_ROADMAP` Phase A item 4:
+
+> **External assurance**: the STOP-8 human items (**license-row review, security
+> review, signed tag, second macOS host**), and the hostile terminal walk as the
+> standing regression floor.
+
+| item | gen-3 verdict |
+|---|---|
+| security review | **DROPPED-BY-DECISION** — `D-3`, the assurance park |
+| license-row review | **STILL OPEN** — see **G-4**; no instrument survives |
+| signed tag | **STILL OPEN** — `signed tag`: zero occurrences; the checked-release pipeline signs artifacts, not releases (**M-15**) |
+| second macOS host | **STILL OPEN** — `reproducib*` appears in 42 files, but independent second-host reproduction has no successor to gen-1's Persvati/Hbox pair |
+
+The hostile terminal walk **is** carried, as the gauntlet.
+
+## G-14. Agent-facing strategy artifacts were specified, not merely wished for
+
+`INSTRUMENT_AND_MARKET_DESIGN_REVIEW` §9 turns **M-3 item 12** from an ambition
+into a six-item interface:
+
+> Expose canonical read-only artifacts for: payoff basis and worst-state payout;
+> source and gap semantics; state-price and measure-witness diagnostics;
+> executable order limits and fee bounds; candidate relation/objective/
+> certificate identity; and roll/refinement maps.
+> **Agents should construct unsigned transactions or plans from these artifacts;
+> they must not need a privileged Dragon service.**
+
+**M-3 item 12** verdicts this *"No. No agent intent format."* The sharpening is
+that the format does not need designing — it is six named artifacts, five of
+which gen-3 already computes internally, and the last mile is exposure. Note
+also that `apps/dclutch-web/lib/capabilityModel.ts` types every user action as
+`'browser-unsigned' | 'rust-unsigned' | 'awaiting-production'` (`M-21`), i.e.
+the tree already produces unsigned plans and simply never named them an
+interface.
+
+## G-15. The remaining new rows, compactly
+
+Each verified as zero-in-successor unless noted.
+
+| ID | Intention | Source | Note |
+|---|---|---|---|
+| G-16 | **Cross-market collateral netting** and its successor design, *"separately capitalized cross-market risk vaults… a frozen joint-state worst-case certificate and its own reserve; it may not borrow claimant principal from underlying Hoards"* | `OPEN_QUESTIONS:152`; `INSTRUMENT…` §9 | gen-3's nine `netting` hits are all *within* one Dealer scenario; the cross-market case is untouched. Adjacent to `U-004`'s open half (**M-11**) |
+| G-17 | **Price-measure and welfare certificates as first-class artifacts**, with the four-row profile→certificate table that *"turns profiles into honest compilation targets rather than arbitrary feature cuts"* | `INSTRUMENT…` §9 | the successor's capability profiles carry no certificate column |
+| G-18 | **IPFS pinning diversity and canonical release-manifest location** | `OPEN_QUESTIONS:139` (P3) | `IPFS`: zero. Bears directly on **M-15**, the unowned `semantic_release_id` |
+| G-19 | **AGPL source-offer** mechanics on distribution | `OPEN_QUESTIONS:141` | `source-offer`: zero; the Pages workflow now distributes |
+| G-20 | **Cross-Series portfolios and rolls** — calendar spreads, roll trades, multi-horizon ladders, *"not single-Market complete sets, so each Market Hoard remains segregated"* | `INSTRUMENT…` §9 | = `PRODUCT_THEORY_REDIRECTION`'s cross-expiry rolls (**M-8**), specified one generation earlier |
+| G-21 | The **error-code consolidation pass**: *"clutch-sbf carries a parallel 0x3000 numbering with the forbidden catch-all (**queued for the instruction-wave consolidation pass**)"*; *"the lossy 0x3fff collapse of eleven gate classes"* | `89e329c6`, `e2b887a9`, `1d0c2576` | **ACTIONED in principle** by ADR 0007 (namespaced refusal codes) — recorded here because it is the clearest case of a gen-1 debt row that a gen-3 *decision* silently discharged, which is what a sweep is for |
+| G-22 | The **12-gate E3 table** for the production source-registry flip | `R2_PHASE0_RUNBOOK.md` §4.1; `ADOPTED:74` | `12-gate`: zero in gen-3. `D-2` gates the flip; nothing enumerates what must be true first |
+| G-23 | *"Whether any historical provider dependency is acceptable for repair"* | `OPEN_QUESTIONS:103` | bears on **M-17**'s cadence tolerance and the relay's recovery leg |
+| G-24 | **Exact admitted portfolio-intent language**: proportional divisibility, partial fills, limit semantics, maximum coefficient/term count | `OPEN_QUESTIONS:121` | gen-1 answered all four *for its own venue*; gen-3 re-derived none of them as a stated language. Adjacent to **M-3 item 3** |
+| G-25 | **Standing-maker definition** (*"at least one full frozen Epoch is the leading candidate"*) and **same-Epoch crossing / self-cross treatment** | `OPEN_QUESTIONS:117` | gen-1 froze `self_cross: RefuseOverlap` (`11008dac`); gen-3 has no self-cross rule under any name |
+| G-26 | *"A **Position funding ledger** is the recorded residual that would make a principal payable"* | `7d7a135f` | the last gen-1 account family with unrefundable rent; gen-3's `LifecycleRentCreditV2` (`P-005`, `F-7`) is the mechanism that would close it, and no one checked whether every family uses it |
+
+---
+
+# §C. NEVER-RUN GATES — the M-14 class
+
+**M-14** found one: the *"nonnegotiable"* monolith-versus-split benchmark that
+never ran, whose deletion discharged its own acceptance condition. The charter
+asked whether there are others of the same class.
+
+**There are.** Of 78 measurement-as-decision-gate commitments found in the
+pre-successor corpus, **11 ran**, **24 are obsolete**, and **43 never ran** — one
+of which, the monolith gate itself, ember has now closed by ruling.
+They group into the twenty-two findings below. Two structural notes first:
+
+- **The gates are almost never in commit bodies.** A full-text sweep of all
+  3,504 messages for `nonnegotiable`, `monolith`, `split release set`,
+  `only after`, `acceptance condition` returns **nothing**. Every gate below is
+  in a document a commit *added*. This is **C-3**'s method note in its strongest
+  form: in this repository, the promise is in the diff.
+- **Not one of the 43 was retired by a decision record.** Twenty-four stopped
+  mattering because THE PURGE (`D-20`) or the gen-3 restart destroyed what they
+  guarded; nineteen still bind. In neither case did anyone write the sentence.
+
+## §C.1 — CLOSED BY RULING: M-14's originals, located, as a provenance repair
+
+**Disposition: the partition ruling at the head of this file closes it — the
+five-role partition stands and no benchmark is owed.** This subsection exists
+because M-14 asked *"whose commitment was it?"* and the answer turns out to
+change how the closure should read.
+
+The charter asked for the monolith-versus-split commitment's originals. The
+2026-08-25 research doc is the fourth statement, not the first. All three
+predecessors are on `main`:
+
+> **Do not immediately split into many CPI-coupled programs**: atomicity,
+> account locks, upgrade coordination, and CPI overhead may be worse. **First
+> measure deployable feature profiles** with identical semantic owners…
+> — `6b9fd37f`, 2026-08-22, `docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md:405`
+> (and its repair-order item 9 at `:494`: *"Introduce capacity and deployable
+> capability profiles **before** increasing constants or splitting programs."*)
+
+> **Measure multi-program composition as a system before splitting.** A sibling
+> program can reduce one ELF while adding a second Program/ProgramData rent
+> principal, CPI CU, metas, upgrade coordination, and atomicity risk. **Compare
+> total persistent rent and runtime behavior, not ELF size alone.**
+> — `e7d8de26`, 2026-08-23, `docs/reviews/CAPABILITY_PROFILE_SIZE_AUDIT_2026-08-23.md:200`
+
+> **Compare binary partitioning as a system.** Measure monolith versus
+> capability profile versus multi-program composition including CPI CU, extra
+> metas, atomic rollback boundaries, deployment/upgrade liquidity, and total
+> persistent rent. **Adopt the smallest verified capability surface, not the
+> smallest ELF in isolation.**
+> — `502d9ad0`, 2026-08-23, `docs/reviews/RENT_COMPUTE_CAPITAL_TIME_AUDIT_2026-08-23.md:395`
+> (experiment 8 of a ranked queue)
+
+**Verified in the successor:** no total-persistent-rent or CPI-CU comparison of
+a monolithic against a split route exists — `total rent`, `capability-profile`,
+`General-only`, `Direct-only`: zero. And gen-3's own ADR concedes it:
+
+> **No measured result since that decision establishes a distinct syscall or
+> canonical-state ownership boundary for the new family Programs.**
+> — `docs/decisions/0003-fixed-role-capability-execution.md:39`
+
+So the commitment was made **four times across two generations** and the
+measurement never ran once. And it started earlier still, as a **P0 register
+row** posed before either generation built anything
+(`docs/OPEN_QUESTIONS.md:54`):
+
+> ### Internal venue ownership
+> Decide whether issuance and simplex venue live in **one immutable program** or
+> the venue **calls conservation-checking instructions on an Eggcrate-owned
+> Position program**. A separate venue must never write Position bytes directly.
+
+That is the same fork, filed under *"P0: before kernel semantics freeze"*, and
+gen-3's ADR 0003 answered it by partitioning into five roles.
+
+**What this changes about the closure.** M-14 reads as one architecture doc's
+unmet acceptance condition. It is really a question the project asked itself at
+its very first commit and re-committed to measuring four times. The ruling
+settles it correctly and on other grounds — `11ca28ba` argues that case well —
+and the honest retirement paragraph is now a *stronger* one than M-14 imagined:
+not *"we skipped a benchmark"* but *"we asked this on day one, promised the
+measurement four times, and decided it on design grounds instead."* One
+paragraph, citing `docs/OPEN_QUESTIONS.md:54`, `6b9fd37f:405`, `e7d8de26:200`,
+`502d9ad0:395`, and `MULTIPROGRAM_OWNERSHIP_EXPERIMENT_2026_08_25.md:218`,
+closes it completely.
+
+**The ruling does not reach the class.** It closes this gate. Forty-two others
+below are untouched by it, and §C.2's first two rows are live.
+
+## §C.2 — The gates that still bind
+
+Ranked. The first is the sharpest single row in this addendum.
+
+### N-1. The fee base: the guarded decision was reversed in silence, and gen-3 ships the arm that was eliminated
+
+Gen-1 ran the comparison honestly, having first found it unrunnable:
+
+> arm 3 — per-Egg `q*p_i*(1-p_i)` charged leg by leg, **the specific baseline
+> the design was built to beat** — does not exist in any language… So **the fee
+> has never been compared against its own benchmark**, and §7 reads as if the
+> comparison were merely un-run.
+> — `docs/reviews/FEE_ECONOMICS_FINDINGS_2026-08-19.md:49` (`342247c7`)
+
+The arms were then built and the fork was decided:
+
+> **Fee base: the composite `kappa*G + kappa'*R` SHAPE is selected**; both rates
+> remain undecided; every byte stays `FeeBaseV1::None` until the destination
+> lands… **Reversible until a rate freezes.**
+> — `ADOPTED_2026-08-20.md` item 9
+
+`docs/OPEN_QUESTIONS.md:106` states the eliminated alternatives plainly:
+*"uncertainty-shaped dispersion with a price-free quotient-norm floor; **flat
+and per-leg are eliminated**."*
+
+**Verified in the successor.** `G_num`, `dispersion`, `quotient-norm`,
+`per-Egg`, `arm 3` — **zero occurrences** outside this ledger. What ships is:
+
+```
+crates/dclutch-direct-codec/src/intent_v2.rs:48
+    /// Exact cumulative floor-fee rate accepted by the maker.
+    pub fee_basis_points: u16,
+```
+
+— a **flat rate on notional**, in 67 places across `crates/` and `programs/`,
+exercised at nonzero rates in `docs/evidence/DIRECT_FAMILY_CAMPAIGN_2026_08_27.md`.
+
+That is the arm item 9 eliminated. There is no decision record reversing item 9,
+and `FEE_GEOMETRY.md` §7's own promotion criteria — Lean closure of six
+properties, the digest-pinned correspondence review, the executable lab gates,
+*"adversarial simulation finds no cheaper equivalent encoding or
+fragmentation"*, and the reward-liveness criterion — **never closed**. Register
+entry **B2 (`fee-bounds-freeze`)**, which required freezing five bounds *before*
+implementation, never happened either.
+
+**M-26** asks *"what is the fee rate?"* This is the prior question: **what is
+the fee's geometry, and when did it change?** The audit records that
+*"`G_num` exists in gen-1 with proved complete-set invariance; nothing in
+gen-3"* (**M-3 item 10**) and treats that as a lost capability. It is worse than
+lost: it was selected, its rivals were named eliminated in a decision record
+ember delegated, and the eliminated rival is what runs today. **M-3 item 10's
+zero-price laundering channel is open against a base that was never supposed to
+be the base.**
+
+Cheap and honest closure: one paragraph saying flat notional is now the V1 base
+and why, or a row saying the composite is still the target and `fee_basis_points`
+is a placeholder. Either is fine. Silence is not, because ember delegated item 9
+on the weakest-choice principle and this reverses it.
+
+### N-2. `MAX_OUTCOMES = 16` — frozen three generations deep on a benchmark that never ran
+
+> Freeze `MAX_OUTCOMES = 16` for V1… **A future transaction format must be
+> feature-detected and benchmarked before raising the bound.**
+> — `71491141`, 2026-08-18, `docs/COST_MODEL.md:82`
+
+Restated twice: `docs/PROTOCOL.md:42` (*"V1 should freeze `2 <= outcome_count <=
+16` **unless the transaction-size and account-limit benchmark proves a different
+safe maximum**"*) and `a81b609b`'s `research/claim-algebra-model/ARCHITECTURE_REVIEW.md:181`
+(*"**Benchmark `n = 2,4,8,16` before changing the outcome cap.** Publish the
+error bound beside the transaction/account/CU cost."*).
+
+**Verified in the successor:** the cap is no longer prose, it is a
+machine-checked consensus constant.
+
+```
+formal/dclutch-semantics/DClutchSemantics/GeneralConfigAbi.lean:19
+    def maxOutcomes : Nat := 16
+crates/dclutch-general-config-contract/src/generated.rs:4
+    pub(crate) const MAX_OUTCOMES_V2: usize = 16;   // @generated from Lean
+```
+
+**NEVER RAN, DECISION FINAL BY DEFAULT** — and it is precisely what blocks
+**M-3 item 1**, the multidimensional claims (*"terminal price × maximum
+drawdown; TWAP × realized volatility"*), whose basis count grows
+multiplicatively. Note the tree already goes wider elsewhere:
+`COMPOSITION_MAX_OUTCOMES_LEAN_V3 = 256`. So the 16 is a *venue-config* cap that
+nobody has re-derived, sitting next to a 256 that somebody did.
+
+**Cheapest recoverable gate in this addendum**: a bounded SVM sweep at
+n = 2, 4, 8, 16, 32 against one Lean-emitted constant with one emit site.
+
+### N-3. The E1 falsifying dual-toolchain spike — the verification architecture, decided by abandonment
+
+> V1 must restrict Eggcrate to the common conservative Rust subset and **run a
+> falsifying dual-toolchain spike before architecture commitment**… **Reject the
+> single-source approach if** SBF compilation requires divergent executable
+> branches, first-party assumptions, public unchecked preconditions, or
+> materially different runtime behavior.
+> — `71491141`, `docs/VERIFICATION.md:200`, `docs/ENGINEERING_PLAN.md:179`
+
+Its own verdict table (`docs/implementation/TOOLCHAIN_SPIKE.md:152`) reads
+`adapter/ELF/program-test | **NOT RUN** | no claim` and `resource and mutation
+matrix | **NOT RUN** | no claim`, concluding *"**NO-GO for declaring the E1
+toolchain gate closed or creating the protocol workspace**"* — restated at
+`f58f1a23`, *"E1 promotion remains **NO-GO**."*
+
+**NEVER RAN.** The protocol workspace was created anyway and the verification
+architecture then changed twice by report (ADR 0003 → ADR 0005, `eb0b24bf`) with
+gates 5 and 6 still NOT RUN and the reject-criteria never evaluated. `Eggcrate`,
+`dual-toolchain`, `unannotated` — zero in the successor. `D-16` retires Rocq and
+`M-18` counts the Kani harnesses; **neither covers the spike that was supposed
+to choose the substrate in the first place.** Now unrecoverable — the
+single-source Verus architecture no longer exists — so the honest closure is a
+written retirement, M-14's shape exactly.
+
+### N-4. `docs/BENCHMARK_PLAN.md` in its entirety, and the control arm for the project's central claim
+
+> Status: experiment design. **No results in this document are measurements.**
+> — `71491141`, `docs/BENCHMARK_PLAN.md:3`
+
+§9 specifies `research/results/<date>-<scenario-id>/` as the result contract for
+every experiment in it. **`research/results/` does not exist and never did** —
+`git log --all -- 'research/results*'` returns nothing across both repositories.
+Nine experiment matrices have no result directory. Two arms are separately
+load-bearing:
+
+- **§4 `:96` — *"external independent-Egg control versus coupled relation."***
+  This is the control that would justify the coupled batch relation over
+  independent per-Egg books, i.e. **the project's central architectural claim**.
+  `independent-Egg`, `coupled relation`, `coupled clearing`, `small-book oracle`
+  — zero in the successor.
+- **§8 `:186`** — a stop condition on the venue's shape: *"the native venue
+  narrows to single-Egg coupled clearing if arbitrary portfolio search pressures
+  documentation into an unproved optimality claim."*
+
+The same control arm is the **JOSHI kill criterion**, stated as a falsifiable
+disqualifier for the whole integration (`docs/JOSHI_EXECUTION_THESIS.md:169`):
+*"The JOSHI integration is not interesting if… **the native auction gives no
+coherence/cost advantage over ordinary Eggs**."* Never tested. Adjacent to
+**M-49** (independent demand evidence) but distinct: M-49 asks whether anyone
+wants it; this asks whether the mechanism beats the trivial alternative.
+
+### N-5. R2 Phase-0 Condition A — a named STOP that was never evaluated, and the version it guarded is now the codec identity
+
+> Both conditions must be **written down before the cutover. A span chosen after
+> seeing the data is not a criterion.**
+> **3.1 Condition A** — the SDK version discrepancy observed resolved. The named
+> STOP: the migration guide says **1.2.0**, the SDK manifest says **2.0.0** …
+> *resolved? (yes → record the single version / no → **STOP**)*
+> **3.2 Condition B** — receiver `Config` bytes stable over a named span.
+> — `95e2c2f3`, 2026-08-21, `docs/implementation/R2_PHASE0_RUNBOOK.md:216`
+
+**The four-row table in the runbook is still empty.** In the successor there is
+no mention of the discrepancy and **SDK 2.0.0 is hard-pinned in six source
+files** (`crates/dclutch-pyth-svm/src/{receiver_config,price_update,lib}.rs` and
+the synthetic-release evidence). Condition A was never evaluated; 2.0.0 became
+the codec identity by default. Condition B likewise —
+`fixtures/pyth/upgraded-2026-08-26/PROVENANCE.md` is a **single ten-minute
+observation**, which is the exact thing the runbook forbids.
+
+**Both are cheaply recoverable**: two upstream fetches and one repeat RPC read
+≥ 24 h apart. Condition B is still live, because the freeze act is human-gated
+(`D-2`); Condition A is already baked in.
+
+### N-6. The Aeneas/Charon spike was a ratified ADR gate with a kill criterion, not a wish
+
+> The Aeneas/Charon spike (one pure kernel function, bounded, **with a kill
+> criterion**) is the named test of closing the model-to-source arrow in Lean…
+> **If the spike fails**, executable-body growth continues in Verus, never by
+> relabeling model theorems.
+> — `eb0b24bf`, `docs/adr/0005-lean-proof-substrate-of-record.md:43`
+
+**Sharpens M-53**, which records it as a `GOAL.md` *"NEXT SESSION — start here"*
+bullet. It was that **and** a gate inside the ADR that made Lean the substrate of
+record, with a stated consequence for failing. `Aeneas`/`Charon` appear in the
+successor in three files, all prose. Never run, never killed.
+
+### N-7. The one-hot versus derived-basis bake-off
+
+`a81b609b`, 2026-08-18, `research/claim-algebra-model/ONE_HOT_VS_DERIVED.md` —
+a named head-to-head. The winner (one-hot first) was chosen **on argument**; the
+loser's promotion was explicitly gated on measurement (`:109`):
+
+> 5. **Treat a higher outcome cap as an account/transaction/proof benchmark, not
+> a documentation edit.** 6. **Promote native fractional degree-1 markets only
+> after** the resolution record and kernel account bind the resolved vector and
+> one of these policies is frozen: exact lots, persistent remainder credits, or
+> portfolio-atomic aggregate redemption.
+
+Gen-3 is one-hot (12 files, led by `dclutch-liability-basis-v2-kernel` — which
+has **zero consumers**, `M-9`); the derived branch was never benchmarked and is
+gone. **Sharpens M-4** by supplying the dated comparison document that named the
+benchmark, and it interlocks with **N-2**: item 5 is the same outcome-cap gate.
+
+### N-8. The Dealer liveness budget vector — a measurement named as the activation gate, with a named owner who does not exist
+
+> `DealerFundedBudgetDependenciesV1` … **selects no vector values; the
+> liveness-policy owner must derive and measure them from maximum
+> row/page/CU/account/rent work before any adapter can activate.**
+> — `2a325b98`, 2026-08-23, `docs/design/DEALER_RUNTIME_V1.md:658`
+
+`DealerLivenessSchedule`, `liveness schedule`, `liveness budget`, `work
+principal` — zero in the successor. Only *"bounded work rewards"* survives, as
+one line of **M-11**'s six-item list. **Sharpens M-11** with an earlier
+statement, a stronger verb (*must derive and measure*), and the same
+nonexistent-owner shape M-11 already flags at `dealer-v2-scenario-collateral.md:101`.
+
+### N-9. Succinct clearing's two unmeasured quantities
+
+> …the **two conditions that gate the direction**… **§7 What is unmeasured (and
+> must not be estimated):** Cert-F proof size and prove time at Dragon's Clutch
+> batch width… whether the Cert-F statement survives recursion into the apex
+> without exceeding the measured shrink budget. **Either could change the
+> verdict.**
+> — `30461261`, 2026-08-19, `docs/design/SUCCINCT_CLEARING_FEASIBILITY.md:7`, `:119`
+
+**Sharpens M-55** with the sha and the exact gating clause, and joins **G-2**:
+this is move 2 of gen-1's two-move strategy, and **M-24**'s 1.4 M-CU wall is the
+exact condition it was scouted for. Cheaply recoverable — it is a bounded
+measurement, and the wall is standing right now.
+
+*(Substrate note, recorded because it is the standing rule: that same commit
+surfaces one hand-written Rust AIR twin as debt. Any resumption of this
+direction is Lean-authored AIR; the Rust twin is debt, not a foundation.)*
+
+### N-10. Two-synthetic-Realm collateral genericity — see **G-8**
+
+> **Demonstrate generic semantics with two synthetic Realms; DREGG must not
+> create a special branch.** — `docs/OPEN_QUESTIONS.md:78`
+
+**NEVER RAN.** Collateral-genericity is recovered requirement 3 and is asserted,
+never exhibited, in both generations. `O-006` is the prohibition; this was the
+proof.
+
+### N-11. The R2 hybrid-representation reject criterion
+
+> Artifacts and falsifiers: … **measured cost of three representation
+> controls** … **Reject or redesign if** supply ownership cannot stay singular
+> or Token-2022 profile semantics make the generic Realm abstraction dishonest.
+> — `71491141`, `docs/RESEARCH_AGENDA.md:55`
+
+`representation control` — zero. The hybrid (internal Position plus optional
+Materialize/Dematerialize) is built and shipped three generations deep
+(`Materialize` in 54 files) and the reject-criterion was never evaluated. Its
+stated rationale — *"external venue compatibility"* — is also unrealized
+(**M-52**).
+
+### N-12. `COST_MODEL.md` §9 — the 22-row matrix that gates every byte layout
+
+> **Before choosing byte layouts or claiming cheapness, measure** with the exact
+> pinned SBF and Token-2022 versions: [22-row matrix]
+> — `71491141`, `docs/COST_MODEL.md:205`
+
+The tree's own lab agrees it never ran
+(`docs/implementation/COST_LAB.md:235`): *"There is still no measured CU, heap,
+stack, account-copy, write-contention, or landing figure in any arm"* and *"the
+differential comparison against a pinned Solana SDK serializer still has to
+happen **before any packet or lock conclusion is drawn**."*
+
+**OBSOLETE for gen-1's layouts** — they are deleted. **Live for gen-3's**, which
+re-chose ~590 byte offsets under the same absence (**M-36**).
+
+### N-13 … N-16. Parks whose trigger fired, and one control
+
+| ID | Gate | Verdict |
+|---|---|---|
+| **N-13** | *"**Per-order cancellation / continuous-claims scouting** stays parked **until the above land**"* — `NEXT_WAVE_ROADMAP:73` | **TRIGGER FIRED, PARK NEVER LIFTED.** Phase S 1–4 all landed 2026-08-21 (`47c7a77a`, `cd54bb72`, `41c231f6`, `525ec13f`, `df1d99e1`); the generation turned over three days later. **See G-3.** |
+| **N-14** | *"the R4 §8 reference-ownership fork… is **explicitly deferred until the provider-horizon evidence exists**"* — `ADOPTED_2026-08-20` item 7 | **DEFERRED ON A MEASUREMENT NOBODY OWNS.** `provider horizon`: zero. The fork itself is obsolete; the **archive paging question it gated is not** — it is `F-8`'s missing half (**M-10**). See **G-12**. |
+| **N-15** | *"the composite fee base's characterization **formalized before any rate freezes**"* — `NEXT_WAVE_ROADMAP:98` | **UNFIRED, UNOWNED — and now doubly so given N-1.** No rate has frozen, so whoever answers **M-26** trips a formalization precondition that exists in no gen-3 document. One line, attached to M-26. |
+| **N-16** | *"opt-z is **refused until re-greened and gate-campaigned at its own identity**"* — `ADOPTED_2026-08-20` item 5, restated with its trigger at `MACRO_AND_MICRO_OPTIMIZATION.md:319` (*"**unless a real rent-per-byte bill appears** (deployment)"*) | **THIS ONE IS CORRECT, AND IS THE CONTROL.** It is `D-17`; it carries an explicit reopen trigger; the trigger has not fired; the successor kept it. N-13 and N-14 differ from it in exactly one respect: nobody was watching. |
+
+### N-17 … N-21. The rest, compactly
+
+| ID | Gate | Verdict |
+|---|---|---|
+| **N-17** | *"Reverse-Dutch bounty step count and **measured SOL cost quantiles**"* — `docs/OPEN_QUESTIONS.md:102` | **mechanism OBSOLETE, measurement STILL OPEN.** What a repair or resolution costs in SOL, at what quantiles, is unmeasured in both generations — while **M-51**'s zero-volume survivability and the prepaid-capability story both rest on it. See **G-11**. |
+| **N-18** | Rung W2 promotion — *"**Every named id retiring refuses, so the rung is re-decided rather than silently upgraded**"* (`396e11de`); last word at `df1d99e1`: *"the audit says which and how far, **as input to a decision this lane does not make**"* | **NEVER DECIDED; ladder replaced.** The rung is obsolete; the **mechanism** is the finding — a promotion gate that *refuses* on a retiring blocker is machinery for `WAVE.md:470`'s *"Never-executed is the default"*, which gen-3 holds by convention instead. Worth stealing back. |
+| **N-19** | *"pinning the exact Token-2022 program artifact (register F5)"* — `docs/OPEN_QUESTIONS.md:74` | **UNFIRED.** gen-3 has a behavior profile and a `PROVENANCE.md` — more than gen-1 — but no pinned upstream artifact identity. Ancestor of **M-44**'s predicted Meteora-DBC blindness, one dependency over. |
+| **N-20** | The mock-ELF two-path build experiment — `8c2465d9` | **OBSOLETE, and the most instructive row here**, because the commit says exactly why it never ran: *"NOT MEASURED HERE… The two-path build was gated on the suite spinlock being free; it was held by another lane at both checks, with two SVM suites running and load above ten. **The swarm has priority. The experiment is left specified instead** — three steps, a falsifiable prediction… and the instruction to record the result as an observation."* A measurement lost a resource race, was written down perfectly, and was never re-queued. **Nothing in either generation re-queues a deferred measurement.** |
+| **N-21** | The four gen-2 rent-format successors — ReceiptPageV1 (*"a projected saving of 935,201,280. **Measure the extra write contention and CU before adopting it**"*, `f1e8945c`), active-width ClearWork (232,296,960/candidate), embedded FundingTailV1, dynamic CandidateFeed; plus `502d9ad0` experiment 3, *"**Maximum-width V2 must match V1.**"* | **OBSOLETE.** Every guarded family died in THE PURGE (`D-20`). Recorded because ~1.9 billion lamports of projected saving were never measured, never adopted, and never retired by decision — they simply stopped existing, which is the shape this whole section is about. |
+
+### The one honest never-run gate
+
+**N-22 is not a defect and is recorded so the section stays honest.**
+`docs/research/DUAL_IS_THE_MEASURE.md:1358` (`d34120ad`), mirrored publicly at
+`site/clearing.html:202`:
+
+> **Lean instantiation** of `Market.CertF` at the capped clearing matrix, plus
+> the accept-set zero-gap theorem over the real `relation_v1.rs` semantics —
+> **the promotion gate for any optimality language.**
+
+`CertF`, `zero-gap` — zero in the successor. **The gate is unmet and the
+restriction it imposes is still in force**: *"best valid submitted"* remains the
+language in nine files including `AGENTS.md` and
+`crates/dclutch-general-adapter-contract/src/runtime_verify.rs`. This is what a
+never-run gate looks like when the system respects it.
+
+---
+
+# §D. Gen-2's verb catalogue: 129 named coordinates, 57 successors, no retiring decision
+
+**M-12** reads *"Gen-2 had 25 General verbs… Gen-3's `dclutch-general-codec::Action`
+has seven."* Both halves understate it. The catalogue is
+`~/dev/dragons-clutch/programs/solana-layout/src/registry.rs` — 3,649 lines,
+nine populated `*Action` enums, every variant carrying a doc comment. Counted
+directly:
+
+| gen-2 enum | coordinates | gen-3 successor | delta |
+|---|---:|---|---:|
+| `GeneralV2Action` | **42** | `dclutch-general-codec::Action` — 7 | −35 |
+| `DealerFacilityAction` | **21** | `MultiLpActionV3` — `Add`/`Remove` | −19 |
+| `DirectMarketAction` | **13** | `DirectExecutionActionV3` — 14, *different mechanism* | book/auction half gone |
+| `RecoveryAction` | **13** | none | −13 |
+| `SourceSeriesAction` | **12** | spec + resolution state, no verb set | −12 |
+| `FractionalRedemptionAction` | **10** | none as a verb set | −10 |
+| `StructuredClaimAction` | **8** | `StructuredAction` — `Issue`/`Unwrap` | −6 |
+| `RecurringSeriesAction` | **6** | kernel functions, no verb set | −6 |
+| `DealerPolicyAction` | **4** | `ClaimAction` — 3 | −1 |
+| **total** | **129** | **~57** | |
+
+plus the 62-variant legacy `Intent` monolith in `programs/solana-layout/src/lib.rs`,
+whose *namespace* `COMPOST.md` explicitly forbids recreating (*"do not recreate
+the 46-slot foundation or **cumulative action namespaces** by inertia"*) and
+`O-002` and ADR 0003 retire on the merits. **That prohibition is about the
+namespace. Nothing in `COMPOST.md`, `OMISSION_INDEX.md`, `WAVE.md` or
+`docs/decisions/` retires the capabilities below — with exactly one exception,
+ADR 0009, which retired gen-2's order-index plane on the merits this afternoon
+and is the model for what the rest would look like.** Against `WAVE.md:329`'s
+standing rule — *"everything named gets actioned or explicitly retired"* — this
+is the largest body of named-and-neither in the project, and it costs one file
+to read.
+
+Every absence below was verified by grep against the successor tree, excluding
+`node_modules`, `target/`, and this ledger itself.
+
+## §D.1 — Ranked by how much the intention transfers
+
+### 1. `ClearWork` — gen-2's structural answer to the fourteenth wall
+
+`InitClearWork`, `GrowClearWork`, `AdvanceClearOrders`, `AdvanceClearSlices`,
+`CompleteCandidateVerification`: a growable work account that verifies a
+candidate **across many transactions**. **Verified: `ClearWork`, `AdvanceClear`,
+`GrowClear` — zero in the successor.** Gen-3's General clears in one instruction,
+and `WAVE.md:115` prices it at 1,336,865–1,386,359 CU with **one draw in twenty
+exceeding 1,400,000 outright**.
+
+**Sharpens M-24**, which frames the fourteenth wall as a record-layout decision
+(*"store each canonical bump in its record"*). Gen-1's verdict was that width
+growth goes through staging or succinctness (**G-2**); gen-2 *built the staging*;
+`P-003` already blesses *"staged computation certificates"* as a lifting path;
+and no lane owns it. Three generations have now met this wall, and the two
+earlier ones answered it architecturally.
+
+### 2. The price-measure admission certificate — the second half of G-1, and gen-2 had it too
+
+`clutch-price-measure` (8,843 Rust lines): a Bernstein-moment continuous checker
+**and** a quantized checker over bounded integer atom mixtures — a gate that an
+admitted price vector comes from a nonnegative measure. Branches
+`quantized-atom-mixture-certificate`, `exact-quantized-atom-solver`,
+`score-v2-quantized-*`, and `general-v2-action10-closed-tuple` (*"Require
+quantized admission before General ranking work"*).
+
+**Verified: `atom mixture`, `quantized admission`, `price admission`,
+`MomentCone`, `Bernstein` — zero in the successor.**
+
+So **G-1**'s gate existed in gen-1 (as the moment cone, wired to `basis_degree`
+on chain) **and independently in gen-2** (as the quantized atom-mixture
+certificate, required before ranking work), and gen-3 has neither.
+**`O-013` substituted for the *basis*. Nothing substituted for the *price-side
+admission certificate*, in either direction, and no decision says so.**
+
+### 3. The windowed-statistic fold pipeline
+
+`SourceSeriesAction`: `OpenRawPage` → `IngestBoundaryBatch` → `SealRawPage` →
+`InitializeWindowWork` → `FoldWindowPages` → `SealWindow` → `EvaluateStatistic`,
+over `clutch-accumulator` (2,419 Rust lines) — an **associative interval-summary
+monoid** with `combine`/`append`, `price_time_integral`, `twap`,
+`relative_terminal_to_twap`.
+
+**Verified: `RawPage`, `WindowWork`, `FoldWindow`, `EvaluateStatistic`,
+`BoundaryBatch`, `price_time_integral` — zero.** Gen-3 has seven `StatisticKind`s
+over a bounded observation slice and no self-computed integral; `TWAP` survives
+only as a *deferred Pyth adapter* in `DESIGN.md:111`, a much narrower thing.
+
+**Sharpens M-3 item 2** decisively. The ledger verdicts *"exact families of path
+properties — extrema, crossings, drawdown, coverage, **integrated price**,
+volatility summaries… One permissionless feed can service hundreds of markets"*
+as **"No."** The honest verdict is **"built in gen-2 as a fold monoid, then
+dropped."** It also sharpens **M-17**: the cadence-tolerance lift
+`OddScheduledMedian` needs is downstream of a fold pipeline the successor no
+longer has.
+
+### 4. The Failure / Recovery family — 219 subjects, two crates, 13 verbs
+
+`clutch-failure-policy-runtime` (15,569 Rust lines) and `clutch-evidence-recovery`
+(3,665 lines). Gen-3 **carries the Source half** — `SourceRecoveryPolicyV2`'s
+four funded attempts with deadlines and allocations,
+`ResolutionKind::{Occurrence, Failure, Recovery}`, the
+`CommitFailure`/`AwaitingFailure`/`FailureCommitted` phases. It does not carry:
+
+- **`TriggerRelationRefusal`** — a failure trigger on the *clearing relation's*
+  deterministic refusal, distinct from source failure. Zero.
+- **`BeginIntervalConsensus` / `Advance` / `Resolve` / `CloseIntervalConsensusWork`**
+  — a bounded-chunk consensus lifecycle for ambiguous evidence, paid through
+  liveness. **`IntervalConsensus`, `interval consensus` — zero.**
+- **The Failure *session* object** — `InitializeFailureRoot`/`CloseFailureRoot`,
+  session archives, exhausted-session closure, zero-payout sessions. Zero.
+- **"recoverable dormancy" as a market outcome** — the stated terminal of
+  `clutch-failure-policy-runtime`, and the same phrase gen-1 used in its ratified
+  `EvidenceOnlyRecoveryV1` decision (*"A market without evidence-selected weights
+  degrades to recoverable dormancy"*, `docs/OPEN_QUESTIONS.md:26`). Zero.
+
+`U-006` names *"Source/Resolution creation, recovery, terminal admission, funding
+closure"* and does not reach a market-level failure root or interval consensus.
+
+### 5. `RevenuePolicyV2` — M-26 was attempted and discarded, not never-attempted
+
+Thirteen gen-2 subjects name it: *Define immutable fee-bearing revenue policy
+V2*; *Allocate immutable Realm revenue record V2*; *Freeze streamed recipient
+allocation V3 authority*; *Keep revenue policy V2 open to registered
+calibrations*; *Bind treasury custody to General runtime and replay*; *Count and
+retire treasury Position service*; `CloseRevenuePolicyRecord`; *Promote selected
+fees to RevenuePolicyV2*.
+
+**Verified: `RevenuePolicy`, `recipient allocation`, `fee manifest` — zero.**
+Gen-3 keeps a per-venue `fee_recipient` pubkey.
+
+**Sharpens M-26 and N-1 together.** The ledger reads the fee question as one
+ember has never been able to answer. The record is worse: gen-1 selected the
+*shape* and eliminated flat (**N-1**); gen-2 built the *record, the streamed
+allocation authority, the calibration hook and the treasury custody*; and gen-3
+ships a flat `fee_basis_points` with none of it and no decision record.
+
+### 6. Exact portfolio value and simplex risk certificates
+
+`clutch-market-quality` (2,233 Rust lines): exact integer portfolio value; the
+complete-set floor as a guaranteed minimum; an exact conservative cap over the
+full simplex; canonical portfolio compression; a simplex price-disagreement
+bound tied to price provenance.
+
+**Verified: `MarketQuality`, `portfolio value`, `risk certificate`,
+`portfolio compression` — zero, and no omission row names them.** This is the
+natural substrate for `U-004`'s scenario-solvent half (**M-11**) and for any
+honest portfolio display — the successor's `/portfolio` route renders addresses,
+not value.
+
+### 7. Candidate-side work economics — the solver bond set
+
+`ClaimCandidateBond`, `ClaimCandidateWork`, `ClaimSolver`, `ClaimEpochUnused`,
+`MarkWorkClosed`, `ExpireCandidate`, `CleanupCandidate`; plus branches
+`candidate-cost-certificate` and *Fund retained Direct candidate bonds*.
+
+**Verified: all seven — zero.** **Sharpens M-50 and G-7.** The permissionless
+work economy reads in the ledger as a gen-1 aspiration; gen-2 allocated the full
+solver-bond-and-claim verb set for it, which is also the missing half of **G-7**'s
+withholding question.
+
+### 8. Global liveness allocation
+
+`clutch-liveness` (4,848 Rust lines): checked fixed-memory admission arithmetic
+proving named finite payments are covered *at admission*. Branches
+`direct-global-liveness-callable` [46 ahead], `product-direct-global-liveness`,
+`liveness-runtime-v2`, and *"Bind Direct work to gapless liveness receipts."*
+
+**Verified: `global liveness`, `liveness allocation`, `liveness receipt`,
+`gapless` — zero**; `liveness` survives as per-capability prepay across 59 files.
+**Sharpens M-51**, filed as a gen-1 intention (*"there is no global
+`LivenessPolicy` and no protocol-wide no-stranding result"*): gen-2 built the
+arithmetic that would give one.
+
+### 9. Owner settlement aggregation and virtual receipts
+
+`clutch-owner-settlement` (12,652 Rust lines) plus `FinalizeOwnerSettlement`,
+`InitializeSettlementRoot`, `AccountReceiptEnd`,
+`ConsumeVirtualSplitReceiptEggs`, `ConsumeVirtualMergeReceiptEggs`,
+`ConsumePortfolioPairEggs`, `ReleaseUnfilledReservation`,
+`TransferPositionAssets`, `FinalPot`, `SettlementReceipt V3`, `OrderPage V5`.
+
+**Verified: `FinalPot`, `OwnerSettlement`, `SettlementRoot`, `VirtualMerge`,
+`PortfolioPair`, `TerminalOwnerFloor`, `unfilled reservation` — all zero.**
+Gen-3's `InitializeSettlement`/`Collect`/`Materialize`/`Distribute` carries the
+*shape*; the owner-level aggregate-then-convert-once invariant — which is exactly
+what gen-1 spent three commits deriving and proving (`c36b3ceb`, `cd54bb72`,
+`41c231f6`) — the virtual split/merge netting, and the unfilled-reservation
+release do not exist.
+
+### 10. The Realm-selected collateral adapter release and policy
+
+`clutch-collateral-adapter-v2`: a canonical release record binding parser/CPI
+code, external token deployment, account layouts and an exact-visible-atom
+theorem; and a policy *selected by an immutable Realm* binding mint, token
+program, decimals, **supply ceiling and market-cap ceiling**. Branches
+`collateral-release-catalog` [267], `collateral-adapter-v2-runtime` [191].
+
+**Verified: `SupplyCeiling`, `supply ceiling` — zero**; gen-3 has a hardcoded
+`Token2022BehaviorProfileV2`. **Sharpens M-10 / `F-6`**: the frontier's
+*"versioned selectable profile record"* is not a design the successor has yet to
+invent — **gen-2 shipped it**, and this is also **G-8**'s two-Realm genericity
+question with a working answer attached.
+
+## §D.2 — The rest, compactly
+
+| gen-2 capability | verbs / crate | successor |
+|---|---|---|
+| **Structured descriptor lifecycle** | `CreateDescriptor`, `WrapCanonical`, `WrapFull`, `UnwrapCanonical`, `UnwrapFull`, `CompactDonation`, `RedeemTerminal`, `RetireDescriptor` | `StructuredAction` = `Issue`/`Unwrap`. `U-008` names wrap/transfer/unwrap/redeem/retire as owed; **the descriptor *object* and the canonical/full distinction are named in neither `U-008` nor `O-014`** |
+| **The Fractional credit ledger** | `RedeemInternalCredit`, `RedeemBearerCredit`, `TransferCredit`, `MergeCredit`, `CloseZeroCredit`, `SealClaimsExhausted`, `CloseEmptyLedger` | all zero. `O-012` admits *"explicit Token-owned remainder/change instruments"* as valid; gen-2's answer was an aggregate credit ledger, which `O-012` neither adopts nor rejects |
+| **The Dealer sponsor funding phase** | `CreateLpPage`, `Contribute`, `WithdrawFunding`, `CancelFunding`, `RefundCancelledSponsor`, `Activate`, `BindEpoch`, `LapseEpoch`, `SelectLeaseAndBegin`, `AbortBeforeCollection`, `QueueExit`, `SponsorHalt`, `TimedClose` | `MultiLpActionV3` = `Add`/`Remove`. `O-011` and `U-004` cover repricing consent and scenario solvency; **neither covers a funding phase with sponsor cancellation, refund, halt, or a permissionless deadline close** |
+| **Direct's sealed-book auction** | `AdmitOrder`, `FreezeBook`, `SubmitCandidate`, `BeginVerification`, `VerifyCandidate`, `FinalizeSelection`, `SettlePair`, `LapseEmpty/Unselected/Selected` | zero; gen-3 Direct is inline/registered fill. A legitimate architecture change — and **`U-002` describes the successor without naming what was retired**, so no record states it |
+| **The exact order/candidate index plane** | `InitOrderPage`, `CloseCandidateIndexPage`, seven branches incl. `exact-index-live-integration` [417] | `OrderPage`, `IndexPage`, `candidate index` — zero, **and deliberately so as of today**: `collection_v1.rs` (`751d702`) answers it — *"a batch is a **window**, not a ledger… it does not enumerate them"* — with `GeneralBatchV1`/`GeneralOrderV1` as content-addressed records whose digests *are* the ids, ruled in ADR 0009. A gen-2 capability **retired on the merits, in writing**. Recorded as the counter-example: this is what the other fifteen rows are missing |
+| **`Endow` / `WithdrawCash`** | owner-level internal trading cash into the Hoard; unreserved-cash withdrawal | **zero — and this is the sharpest single row in §D.** It is exactly the gap **M-13** quotes from gen-1 `01d00083`: *"no endowment instruction (**the sharpest gap** — opening cash is the one unwritten field)."* **Gen-2 closed it. Gen-3 reopened it.** The ledger cites it as an example of unswept gen-1 debt; it is really an example of a closed gap lost at a generation boundary |
+| **Chunked on-chain artifact staging** | `BeginArtifact`/`WriteArtifact`/`SealArtifact`/`AbortArtifact` — the transport gen-2 used for Dealer policy catalogs and Source archives | zero. Adjacent to **M-3 item 5**: not a quoting-policy compiler, but the artifact seam one would need |
+| Also zero, named | `ScorePolicy`/`RankKey` two-window rank binding; `Market family aggregator`; `multiboundary` source rollback schema; operator draft invalidation after finalized rescan | — |
+
+## §D.3 — A correction to the branch-absorption test
+
+**M-58** and `BRANCH_TRIAGE_2026-08-22.md` measure a branch by *"is it in
+`main`"*, and found *"97–100% line-level absorption on every branch"* over the 16
+to 27 they covered. For gen-2 that test answers the wrong question twice:
+
+1. **`main` is compost.** Reaching `main` does not mean reaching gen-3 — the
+   successor is a subtree, not a descendant.
+2. **45 of 361 refs are 0 commits ahead of `origin/main` and their capabilities
+   are still absent from the successor** — `quantized-interval-consensus`,
+   `exact-index-builder-frame`, `fractional-credit-actions`,
+   `nonzero-fee-economics`, `production-payoff-compiler`,
+   `structured-claim-runtime`, `settlement-generality-runtime`,
+   `source-plane-v3-runtime`, `liveness-runtime-v2`,
+   `general-v2-streaming-traversal`, and 35 more. Perfect absorption into a dead
+   tree.
+
+Also worth noting: **`product-theory-redesign` is now 530 commits ahead** and
+still unmerged — the branch **M-8** identifies as carrying seven concrete product
+upgrades that *"the successor never received."*
+
+The triage's own reassurance is therefore about line survival in the compost
+repository, not about intent survival into the successor. That is the whole
+distinction this addendum is about.
+
+---
+
+# §E. Rows this sweep sharpens
+
+Compact; the evidence is a commit or a committed gen-1 document that the audit's
+sources did not carry.
+
+| Row | Sharpening |
+|---|---|
+| **M-1** | See **C-2**. Also: `SWARM_ROADMAP` §6 gives *Breadstuffs* a five-step plan whose step 5 is *"only then the expensive proof freeze/MPC ceremony"* — which is precisely the trusted-setup condition `SUCCINCT_CLEARING_FEASIBILITY` names as one of two gates on **M-55**. The two documents interlock and neither has a successor. |
+| **M-3** | The twelve-item ceiling is not the only ambition statement. `INSTRUMENT…` §9 independently specifies five of its items (product-space compiler; cross-Series rolls; cross-market vaults; certificates as artifacts; agent artifacts) as *design directions with mechanisms*, and §5 makes item 2's price coherence **mandatory** rather than aspirational: *"Smooth-market price coherence must become mandatory."* |
+| **M-4** | Three sharpenings. (a) `SWARM_ROADMAP` §7 lists, as an *attractive distraction to refuse*, **"categorical lowering presented as smooth-product support"** — written 2026-08-19, and it is the exact risk `O-013` runs; the audit says ember *"should get to say whether that is the same thing"*, and gen-1 already wrote down that it would not be. (b) The gate `O-013` does **not** substitute for is the price-side one, and gen-2 had it independently (**G-1**, **§D.1 item 2**). (c) Superseded in part by `docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md`, which answers M-4's question directly (*"is the successor now at least as capable as generation one on shaped dynamics?" — "**no, not yet**"*) and is the row's live owner. |
+| **M-4**, earlier still | `a81b609b`, 2026-08-18, `research/claim-algebra-model/ONE_HOT_VS_DERIVED.md` is the dated head-to-head that chose one-hot **on argument** and gated the derived branch's promotion on a benchmark that never ran — **N-7**. |
+| **M-5** | See **G-10**. The Aug 24/26/27 calendar is in a committed decision record, not only in `cv`. |
+| **M-8** | `PRODUCT_THEORY_REDIRECTION`'s seven upgrades are largely gen-1's `INSTRUMENT…` §9 re-derived; the gen-1 original is committed on `main` and was never swept, so the successor lost the same content twice, by two different mechanisms (branch-only, then generation boundary). |
+| **M-16** | See **C-4**. `κ` is a gen-1 P1 row, so it has survived two generations. |
+| **M-55** | See **G-2** and **N-9**. Succinct verification was *move 2 of exactly two* in gen-1's strategy document, its two gating quantities are named and explicitly must-not-be-estimated, and `SWARM_ROADMAP` §6 makes Breadstuffs' *"expensive proof freeze/MPC ceremony"* step 5 of its own five-step plan. |
+| **M-26** | Two sharpenings. `3e818be8` and `15122506` show the treasury was made **structurally** undecidable — *"the treasury pubkey **DEFERRED** as the structural `REVENUE-TREASURY-UNSET-SENTINEL1` byte string"*, and `525ec13f` makes `RevenueTreasuryUnset` fire *"on EVERY fee-bearing admission… **unreachable until ember binds a key in a new const**"*. Gen-1 built a protocol that could not take a fee until ember answered. And three more: **N-1**, the base geometry silently changed under the rate question; **N-15**, a formalization gate stands in front of it; and **§D.1 item 5**, gen-2 built `RevenuePolicyV2` — the immutable fee-bearing Realm record, streamed recipient allocation V3, registered calibrations, and treasury Position custody, all zero in the successor. M-26 reads as never-attempted. It was selected in gen-1, built in gen-2, and discarded in gen-3, three times without a decision record. |
+| **M-46** | Gen-1 had the abandonment problem too and solved it structurally rather than socially: `SWARM_ROADMAP` §8 rule 4 requires *"each lane to report: exact paths, commit, evidence plane, commands, test counts, artifact identity, negative boundaries, and remaining STOPs."* A lane that must report an artifact identity cannot vanish silently. Gen-3's `AGENTS.md` carries `semantic owner` (§8 rule 3) and none of rule 4. |
+| **M-10 / `F-6`** | The frontier's *"versioned selectable profile record"* is not a design still to be invented: gen-2's `clutch-collateral-adapter-v2` shipped it, with a canonical release record binding parser/CPI code and layouts, and a Realm-selected policy carrying **supply and market-cap ceilings**. **§D.1 item 10**, and it is **G-8**'s genericity question with a working answer attached. |
+| **M-17** | The cadence-tolerance lift `OddScheduledMedian` needs is downstream of a fold pipeline the successor does not have: gen-2's `RawPage → WindowWork → FoldWindowPages → SealWindow → EvaluateStatistic` over an associative monoid. **§D.1 item 3.** |
+| **M-50** | `0e1bc44d` is the commit behind the audit's quote, and its full form is stronger: *"Three things it deliberately does not do. **Candidate submission is solver work, not a crank**, so the quote table carries no row it never spends against."* The keeper was built with the solver boundary drawn deliberately, not left out. And see **G-7** for why the solver half was known to be a mechanism-design problem. |
+| **M-3 item 2** | **Built and dropped, not uncontemplated.** `clutch-accumulator` (2,419 Rust lines) is an associative interval-summary monoid with `combine`/`append`, `price_time_integral`, `twap`, `relative_terminal_to_twap`. See **§D.1 item 3**. |
+| **M-11** | Two: **N-8**'s *"the liveness-policy owner **must derive and measure**"* budget vector, and **§D.1 item 6** — `clutch-market-quality`'s exact portfolio value and full-simplex conservative cap are the natural substrate for `U-004`'s scenario-solvent half. |
+| **M-12** | Gen-2 had **42** `GeneralV2Action` verbs, not 25 — counted directly from `registry.rs:1902`. And see **G-3**: cancellation is separable from collection, was separately named and separately parked, and Direct's `CancelThroughV2` proves the intention transfers. |
+| **M-13** | Three. The 5,106 is 3,504, and 1,568 of those are unique subject lines (§ *the corpus*). The four workstreams are an 85-line roadmap (**C-3**). And **the "sharpest gap" it quotes — `01d00083`'s missing endowment instruction — was closed in gen-2** (`Endow`, `WithdrawCash`) **and is open again**: see §D.2. |
+| **M-24** | Two. Gen-1's surviving verdict is that *width* growth goes through staging or succinctness (**G-2**); gen-2 **built the staging** as the `ClearWork` growable work account (**§D.1 item 1**); `P-003` already blesses staged computation certificates. Three generations have met this wall and the two earlier ones answered it architecturally. |
+| **M-51** | `clutch-liveness` (4,848 Rust lines) is checked fixed-memory admission arithmetic proving named finite payments are covered at admission — the protocol-wide result M-51 says does not exist and is not scheduled. **§D.1 item 8.** |
+| **M-58** | Two corrections. This sweep read all 3,504 commits across every ref, so branch *content* is now swept. And the triage's absorption test does not apply to gen-2: `main` is compost, and **45 of 361 refs are 0 ahead of `origin/main` with capabilities still absent from the successor** — perfect absorption into a dead tree. **§D.3.** Also: `product-theory-redesign` is now **530 ahead** and still unmerged. |
+| **D-16** | `100e97ea`'s full wording is a better epitaph than the audit's excerpt: *"R5's 'install/pin Rocq and prove' bullet retired, noting **Rocq was in fact pinned and still produced nothing**… the file remains a specification with zero checked properties… **The named kernel properties are Lean's to prove.**"* |
+
+---
+
+# §F. ACTIONED and OBSOLETE — stated fairly
+
+The successor carries more of gen-1 than a reader of the MISSING list would
+guess. A sample, each verified against the tree rather than a document:
+
+- **Mint closability.** `SOPHISTICATION_GAP` §4: *"outcome mints are 82 bytes
+  with no TLV room, so `MintCloseAuthority` is unrepresentable and **they can
+  never close**."* Gen-3 has `crates/dclutch-token-svm/src/closeable_mint.rs`,
+  and `PROVENANCE.md` records the deliberate profile: *"immutable self-pointing
+  `MetadataPointer` plus immutable, fully consumed `TokenMetadata`."*
+  **ACTIONED**, and it also answers P3's *"bare versus immutable in-mint
+  metadata"* row by construction.
+- **The static client.** `SOPHISTICATION_GAP` §4: *"No client capable of reading
+  the chain: the static client ships `connect-src 'none'` by design."* P3:
+  *"Static-client framework and wallet adapter with no hosted backend."*
+  **ACTIONED** — `apps/dclutch-web`, Wallet Standard discovery, Talisman
+  confirmed.
+- **"Best valid submitted candidate."** Requirement 6, kept verbatim in
+  `dclutch-general-codec::Action::Freeze`'s doc comment. **ACTIONED.**
+- **The two-window candidate lifecycle.** Gen-1 ADR 0006's *"two exclusive slot
+  boundaries after the book freezes"* is gen-3's `Consider` → `Freeze`.
+  **ACTIONED** — while its commit/reveal subdivision is not (see **G-7**).
+- **Error-code consolidation.** Three gen-1 commits queue it; ADR 0007
+  (namespaced refusal codes) discharges it. **ACTIONED** (**G-21**).
+- **Internal venue ownership** (P0). **OBSOLETE** by ADR 0003's five-role
+  partition — with the caveat in §C that the partition's own measurement never
+  ran.
+- **Rocq.** **OBSOLETE** by ADR 0005 / `D-16`.
+- **The whole sealed-ELF apparatus** — `svm_run.txt` regeneration, the two-then-
+  thirteen rustdoc warnings riding a reseal wave, the relocated-Cargo-home
+  probe, `audit_artifact.sh`'s declared closure, the four cheap reseal riders at
+  `MACRO_AND_MICRO_OPTIMIZATION.md:400`, the default profile's ELF identity
+  matching no manifest key pattern (`710341bd`). **OBSOLETE** — gen-3 replaced
+  seal-identity with the checked-release pipeline. Roughly a third of gen-1's
+  entire debt vocabulary lives here, which is the honest reason gen-1's commit
+  prose yields 41 open rows rather than 200.
+- **The gen-1 settlement blocker ledger** — `PartialFillLedger`, `VirtualPot`,
+  `VirtualMergeCredit`, `TerminalClosure`, and the ten retired before them.
+  **All closed inside gen-1**, each with a bank campaign; `f9871af3` is the
+  commit that records the list empty. Nothing was handed forward unfinished.
+  This is why gen-1's *own* debt discipline is not the finding — the finding is
+  everything that was in a **register or a review** rather than a blocker row.
+
+---
+
+# §G. Findings about the instrument itself
+
+**1. The debt that survives is the debt that was never in a ledger.** Every gen-1
+row that reached `SETTLEMENT_BLOCKERS` or the terminal inventory's blocking ids
+was closed, with evidence, inside gen-1. Every row that lived in
+`docs/OPEN_QUESTIONS.md`, a decision record's *Deferred* section, a roadmap
+phase, or a review's §9 is still open. That is the same shape as the audit's
+finding **1** (*"the unrouted items live in the wrong ledger"* — `blocked.json`
+survived, board prose did not) — one generation earlier, with a different pair
+of ledgers. **The mechanism is not the medium; it is whether a row is in the
+thing a gate reads.** `blocked.json` and `SETTLEMENT_BLOCKERS` are read by
+tests. `OPEN_QUESTIONS.md` is read by people.
+
+**2. The generation boundary is a lossier interface than any lane handoff.**
+`M-7` counts 489 lane charters lost to encryption and calls reconstruct-from-a-
+name the failure mode. This sweep found the larger loss and it needed no
+cryptography: **four committed, on-`main`, plain-text artefacts — the intent
+archaeology, the instrument review, the next-wave roadmap, and a 3,649-line
+action catalogue with a doc comment on every one of 129 verbs — carrying most of
+Tier 0, all of gen-1's decision deferrals, a written next step for the dark
+programme, and the entire named surface of gen-2, did not cross a subtree
+merge.** `COMPOST.md` explicitly permits recovering *"user intent and product
+requirements"* from the compost tree. Nobody did, because nothing pointed at
+them.
+
+**M-7 is therefore too pessimistic and the audit's Tier 0 is too pessimistic in
+the same way.** The intentions were not lost to encryption or to memory. They
+were written down carefully, in the repository we still have, and then a subtree
+merge became a wall nobody thought to look over. The cheapest durable repair in
+this whole addendum is a pointer: **`~/dev/dclutch/COMPOST.md` should name those
+four files by path**, which turns three of this addendum's four corrections into
+things that cannot recur.
+
+**3. Nothing in either generation re-queues a deferred measurement.** Eleven of
+the 78 gates ran; every one ran because the lane that named it also ran it, in
+the same wave. Of the 43 that did not, not one was picked up by a later lane —
+`N-20` is the clean specimen, a measurement that lost a resource race to the
+swarm, was written down perfectly with three steps and a falsifiable prediction,
+and was never seen again. `blocked.json` holds *routes*; nothing holds
+*measurements that are owed*. That is a missing row type, not a missing lane.
+
+---
+
+# §H. What this evidence would support
+
+*"Weigh this ledger as evidence, not obligation: a mention is not a commitment."*
+So this is not a queue and nothing below is owed. It is the shortest list of
+moves this evidence would support **if someone wanted them**, ordered by what a
+miss would cost, and deliberately disjoint from the audit's ten. Two of them
+(1 and 3) are cheap enough that the cost of skipping them is the only argument
+for doing them; the rest are genuinely optional.
+
+1. **Before choosing between the scorecard's two options for the degree-≥2 price
+   gate, look at gen-2's third one** (`G-1`, **§D.1 item 2**). The gap is already
+   found and owned by `BSPLINE_ECLIPSE_SCORECARD`, which frames the choice as
+   *"port a sound-but-incomplete gate, or do the per-span Hausdorff witness
+   generation one designed and never built."* Gen-2's `clutch-price-measure`
+   carries a **quantized** atom-mixture certificate over bounded integers — the
+   posture `LiabilityBasisV2` is already in — and a two-way gen-1/gen-3
+   comparison cannot see it. Half a day of reading before a design choice.
+2. **Reconcile the fee base with the decision that chose it** (`N-1`,
+   **§D.1 item 5**). Either a paragraph saying flat notional is the V1 base and
+   why, or a row saying `fee_basis_points` is a placeholder for the composite.
+   Ember delegated item 9 on the weakest-choice principle and it named flat
+   *eliminated*; flat is what runs.
+3. **Point `COMPOST.md` at four files** (`C-1`, `C-2`, **§G.2**). The cheapest
+   durable act in this addendum:
+   `docs/reviews/PROJECT_INTENT_ARCHAEOLOGY_2026-08-22.md`,
+   `docs/reviews/INSTRUMENT_AND_MARKET_DESIGN_REVIEW_2026-08-22.md`,
+   `docs/reviews/SOPHISTICATION_GAP_2026-08-19.md`, and
+   `programs/solana-layout/src/registry.rs`. Then **port** the first three,
+   plus `docs/design/NEXT_WAVE_ROADMAP_2026-08-20.md` and
+   `docs/OPEN_QUESTIONS.md`. This is most of the audit's recommendation 2,
+   already written, by us — an hour of copying instead of an hour of `cv`.
+4. **Read `registry.rs` once** (§D). 129 named coordinates, 72 with no successor,
+   every one carrying the doc comment that says what it did. ADR 0009 is what one
+   of them looks like when it gets a real answer — retired on the merits, in
+   writing, this afternoon. A mention is not a commitment, so most of the other
+   71 may deserve exactly the sentence *"we looked, and no"*; the point is that
+   nobody has looked. One file, one afternoon, and it would inform `U-002`,
+   `U-004`, `U-006`, `U-008`, `O-011` and `O-012` at once.
+5. **Ask ember the sixth Tier-3 question** (`G-5`): upgrade posture. It is the
+   only decision gen-1 formally deferred to him, it has a written recommendation
+   *and* his own counter-principle recorded against it, and its second sentence
+   binds the source today — *"Source code must support either deployment without
+   pretending the former is the latter."*
+6. **Open a licence lane** (`G-4`). The addendum's only outright regression:
+   gen-1 ran a green SBOM over 36 manifests and left three families for human
+   eyes; gen-3 has no instrument and a larger surface. AGPL's source-offer
+   obligation attaches on distribution, and the Pages workflow now distributes.
+   The owner already exists — *"counsel/security/licence engagements"* is on
+   ember's own reserved list (`G-10`).
+7. **Give owed measurements a row type** (**§G.3**). `blocked.json` routes what
+   refuses. Nothing routes what was promised and not measured, which is why
+   forty-three of them are here. Three are cheap enough to close this week:
+   `N-5`'s two upstream fetches, `N-2`'s bounded outcome-cap sweep, and `N-9`'s
+   Cert-F instrumentation against the wall that is standing right now.
+
+---
+
+*Gen-1 did not fail to write things down. It wrote them down — in reviews, in a
+register, in a roadmap, and in a catalogue with a doc comment on every verb — and
+then we moved, and the move was the lossy part.*
