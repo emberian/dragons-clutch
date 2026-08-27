@@ -1,0 +1,33 @@
+{
+  "name": "@dclutch/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "dclutch: the dClutch trader loop from a terminal - markets, buy/sell, redeem, portfolio, found, and the funded failure walk - built on @dclutch/sdk, which it exists to prove.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "dclutch": "./bin/dclutch.mjs"
+  },
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/dclutch.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@dclutch/sdk": "file:../dclutch-sdk",
+    "@solana/web3.js": "1.98.4",
+    "tweetnacl": "1.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "esbuild": "0.25.12",
+    "eslint": "9.39.4",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.4",
+    "vitest": "4.0.17"
+  }
+}
