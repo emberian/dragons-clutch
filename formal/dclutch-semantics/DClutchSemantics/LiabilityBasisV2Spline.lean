@@ -309,8 +309,9 @@ theorem apportionFrom_within_one_atom
         omega
       · exact induction _ _ rfl member
 
-/-- The one-atom bound at a single boundary step, which is the head case of the
-theorem above and the induction step of the control-polygon bound below. -/
+/-- The one-atom bound at a single boundary step: the head case of
+`apportionFrom_within_one_atom`, and the induction step of the control-polygon
+bound below. -/
 theorem boundary_step_within_one_atom
     (scale denominator cumulative carried weight : Nat)
     (positive : 0 < denominator)
