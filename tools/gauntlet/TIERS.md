@@ -164,6 +164,64 @@ whatever CONTEXT file the tier wants `expect_from` to read; tier 1 passes the
 bootstrap plan, `direct/` passes a hand-derived expectations file merged with
 its build stage's artifact record.
 
+## Family lanes are named, not numbered
+
+Tier 1 is a number because it is the infrastructure floor and there is one of
+it. Everything after it is a FAMILY, several land at once, and four lanes
+independently numbering their own tier is a race nobody wins -- it happened, on
+2026-08-27, and the numbering had to be renegotiated live while a committed
+`tier2/` was being moved to `tier4/`. A family lane therefore lives in a
+directory named for its family:
+
+```
+tools/gauntlet/
+  tier1/            the infrastructure floor: a real validator, a real deploy
+  tier4/            the Series occurrence fast lane (numbered before this rule)
+  claims-custody/   the Claims and Custody family fast lanes
+  dealer/           the Dealer family fast lane
+  direct/           the Direct family fast lane
+```
+
+Each family lane owns a `run-<family>.sh` that builds its ELFs, runs its
+campaigns, folds the evidence, checks its witnesses and calls `census observe`
+itself. It does NOT add a stage to `run.sh`: `run.sh` owns tier 1 and the
+census, and a shared script that every family edits is the same race one level
+down. Render the report afterwards with `run.sh --mode census`, which is cheap
+and reads the accumulated ledger.
+
+A family lane may carry more than one census campaign. It has to when its
+campaigns disagree about an address: a census campaign has ONE program map, and
+`claims-custody` pins different `registry` addresses in its two families.
+
+## A refusal the census cannot name
+
+A campaign that proves rollback does it by refusing AFTER the child committed,
+and the program that refuses is a test-only caller the census does not
+enumerate. The chain reports THAT program's code, which can collide numerically
+with a first-party refusal it has nothing to do with -- `DeliberateLateFailure
+= 3` is also `claims/ClaimsSbfError::Release` and
+`custody/CustodySbfError::CallerAuthority`.
+
+Naming the first-party refusal in that binding is a lie the census cannot
+detect, because the numbers match. Such a binding instead carries:
+
+```json
+{
+  "outcome": "refused",
+  "unnamed_refusal": {
+    "code": 3,
+    "reason": "the test-only caller's DeliberateLateFailure, raised after the child committed"
+  }
+}
+```
+
+The code is still checked against what the chain reported, so a campaign whose
+claim and chain disagree is still refused; the observation simply credits no
+enumerated taxonomy. Exactly one of `refusal` and `unnamed_refusal` is
+admissible per binding, and an empty reason is refused: an uncredited refusal
+with no account of where it came from is how a real refusal launders itself out
+of the taxonomy.
+
 ## Adding a family tier
 
 1. **Check the census first.** `run.sh --mode census` takes seconds and prints
@@ -174,12 +232,15 @@ its build stage's artifact record.
    reason and the owning lane. A route with no entry and no observation shows up
    in the report's "NO stated reason at all" row, which is the row that should
    make someone uncomfortable.
-3. **Add a producer** under `tools/gauntlet/tier<N>/`, emitting the evidence
-   shape above.
-4. **Extend `run.sh`** with a `tier<N>` stage. Follow tier 1's staging: a stamp
-   keyed on the stage's exact inputs, outputs under `$WORK`, never in the repo.
-   Do not key a campaign stage on its bindings file — authoring a binding must
-   never cost a campaign re-run.
+3. **Add a producer** under `tools/gauntlet/<family>/`, emitting the evidence
+   shape above. A ProgramTest campaign gets there through
+   `tools/gauntlet/program-test-evidence`: one `record` call per submitted
+   transaction, a no-op unless `DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR` is set, and
+   `fold-program-test-evidence` to assemble the document.
+4. **Add a `run-<family>.sh`**, not a `run.sh` stage. Outputs under a `--work`
+   root, never in the repo; the ledger and inventory default to the shared
+   `run.sh` output so campaigns accumulate. A campaign must never be keyed on
+   its bindings file — authoring a binding must never cost a campaign re-run.
 5. **Bind, witness, observe.** `census observe` is called once per campaign; the
    ledger accumulates across tiers.
 

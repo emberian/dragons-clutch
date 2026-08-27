@@ -4,7 +4,7 @@
     {
       "route": "monolith/*",
       "reason": "programs/dclutch-sbf is the gen-1 single-program prototype. It is a workspace member and still builds, but it is not one of the seven artifacts the successor release set binds (Registry, Core, Claims, Trading, Resolution, Custody, Rent), so the transaction-only bootstrap never deploys it and no route of it is reachable by any tier. Whether it is superseded debt to delete under AGENTS.md's 'do not preserve parallel legacy/current authority paths' rule, or a live target that needs its own tier, has not been decided anywhere in the tree.",
-      "owner": "UNASSIGNED — needs an owner decision, not a test"
+      "owner": "UNASSIGNED \u2014 needs an owner decision, not a test"
     },
     {
       "route": "claims-proof/*",
@@ -28,7 +28,7 @@
     },
     {
       "route": "dealer-accelerator/*",
-      "reason": "Dealer accelerator, not part of the seven-role successor release set. It is ALSO the one first-party artifact whose SBF build is not frame-clean, and every campaign runner refuses a campaign on an artifact the toolchain calls potentially-undefined. Measured at 9abed0c (TA-DLR, wave board 2026-08-27): 253 'overwrites values in the frame' diagnostics, every one naming hot_v3::process_hot_execution_v3 — and the ROOT CAUSE is NOT this package's family features. It is that dclutch-trading-sbf compiles without its own #[global_allocator] whenever `no-entrypoint` or `custom-heap` is set, which leaves __rust_alloc an opaque extern and spills process_hot_execution_v3 past the SBPF v0 4,096-byte frame: `families` alone is 0 diagnostics, `dealer-family,series-family` alone is 0, and `families,custom-heap` is 255 with the entrypoint still on. The fix is measured to zero and is two edits — drop `not(feature = \"no-entrypoint\")` from the five PROGRAM_HEAP_V1 cfg predicates in entrypoint_adapter.rs (W2h's file), and enable this package's own `custom-heap` feature so solana_program::entrypoint! stops installing a second allocator. The emitted .so is NOT contaminated: process_hot_execution_v3 is dead-stripped from it (.text differs by 104 bytes with the function cfg'd out of existence), so this row is blocked on build hygiene the runners enforce, not on a broken artifact.",
+      "reason": "Dealer accelerator, not part of the seven-role successor release set. It is ALSO the one first-party artifact whose SBF build is not frame-clean, and every campaign runner refuses a campaign on an artifact the toolchain calls potentially-undefined. Measured at 9abed0c (TA-DLR, wave board 2026-08-27): 253 'overwrites values in the frame' diagnostics, every one naming hot_v3::process_hot_execution_v3 \u2014 and the ROOT CAUSE is NOT this package's family features. It is that dclutch-trading-sbf compiles without its own #[global_allocator] whenever `no-entrypoint` or `custom-heap` is set, which leaves __rust_alloc an opaque extern and spills process_hot_execution_v3 past the SBPF v0 4,096-byte frame: `families` alone is 0 diagnostics, `dealer-family,series-family` alone is 0, and `families,custom-heap` is 255 with the entrypoint still on. The fix is measured to zero and is two edits \u2014 drop `not(feature = \"no-entrypoint\")` from the five PROGRAM_HEAP_V1 cfg predicates in entrypoint_adapter.rs (W2h's file), and enable this package's own `custom-heap` feature so solana_program::entrypoint! stops installing a second allocator. The emitted .so is NOT contaminated: process_hot_execution_v3 is dead-stripped from it (.text differs by 104 bytes with the function cfg'd out of existence), so this row is blocked on build hygiene the runners enforce, not on a broken artifact.",
       "owner": "TA-DLR (the campaign); W2h (the entrypoint_adapter.rs cfg line)"
     },
     {
@@ -39,7 +39,7 @@
     {
       "route": "series/*",
       "reason": "STRUCTURALLY UNREACHABLE, not merely un-driven. Every route of programs/dclutch-series-sbf ends in a Core CPI that Core refuses by construction: the adapter sends exactly SERIES_CORE_REQUEST_BYTES_V1 (336) bytes with no receipt tail (series-sbf/src/lib.rs:844), while Core's dispatch for that magic requires a tail of CLAIMS_FOUNDING_RECEIPT_BYTES_V5 (1008) or PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1 (320), both filtered on start >= 336, so a bare request falls through to CoreSbfError::Instruction. Core also has NO handler for SeriesCoreActionV1::{Prepare, Expire, Close}; series_open.rs:253 and series_consume.rs:296 both require Consume. So no tier anyone writes can execute these four routes or raise these twelve codes. It is also the only consumer of the v1 dclutch-series-codec; Core, Trading, series-shadow and the operator are all on dclutch-series-v3-kernel, whose Core seam DOES execute (see core/series_consume::process). Full argument: docs/evidence/SERIES_ADAPTER_CORE_SEAM_2026_08_27.md. This needs an owner DECISION -- delete the superseded path per AGENTS.md, or write an ADR for the Core-side Prepare/Expire/Close seam -- not a test.",
-      "owner": "UNASSIGNED — needs an owner decision, not a test (TA-SER, 2026-08-27)"
+      "owner": "UNASSIGNED \u2014 needs an owner decision, not a test (TA-SER, 2026-08-27)"
     },
     {
       "route": "series-shadow/*",
@@ -72,9 +72,49 @@
       "owner": "cycle-2 tranche A (WAVE.md)"
     },
     {
-      "route": "claims/*",
-      "reason": "The Claims ELF IS bound into the five-role release set and IS activated by tier 1, but no tier-1 transaction reaches it: the Found31 path invokes only Registry, Core and Rent (tools/local-validator/bootstrap/successor/README.md). Claims routes need either the Open-last chain (Core Open consumes a Claims FoundingV5 receipt) or a family tier.",
-      "owner": "W1d for the Open-last chain; cycle-2 tranche A for the family tier"
+      "route": "claims/affine_batch_v2::process",
+      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/affine-batch (tests/affine_batch_v2.rs).",
+      "owner": "cycle-2 tranche A, Claims"
+    },
+    {
+      "route": "claims/signed_delta_v3::process",
+      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/fractional-signed-delta (tests/fractional_signed_delta.rs).",
+      "owner": "cycle-2 tranche A, Fractional"
+    },
+    {
+      "route": "claims/liability_basis_v2::process",
+      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/tests/liability_basis_v2_program_test.rs.",
+      "owner": "LB liability-basis-v2 lane"
+    },
+    {
+      "route": "claims/rational_representation_v2::process",
+      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs.",
+      "owner": "cycle-2 tranche A, Rational"
+    },
+    {
+      "route": "claims/rational_lifecycle_v2::process",
+      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/rational-lifecycle (tests/lifecycle.rs).",
+      "owner": "cycle-2 tranche A, Rational"
+    },
+    {
+      "route": "claims/terminal_settlement_v3::process",
+      "reason": "No campaign drives it. The test caller exists (programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller) and the route needs no open Market, but its 35-account frame spans four prestates no existing fixture installs together: the SignedDeltaV3 parent frame with a runtime Position table, a Custody replay plus Hoard token account plus custody-authority PDA under a real token program, a Realm record, and the composition-exposure and terminal-coordinate finalized records. That fixture is the work, not the wiring.",
+      "owner": "TA-CL claims/custody lane, next element"
+    },
+    {
+      "route": "claims/founding_v5::process",
+      "reason": "No ProgramTest drives it, and the validator campaign that would has never reached it. The 32-account frame consumes BOTH a ProjectedCustodyLockReceiptV1 and a ProjectedCustodyReceiptV1 in its instruction tail plus a Core SeriesFoundingPermitV1, a Custody replay and a Hoard token account -- so its prestate is the projected-Custody one that W1d owns and that no live route can create yet (see the DCLTPCB1 and DCLTGMF1 entries here). A Claims-family ProgramTest can install that prestate directly, which is the cheapest way to reach the route; nobody has.",
+      "owner": "TA-CL for the ProgramTest; W1d for the live prestate"
+    },
+    {
+      "route": "claims/market_closure_v1::process",
+      "reason": "No campaign drives it. Closure requires a zero-supply Claims aggregate and the RentCredit identities behind it, which is a terminal prestate no fixture builds.",
+      "owner": "cycle-2 tranche A, Claims"
+    },
+    {
+      "route": "claims/process_core_effect",
+      "reason": "The DCLTCEF1 Core-effect route. Reachable only from a Core effect batch; no campaign drives Core into it.",
+      "owner": "cycle-2 tranche A, Claims"
     },
     {
       "route": "resolution/*",
@@ -98,7 +138,7 @@
     },
     {
       "route": "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
-      "reason": "DCLTPCB1 exists (28d2da6): a 60-account Trading route driving projected-Custody Initialize and OpenHoard under their single-use ProjectedCustodyCallerSeedsV1 signers. No campaign stage drives it yet. NOTE for whoever adds that stage: f30d087 fixed a 35-byte caller PDA seed domain against Solana's 32-byte cap, which means no projected-Custody transition could ever have signed before it — precisely the class of defect the census exists to make visible.",
+      "reason": "DCLTPCB1 exists (28d2da6): a 60-account Trading route driving projected-Custody Initialize and OpenHoard under their single-use ProjectedCustodyCallerSeedsV1 signers. No campaign stage drives it yet. NOTE for whoever adds that stage: f30d087 fixed a 35-byte caller PDA seed domain against Solana's 32-byte cap, which means no projected-Custody transition could ever have signed before it \u2014 precisely the class of defect the census exists to make visible.",
       "owner": "W1d"
     },
     {
@@ -118,7 +158,7 @@
     },
     {
       "route": "custody/open_source_compartment#OpenSourceCompartment",
-      "reason": "The new projected-family Custody operation that opens a source compartment against a vacant Market — the operation W1d added for the Open gate. No campaign drives it yet.",
+      "reason": "The new projected-family Custody operation that opens a source compartment against a vacant Market \u2014 the operation W1d added for the Open gate. No campaign drives it yet.",
       "owner": "W1d"
     },
     {
@@ -144,41 +184,6 @@
     {
       "route": "custody/abort_open_and_close#AbortOpenAndClose",
       "reason": "Projected-Custody abort path; reachable only after a projected compartment exists.",
-      "owner": "W1d"
-    },
-    {
-      "route": "custody/delegated::process",
-      "reason": "Delegated custody requires a live Core-owned Market, i.e. the Open path.",
-      "owner": "W1d for Open; cycle-2 tranche A for the Claims -> Custody -> Token-2022 terminal tier"
-    },
-    {
-      "route": "custody/initialize_replay#InitializeReplay",
-      "reason": "Normal custody goes through authenticate_market, which requires live Core-owned Market state; no tier reaches an open Market.",
-      "owner": "W1d for Open; cycle-2 tranche A"
-    },
-    {
-      "route": "custody/open_vault#OpenVault",
-      "reason": "Normal custody; requires a live Core-owned Market.",
-      "owner": "W1d for Open; cycle-2 tranche A"
-    },
-    {
-      "route": "custody/execute_transfer#Transfer",
-      "reason": "Normal custody; requires a live Core-owned Market.",
-      "owner": "W1d for Open; cycle-2 tranche A"
-    },
-    {
-      "route": "custody/close_vault#CloseVault",
-      "reason": "Normal custody; requires a live Core-owned Market.",
-      "owner": "W1d for Open; cycle-2 tranche A"
-    },
-    {
-      "route": "custody/close_replay#CloseReplay",
-      "reason": "Normal custody; requires a live Core-owned Market.",
-      "owner": "W1d for Open; cycle-2 tranche A"
-    },
-    {
-      "route": "custody/process_instruction",
-      "reason": "The Custody ELF is activated by tier 1 but never invoked: every one of its routes needs either an open Market or the projected-Custody bootstrap.",
       "owner": "W1d"
     },
     {
@@ -274,21 +279,21 @@
     {
       "route": "core/found::project",
       "reason": "DCLTPFQ1, the host-side Found projection request route. Tier 1 computes the Found projection with the operator crate off finalized RPC state rather than asking Core for it, so this on-chain route is unexercised.",
-      "owner": "UNASSIGNED — needs a decision on whether the on-chain projection route is still wanted now that the operator derives it"
+      "owner": "UNASSIGNED \u2014 needs a decision on whether the on-chain projection route is still wanted now that the operator derives it"
     },
     {
       "route": "rent/process_create#Create",
       "reason": "RentCreditV1 Create. Superseded on the live path by the Market-scoped LifecycleRentCreditV2 that tier 1 does exercise; AGENTS.md forbids preserving parallel legacy/current authority paths, so this is a supersession decision, not a missing test.",
-      "owner": "UNASSIGNED — owner decision (delete V1, or state why both survive)"
+      "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
     },
     {
       "route": "rent/process_withdraw#Withdraw",
       "reason": "RentCreditV1 Withdraw; same supersession question as V1 Create.",
-      "owner": "UNASSIGNED — owner decision (delete V1, or state why both survive)"
+      "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
     },
     {
       "route": "rent/process_sweep_v2#Sweep",
-      "reason": "LifecycleRentCreditV2 Sweep. Tier 1 creates a V2 credit and stops at Found; nothing sweeps it. This is a missing tier stage, not a structural blocker — it should be the first thing a tier-1 extension adds.",
+      "reason": "LifecycleRentCreditV2 Sweep. Tier 1 creates a V2 credit and stops at Found; nothing sweeps it. This is a missing tier stage, not a structural blocker \u2014 it should be the first thing a tier-1 extension adds.",
       "owner": "FT (this lane's next slice)"
     },
     {
@@ -299,7 +304,7 @@
     {
       "route": "registry/batch_v2::process",
       "reason": "DCLTRGB2, the role-batch request route. Tier 1 activates one role per transaction (whole-ELF hashing makes a five-role transaction exceed the maximum), so the batch route is not on its path.",
-      "owner": "UNASSIGNED — needs a decision on whether batch activation is still reachable at real ELF sizes"
+      "owner": "UNASSIGNED \u2014 needs a decision on whether batch activation is still reachable at real ELF sizes"
     },
     {
       "route": "registry/continuation_v1::process",

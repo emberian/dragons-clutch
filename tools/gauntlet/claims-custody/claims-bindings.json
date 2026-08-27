@@ -1,0 +1,147 @@
+{
+  "campaign": "claims-family-programtest",
+  "note": "Tier 2, Claims family fast lane. Real Claims, Registry, Core and Rent ELFs with the Product Runtime V3 graph, the LiabilityBasisV2 aggregate, the Core Market and the lifecycle RentCredit INSTALLED directly, so the family routes are reachable with no Hot execution and no open Market. Refusal bindings claim only the entrypoint route unless the campaign observed the handler return; this lane asserts which refusal the chain reported, not which line raised it.",
+  "bindings": [
+    {
+      "label": "claims position: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. The Claims frames are 26 and 15 accounts wide and ride a v0 message over this table."
+    },
+    {
+      "label": "claims position: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension, twenty addresses per transaction. No dClutch program is invoked."
+    },
+    {
+      "label": "claims position: admit under a substituted Position owner",
+      "routes": [
+        "claims/process_instruction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ProtocolPositionSbfErrorV2::Position",
+      "note": "HOSTILE. The admission names a Position owner the caller-authority PDA does not authorize. Refuses Position (145); the campaign asserts the Position account is byte-identical to its prestate."
+    },
+    {
+      "label": "claims position: admit",
+      "routes": [
+        "claims/process_instruction",
+        "claims/protocol_position_v2::process",
+        "claims/process_admit#Admit"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The canonical 26-account Admit. Allocates and assigns the runtime-width Position and its admission record, and returns the 512-byte ProtocolPositionAdmissionV2 receipt."
+    },
+    {
+      "label": "claims position: caller refuses after a complete admission",
+      "routes": [
+        "claims/process_instruction",
+        "claims/protocol_position_v2::process",
+        "claims/process_admit#Admit"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 3,
+        "reason": "The test-only caller's DeliberateLateFailure, raised AFTER Claims logged success, to prove the allocation and the admission record roll back together. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+      },
+      "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit. The campaign asserts the admission account is byte-identical to its prestate."
+    },
+    {
+      "label": "claims position: admit an already admitted Position",
+      "routes": [
+        "claims/process_instruction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ProtocolPositionSbfErrorV2::Position",
+      "note": "HOSTILE replay. The request declares a Vacant prestate for a Position that now exists. Refuses Position (145)."
+    },
+    {
+      "label": "claims position: close a zero Position",
+      "routes": [
+        "claims/process_instruction",
+        "claims/protocol_position_v2::process",
+        "claims/process_close#Close"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The canonical 15-account Close. Reclaims both the Position and its admission record into the lifecycle RentCredit; the campaign asserts the RentCredit gained exactly the two observed rent principals."
+    },
+    {
+      "label": "claims sparse: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. The composed chain carries 64 account references (1 + 26 + 22 + 15) and cannot ride a legacy message."
+    },
+    {
+      "label": "claims sparse: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension, twenty addresses per transaction. No dClutch program is invoked."
+    },
+    {
+      "label": "claims sparse: transfer of zero",
+      "routes": [
+        "claims/process_instruction",
+        "claims/protocol_position_v2::process",
+        "claims/process_admit#Admit",
+        "claims/sparse_native_transfer_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/SparseNativeTransferSbfErrorV1::Instruction",
+      "note": "HOSTILE, built as BYTES: the canonical codec refuses a zero quantity at construction, so the only way to put one on the wire is to overwrite the encoded field. Admit returns first and the whole chain rolls back; the campaign asserts the aggregate, both Positions and the RentCredit are byte-identical to their prestate."
+    },
+    {
+      "label": "claims sparse: transfer under a substituted admission receipt",
+      "routes": [
+        "claims/process_instruction",
+        "claims/protocol_position_v2::process",
+        "claims/process_admit#Admit",
+        "claims/sparse_native_transfer_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/SparseNativeTransferSbfErrorV1::ClaimsState",
+      "note": "HOSTILE. The caller carries a receipt that decodes but names another Position owner. This is the check validate_sparse_admission_receipt_v3 owns (commit 78bda05). NOTE: omitting the suffix entirely is NOT refused here -- the adapter treats the receipt as optional and the exact backward dependency is enforced by ClaimsCompositionV3 in the outer controller, which no live route reaches yet."
+    },
+    {
+      "label": "claims sparse: caller refuses after the complete chain",
+      "routes": [
+        "claims/process_instruction",
+        "claims/protocol_position_v2::process",
+        "claims/process_admit#Admit",
+        "claims/sparse_native_transfer_v1::process",
+        "claims/process_close#Close"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 3,
+        "reason": "The test-only chain caller's DeliberateLateFailure, raised AFTER all three Claims stages returned, to prove that a completed three-route composition rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+      },
+      "note": "The strongest rollback case in this tier: three routes, an allocation, an admission record, a liability transfer and a rent reclamation, all undone. The campaign asserts every touched account is byte-identical to its prestate and that the chain's own logs carry three `Program <claims> success` lines inside the failed transaction."
+    },
+    {
+      "label": "claims sparse: admit, transfer and close",
+      "routes": [
+        "claims/process_instruction",
+        "claims/protocol_position_v2::process",
+        "claims/process_admit#Admit",
+        "claims/sparse_native_transfer_v1::process",
+        "claims/process_close#Close"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The composition of commit 78bda05, executed: Admit (26 accounts) returns the 512-byte admission receipt, the SparseNativeTransfer (22) consumes it verbatim and returns its 448-byte receipt, and the Close (15) consumes THAT and reclaims the drained source Position. One transaction. The campaign asserts the destination holds exactly the transferred quantity, that the aggregate supply at the moved coordinate is unchanged, and that the RentCredit gained exactly the two observed rent principals."
+    }
+  ]
+}
