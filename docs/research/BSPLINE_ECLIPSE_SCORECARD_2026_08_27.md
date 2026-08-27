@@ -71,7 +71,7 @@ clamped cubic returns `[1/48, 23/48, 23/48, 1/48]` at a span midpoint.
 | Supply algebra preservation | proved per-property for the spline path | inherited from one `Basis` instance | **gen-3 ahead**, structurally |
 | Maximum claims, physically | 16 | 10 (twelve knot slots in the first record) | **gen-1 ahead** |
 | Edge policy | clamp **or** refuse, caller-selected | clamp only | **gen-1 ahead**, minor |
-| Degree ≥ 2 arbitrage gate | built (moment cone V1b), `decide`-checked both directions, with its table proved *tight* — and provably incomplete on multi-span grids, with a named false acceptance | **absent** | **gen-1 ahead — the largest gap** |
+| Degree ≥ 2 arbitrage gate | built (moment cone V1b), `decide`-checked both directions, table proved *tight* — and provably incomplete on multi-span grids, with a named false acceptance. **Gen-2 built a second, integer one that refutes it** | **absent** | **behind — the largest gap. But see the correction below: the fix exists and is a transplant, not research** |
 | Shape compiler (analytic target → coefficients + error certificate) | built, host-only | absent | **gen-1 ahead** |
 | Occupation / path accumulator | built, never integrated | absent | gen-1 ahead on paper only |
 | Lean↔Rust agreement corpus | 3,360 rows, **uniform grids only** | 28 agreement + 32 refusal, covering multiplicity, non-uniform grids, both clamps, both scale extremes | gen-1 ahead on volume, gen-3 ahead on coverage classes |
@@ -100,13 +100,85 @@ The load-bearing point is that it must be closed **before** a Market can
 select degree ≥ 2, not after, and the trigger has to be written down now
 rather than rediscovered.
 
-The honest framing of what would be inherited: generation one's own gate was
-**provably incomplete** on multi-span grids, with a pinned false acceptance
-(degree two, five claims, breakpoints `[0,1,2,3]`: `p/S = (1/3,2/3,0,0,0)`
-passes the gate while `(1, −2, 10, 40, 64)` has the globally nonnegative
-payoff `(3x−1)²` and price `−S`). So this is not "port the gate" — it is
-"port a sound-but-incomplete gate, or do the per-span Hausdorff witness
-generation one designed and never built."
+Generation one's own gate was **provably incomplete** on multi-span grids, with
+a pinned false acceptance (degree two, five claims, breakpoints `[0,1,2,3]`:
+`p/S = (1/3,2/3,0,0,0)` passes the gate while `(1, -2, 10, 40, 64)` has the
+globally nonnegative payoff `(3x-1)^2` and price `-S`).
+
+### Correction: there is a third option, and it is the right one
+
+**An earlier revision of this document said the choice was "port a
+sound-but-incomplete gate, or do the per-span Hausdorff witness generation one
+designed and never built." Both halves of that sentence were wrong**, and the
+reason is that this document compared generation one to generation three and
+never looked at **generation two**. `ASPIRATION_LEDGER.md` `G-1` caught it the
+same afternoon.
+
+Generation two built the gate independently, over integers, and it is not in
+the purged monolith — it is intact on `dragons-clutch` `main` today as
+`crates/clutch-price-measure`, 8,843 Rust lines, dated 2026-08-23/24. It
+contains **both** of the things named above:
+
+- `verify_continuous_price_measure_v2` — the per-span Hausdorff/Bernstein
+  witness generation one designed. **It was built.** It enforces
+  `w1^2 <= 4*w0*w2` at degree two and `w1^2 <= 3*w0*w2`, `w2^2 <= 3*w1*w3` at
+  degree three *per span*, then requires exact reconstruction through a
+  transfer matrix generated from the B-spline recurrence rather than supplied
+  by the caller.
+- `verify_quantized_atom_mixture_v1` — the one that actually fits
+  `LiabilityBasisV2`. It checks that the price vector is a nonnegative integer
+  mixture of *actually attainable* quantized payout vectors:
+
+  ```text
+  sum_k weight_k = W
+  sum_i price_i  = D
+  atom_k = evaluate(coordinate_k)              -- recomputed, never supplied
+  price_i * W = sum_k weight_k * atom_k[i]     for every claim i
+  ```
+
+  That is convex-hull membership over the real atom set. Checked `u128`, no
+  floats, `no_std`, allocation-free, at most 16 atoms, a fixed 544-byte
+  certificate.
+
+**It refutes generation one's gate in both directions, and the tests are in the
+tree.** `crates/clutch-price-measure/tests/adversarial.rs:262` asserts that V1b
+*accepts* `(4,8,0,0,0)/12` — the pinned false acceptance quoted above — that the
+generation-two checker returns `Err(QuadraticMomentOutsideCone { span: 0 })`,
+and that the arbitrage portfolio costs exactly `-12 = -S`. Line `281` goes the
+other way: a live quantized point V1b *refuses* is given a valid single-atom
+certificate. Generation two fixes both the unsoundness and the over-refusal.
+
+**Why it fits `LiabilityBasisV2` better than either alternative.** The quantized
+verifier needs exactly one thing from a basis: a deterministic integer evaluator
+whose payouts sum to a fixed scale. No uniformity, no knot vector, no degree, no
+span decomposition. Every axis on which this lane is *ahead* of generation one —
+interior knot multiplicity, non-uniform grids at degree >= 2, a
+partition-of-unity proof not restricted to uniform grids — is an axis on which
+generation one's moment cone cannot even be stated, and to which hull membership
+is simply indifferent. The expensive half is off-chain: the 2,850-line exact
+solver and the 1,058-line 2048-bit Bareiss substrate are the *prover*; the chain
+runs only the verifier.
+
+**What is honestly still open.** Generation two's gate has **no Lean at all** —
+48 Rust tests, zero theorems, and its own promotion gate 9 (*"extend Lean only
+for the exact checker correspondence proved"*) was never run. It also carries a
+named residual: *"The fixed `u64` mass denominator remains an inner-certificate
+bound; support-boundedness alone does not prove that every lattice price has
+such a small denominator"* (`docs/design/PRICE_MEASURE_WITNESS_V2.md:188`), with
+`OutOfProfile` distinguishing "no representation" from "representation too large
+to encode", so it fails **closed**. That is a real hole, and a much better hole
+than an unsound one.
+
+So the trade is plain: **generation one's gate is machine-checked and wrong;
+generation two's is only Rust-tested and right.** Generation three has the Lean
+machinery neither predecessor pointed at this problem, and the theorem worth
+stating is finite and `decide`-shaped — *a price admitted by the certificate
+admits no arbitrage against the finite atom set*. Landing that would put
+generation three ahead of **both** predecessors on the largest gap in this
+table, rather than merely level with one of them.
+
+Transplanting requires a `docs/compost/` manifest under `COMPOST.md`'s rule;
+`PYTH-FIXTURE-001` is the only existing row and the template.
 
 **Degree 1 is unaffected.** At degree ≤ 1 the gate is vacuous and provably so.
 A degree-1 wave is the whole vanilla-option span at grid resolution and needs
@@ -170,6 +242,18 @@ not recalled and not taken from a summary:
 | The multi-span false acceptance | `docs/research/DUAL_IS_THE_MEASURE.md`, blob `ce9a991`, §7.6.7 — quoted verbatim above |
 | *"the biggest capability regression the design accepts, and the reason deg ≤ 1 is the recommended first wave"* | `docs/implementation/DISTRIBUTIONAL_CLAIMS_DESIGN.md`, commit `eacf95fa` |
 
+The generation-two column added by the correction above was verified the same
+way, in `dragons-clutch` working tree on `main`-equivalent content:
+
+| Claim | Source, verified |
+| --- | --- |
+| `clutch-price-measure` is 8,843 lines across five modules and three test files | `wc -l crates/clutch-price-measure/{src,tests}/*.rs` |
+| `verify_quantized_atom_mixture_v1(bound, prices, certificate)` exists with that signature | `src/atom_mixture_v1.rs:564` |
+| It refuses generation one's pinned false acceptance, and the arbitrage costs `-S` | `tests/adversarial.rs:262`, asserting `v1b_degree_two_accepts` *and* `Err(QuadraticMomentOutsideCone { span: 0 })` *and* `cost == -12` |
+| It also fixes generation one's over-refusal | `tests/adversarial.rs:281` |
+| The `u64` mass-denominator completeness residual, failing closed via `OutOfProfile` | `docs/design/PRICE_MEASURE_WITNESS_V2.md:188`, `:271`, `:354` |
+| `G-1` says the ledger itself could not judge soundness — this document now does | `ASPIRATION_LEDGER.md:1285`, *"Whether the quantized checker is sound, complete, or cheap is not something this sweep can say"* |
+
 One further fact from that reading belongs here, because it is the closest
 thing to a tie in this comparison. Generation one's own `BSpline.lean` header
 says:
@@ -195,8 +279,13 @@ machine-checked partition of unity, and the auditability of the rounding rule;
 behind on physical width, edge policy, and rounding symmetry; and equal on
 degree range, exactness and accuracy.
 
-On the **whole instrument**, it is behind, because the moment-cone gate and
-the shape compiler are absent and nothing is wired to a consumer.
+On the **whole instrument**, it is behind, because no price-plane gate and no
+shape compiler exist here and nothing is wired to a consumer. That verdict is
+unchanged by the correction above — but its *cost* is much lower than it first
+appeared. The largest gap in this table is not open research: generation two
+already wrote a sound integer gate that fits `LiabilityBasisV2` better than
+generation one's, and the remaining work is a reviewed transplant plus the Lean
+correspondence neither predecessor ever ran.
 
 `O-013` remains open. What has changed is that its second slice is no longer
 a ramp, and the row's own closure condition can now be written against
