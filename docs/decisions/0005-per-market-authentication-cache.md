@@ -124,19 +124,29 @@ one copy of it per Market would store M copies of one fact, which is exactly wha
 
 **Validated-artifact evidence is persisted once per `(descriptor schema,
 descriptor content digest, action selector, Trading interpreter semantic
-release)` in one Trading-owned, content-addressed, write-once seal account. It is
-never persisted per Market, and no hot action may trust a seal written for a
-different interpreter release.**
+release, Registry program)` in one Trading-owned, content-addressed, write-once
+seal account. It is never persisted per Market, and no hot action may trust a
+seal written for a different interpreter release.**
 
 ```text
 seal = find_program_address(
     [ CAPABILITY_SEAL_PDA_DOMAIN_V1,
-      descriptor_schema,          // 32
-      descriptor_digest,          // 32
-      action_selector_le,         // 4
-      trading_semantic_release ], // 32
+      descriptor_schema,        // 32
+      descriptor_digest,        // 32
+      action_selector_le,       // 4
+      trading_semantic_release, // 32
+      registry_program ],       // 32
     trading_program)
 ```
+
+The Registry program is the fifth coordinate because the rows persist the
+canonical raw-record and staging addresses, and those are PDAs *of a particular
+Registry*. Making it a seed rather than a body field means a Market whose
+selected Registry differs derives a different address and can seal there,
+instead of finding one seal it must refuse forever at an address that is
+write-once. The Registry a hot action compares against is the one its own
+authenticated Market state names, which is the same Registry every record in the
+frame is already required to be owned by.
 
 `SealedDescriptorClosureV1` holds, in canonical order and fixed arity: the four
 key coordinates repeated in the body; and one row per artifact the descriptor
@@ -195,7 +205,7 @@ after this decision is:
     receipts, and commit-last ordering (all unchanged);
 13. the seal account itself: `owner == this program`, `!is_signer`,
     `!is_writable`, `!executable`, rent exemption for its exact width, the exact
-    canonical PDA under the four seed coordinates above, magic, schema version,
+    canonical PDA under the five seed coordinates above, magic, schema version,
     artifact profile, canonical reserved bytes, and that every row's `schema` and
     `content_digest` equal the identities the *authenticated descriptor* names —
     not the identities the caller supplies.
@@ -300,7 +310,7 @@ action refuses with `TradingSbfError::Content` before any write or CPI:
 - the seal account is absent, wrong owner, writable, signer, executable, not
   rent-exempt, the wrong width, or not the exact PDA for
   `(descriptor schema, descriptor digest, action, authenticated Trading semantic
-  release)`;
+  release, Market-selected Registry)`;
 - the seal's magic, schema version, artifact profile or reserved bytes are not
   canonical;
 - any row's `schema` or `content_digest` differs from the identity the
@@ -370,9 +380,34 @@ The converged implementation must include adversarial coverage for:
 - any refusal after an earlier write or CPI, with transaction-wide rollback
   checked byte-for-byte.
 
-## What this does and does not buy
+## What this bought, measured
 
-Measured saving, canonical Direct Profile14 bundle:
+Converged at `ca5e5f1`. Canonical Direct Profile14 bundle, COMPUTE_LIMIT
+1,400,000, the real 32,768-byte heap, at the same DP2-owned `Custom(3)` refusal
+in the lifecycle preplan, with the suite result unchanged (the same three Direct
+emitter failures before and after):
+
+| checkpoint | before | after |
+| --- | ---: | ---: |
+| artifacts phase | 645,836 CU | 62,693 CU |
+| artifacts phase heap | 2,850 B | 2,840 B |
+| cumulative to `runtime-observations` | 850,425 CU | 254,891 CU |
+| cumulative to the mid-preplan refusal | 1,220,769 CU | 572,986 CU |
+
+**647,783 CU removed at the same refusal point**, against the ~650,000 estimated
+below. The heap moved by 10 bytes, as predicted.
+
+Projected against the W2c full-path table, replacing the artifacts phase and
+`require_static_register_ownership_v5` and leaving every per-execution phase
+unchanged, the path to the child-route preflight becomes about **1,292,500 CU**
+of the **1,300,630** a Trading invocation actually receives under the 1,400,000
+protocol limit. That leaves roughly **8,000 CU** before the three child CPIs, the
+commit and the acknowledgment run, and the accumulated heap is still **61,879
+bytes against 32,768**. The gate is not met and this decision does not meet it.
+Phases 8 through 10 remain unmeasured because the Direct emitter defect refuses
+before them.
+
+Estimated saving, itemised:
 
 | removed | CU |
 | --- | ---: |
@@ -476,12 +511,16 @@ start unsound.
    `from_sealed` constructor beside its `decode`, taking the token, performing
    the same cheap header parse over the same bytes, and skipping only the sweep
    that the token names. No `decode` is weakened and no validation is deleted.
-3. `programs/dclutch-trading-sbf/src/capability_seal_v1.rs` — new: the
-   `SealDescriptorClosure` handler, which calls the same validators the hot path
-   calls and writes the seal exactly once.
-4. `programs/dclutch-trading-sbf/src/dispatch.rs` — one new outer tag.
-5. `programs/dclutch-trading-sbf/src/hot_v3.rs` — authenticate the seal, thread
-   the token, keep every existing refusal.
+3. `programs/dclutch-trading-sbf/src/hot_v3.rs` — the `DCLTSEL1` handler beside
+   the hot path it is the prologue of, so that "the seal writer and the hot
+   reader call the same functions" is visible rather than asserted; and the hot
+   consumption itself, threading the tokens and keeping every existing refusal.
+   The handler was planned as its own module and is not, because every validator
+   and every frame accessor it needs is private to `hot_v3`, and widening all of
+   them to `pub(crate)` to move 250 lines would have been a larger change than
+   the one it avoided.
+4. `programs/dclutch-trading-sbf/src/lib.rs` — one new outer tag in the
+   entrypoint dispatch.
 6. `programs/dclutch-trading-sbf/program-test` — the seal transaction in the
    canonical Direct campaign, and the refusal corpus above.
 7. Delete nothing. `outer.rs::process_activation`, `authenticate_vacant_root`,
