@@ -584,6 +584,63 @@ mod tests {
         );
     }
 
+    /// The route's two named hostile inputs, at the level they are decidable
+    /// without a validator.
+    ///
+    /// A substituted caller-seeds account and a substituted Hoard vault are both
+    /// refused twice over, and the second refusal is the one that matters: the
+    /// caller authority is derived from the exact request bytes, so substituting
+    /// any coordinate moves the signer. There is no signature in existence for a
+    /// hostile request, so the CPI could not be made even if the frame check
+    /// were bypassed. This is a pure derivation argument, not execution
+    /// evidence; the on-chain rollback case still waits on a runnable outer.
+    #[test]
+    fn a_substituted_caller_or_hoard_vault_has_no_signature_in_existence() {
+        let honest = lock();
+        let caller = |request: ProjectedCustodyRequestV1| {
+            let raw = request.encode().expect("bytes");
+            Pubkey::find_program_address(
+                &ProjectedCustodyCallerSeedsV1::new(request, hash(&raw).to_bytes()).as_slices(),
+                &trading(),
+            )
+            .0
+        };
+        let honest_prestate = honest.founding_prestate_v1().expect("prestate");
+
+        let mut rehoarded = honest;
+        rehoarded.hoard_vault = [0x7c; 32];
+        // Refusal one: the shared founding join owns the Hoard coordinate.
+        assert_eq!(
+            authenticate_projected_lock_join_v1(&trading(), &core(), &found(), &rehoarded),
+            Err(TradingSbfError::Content.into())
+        );
+        // Refusal two: even reached, both of its prestates need signers that do
+        // not exist, because the vault is a caller-seed input through the
+        // request digest.
+        let hostile_prestate = rehoarded.founding_prestate_v1().expect("hostile prestate");
+        assert_ne!(
+            caller(hostile_prestate.initialize),
+            caller(honest_prestate.initialize)
+        );
+        assert_ne!(
+            caller(hostile_prestate.open_hoard),
+            caller(honest_prestate.open_hoard)
+        );
+
+        // Substituting the caller-seeds account directly is the same argument
+        // read the other way: the route requires frame index zero to equal the
+        // address derived from the request it is about to send, so any other
+        // key refuses before the CPI, and the runtime would refuse the
+        // signature after it.
+        for hostile in [
+            caller(honest_prestate.open_hoard),
+            caller(honest),
+            Pubkey::new_from_array([0x7d; 32]),
+        ] {
+            assert_ne!(hostile, caller(honest_prestate.initialize));
+        }
+    }
+
     #[test]
     fn each_prestate_has_its_own_single_use_caller_authority() {
         let lock = lock();
