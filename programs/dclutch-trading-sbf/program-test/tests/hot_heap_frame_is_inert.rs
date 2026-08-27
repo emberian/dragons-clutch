@@ -23,10 +23,14 @@
 //! Either way the change is deliberate and visible here, rather than a
 //! doctrine living only in a doc comment.
 
+use dclutch_trading_sbf::TradingSbfError;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
-use solana_program::{instruction::Instruction, pubkey::Pubkey};
+use solana_program::{
+    instruction::{Instruction, InstructionError},
+    pubkey::Pubkey,
+};
 use solana_program_test::ProgramTest;
-use solana_sdk::signature::Signer;
+use solana_sdk::{signature::Signer, transaction::TransactionError};
 use solana_sdk_ids::compute_budget;
 use solana_transaction::versioned::VersionedTransaction;
 
@@ -168,9 +172,18 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     // an abort. If this ever becomes an access violation, the grant has gone
     // live without the packet room to carry it and the allocator is writing
     // past a region the runtime did not map.
-    assert!(
-        format!("{refusal:?}").contains("Custom(3)"),
-        "Hot refused something other than its own heap refusal: {refusal:?}",
+    //
+    // Matched as a value, not as a substring of the Debug rendering. The
+    // substring form said `contains("Custom(3)")`, which also matches
+    // `Custom(30)`, `Custom(300)` and -- after decision 0007 renumbered
+    // Trading into band 4 -- nothing at all.
+    let TransactionError::InstructionError(_, InstructionError::Custom(code)) = refusal else {
+        panic!("Hot refused outside its own error taxonomy: {refusal:?}");
+    };
+    assert_eq!(
+        code,
+        TradingSbfError::Content as u32,
+        "Hot refused something other than its own heap refusal",
     );
     assert!(
         metadata.compute_units_consumed <= 1_400_000,

@@ -45,6 +45,8 @@ use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
+use dclutch_resolution_proof_sbf::ResolutionError;
+use dclutch_resolution_receipt_test_caller_sbf::TestReceiptCallerError;
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
     ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
@@ -66,6 +68,14 @@ use solana_sdk::signature::Signer;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::transfer;
 use solana_transaction::{InstructionError, Transaction, TransactionError};
+
+/// The refusals this campaign pins, taken from the taxonomies that own them
+/// rather than typed as numbers. A `matches!` pattern needs a const, and a
+/// const is the honest place for this: the campaign asserts WHICH guard
+/// refused, and only the declaring crate knows which number that is.
+const REFUSAL_TRANSITION: u32 = ResolutionError::Transition as u32;
+const REFUSAL_OUTPUT_STATE: u32 = ResolutionError::OutputState as u32;
+const CALLER_DELIBERATE_LATE_FAILURE: u32 = TestReceiptCallerError::DeliberateLateFailure as u32;
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x50; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x51; 32]);
@@ -1304,7 +1314,7 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         matches!(
             primary_replay,
             Err(BanksClientError::TransactionError(
-                TransactionError::InstructionError(0, InstructionError::Custom(12))
+                TransactionError::InstructionError(0, InstructionError::Custom(REFUSAL_TRANSITION))
             ))
         ),
         "primary certificate replay refuses against terminal Source state: {primary_replay:?}"
@@ -1340,7 +1350,10 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         matches!(
             underfunded,
             Err(BanksClientError::TransactionError(
-                TransactionError::InstructionError(0, InstructionError::Custom(2))
+                TransactionError::InstructionError(
+                    0,
+                    InstructionError::Custom(REFUSAL_OUTPUT_STATE)
+                )
             ))
         ),
         "under-rent deterministic certificate refuses at the final output gate: {underfunded:?}"
@@ -1613,7 +1626,10 @@ async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusa
         matches!(
             refusal,
             Err(BanksClientError::TransactionError(
-                TransactionError::InstructionError(0, InstructionError::Custom(5))
+                TransactionError::InstructionError(
+                    0,
+                    InstructionError::Custom(CALLER_DELIBERATE_LATE_FAILURE)
+                )
             ))
         ),
         "caller validates the complete funded receipt before deliberate refusal: {refusal:?}"

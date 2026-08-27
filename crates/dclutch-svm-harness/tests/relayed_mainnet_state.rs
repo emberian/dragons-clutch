@@ -30,14 +30,12 @@ use std::{env, fs, path::PathBuf};
 
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    CapabilityEntryV1,
-    CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
-    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1, FundingCustodyObservationV1,
-    FundingQuoteV1, FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
+    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
+    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
+    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, FundingStatus,
+    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
 };
@@ -49,6 +47,7 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -87,6 +86,7 @@ use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
+use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_source_contract::{
     CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
     PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1, RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1,
@@ -385,9 +385,9 @@ fn capability_id(bytes: [u8; 32]) -> CapabilityContentId {
 fn funding_entry(config: [u8; 32]) -> CapabilityEntryV1 {
     let quote = FundingQuoteV1::new(
         FundingAmountsV1::new(
-            CompartmentFundingV1::native_lamports(Rent::default().minimum_balance(
-                FUNDING_STATE_BYTES,
-            ))
+            CompartmentFundingV1::native_lamports(
+                Rent::default().minimum_balance(FUNDING_STATE_BYTES),
+            )
             .expect("funding-state rent"),
             CompartmentFundingV1::not_applicable(),
             CompartmentFundingV1::not_applicable(),
@@ -855,7 +855,7 @@ fn source_graph(
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
     // The graph the material claims is the graph the records make. Asserting it
-    // here turns a Custom(7) from the bank into a named fixture failure.
+    // here turns a `SourceMaterial` refusal from the bank into a named fixture failure.
     material_value
         .validate_source_graph(
             source_id(spec_digest),
@@ -1476,10 +1476,7 @@ impl Fixture {
                 AccountMeta::new_readonly(self.product.portfolio.staging, false),
                 AccountMeta::new_readonly(self.capability_manifest.raw, false),
                 AccountMeta::new_readonly(self.capability_manifest.staging, false),
-                AccountMeta::new(
-                    substitution.funding.unwrap_or(self.failure_funding),
-                    false,
-                ),
+                AccountMeta::new(substitution.funding.unwrap_or(self.failure_funding), false),
                 AccountMeta::new_readonly(sysvar::clock::ID, false),
                 AccountMeta::new_readonly(sysvar::rent::ID, false),
                 AccountMeta::new_readonly(system_program::ID, false),
@@ -1908,10 +1905,15 @@ fn refused(result: Result<(), BanksClientError>) -> TransactionError {
 /// creation corpus below names the code it expects rather than accepting any
 /// failure. `AccountFrame` is deliberately absent: a substitution that trips
 /// the frame's no-alias rule has not reached the check it was written for.
-const REFUSAL_MARKET_AUTHORITY: u32 = 3;
-const REFUSAL_RESOLUTION_RELEASE: u32 = 5;
-const REFUSAL_SOURCE_MATERIAL: u32 = 7;
-const REFUSAL_TRANSITION: u32 = 12;
+///
+/// These used to be the numbers 3, 5, 7 and 12, typed out here. They were a
+/// second opinion about a taxonomy that already had an owner, and a renumber
+/// would have left them silently naming the wrong guard rather than failing.
+/// They come from the adapter now.
+const REFUSAL_MARKET_AUTHORITY: u32 = ResolutionError::MarketAuthority as u32;
+const REFUSAL_RESOLUTION_RELEASE: u32 = ResolutionError::ResolutionRelease as u32;
+const REFUSAL_SOURCE_MATERIAL: u32 = ResolutionError::SourceMaterial as u32;
+const REFUSAL_TRANSITION: u32 = ResolutionError::Transition as u32;
 
 fn refused_with(result: Result<(), BanksClientError>, code: u32) {
     let error = refused(result);
@@ -2293,15 +2295,20 @@ fn two_disjoint_relayer_key_sets_share_one_decoding_rules_identity() {
 // green case. Nothing here observed mainnet.
 // ---------------------------------------------------------------------------
 
-const REFUSAL_ACCOUNT_FRAME: u32 = 0;
-const REFUSAL_FINALIZED_RECORD: u32 = 4;
-const REFUSAL_PRODUCT_DOMAIN: u32 = 8;
-const REFUSAL_PROVIDER_OBSERVATION: u32 = 10;
-const REFUSAL_OUTPUT_STATE: u32 = 2;
-const REFUSAL_RELAYED_RECORD: u32 = 15;
-const REFUSAL_RELAYED_WINDOW: u32 = 16;
-const REFUSAL_TRANSITION_LIVENESS: u32 = 12;
-const REFUSAL_FUNDING: u32 = 14;
+// The consumer half of the same taxonomy, and derived for the same reason.
+// `REFUSAL_TRANSITION_LIVENESS` is deliberately the same variant as
+// `REFUSAL_TRANSITION` above under a name that says what the consumer route is
+// asking of it; that the two are one code is a fact about the adapter, and it
+// stays true here by construction rather than by two people typing 12.
+const REFUSAL_ACCOUNT_FRAME: u32 = ResolutionError::AccountFrame as u32;
+const REFUSAL_FINALIZED_RECORD: u32 = ResolutionError::FinalizedRecord as u32;
+const REFUSAL_PRODUCT_DOMAIN: u32 = ResolutionError::ProductDomain as u32;
+const REFUSAL_PROVIDER_OBSERVATION: u32 = ResolutionError::ProviderObservation as u32;
+const REFUSAL_OUTPUT_STATE: u32 = ResolutionError::OutputState as u32;
+const REFUSAL_RELAYED_RECORD: u32 = ResolutionError::RelayedRecord as u32;
+const REFUSAL_RELAYED_WINDOW: u32 = ResolutionError::RelayedWindow as u32;
+const REFUSAL_TRANSITION_LIVENESS: u32 = ResolutionError::Transition as u32;
+const REFUSAL_FUNDING: u32 = ResolutionError::Funding as u32;
 
 /// Pin the devnet clock so both time bounds are exact.
 ///
@@ -2971,13 +2978,11 @@ struct WalkState {
 }
 
 async fn walk_state(context: &mut ProgramTestContext, fixture: &Fixture) -> WalkState {
-    let source = SourceResolutionStateV2::decode(
-        &record_bytes(context, fixture.source_state).await,
-    )
-    .expect("Source decodes");
-    let owner_of = |account: Option<Account>| {
-        account.map_or(system_program::ID, |account| account.owner)
-    };
+    let source =
+        SourceResolutionStateV2::decode(&record_bytes(context, fixture.source_state).await)
+            .expect("Source decodes");
+    let owner_of =
+        |account: Option<Account>| account.map_or(system_program::ID, |account| account.owner);
     WalkState {
         source_phase: source.phase(),
         failure_escrow: lamports_of(context, fixture.failure_funding).await,
@@ -3058,10 +3063,9 @@ async fn a_silent_relayer_cannot_make_the_market_unresolvable() {
         "success and failure are different addresses; a failure walk cannot occupy the success one"
     );
 
-    let funding = FundingStateV1::decode(
-        &record_bytes(&mut context, fixture.failure_funding).await,
-    )
-    .expect("Funding state decodes");
+    let funding =
+        FundingStateV1::decode(&record_bytes(&mut context, fixture.failure_funding).await)
+            .expect("Funding state decodes");
     assert_eq!(funding.status(), FundingStatus::Active);
     assert_eq!(
         funding.remaining().bounty().amount(),
@@ -3070,7 +3074,11 @@ async fn a_silent_relayer_cannot_make_the_market_unresolvable() {
     );
 
     let certificate = ResolutionCertificateV2::decode(
-        &record_bytes(&mut context, fixture.certificate_of(RESOLUTION_FAILURE_KIND)).await,
+        &record_bytes(
+            &mut context,
+            fixture.certificate_of(RESOLUTION_FAILURE_KIND),
+        )
+        .await,
     )
     .expect("terminal certificate decodes");
     assert_eq!(
@@ -3094,8 +3102,7 @@ async fn a_silent_relayer_cannot_make_the_market_unresolvable() {
         "and no observation stands behind it"
     );
     assert_eq!(
-        certificate.funding_allocation,
-        fixture.graph.material_id,
+        certificate.funding_allocation, fixture.graph.material_id,
         "the allocation identity is the market's own Source material, which is what makes \
          the explicit-failure compartment identifiable at all"
     );

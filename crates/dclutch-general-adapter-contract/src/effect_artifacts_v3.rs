@@ -308,7 +308,7 @@ const fn receipt_dependency_count(action: Action) -> usize {
 /// list. `CustodyFrameRoleV1` has no `CustodyProgram` variant at all -- a
 /// Custody frame names `CallerProgram`, which is Trading's -- so no Custody
 /// frame can carry it and the topology must declare a coordinate of its own or
-/// every Custody route refuses `Custom(1)` before any CPI. The Claims routes
+/// every Custody route refuses `AccountFrame` before any CPI. The Claims routes
 /// need nothing: the Claims FrameSpecs declare `ClaimsProgram` inside their own
 /// frames, which is why only Custody was missing.
 ///

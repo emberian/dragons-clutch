@@ -33,6 +33,7 @@
     reason = "fixed-width fixture arrays with statically known extents"
 )]
 
+use dclutch_dealer_sbf::DealerSbfError;
 use std::{
     env, fs,
     sync::atomic::{AtomicUsize, Ordering},
@@ -110,13 +111,19 @@ const COMMON_ACCOUNT_COUNT_V1: usize = 23;
 const REQUEST_ACTION_OFFSET: usize = 10;
 const REQUEST_NOW_OFFSET: usize = 24;
 
-/// Stable Dealer SBF refusal codes (`DealerSbfError`, `#[repr(u32)]`).
-const REFUSAL_INSTRUCTION: u32 = 0;
-const REFUSAL_ACCOUNT_FRAME: u32 = 1;
-const REFUSAL_ACCOUNT_IDENTITY: u32 = 2;
-const REFUSAL_SIGNATURE: u32 = 3;
-const REFUSAL_CLOCK: u32 = 4;
-const REFUSAL_RELEASE: u32 = 5;
+/// Stable Dealer SBF refusal codes, from the taxonomy that owns them.
+///
+/// These were the numbers 0 through 5, written out under a doc comment naming
+/// the enum they came from. Naming an authority and then restating its
+/// contents is the shape that goes stale quietly: a renumber leaves the
+/// constants pointing at whatever now holds those numbers, and the campaign
+/// keeps passing while asserting the wrong guard.
+const REFUSAL_INSTRUCTION: u32 = DealerSbfError::Instruction as u32;
+const REFUSAL_ACCOUNT_FRAME: u32 = DealerSbfError::AccountFrame as u32;
+const REFUSAL_ACCOUNT_IDENTITY: u32 = DealerSbfError::AccountIdentity as u32;
+const REFUSAL_SIGNATURE: u32 = DealerSbfError::Signature as u32;
+const REFUSAL_CLOCK: u32 = DealerSbfError::Clock as u32;
+const REFUSAL_RELEASE: u32 = DealerSbfError::Release as u32;
 
 /// `MAX_COMPUTE_UNIT_LIMIT`. A measurement may not raise it and a gate may not
 /// lower it.

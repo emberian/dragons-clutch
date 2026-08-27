@@ -44,8 +44,8 @@ use dclutch_claims_sbf::liability_basis_v2::{
     LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, LiabilityBasisActionInputV2, LiabilityBasisActionKindV2,
     LiabilityBasisActionV2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
     LiabilityBasisSbfErrorV2, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-    encode_liability_basis_market_v2,
-    encode_liability_basis_position_v2, encode_terminal_coordinate_v2,
+    encode_liability_basis_market_v2, encode_liability_basis_position_v2,
+    encode_terminal_coordinate_v2,
 };
 use dclutch_claims_sbf::protocol_position_v2::{
     PROTOCOL_POSITION_ADMISSION_BYTES_V2, PROTOCOL_POSITION_ADMISSION_SEED_V2,
@@ -1222,7 +1222,11 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
     extent
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) -> u64 {
+async fn process_legacy(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    label: &str,
+) -> u64 {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -1361,7 +1365,10 @@ async fn submit_v0(
         .first()
         .ok_or(BanksClientError::ClientError("unsigned transaction"))?
         .to_string();
-    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -1494,19 +1501,20 @@ fn retired_terminal_redeem_data(accepted: &Instruction) -> Vec<u8> {
 /// `CustodySbfError::Instruction`, the refusal real Custody raises for an
 /// external-source debit arriving on the V1 `CustodyRequestV1` wire.
 ///
-/// Stated rather than imported: `dclutch-custody-sbf` is a second program
-/// crate and this campaign has no business taking a code dependency on one to
-/// read a discriminant. Provenance:
-/// `programs/dclutch-custody-sbf/src/lib.rs`, `CustodySbfError::Instruction =
-/// 0x6000`, raised at the head of `execute_transfer` whenever
-/// `request.source_compartment == CompartmentV1::External`. The census checks
-/// the same code against the enumerated Custody taxonomy rather than against
-/// this constant (`tools/gauntlet/claims-liability-basis-v2/bindings.json`).
+/// Not imported from `dclutch-custody-sbf`: that is a second program crate and
+/// this campaign has no business taking a code dependency on one to read a
+/// discriminant. It is not restated by hand either, which is how it came to
+/// say `0` for a while after `6cbcb3b` moved every program onto its registered
+/// band. It comes from the band allocation instead (decision 0007) -- a shared
+/// authority rather than another program -- and `Instruction` is by convention
+/// the first variant, so it IS the base.
 ///
-/// Restated by hand, and therefore something that can go stale: it said `0`
-/// until `6cbcb3b` moved every first-party program onto its registered refusal
-/// band and this mirror did not follow.
-const CUSTODY_INSTRUCTION_REFUSAL: u32 = 0x6000;
+/// Provenance: `programs/dclutch-custody-sbf/src/lib.rs`, raised at the head of
+/// `execute_transfer` whenever `request.source_compartment ==
+/// CompartmentV1::External`. The census checks the same code against the
+/// enumerated Custody taxonomy rather than against this constant
+/// (`tools/gauntlet/claims-liability-basis-v2/bindings.json`).
+const CUSTODY_INSTRUCTION_REFUSAL: u32 = dclutch_refusal_registry::CUSTODY_REFUSAL_BASE;
 
 #[tokio::test]
 async fn real_sbf_liability_basis_merge_lifecycle_and_hostile_joins_are_atomic() {
@@ -1588,9 +1596,12 @@ async fn real_sbf_liability_basis_merge_lifecycle_and_hostile_joins_are_atomic()
         changed_payoff.direct.clone(),
         retired_split.direct.clone(),
     ];
-    let (table, addresses) =
-        create_live_lookup_table(&mut context, &instructions, "claims liability-basis lifecycle")
-            .await;
+    let (table, addresses) = create_live_lookup_table(
+        &mut context,
+        &instructions,
+        "claims liability-basis lifecycle",
+    )
+    .await;
     let before = snapshot(&mut context, &fixture).await;
 
     for (hostile, label) in [
@@ -1603,11 +1614,13 @@ async fn real_sbf_liability_basis_merge_lifecycle_and_hostile_joins_are_atomic()
             "claims liability-basis lifecycle: merge against a changed payoff basis",
         ),
     ] {
-        let (accepted, logs) =
-            submit_v0(&mut context, &fixture, hostile, table, &addresses, label)
-                .await
-                .expect("hostile transaction");
-        assert!(!accepted, "hostile finalized basis substitution must refuse");
+        let (accepted, logs) = submit_v0(&mut context, &fixture, hostile, table, &addresses, label)
+            .await
+            .expect("hostile transaction");
+        assert!(
+            !accepted,
+            "hostile finalized basis substitution must refuse"
+        );
         assert_eq!(
             reported_custom_code(&logs),
             Some(LiabilityBasisSbfErrorV2::ProductLink as u32),
@@ -1724,9 +1737,12 @@ async fn real_sbf_retired_terminal_redeem_and_terminal_merge_both_refuse() {
     );
 
     let instructions = [merge.direct.clone(), retired.clone()];
-    let (table, addresses) =
-        create_live_lookup_table(&mut context, &instructions, "claims liability-basis terminal")
-            .await;
+    let (table, addresses) = create_live_lookup_table(
+        &mut context,
+        &instructions,
+        "claims liability-basis terminal",
+    )
+    .await;
     let before = snapshot(&mut context, &fixture).await;
 
     let (accepted, logs) = submit_v0(

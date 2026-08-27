@@ -7,7 +7,11 @@ rust-version.workspace = true
 description = "Small Registry-bound Pyth Resolution controller for the dClutch successor"
 
 [lib]
-crate-type = ["cdylib"]
+# `lib` alongside `cdylib` so this program's own refusal taxonomy is importable
+# by the campaigns that assert on it. Without an rlib a test can only match the
+# code as a number it typed out by hand, which is the drift decision 0007 exists
+# to end. Four sibling programs already ship both crate types.
+crate-type = ["cdylib", "lib"]
 path = "src/lib.rs"
 
 [features]
