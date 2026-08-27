@@ -1,0 +1,38 @@
+[package]
+name = "dclutch-gauntlet-direct-campaign"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Direct-family gauntlet campaign producer: real Direct ELFs under solana-program-test, emitting the gauntlet evidence document"
+
+# Deliberately its own workspace, like tools/gauntlet/census: the gauntlet's
+# host tools are built and versioned independently of the protocol workspace.
+[workspace]
+
+[[bin]]
+name = "dclutch-gauntlet-direct-campaign"
+path = "src/main.rs"
+
+[dependencies]
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-direct-aot-contract = { path = "../../../../crates/dclutch-direct-aot-contract" }
+dclutch-direct-aot-sbf = { path = "../../../../programs/dclutch-direct-aot-sbf", default-features = false, features = ["no-entrypoint"] }
+dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
+serde_json = "1"
+sha2 = { version = "=0.10.9", default-features = false }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-transaction = "=4.2.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+indexing_slicing = "deny"
+panic = "allow"
+unwrap_used = "deny"
