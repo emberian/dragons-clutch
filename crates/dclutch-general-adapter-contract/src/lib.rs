@@ -83,6 +83,24 @@ pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-candidate:v
 pub const GENERAL_POLICY_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-policy:v1";
 /// Immutable candidate page PDA domain.
 pub const GENERAL_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch:general-page:v1";
+
+/// Maximum bytes in one Solana program-derived-address seed.
+pub const MAX_PDA_SEED_BYTES: usize = 32;
+
+const _: () = {
+    // A PDA seed may be at most thirty-two bytes. An over-long domain refuses
+    // every bump inside `find_program_address`, so the account or signer it
+    // names can never be derived and every route through it is unreachable.
+    // Assert it here rather than discovering it on a validator.
+    assert!(GENERAL_AUTHORITY_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_SELECTION_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_VERIFICATION_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_CERTIFICATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_SETTLEMENT_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_CANDIDATE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_POLICY_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+    assert!(GENERAL_PAGE_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES);
+};
 /// Canonical General-owned V2 child-plan preimage header width.
 pub const GENERAL_CHILD_PLAN_HEADER_BYTES_V2: usize = 272;
 /// Canonical General-owned V2 child-plan magic and digest domain.
