@@ -35,7 +35,7 @@ const FIXED_ROLES = Object.freeze([
   'Lifecycle raw', 'Lifecycle staging', 'Strategy raw', 'Strategy staging', 'Activation cache', 'Core program',
   'Core ProgramData', 'Trading program', 'Trading ProgramData', 'Registry program', 'Rent sysvar', 'Instructions sysvar',
   'Product raw', 'Product staging', 'result domain raw', 'result domain staging', 'portfolio raw', 'portfolio staging',
-  'Product basis raw', 'Product basis staging',
+  'Product basis raw', 'Product basis staging', 'Capability seal',
 ]);
 
 type ParticipantFields = Readonly<{
@@ -289,7 +289,7 @@ export default function DirectTradeWorkspace() {
 
     <form className="trade-v3-card route-card" onSubmit={inspectRoute}>
       <header><span>01</span><div><h2>Acquire the action-selected route</h2><p>The address map is transport, not truth. Every account is reacquired and joined against the current Registry/Core/Trading state.</p></div></header>
-      <div className="trade-v3-route-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Optional {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()}-byte checked V4-capable infrastructure · base64</span><textarea value={infrastructureText} onChange={(event) => setInfrastructureText(event.target.value.trim())} /></label><label className="route-json"><span>Exact Hot38 + strategy/runtime-suffix + one canonical LUT route manifest · JSON</span><textarea required spellCheck={false} value={routeText} onChange={(event) => setRouteText(event.target.value)} /></label></div>
+      <div className="trade-v3-route-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Optional {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()}-byte checked V4-capable infrastructure · base64</span><textarea value={infrastructureText} onChange={(event) => setInfrastructureText(event.target.value.trim())} /></label><label className="route-json"><span>Exact Hot39 + strategy/runtime-suffix + one canonical LUT route manifest · JSON</span><textarea required spellCheck={false} value={routeText} onChange={(event) => setRouteText(event.target.value)} /></label></div>
       <button disabled={routeState.kind === 'loading'}>{routeState.kind === 'loading' ? 'Reading finalized route…' : 'Authenticate route'}</button><p className="direct-status" aria-live="polite">{routeState.message}</p>
       {inspection && <div className="trade-v3-evidence"><article><span>Outcome width</span><strong>{inspection.route.outcomeCount.toLocaleString()}</strong><small>Product-derived u32</small></article><article><span>Price / fee</span><strong>{inspection.route.priceScale.toString()} / {inspection.route.feeBasisPoints} bps</strong><small>immutable Direct config</small></article><article><span>Program selector</span><strong>{inspection.selectedProgramDigest.slice(0, 16)}…</strong><small>SetV2 · CapabilityV4 · action 1</small></article><article><span>Strategy → VM</span><strong>{inspection.strategyDigest.slice(0, 8)}… → {inspection.transitionDigest.slice(0, 8)}…</strong><small>interpreted V2 / V3</small></article></div>}
     </form>

@@ -17,6 +17,7 @@ import {
   type MarketCollateralV1,
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
+import MarketTradePanel from '@/components/MarketTradePanel';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 
 type State =
@@ -150,6 +151,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const [registryProgram, setRegistryProgram] = useState('');
   const [claimsProgram, setClaimsProgram] = useState('');
   const [custodyProgram, setCustodyProgram] = useState('');
+  const [tradingProgram, setTradingProgram] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No finalized state has been read for this Market address.' });
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
@@ -220,6 +222,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
         <label><span>Claims program · optional</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
         <label><span>Custody program · optional</span><input value={custodyProgram} onChange={(event) => setCustodyProgram(event.target.value.trim())} /></label>
+        <label><span>Trading program · optional, enables the trade panel</span><input value={tradingProgram} onChange={(event) => setTradingProgram(event.target.value.trim())} /></label>
       </div>
       <div className="direct-actions">
         <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized Market state…' : 'Read this Market'}</button>
@@ -336,6 +339,16 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         ? <p className="market-empty">No capability manifest identity exists to authenticate, because no Market root has been decoded.</p>
         : <Capabilities capabilities={decoded.capabilities} />}
     </section>
+
+    {decoded !== null && <MarketTradePanel
+      endpoint={endpoint}
+      marketAddress={address}
+      coreProgramId={coreProgram}
+      registryProgramId={registryProgram === '' ? null : registryProgram}
+      claimsProgramId={claimsProgram === '' ? null : claimsProgram}
+      tradingProgramId={tradingProgram === '' ? null : tradingProgram}
+      liability={decoded.liability}
+    />}
 
     <footer className="product-footer">
       <span>Chain-derived fields, atoms, and refusals only</span>

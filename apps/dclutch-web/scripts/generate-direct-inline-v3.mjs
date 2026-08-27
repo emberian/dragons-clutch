@@ -54,6 +54,7 @@ const sources = Object.freeze({
   descriptorV4: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_v4.rs', root), 'utf8'),
   descriptorContractV4: readFileSync(new URL('crates/dclutch-capability-program-contract/src/v4.rs', root), 'utf8'),
   root: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated.rs', root), 'utf8'),
+  rootContract: readFileSync(new URL('crates/dclutch-capability-program-contract/src/lib.rs', root), 'utf8'),
   selection: readFileSync(new URL('crates/dclutch-release-set-contract/src/generated_capability_execution.rs', root), 'utf8'),
   manifest: relabel(
     readFileSync(new URL('crates/dclutch-capability-contract/src/generated_abi.rs', root), 'utf8'),
@@ -102,6 +103,12 @@ function bytes(source, name) {
   if (!match) throw new Error(`missing Rust bytes ${source}.${name}`);
   if (match[1]) return [...new TextEncoder().encode(match[1])];
   return [...match[2].matchAll(/0x[0-9a-f]+|\b[0-9]+\b/g)].map((entry) => Number(entry[0]));
+}
+
+function byteString(source, name) {
+  const match = sources[source].match(new RegExp(`(?:pub )?const ${name}: &\\[u8(?:; [0-9]+)?\\] =\\s*b"([^"]+)";`));
+  if (!match) throw new Error(`missing Rust byte string ${source}.${name}`);
+  return match[1];
 }
 
 function array(name, values) {
@@ -313,6 +320,10 @@ output += 'export const DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 = DIRECT
 output += 'export const DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 - 32;\n';
 output += 'export const DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 + DIRECT_SIGNED_PARTICIPANT_BYTES_V3;\n';
 output += 'export const DIRECT_NATIVE_EVIDENCE_BUYER_MAKER_OFFSET_V3 = DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3 - 32;\n\n';
+// The composite Trading child root PDA domain: [domain, market, generation_le,
+// manifest, entry_index_le, kind, capability_release, config] under the
+// Trading program (CapabilityRootSeedsV1::as_slices, the sole author).
+output += `export const CAPABILITY_ROOT_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('rootContract', 'CAPABILITY_ROOT_PDA_DOMAIN_V1')}');\n`;
 for (const [source, name] of [
   ['hot', 'HOT_EXECUTION_MAGIC_V3'], ['descriptor', 'CAPABILITY_PROGRAM_V3_MAGIC'],
   ['descriptorV4', 'CAPABILITY_PROGRAM_V4_MAGIC'], ['setV2', 'CAPABILITY_PROGRAM_SET_MAGIC_V2'],
