@@ -326,6 +326,17 @@ pub struct ProjectedCustodyFoundingPrestateV1 {
     pub open_source: ProjectedCustodyRequestV1,
 }
 
+/// One transition of the generic founding's projected-Custody prestate ladder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FoundingPrestateStageV1 {
+    /// Creates the projected replay at revision `0 -> 1`.
+    Initialize,
+    /// Creates the projected Hoard vault at revision `1 -> 2`.
+    OpenHoard,
+    /// Creates and funds the normal source compartment at revision `2 -> 3`.
+    OpenSourceCompartment,
+}
+
 impl ProjectedCustodyRequestV1 {
     /// Validate identities and the exact operation shape.
     pub fn validate(self) -> Result<(), ProjectedCustodyError> {
@@ -419,6 +430,26 @@ impl ProjectedCustodyRequestV1 {
     pub fn founding_prestate_v1(
         self,
     ) -> Result<ProjectedCustodyFoundingPrestateV1, ProjectedCustodyError> {
+        Ok(ProjectedCustodyFoundingPrestateV1 {
+            initialize: self.founding_prestate_stage_v1(FoundingPrestateStageV1::Initialize)?,
+            open_hoard: self.founding_prestate_stage_v1(FoundingPrestateStageV1::OpenHoard)?,
+            open_source: self
+                .founding_prestate_stage_v1(FoundingPrestateStageV1::OpenSourceCompartment)?,
+        })
+    }
+
+    /// Derive exactly one prestate of the generic founding ladder.
+    ///
+    /// Identical in content to the corresponding field of
+    /// [`Self::founding_prestate_v1`], which is defined in terms of this, and
+    /// pinned to agree by test. An SBF adapter uses this one instead: three
+    /// seven-hundred-and-sixty-eight-byte requests cannot be materialised
+    /// together inside a four-kilobyte verifier frame, and a stage that is
+    /// derived immediately before it is executed never needs its siblings.
+    pub fn founding_prestate_stage_v1(
+        self,
+        stage: FoundingPrestateStageV1,
+    ) -> Result<Self, ProjectedCustodyError> {
         self.validate()?;
         if self.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource {
             return Err(ProjectedCustodyError::NonCanonical);
@@ -432,38 +463,34 @@ impl ProjectedCustodyRequestV1 {
         if self.expected_revision != OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1 {
             return Err(ProjectedCustodyError::Revision);
         }
-        let initialize = Self {
-            operation: ProjectedCustodyOperationV1::Initialize,
-            expected_revision: 0,
-            resulting_revision: INITIALIZE_RESULTING_REVISION_V1,
-            amount: 0,
-            ..self
-        };
-        let open_hoard = Self {
-            operation: ProjectedCustodyOperationV1::OpenHoard,
-            expected_revision: INITIALIZE_RESULTING_REVISION_V1,
-            resulting_revision: OPEN_HOARD_RESULTING_REVISION_V1,
-            amount: 0,
-            ..self
-        };
         // The source compartment is funded with exactly the principal the Lock
         // will move into the Hoard. It is the one prestate that carries the
         // terminal request's `amount` unchanged, because funding it with any
         // other quantity is refused at Lock and would strand the difference.
-        let open_source = Self {
-            operation: ProjectedCustodyOperationV1::OpenSourceCompartment,
-            expected_revision: OPEN_HOARD_RESULTING_REVISION_V1,
-            resulting_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
-            ..self
+        let derived = match stage {
+            FoundingPrestateStageV1::Initialize => Self {
+                operation: ProjectedCustodyOperationV1::Initialize,
+                expected_revision: 0,
+                resulting_revision: INITIALIZE_RESULTING_REVISION_V1,
+                amount: 0,
+                ..self
+            },
+            FoundingPrestateStageV1::OpenHoard => Self {
+                operation: ProjectedCustodyOperationV1::OpenHoard,
+                expected_revision: INITIALIZE_RESULTING_REVISION_V1,
+                resulting_revision: OPEN_HOARD_RESULTING_REVISION_V1,
+                amount: 0,
+                ..self
+            },
+            FoundingPrestateStageV1::OpenSourceCompartment => Self {
+                operation: ProjectedCustodyOperationV1::OpenSourceCompartment,
+                expected_revision: OPEN_HOARD_RESULTING_REVISION_V1,
+                resulting_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+                ..self
+            },
         };
-        initialize.validate()?;
-        open_hoard.validate()?;
-        open_source.validate()?;
-        Ok(ProjectedCustodyFoundingPrestateV1 {
-            initialize,
-            open_hoard,
-            open_source,
-        })
+        derived.validate()?;
+        Ok(derived)
     }
 
     /// Encode one exact request.
@@ -2116,6 +2143,49 @@ mod tests {
             .expect("lock from a projected-created source");
         assert_eq!(locked.phase, ProjectedCustodyPhaseV1::HoardLocked);
         assert_eq!(locked.locked_amount, 500);
+    }
+
+    /// The per-stage derivation an adapter uses and the whole-ladder
+    /// constructor a host uses are the same function.
+    #[test]
+    fn the_per_stage_ladder_agrees_with_the_whole_prestate() {
+        let lock = generic_request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
+            500,
+        );
+        let whole = lock.founding_prestate_v1().expect("prestate");
+        for (stage, expected) in [
+            (FoundingPrestateStageV1::Initialize, whole.initialize),
+            (FoundingPrestateStageV1::OpenHoard, whole.open_hoard),
+            (
+                FoundingPrestateStageV1::OpenSourceCompartment,
+                whole.open_source,
+            ),
+        ] {
+            assert_eq!(lock.founding_prestate_stage_v1(stage), Ok(expected));
+        }
+        // Every refusal of the whole ladder is a refusal of every stage of it,
+        // so an adapter that only ever derives one stage refuses identically.
+        let unreachable = generic_request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_HOARD_RESULTING_REVISION_V1,
+            500,
+        );
+        assert_eq!(
+            unreachable.founding_prestate_v1(),
+            Err(ProjectedCustodyError::Revision)
+        );
+        for stage in [
+            FoundingPrestateStageV1::Initialize,
+            FoundingPrestateStageV1::OpenHoard,
+            FoundingPrestateStageV1::OpenSourceCompartment,
+        ] {
+            assert_eq!(
+                unreachable.founding_prestate_stage_v1(stage),
+                Err(ProjectedCustodyError::Revision)
+            );
+        }
     }
 
     #[test]

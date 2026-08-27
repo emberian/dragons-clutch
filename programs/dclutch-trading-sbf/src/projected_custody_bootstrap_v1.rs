@@ -32,12 +32,12 @@ use dclutch_capability_contract::{
     FundingCustodyObservationV1, FundingStateV1,
 };
 use dclutch_custody_contract::{
-    INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
+    FoundingPrestateStageV1, INITIALIZE_RESULTING_REVISION_V1, OPEN_HOARD_RESULTING_REVISION_V1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
-    ProjectedCustodyCallerSeedsV1, ProjectedCustodyFoundingPrestateV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV1,
+    ProjectedCustodyCallerSeedsV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
+    ProjectedCustodyRequestV1, ProjectedCustodyStateV1,
 };
 use dclutch_market_core_codec::{
     GENERIC_FOUNDING_MAX_FUNDING_STATES_V1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
@@ -162,14 +162,14 @@ pub fn process_projected_custody_bootstrap_v1(
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let frame = BootstrapFrameV1::parse(accounts)?;
-    let plan = authenticate_and_project(program_id, &frame)?;
-    let prestate = &plan.prestate;
+    let (lock, funding) = authenticate_and_project(program_id, &frame)?;
     let custody_program = frame.custody_program;
     run_stage(
         program_id,
         custody_program,
         frame.initialize,
-        &prestate.initialize,
+        &lock,
+        FoundingPrestateStageV1::Initialize,
         &INITIALIZE_WRITABLE,
         &INITIALIZE_SIGNERS,
         ProjectedCustodyPhaseV1::Initialized,
@@ -180,7 +180,8 @@ pub fn process_projected_custody_bootstrap_v1(
         program_id,
         custody_program,
         frame.open_hoard,
-        &prestate.open_hoard,
+        &lock,
+        FoundingPrestateStageV1::OpenHoard,
         &OPEN_HOARD_WRITABLE,
         &OPEN_HOARD_SIGNERS,
         ProjectedCustodyPhaseV1::HoardOpen,
@@ -191,26 +192,29 @@ pub fn process_projected_custody_bootstrap_v1(
         program_id,
         custody_program,
         frame.open_source,
-        &prestate.open_source,
+        &lock,
+        FoundingPrestateStageV1::OpenSourceCompartment,
         &OPEN_SOURCE_WRITABLE,
         &OPEN_SOURCE_SIGNERS,
         ProjectedCustodyPhaseV1::SourceFunded,
         OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
-        prestate.open_source.amount,
+        lock.amount,
     )?;
-    stage_founding_capability_funding_v1(program_id, &frame, &plan.funding)
+    stage_founding_capability_funding_v1(program_id, &frame, &funding)
 }
 
 /// Decode both readonly artifacts, authenticate every program and the founding
 /// join, and derive the exact prestate ladder the terminal Lock determines.
 ///
-/// The two raw request bodies and both decoded requests live only in this
-/// frame; the caller keeps nothing but the boxed prestate.
+/// The two raw request bodies and the decoded founding artifact live only in
+/// this frame; the caller keeps the boxed terminal Lock request, from which
+/// each stage derives its own prestate as it runs, and the founding's
+/// commitment to its capability-funding tail.
 #[inline(never)]
 fn authenticate_and_project(
     program_id: &Pubkey,
     frame: &BootstrapFrameV1<'_, '_>,
-) -> Result<Box<BootstrapPlanV1>, ProgramError> {
+) -> Result<(Box<ProjectedCustodyRequestV1>, FoundingFundingFactsV1), ProgramError> {
     let found_raw = frame.raw_bytes(FOUND_RAW, GENERIC_FOUNDING_REQUEST_BYTES_V1)?;
     let lock_raw = frame.raw_bytes(LOCK_RAW, PROJECTED_CUSTODY_REQUEST_BYTES_V1)?;
     let found = decode_found_request(&found_raw)?;
@@ -221,29 +225,31 @@ fn authenticate_and_project(
     // predicate is what makes the prestate admissible at Lock: the two routes
     // cannot drift into disagreeing about what a founding's Lock request is.
     authenticate_projected_lock_join_v1(program_id, core_program.key, &found, &lock)?;
+    let funding = founding_funding_facts_v1(&found, frame.funding.len())?;
+    Ok((lock, funding))
+}
+
+/// Project the founding artifact's commitment to its capability-funding tail.
+///
+/// Its own frame: every `GenericFoundingRequestV1` accessor takes `self` by
+/// value, so four of them in one frame is four copies of a four-hundred-byte
+/// request against a four-kilobyte budget.
+#[inline(never)]
+fn founding_funding_facts_v1(
+    found: &GenericFoundingRequestV1,
+    supplied: usize,
+) -> Result<FoundingFundingFactsV1, ProgramError> {
     // The FundingState tail belongs to this founding and to no other: its
     // length is the artifact's `funding_count` and the ordered address list it
     // must hash to is the artifact's `funding_list_id`.
-    if usize::from(found.funding_count()) != frame.funding.len() {
+    if usize::from(found.funding_count()) != supplied {
         return Err(TradingSbfError::Content.into());
     }
-    let prestate = lock
-        .founding_prestate_v1()
-        .map_err(|_| TradingSbfError::Content)?;
-    Ok(Box::new(BootstrapPlanV1 {
-        prestate,
-        funding: FoundingFundingFactsV1 {
-            market: found.market().to_bytes(),
-            generation: found.generation(),
-            funding_list_id: found.funding_list_id(),
-        },
-    }))
-}
-
-/// Everything the four stages need from the two readonly artifacts.
-struct BootstrapPlanV1 {
-    prestate: ProjectedCustodyFoundingPrestateV1,
-    funding: FoundingFundingFactsV1,
+    Ok(FoundingFundingFactsV1 {
+        market: found.market().to_bytes(),
+        generation: found.generation(),
+        funding_list_id: found.funding_list_id(),
+    })
 }
 
 /// The founding artifact's own commitment to its capability-funding tail.
@@ -253,6 +259,20 @@ struct FoundingFundingFactsV1 {
     funding_list_id: Identity,
 }
 
+/// Encode one request onto the heap.
+///
+/// The seven-hundred-and-sixty-eight-byte encoding and the request it is taken
+/// from cannot share a frame with a derivation of the same width.
+#[inline(never)]
+fn encode_projected_request_boxed(
+    request: &ProjectedCustodyRequestV1,
+) -> Result<Box<[u8; PROJECTED_CUSTODY_REQUEST_BYTES_V1]>, ProgramError> {
+    request
+        .encode()
+        .map(Box::new)
+        .map_err(|_| TradingSbfError::Content.into())
+}
+
 /// Execute one projected-Custody prestate transition and join its poststate.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -260,28 +280,36 @@ fn run_stage<'info>(
     program_id: &Pubkey,
     custody_program: &AccountInfo<'info>,
     accounts: &[AccountInfo<'info>],
-    request: &ProjectedCustodyRequestV1,
+    lock: &ProjectedCustodyRequestV1,
+    stage: FoundingPrestateStageV1,
     writable: &[usize],
     signers: &[usize],
     phase: ProjectedCustodyPhaseV1,
     next_revision: u64,
     locked_amount: u64,
 ) -> Result<(), ProgramError> {
-    let raw = request.encode().map_err(|_| TradingSbfError::Content)?;
+    // Derived here rather than up front: three prestate requests cannot be
+    // materialised together inside one verifier frame, and a stage derived
+    // immediately before it executes still refuses an unreachable terminal
+    // before any CPI, because the derivation revalidates the whole ladder.
+    let request = lock
+        .founding_prestate_stage_v1(stage)
+        .map_err(|_| TradingSbfError::Content)?;
+    let raw = encode_projected_request_boxed(&request)?;
     invoke_projected_child(
         program_id,
         custody_program,
         accounts,
-        request,
-        &raw,
+        &request,
+        raw.as_slice(),
         writable,
         signers,
     )?;
     authenticate_poststate(
         account(accounts, COMMON_STATE)?,
         custody_program,
-        request,
-        &raw,
+        &request,
+        raw.as_slice(),
         phase,
         next_revision,
         locked_amount,
