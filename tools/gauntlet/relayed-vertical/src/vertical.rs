@@ -193,8 +193,28 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         ));
     }
 
+    let founder_wallet = pubkey(
+        &session
+            .accounts
+            .get("collateral_wallet")
+            .ok_or_else(|| Error::new("no collateral_wallet evidence"))?
+            .address,
+    )?;
+    let founder_position = pubkey(
+        &session
+            .accounts
+            .get("founder_position")
+            .ok_or_else(|| Error::new("no founder_position evidence"))?
+            .address,
+    )?;
     let mut ledger = ConservationLedgerV1::new(mint, session.authority.pubkey());
     ledger.admit_founding(hoard, aggregate, 1);
+    // The whole collateral partition, or L1 reads honest movement as a leak:
+    // the founding leaves half the supply in the Hoard and half in the
+    // founder's wallet, and the founder's Position carries what the aggregate
+    // owes.
+    ledger.track_token_account("founder_wallet", founder_wallet);
+    ledger.track_position("founder_position", founder_position);
 
     // Keep the campaign payer comfortably funded for the publications and the
     // prepaid outputs; this is fee-side lamports, not market collateral.
