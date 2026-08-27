@@ -92,3 +92,7 @@ root = "EmitStructuredV2AbiRust"
 [[lean_exe]]
 name = "emit-relayed-mainnet-state-v1-abi-rust"
 root = "EmitRelayedMainnetStateV1AbiRust"
+
+[[lean_exe]]
+name = "emit-relayed-venue-decoding-rules-v1-rust"
+root = "EmitRelayedVenueDecodingRulesV1Rust"
