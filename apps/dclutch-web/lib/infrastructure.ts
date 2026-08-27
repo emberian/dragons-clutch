@@ -14,6 +14,7 @@ import {
   decodeArtifactReleaseV1,
   decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
+  requireSlotPinnedReleaseV1,
   type ArtifactReleaseV1,
   type CheckedMultiprogramV1,
   type ExecutionReleaseSetV1,
@@ -137,8 +138,19 @@ function required(accounts: ReadonlyMap<string, RpcAccount | null>, address: str
   return account;
 }
 
-function immutable(artifact: ArtifactReleaseV1, field: string): void {
-  if (artifact.upgradeAuthority !== null) throw new Error(`${field} ArtifactRelease is not immutable`);
+/**
+ * Admit one infrastructure artifact onto the slot-pinned authentication path.
+ *
+ * This used to read `if (artifact.upgradeAuthority !== null) throw` — the
+ * browser's copy of the Immutable-only gate decision 0012 retired, and the one
+ * that would have refused every iterated devnet substrate before a single
+ * account was read. What replaces it is not weaker: `authenticateArtifactDeploymentV1`
+ * below still requires the observed ProgramData to carry the exact slot and the
+ * exact authority the release bound, and a moved slot is named
+ * `ReleaseSupersededByUpgrade` in the protocol's own registered words.
+ */
+function slotPinned(artifact: ArtifactReleaseV1, field: string): void {
+  requireSlotPinnedReleaseV1(artifact, `the ${field} ArtifactRelease`);
 }
 
 function exactProfileBinding(bytes: Uint8Array, programOffset: number, artifactOffset: number, field: string): InfrastructureBindingV1 {
@@ -275,9 +287,9 @@ export async function decodeCheckedInfrastructureV1(bytes: Uint8Array): Promise<
   const rentChecked = slice(bytes, CHECKED_INFRASTRUCTURE_RENT_OFFSET + ARTIFACT_RELEASE_BYTES, 32);
   requireNonzero(registryChecked, 'Registry checked release identity');
   requireNonzero(rentChecked, 'Rent checked release identity');
-  immutable(execution.artifacts.core, 'Core');
-  immutable(registryArtifact, 'Registry');
-  immutable(rentArtifact, 'Rent');
+  slotPinned(execution.artifacts.core, 'Core');
+  slotPinned(registryArtifact, 'Registry');
+  slotPinned(rentArtifact, 'Rent');
   if (
     execution.artifacts.core.program === registryArtifact.program
     || execution.artifacts.core.program === rentArtifact.program
@@ -378,7 +390,7 @@ export async function inspectProtocolInfrastructureV1(
   if (initialCacheAccount.owner !== input.registryProgram || initialCacheAccount.executable) throw new Error('activation cache has the wrong Registry owner or executable flag');
   const initialCache = await decodeActivationCacheV1(initialCacheAccount.data, input.registryProgram, input.activationCache);
   const coreArtifact = initialCache.artifacts.core;
-  immutable(coreArtifact, 'Core');
+  slotPinned(coreArtifact, 'Core');
   const profilePda = PublicKey.findProgramAddressSync(
     [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
     new PublicKey(coreArtifact.program),
@@ -413,8 +425,8 @@ export async function inspectProtocolInfrastructureV1(
   const rentArtifactAccount = required(recordAccounts, rentRecordAddresses.record, 'Rent artifact');
   const registryArtifact = decodeArtifactReleaseV1(registryArtifactAccount.data);
   const rentArtifact = decodeArtifactReleaseV1(rentArtifactAccount.data);
-  immutable(registryArtifact, 'Registry');
-  immutable(rentArtifact, 'Rent');
+  slotPinned(registryArtifact, 'Registry');
+  slotPinned(rentArtifact, 'Rent');
   if (
     registryArtifact.program !== profile.registry.program
     || rentArtifact.program !== profile.rent.program

@@ -8,6 +8,7 @@ import {
 
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { PACKET_DATA_SIZE } from './directTransaction';
+import { releaseSupersededMeaningV1 } from './refusals';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 export const CHECKED_MULTIPROGRAM_BYTES = 1_592;
@@ -61,6 +62,29 @@ export const ARTIFACT_RELEASE_SCHEMA_ID_V1 = Uint8Array.from([
 export const REGISTRY_ROLES = ['core', 'claims', 'trading', 'resolution', 'custody'] as const;
 export type RegistryRole = typeof REGISTRY_ROLES[number];
 
+/**
+ * The two canonical upgrade policies an artifact release can bind, named the
+ * way `dclutch_registry_contract::ArtifactUpgradePolicyV1` names them.
+ *
+ * Decision 0012 (`docs/decisions/0012-devnet-iteration-substrate.md`) made this
+ * a live distinction rather than a formality. Before it, only `immutable` was
+ * admitted anywhere: the fast path reused the activation-bound ELF digest
+ * because irrevocability meant the bytes could never move. That bought
+ * soundness at a price the project refused to keep paying — every iteration of
+ * the devnet substrate cost ~31.7 SOL of unrecoverable rent, and devnet SOL
+ * arrives by faucet at a few SOL a day.
+ *
+ * `exact-authority` is admitted on a different argument, not a weaker one. The
+ * Loader V3 writes the current slot into ProgramData on every `Upgrade`, and it
+ * refuses an `Upgrade` in the deployment's own slot ("Program was deployed in
+ * this block already"), and it refuses the `Close` that a redeploy would have
+ * to precede one with. So there is no path to different bytes at a program id
+ * that leaves the recorded slot equal: **observed-slot equality proves the
+ * admitted digest is the current digest**, at the cost of one u64 comparison
+ * instead of a megabyte-scale hash.
+ */
+export type ArtifactUpgradePolicyV1 = 'immutable' | 'exact-authority';
+
 export type ArtifactReleaseV1 = Readonly<{
   bytes: Uint8Array;
   program: string;
@@ -69,8 +93,86 @@ export type ArtifactReleaseV1 = Readonly<{
   semanticReleaseId: string;
   elfDigest: string;
   deploymentSlot: bigint;
+  upgradePolicy: ArtifactUpgradePolicyV1;
   upgradeAuthority: string | null;
 }>;
+
+/**
+ * Admit one artifact release onto the slot-pinned authentication path.
+ *
+ * The exact mirror of `require_slot_pinned_release_v1`
+ * (`crates/dclutch-registry-contract/src/immutable_registry.rs`). Decision 0012
+ * replaced "the release must be `Immutable`" with "the release must be one of
+ * the two canonical pinned shapes", because the soundness a reader needs comes
+ * from the slot and authority equalities, not from irrevocability:
+ *
+ * - `immutable` with no bound authority — the deployment cannot move at all;
+ * - `exact-authority` with an exact bound authority — the deployment can move
+ *   only by an `Upgrade` signed by that key, and every such move breaks the
+ *   slot pin and refuses every dependent open market by name.
+ *
+ * A decoded release is already canonical in this respect: `decodeArtifactReleaseV1`
+ * refuses a mismatched policy/authority pairing before anything reaches here.
+ * This predicate exists so the browser states its admission out loud in one
+ * greppable place rather than by the absence of a check — the same reason the
+ * contract states it — and so a hand-constructed release cannot slip a
+ * non-canonical pairing past a caller that skipped `decode`.
+ */
+export function requireSlotPinnedReleaseV1(artifact: ArtifactReleaseV1, field: string): void {
+  const canonical = (artifact.upgradePolicy === 'immutable' && artifact.upgradeAuthority === null)
+    || (artifact.upgradePolicy === 'exact-authority' && artifact.upgradeAuthority !== null);
+  if (canonical) return;
+  const carried = artifact.upgradeAuthority === null ? 'no upgrade authority' : `the upgrade authority ${artifact.upgradeAuthority}`;
+  throw new Error(`MutableRegistryRelease: ${field} binds upgrade policy ${artifact.upgradePolicy} together with ${carried}, which is neither of the two canonical pinned release shapes`);
+}
+
+/** Which refusal a slot that differs from the pin earns, by the release's own policy. */
+export type SlotPinRefusalV1 = 'ReleaseSupersededByUpgrade' | 'DeploymentSlotMismatch';
+
+/**
+ * Name a slot mismatch: superseded by an upgrade, or plain staleness.
+ *
+ * The exact mirror of `ArtifactReleaseV1::slot_pin_refusal`
+ * (`crates/dclutch-registry-contract/src/artifact.rs`). An `immutable` release
+ * pins a slot nothing can move, so any mismatch is a substituted or
+ * wrong-generation observation. An `exact-authority` release pins a slot the
+ * named authority CAN move, and under Loader V3 only forward — so a strictly
+ * later observed slot is exactly one event, and it gets its own name so a
+ * reader gets a remedy instead of a mystery.
+ */
+export function slotPinRefusalV1(artifact: ArtifactReleaseV1, observedDeploymentSlot: bigint): SlotPinRefusalV1 {
+  return artifact.upgradePolicy === 'exact-authority' && observedDeploymentSlot > artifact.deploymentSlot
+    ? 'ReleaseSupersededByUpgrade'
+    : 'DeploymentSlotMismatch';
+}
+
+/**
+ * Render a broken slot pin as a sentence a person can act on.
+ *
+ * The supersession half carries the protocol's OWN registered meaning, read
+ * out of the generated refusal registry rather than retyped here — see
+ * `releaseSupersededMeaningV1`. The facts stay: which program, which slot the
+ * release pins, which slot the chain now reports. A story without the numbers
+ * is not evidence, and numbers without the story make the reader do the
+ * protocol reasoning themselves.
+ */
+export function slotPinRefusalSentenceV1(artifact: ArtifactReleaseV1, programAddress: string, observedDeploymentSlot: bigint): string {
+  const pinned = `the artifact release pins deployment slot ${artifact.deploymentSlot}, and the chain reports slot ${observedDeploymentSlot}`;
+  if (slotPinRefusalV1(artifact, observedDeploymentSlot) === 'ReleaseSupersededByUpgrade') {
+    return `ReleaseSupersededByUpgrade: ${programAddress} has been upgraded since this release authenticated it — ${pinned}. ${releaseSupersededMeaningV1()}`;
+  }
+  const why = artifact.upgradePolicy === 'immutable'
+    ? 'This release is immutable, so its slot is not something an upgrade could have moved: this is a different deployment, or an observation from a different generation of the substrate.'
+    : 'A slot below the pin is not an upgrade — the Loader only ever moves a deployment slot forward — so this is a stale or wrong-generation observation rather than a superseded substrate.';
+  return `DeploymentSlotMismatch: ${programAddress} is not the deployment this release authenticated — ${pinned}. ${why}`;
+}
+
+/** Render a changed upgrade authority the way the chain names it. */
+export function upgradeAuthorityMismatchSentenceV1(artifact: ArtifactReleaseV1, programAddress: string, observedAuthority: string | null): string {
+  const observed = observedAuthority === null ? 'no upgrade authority' : `the upgrade authority ${observedAuthority}`;
+  const bound = artifact.upgradeAuthority === null ? 'none' : artifact.upgradeAuthority;
+  return `UpgradeAuthorityMismatch: ${programAddress} now carries ${observed}, and the artifact release binds ${bound}. A release is an identity contract over one deployment, and who may replace its bytes is part of that identity, so a changed authority is refused whether or not any byte has moved yet.`;
+}
 
 /**
  * Which contract, if any, decodes this release's semantic preimage.
@@ -260,7 +362,8 @@ export function decodeArtifactReleaseV1(bytes: Uint8Array): ArtifactReleaseV1 {
   return Object.freeze({
     bytes: new Uint8Array(bytes), program: new PublicKey(program).toBase58(), loader: new PublicKey(loader).toBase58(),
     programData: new PublicKey(programData).toBase58(), semanticReleaseId: hex(semantic), elfDigest: hex(elf),
-    deploymentSlot: u64(bytes, 176), upgradeAuthority: policy === 0 ? null : new PublicKey(authority).toBase58(),
+    deploymentSlot: u64(bytes, 176), upgradePolicy: policy === 0 ? 'immutable' : 'exact-authority',
+    upgradeAuthority: policy === 0 ? null : new PublicKey(authority).toBase58(),
   });
 }
 
@@ -412,7 +515,15 @@ function programDataView(program: RpcAccount, programAddress: string, programDat
   // rather than judged.
   const tag = programData.data[12]; if (tag > 1) throw new Error('ProgramData upgrade-authority tag is undefined');
   const authority = tag === 0 ? null : new PublicKey(slice(programData.data, 13, 32)).toBase58();
-  if (u64(programData.data, 4) !== artifact.deploymentSlot || authority !== artifact.upgradeAuthority) throw new Error('ProgramData slot or authority differs from the artifact release');
+  // Decision 0012's two equalities, split apart and named. They used to be one
+  // joint refusal reading "ProgramData slot or authority differs from the
+  // artifact release", which was true of an upgraded devnet substrate, of a
+  // stale read, and of a substituted program alike — three different situations
+  // with three different remedies, and the reader could not tell which they had.
+  requireSlotPinnedReleaseV1(artifact, `${programAddress}'s artifact release`);
+  const observedSlot = u64(programData.data, 4);
+  if (observedSlot !== artifact.deploymentSlot) throw new Error(slotPinRefusalSentenceV1(artifact, programAddress, observedSlot));
+  if (authority !== artifact.upgradeAuthority) throw new Error(upgradeAuthorityMismatchSentenceV1(artifact, programAddress, authority));
   return slice(programData.data, LOADER_V3_PROGRAMDATA_OFFSET, programData.data.length - LOADER_V3_PROGRAMDATA_OFFSET);
 }
 

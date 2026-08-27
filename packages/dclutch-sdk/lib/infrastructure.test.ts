@@ -45,7 +45,16 @@ type ArtifactFixture = Readonly<{
   programDataAccount: RpcAccount;
 }>;
 
-async function artifactFixture(seed: number): Promise<ArtifactFixture> {
+/**
+ * One role's Loader identity, in either canonical pinned shape.
+ *
+ * `upgradeAuthority` absent builds the `Immutable` shape the fixtures always
+ * built. Supplying one builds `ExactAuthority`: the release carries the key and
+ * the observed ProgramData carries the same key at the same slot. That second
+ * shape is the iterated devnet substrate decision 0012 admits, and before this
+ * lane nothing in the browser's tests could construct it at all.
+ */
+async function artifactFixture(seed: number, upgradeAuthority?: PublicKey): Promise<ArtifactFixture> {
   const loader = new PublicKey(UPGRADEABLE_LOADER_ID);
   const program = key(seed);
   const programData = PublicKey.findProgramAddressSync([program.toBytes()], loader)[0];
@@ -56,12 +65,14 @@ async function artifactFixture(seed: number): Promise<ArtifactFixture> {
   const programDataBytes = new Uint8Array(45 + elf.length);
   new DataView(programDataBytes.buffer).setUint32(0, 3, true);
   new DataView(programDataBytes.buffer).setBigUint64(4, BigInt(seed), true);
+  if (upgradeAuthority !== undefined) { programDataBytes[12] = 1; programDataBytes.set(upgradeAuthority.toBytes(), 13); }
   programDataBytes.set(elf, 45);
   const bytes = new Uint8Array(ARTIFACT_RELEASE_BYTES);
   bytes.set(new TextEncoder().encode('DCLTARF1'));
   const view = new DataView(bytes.buffer);
   view.setUint16(8, 1, true);
   view.setUint16(10, 1, true);
+  if (upgradeAuthority !== undefined) { bytes[12] = 1; bytes.set(upgradeAuthority.toBytes(), 184); }
   bytes.set(program.toBytes(), 16);
   bytes.set(loader.toBytes(), 48);
   bytes.set(programData.toBytes(), 80);
@@ -98,15 +109,15 @@ type Fixture = Readonly<{
   accounts: ReadonlyMap<string, RpcAccount | null>;
 }>;
 
-async function fixture(seed: number): Promise<Fixture> {
-  const roleFixtures = await Promise.all(REGISTRY_ROLES.map((_, index) => artifactFixture(seed + index * 7)));
+async function fixture(seed: number, upgradeAuthority?: PublicKey): Promise<Fixture> {
+  const roleFixtures = await Promise.all(REGISTRY_ROLES.map((_, index) => artifactFixture(seed + index * 7, upgradeAuthority)));
   const artifacts = Object.freeze(Object.fromEntries(REGISTRY_ROLES.map((role, index) => [role, roleFixtures[index]])) as Record<RegistryRole, ArtifactFixture>);
   const artifactIdValues = await Promise.all(REGISTRY_ROLES.map((role) => sha256(artifacts[role].artifact.bytes)));
   const artifactIds = Object.freeze(Object.fromEntries(REGISTRY_ROLES.map((role, index) => [role, artifactIdValues[index]])) as Record<RegistryRole, Uint8Array>);
   const releaseSet = releaseSetBytes(artifacts, artifactIds);
   const releaseSetId = await sha256(releaseSet);
-  const registryFixture = await artifactFixture(seed + 50);
-  const rentFixture = await artifactFixture(seed + 60);
+  const registryFixture = await artifactFixture(seed + 50, upgradeAuthority);
+  const rentFixture = await artifactFixture(seed + 60, upgradeAuthority);
   const registryProgram = registryFixture.artifact.program;
   const registryArtifactId = await sha256(registryFixture.artifact.bytes);
   const rentArtifactId = await sha256(rentFixture.artifact.bytes);
@@ -251,7 +262,7 @@ describe('immutable protocol infrastructure inspection', () => {
     })).rejects.toThrow('current ELF differs');
   });
 
-  it('refuses profile PDA, manifest mutability, and reserved-byte substitution', async () => {
+  it('refuses profile PDA and reserved-byte substitution', async () => {
     const value = await fixture(11);
     const wrongPda = new Uint8Array(value.checkedManifest);
     wrongPda[16 + CHECKED_MULTIPROGRAM_BYTES + 144] ^= 1;
@@ -259,10 +270,82 @@ describe('immutable protocol infrastructure inspection', () => {
     const reserved = new Uint8Array(value.checkedManifest);
     reserved[12] = 1;
     await expect(decodeCheckedInfrastructureV1(reserved)).rejects.toThrow('reserved');
-    const mutableRegistry = new Uint8Array(value.checkedManifest);
+  });
+
+  // Decision 0012. This assertion used to read the other way: flipping the
+  // Registry leaf's upgrade-policy byte to `ExactAuthority` was expected to
+  // throw `not immutable`, because a mutable release was refused before a
+  // single equality was checked. The browser now admits the shape and refuses
+  // on the pin instead — so the whole substrate below is MUTABLE, every
+  // ProgramData carries the bound authority at the bound slot, and it
+  // inspects.
+  it('admits a slot-pinned mutable substrate end to end, which the Immutable-only gate refused outright', async () => {
+    const authority = key(0x5a);
+    const value = await fixture(11, authority);
+    const checked = await decodeCheckedInfrastructureV1(value.checkedManifest);
+    expect(checked.registryArtifact.upgradePolicy).toBe('exact-authority');
+    expect(checked.registryArtifact.upgradeAuthority).toBe(authority.toBase58());
+    expect(checked.execution.artifacts.core.upgradeAuthority).toBe(authority.toBase58());
+    const inspection = await inspectProtocolInfrastructureV1(client(value), {
+      registryProgram: value.registryProgram,
+      activationCache: value.activationCache,
+      checkedManifest: value.checkedManifest,
+    });
+    expect(inspection.recognition.kind).toBe('supplied-manifest-match');
+    expect(inspection.registry.deploymentSlot).toBe('61');
+  });
+
+  // The residue of `require_slot_pinned_release_v1`: what `MutableRegistryRelease`
+  // still means is a NON-CANONICAL pairing, and there are exactly two of them.
+  it('refuses both non-canonical policy/authority pairings by name', async () => {
     const registryOffset = 16 + CHECKED_MULTIPROGRAM_BYTES + 144 + 32;
-    mutableRegistry[registryOffset + 12] = 1;
-    mutableRegistry.fill(0x44, registryOffset + 184, registryOffset + 216);
-    await expect(decodeCheckedInfrastructureV1(mutableRegistry)).rejects.toThrow('not immutable');
+    const immutableWithAuthority = new Uint8Array((await fixture(11)).checkedManifest);
+    immutableWithAuthority.fill(0x44, registryOffset + 184, registryOffset + 216);
+    await expect(decodeCheckedInfrastructureV1(immutableWithAuthority)).rejects.toThrow('upgrade authority is noncanonical');
+    const authorityWithoutKey = new Uint8Array((await fixture(11, key(0x5a))).checkedManifest);
+    authorityWithoutKey.fill(0, registryOffset + 184, registryOffset + 216);
+    await expect(decodeCheckedInfrastructureV1(authorityWithoutKey)).rejects.toThrow('upgrade authority is noncanonical');
+  });
+
+  // The event the browser exists to render: the authority the release names
+  // shipped new bytes, so the slot moved forward and every dependent market
+  // refuses until a re-release re-pins.
+  it('renders an upgraded substrate as ReleaseSupersededByUpgrade, in the protocol’s registered words', async () => {
+    const authority = key(0x5a);
+    const value = await fixture(11, authority);
+    const checked = await decodeCheckedInfrastructureV1(value.checkedManifest);
+    const upgraded = new Map(value.accounts);
+    const programData = upgraded.get(checked.registryArtifact.programData);
+    expect(programData).toBeTruthy();
+    if (programData === null || programData === undefined) throw new Error('unreachable');
+    const moved = new Uint8Array(programData.data);
+    new DataView(moved.buffer).setBigUint64(4, checked.registryArtifact.deploymentSlot + 1n, true);
+    upgraded.set(checked.registryArtifact.programData, account(programData.owner, programData.executable, moved));
+    await expect(inspectProtocolInfrastructureV1(client(Object.freeze({ ...value, accounts: upgraded })), {
+      registryProgram: value.registryProgram,
+      activationCache: value.activationCache,
+    })).rejects.toThrow(/ReleaseSupersededByUpgrade.*pins deployment slot 61, and the chain reports slot 62.*substrate was upgraded/s);
+  });
+
+  // A slot that moved BACKWARD is not an upgrade — the Loader only moves a
+  // deployment slot forward — so it must keep the plain-staleness name.
+  it('keeps a backward slot as DeploymentSlotMismatch rather than calling it an upgrade', async () => {
+    const value = await fixture(11, key(0x5a));
+    const checked = await decodeCheckedInfrastructureV1(value.checkedManifest);
+    const stale = new Map(value.accounts);
+    const programData = stale.get(checked.registryArtifact.programData);
+    if (programData === null || programData === undefined) throw new Error('unreachable');
+    const moved = new Uint8Array(programData.data);
+    new DataView(moved.buffer).setBigUint64(4, checked.registryArtifact.deploymentSlot - 1n, true);
+    stale.set(checked.registryArtifact.programData, account(programData.owner, programData.executable, moved));
+    // Asserted on the caught message rather than through `.rejects.not.toThrow`,
+    // which passes on any rejection at all and would not discriminate.
+    const refusal = await inspectProtocolInfrastructureV1(client(Object.freeze({ ...value, accounts: stale })), {
+      registryProgram: value.registryProgram,
+      activationCache: value.activationCache,
+    }).then(() => null, (error: unknown) => (error instanceof Error ? error.message : String(error)));
+    expect(refusal).toContain('DeploymentSlotMismatch');
+    expect(refusal).toContain('pins deployment slot 61, and the chain reports slot 60');
+    expect(refusal).not.toContain('Superseded');
   });
 });
