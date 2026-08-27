@@ -378,6 +378,30 @@ def discover_cargo_specs(
 # --------------------------------------------------------------------- npm
 
 
+# Registry packages whose own metadata carries no modern ``license`` field
+# anywhere this tool can read WITHOUT an installed node_modules (the lock has
+# no license field and the package.json uses the legacy ``licenses`` array or
+# nothing at all). Each row is pinned to the exact lockfile integrity, so a
+# republished tarball under the same version stops matching and fails loudly.
+# Provenance, verified against the installed package the day each row was
+# added: eyes 0.1.8 declares ``licenses: ['MIT']`` (legacy array);
+# text-encoding-utf-8 1.0.2 ships the W3C text-encoding polyfill's dual
+# licence in its LICENSE.md (Unlicense OR Apache-2.0) and declares nothing in
+# package.json.
+CURATED_NPM_LICENSES: dict[tuple[str, str, str], str] = {
+    (
+        "eyes",
+        "0.1.8",
+        "sha512-GipyPsXO1anza0AOZdy69Im7hGFCNB7Y/NGjDlZGJ3GJJLtwNSb2vrzYrTYJRrRloVx7pl+bhUaTB8yiccPvFQ==",
+    ): "MIT",
+    (
+        "text-encoding-utf-8",
+        "1.0.2",
+        "sha512-8bw4MY9WjdsD2aMtO0OzOCY3pXGYNx2d2FfHRVUKkiCPDWjKuOlhLVASS+pD7VkLTVjW268LYJHwsnPFlBpbAg==",
+    ): "(Unlicense OR Apache-2.0)",
+}
+
+
 def npm_package_license(
     entry_path: str, entry: dict, root: pathlib.Path, manifest_dir: pathlib.Path
 ) -> tuple[str | None, str | None]:
@@ -385,6 +409,13 @@ def npm_package_license(
     lock_license = entry.get("license")
     if lock_license:
         return lock_license, "npm-lock-field"
+
+    curated = CURATED_NPM_LICENSES.get(
+        (entry.get("name") or entry_path.rpartition("node_modules/")[2],
+         entry.get("version", "?"), entry.get("integrity", ""))
+    )
+    if curated:
+        return curated, "curated-integrity-pinned"
 
     installed = manifest_dir / entry_path / "package.json"
     if installed.is_file():
@@ -456,6 +487,21 @@ def check_npm_manifest(
                 continue
             dep_name = entry.get("name") or entry_path.rpartition("node_modules/")[2]
             dep_version = entry.get("version", "?")
+            if not entry_path.startswith("node_modules/"):
+                # A ``file:`` dependency's target entry (npm keys it by its
+                # relative path). Same rule as a Cargo path dependency: it
+                # must resolve inside this repository, and it is first-party
+                # -- there is no registry integrity to demand.
+                target = (manifest_dir / entry_path).resolve()
+                try:
+                    rel = target.relative_to(root.resolve())
+                except ValueError:
+                    failures.append(f"{manifest}: path dependency outside repository: {dep_name} {target}")
+                    continue
+                license_id = entry.get("license") or default_first_party_license
+                basis = "declared" if entry.get("license") else "inherited-default (first-party path dependency, undeclared)"
+                rows.append(Row("npm", manifest, dep_name, dep_version, f"path+{rel}", "-", license_id, basis))
+                continue
             resolved = entry.get("resolved", "")
             if resolved and not resolved.startswith(NPM_REGISTRY_PREFIX):
                 failures.append(f"{manifest}: forbidden npm source: {dep_name} {resolved}")
