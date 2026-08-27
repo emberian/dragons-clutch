@@ -1276,6 +1276,110 @@ mod tests {
         }
     }
 
+    /// Re-seal a substituted descriptor into a complete, self-consistent graph.
+    ///
+    /// Substituting one descriptor field moves its digest, so the ProgramSet
+    /// must name the new descriptor and the config must name the new set.
+    /// Without that the substitution would refuse on a content identity and
+    /// never reach the conjunct under test.
+    fn resealed(fixture: &Fixture, descriptor: CapabilityProgramV4) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let encoded = descriptor.encode().to_vec();
+        let set = program_set(digest(&encoded));
+        let existing = GeneralConfigV3::decode(&fixture.config).expect("fixture config");
+        let config = GeneralConfigV3::new(GeneralConfigV3Input {
+            capacity_profile_id: existing.capacity_profile_id(),
+            claim_basis_id: existing.claim_basis_id(),
+            program_set_id: digest(&set),
+            generation: existing.generation(),
+            price_scale: existing.price_scale(),
+            collection_slots: existing.collection_slots(),
+            selection_slots: existing.selection_slots(),
+            settlement_slots: existing.settlement_slots(),
+            max_orders_per_candidate: existing.max_orders_per_candidate(),
+            max_pages_per_candidate: existing.max_pages_per_candidate(),
+            continuation_reward_lamports: existing.continuation_reward_lamports(),
+            selection_policy_id: existing.selection_policy_id(),
+            quote_surplus_beneficiary: existing.quote_surplus_beneficiary(),
+        })
+        .expect("resealed config");
+        (set, encoded, config.to_bytes().to_vec())
+    }
+
+    /// A General action against a capability that is not General refuses.
+    ///
+    /// The Hot executor is family-neutral by decision 0006: it proves the
+    /// selected kind against the manifest entry and the descriptor and then
+    /// runs whatever closure the descriptor names. That makes `validate_descriptor`
+    /// the conjunct standing between a General artifact set and a capability of
+    /// some other family, and it must not be satisfiable by an identity that is
+    /// merely well-formed. Two of the three substitutions below are General's
+    /// own real identities in each other's slots -- the strongest form of the
+    /// mistake, because every byte is an identity this family publishes.
+    #[test]
+    fn a_descriptor_of_another_family_refuses_the_general_artifact_set() {
+        let fixture = fixture();
+        let canonical = CapabilityProgramV4::decode(&fixture.descriptor).expect("fixture");
+        for (kind, root_schema) in [
+            // General's own root schema standing in the kind slot.
+            (GENERAL_ROOT_SCHEMA_ID_V2, GENERAL_ROOT_SCHEMA_ID_V2),
+            // and the converse: the kind identity standing in the root slot.
+            (GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_CAPABILITY_KIND_ID_V1),
+            // and a foreign identity belonging to neither.
+            ([0x7c; 32], GENERAL_ROOT_SCHEMA_ID_V2),
+        ] {
+            let substituted = CapabilityProgramV4::new(
+                id(kind),
+                canonical.config_schema(),
+                canonical.request_schema(),
+                id(root_schema),
+                canonical.derivation_policy(),
+                canonical.capacity_profile(),
+                canonical.artifacts(),
+                canonical.root_state_bytes(),
+            )
+            .expect("substituted descriptor");
+            let (set, descriptor, config) = resealed(&fixture, substituted);
+            let mut artifacts = fixture.artifacts();
+            artifacts.program_set = &set;
+            artifacts.descriptor = &descriptor;
+            artifacts.config = &config;
+            assert_eq!(
+                authenticate_general_artifacts_v3(
+                    GeneralArtifactSelectionV3 {
+                        program_set: digest(&set),
+                        config: digest(&config),
+                        artifact_release: fixture.selection().artifact_release,
+                    },
+                    artifacts,
+                    &fixture.request,
+                    258,
+                ),
+                Err(GeneralArtifactErrorV3::Descriptor),
+                "kind {kind:?} root_schema {root_schema:?}"
+            );
+        }
+
+        // The control: the same reseal with nothing substituted still joins.
+        let (set, descriptor, config) = resealed(&fixture, canonical);
+        let mut artifacts = fixture.artifacts();
+        artifacts.program_set = &set;
+        artifacts.descriptor = &descriptor;
+        artifacts.config = &config;
+        assert!(
+            authenticate_general_artifacts_v3(
+                GeneralArtifactSelectionV3 {
+                    program_set: digest(&set),
+                    config: digest(&config),
+                    artifact_release: fixture.selection().artifact_release,
+                },
+                artifacts,
+                &fixture.request,
+                258,
+            )
+            .is_ok()
+        );
+    }
+
     #[test]
     fn zero_tail_action_and_selected_content_substitution_refuse() {
         let fixture = fixture();
