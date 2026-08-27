@@ -392,6 +392,28 @@ pub struct SelectedLifecycleV3<'a> {
     policy: StateLifecyclePolicyV3<'a>,
     plan: ActionPlanV3,
     plan_index: u16,
+    join: Option<ValidatedProfileJoinV3<'a>>,
+}
+
+impl<'a> SelectedLifecycleV3<'a> {
+    /// Carry evidence that this policy's join to one AccountProfile is proved.
+    ///
+    /// Six methods on this type and its policy each re-derived that join on
+    /// every call, and a lifecycle batch calls them once per seed, per
+    /// invocation, per plan, twice over. Attaching the evidence once makes the
+    /// join a fact of the selection rather than a per-call derivation; a method
+    /// still derives it for any AccountProfile the evidence does not name.
+    #[must_use]
+    pub const fn with_validated_join(self, join: ValidatedProfileJoinV3<'a>) -> Self {
+        Self {
+            join: Some(join),
+            ..self
+        }
+    }
+
+    fn require_join(self, profile: AccountProfileV2<'_>) -> Result<()> {
+        self.policy.require_join(self.join, profile)
+    }
 }
 
 impl SelectedLifecycleV3<'_> {
@@ -524,7 +546,7 @@ impl SelectedLifecycleV3<'_> {
         tail_count: u32,
         item_index: Option<u32>,
     ) -> Result<LifecycleAccountIndicesV3> {
-        self.policy.validate_account_profile(profile)?;
+        self.require_join(profile)?;
         let recipe = self.policy.recipe(self.plan.recipe)?;
         validate_item(recipe.account.scope, tail_count, item_index)?;
         Ok(LifecycleAccountIndicesV3 {
@@ -596,6 +618,7 @@ impl SelectedLifecycleV3<'_> {
     ) -> Result<LifecycleSeedInputValueV3> {
         self.policy.materialize_seed_input_for(
             profile,
+            self.join,
             self.plan,
             tail_count,
             item_index,
@@ -659,7 +682,7 @@ impl SelectedLifecycleV3<'_> {
         item_index: Option<u32>,
         registers: LifecycleRegistersV3<'_>,
     ) -> Result<bool> {
-        self.policy.validate_account_profile(profile)?;
+        self.require_join(profile)?;
         validate_runtime_width(profile, tail_count, registers)?;
         match self.plan.guard {
             PlanGuardV3::Always => Ok(true),
@@ -790,6 +813,21 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         self.0.bytes()
     }
 
+    /// Validate this policy's join to one exact AccountProfile and record it.
+    ///
+    /// The returned evidence lets a batch of plans over the same two artifacts
+    /// skip re-deriving a join that cannot have changed. It proves exactly what
+    /// `validate_account_profile` proves, for exactly these bytes.
+    pub fn validate_account_profile_join<'b>(
+        self,
+        profile: AccountProfileV2<'b>,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        self.0.validate_account_profile_join(profile)
+    }
+
     /// Whether every lifecycle and quote table is canonically empty.
     pub const fn is_empty(self) -> bool {
         self.0.recipes == 0
@@ -832,15 +870,17 @@ impl<'a> StateLifecyclePolicyV5<'a> {
     /// AccountProfile writes and lifecycle protected outputs are statically
     /// forbidden from targeting them. The Hot adapter must additionally forbid
     /// RequestProfile and Transition writes before and after execution.
+    #[allow(clippy::too_many_arguments)]
     pub fn project_authenticated_current_rent_quotes_atomic(
         self,
         profile: AccountProfileV2<'_>,
+        join: Option<ValidatedProfileJoinV3<'_>>,
         tail_count: u32,
         input_scalars: &[u64],
         quotes: &[AuthenticatedRentQuoteV5],
         buffers: LifecycleRentQuoteBuffersV5<'_>,
     ) -> Result<()> {
-        self.validate_account_profile(profile)?;
+        self.0.require_join(join, profile)?;
         let expected_width = affine_width(
             profile.common_scalar_count(),
             profile.item_scalar_stride(),
@@ -889,11 +929,12 @@ impl<'a> StateLifecyclePolicyV5<'a> {
     pub fn validate_projected_current_rent_quotes(
         self,
         profile: AccountProfileV2<'_>,
+        join: Option<ValidatedProfileJoinV3<'_>>,
         tail_count: u32,
         projected_scalars: &[u64],
         quotes: &[AuthenticatedRentQuoteV5],
     ) -> Result<()> {
-        self.validate_account_profile(profile)?;
+        self.0.require_join(join, profile)?;
         if quotes.len() != usize::from(self.0.current_rent_quotes)
             || projected_scalars.len()
                 != affine_width(
@@ -1090,6 +1131,7 @@ impl<'a> StateLifecyclePolicyV3<'a> {
                         policy: self,
                         plan,
                         plan_index: index,
+                        join: None,
                     });
                 }
                 seen = seen.checked_add(1).ok_or(Error::Arithmetic)?;
@@ -1097,6 +1139,39 @@ impl<'a> StateLifecyclePolicyV3<'a> {
             index = index.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         Err(Error::InvalidCoordinate)
+    }
+
+    /// Validate this policy's join to one exact AccountProfile and record it.
+    ///
+    /// The returned evidence lets a batch of plans over the same two artifacts
+    /// skip re-deriving a join that cannot have changed. It proves exactly what
+    /// `validate_account_profile` proves, for exactly these bytes.
+    pub fn validate_account_profile_join<'b>(
+        self,
+        profile: AccountProfileV2<'b>,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        self.validate_account_profile(profile)?;
+        Ok(ValidatedProfileJoinV3 {
+            policy: self.bytes(),
+            profile: profile.bytes(),
+        })
+    }
+
+    /// Establish this policy's join to `profile`, deriving it only if the
+    /// supplied evidence does not already name exactly these two artifacts.
+    fn require_join(
+        self,
+        join: Option<ValidatedProfileJoinV3<'_>>,
+        profile: AccountProfileV2<'_>,
+    ) -> Result<()> {
+        if join.is_some_and(|join| join.covers(self, profile)) {
+            Ok(())
+        } else {
+            self.validate_account_profile(profile)
+        }
     }
 
     /// Require every policy coordinate to fit the sole AccountProfile geometry.
@@ -1402,16 +1477,18 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         seed.materialize(profile, tail_count, item_index, registers)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn materialize_seed_input_for(
         self,
         profile: AccountProfileV2<'_>,
+        join: Option<ValidatedProfileJoinV3<'_>>,
         plan: ActionPlanV3,
         tail_count: u32,
         item_index: Option<u32>,
         registers: LifecycleRegistersV3<'_>,
         seed_ordinal: u8,
     ) -> Result<LifecycleSeedInputValueV3> {
-        self.validate_account_profile(profile)?;
+        self.require_join(join, profile)?;
         validate_runtime_width(profile, tail_count, registers)?;
         let recipe = self.recipe(plan.recipe)?;
         validate_item(recipe.account.scope, tail_count, item_index)?;
@@ -2304,6 +2381,37 @@ impl StateLifecyclePlanV3 {
     }
 }
 
+/// Evidence that one exact policy's join to one exact AccountProfile has
+/// already been validated.
+///
+/// `validate_account_profile` is a pure function of the two artifacts' bytes
+/// and neither can change during an execution, yet the planner re-derived it
+/// for every invocation of a batch: on the canonical Direct Profile14 lifecycle
+/// that is the same 82,000-CU join recomputed once per planned state, twice
+/// over, because the executor plans the batch and then replans it against the
+/// transition's outputs.
+///
+/// The token records the two byte ranges it was proved for. The planner accepts
+/// it only for the very same ranges -- same address, same length, and both are
+/// immutable borrows for the whole execution -- so it can never carry a
+/// validation of one artifact pair into a plan over another.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ValidatedProfileJoinV3<'a> {
+    policy: &'a [u8],
+    profile: &'a [u8],
+}
+
+impl ValidatedProfileJoinV3<'_> {
+    fn covers(self, policy: StateLifecyclePolicyV3<'_>, profile: AccountProfileV2<'_>) -> bool {
+        let policy_bytes = policy.bytes();
+        let profile_bytes = profile.bytes();
+        core::ptr::eq(self.policy.as_ptr(), policy_bytes.as_ptr())
+            && self.policy.len() == policy_bytes.len()
+            && core::ptr::eq(self.profile.as_ptr(), profile_bytes.as_ptr())
+            && self.profile.len() == profile_bytes.len()
+    }
+}
+
 /// Authenticate and plan one exact selected lifecycle operation.
 pub fn plan_lifecycle(
     selected: SelectedLifecycleV3<'_>,
@@ -2424,7 +2532,7 @@ fn plan_lifecycle_with_values(
     }
     let data_bytes = selected.target_data_bytes(context.tail_count)?;
     let selected = selected.plan;
-    policy.validate_account_profile(context.account_profile)?;
+    policy.require_join(selected_record.join, context.account_profile)?;
     validate_runtime_width(
         context.account_profile,
         context.tail_count,
@@ -3898,8 +4006,12 @@ mod tests {
             .expect("account projection");
             let mut scalar_scratch = [0_u64; 5];
             let mut identity_scratch = [[0_u8; 32]; 5];
+            let join = selected
+                .policy
+                .validate_account_profile_join(profile)
+                .expect("validated join");
             plan_lifecycle_with_protected_outputs_atomic(
-                selected,
+                selected.with_validated_join(join),
                 LifecycleContextV3 {
                     account_profile: profile,
                     tail_count: 0,
@@ -4350,6 +4462,53 @@ mod tests {
             AccountObservationV1::new(&[0x51; 32], &SYSTEM, 0, &[], false, true, false),
             AccountObservationV1::new(&[0x52; 32], &SYSTEM, 20, &[], false, true, false),
         ]
+    }
+
+    /// Evidence that a policy joins one AccountProfile must never stand in for
+    /// a plan over a different one.
+    ///
+    /// The planner skips re-deriving the join only for the exact byte ranges the
+    /// evidence was proved against. A token is therefore neither transferable to
+    /// another profile -- where the join genuinely fails and must still be
+    /// refused -- nor to a byte-identical profile at another address, where the
+    /// join is simply re-derived.
+    #[test]
+    fn validated_join_evidence_never_covers_another_artifact() {
+        let policy_bytes = policy_bytes();
+        let policy = StateLifecyclePolicyV3::decode_selected(POLICY_ID, POLICY_ID, &policy_bytes)
+            .expect("policy");
+        let profile_bytes = account_profile_bytes();
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("profile");
+        let join = policy
+            .validate_account_profile_join(profile)
+            .expect("join validates");
+        assert!(join.covers(policy, profile));
+
+        // A byte-identical profile at another address is not the artifact the
+        // evidence names, so the join is re-derived rather than assumed.
+        let copied_bytes = account_profile_bytes();
+        assert_eq!(copied_bytes, profile_bytes);
+        let copied = AccountProfileV2::decode(&copied_bytes).expect("copied profile");
+        assert!(!join.covers(policy, copied));
+
+        // A profile this policy does not join is refused, evidence or not.
+        let mut narrowed_bytes = account_profile_bytes();
+        put(&mut narrowed_bytes, 26, &0_u16.to_le_bytes());
+        let narrowed = AccountProfileV2::decode(&narrowed_bytes).expect("narrowed profile");
+        assert_eq!(
+            policy.validate_account_profile(narrowed),
+            Err(Error::ProfileMismatch)
+        );
+        assert!(!join.covers(policy, narrowed));
+
+        // A second policy carrying identical bytes is likewise not the artifact
+        // the evidence names.
+        let copied_policy_bytes = policy_bytes.clone();
+        let copied_policy =
+            StateLifecyclePolicyV3::decode_selected(POLICY_ID, POLICY_ID, &copied_policy_bytes)
+                .expect("policy");
+        assert_eq!(copied_policy.bytes(), policy.bytes());
+        assert!(!join.covers(copied_policy, profile));
     }
 
     #[test]

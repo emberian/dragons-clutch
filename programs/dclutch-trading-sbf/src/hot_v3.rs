@@ -18,7 +18,8 @@ use dclutch_account_profile_contract::{
         CoordinateScopeV3, LifecycleContextV3, LifecycleOperationV3,
         LifecycleProtectedRegisterBuffersV3, LifecycleRegisterKindV3, LifecycleRegisterTargetV3,
         LifecycleRegistersV3, LifecycleRentQuoteBuffersV5, LifecycleSeedInputValueV3,
-        StateLifecyclePlanV3, StateLifecyclePolicyV5, plan_lifecycle_with_protected_outputs_atomic,
+        StateLifecyclePlanV3, StateLifecyclePolicyV5, ValidatedProfileJoinV3,
+        plan_lifecycle_with_protected_outputs_atomic,
     },
     v2::{
         AccountPrestateV2, AccountProfileV2, ProjectionRegistersV2, RouteAccountPrivilegesV2,
@@ -1726,8 +1727,11 @@ pub fn process_hot_execution_v3(
     }
     let account_profile =
         AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
-    lifecycle
-        .validate_account_profile(account_profile)
+    // One validated join for the whole execution: the lifecycle preplan runs a
+    // batch of plans over these same two immutable artifacts, twice, and the
+    // planner otherwise re-derives this join for every planned state.
+    let profile_join = lifecycle
+        .validate_account_profile_join(account_profile)
         .map_err(|_| TradingSbfError::Content)?;
 
     let request_profile_data = borrow_finalized_record(
@@ -2005,6 +2009,7 @@ pub fn process_hot_execution_v3(
         account_profile,
         request_profile,
         lifecycle,
+        profile_join,
         &current_rent_quotes,
         &dynamic_spans.widths,
         tail_count,
@@ -2040,6 +2045,7 @@ pub fn process_hot_execution_v3(
         &request_output_identities,
         &rent,
         &aliases,
+        profile_join,
     )?;
     hot_cu_checkpoint!("request-lifecycle-preplan");
 
@@ -2089,6 +2095,7 @@ pub fn process_hot_execution_v3(
     lifecycle
         .validate_projected_current_rent_quotes(
             account_profile,
+            Some(profile_join),
             tail_count,
             &transition_output_scalars,
             &current_rent_quotes,
@@ -2152,6 +2159,7 @@ pub fn process_hot_execution_v3(
         &transition_output_identities,
         &rent,
         &aliases,
+        profile_join,
     )?;
     require_lifecycle_replan_agreement_v4(
         &preplanned_lifecycle,
@@ -3979,6 +3987,7 @@ fn prepare_lifecycle_v4<'a>(
     identities: &[[u8; 32]],
     rent: &Rent,
     aliases: &[usize],
+    profile_join: ValidatedProfileJoinV3<'_>,
 ) -> Result<PreparedLifecycleBatchV4, ProgramError> {
     if observations.len() != accounts.len() || aliases.len() != accounts.len() {
         return Err(TradingSbfError::Content.into());
@@ -4014,7 +4023,8 @@ fn prepare_lifecycle_v4<'a>(
     while ordinal < plan_count {
         let selected = policy
             .action_plan(action, ordinal)
-            .map_err(|_| TradingSbfError::Content)?;
+            .map_err(|_| TradingSbfError::Content)?
+            .with_validated_join(profile_join);
         let invocation_count = selected
             .invocation_count(tail_count)
             .map_err(|_| TradingSbfError::Content)?;
@@ -6141,6 +6151,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     account_profile: AccountProfileV2<'artifact>,
     request_profile: RequestProfileKindV3<'artifact>,
     lifecycle: StateLifecyclePolicyV5<'artifact>,
+    profile_join: ValidatedProfileJoinV3<'artifact>,
     current_rent_quotes: &[AuthenticatedRentQuoteV5],
     span_counts: &[u32],
     tail_count: u32,
@@ -6226,6 +6237,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     lifecycle
         .project_authenticated_current_rent_quotes_atomic(
             account_profile,
+            Some(profile_join),
             tail_count,
             &current_scalars,
             current_rent_quotes,
@@ -6282,6 +6294,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     lifecycle
         .validate_projected_current_rent_quotes(
             account_profile,
+            Some(profile_join),
             tail_count,
             &current_scalars,
             current_rent_quotes,
