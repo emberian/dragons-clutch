@@ -498,14 +498,19 @@ pub(crate) fn resolve_through_pyth(
             registry_artifact: crate::runtime::record(plan, "registry_artifact_release")?.0,
             registry_artifact_staging: crate::runtime::record(plan, "registry_artifact_release")?.1,
             core_programdata: addresses.core_programdata,
-            // The field is named `trading_program` and the account it fills is
-            // the CUSTODY deployment. That is what the operator's own campaign
-            // passes, and the frame is a readonly role observation rather than
-            // a callee, so the name is the thing that is wrong and not the
-            // value. Recorded rather than renamed: the operator is not this
-            // tier's file.
-            trading_program: pubkey(&plan.custody.program_id)?,
-            trading_programdata: pubkey(&plan.custody.programdata_id)?,
+            // The TRADING role, and it means it. This campaign passed CUSTODY
+            // here first, because that is what the operator's own ProgramTest
+            // campaign passes and the field looked like a readonly role
+            // observation rather than a callee. The chain refused it:
+            // `provider_instruction_v3` authenticates accounts 13/14 against
+            // `activation.role(ExecutionRoleV1::Trading).release().program()`
+            // and raised `ResolutionRelease` (0x8005) after 681,773 CU. The
+            // fixture passes because ITS release set binds Custody's key to the
+            // Trading role; a real five-role activation binds five different
+            // keys, so the confusion is invisible in ProgramTest and fatal on a
+            // validator. The fixture is never the authority.
+            trading_program: pubkey(&plan.trading.program_id)?,
+            trading_programdata: pubkey(&plan.trading.programdata_id)?,
             resolution_program: addresses.resolution_program,
             resolution_programdata: addresses.resolution_programdata,
             receiver_config: addresses_p.config,
