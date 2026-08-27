@@ -201,15 +201,40 @@ of silent loss.
    Create pins it to the Rent sysvar minimum by equality; what is owed is a
    composition theorem at `direct/inline.rs:308`, queued below. Identities moved
    once and swept tree-wide; the differential now runs with zero ignored tests.
-   **Successor debt**: `registered_fill_artifacts_v4.rs` is the same class — the
-   last V3 program in the tree authored as a hand-written Rust `InstructionV3`
-   array. Attach to tranche-A Direct; author it against `TransitionVMV3.lean`
-   with the same byte-identity gate.
-5. **RegisterBuy topology defects, reported-not-fixed** (9b99662):
-   `validate_lengths` still pins System at width 0
-   (registered_account_artifacts_v4.rs:562) and Exact loader/program widths the
-   opaque ruling should cover — refuses on any real validator. Attach to the
-   tranche-A Direct family charter.
+   **Successor debt CLOSED 2026-08-27 (TR-A-DIR)**: `registered_fill_artifacts_v4.rs`
+   is Lean-authored. `DirectRegisteredFillV4.lean` +
+   `EmitDirectRegisteredFillV4Rust.lean` emit `generated_registered_fill_v4.rs`,
+   gated byte-for-byte on the 2,408 bytes the hand-written array produced, with
+   the transcription kept decidable in the module as `transcribedProgram`.
+   Strengthened by exactly one clause — `policyFeeBps <= feeDenominator`, the one
+   73f0793 landed on ordinary and this program never had; the conservation clause
+   is an identity in the fee deltas and bounded nothing.
+   `the_transcription_admitted_the_out_of_bound_rate` decides that the shipped
+   object admitted it. 73f0793's OTHER clause (the Product-tail Claims total)
+   does NOT apply and is recorded as such: this program has no item body, a zero
+   item stride, and no per-item quantity. The AOT translation carries the clause
+   too, with a hostile-corpus twin verified adversarially (removing it fails the
+   differential). **There is now no hand-written V3 program left in the tree.**
+5. **RegisterBuy topology defects — CLOSED 2026-08-27 (TR-A-DIR).** The System
+   Program's width-0 pin is gone and its rule is `opaque(executable)`; the
+   Custody `TokenMint`/`TokenAccount`/`TokenProgram` data kinds are opaque across
+   all three frames, and the source-account nonzero pin went with them.
+   `chain_owned_record_widths_do_not_change_profile_identity` emits the baseline
+   bytes against 21- and 14-byte System records, fixed-loader Rent and Custody
+   programs, a 278-byte Token-2022 mint, a 170-byte ImmutableOwner source and a
+   1 MiB token-program ELF. Coordinates 15/16 STAY pinned to
+   `LOADER_V3_PROGRAM_BYTES` deliberately: checked-release requires those two to
+   be Loader-v3 records exactly, as the ordinary profile also pins.
+   **Found doing it**: the registration Transition's two `identity_eq`
+   instructions compared the maker's SIGNED rent-credit keys against identity
+   registers the AccountProfile NEVER WROTE — an equality against zero that the
+   request decoder's own nonzero check then made unsatisfiable. Invisible because
+   no registered creation has ever executed on a chain. The profile now projects
+   the sole credit and the Rent program, and both signed fields bind to the
+   credit. **Still open, named not fixed**: coordinate 9 is a second
+   self-representative SIGNER whose own doc calls it an alias — 52f14fa found
+   exactly this on ordinary and ruled two signers do not fit the continuation
+   packet. The registered packet has not been measured.
 6. **Dealer equity profile migration** to the FixedDataPredicate profile
    (d64d0c2 "QUEUED, NOT DONE") so its callee can be `opaque(executable)`.
    Attach to tranche-A Dealer.
@@ -221,11 +246,22 @@ of silent loss.
    was never executable; its read-only `authenticate_request` stays, live under
    both continuation routes). blocked.json now carries no UNASSIGNED row at all:
    44 rows → 41, census 101 routes → 98, refusal codes unchanged at 193.
-   **Carried forward, one row:** with no V1 Create route, no `RentCreditV1`
-   account can be created, and `dclutch-direct-codec` still pins
-   `RENT_CREDIT_BYTES_V1` at registered artifact coordinates 7 and 10 — the
-   V1/V2 width skew already owned by DP2. That migration retires the last of V1;
-   DELDEC did not front-run it under a live emitter lane.
+   **Carried row CLOSED 2026-08-27 (TR-A-DIR).** Registered artifact
+   coordinates 7 and 10 are now a 128-byte `LifecycleRentCreditV2` and the Rent
+   program that owns it, and `RentCreditV1` is deleted tree-wide with its width,
+   PDA domain, magic, schema version, field offsets, seed projection and the
+   `CreditBindingMismatch` refusal. **Two readers nobody had recorded**: the
+   svm-harness Resolution and Relayed Markets each planted a V1 record as their
+   rent beneficiary. Nothing decodes a beneficiary's bytes — Core compares it by
+   key and credits lamports — so both now plant a Rent-owned account and say so.
+   They are NOT V2 credits, structurally: V2 is keyed by
+   [domain, market, generation] and in those two fixtures the Market address is
+   derived from an identity already carrying the beneficiary, so a V2 credit
+   cannot be the beneficiary of the Market it is keyed by. Reordering them is
+   that family's work. Left behind: the rent `Error` enum's five variants that
+   lost their last constructor when DELDEC took the V1 routes (`UnknownAction`,
+   `InvalidAccountPrivilege`, `InvalidSystemProgram`, `InvalidSystemWallet`,
+   `AccountAlias`) — Rust does not warn on an unused public variant.
 8. **sha2 default-features latent no_std breakage** in 7 on-chain-reachable
    manifests (7123164; verified: general-config-contract,
    rational-representation-v2-lifecycle-contract, registry-svm,
@@ -515,16 +551,53 @@ QUEUED with owners:
   The two orphan V1 schema IDs are clean deletes; the wire types are NOT
   until that program migrates. Never delete "V1 accelerator" as one unit.
 
-- Tranche-A Direct, method ready: registered_fill_artifacts_v4.rs is the LAST
-  hand-written V3 program — author in TransitionVMV3.lean, gate on byte
-  identity, then strengthen (LEANGUARD's 73f0793 is the worked example).
+- Tranche-A Direct: DONE 2026-08-27 (TR-A-DIR) — see items 4, 5 and 7 above.
+  Three commits: the Lean authorship + byte-identity gate, the Profile14 credit
+  migration + width defects, the V1 record deletion.
 - Small batch: fixtures:verify provenance regen for realm-contract/src/lib.rs
   (moved by TSGEN's f5dfe5d); the direct-inline alias-table retirement once
   W2o yields; the inline.rs:308 composition theorem LEANGUARD queued.
 
-- Tranche-A Direct: THREE items converge on registered_fill_artifacts_v4.rs —
-  Lean-author it (the last hand-written V3 program; LEANGUARD's method),
-  migrate its V1 credits at coords 7/10 to LifecycleRentCreditV2 (DP2 fixed
-  ordinary only; DELDEC's resisted-deletion find), and its real-validator
-  width defects (System width 0, Exact loader widths). One lane, one file
-  family, one identity regeneration.
+- **THE REGISTERED CAMPAIGN IS NOT A HARNESS EXTENSION. Sized 2026-08-27
+  (TR-A-DIR), because the tranche-A charter asked for "registered fills through
+  the Registry continuation at 1.4M/32KB, extend the gate or the gauntlet with
+  create/fill/cancel/expiry/terminal" and that reads as a day of work. It is
+  not.** The registered family has ten actions (`DirectExecutionActionV3` 2..11).
+  What exists per action, verified by grep at HEAD:
+  - **requests**: all ten have encoders/decoders in `registered_requests_v4.rs`.
+  - **RegisterBuy**: the only complete one. RequestProfileV2 + Transition +
+    Strategy + LifecycleV5 + EffectV4 + Profile14 + `build_direct_register_buy_hot_bundle_v4`.
+    Never executed on any chain: its bundle builder is called only from its own
+    test module, and this lane just fixed three defects that would each have
+    refused it plus a fourth (signed rent-credit fields bound to unwritten
+    registers) that no host test could have caught.
+  - **RegisterSell**: shares the creation Transition and LifecycleV5. No
+    AccountProfile, no Effect, no bundle — `registered_account_artifacts_v4.rs`
+    is titled "for registered Buy creation" and means it.
+  - **FillRegisteredOrdinary**: RequestProfileV1 + Transition + Strategy only.
+    **No AccountProfile, no LifecycleV5, no EffectV4 (its Claims transfer and its
+    three Custody legs have no route program at all), no bundle, no descriptor.**
+    Its only consumer in the tree is the host-side AOT translation and its tests.
+  - **Split, Merge, Cancel, Expire, CloseInvalidated, CancelThrough,
+    CloseMakerReplay**: request encoders only.
+  And `programs/dclutch-trading-sbf/program-test/` plus `tools/gauntlet/direct/`
+  contain ZERO occurrences of "registered", "RegisterBuy" or "RegisterSell`. The
+  15/15 gate is entirely the inline-ordinary bundle.
+  So the campaign's real shape is: build the Fill's AccountProfile + LifecycleV5
+  + EffectV4 + bundle, build RegisterSell's three missing artifacts, build a
+  registered chain fixture + program set + descriptor, wire it into the gate, and
+  only then measure CU. That is the artifact set the ordinary path took several
+  lanes to produce, not a case list. **BUNDLE's family-generic chain-fixture
+  builder is the right lever** and should land before anyone starts hand-building
+  a registered fixture. Nothing in this lane was blocked by it; it is the next
+  lane's premise, corrected.
+
+- Tranche-A Direct: all three items DONE 2026-08-27 (TR-A-DIR). Correction to
+  this entry's own premise, for whoever writes the next charter: the coords-7/10
+  credits and the width defects were never in `registered_fill_artifacts_v4.rs`
+  — they live in `registered_account_artifacts_v4.rs` (rules + `validate_lengths`)
+  with their names in `registered_state_artifacts_v4.rs`. And there was NO
+  identity to regenerate: the registered family pins no content identity
+  anywhere (`registered_bundle_v4.rs` digests every artifact at runtime) and
+  `apps/dclutch-web/lib/generated/registeredDirect.ts` carries layout offsets and
+  magics only. Nothing regenerated; no stale window existed to close.
