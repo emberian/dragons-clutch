@@ -22,8 +22,12 @@ pub mod account_rules_v3;
 pub mod admitted_accelerator_v3;
 /// Complete content-addressed General V3 artifact joins for generic Trading.
 pub mod artifacts_v3;
+/// Candidate submission and streamed on-chain page verification.
+pub mod candidate_v1;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
+/// Batch and signed-order records: the collection half settlement consumes.
+pub mod collection_v1;
 /// Generated exact-child EffectProgram artifacts for every General action.
 pub mod effect_artifacts_v3;
 /// Complete General Hot38 candidate register ABI for exact child packets.
@@ -61,7 +65,7 @@ use dclutch_general_codec::{
     PageViewV1, Phase, SelectionCriterion, SelectionCursorV1, SelectionPolicyV1,
     SettlementCursorV1,
 };
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digestv;
 
 /// Exact verified-candidate certificate width.
 pub const VERIFIED_CANDIDATE_BYTES_V1: usize = 416;
@@ -184,6 +188,14 @@ pub enum GeneralChildEffectV1 {
     DistributeCollateral = 5,
     /// Move the exact terminal quote surplus out of settlement custody.
     PaySurplus = 6,
+    /// Move one order's reserved Claims into its escrow at admission.
+    EscrowClaims = 7,
+    /// Move one order's worst-case quote into its escrow at admission.
+    EscrowCollateral = 8,
+    /// Return one order's remaining escrowed Claims to its maker.
+    ReleaseClaims = 9,
+    /// Return one order's remaining escrowed quote to its maker.
+    ReleaseCollateral = 10,
 }
 
 impl GeneralChildEffectV1 {
@@ -194,13 +206,34 @@ impl GeneralChildEffectV1 {
                 | Self::CollectCollateral
                 | Self::DistributeClaims
                 | Self::DistributeCollateral
+                | Self::EscrowClaims
+                | Self::EscrowCollateral
+                | Self::ReleaseClaims
+                | Self::ReleaseCollateral
+        )
+    }
+
+    /// Whether this effect belongs to one order's escrow lifecycle rather than
+    /// to a candidate's settlement.
+    #[must_use]
+    pub const fn is_escrow(self) -> bool {
+        matches!(
+            self,
+            Self::EscrowClaims
+                | Self::EscrowCollateral
+                | Self::ReleaseClaims
+                | Self::ReleaseCollateral
         )
     }
 
     const fn is_scalar(self) -> bool {
         matches!(
             self,
-            Self::CollectCollateral | Self::DistributeCollateral | Self::PaySurplus
+            Self::CollectCollateral
+                | Self::DistributeCollateral
+                | Self::PaySurplus
+                | Self::EscrowCollateral
+                | Self::ReleaseCollateral
         )
     }
 
@@ -1250,10 +1283,7 @@ impl<'a> GeneralChildPlanV2<'a> {
         self.validate()?;
         let mut header = [0_u8; GENERAL_CHILD_PLAN_HEADER_BYTES_V2];
         self.encode_header(&mut header);
-        let mut hasher = Sha256::new();
-        hasher.update(header);
-        hasher.update(self.quantities);
-        Ok(hasher.finalize().into())
+        Ok(digestv(&[&header, self.quantities]))
     }
 
     /// Exact selected child effect.

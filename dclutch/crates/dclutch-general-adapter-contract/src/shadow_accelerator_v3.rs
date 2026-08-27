@@ -13,7 +13,7 @@ use dclutch_execution_strategy_contract::{
     shadow_v3::{ShadowAckV3, ShadowArtifactTupleV3, ShadowDispositionV3, ShadowRequestV3},
     v2::{AcceleratorAckV2, AcceleratorRequestV2, ExecutionCandidateV2, StrategyDispositionV2},
 };
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactSelectionV3, authenticate_general_artifacts_v3,
@@ -230,7 +230,7 @@ fn affine_count(common: u16, stride: u16, tail_count: u32) -> Result<u32> {
 }
 
 fn content(bytes: &[u8]) -> Result<ContentId> {
-    ContentId::new(Sha256::digest(bytes).into()).map_err(|_| GeneralShadowErrorV3::Digest)
+    ContentId::new(digest(bytes)).map_err(|_| GeneralShadowErrorV3::Digest)
 }
 
 #[cfg(test)]

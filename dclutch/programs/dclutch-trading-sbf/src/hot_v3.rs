@@ -623,23 +623,30 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
     let product_runtime = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
 
-    let manifest_data = borrow_finalized_record(
+    // Same three Market-selected records as the canonical hot path, located the
+    // same way: from the bumps this Market's root recorded at activation.
+    let record_bumps = family_context.record_bumps();
+    let manifest_data = borrow_finalized_record_at(
         frame,
         frame.manifest_raw,
         frame.manifest_staging,
         &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         family_context.selection().manifest().to_bytes(),
+        record_bumps.manifest_raw(),
+        record_bumps.manifest_staging(),
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, &family_context)?;
     drop(manifest_data);
-    let program_set_data = borrow_finalized_record(
+    let program_set_data = borrow_finalized_record_at(
         frame,
         frame.program_set_raw,
         frame.program_set_staging,
         &rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         family_context.selection().capability_release().to_bytes(),
+        family_context.selection().capability_release_raw_bump(),
+        family_context.selection().capability_release_staging_bump(),
     )?;
     let program_set = CapabilityProgramSetV2::decode_selected(
         family_context.selection().capability_release().to_bytes(),
@@ -671,13 +678,15 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
     drop(entry);
 
-    let config_data = borrow_finalized_record(
+    let config_data = borrow_finalized_record_at(
         frame,
         frame.config_raw,
         frame.config_staging,
         &rent,
         descriptor.config_schema().to_bytes(),
         family_context.selection().config().to_bytes(),
+        record_bumps.config_raw(),
+        record_bumps.config_staging(),
     )?;
     // As on the canonical path: `borrow_finalized_record` already refused
     // unless `hash(config_data)` is the selected config identity.
@@ -731,7 +740,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     if request.tail_count() != product_runtime.runtime.outcome_count {
         return Err(TradingSbfError::Content.into());
     }
-    let span_widths = authenticate_accelerator_artifacts_v4(
+    let geometry = authenticate_accelerator_artifacts_v4(
         frame,
         &rent,
         &descriptor,
@@ -754,6 +763,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         request,
         family_request,
         runtime_accounts,
+        &geometry.representatives,
         root_prestate,
     )?;
     authenticate_accelerator_caller_authority_v4(
@@ -774,7 +784,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         product_runtime,
         claims_program,
         custody_program,
-        span_widths,
+        span_widths: geometry.span_widths,
         input_bank,
         scalars,
         identities,
@@ -790,6 +800,17 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     }))
 }
 
+/// AccountProfile-derived geometry the accelerator must reproduce exactly.
+///
+/// `representatives` is here because the observation transcript needs it and
+/// this is the only place on the accelerator path that holds a decoded
+/// AccountProfile. See [`accelerator_runtime_observations_digest_v4`] for what
+/// went wrong while it was not carried.
+struct AcceleratorGeometryV4 {
+    span_widths: Vec<u32>,
+    representatives: Vec<usize>,
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn authenticate_accelerator_artifacts_v4(
@@ -801,7 +822,7 @@ fn authenticate_accelerator_artifacts_v4(
     family_request: &[u8],
     runtime_account_count: usize,
     scalars: &[u64],
-) -> Result<Vec<u32>, ProgramError> {
+) -> Result<AcceleratorGeometryV4, ProgramError> {
     let account_profile_data = borrow_finalized_record(
         frame,
         frame.account_profile_raw,
@@ -901,7 +922,19 @@ fn authenticate_accelerator_artifacts_v4(
         &span_widths,
         scalars,
     )?;
-    Ok(span_widths)
+    // Resolved here and nowhere else on this path: the observation transcript
+    // keys an aliased coordinate by its REPRESENTATIVE, and this is the only
+    // scope holding the decoded AccountProfile that can say what that is.
+    let representatives = representative_coordinates_v3(
+        account_profile,
+        request.tail_count(),
+        &span_widths,
+        runtime_account_count,
+    )?;
+    Ok(AcceleratorGeometryV4 {
+        span_widths,
+        representatives,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -918,10 +951,12 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
     request: AcceleratorRequestV2<'_>,
     family_request: &[u8],
     runtime_accounts: &[AccountInfo<'info>],
+    representatives: &[usize],
     root_prestate: [u8; 32],
 ) -> Result<Box<AdmittedInvocationContextV3>, ProgramError> {
     let runtime_observations_digest = accelerator_runtime_observations_digest_v4(
         runtime_accounts,
+        representatives,
         family_context.selection().config().to_bytes(),
         product_runtime
             .runtime
@@ -988,7 +1023,12 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
                 .to_bytes(),
         )
         .map_err(|_| TradingSbfError::Content)?,
-        family_request_digest: ContentId::new(hash(family_request).to_bytes())
+        // The producer of this field is `execute_admitted_candidate_v3`, and it
+        // commits the domain-separated, length-prefixed digest. Hashing the
+        // request bare here recomputes a value the producer can never emit, so
+        // the equality below could never hold and the whole admitted lane
+        // refused every well-formed invocation.
+        family_request_digest: family_request_digest_v3(family_request)
             .map_err(|_| TradingSbfError::Content)?,
         runtime_observations_digest,
         root_prestate_digest: ContentId::new(root_prestate)
@@ -1396,13 +1436,36 @@ fn decode_accelerator_register_bank_v4(
     Ok((scalars, identities))
 }
 
+/// The accelerator's copy of the observation walk, keyed the way Trading keys it.
+///
+/// `representatives` is not optional and not a refinement. Trading keys an
+/// aliased coordinate by its representative
+/// (`logical_projection_key_v3(*aliases.get(coordinate)…)` in
+/// `execute_hot_v3`), and `logical_projection_key_v3` substitutes a *content
+/// digest* for coordinates 1..=4 and the *physical key* for everything else.
+/// Walking the raw `enumerate()` index here therefore produced a different
+/// transcript for every profile that route-aliases a later coordinate onto one
+/// of those four — which the shipped Dealer scenario profile does three times
+/// (`dealer::v3_trade_profile`, base rules 7/9/13 aliasing to 4/2/3). The
+/// context digests could not agree, so the admitted-AOT lane refused every
+/// well-formed invocation, in the same way and for the same reason as the bare
+/// `family_request` hash beside it.
+///
+/// The expression below is deliberately identical to Trading's rather than
+/// merely equivalent to it: this is the third copy of this walk in this file,
+/// and copies two and three had already been observed to agree only by
+/// inspection.
 fn accelerator_runtime_observations_digest_v4(
     runtime_accounts: &[AccountInfo<'_>],
+    representatives: &[usize],
     selected_config: [u8; 32],
     product_root: [u8; 32],
     portfolio: [u8; 32],
     linked_basis: [u8; 32],
 ) -> Result<ContentId, ProgramError> {
+    if representatives.len() != runtime_accounts.len() {
+        return Err(TradingSbfError::Content.into());
+    }
     let projected = LogicalProjectionKeysV3 {
         selected_config,
         product_root,
@@ -1426,7 +1489,11 @@ fn accelerator_runtime_observations_digest_v4(
         .zip(&runtime_data)
         .enumerate()
         .map(|(coordinate, (account, data))| ShadowRuntimeObservationV3 {
-            key: *logical_projection_key_v3(coordinate, account.key, &projected),
+            key: *logical_projection_key_v3(
+                *representatives.get(coordinate).unwrap_or(&coordinate),
+                account.key,
+                &projected,
+            ),
             owner: account.owner.to_bytes(),
             lamports: account.lamports(),
             data: data.as_ref(),
@@ -1688,24 +1755,31 @@ pub fn process_hot_execution_v3(
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
     let product_runtime = product_runtime_v3.runtime;
     hot_cu_checkpoint!("root-product");
-    let manifest_data = borrow_finalized_record(
+    // The three record coordinates below are read, not searched for. See
+    // `borrow_finalized_record_at`.
+    let record_bumps = context.record_bumps();
+    let manifest_data = borrow_finalized_record_at(
         *frame,
         frame.manifest_raw,
         frame.manifest_staging,
         &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
+        record_bumps.manifest_raw(),
+        record_bumps.manifest_staging(),
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, context)?;
 
     let capability_release = context.selection().capability_release().to_bytes();
-    let program_set_data = borrow_finalized_record(
+    let program_set_data = borrow_finalized_record_at(
         *frame,
         frame.program_set_raw,
         frame.program_set_staging,
         &rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         capability_release,
+        context.selection().capability_release_raw_bump(),
+        context.selection().capability_release_staging_bump(),
     )?;
     // The record's own authentication is the single owner of its content
     // digest: `borrow_finalized_record` refuses unless `hash(program_set_data)`
@@ -1765,13 +1839,15 @@ pub fn process_hot_execution_v3(
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
     authenticate_descriptor_root_selection(&descriptor, context, &entry)?;
 
-    let config_data = borrow_finalized_record(
+    let config_data = borrow_finalized_record_at(
         *frame,
         frame.config_raw,
         frame.config_staging,
         &rent,
         descriptor.config_schema().to_bytes(),
         context.selection().config().to_bytes(),
+        record_bumps.config_raw(),
+        record_bumps.config_staging(),
     )?;
     // The config record needs no digest of its own here either: the borrow
     // above refuses unless `hash(config_data)` is the selected config identity,
@@ -7000,12 +7076,36 @@ fn child_receipt_provenance_v4(
         .ok_or(TradingSbfError::Content)?
         .try_into()
         .map_err(|_| TradingSbfError::Content)?;
-    let request_digest = match borrowed_request {
-        Some(witness) => {
-            hashv(&[CHILD_REQUEST_DIGEST_DOMAIN_V4, child_request, witness]).to_bytes()
-        }
-        None => hashv(&[CHILD_REQUEST_DIGEST_DOMAIN_V4, child_request]).to_bytes(),
-    };
+    // Domain ‖ 0x00 ‖ presence tag ‖ u32_le(request len) ‖ u32_le(witness len)
+    // ‖ request ‖ witness — the `shadow_digest_v3` framing convention, with the
+    // lengths hoisted ahead of the variable fields so `hashv` never has to see
+    // a concatenation it cannot re-split.
+    //
+    // `hashv` concatenates its parts and frames nothing. Digesting the request
+    // and the borrowed witness bare therefore committed only to their
+    // concatenation: any other split of the same bytes hashes identically, and
+    // a witnessless request collides with every pair that spells it. Both
+    // preimages are attacker-shaped — the Effect program chooses
+    // `request_offset`/`request_len` and the borrowed-witness range — and this
+    // digest is exactly what binds a resolved receipt to the request that
+    // produced it, so a collision here lets one invocation's receipt satisfy
+    // another's declared dependency.
+    let presence = [0_u8, u8::from(borrowed_request.is_some())];
+    let child_request_len = u32::try_from(child_request.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let witness_len = u32::try_from(borrowed_request.map_or(0, |witness| witness.len()))
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let request_digest = hashv(&[
+        CHILD_REQUEST_DIGEST_DOMAIN_V4,
+        &presence,
+        &child_request_len,
+        &witness_len,
+        child_request,
+        borrowed_request.unwrap_or(&[]),
+    ])
+    .to_bytes();
     let context_digest = hashv(&[
         CHILD_RECEIPT_CONTEXT_DOMAIN_V4,
         &release_set,
@@ -9161,6 +9261,67 @@ fn sealed_token<'a>(
         .map_err(|_| TradingSbfError::Content.into())
 }
 
+/// Borrow one finalized record at the canonical bumps its root recorded.
+///
+/// This is `borrow_finalized_record` with the two `find_program_address` calls
+/// replaced by the two `create_program_address` calls they would have ended on.
+/// Nothing about the conjunction is weakened: the derivation still has to
+/// reproduce the account the caller supplied, still under this Market's
+/// Registry and still from the schema and digest the caller is holding the
+/// record to. What changes is only who paid for the search. A record's address
+/// is an immutable fact about (schema, digest, Registry); the activation that
+/// wrote this Market's root searched for it once, proved the account it found
+/// was the finalized record, and wrote down the bump. A wrong bump reproduces a
+/// different address and refuses here — the derivation IS the check — so the
+/// stored bump is a hint that cannot lie, not an authority.
+///
+/// Measured (W2q, against the shipped ELF): `try_find_program_address` costs
+/// 1,500 CU per attempt, and the two Market-selected records cost between 5 and
+/// 19 attempts depending on which keys drew the Market. That spread is what put
+/// fixture seed 10 at 1,399,944 CU of a 1,400,000 ceiling.
+#[allow(clippy::too_many_arguments)]
+fn borrow_finalized_record_at<'a, 'info>(
+    frame: HotFrameV3<'_, 'info>,
+    raw: &'a AccountInfo<'info>,
+    staging: &AccountInfo<'info>,
+    rent: &Rent,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    raw_bump: u8,
+    staging_bump: u8,
+) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
+    let expected_raw = Pubkey::create_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[raw_bump]],
+        frame.registry.key,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let expected_staging = Pubkey::create_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &schema,
+            &digest,
+            &[staging_bump],
+        ],
+        frame.registry.key,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    borrow_record_against(
+        frame,
+        raw,
+        staging,
+        rent,
+        digest,
+        expected_raw,
+        expected_staging,
+    )
+}
+
+/// Borrow one finalized record, searching for both of its addresses.
+///
+/// This is the write-time form: the routes that must ESTABLISH a record's
+/// canonical coordinate — activation, and the validated-artifact seal outer —
+/// use it, once, and hand what they found to the readers. A hot action never
+/// calls it; see [`borrow_finalized_record_at`].
 fn borrow_finalized_record<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
     raw: &'a AccountInfo<'info>,
@@ -9662,7 +9823,7 @@ mod tests {
         assert!(decode_selected_effect_v4([7; 32], &output).is_err());
 
         let mut hostile = output;
-        hostile[0] ^= 1;
+        *hostile.first_mut().expect("effect output is non-empty") ^= 1;
         assert!(decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &hostile).is_err());
     }
 
@@ -9715,7 +9876,13 @@ mod tests {
             authenticate_accelerator_input_bank_v4(wrong_digest, &[], &Pubkey::new_unique())
                 .is_err()
         );
-        assert!(decode_accelerator_register_bank_v4(request, &bank[..40]).is_err());
+        assert!(
+            decode_accelerator_register_bank_v4(
+                request,
+                bank.get(..40).expect("bank holds at least 40 bytes")
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -9756,16 +9923,27 @@ mod tests {
         let mut keys = (0..=HOT_FIXED_ACCOUNT_COUNT_V3)
             .map(|_| Pubkey::new_unique())
             .collect::<Vec<_>>();
-        keys[HOT_TRADING_PROGRAM_ACCOUNT_V3] = program_id;
-        keys[HOT_REGISTRY_PROGRAM_ACCOUNT_V3] = registry;
-        keys[HOT_RENT_SYSVAR_ACCOUNT_V3] = sysvar::rent::ID;
-        keys[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = sysvar::instructions::ID;
+        let key_at = |keys: &[Pubkey], slot: usize| {
+            *keys.get(slot).expect("Hot fixed slot inside the frame")
+        };
+        *keys
+            .get_mut(HOT_TRADING_PROGRAM_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = program_id;
+        *keys
+            .get_mut(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = registry;
+        *keys
+            .get_mut(HOT_RENT_SYSVAR_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = sysvar::rent::ID;
+        *keys
+            .get_mut(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("Hot fixed slot inside the frame") = sysvar::instructions::ID;
         let activation_bytes = vec![0xa7; 64];
         let release = ContentId::new([0x31; 32]).expect("release");
         let envelope = HotExecutionEnvelopeV3::new(
             1,
             release.to_bytes(),
-            keys[HOT_MARKET_ACCOUNT_V3].to_bytes(),
+            key_at(&keys, HOT_MARKET_ACCOUNT_V3).to_bytes(),
             7,
             [0x32; 32],
         )
@@ -9787,7 +9965,7 @@ mod tests {
             ContentId::new(hash(&batch.to_bytes()).to_bytes()).expect("batch digest");
         let seeds = RegistryContinuationAdmissionSeedsV1::new(
             continuation,
-            keys[HOT_ACTIVATION_CACHE_ACCOUNT_V3].to_bytes(),
+            key_at(&keys, HOT_ACTIVATION_CACHE_ACCOUNT_V3).to_bytes(),
             batch_digest,
         )
         .expect("admission seeds");
@@ -9797,7 +9975,9 @@ mod tests {
         let mask_seed = seeds.role_mask();
         let role_seed = seeds.continuation_role();
         let digest_seed = seeds.continuation_digest();
-        keys[HOT_FIXED_ACCOUNT_COUNT_V3] = Pubkey::find_program_address(
+        *keys
+            .get_mut(HOT_FIXED_ACCOUNT_COUNT_V3)
+            .expect("admission slot inside the frame") = Pubkey::find_program_address(
             &[
                 seeds.domain(),
                 release_seed.as_slice(),
@@ -9813,12 +9993,12 @@ mod tests {
 
         let top_data = hot_bytes.clone();
         let outer_keys = [
-            keys[HOT_ACTIVATION_CACHE_ACCOUNT_V3],
-            keys[HOT_CORE_PROGRAM_ACCOUNT_V3],
-            keys[HOT_CORE_PROGRAMDATA_ACCOUNT_V3],
-            keys[HOT_TRADING_PROGRAM_ACCOUNT_V3],
-            keys[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3],
-            keys[HOT_FIXED_ACCOUNT_COUNT_V3],
+            key_at(&keys, HOT_ACTIVATION_CACHE_ACCOUNT_V3),
+            key_at(&keys, HOT_CORE_PROGRAM_ACCOUNT_V3),
+            key_at(&keys, HOT_CORE_PROGRAMDATA_ACCOUNT_V3),
+            key_at(&keys, HOT_TRADING_PROGRAM_ACCOUNT_V3),
+            key_at(&keys, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3),
+            key_at(&keys, HOT_FIXED_ACCOUNT_COUNT_V3),
         ];
         let build_metas = || {
             let mut metas = outer_keys
@@ -9909,19 +10089,26 @@ mod tests {
             .get_mut(substituted_end - 2..)
             .expect("substituted current instruction")
             .copy_from_slice(&0_u16.to_le_bytes());
-        accounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]
+        accounts
+            .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("instructions sysvar slot inside the frame")
             .try_borrow_mut_data()
             .expect("instructions data")
             .copy_from_slice(&substituted_instructions);
         assert!(
             authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
         );
-        accounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]
+        accounts
+            .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+            .expect("instructions sysvar slot inside the frame")
             .try_borrow_mut_data()
             .expect("instructions restore")
             .copy_from_slice(&instructions_data);
 
-        accounts[HOT_FIXED_ACCOUNT_COUNT_V3].is_signer = false;
+        accounts
+            .get_mut(HOT_FIXED_ACCOUNT_COUNT_V3)
+            .expect("admission slot inside the frame")
+            .is_signer = false;
         assert!(
             authenticate_hot_invocation_v3(&program_id, &accounts, &hot_bytes, envelope).is_err()
         );
@@ -9989,9 +10176,10 @@ mod tests {
         let quotes = authenticate_current_rent_quotes_v5(policy, &rent)
             .expect("authenticated current Rent quote");
         assert_eq!(quotes.len(), 1);
-        assert_eq!(quotes[0].exact_data_len, 152);
-        assert_eq!(quotes[0].scalar_destination, 64);
-        assert_eq!(quotes[0].current_minimum, rent.minimum_balance(152));
+        let quote = quotes.first().expect("exactly one quote");
+        assert_eq!(quote.exact_data_len, 152);
+        assert_eq!(quote.scalar_destination, 64);
+        assert_eq!(quote.current_minimum, rent.minimum_balance(152));
     }
 
     #[test]
@@ -10095,7 +10283,16 @@ mod tests {
         )
         .expect("expand physical representatives");
         assert_eq!(logical.len(), 7);
-        assert_eq!(logical[4].key, logical[6].key);
+        assert_eq!(
+            logical
+                .get(4)
+                .expect("representative coordinate inside the expanded frame")
+                .key,
+            logical
+                .get(6)
+                .expect("alias coordinate inside the expanded frame")
+                .key
+        );
 
         let declared =
             child_route_privileges_v3(profile, 0, &[], &logical).expect("declared privileges");
@@ -10333,7 +10530,7 @@ mod tests {
             value
         };
         assert!(resolve(&[inert], &[0]).is_err());
-        assert!(resolve(&[other.clone()], &[0]).is_err());
+        assert!(resolve(core::slice::from_ref(&other), &[0]).is_err());
 
         // The alias table has to be the one this vector was downgraded at.
         assert!(resolve(&series, &[0, 0, 2]).is_err());
@@ -10404,8 +10601,14 @@ mod tests {
         let pages = authenticated_input_scratch_pages_v3(profile, &[2], Some(0), &logical)
             .expect("exact trailing pages");
         assert_eq!(pages.len(), 2);
-        assert_eq!(pages[0].key, accounts[5].key);
-        assert_eq!(pages[1].key, accounts[6].key);
+        assert_eq!(
+            pages.first().expect("first trailing page").key,
+            accounts.get(5).expect("page slot inside the frame").key
+        );
+        assert_eq!(
+            pages.get(1).expect("second trailing page").key,
+            accounts.get(6).expect("page slot inside the frame").key
+        );
         assert!(authenticated_input_scratch_pages_v3(profile, &[2], Some(1), &logical).is_err());
         assert!(authenticated_input_scratch_pages_v3(profile, &[4], Some(0), &logical).is_err());
     }
@@ -11505,5 +11708,157 @@ mod tests {
         assert_eq!(hot_admitted_runtime_accounts_start_v3(1, 1), Ok(48));
         assert_eq!(hot_admitted_runtime_accounts_start_v3(120, 2), Ok(49));
         assert!(hot_admitted_runtime_accounts_start_v3(0, 0).is_err());
+    }
+
+    fn leaked_readonly_account(
+        key: [u8; 32],
+        owner: [u8; 32],
+        data: Vec<u8>,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(Pubkey::new_from_array(key))),
+            false,
+            false,
+            Box::leak(Box::new(1_000_u64)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::new_from_array(owner))),
+            false,
+        )
+    }
+
+    /// Both admitted-AOT observation walks over one bank, compared directly.
+    ///
+    /// Trading and the accelerator each own a copy of this walk and each
+    /// commits its result to the same `AdmittedInvocationContextV3` field, so
+    /// the only thing that makes the lane executable is that the two produce
+    /// the same bytes. The accelerator's copy used to key by the raw
+    /// `enumerate()` index while Trading keys by the coordinate's
+    /// REPRESENTATIVE; the second half of this test is the substitution that
+    /// difference amounts to, and it is not subtle — an aliased coordinate is
+    /// keyed by a record's content digest on one side and by an account
+    /// address on the other.
+    #[test]
+    fn both_admitted_observation_walks_key_an_alias_by_its_representative() {
+        let projected = LogicalProjectionKeysV3 {
+            selected_config: [0x11; 32],
+            product_root: [0x22; 32],
+            portfolio: [0x33; 32],
+            linked_basis: [0x44; 32],
+        };
+        // Six logical coordinates over five physical accounts: coordinate 5
+        // route-aliases onto the Product root at coordinate 2, which is the
+        // shape the shipped Dealer scenario profile uses three times, so the
+        // two coordinates share one physical account.
+        let representatives = [0_usize, 1, 2, 3, 4, 2];
+        let accounts = (0..representatives.len())
+            .map(|coordinate| {
+                let representative = *representatives
+                    .get(coordinate)
+                    .expect("representative per coordinate");
+                let tag = u8::try_from(representative).expect("small coordinate");
+                leaked_readonly_account([0xa0 | tag; 32], [0x5c; 32], vec![tag; 8])
+            })
+            .collect::<Vec<_>>();
+        let borrowed = accounts.iter().collect::<Vec<_>>();
+
+        let accelerator = accelerator_runtime_observations_digest_v4(
+            &accounts,
+            &representatives,
+            projected.selected_config,
+            projected.product_root,
+            projected.portfolio,
+            projected.linked_basis,
+        )
+        .expect("accelerator transcript");
+
+        let trading_transcript = |walk: &[usize]| {
+            let data = accounts
+                .iter()
+                .map(|account| account.try_borrow_data().expect("readable account"))
+                .collect::<Vec<_>>();
+            let observations = accounts
+                .iter()
+                .zip(&data)
+                .enumerate()
+                .map(|(coordinate, (account, bytes))| {
+                    AccountObservationV1::new(
+                        logical_projection_key_v3(
+                            *walk.get(coordinate).unwrap_or(&coordinate),
+                            account.key,
+                            &projected,
+                        ),
+                        account.owner.as_array(),
+                        account.lamports(),
+                        bytes.as_ref(),
+                        false,
+                        false,
+                        account.executable,
+                    )
+                })
+                .collect::<Vec<_>>();
+            runtime_transcript_digest_v3(&observations, &borrowed).expect("Trading transcript")
+        };
+
+        assert_eq!(
+            accelerator,
+            trading_transcript(&representatives),
+            "the accelerator must reproduce Trading's transcript exactly"
+        );
+        // The pre-fix accelerator walk. Coordinate 5's key becomes its physical
+        // address instead of the Product root's content digest, so no
+        // well-formed invocation of a route-aliasing family could ever match.
+        let raw_index_walk = (0..representatives.len()).collect::<Vec<_>>();
+        assert_ne!(
+            accelerator,
+            trading_transcript(&raw_index_walk),
+            "keying by the raw coordinate must not accidentally agree"
+        );
+    }
+
+    /// The shipped Dealer scenario profile really does route-alias onto the
+    /// four projected coordinates, so the divergence above is reachable rather
+    /// than hypothetical. Three aliases, onto linked basis (4), Product root
+    /// (2) and portfolio (3).
+    #[cfg(feature = "dealer-family")]
+    #[test]
+    fn the_shipped_dealer_profile_aliases_onto_the_projected_coordinates() {
+        use crate::dealer::v3_trade_profile::{
+            DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DealerScenarioAccountProfileInputV4,
+            encode_dealer_scenario_account_profile_v4_atomic,
+        };
+
+        let mut scratch = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        let mut encoded = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        encode_dealer_scenario_account_profile_v4_atomic(
+            DealerScenarioAccountProfileInputV4 {
+                common_data_lengths: [64, 128, 96, 112, 128],
+            },
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("selector-9 profile");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode profile");
+
+        let spans = [0_u32, 0, 0, 0, 1, 0, 0, 0, 6];
+        let tail_count = 1_u32;
+        let logical = profile
+            .logical_account_count_with_dynamic_spans(tail_count, &spans)
+            .expect("logical width");
+        let representatives = representative_coordinates_v3(profile, tail_count, &spans, logical)
+            .expect("representatives");
+        let projected_aliases = representatives
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(coordinate, representative)| {
+                representative != coordinate && (1..=4).contains(representative)
+            })
+            .map(|(_, representative)| representative)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            projected_aliases,
+            vec![4, 2, 3],
+            "selector 9 aliases Claims linked-basis, Product and portfolio onto the projected coordinates"
+        );
     }
 }

@@ -23,12 +23,12 @@ use dclutch_account_profile_contract::{
     project_atomic as project_accounts_atomic,
 };
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId, FUNDING_STATE_BYTES,
-    FundingCustodyObservationV1, FundingStateV1,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
+    ContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
-    CapabilityRootAccountV1, CapabilityRootHeaderV1,
+    CapabilityRootAccountV1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     activation_registers_v2::{
         ACTIVATION_ACCOUNT_PROFILE_IDENTITY_V2, ACTIVATION_ACTION_SCALAR_V2,
         ACTIVATION_CAPABILITY_RELEASE_IDENTITY_V2, ACTIVATION_COMMON_IDENTITIES_V2,
@@ -109,6 +109,9 @@ const MAX_RUNTIME_IDENTITIES_V2: usize = 32;
 const MAX_RUNTIME_ACCOUNTS_V2: usize = 64;
 const MAX_ROLE_REQUEST_BYTES_V2: usize = 2_048;
 
+/// Domain for the activation poststate commitment in [`poststate_digest`].
+const ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch:activation-poststate:v1";
+
 /// Which generation of capability release `selection.capability_release()` names.
 ///
 /// This is not a dispatch on a capability kind. It is a fact about one finalized
@@ -144,26 +147,29 @@ impl CapabilityReleaseGenerationV1 {
 }
 
 /// Decide the release generation from the supplied raw record's own address.
+///
+/// It returns the canonical raw bump alongside the generation because it has
+/// just paid for it: the search that identifies the generation IS the search
+/// the record authentication would otherwise repeat from identical seeds.
 fn select_release_generation(
     registry: &Pubkey,
     release_raw: &AccountInfo<'_>,
     capability_release: [u8; 32],
-) -> Result<CapabilityReleaseGenerationV1, ProgramError> {
+) -> Result<(CapabilityReleaseGenerationV1, (Pubkey, u8)), ProgramError> {
     for generation in [
         CapabilityReleaseGenerationV1::FlatDescriptor,
         CapabilityReleaseGenerationV1::ProgramSet,
     ] {
-        let expected = Pubkey::find_program_address(
+        let coordinate = Pubkey::find_program_address(
             &[
                 RAW_RECORD_PDA_SEED_V1,
                 &generation.release_schema(),
                 &capability_release,
             ],
             registry,
-        )
-        .0;
-        if release_raw.key == &expected {
-            return Ok(generation);
+        );
+        if release_raw.key == &coordinate.0 {
+            return Ok((generation, coordinate));
         }
     }
     Err(TradingSbfError::Content.into())
@@ -196,7 +202,7 @@ pub fn process_activation(
     let framed = TradingActivationAccountsV1::parse(accounts, request.funding())?;
     let family_accounts = framed.family_accounts();
     let capability_release = request.selection().capability_release().to_bytes();
-    let generation = select_release_generation(
+    let (generation, release_raw_coordinate) = select_release_generation(
         get(family_accounts, REGISTRY_PROGRAM)?.key,
         get(family_accounts, RELEASE_RAW)?,
         capability_release,
@@ -209,14 +215,27 @@ pub fn process_activation(
         .release_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    authenticate_finalized_record(
+    // Activation is the one route entitled to SEARCH for these coordinates. It
+    // hands what it finds to the root it is about to write, and every hot
+    // reader derives from that instead. See `hot_v3::borrow_finalized_record_at`.
+    //
+    // The raw bump is NOT searched for again: `select_release_generation` has
+    // already found it, from these exact seeds, and matched the account.
+    let release_staging_coordinate = finalized_staging_coordinate(
+        suffix.registry.key,
+        generation.release_schema(),
+        capability_release,
+    );
+    let release_record_bumps = (release_raw_coordinate.1, release_staging_coordinate.1);
+    authenticate_finalized_record_against(
         suffix.registry.key,
         suffix.release_raw,
         suffix.release_staging,
         &rent,
-        generation.release_schema(),
         capability_release,
         &release_data,
+        release_raw_coordinate.0,
+        release_staging_coordinate.0,
     )?;
     let set_descriptor_data = authenticate_set_descriptor(
         &suffix,
@@ -236,11 +255,57 @@ pub fn process_activation(
     let root_bytes = descriptor
         .root_account_bytes()
         .map_err(|_| TradingSbfError::Root)?;
+    // The manifest raw record had NO address authentication on this route at
+    // all -- it was admitted on `hash(bytes) == selection.manifest()` alone.
+    // Deriving its coordinate for the root's sake makes that check free, so it
+    // is taken: the account this activation reads and the account every later
+    // hot action will read are now required to be the same one.
+    let (expected_manifest_raw, manifest_raw_bump) = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            &request.selection().manifest().to_bytes(),
+        ],
+        suffix.registry.key,
+    );
+    if framed.manifest().key != &expected_manifest_raw
+        || framed.manifest().owner != suffix.registry.key
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    // The staging cursor is not in this frame, so its bump is derived and not
+    // observed. That is sound because a bump is a pure function of the seeds:
+    // what the root records is a memo of a computation, and the hot reader
+    // still requires the account it is handed to sit at the address that memo
+    // reproduces, Registry-owned, with a closed cursor beside it.
+    let manifest_record_bumps = (
+        manifest_raw_bump,
+        finalized_staging_coordinate(
+            suffix.registry.key,
+            CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            request.selection().manifest().to_bytes(),
+        )
+        .1,
+    );
+    let (config_raw_coordinate, config_staging_coordinate) = finalized_record_coordinates(
+        suffix.registry.key,
+        descriptor.config_schema().to_bytes(),
+        request.selection().config().to_bytes(),
+    );
+    let config_record_bumps = (config_raw_coordinate.1, config_staging_coordinate.1);
     let root_header = CapabilityRootHeaderV1::new(
         content(envelope.release_set().to_bytes())?,
         envelope.market().to_bytes(),
         envelope.generation(),
-        request.selection(),
+        request
+            .selection()
+            .with_capability_release_record_bumps(release_record_bumps.0, release_record_bumps.1),
+        SelectedRecordBumpsV1::new(
+            manifest_record_bumps.0,
+            manifest_record_bumps.1,
+            config_record_bumps.0,
+            config_record_bumps.1,
+        ),
     )
     .map_err(|_| TradingSbfError::Root)?;
     authenticate_vacant_root(program_id, framed.child_root(), root_header, root_bytes)?;
@@ -281,14 +346,15 @@ pub fn process_activation(
         .config_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    authenticate_finalized_record(
+    authenticate_finalized_record_against(
         suffix.registry.key,
         suffix.config_raw,
         suffix.config_staging,
         &rent,
-        descriptor.config_schema().to_bytes(),
         request.selection().config().to_bytes(),
         &config_data,
+        config_raw_coordinate.0,
+        config_staging_coordinate.0,
     )?;
     let descriptor = authenticate_activation_program(
         context,
@@ -715,19 +781,44 @@ fn authenticate_vacant_root(
     Ok(())
 }
 
-fn authenticate_finalized_record(
+/// The canonical raw/staging bumps of one finalized record's coordinate.
+///
+/// A pure function of the seeds: no account is consulted and none needs to
+/// exist. Activation calls this so the root it writes can carry what it found,
+/// and every later reader derives with `create_program_address` instead of
+/// searching. See `hot_v3::borrow_finalized_record_at`.
+fn finalized_record_coordinates(
+    registry: &Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> ((Pubkey, u8), (Pubkey, u8)) {
+    (
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry),
+        finalized_staging_coordinate(registry, schema, digest),
+    )
+}
+
+/// The canonical address and bump of one finalized record's staging cursor.
+fn finalized_staging_coordinate(
+    registry: &Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry)
+}
+
+/// Authenticate one finalized record against coordinates the caller derived.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_finalized_record_against(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
     rent: &Rent,
-    schema: [u8; 32],
     digest: [u8; 32],
     bytes: &[u8],
+    expected_raw: Pubkey,
+    expected_staging: Pubkey,
 ) -> Result<(), ProgramError> {
-    let expected_raw =
-        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry).0;
-    let expected_staging =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry).0;
     if raw.key != &expected_raw
         || raw.owner != registry
         || raw.is_writable
@@ -743,6 +834,35 @@ fn authenticate_finalized_record(
         return Err(TradingSbfError::Content.into());
     }
     Ok(())
+}
+
+/// Authenticate one finalized record, searching for both of its addresses.
+///
+/// Activation is a write-time route: it is entitled to search, and it is the
+/// authority that hands the readers what it found. It returns the two canonical
+/// bumps for exactly that reason.
+fn authenticate_finalized_record(
+    registry: &Pubkey,
+    raw: &AccountInfo<'_>,
+    staging: &AccountInfo<'_>,
+    rent: &Rent,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    bytes: &[u8],
+) -> Result<(u8, u8), ProgramError> {
+    let (raw_coordinate, staging_coordinate) =
+        finalized_record_coordinates(registry, schema, digest);
+    authenticate_finalized_record_against(
+        registry,
+        raw,
+        staging,
+        rent,
+        digest,
+        bytes,
+        raw_coordinate.0,
+        staging_coordinate.0,
+    )?;
+    Ok((raw_coordinate.1, staging_coordinate.1))
 }
 
 struct RuntimeFrameV2<'accounts, 'info> {
@@ -1103,7 +1223,10 @@ fn seed_common_registers(
             .ok_or(TradingSbfError::Content)? = value;
     }
     for (slot, value) in [
-        (ACTIVATION_TRADING_PROGRAM_IDENTITY_V2, program_id.to_bytes()),
+        (
+            ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+            program_id.to_bytes(),
+        ),
         (
             ACTIVATION_CORE_PROGRAM_IDENTITY_V2,
             suffix.core_program.key.to_bytes(),
@@ -1117,7 +1240,10 @@ fn seed_common_registers(
             envelope.release_set().to_bytes(),
         ),
         (ACTIVATION_MARKET_IDENTITY_V2, envelope.market().to_bytes()),
-        (ACTIVATION_CONTEXT_IDENTITY_V2, envelope.context().to_bytes()),
+        (
+            ACTIVATION_CONTEXT_IDENTITY_V2,
+            envelope.context().to_bytes(),
+        ),
         (
             ACTIVATION_MANIFEST_IDENTITY_V2,
             request.selection().manifest().to_bytes(),
@@ -1243,20 +1369,55 @@ fn emit_ack(
     Ok(())
 }
 
+/// Commit the exact activation poststate: root account, per-allocation funding
+/// states, and output lamports.
+///
+/// Domain ‖ 0x00 ‖ u32_le(root len) ‖ u32_le(funding count) ‖ u32_le(lamport
+/// count) ‖ root ‖ funding… ‖ lamports…, matching the framing convention the
+/// rest of the protocol digests under.
+///
+/// The three counts are ahead of the data on purpose. `hashv` concatenates its
+/// parts and frames nothing, so digesting a variable-length root, a variable
+/// number of fixed-width funding states, and a variable-length lamport
+/// encoding back to back committed only to their concatenation: a longer root
+/// with fewer funding states, or funding bytes re-read as lamports, produce the
+/// same digest as the honest split. There was also no domain, so the value was
+/// a bare SHA-256 of an unframed buffer.
+///
+/// **This digest is currently verified by nobody.** It is carried as
+/// `CoreEffectAckV1::post_resource_digest`, and `CoreEffectAckV1::validate_for`
+/// compares every other field and not this one; no consumer in the tree
+/// recomputes it. The framing is fixed here so the commitment is sound whenever
+/// a consumer does start checking it, but the unchecked field is real debt and
+/// is named as such rather than treated as closed.
 fn poststate_digest(
     root: &[u8],
     funding: &[[u8; FUNDING_STATE_BYTES]],
     lamports: &[u64],
 ) -> Result<Identity, ProgramError> {
-    let mut parts: Vec<&[u8]> = Vec::with_capacity(1 + funding.len() + lamports.len());
-    parts.push(root);
-    for bytes in funding {
-        parts.push(bytes);
-    }
+    let root_len = u32::try_from(root.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let funding_count = u32::try_from(funding.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
+    let lamport_count = u32::try_from(lamports.len())
+        .map_err(|_| TradingSbfError::Content)?
+        .to_le_bytes();
     let encoded_lamports = lamports
         .iter()
         .flat_map(|value| value.to_le_bytes())
         .collect::<Vec<_>>();
+    let mut parts: Vec<&[u8]> = Vec::with_capacity(6 + funding.len());
+    parts.push(ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V1);
+    parts.push(&[0_u8]);
+    parts.push(&root_len);
+    parts.push(&funding_count);
+    parts.push(&lamport_count);
+    parts.push(root);
+    for bytes in funding {
+        parts.push(bytes);
+    }
     parts.push(&encoded_lamports);
     identity(hashv(&parts).to_bytes())
 }

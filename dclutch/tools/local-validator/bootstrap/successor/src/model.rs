@@ -73,6 +73,23 @@ pub(crate) struct MarketRunInput {
     pub(crate) window_spec_id: String,
     pub(crate) statistic_spec_id: String,
     pub(crate) failure_policy_release_id: String,
+    /// The five source-graph record BODIES whose digests the four identities
+    /// above name.
+    ///
+    /// A finalized record lives at an address derived from the hash of its own
+    /// body, so an identity that is not the hash of a body names a record
+    /// nobody can ever publish. These fields exist because the demo Market's
+    /// source graph used to carry domain-separated demo digests in those four
+    /// slots: the Market could create and activate its Resolution funding and
+    /// then never reach a certificate, because both provider legs authenticate
+    /// the source spec, window spec and statistic spec as finalized records.
+    /// The run spec carries the exact bodies for the same reason it already
+    /// carries `linked_basis_hex` rather than an opaque digest.
+    pub(crate) source_spec_hex: String,
+    pub(crate) window_spec_hex: String,
+    pub(crate) statistic_spec_hex: String,
+    pub(crate) provider_release_hex: String,
+    pub(crate) pyth_adapter_config_hex: String,
     pub(crate) recovery_policy_hex: String,
     pub(crate) capability_manifest_hex: String,
     pub(crate) linked_basis_hex: String,

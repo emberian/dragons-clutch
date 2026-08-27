@@ -65,7 +65,6 @@ use dclutch_release_set_contract::{
     ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
     ProtocolInfrastructureProfileV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
@@ -114,6 +113,8 @@ const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x72; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x73; 32]);
 const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x74; 32]);
+/// Fixture-local seed domain for the Market rent beneficiary; see its use below.
+const RENT_BENEFICIARY_FIXTURE_DOMAIN: &[u8] = b"dclutch/test-rent-beneficiary";
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x75; 32]);
 const GENERATION: u64 = 7;
 const TERMINAL_SEQUENCE: u64 = 1;
@@ -886,15 +887,22 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let domain = add_record(&mut test, RESULT_DOMAIN_SCHEMA_ID_V2, domain_bytes.clone());
     let portfolio = add_record(&mut test, PORTFOLIO_SCHEMA_ID_V2, portfolio_bytes);
 
-    let refund_authority = RefundAuthority::new([0xb1; 32]).expect("rent refund authority");
-    let (rent_credit, rent_credit_bump) = Pubkey::find_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &refund_authority.to_bytes()],
+    // The Market's rent beneficiary. Core compares this account BY KEY against
+    // its own persisted `rent_beneficiary` and credits lamports to it; nothing
+    // on any path under test decodes its bytes, and this test only ever reads
+    // its lamports. It is deliberately not a `LifecycleRentCreditV2`: V2 is
+    // keyed by [domain, market, generation], and this Market's own address is
+    // derived from an identity that already carries the beneficiary, so a V2
+    // credit cannot be the beneficiary of the Market it is keyed by in this
+    // ordering. It is also no longer a `RentCreditV1` -- that record was
+    // deleted with the last route that could create one.
+    let (rent_credit, _) = Pubkey::find_program_address(
+        &[RENT_BENEFICIARY_FIXTURE_DOMAIN, &[0xb1; 32]],
         &RENT_PROGRAM_ID,
     );
-    let rent_credit_value = RentCreditV1::new(refund_authority, rent_credit_bump);
     test.add_account(
         rent_credit,
-        protocol_account(RENT_PROGRAM_ID, rent_credit_value.to_bytes().to_vec()),
+        protocol_account(RENT_PROGRAM_ID, std::vec![0_u8; 128]),
     );
 
     let mut identity = MarketIdentity {

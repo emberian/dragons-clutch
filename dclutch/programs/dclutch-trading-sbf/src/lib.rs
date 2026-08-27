@@ -267,7 +267,10 @@ mod entrypoint_tests {
 
     #[test]
     fn canonical_bound_exceeds_legacy_limit_and_refuses_overflow() {
-        assert!(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3 > 64);
+        // Deliberately a compile-time fact: the canonical bound must exceed
+        // the legacy 64-account limit for the runtime checks below to mean
+        // anything, so let the compiler enforce it.
+        const { assert!(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3 > 64) };
         assert_eq!(require_instruction_account_bound_v3(65), Ok(()));
         assert_eq!(
             require_instruction_account_bound_v3(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3),

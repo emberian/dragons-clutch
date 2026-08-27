@@ -61,6 +61,7 @@ members = [
     "crates/dclutch-representation-composition-v3-kernel",
     "crates/dclutch-representation-composition-v3-operator",
     "crates/dclutch-series-v3-kernel",
+    "crates/dclutch-sha256-adapter",
     "crates/dclutch-shadow-accelerator-auth-v4",
     "crates/dclutch-source-contract",
     "crates/dclutch-token-svm",

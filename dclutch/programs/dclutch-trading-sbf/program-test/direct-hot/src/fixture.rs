@@ -13,7 +13,7 @@ use dclutch_capability_contract::{
     MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
         HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
@@ -417,6 +417,9 @@ struct CapabilityFixture {
 struct CapabilityManifestFixture {
     bytes: Vec<u8>,
     selection: CapabilityExecutionSelectionV1,
+    /// Exactly what the on-chain activation would have recorded in the root:
+    /// the canonical bumps of the manifest and config records.
+    record_bumps: SelectedRecordBumpsV1,
 }
 
 struct RealmFixture {
@@ -742,12 +745,14 @@ fn capability_fixture(
     let CapabilityManifestFixture {
         bytes: manifest,
         selection,
+        record_bumps,
     } = manifest;
     let header = CapabilityRootHeaderV1::new(
         core_content(input.release_set)?,
         market.to_bytes(),
         GENERATION,
         selection,
+        record_bumps,
     )
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut root_bytes = Vec::with_capacity(
@@ -813,6 +818,24 @@ fn capability_manifest(
     CapabilityManifestV1::encode_into(&[entry], &mut manifest)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let manifest_digest = hash(&manifest).to_bytes();
+    // The activation the chain would have run derives these six bumps once and
+    // records them; the fixture stands in for that activation, so it derives
+    // exactly the same six from exactly the same seeds.
+    let program_set_bumps = record_bumps_v1(
+        input.registry_program,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        artifacts.program_set_id,
+    );
+    let manifest_bumps = record_bumps_v1(
+        input.registry_program,
+        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        manifest_digest,
+    );
+    let config_bumps = record_bumps_v1(
+        input.registry_program,
+        descriptor.config_schema().to_bytes(),
+        config_digest,
+    );
     let selection = CapabilityExecutionSelectionV1::new(
         0,
         capability_id(manifest_digest)?,
@@ -820,11 +843,26 @@ fn capability_manifest(
         capability_id(artifacts.program_set_id)?,
         capability_id(config_digest)?,
     )
-    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+    .with_capability_release_record_bumps(program_set_bumps.0, program_set_bumps.1);
     Ok(CapabilityManifestFixture {
         bytes: manifest,
         selection,
+        record_bumps: SelectedRecordBumpsV1::new(
+            manifest_bumps.0,
+            manifest_bumps.1,
+            config_bumps.0,
+            config_bumps.1,
+        ),
     })
+}
+
+/// The canonical raw/staging bumps of one finalized record under one Registry.
+fn record_bumps_v1(registry: Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (u8, u8) {
+    (
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).1,
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).1,
+    )
 }
 
 fn realm_fixture(
@@ -2508,3 +2546,589 @@ fn put(output: &mut [u8], offset: usize, value: &[u8]) -> Result<(), DirectHotCh
 
 // Remaining helpers own manifest/root construction, account frames, and
 // Profile13 physical packing.
+
+/// Build the same canonical Direct fixture through the family-generic
+/// artifact-derived bundle builder.
+///
+/// The hand-built path above states the whole topology; this path states only
+/// the corpus — the request, the semantic prestate accounts, and the waist —
+/// and lets the builder derive record addresses, the seal, packing,
+/// privileges, funding, the lifecycle-created maker replays, and all five
+/// caller authorities by executing the emitted artifacts host-side. The two
+/// paths agreeing byte-for-byte is the reproduction gate for the builder.
+pub mod via_builder {
+    use dclutch_chain_bundle_builder::{
+        WaistFactsV1,
+        artifacts::{ArtifactSetV1, derive_record},
+        bundle::{BundleInputV1, FixedCorpusV1, ScenarioV1, build_bundle},
+        frame::{
+            BuiltAccountV1, data_account, external_with_view, program, program_with_deployed_view,
+            program_with_view, rent_sysvar_bytes, vacant,
+        },
+    };
+    use dclutch_direct_codec::native_evidence_v3::{
+        DIRECT_NATIVE_EVIDENCE_BYTES_V3,
+        encode_direct_headerless_registry_native_evidence_v4_atomic,
+    };
+    use dclutch_product_runtime_v2_admission::{
+        PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+    };
+    use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
+
+    use super::*;
+
+    /// Bundle-builder reproduction of [`build_direct_hot_chain_fixture_v5`].
+    #[allow(clippy::too_many_lines)]
+    pub fn build_direct_hot_chain_fixture_via_builder_v1(
+        input: DirectHotChainInputV5,
+    ) -> Result<DirectHotChainFixtureV5, DirectHotChainFixtureErrorV5> {
+        validate_input(input)?;
+        let rent = Rent::default();
+        let artifacts = build_direct_hot_artifact_fixture_v5(input.deployment_widths)
+            .map_err(DirectHotChainFixtureErrorV5::Artifact)?;
+        let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
+            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+            .encode();
+        let product = product_fixture(input, &rent)?;
+        let manifest = capability_manifest(input, &artifacts, &config)?;
+        let state = market_and_claims(input, &product, &manifest, &rent)?;
+        let intents = intents(input, state.market, product.collateral_accounts)?;
+        let request = direct_request(input.makers, intents)?;
+        let capability = capability_fixture(input, manifest, state.market)?;
+        let realm = realm_fixture(
+            input,
+            product.collateral_accounts,
+            state.market,
+            capability.buyer_maker,
+        )?;
+
+        let waist = WaistFactsV1 {
+            registry_program: input.registry_program,
+            trading_program: input.trading_program,
+            core_program: input.core_program,
+            claims_program: input.claims_program,
+            custody_program: input.custody_program,
+            release_set: input.release_set,
+            activation_cache: input.activation_cache,
+            trading_semantic_release: input.trading_semantic_release,
+        };
+        let set = ArtifactSetV1 {
+            descriptor: &artifacts.bundle.descriptor,
+            account_profile: &artifacts.bundle.account_profile,
+            request_profile: &artifacts.bundle.request_profile,
+            transition: &artifacts.bundle.transition,
+            effect: &artifacts.bundle.effect,
+            lifecycle: &artifacts.bundle.lifecycle_policy,
+            strategy: &artifacts.bundle.strategy,
+            program_set: &artifacts.program_set,
+            manifest: &capability.manifest,
+            config: &config,
+        };
+
+        // The Ed25519 evidence at build time: exact offsets and maker public
+        // keys over the exact nested instruction bytes; signatures are a
+        // nonzero placeholder (the encoder refuses all-zero evidence). Only
+        // offsets and keys seed registers — the native program checks
+        // signatures at submission, over evidence the campaign re-encodes with
+        // the real ones.
+        let envelope = HotExecutionEnvelopeV3::new(
+            u32::try_from(request.len()).map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
+            input.release_set,
+            state.market.to_bytes(),
+            GENERATION,
+            hash(&capability.root_bytes).to_bytes(),
+        )
+        .map_err(|_| {
+            #[cfg(test)]
+            std::eprintln!("via_builder: envelope refused");
+            DirectHotChainFixtureErrorV5::Encoding
+        })?;
+        let mut instruction_data =
+            Vec::with_capacity(HOT_EXECUTION_ENVELOPE_BYTES_V3 + request.len());
+        instruction_data.extend_from_slice(&envelope.to_bytes());
+        instruction_data.extend_from_slice(&request);
+        let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
+        encode_direct_headerless_registry_native_evidence_v4_atomic(
+            1,
+            &instruction_data,
+            [[1_u8; 64]; 2],
+            &mut evidence,
+        )
+        .map_err(|_| {
+            #[cfg(test)]
+            std::eprintln!("via_builder: ed25519 evidence refused");
+            DirectHotChainFixtureErrorV5::Encoding
+        })?;
+
+        let fixed = FixedCorpusV1 {
+            market: data_account(
+                &rent,
+                state.market,
+                input.core_program,
+                state.core_bytes.clone(),
+            ),
+            root: data_account(
+                &rent,
+                capability.root,
+                input.trading_program,
+                capability.root_bytes.clone(),
+            ),
+            product: derive_record(
+                input.registry_program,
+                PRODUCT_RECORD_SCHEMA_ID_V2,
+                &product.product.bytes,
+            ),
+            result_domain: derive_record(
+                input.registry_program,
+                RESULT_DOMAIN_SCHEMA_ID_V2,
+                &product.domain.bytes,
+            ),
+            portfolio: derive_record(
+                input.registry_program,
+                PORTFOLIO_SCHEMA_ID_V2,
+                &product.portfolio.bytes,
+            ),
+            linked_basis: derive_record(
+                input.registry_program,
+                GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+                &product.basis.bytes,
+            ),
+            core_programdata: input.core_programdata,
+            trading_programdata: input.trading_programdata,
+        };
+        let realm_record = derive_record(
+            input.registry_program,
+            REALM_SCHEMA_RELEASE_ID_V1,
+            &realm.realm.bytes,
+        );
+        let (credit_key, credit) = lifecycle_rent_credit(
+            input.rent_program,
+            state.market,
+            input.release_set,
+            input.payer,
+        )?;
+        let gross = FILL
+            .checked_mul(EXECUTION_PRICE)
+            .and_then(|value| value.checked_div(PRICE_SCALE))
+            .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+
+        // The Direct corpus: every runtime self-coordinate the artifacts do
+        // not determine. Maker replays (5, 8) and the five caller authorities
+        // (12, 34, 48, 62, 76) are deliberately absent — the builder derives
+        // them.
+        let bindings: Vec<(usize, BuiltAccountV1)> = vec![
+            (
+                6,
+                vacant(input.payer).with_observed(solana_account::Account {
+                    // `direct_case` funds the payer to ten SOL; the chain view
+                    // must show a balance the Create plans can debit.
+                    lamports: 10_000_000_000,
+                    data: Vec::new(),
+                    owner: system_program::ID,
+                    executable: false,
+                    rent_epoch: 0,
+                }),
+            ),
+            (
+                7,
+                data_account(
+                    &rent,
+                    credit_key,
+                    input.rent_program,
+                    credit.to_bytes().to_vec(),
+                ),
+            ),
+            (
+                9,
+                vacant(input.payer).with_observed(solana_account::Account {
+                    lamports: 10_000_000_000,
+                    data: Vec::new(),
+                    owner: system_program::ID,
+                    executable: false,
+                    rent_epoch: 0,
+                }),
+            ),
+            (10, program(input.rent_program)),
+            (11, program(system_program::ID)),
+            (
+                13,
+                data_account(
+                    &rent,
+                    state.claims_market,
+                    input.claims_program,
+                    state.claims_bytes.clone(),
+                ),
+            ),
+            (
+                14,
+                data_account(
+                    &rent,
+                    fixed.linked_basis.raw,
+                    input.registry_program,
+                    fixed.linked_basis.bytes.clone(),
+                ),
+            ),
+            (15, vacant(fixed.linked_basis.staging)),
+            (
+                16,
+                data_account(
+                    &rent,
+                    fixed.product.raw,
+                    input.registry_program,
+                    fixed.product.bytes.clone(),
+                ),
+            ),
+            (17, vacant(fixed.product.staging)),
+            (
+                18,
+                data_account(
+                    &rent,
+                    fixed.result_domain.raw,
+                    input.registry_program,
+                    fixed.result_domain.bytes.clone(),
+                ),
+            ),
+            (19, vacant(fixed.result_domain.staging)),
+            (
+                20,
+                data_account(
+                    &rent,
+                    fixed.portfolio.raw,
+                    input.registry_program,
+                    fixed.portfolio.bytes.clone(),
+                ),
+            ),
+            (21, vacant(fixed.portfolio.staging)),
+            (
+                22,
+                external_with_view(sysvar::rent::ID, sysvar::ID, rent_sysvar_bytes(&rent)),
+            ),
+            (
+                23,
+                data_account(
+                    &rent,
+                    state.market,
+                    input.core_program,
+                    state.core_bytes.clone(),
+                ),
+            ),
+            (
+                24,
+                external_with_view(
+                    input.activation_cache,
+                    input.registry_program,
+                    vec![0; dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1],
+                ),
+            ),
+            (25, program_with_deployed_view(input.registry_program)),
+            (
+                26,
+                program_with_view(input.trading_program, input.trading_programdata),
+            ),
+            (
+                27,
+                external_with_view(
+                    input.trading_programdata,
+                    bpf_loader_upgradeable::ID,
+                    vec![
+                        0;
+                        usize::try_from(input.deployment_widths.trading_programdata_bytes)
+                            .map_err(|_| DirectHotChainFixtureErrorV5::Input)?
+                    ],
+                ),
+            ),
+            (
+                28,
+                program_with_view(input.claims_program, input.claims_programdata),
+            ),
+            (
+                29,
+                external_with_view(
+                    input.claims_programdata,
+                    bpf_loader_upgradeable::ID,
+                    vec![
+                        0;
+                        usize::try_from(input.deployment_widths.claims_programdata_bytes)
+                            .map_err(|_| DirectHotChainFixtureErrorV5::Input)?
+                    ],
+                ),
+            ),
+            (
+                30,
+                program_with_view(input.core_program, input.core_programdata),
+            ),
+            (
+                31,
+                external_with_view(
+                    input.core_programdata,
+                    bpf_loader_upgradeable::ID,
+                    vec![
+                        0;
+                        usize::try_from(input.deployment_widths.core_programdata_bytes)
+                            .map_err(|_| DirectHotChainFixtureErrorV5::Input)?
+                    ],
+                ),
+            ),
+            (
+                32,
+                data_account(
+                    &rent,
+                    state.positions[0].0,
+                    input.claims_program,
+                    state.positions[0].1.clone(),
+                ),
+            ),
+            (
+                33,
+                data_account(
+                    &rent,
+                    state.positions[1].0,
+                    input.claims_program,
+                    state.positions[1].1.clone(),
+                ),
+            ),
+            (
+                40,
+                data_account(
+                    &rent,
+                    realm_record.raw,
+                    input.registry_program,
+                    realm_record.bytes.clone(),
+                ),
+            ),
+            (41, vacant(realm_record.staging)),
+            (
+                42,
+                data_account(
+                    &rent,
+                    realm.custody_replay,
+                    input.custody_program,
+                    realm.custody_replay_bytes.clone(),
+                ),
+            ),
+            (
+                43,
+                data_account(&rent, realm.mint, realm.token_program, mint_bytes()),
+            ),
+            (
+                44,
+                data_account(
+                    &rent,
+                    product.collateral_accounts[0],
+                    realm.token_program,
+                    token_bytes(
+                        realm.mint,
+                        input.makers[1],
+                        100,
+                        Some(realm.custody_authority),
+                        gross,
+                    )?,
+                ),
+            ),
+            (
+                45,
+                data_account(
+                    &rent,
+                    product.collateral_accounts[1],
+                    realm.token_program,
+                    token_bytes(realm.mint, input.makers[0], 30, None, 0)?,
+                ),
+            ),
+            (46, vacant(realm.custody_authority)),
+            (47, program_with_deployed_view(realm.token_program)),
+            (
+                73,
+                data_account(
+                    &rent,
+                    product.collateral_accounts[2],
+                    realm.token_program,
+                    token_bytes(realm.mint, input.payer, 40, None, 0)?,
+                ),
+            ),
+            (
+                usize::from(DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3),
+                program(input.custody_program),
+            ),
+        ];
+
+        let externally_installed_extra = [
+            input.claims_programdata,
+            Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
+        ];
+        let scenario = ScenarioV1 {
+            family_request: &request,
+            tail_count: OUTCOME_COUNT_U32,
+            clock_slot: input.clock_slot,
+            generation: GENERATION,
+            ed25519_evidence: Some(&evidence),
+            native_message_instruction_index: 1,
+            externally_installed_extra: &externally_installed_extra,
+            payer: input.payer,
+        };
+        let bundle = build_bundle(&BundleInputV1 {
+            set,
+            waist,
+            scenario,
+            fixed,
+            bindings: &bindings,
+            rent: &rent,
+        })
+        .map_err(|error| {
+            // Surface the builder's stage name during reproduction work.
+            #[cfg(test)]
+            std::eprintln!("bundle builder refused: {error:?}");
+            let _ = error;
+            DirectHotChainFixtureErrorV5::Profile
+        })?;
+
+        // Reassemble the reference fixture shape from the builder's output.
+        let seller_maker = bundle
+            .logical
+            .get(5)
+            .ok_or(DirectHotChainFixtureErrorV5::Profile)?
+            .key;
+        let buyer_maker = bundle
+            .logical
+            .get(8)
+            .ok_or(DirectHotChainFixtureErrorV5::Profile)?
+            .key;
+        let mut custody_routes = [CustodyRouteAuthorityV3 {
+            authority: Pubkey::default(),
+            request_digest: [0; 32],
+        }; 4];
+        for (slot, coordinate) in custody_routes.iter_mut().zip([34_usize, 48, 62, 76]) {
+            let authority = bundle
+                .authorities
+                .iter()
+                .find(|value| value.coordinate == coordinate)
+                .ok_or_else(|| {
+                    #[cfg(test)]
+                    std::eprintln!(
+                        "via_builder: no authority at coordinate {coordinate}; derived {:?}",
+                        bundle
+                            .authorities
+                            .iter()
+                            .map(|value| value.coordinate)
+                            .collect::<Vec<_>>()
+                    );
+                    DirectHotChainFixtureErrorV5::Profile
+                })?;
+            *slot = CustodyRouteAuthorityV3 {
+                authority: authority.authority,
+                request_digest: authority.request_digest,
+            };
+        }
+        Ok(DirectHotChainFixtureV5 {
+            hot_instruction: bundle.hot_instruction,
+            signed_messages: [
+                intents[0]
+                    .signed_preimage()
+                    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+                intents[1]
+                    .signed_preimage()
+                    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+            ],
+            accounts: bundle
+                .accounts
+                .iter()
+                .map(|value| DirectHotInstallAccountV5 {
+                    key: value.key,
+                    account: value.account.clone(),
+                    snapshot_for_rollback: value.snapshot_for_rollback,
+                })
+                .collect(),
+            externally_installed_keys: bundle.externally_installed_keys.clone(),
+            rollback_snapshot_keys: bundle.rollback_snapshot_keys.clone(),
+            market: state.market,
+            root: capability.root,
+            claims_market: state.claims_market,
+            claims_positions: [state.positions[0].0, state.positions[1].0],
+            maker_replays: [seller_maker, buyer_maker],
+            custody_replay: realm.custody_replay,
+            collateral_accounts: product.collateral_accounts,
+            custody_routes,
+            capability_seal: bundle.artifacts.seal,
+            capability_seal_bytes: bundle.artifacts.seal_bytes.clone(),
+            descriptor_digest: bundle.artifacts.descriptor.digest,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn input() -> DirectHotChainInputV5 {
+            DirectHotChainInputV5 {
+                registry_program: key(1),
+                trading_program: key(2),
+                core_program: key(3),
+                claims_program: key(4),
+                custody_program: key(5),
+                rent_program: key(14),
+                release_set: [6; 32],
+                activation_cache: key(7),
+                trading_programdata: key(8),
+                core_programdata: key(9),
+                claims_programdata: key(10),
+                deployment_widths: DirectHotDeploymentWidthsV5::new(1_141_117, 971_053, 934_037)
+                    .expect("widths"),
+                payer: key(11),
+                makers: [key(12), key(13)],
+                clock_slot: 50,
+                trading_semantic_release: [0x33; 32],
+            }
+        }
+
+        /// The reproduction gate: the builder's bundle is the hand-built one,
+        /// byte for byte.
+        #[test]
+        fn builder_reproduces_the_hand_built_direct_fixture() {
+            let input = input();
+            let hand = build_direct_hot_chain_fixture_v5(input).expect("hand fixture");
+            let built =
+                build_direct_hot_chain_fixture_via_builder_v1(input).expect("builder fixture");
+            assert_eq!(built.signed_messages, hand.signed_messages);
+            assert_eq!(built.market, hand.market);
+            assert_eq!(built.root, hand.root);
+            assert_eq!(built.claims_market, hand.claims_market);
+            assert_eq!(built.claims_positions, hand.claims_positions);
+            assert_eq!(built.maker_replays, hand.maker_replays);
+            assert_eq!(built.custody_replay, hand.custody_replay);
+            assert_eq!(built.collateral_accounts, hand.collateral_accounts);
+            assert_eq!(built.custody_routes, hand.custody_routes);
+            assert_eq!(built.capability_seal, hand.capability_seal);
+            assert_eq!(built.capability_seal_bytes, hand.capability_seal_bytes);
+            assert_eq!(built.descriptor_digest, hand.descriptor_digest);
+            assert_eq!(
+                built.hot_instruction.program_id,
+                hand.hot_instruction.program_id
+            );
+            assert_eq!(built.hot_instruction.data, hand.hot_instruction.data);
+            assert_eq!(
+                built.hot_instruction.accounts.len(),
+                hand.hot_instruction.accounts.len()
+            );
+            for (index, (built_meta, hand_meta)) in built
+                .hot_instruction
+                .accounts
+                .iter()
+                .zip(&hand.hot_instruction.accounts)
+                .enumerate()
+            {
+                assert_eq!(built_meta, hand_meta, "instruction meta {index}");
+            }
+            assert_eq!(built.accounts.len(), hand.accounts.len());
+            for (index, (built_account, hand_account)) in
+                built.accounts.iter().zip(&hand.accounts).enumerate()
+            {
+                assert_eq!(built_account, hand_account, "chain account {index}");
+            }
+            assert_eq!(built.rollback_snapshot_keys, hand.rollback_snapshot_keys);
+            let mut built_external = built.externally_installed_keys.clone();
+            let mut hand_external = hand.externally_installed_keys.clone();
+            built_external.sort_unstable_by_key(Pubkey::to_bytes);
+            hand_external.sort_unstable_by_key(Pubkey::to_bytes);
+            assert_eq!(built_external, hand_external);
+        }
+    }
+}

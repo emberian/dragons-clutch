@@ -404,6 +404,41 @@ pub fn serialize_transaction(transaction: &VersionedTransaction) -> Result<Vec<u
         .map_err(|error| RelayerError::Serialization(format!("transaction wire: {error}")))
 }
 
+/// Solana's serialized-transaction packet maximum, in bytes.
+///
+/// This is the chain's limit, not ours (`PACKET_DATA_BYTES`: 1280-byte IPv6
+/// MTU minus 48 bytes of headers). It is restated here because the daemon is
+/// the process that must never *build* an unsendable transaction: the relayed
+/// tier measured the full-body VirtualPool append at 1,377 bytes on a bare
+/// message, and an RPC node refuses such a wire after the observation was
+/// already taken and signed.
+pub const SOLANA_PACKET_DATA_BYTES: usize = 1_232;
+
+/// Refuse a wire that exceeds the packet maximum, naming the fix.
+///
+/// The fix is routing, not content: compile the same instructions against the
+/// Market's address lookup table (`submit.address_lookup_table`), which moves
+/// non-signer account addresses out of the message. The signed attestation
+/// bytes themselves never shrink and never should.
+pub fn require_packet_fit(context: &str, wire: &[u8], routed_addresses: usize) -> Result<()> {
+    if wire.len() <= SOLANA_PACKET_DATA_BYTES {
+        return Ok(());
+    }
+    let advice = if routed_addresses == 0 {
+        "no address lookup table is configured; publish the Market ALT and set \
+         submit.address_lookup_table so the frame's non-signer addresses ride as one-byte table \
+         indices"
+    } else {
+        "an address lookup table is configured but the frame still does not fit; extend the table \
+         to cover every non-signer address in this frame"
+    };
+    Err(RelayerError::config(format!(
+        "{context}: the serialized transaction is {} bytes against Solana's \
+         {SOLANA_PACKET_DATA_BYTES}-byte packet maximum; {advice}",
+        wire.len()
+    )))
+}
+
 /// Derive the observation record PDA for one `(market, generation, set, slot)`.
 ///
 /// Seeding by `observed_slot` is the equivocation bound: at most one record
@@ -640,6 +675,19 @@ mod tests {
         assert_eq!(&wire[0..1], &[1u8]);
         assert_eq!(&wire[1..65], &[0x11u8; 64]);
         assert_eq!(&wire[65..], message.as_slice());
+    }
+
+    #[test]
+    fn an_oversized_wire_refuses_before_any_rpc_and_names_the_alt_fix() {
+        let wire = vec![0u8; SOLANA_PACKET_DATA_BYTES + 1];
+        let error = require_packet_fit("append position 2", &wire, 0).unwrap_err();
+        let text = format!("{error}");
+        assert!(text.contains("1233 bytes"), "{text}");
+        assert!(text.contains("no address lookup table"), "{text}");
+        let error = require_packet_fit("consume", &wire, 30).unwrap_err();
+        assert!(format!("{error}").contains("extend the table"));
+        require_packet_fit("fits", &vec![0u8; SOLANA_PACKET_DATA_BYTES], 0)
+            .expect("exactly at the limit fits");
     }
 
     #[test]

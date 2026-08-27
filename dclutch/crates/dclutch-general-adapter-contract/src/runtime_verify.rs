@@ -1342,6 +1342,40 @@ fn zero_identity(value: &[u8; 32]) -> bool {
     value.iter().all(|byte| *byte == 0)
 }
 
+/// Whether `left` strictly precedes `right` in the protocol's identity order.
+///
+/// A 32-byte identity is ordered as a LITTLE-ENDIAN 256-bit integer, which is
+/// NOT `[u8; 32]`'s lexicographic `Ord`. Every candidate row group and every
+/// `MinimizeCandidateId` comparison uses this order, so a builder that sorts
+/// with the derived `Ord` produces candidates the verifier refuses with
+/// `NonCanonicalOrder`. That defect is invisible against fabricated identities
+/// of the shape `[low, 0, 0, ...]`, where the two orders agree, and appears the
+/// moment the identities are real digests -- which is exactly how it was found.
+///
+/// Exported so a candidate builder can sort by the order the protocol reads
+/// rather than rediscovering it from a refusal.
+#[must_use]
+pub fn runtime_identity_precedes_v2(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    le_numeric_id(left, right)
+}
+
+/// Return the exact number of manifest order rows one row step will emit.
+///
+/// A caller must size the manifest bank before evaluating, and the count is a
+/// function of the cursor's open order and whether this is the terminal step.
+/// Without this the sizing rule lives only inside the evaluator, and a caller
+/// has to guess at a capacity the evaluator will then refuse.
+pub fn runtime_manifest_orders_for_row_v2(
+    cursor_before: &[u8],
+    execution_order_id: [u8; 32],
+    terminal_step: bool,
+) -> RuntimeVerifyResultV2<u32> {
+    if cursor_before.iter().all(|byte| *byte == 0) {
+        return Ok(u32::from(terminal_step));
+    }
+    measure_manifest_orders_v2(cursor_before, execution_order_id, terminal_step)
+}
+
 fn le_numeric_id(left: &[u8; 32], right: &[u8; 32]) -> bool {
     for index in (0..32).rev() {
         if left[index] != right[index] {

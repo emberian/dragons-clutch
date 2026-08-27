@@ -287,8 +287,7 @@ fn rules(
             prestate: AccountPrestateV2::LifecycleBound,
         };
     }
-    // Both replay-root creation payers are one rent payer: the 1,224-byte
-    // continuation packet has no room for a second signer, so coordinate 9 is
+    // Both replay-root creation payers are one rent payer, so coordinate 9 is
     // an authenticated route alias of coordinate 6 (see `ROUTE_ALIASES`). Both
     // coordinates are still stated here so the alias loop's privilege-equality
     // refusal has the pre-alias privileges to compare.
@@ -639,8 +638,14 @@ fn operations()
 const ROUTE_ALIASES: &[(u16, u16)] = &[
     // One rent payer funds both replay-root creations. Declaring coordinates 6
     // and 9 as distinct self-representatives asserted two signers, which the
-    // 1,224-byte continuation packet cannot carry and which the runtime refuses
-    // as a `CrossItemAlias` the moment both coordinates observe the same key.
+    // runtime refuses as a `CrossItemAlias` the moment both coordinates observe
+    // the same key -- and which this topology has no packet room for either:
+    // `waist.rs` measures the canonical continuation at 1,228 bytes of the one
+    // 1,232-byte v0 ceiling, four bytes of margin, and a second signer costs 64
+    // for its signature plus 32 for a static key a signer may never ALT-route.
+    // The refusal is the binding reason; the packet is why there is no room to
+    // argue with it. (1,224 was this packet's measured extent before decision
+    // 0005's seal and the Custody callee each added two index bytes.)
     (9, 6),
     (14, 4),
     (16, 2),
@@ -973,7 +978,6 @@ mod tests {
     use std::{vec, vec::Vec};
 
     use super::*;
-    use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
 
     use dclutch_account_profile_contract::{
         AccountObservationV1, EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
@@ -1305,10 +1309,9 @@ mod tests {
     /// adapter refused: it authenticates 128 bytes of `LifecycleRentCreditV2`.
     #[test]
     fn superseded_rent_credit_geometries_refuse_atomically() {
-        for hostile_width in [
-            width(RENT_CREDIT_BYTES_V1).expect("V1 RentCredit width"),
-            64,
-        ] {
+        // 48 is the deleted `RentCreditV1` width and 64 the legacy one; both
+        // are literals now, because no record type in the tree carries either.
+        for hostile_width in [48_u32, 64] {
             let mut hostile = lengths(256);
             hostile[7] = hostile_width;
             let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
@@ -1682,8 +1685,9 @@ mod tests {
         assert_eq!(permissions.get(6), Some(&debit));
         assert_eq!(permissions.get(9), Some(&debit));
         // Ninety-one logical coordinates pack into forty-four physical accounts
-        // carrying exactly one signer, which is what the 1,224-byte
-        // continuation packet can actually carry. The forty-fourth is the
+        // carrying exactly one signer, which is what the canonical continuation
+        // packet -- 1,228 bytes of the 1,232-byte v0 ceiling, measured in
+        // `waist.rs` -- can actually carry. The forty-fourth is the
         // Custody program: one readonly executable key, no signer, no writable.
         assert_eq!(
             profile

@@ -573,7 +573,7 @@ mod tests {
                 transition: reference(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID, 14),
                 effect: reference(effect_schema, 15),
             },
-            SERIES_STATE_BYTES_V3 as u32,
+            u32::try_from(SERIES_STATE_BYTES_V3).expect("Series state size fits in u32"),
         )
         .expect("descriptor")
     }
@@ -651,7 +651,10 @@ mod tests {
         );
 
         let insertion = dclutch_account_profile_contract::v2::DYNAMIC_FIXED_SPAN_HEADER_BYTES;
-        bytes[insertion..insertion + 2].copy_from_slice(&62_u16.to_le_bytes());
+        bytes
+            .get_mut(insertion..insertion + 2)
+            .expect("dynamic span header offset in bounds")
+            .copy_from_slice(&62_u16.to_le_bytes());
         let substituted = AccountProfileV2::decode(&bytes).expect("valid substituted Profile13");
         assert_eq!(
             validate_dynamic_account_span(substituted, effect, registers),

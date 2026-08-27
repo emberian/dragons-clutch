@@ -1102,7 +1102,10 @@ mod tests {
         let header = request.header();
         let mut receipt = alloc::vec![0_u8; representation_wire::RECEIPT_BYTES_V2];
         let mut put = |offset: usize, value: &[u8]| {
-            receipt[offset..offset + value.len()].copy_from_slice(value);
+            receipt
+                .get_mut(offset..offset + value.len())
+                .expect("receipt offset in bounds")
+                .copy_from_slice(value);
         };
         put(
             representation_wire::RECEIPT_MAGIC_OFFSET,
@@ -1412,7 +1415,9 @@ mod tests {
             verify_route_receipt(
                 ReceiptKindV3::RationalRepresentation,
                 &request,
-                &receipt[..receipt.len() - 1],
+                receipt
+                    .get(..receipt.len() - 1)
+                    .expect("receipt is non-empty"),
                 claims,
                 id(21),
                 PostResourceEvidenceV3::None,
@@ -1421,7 +1426,9 @@ mod tests {
         );
 
         let mut substituted_receipt = receipt.clone();
-        substituted_receipt[representation_wire::RECEIPT_TOKEN_PROGRAM_OFFSET] ^= 1;
+        *substituted_receipt
+            .get_mut(representation_wire::RECEIPT_TOKEN_PROGRAM_OFFSET)
+            .expect("token program offset inside the receipt") ^= 1;
         assert!(
             verify_route_receipt(
                 ReceiptKindV3::RationalRepresentation,
@@ -1435,7 +1442,9 @@ mod tests {
         );
 
         let mut substituted_request = request.clone();
-        substituted_request[representation_wire::REQUEST_QUANTITY_OFFSET] ^= 1;
+        *substituted_request
+            .get_mut(representation_wire::REQUEST_QUANTITY_OFFSET)
+            .expect("quantity offset inside the request") ^= 1;
         assert!(
             verify_route_receipt(
                 ReceiptKindV3::RationalRepresentation,
@@ -1456,9 +1465,11 @@ mod tests {
         let request = founding(claims, trading);
         let request_bytes = request.to_bytes();
         let mut accounts: Vec<_> = (0..33).map(|_| account_info(false, false)).collect();
-        accounts[2] = account_info(false, true);
-        accounts[3] = account_info(false, true);
-        accounts[4] = account_info(false, true);
+        for slot in 2..=4 {
+            *accounts
+                .get_mut(slot)
+                .expect("post-resource slot inside the frame") = account_info(false, true);
+        }
         let post = founding_post_resource_digests(&accounts).expect("post resources");
         let receipt = ClaimsFoundingReceiptV5::new(
             request,
@@ -1512,7 +1523,10 @@ mod tests {
         assert_eq!(kind, ReceiptKindV3::Founding);
         assert_eq!(seeds.context(), request.founding_intent_digest());
         assert!(route_authority(&request_bytes, RouteKindV3::AffineOnce).is_err());
-        assert!(founding_post_resource_digests(&accounts[..32]).is_err());
+        assert!(
+            founding_post_resource_digests(accounts.get(..32).expect("frame holds 33 accounts"))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1596,7 +1610,9 @@ mod tests {
             verify_route_receipt(
                 ReceiptKindV3::SparseNativeTransfer,
                 &request_bytes,
-                &receipt[..receipt.len() - 1],
+                receipt
+                    .get(..receipt.len() - 1)
+                    .expect("receipt is non-empty"),
                 claims,
                 id(30),
                 PostResourceEvidenceV3::Single(post_resources),
@@ -1638,11 +1654,18 @@ mod tests {
     #[test]
     fn sparse_resource_digest_binds_exact_aggregate_source_destination_poststates() {
         let mut accounts: Vec<_> = (0..23).map(|_| account_info(false, false)).collect();
-        accounts[1] = account_info(false, true);
-        accounts[20] = account_info(false, true);
-        accounts[21] = account_info(false, true);
+        for slot in [1, 20, 21] {
+            *accounts
+                .get_mut(slot)
+                .expect("post-resource slot inside the frame") = account_info(false, true);
+        }
         let expected = hashv(&[b"dclutch/claims/sparse-native-post/v1", &[], &[], &[]]).to_bytes();
         assert_eq!(sparse_native_post_resource_digest(&accounts), Ok(expected));
-        assert!(sparse_native_post_resource_digest(&accounts[..22]).is_err());
+        assert!(
+            sparse_native_post_resource_digest(
+                accounts.get(..22).expect("frame holds 23 accounts")
+            )
+            .is_err()
+        );
     }
 }

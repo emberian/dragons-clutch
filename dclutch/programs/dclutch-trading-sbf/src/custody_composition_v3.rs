@@ -680,7 +680,9 @@ mod tests {
         // Custody child CPI could ever run.
         for coordinate in [1_usize, 8, FRAME - 1] {
             let mut hostile = keys;
-            hostile[coordinate] = callee;
+            *hostile
+                .get_mut(coordinate)
+                .expect("coordinate is inside the fourteen-account frame") = callee;
             let (mut hl, mut hd) = ([0_u64; FRAME], [[0_u8; 1]; FRAME]);
             assert_eq!(
                 require_custody_frame_shape_v3(

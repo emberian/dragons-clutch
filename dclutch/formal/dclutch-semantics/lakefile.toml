@@ -98,6 +98,10 @@ name = "emit-direct-ordinary-v3-rust"
 root = "EmitDirectOrdinaryV3Rust"
 
 [[lean_exe]]
+name = "emit-direct-registered-fill-v4-rust"
+root = "EmitDirectRegisteredFillV4Rust"
+
+[[lean_exe]]
 name = "emit-direct-program"
 root = "EmitDirectProgram"
 
@@ -152,6 +156,10 @@ root = "EmitGeneralRequestProfilesV1Rust"
 [[lean_exe]]
 name = "emit-liability-basis-v2-rust"
 root = "EmitLiabilityBasisV2Rust"
+
+[[lean_exe]]
+name = "emit-liability-basis-v2-spline-rust"
+root = "EmitLiabilityBasisV2SplineRust"
 
 [[lean_exe]]
 name = "emit-market-core-physical-rust"
@@ -260,6 +268,14 @@ root = "EmitSeriesOccurrenceV3Rust"
 [[lean_exe]]
 name = "emit-source-material-v2-abi-rust"
 root = "EmitSourceMaterialV2AbiRust"
+
+[[lean_exe]]
+name = "emit-source-principal-capacity-v1-rust"
+root = "EmitSourcePrincipalCapacityV1Rust"
+
+[[lean_exe]]
+name = "emit-source-scheduled-median-v1-rust"
+root = "EmitSourceScheduledMedianV1Rust"
 
 [[lean_exe]]
 name = "emit-source-recovery-policy-v2-abi-rust"

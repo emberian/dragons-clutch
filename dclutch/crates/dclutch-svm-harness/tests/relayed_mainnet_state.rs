@@ -81,7 +81,6 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
 };
-use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
     RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2, ResolutionCertificateV2,
@@ -118,6 +117,8 @@ const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([72; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([73; 32]);
 /// The Rent program that owns the Market's persisted RentCredit beneficiary.
 const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([74; 32]);
+/// Fixture-local seed domain for the Market rent beneficiary; see its use below.
+const RENT_BENEFICIARY_FIXTURE_DOMAIN: &[u8] = b"dclutch/test-rent-beneficiary";
 const GENERATION: u64 = 73;
 /// A finalized mainnet slot, as a number. Nothing was read to obtain it.
 const OBSERVED_SLOT: u64 = 423_941_138;
@@ -1029,15 +1030,13 @@ fn fixture_with_venue(
     // program. The relay adapter never derives it: Core already persists which
     // account receives this Market's returned rent, and the adapter can only
     // agree with that.
-    let refund_authority = RefundAuthority::new([0x61; 32]).expect("refund authority");
-    let (rent_beneficiary, rent_credit_bump) = Pubkey::find_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, &refund_authority.to_bytes()],
+    let (rent_beneficiary, _) = Pubkey::find_program_address(
+        &[RENT_BENEFICIARY_FIXTURE_DOMAIN, &[0x61; 32]],
         &RENT_PROGRAM_ID,
     );
-    let rent_credit_value = RentCreditV1::new(refund_authority, rent_credit_bump);
     test.add_account(
         rent_beneficiary,
-        protocol_account(RENT_PROGRAM_ID, rent_credit_value.to_bytes().to_vec()),
+        protocol_account(RENT_PROGRAM_ID, std::vec![0_u8; 128]),
     );
 
     // The capability manifest, and the reason the deadline walk has a bounty at

@@ -12,7 +12,7 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_general_codec::Action;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::artifacts_v3::{
     GeneralArtifactBytesV3, GeneralArtifactErrorV3, GeneralArtifactSelectionV3,
@@ -199,10 +199,6 @@ pub fn authenticate_general_release_v3(
         descriptors,
         tail_count,
     })
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
 }
 
 fn content(bytes: &[u8]) -> Result<ContentId> {

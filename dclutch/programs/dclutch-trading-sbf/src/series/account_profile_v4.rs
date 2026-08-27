@@ -432,7 +432,10 @@ mod tests {
         let bytes = encoded_profile();
         let profile = AccountProfileV2::decode(&bytes).expect("profile");
         let ticket = profile
-            .rule(false, TICKET_REPLAY as u16)
+            .rule(
+                false,
+                u16::try_from(TICKET_REPLAY).expect("Ticket replay coordinate fits in u16"),
+            )
             .expect("Ticket rule");
         assert_eq!(
             ticket.effect_permissions() & EFFECT_PERMISSION_WRITE_DATA,

@@ -25,15 +25,43 @@ use dclutch_product_contract::{
 };
 
 #[allow(missing_docs)]
+mod generated_principal_capacity_v1;
+#[allow(missing_docs)]
+mod generated_scheduled_median_v1;
+#[allow(missing_docs)]
 mod generated_source_material_v2;
 #[allow(missing_docs)]
 mod generated_source_recovery_policy_v2;
 #[allow(missing_docs)]
 mod generated_source_resolution_state_v2;
+mod principal_capacity_v1;
 mod provider_join_v2;
+mod scheduled_median_v1;
 mod source_material_v2;
 mod source_recovery_policy_v2;
 mod source_resolution_v2;
+
+pub use principal_capacity_v1::{
+    BONDING_CURVE_FLOOR_DERIVATION_ID_V1, BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1,
+    BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1, CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
+    CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+    MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1, MANIPULATION_FLOOR_V1_BYTES,
+    MANIPULATION_FLOOR_V1_MAGIC, MANIPULATION_FLOOR_V1_MAGIC_OFFSET,
+    MANIPULATION_FLOOR_V1_SCHEMA_VERSION, MANIPULATION_FLOOR_V1_VERSION_OFFSET,
+    ManipulationFloorBasis, ManipulationFloorV1, PRINCIPAL_ADMISSION_CASES_V1,
+    PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1,
+    PrincipalAdmissionCaseV1, PrincipalCapacityV1, SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1,
+    SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
+    SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_BYTES_V1,
+    SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_OFFSET_V1, admit_founding_principal,
+};
+pub use scheduled_median_v1::{
+    CADENCE_TOLERANCE_LIFTING_PLAN_ID_V1, CADENCE_TOLERANCE_LIFTING_PLAN_PREIMAGE_V1,
+    MEDIAN_CASES_V1, MINIMUM_MEDIAN_SAMPLES_V1, MedianCaseV1, SCHEDULE_CASES_V1,
+    SCHEDULED_MEDIAN_CORPUS_MAX_SAMPLES_V1, ScheduleCaseV1, ScheduledMedianScheduleV1,
+    WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1, WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_BYTES_V1,
+    WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_OFFSET_V1,
+};
 
 pub use generated_source_material_v2::{
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_FAILURE_POLICY_RELEASE_PREIMAGE_V2,
@@ -348,6 +376,14 @@ pub enum Error {
     MarketChildCountMismatch,
     /// A Pyth feed, exponent, or confidence bound did not match committed configuration.
     InvalidPythObservation,
+    /// A byte did not name a defined manipulation-floor derivation basis.
+    UnknownManipulationFloorBasis,
+    /// The selected capacity profile states no principal bound for this Source.
+    PrincipalCapacityUnstated,
+    /// Founding principal exceeded the venue's manipulation floor scaled by κ.
+    PrincipalExceedsCapacity,
+    /// A cadence tolerance was not strictly below half the derived cadence.
+    CadenceToleranceExceedsSchedule,
 }
 
 /// Result alias for source-contract operations.
@@ -587,6 +623,8 @@ pub struct SourceCapacityProfileV1 {
     envelope_basis_id: ContentId,
     max_observation_bytes: u32,
     max_shared_children: u32,
+    principal_capacity_numerator: u32,
+    principal_capacity_denominator: u32,
 }
 
 impl SourceCapacityProfileV1 {
@@ -614,7 +652,41 @@ impl SourceCapacityProfileV1 {
             envelope_basis_id,
             max_observation_bytes,
             max_shared_children,
+            principal_capacity_numerator: 0,
+            principal_capacity_denominator: 0,
         })
+    }
+
+    /// State §6.5's κ on this profile.
+    ///
+    /// κ is the exact rational `numerator / denominator` bounding total Hoard
+    /// principal against a venue's manipulation floor. It rides the two `u32`
+    /// coordinates this record's reserved tail already had, so the width does
+    /// not move and a profile that never states κ is byte-identical to what it
+    /// was before κ existed. A `Provisional` envelope's `envelope_basis_id` is
+    /// κ's lifting plan; no second lifting mechanism exists for it.
+    ///
+    /// A numerator without a denominator is not a rational and is refused.
+    pub const fn bounding_principal(self, numerator: u32, denominator: u32) -> Result<Self> {
+        if denominator == 0 {
+            return Err(Error::NonCanonicalCapacity);
+        }
+        Ok(Self {
+            principal_capacity_numerator: numerator,
+            principal_capacity_denominator: denominator,
+            ..self
+        })
+    }
+
+    /// Read this profile's κ tail.
+    ///
+    /// A profile written before κ existed carries the all-zero tail and reads
+    /// [`PrincipalCapacityV1::Unstated`], which a chain-state founding refuses.
+    pub const fn principal_capacity(self) -> Result<PrincipalCapacityV1> {
+        PrincipalCapacityV1::read(
+            self.principal_capacity_numerator,
+            self.principal_capacity_denominator,
+        )
     }
 
     /// Decode one exact canonical capacity profile.
@@ -627,8 +699,20 @@ impl SourceCapacityProfileV1 {
         let envelope = CapacityEnvelope::decode(one(bytes, 10)?)?;
         let attempts = one(bytes, 11)?;
         zero(bytes, 14, 2)?;
-        zero(bytes, 88, 24)?;
-        Self::new(
+        zero(
+            bytes,
+            SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_OFFSET_V1,
+            SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_BYTES_V1,
+        )?;
+        let numerator = u32::from_le_bytes(read_array(
+            bytes,
+            SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
+        )?);
+        let denominator = u32::from_le_bytes(read_array(
+            bytes,
+            SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1,
+        )?);
+        let profile = Self::new(
             envelope,
             u16::from_le_bytes(read_array(bytes, 12)?),
             attempts,
@@ -636,7 +720,14 @@ impl SourceCapacityProfileV1 {
             content(bytes, 48)?,
             u32::from_le_bytes(read_array(bytes, 80)?),
             u32::from_le_bytes(read_array(bytes, 84)?),
-        )
+        )?;
+        match PrincipalCapacityV1::read(numerator, denominator)? {
+            PrincipalCapacityV1::Unstated => Ok(profile),
+            PrincipalCapacityV1::Bounded {
+                numerator,
+                denominator,
+            } => profile.bounding_principal(numerator, denominator),
+        }
     }
 
     /// Encode exact canonical capacity-profile bytes.
@@ -652,6 +743,16 @@ impl SourceCapacityProfileV1 {
         put(&mut out, 48, self.envelope_basis_id.as_bytes());
         put(&mut out, 80, &self.max_observation_bytes.to_le_bytes());
         put(&mut out, 84, &self.max_shared_children.to_le_bytes());
+        put(
+            &mut out,
+            SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
+            &self.principal_capacity_numerator.to_le_bytes(),
+        );
+        put(
+            &mut out,
+            SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1,
+            &self.principal_capacity_denominator.to_le_bytes(),
+        );
         out
     }
 
@@ -855,6 +956,7 @@ pub struct WindowSpecV1 {
     max_age_seconds: u32,
     max_future_skew_seconds: u32,
     schedule_id: ContentId,
+    cadence_tolerance_seconds: u32,
 }
 
 impl WindowSpecV1 {
@@ -903,6 +1005,30 @@ impl WindowSpecV1 {
             max_age_seconds,
             max_future_skew_seconds,
             schedule_id,
+            cadence_tolerance_seconds: 0,
+        })
+    }
+
+    /// Widen each scheduled position into an admission interval of this
+    /// half-width, in seconds.
+    ///
+    /// This is the lift for §6.4's recorded hazard: under congestion a
+    /// submitter that misses its schedule second broke the whole window and the
+    /// statistic refused. A terminal window has no cadence to tolerate and
+    /// refuses a nonzero value outright.
+    ///
+    /// The tolerance is bounded against the *derived* cadence — which depends
+    /// on the committed sample count and so is not visible here — by
+    /// [`ScheduledMedianScheduleV1::derive`]. Zero recovers exactly the strict
+    /// equal cadence, which is what every window written before this
+    /// coordinate existed carries.
+    pub const fn tolerating_cadence(self, cadence_tolerance_seconds: u32) -> Result<Self> {
+        if cadence_tolerance_seconds != 0 && matches!(self.kind, WindowKind::Terminal) {
+            return Err(Error::InvalidWindow);
+        }
+        Ok(Self {
+            cadence_tolerance_seconds,
+            ..self
         })
     }
 
@@ -910,7 +1036,11 @@ impl WindowSpecV1 {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         header(bytes, WINDOW_SPEC_BYTES, WINDOW_SPEC_MAGIC)?;
         zero(bytes, 11, 5)?;
-        zero(bytes, 104, 8)?;
+        zero(
+            bytes,
+            WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_OFFSET_V1,
+            WINDOW_SPEC_CADENCE_TOLERANCE_TAIL_RESERVED_BYTES_V1,
+        )?;
         Self::new(
             content(bytes, 16)?,
             WindowKind::decode(one(bytes, 10)?)?,
@@ -919,7 +1049,11 @@ impl WindowSpecV1 {
             u32::from_le_bytes(read_array(bytes, 64)?),
             u32::from_le_bytes(read_array(bytes, 68)?),
             content(bytes, 72)?,
-        )
+        )?
+        .tolerating_cadence(u32::from_le_bytes(read_array(
+            bytes,
+            WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1,
+        )?))
     }
 
     /// Encode exact canonical window bytes.
@@ -932,7 +1066,36 @@ impl WindowSpecV1 {
         put(&mut out, 64, &self.max_age_seconds.to_le_bytes());
         put(&mut out, 68, &self.max_future_skew_seconds.to_le_bytes());
         put(&mut out, 72, self.schedule_id.as_bytes());
+        put(
+            &mut out,
+            WINDOW_SPEC_CADENCE_TOLERANCE_OFFSET_V1,
+            &self.cadence_tolerance_seconds.to_le_bytes(),
+        );
         out
+    }
+
+    /// Return the admission half-width around each scheduled position.
+    pub const fn cadence_tolerance_seconds(self) -> u32 {
+        self.cadence_tolerance_seconds
+    }
+
+    /// Whether an observation time is inside the window this record names.
+    ///
+    /// The tolerance widens the window symmetrically: a sample admitted at the
+    /// first or last scheduled position may land up to the tolerance outside
+    /// `[start, end]`, and this is the one place that widening is stated. At a
+    /// zero tolerance it is exactly the closed interval.
+    pub fn contains_observation(self, unix_seconds: i64) -> Result<bool> {
+        let tolerance = i64::from(self.cadence_tolerance_seconds);
+        let earliest = self
+            .start_unix_seconds
+            .checked_sub(tolerance)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let latest = self
+            .end_unix_seconds
+            .checked_add(tolerance)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Ok(unix_seconds >= earliest && unix_seconds <= latest)
     }
 
     /// Check that this window belongs to the supplied source identity.
@@ -1244,20 +1407,22 @@ pub fn evaluate(
     observations: &[Observation],
 ) -> Result<StatisticValue> {
     spec.validate_shape()?;
+    validate_cadence_tolerance_pairing(spec, window)?;
     if observations.len() != usize::from(spec.required_samples) {
         return Err(Error::InvalidObservationSchedule);
     }
     validate_observation_order(observations)?;
     if spec.kind == StatisticKind::OddScheduledMedian {
-        validate_odd_median_schedule(window, observations)?;
+        let schedule = ScheduledMedianScheduleV1::derive(window, observations.len())?;
+        for (index, item) in observations.iter().enumerate() {
+            schedule.admit(index, item.unix_seconds)?;
+        }
     }
     let mut sum = 0i128;
     let mut min = 0i128;
     let mut max = 0i128;
     for (index, item) in observations.iter().enumerate() {
-        if item.unix_seconds < window.start_unix_seconds
-            || item.unix_seconds > window.end_unix_seconds
-        {
+        if !window.contains_observation(item.unix_seconds)? {
             return Err(Error::InvalidObservationSchedule);
         }
         if index == 0 {
@@ -1301,9 +1466,28 @@ pub fn evaluate(
                 0
             }
         }
-        StatisticKind::OddScheduledMedian => exact_median(observations)?,
+        StatisticKind::OddScheduledMedian => {
+            scheduled_median_v1::exact_median_by(observations.len(), |index| {
+                observations.get(index).map_or(0, |item| item.atoms)
+            })?
+        }
     };
     finalize(raw, 1, spec.rounding)
+}
+
+/// A cadence tolerance widens a *schedule*, so it is admitted only by the one
+/// statistic that has one. Without this, a nonzero tolerance would silently
+/// widen the window a minimum, maximum or average is taken over.
+fn validate_cadence_tolerance_pairing(
+    statistic: StatisticSpecV1,
+    window: WindowSpecV1,
+) -> Result<()> {
+    if window.cadence_tolerance_seconds() != 0
+        && statistic.kind != StatisticKind::OddScheduledMedian
+    {
+        return Err(Error::NonCanonicalStatistic);
+    }
+    Ok(())
 }
 
 fn validate_observation_order(observations: &[Observation]) -> Result<()> {
@@ -1317,67 +1501,6 @@ fn validate_observation_order(observations: &[Observation]) -> Result<()> {
         previous = Some(observation.unix_seconds);
     }
     Ok(())
-}
-
-fn validate_odd_median_schedule(window: WindowSpecV1, observations: &[Observation]) -> Result<()> {
-    if window.kind != WindowKind::ScheduledInterval || observations.len() < 3 {
-        return Err(Error::NonCanonicalStatistic);
-    }
-    let first = observations
-        .first()
-        .ok_or(Error::InvalidObservationSchedule)?
-        .unix_seconds;
-    let last = observations
-        .last()
-        .ok_or(Error::InvalidObservationSchedule)?
-        .unix_seconds;
-    if first != window.start_unix_seconds || last != window.end_unix_seconds {
-        return Err(Error::InvalidObservationSchedule);
-    }
-    let intervals = i64::try_from(observations.len().saturating_sub(1))
-        .map_err(|_| Error::InvalidObservationSchedule)?;
-    let span = window
-        .end_unix_seconds
-        .checked_sub(window.start_unix_seconds)
-        .ok_or(Error::ArithmeticOverflow)?;
-    if intervals == 0 || span.rem_euclid(intervals) != 0 {
-        return Err(Error::InvalidObservationSchedule);
-    }
-    let cadence = span.div_euclid(intervals);
-    if cadence <= 0 {
-        return Err(Error::InvalidObservationSchedule);
-    }
-    for (index, observation) in observations.iter().enumerate() {
-        let position = i64::try_from(index).map_err(|_| Error::InvalidObservationSchedule)?;
-        let expected = cadence
-            .checked_mul(position)
-            .and_then(|offset| window.start_unix_seconds.checked_add(offset))
-            .ok_or(Error::ArithmeticOverflow)?;
-        if observation.unix_seconds != expected {
-            return Err(Error::InvalidObservationSchedule);
-        }
-    }
-    Ok(())
-}
-
-fn exact_median(observations: &[Observation]) -> Result<i128> {
-    let rank = observations.len() / 2;
-    for candidate in observations {
-        let mut below = 0usize;
-        let mut equal = 0usize;
-        for item in observations {
-            if item.atoms < candidate.atoms {
-                below = below.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-            } else if item.atoms == candidate.atoms {
-                equal = equal.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-            }
-        }
-        let after_equal = below.checked_add(equal).ok_or(Error::ArithmeticOverflow)?;
-        if below <= rank && rank < after_equal {
-            return Ok(candidate.atoms);
-        }
-    }
-    Err(Error::InvalidObservationSchedule)
 }
 
 fn finalize(
@@ -1923,9 +2046,7 @@ impl NormalizedProviderEvidenceV1 {
         {
             return Err(Error::LinkageMismatch);
         }
-        if self.observation_unix_seconds < window.start_unix_seconds
-            || self.observation_unix_seconds > window.end_unix_seconds
-        {
+        if !window.contains_observation(self.observation_unix_seconds)? {
             return Err(Error::InvalidObservationSchedule);
         }
         let oldest = current_unix_seconds
@@ -3708,6 +3829,7 @@ fn evaluate_normalized_evidence(
     current_unix_seconds: i64,
 ) -> Result<StatisticValue> {
     statistic.validate_shape()?;
+    validate_cadence_tolerance_pairing(statistic, window)?;
     if evidence.len() != usize::from(statistic.required_samples) {
         return Err(Error::InvalidObservationSchedule);
     }
@@ -3758,74 +3880,16 @@ fn evaluate_normalized_evidence(
         StatisticKind::AtLeastThreshold => i128::from(u8::from(min >= statistic.threshold_atoms)),
         StatisticKind::AtMostThreshold => i128::from(u8::from(max <= statistic.threshold_atoms)),
         StatisticKind::OddScheduledMedian => {
-            validate_normalized_median_schedule(window, evidence)?;
-            exact_normalized_median(evidence)?
+            let schedule = ScheduledMedianScheduleV1::derive(window, evidence.len())?;
+            for (index, item) in evidence.iter().enumerate() {
+                schedule.admit(index, item.observation_unix_seconds)?;
+            }
+            scheduled_median_v1::exact_median_by(evidence.len(), |index| {
+                evidence.get(index).map_or(0, |item| item.atoms)
+            })?
         }
     };
     finalize(raw, 1, statistic.rounding)
-}
-
-fn validate_normalized_median_schedule(
-    window: WindowSpecV1,
-    evidence: &[NormalizedProviderEvidenceV1],
-) -> Result<()> {
-    if window.kind != WindowKind::ScheduledInterval || evidence.len() < 3 {
-        return Err(Error::NonCanonicalStatistic);
-    }
-    let first = evidence
-        .first()
-        .ok_or(Error::InvalidObservationSchedule)?
-        .observation_unix_seconds;
-    let last = evidence
-        .last()
-        .ok_or(Error::InvalidObservationSchedule)?
-        .observation_unix_seconds;
-    if first != window.start_unix_seconds || last != window.end_unix_seconds {
-        return Err(Error::InvalidObservationSchedule);
-    }
-    let intervals = i64::try_from(evidence.len().saturating_sub(1))
-        .map_err(|_| Error::InvalidObservationSchedule)?;
-    let span = window
-        .end_unix_seconds
-        .checked_sub(window.start_unix_seconds)
-        .ok_or(Error::ArithmeticOverflow)?;
-    if intervals == 0 || span.rem_euclid(intervals) != 0 {
-        return Err(Error::InvalidObservationSchedule);
-    }
-    let cadence = span.div_euclid(intervals);
-    if cadence <= 0 {
-        return Err(Error::InvalidObservationSchedule);
-    }
-    for (index, item) in evidence.iter().enumerate() {
-        let position = i64::try_from(index).map_err(|_| Error::InvalidObservationSchedule)?;
-        let expected = cadence
-            .checked_mul(position)
-            .and_then(|offset| window.start_unix_seconds.checked_add(offset))
-            .ok_or(Error::ArithmeticOverflow)?;
-        if item.observation_unix_seconds != expected {
-            return Err(Error::InvalidObservationSchedule);
-        }
-    }
-    Ok(())
-}
-
-fn exact_normalized_median(evidence: &[NormalizedProviderEvidenceV1]) -> Result<i128> {
-    let rank = evidence.len() / 2;
-    for candidate in evidence {
-        let mut below = 0usize;
-        let mut equal = 0usize;
-        for item in evidence {
-            if item.atoms < candidate.atoms {
-                below = below.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-            } else if item.atoms == candidate.atoms {
-                equal = equal.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
-            }
-        }
-        if below <= rank && rank < below.checked_add(equal).ok_or(Error::ArithmeticOverflow)? {
-            return Ok(candidate.atoms);
-        }
-    }
-    Err(Error::InvalidObservationSchedule)
 }
 
 /// Persisted phase of an explicitly selected shared-observation child.
@@ -5617,6 +5681,7 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
         dest.copy_from_slice(input);
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5857,12 +5922,25 @@ mod tests {
     fn canonical_tails_and_pyth_terminal_profile_are_enforced() {
         let profile_bytes = profile().to_bytes();
         let mut changed_profile = profile_bytes;
-        if let Some(slot) = changed_profile.get_mut(88) {
+        if let Some(slot) =
+            changed_profile.get_mut(SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_OFFSET_V1)
+        {
             *slot = 1;
         }
         assert_eq!(
             SourceCapacityProfileV1::decode(&changed_profile),
             Err(Error::NonCanonicalReservedBytes)
+        );
+        // Bytes 88..96 stopped being reserved when κ took them: a numerator
+        // without a denominator is not a rational, and refuses as such.
+        let mut stated_numerator = profile_bytes;
+        if let Some(slot) = stated_numerator.get_mut(SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1)
+        {
+            *slot = 1;
+        }
+        assert_eq!(
+            SourceCapacityProfileV1::decode(&stated_numerator),
+            Err(Error::NonCanonicalCapacity)
         );
         let stat = StatisticSpecV1 {
             source_unit_id: id(2),

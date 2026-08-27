@@ -19,10 +19,7 @@ use dclutch_series_v3_kernel::{
     AccountKeyV3, AuthenticatedProductProjectionV2, composition::SeriesConsumeCompositionV3,
     plan::SeriesReplayWitnessV3,
 };
-use solana_program::{
-    hash::{hash, hashv},
-    pubkey::Pubkey,
-};
+use solana_program::{hash::hash, pubkey::Pubkey};
 
 use super::{
     artifacts_v3::{
@@ -33,7 +30,7 @@ use super::{
         SERIES_CONSUME_REALIZE_OFFSET_V3, SERIES_CONSUME_ROUTE_COUNT_V3,
         SERIES_CORE_FOUND_RECEIPT_DEPENDENCIES_V3, SERIES_CORE_OPEN_RECEIPT_DEPENDENCIES_V3,
         SERIES_NO_RECEIPT_DEPENDENCIES_V3, SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-        SeriesArtifactBundleV3, resolved_dependencies_match,
+        SeriesArtifactBundleV3, resolved_dependencies_match, series_base_request_digest_v3,
     },
     instruction::SERIES_ACTION_HEADER_BYTES_V3,
     projected_custody_v3::{
@@ -422,10 +419,8 @@ fn stage_child_call_v3<'a>(
     let witness = expected
         .borrows_witness
         .then_some(inputs.artifacts.slices.witness);
-    let base_request_digest = match witness {
-        Some(witness) => hashv(&[request, witness]).to_bytes(),
-        None => hash(request).to_bytes(),
-    };
+    let base_request_digest =
+        series_base_request_digest_v3(request, witness).ok_or(SeriesExecuteErrorV3::Invocation)?;
     Ok(SeriesStagedChildCallV3 {
         invocation,
         request,

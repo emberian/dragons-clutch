@@ -23,8 +23,8 @@ dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
-sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]
 workspace = true

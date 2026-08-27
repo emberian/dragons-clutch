@@ -5,6 +5,15 @@
 //! The transition re-proves both reservations, charges cumulative-difference
 //! fees, derives partial/terminal candidates, and exposes only checked child
 //! effect quantities.
+//!
+//! The register schema, the admission program, and its exact encoded bytes are
+//! authored in
+//! `formal/dclutch-semantics/DClutchSemantics/DirectRegisteredFillV4.lean` and
+//! emitted into `generated_registered_fill_v4.rs`. This module republishes the
+//! emitted program after hostile decoding; it holds no admission relation of
+//! its own. The unsigned RequestProfileV1 below is a projection, not an
+//! admission relation: every value it places in the bank is re-proved by the
+//! authored program.
 
 #[cfg(not(target_os = "solana"))]
 use dclutch_core_contract::ContentId;
@@ -20,296 +29,26 @@ use dclutch_request_profile_contract::encode::{
     encode_request_profile_v1_atomic,
 };
 #[cfg(not(target_os = "solana"))]
-use dclutch_transition_vm::v3::{
-    IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
-};
+use dclutch_transition_vm::v3::ProgramV3;
 
 #[cfg(not(target_os = "solana"))]
-use crate::{
-    execution_v3::{
-        DIRECT_EXECUTION_REQUEST_MAGIC_V3, DIRECT_EXECUTION_REQUEST_VERSION_V3,
-        DIRECT_REGISTERED_FILL_REQUEST_BYTES_V3, DirectExecutionActionV3,
-    },
-    successor::DIRECT_FEE_DENOMINATOR_V1,
+use crate::execution_v3::{
+    DIRECT_EXECUTION_REQUEST_MAGIC_V3, DIRECT_EXECUTION_REQUEST_VERSION_V3,
+    DIRECT_REGISTERED_FILL_REQUEST_BYTES_V3, DirectExecutionActionV3,
 };
-
-/// Common scalar-bank width for registered ordinary fills.
-pub const DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4: usize = 92;
-/// Common identity-bank width for registered ordinary fills.
-pub const DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4: usize = 40;
-/// Registered ordinary fills have no per-Product-item register body.
-pub const DIRECT_REGISTERED_FILL_ITEM_SCALAR_STRIDE_V4: u16 = 0;
-/// Registered ordinary fills have no per-Product-item identity body.
-pub const DIRECT_REGISTERED_FILL_ITEM_IDENTITY_STRIDE_V4: u16 = 0;
-
-/// Authenticated root phase.
-pub const FILL_SCALAR_ROOT_PHASE_V4: usize = 0;
-/// Trusted current slot.
-pub const FILL_SCALAR_SLOT_V4: usize = 1;
-/// Product-authenticated outcome count.
-pub const FILL_SCALAR_OUTCOME_COUNT_V4: usize = 2;
-/// Core Market generation.
-pub const FILL_SCALAR_MARKET_GENERATION_V4: usize = 3;
-/// Immutable config price scale.
-pub const FILL_SCALAR_PRICE_SCALE_V4: usize = 4;
-/// Immutable config fee basis points.
-pub const FILL_SCALAR_POLICY_FEE_BPS_V4: usize = 5;
-/// Matcher-selected positive fill quantity.
-pub const FILL_SCALAR_QUANTITY_V4: usize = 6;
-/// Matcher-selected execution price.
-pub const FILL_SCALAR_EXECUTION_PRICE_V4: usize = 7;
-/// Canonical zero constant.
-pub const FILL_SCALAR_ZERO_V4: usize = 8;
-/// Canonical one constant.
-pub const FILL_SCALAR_ONE_V4: usize = 9;
-/// Registered lifecycle constant.
-pub const FILL_SCALAR_GTC_V4: usize = 10;
-/// Fee denominator constant.
-pub const FILL_SCALAR_FEE_DENOMINATOR_V4: usize = 11;
-/// Number of live maker roots; unchanged by record fill.
-pub const FILL_SCALAR_ROOT_OPEN_COUNT_V4: usize = 12;
-
-/// Seller persisted side.
-pub const FILL_SCALAR_SELLER_SIDE_V4: usize = 13;
-/// Seller persisted lifecycle.
-pub const FILL_SCALAR_SELLER_LIFECYCLE_V4: usize = 14;
-/// Seller outcome.
-pub const FILL_SCALAR_SELLER_OUTCOME_V4: usize = 15;
-/// Seller Market generation.
-pub const FILL_SCALAR_SELLER_GENERATION_V4: usize = 16;
-/// Seller record nonce.
-pub const FILL_SCALAR_SELLER_NONCE_V4: usize = 17;
-/// Seller validity start.
-pub const FILL_SCALAR_SELLER_VALID_FROM_V4: usize = 18;
-/// Seller validity end.
-pub const FILL_SCALAR_SELLER_VALID_THROUGH_V4: usize = 19;
-/// Seller maximum quantity.
-pub const FILL_SCALAR_SELLER_MAXIMUM_V4: usize = 20;
-/// Seller minimum price.
-pub const FILL_SCALAR_SELLER_LIMIT_V4: usize = 21;
-/// Seller signed fee rate.
-pub const FILL_SCALAR_SELLER_FEE_BPS_V4: usize = 22;
-/// Seller already-filled quantity.
-pub const FILL_SCALAR_SELLER_FILLED_V4: usize = 23;
-/// Seller remaining claim reserve.
-pub const FILL_SCALAR_SELLER_RESERVED_CLAIMS_V4: usize = 24;
-/// Seller collateral reserve, canonically zero.
-pub const FILL_SCALAR_SELLER_RESERVED_COLLATERAL_V4: usize = 25;
-/// Seller cumulative gross.
-pub const FILL_SCALAR_SELLER_CUMULATIVE_GROSS_V4: usize = 26;
-/// Seller cumulative fee.
-pub const FILL_SCALAR_SELLER_CUMULATIVE_FEE_V4: usize = 27;
-/// Seller maker replay next nonce.
-pub const FILL_SCALAR_SELLER_NEXT_NONCE_V4: usize = 28;
-/// Seller maker replay live record count.
-pub const FILL_SCALAR_SELLER_LIVE_COUNT_V4: usize = 29;
-/// Seller replay invalidation threshold.
-pub const FILL_SCALAR_SELLER_MINIMUM_NONCE_V4: usize = 30;
-/// Seller maker replay Market generation.
-pub const FILL_SCALAR_SELLER_MAKER_GENERATION_V4: usize = 31;
-
-/// Buyer persisted side.
-pub const FILL_SCALAR_BUYER_SIDE_V4: usize = 32;
-/// Buyer persisted lifecycle.
-pub const FILL_SCALAR_BUYER_LIFECYCLE_V4: usize = 33;
-/// Buyer outcome.
-pub const FILL_SCALAR_BUYER_OUTCOME_V4: usize = 34;
-/// Buyer Market generation.
-pub const FILL_SCALAR_BUYER_GENERATION_V4: usize = 35;
-/// Buyer record nonce.
-pub const FILL_SCALAR_BUYER_NONCE_V4: usize = 36;
-/// Buyer validity start.
-pub const FILL_SCALAR_BUYER_VALID_FROM_V4: usize = 37;
-/// Buyer validity end.
-pub const FILL_SCALAR_BUYER_VALID_THROUGH_V4: usize = 38;
-/// Buyer maximum quantity.
-pub const FILL_SCALAR_BUYER_MAXIMUM_V4: usize = 39;
-/// Buyer maximum price.
-pub const FILL_SCALAR_BUYER_LIMIT_V4: usize = 40;
-/// Buyer signed fee rate.
-pub const FILL_SCALAR_BUYER_FEE_BPS_V4: usize = 41;
-/// Buyer already-filled quantity.
-pub const FILL_SCALAR_BUYER_FILLED_V4: usize = 42;
-/// Buyer claim reserve, canonically zero.
-pub const FILL_SCALAR_BUYER_RESERVED_CLAIMS_V4: usize = 43;
-/// Buyer remaining collateral reserve.
-pub const FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4: usize = 44;
-/// Buyer cumulative gross.
-pub const FILL_SCALAR_BUYER_CUMULATIVE_GROSS_V4: usize = 45;
-/// Buyer cumulative fee.
-pub const FILL_SCALAR_BUYER_CUMULATIVE_FEE_V4: usize = 46;
-/// Buyer maker replay next nonce.
-pub const FILL_SCALAR_BUYER_NEXT_NONCE_V4: usize = 47;
-/// Buyer maker replay live record count.
-pub const FILL_SCALAR_BUYER_LIVE_COUNT_V4: usize = 48;
-/// Buyer replay invalidation threshold.
-pub const FILL_SCALAR_BUYER_MINIMUM_NONCE_V4: usize = 49;
-/// Buyer maker replay Market generation.
-pub const FILL_SCALAR_BUYER_MAKER_GENERATION_V4: usize = 50;
-
-/// Seller filled quantity after this match.
-pub const FILL_SCALAR_SELLER_FILLED_AFTER_V4: usize = 51;
-/// Buyer filled quantity after this match.
-pub const FILL_SCALAR_BUYER_FILLED_AFTER_V4: usize = 52;
-/// Seller remaining quantity after this match.
-pub const FILL_SCALAR_SELLER_REMAINING_AFTER_V4: usize = 53;
-/// Buyer remaining quantity after this match.
-pub const FILL_SCALAR_BUYER_REMAINING_AFTER_V4: usize = 54;
-/// Exact common gross quote.
-pub const FILL_SCALAR_GROSS_V4: usize = 55;
-/// Seller cumulative gross after this match.
-pub const FILL_SCALAR_SELLER_CUMULATIVE_GROSS_AFTER_V4: usize = 56;
-/// Buyer cumulative gross after this match.
-pub const FILL_SCALAR_BUYER_CUMULATIVE_GROSS_AFTER_V4: usize = 57;
-/// Seller cumulative fee after this match.
-pub const FILL_SCALAR_SELLER_CUMULATIVE_FEE_AFTER_V4: usize = 58;
-/// Buyer cumulative fee after this match.
-pub const FILL_SCALAR_BUYER_CUMULATIVE_FEE_AFTER_V4: usize = 59;
-/// Seller difference-of-floors fee.
-pub const FILL_SCALAR_SELLER_FEE_DELTA_V4: usize = 60;
-/// Buyer difference-of-floors fee.
-pub const FILL_SCALAR_BUYER_FEE_DELTA_V4: usize = 61;
-/// Net collateral credited to the seller.
-pub const FILL_SCALAR_SELLER_NET_V4: usize = 62;
-/// Gross plus buyer fee debited from buyer escrow.
-pub const FILL_SCALAR_BUYER_DEBIT_V4: usize = 63;
-/// Combined seller and buyer fee transfer.
-pub const FILL_SCALAR_TOTAL_FEE_V4: usize = 64;
-/// Seller claim reserve after this match.
-pub const FILL_SCALAR_SELLER_RESERVED_CLAIMS_AFTER_V4: usize = 65;
-/// Buyer collateral reserve after this match.
-pub const FILL_SCALAR_BUYER_RESERVED_COLLATERAL_AFTER_V4: usize = 66;
-/// One exactly when the seller record becomes terminal.
-pub const FILL_SCALAR_SELLER_TERMINAL_V4: usize = 67;
-/// One exactly when the buyer record becomes terminal.
-pub const FILL_SCALAR_BUYER_TERMINAL_V4: usize = 68;
-/// Seller maker live count after optional terminal close.
-pub const FILL_SCALAR_SELLER_LIVE_COUNT_AFTER_V4: usize = 69;
-/// Buyer maker live count after optional terminal close.
-pub const FILL_SCALAR_BUYER_LIVE_COUNT_AFTER_V4: usize = 70;
-/// Temporary current seller fee recomputation.
-pub const FILL_SCALAR_SELLER_CURRENT_FEE_CHECK_V4: usize = 71;
-/// Temporary current buyer fee recomputation.
-pub const FILL_SCALAR_BUYER_CURRENT_FEE_CHECK_V4: usize = 72;
-/// Temporary current seller remaining quantity.
-pub const FILL_SCALAR_SELLER_CURRENT_REMAINING_V4: usize = 73;
-/// Temporary initial buyer gross reserve.
-pub const FILL_SCALAR_BUYER_INITIAL_GROSS_V4: usize = 74;
-/// Temporary initial buyer fee reserve.
-pub const FILL_SCALAR_BUYER_INITIAL_FEE_V4: usize = 75;
-/// Temporary total initial buyer reserve.
-pub const FILL_SCALAR_BUYER_INITIAL_RESERVE_V4: usize = 76;
-/// Temporary buyer amount already spent.
-pub const FILL_SCALAR_BUYER_SPENT_V4: usize = 77;
-/// Temporary expected current buyer reserve.
-pub const FILL_SCALAR_BUYER_CURRENT_RESERVE_CHECK_V4: usize = 78;
-/// Conservation scratch: seller net plus combined fee.
-pub const FILL_SCALAR_CONSERVATION_V4: usize = 79;
-/// Seller record Position expected revision.
-pub const FILL_SCALAR_CLAIM_SOURCE_REVISION_V4: usize = 80;
-/// Buyer Position expected revision.
-pub const FILL_SCALAR_CLAIM_DESTINATION_REVISION_V4: usize = 81;
-/// Seller record Position resulting revision.
-pub const FILL_SCALAR_CLAIM_SOURCE_REVISION_AFTER_V4: usize = 82;
-/// Buyer Position resulting revision.
-pub const FILL_SCALAR_CLAIM_DESTINATION_REVISION_AFTER_V4: usize = 83;
-/// Buyer Custody replay revision before the first transfer.
-pub const FILL_SCALAR_CUSTODY_REVISION_V4: usize = 84;
-/// Buyer Custody revision after the seller transfer.
-pub const FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4: usize = 85;
-/// Buyer Custody revision after the fee transfer.
-pub const FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4: usize = 86;
-/// Final terminal constant for child delegated transfer envelopes.
-pub const FILL_SCALAR_TERMINAL_V4: usize = 87;
-/// Seller maker replay historical rent principal.
-pub const FILL_SCALAR_SELLER_MAKER_RENT_PRINCIPAL_V4: usize = 88;
-/// Seller registered-record historical rent principal.
-pub const FILL_SCALAR_SELLER_RECORD_RENT_PRINCIPAL_V4: usize = 89;
-/// Buyer maker replay historical rent principal.
-pub const FILL_SCALAR_BUYER_MAKER_RENT_PRINCIPAL_V4: usize = 90;
-/// Buyer registered-record historical rent principal.
-pub const FILL_SCALAR_BUYER_RECORD_RENT_PRINCIPAL_V4: usize = 91;
-
-/// Parent request digest seeded by common Hot.
-pub const FILL_IDENTITY_PARENT_REQUEST_V4: usize = 0;
-/// Authenticated Core Market.
-pub const FILL_IDENTITY_MARKET_V4: usize = 1;
-/// Selected release set.
-pub const FILL_IDENTITY_RELEASE_SET_V4: usize = 2;
-/// Authenticated Product record digest.
-pub const FILL_IDENTITY_PRODUCT_RECORD_V4: usize = 3;
-/// Product semantic LiabilityBasis identity.
-pub const FILL_IDENTITY_SEMANTIC_BASIS_V4: usize = 4;
-/// Authenticated raw ProductBasis digest.
-pub const FILL_IDENTITY_LINKED_BASIS_V4: usize = 5;
-/// Registry-selected Trading program.
-pub const FILL_IDENTITY_TRADING_PROGRAM_V4: usize = 6;
-/// Authenticated Realm.
-pub const FILL_IDENTITY_REALM_V4: usize = 7;
-/// Realm collateral mint.
-pub const FILL_IDENTITY_MINT_V4: usize = 8;
-/// Realm token program.
-pub const FILL_IDENTITY_TOKEN_PROGRAM_V4: usize = 9;
-/// Immutable fee recipient.
-pub const FILL_IDENTITY_FEE_RECIPIENT_V4: usize = 10;
-/// Seller record maker.
-pub const FILL_IDENTITY_SELLER_MAKER_V4: usize = 11;
-/// Buyer record maker.
-pub const FILL_IDENTITY_BUYER_MAKER_V4: usize = 12;
-/// Seller intent Market.
-pub const FILL_IDENTITY_SELLER_INTENT_MARKET_V4: usize = 13;
-/// Buyer intent Market.
-pub const FILL_IDENTITY_BUYER_INTENT_MARKET_V4: usize = 14;
-/// Seller maker replay Market.
-pub const FILL_IDENTITY_SELLER_MAKER_MARKET_V4: usize = 15;
-/// Buyer maker replay Market.
-pub const FILL_IDENTITY_BUYER_MAKER_MARKET_V4: usize = 16;
-/// Seller record account.
-pub const FILL_IDENTITY_SELLER_RECORD_V4: usize = 17;
-/// Buyer record account.
-pub const FILL_IDENTITY_BUYER_RECORD_V4: usize = 18;
-/// Seller maker replay account.
-pub const FILL_IDENTITY_SELLER_MAKER_STATE_V4: usize = 19;
-/// Buyer maker replay account.
-pub const FILL_IDENTITY_BUYER_MAKER_STATE_V4: usize = 20;
-/// Signed seller collateral destination.
-pub const FILL_IDENTITY_SELLER_COLLATERAL_DESTINATION_V4: usize = 21;
-/// Signed buyer collateral refund account.
-pub const FILL_IDENTITY_BUYER_COLLATERAL_REFUND_V4: usize = 22;
-/// Buyer record-keyed Custody vault.
-pub const FILL_IDENTITY_BUYER_CUSTODY_VAULT_V4: usize = 23;
-/// Custody transfer authority.
-pub const FILL_IDENTITY_CUSTODY_AUTHORITY_V4: usize = 24;
-/// Claims aggregate selected by the Product basis.
-pub const FILL_IDENTITY_CLAIMS_AGGREGATE_V4: usize = 25;
-/// Seller record Position owner.
-pub const FILL_IDENTITY_CLAIM_SOURCE_OWNER_V4: usize = 26;
-/// Buyer user Position owner.
-pub const FILL_IDENTITY_CLAIM_DESTINATION_OWNER_V4: usize = 27;
-/// Seller record RentCredit beneficiary.
-pub const FILL_IDENTITY_SELLER_RENT_OWNER_V4: usize = 28;
-/// Buyer record RentCredit beneficiary.
-pub const FILL_IDENTITY_BUYER_RENT_OWNER_V4: usize = 29;
-/// Seller identity stored in the maker replay account.
-pub const FILL_IDENTITY_SELLER_MAKER_REPLAY_OWNER_V4: usize = 30;
-/// Buyer identity stored in the maker replay account.
-pub const FILL_IDENTITY_BUYER_MAKER_REPLAY_OWNER_V4: usize = 31;
+#[cfg(not(target_os = "solana"))]
+pub use crate::generated_registered_fill_v4::*;
 
 #[cfg(not(target_os = "solana"))]
 mod host {
     use super::*;
 
     const REQUEST_OPERATIONS: usize = 8;
-    const TRANSITION_INSTRUCTIONS: usize = 99;
 
     /// Exact unsigned RequestProfileV1 width.
     pub const DIRECT_REGISTERED_FILL_REQUEST_PROFILE_BYTES_V4: usize =
         dclutch_request_profile_contract::HEADER_BYTES
             + REQUEST_OPERATIONS * dclutch_request_profile_contract::OPERATION_BYTES;
-    /// Exact registered-fill TransitionVMV3 width.
-    pub const DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4: usize =
-        dclutch_transition_vm::v3::HEADER_BYTES
-            + TRANSITION_INSTRUCTIONS * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
     /// Exact interpreted ExecutionStrategy width.
     pub const DIRECT_REGISTERED_FILL_STRATEGY_BYTES_V4: usize = EXECUTION_STRATEGY_PROGRAM_BYTES_V2;
 
@@ -320,7 +59,7 @@ mod host {
         Coordinate,
         /// RequestProfile construction or hostile decoding refused.
         RequestProfile,
-        /// Transition construction or hostile decoding refused.
+        /// Transition republication or hostile decoding refused.
         Transition,
         /// Interpreted strategy construction refused.
         Strategy,
@@ -378,7 +117,14 @@ mod host {
         .map_err(|_| DirectRegisteredFillArtifactErrorV4::RequestProfile)
     }
 
-    /// Emit the exact registered ordinary candidate transition atomically.
+    /// Republish the exact Lean-emitted registered-fill TransitionVM V3 program.
+    ///
+    /// The program is authored in
+    /// `formal/dclutch-semantics/DClutchSemantics/DirectRegisteredFillV4.lean`
+    /// and emitted into `generated_registered_fill_v4.rs`. This function
+    /// hostile-decodes those bytes in caller-owned scratch and copies them to
+    /// `output` only after the decoder accepts the complete result, so a caller
+    /// never observes a partially written or undecodable program.
     pub fn encode_direct_registered_fill_transition_v4_atomic(
         scratch: &mut [u8],
         output: &mut [u8],
@@ -388,21 +134,10 @@ mod host {
         {
             return Err(DirectRegisteredFillArtifactErrorV4::Coordinate);
         }
-        let instructions = transition_instructions()?;
-        encode_program_atomic(
-            ProgramGeometryV3 {
-                common_scalars: width16(DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4)?,
-                item_scalar_stride: DIRECT_REGISTERED_FILL_ITEM_SCALAR_STRIDE_V4,
-                common_identities: width16(DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4)?,
-                item_identity_stride: DIRECT_REGISTERED_FILL_ITEM_IDENTITY_STRIDE_V4,
-            },
-            &instructions,
-            &[],
-            &[],
-            scratch,
-            output,
-        )
-        .map_err(|_| DirectRegisteredFillArtifactErrorV4::Transition)
+        scratch.copy_from_slice(&DIRECT_REGISTERED_FILL_TRANSITION_V4);
+        ProgramV3::decode(scratch).map_err(|_| DirectRegisteredFillArtifactErrorV4::Transition)?;
+        output.copy_from_slice(scratch);
+        Ok(())
     }
 
     /// Construct the canonical interpreted strategy selecting `transition_id`.
@@ -432,402 +167,10 @@ mod host {
         Ok(strategy.to_bytes())
     }
 
-    fn transition_instructions()
-    -> Result<[InstructionV3; TRANSITION_INSTRUCTIONS], DirectRegisteredFillArtifactErrorV4> {
-        let s = scalar_transition;
-        let i = identity_transition;
-        Ok([
-            InstructionV3::load_const(s(FILL_SCALAR_ZERO_V4)?, 0),
-            InstructionV3::load_const(s(FILL_SCALAR_ONE_V4)?, 1),
-            InstructionV3::load_const(s(FILL_SCALAR_GTC_V4)?, 2),
-            InstructionV3::load_const(
-                s(FILL_SCALAR_FEE_DENOMINATOR_V4)?,
-                u64::from(DIRECT_FEE_DENOMINATOR_V1),
-            ),
-            InstructionV3::load_const(s(FILL_SCALAR_TERMINAL_V4)?, 1),
-            InstructionV3::scalar_eq(s(FILL_SCALAR_ROOT_PHASE_V4)?, s(FILL_SCALAR_ZERO_V4)?),
-            InstructionV3::nonzero(s(FILL_SCALAR_ROOT_OPEN_COUNT_V4)?),
-            InstructionV3::nonzero(s(FILL_SCALAR_QUANTITY_V4)?),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_EXECUTION_PRICE_V4)?,
-                s(FILL_SCALAR_PRICE_SCALE_V4)?,
-            ),
-            InstructionV3::identity_eq(
-                i(FILL_IDENTITY_MARKET_V4)?,
-                i(FILL_IDENTITY_SELLER_INTENT_MARKET_V4)?,
-            ),
-            InstructionV3::identity_eq(
-                i(FILL_IDENTITY_MARKET_V4)?,
-                i(FILL_IDENTITY_BUYER_INTENT_MARKET_V4)?,
-            ),
-            InstructionV3::identity_eq(
-                i(FILL_IDENTITY_MARKET_V4)?,
-                i(FILL_IDENTITY_SELLER_MAKER_MARKET_V4)?,
-            ),
-            InstructionV3::identity_eq(
-                i(FILL_IDENTITY_MARKET_V4)?,
-                i(FILL_IDENTITY_BUYER_MAKER_MARKET_V4)?,
-            ),
-            InstructionV3::identity_ne(
-                i(FILL_IDENTITY_SELLER_MAKER_V4)?,
-                i(FILL_IDENTITY_BUYER_MAKER_V4)?,
-            ),
-            InstructionV3::identity_eq(
-                i(FILL_IDENTITY_SELLER_MAKER_V4)?,
-                i(FILL_IDENTITY_SELLER_MAKER_REPLAY_OWNER_V4)?,
-            ),
-            InstructionV3::identity_eq(
-                i(FILL_IDENTITY_BUYER_MAKER_V4)?,
-                i(FILL_IDENTITY_BUYER_MAKER_REPLAY_OWNER_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_MARKET_GENERATION_V4)?,
-                s(FILL_SCALAR_SELLER_GENERATION_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_MARKET_GENERATION_V4)?,
-                s(FILL_SCALAR_BUYER_GENERATION_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_MARKET_GENERATION_V4)?,
-                s(FILL_SCALAR_SELLER_MAKER_GENERATION_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_MARKET_GENERATION_V4)?,
-                s(FILL_SCALAR_BUYER_MAKER_GENERATION_V4)?,
-            ),
-            InstructionV3::scalar_eq(s(FILL_SCALAR_SELLER_SIDE_V4)?, s(FILL_SCALAR_ZERO_V4)?),
-            InstructionV3::scalar_eq(s(FILL_SCALAR_BUYER_SIDE_V4)?, s(FILL_SCALAR_ONE_V4)?),
-            InstructionV3::scalar_eq(s(FILL_SCALAR_SELLER_LIFECYCLE_V4)?, s(FILL_SCALAR_GTC_V4)?),
-            InstructionV3::scalar_eq(s(FILL_SCALAR_BUYER_LIFECYCLE_V4)?, s(FILL_SCALAR_GTC_V4)?),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_SELLER_OUTCOME_V4)?,
-                s(FILL_SCALAR_BUYER_OUTCOME_V4)?,
-            ),
-            InstructionV3::scalar_lt(
-                s(FILL_SCALAR_SELLER_OUTCOME_V4)?,
-                s(FILL_SCALAR_OUTCOME_COUNT_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_SELLER_FEE_BPS_V4)?,
-                s(FILL_SCALAR_POLICY_FEE_BPS_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_BUYER_FEE_BPS_V4)?,
-                s(FILL_SCALAR_POLICY_FEE_BPS_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_VALID_FROM_V4)?,
-                s(FILL_SCALAR_SLOT_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SLOT_V4)?,
-                s(FILL_SCALAR_SELLER_VALID_THROUGH_V4)?,
-            ),
-            InstructionV3::scalar_le(s(FILL_SCALAR_BUYER_VALID_FROM_V4)?, s(FILL_SCALAR_SLOT_V4)?),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SLOT_V4)?,
-                s(FILL_SCALAR_BUYER_VALID_THROUGH_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_LIMIT_V4)?,
-                s(FILL_SCALAR_EXECUTION_PRICE_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_EXECUTION_PRICE_V4)?,
-                s(FILL_SCALAR_BUYER_LIMIT_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_BUYER_LIMIT_V4)?,
-                s(FILL_SCALAR_PRICE_SCALE_V4)?,
-            ),
-            InstructionV3::scalar_lt(
-                s(FILL_SCALAR_SELLER_NONCE_V4)?,
-                s(FILL_SCALAR_SELLER_NEXT_NONCE_V4)?,
-            ),
-            InstructionV3::scalar_lt(
-                s(FILL_SCALAR_BUYER_NONCE_V4)?,
-                s(FILL_SCALAR_BUYER_NEXT_NONCE_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_MINIMUM_NONCE_V4)?,
-                s(FILL_SCALAR_SELLER_NONCE_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_BUYER_MINIMUM_NONCE_V4)?,
-                s(FILL_SCALAR_BUYER_NONCE_V4)?,
-            ),
-            InstructionV3::nonzero(s(FILL_SCALAR_SELLER_LIVE_COUNT_V4)?),
-            InstructionV3::nonzero(s(FILL_SCALAR_BUYER_LIVE_COUNT_V4)?),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_LIVE_COUNT_V4)?,
-                s(FILL_SCALAR_SELLER_NEXT_NONCE_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_MINIMUM_NONCE_V4)?,
-                s(FILL_SCALAR_SELLER_NEXT_NONCE_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_BUYER_LIVE_COUNT_V4)?,
-                s(FILL_SCALAR_BUYER_NEXT_NONCE_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_BUYER_MINIMUM_NONCE_V4)?,
-                s(FILL_SCALAR_BUYER_NEXT_NONCE_V4)?,
-            ),
-            InstructionV3::nonzero(s(FILL_SCALAR_SELLER_MAKER_RENT_PRINCIPAL_V4)?),
-            InstructionV3::nonzero(s(FILL_SCALAR_SELLER_RECORD_RENT_PRINCIPAL_V4)?),
-            InstructionV3::nonzero(s(FILL_SCALAR_BUYER_MAKER_RENT_PRINCIPAL_V4)?),
-            InstructionV3::nonzero(s(FILL_SCALAR_BUYER_RECORD_RENT_PRINCIPAL_V4)?),
-            InstructionV3::scalar_lt(
-                s(FILL_SCALAR_SELLER_FILLED_V4)?,
-                s(FILL_SCALAR_SELLER_MAXIMUM_V4)?,
-            ),
-            InstructionV3::scalar_lt(
-                s(FILL_SCALAR_BUYER_FILLED_V4)?,
-                s(FILL_SCALAR_BUYER_MAXIMUM_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_CUMULATIVE_GROSS_V4)?,
-                s(FILL_SCALAR_SELLER_FILLED_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_BUYER_CUMULATIVE_GROSS_V4)?,
-                s(FILL_SCALAR_BUYER_FILLED_V4)?,
-            ),
-            InstructionV3::mul_div_floor(
-                s(FILL_SCALAR_SELLER_CUMULATIVE_GROSS_V4)?,
-                s(FILL_SCALAR_POLICY_FEE_BPS_V4)?,
-                s(FILL_SCALAR_FEE_DENOMINATOR_V4)?,
-                s(FILL_SCALAR_SELLER_CURRENT_FEE_CHECK_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_SELLER_CURRENT_FEE_CHECK_V4)?,
-                s(FILL_SCALAR_SELLER_CUMULATIVE_FEE_V4)?,
-            ),
-            InstructionV3::mul_div_floor(
-                s(FILL_SCALAR_BUYER_CUMULATIVE_GROSS_V4)?,
-                s(FILL_SCALAR_POLICY_FEE_BPS_V4)?,
-                s(FILL_SCALAR_FEE_DENOMINATOR_V4)?,
-                s(FILL_SCALAR_BUYER_CURRENT_FEE_CHECK_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_BUYER_CURRENT_FEE_CHECK_V4)?,
-                s(FILL_SCALAR_BUYER_CUMULATIVE_FEE_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_SELLER_MAXIMUM_V4)?,
-                s(FILL_SCALAR_SELLER_FILLED_V4)?,
-                s(FILL_SCALAR_SELLER_CURRENT_REMAINING_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_SELLER_CURRENT_REMAINING_V4)?,
-                s(FILL_SCALAR_SELLER_RESERVED_CLAIMS_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_SELLER_RESERVED_COLLATERAL_V4)?,
-                s(FILL_SCALAR_ZERO_V4)?,
-            ),
-            InstructionV3::mul_div_floor(
-                s(FILL_SCALAR_BUYER_MAXIMUM_V4)?,
-                s(FILL_SCALAR_BUYER_LIMIT_V4)?,
-                s(FILL_SCALAR_PRICE_SCALE_V4)?,
-                s(FILL_SCALAR_BUYER_INITIAL_GROSS_V4)?,
-            ),
-            InstructionV3::mul_div_floor(
-                s(FILL_SCALAR_BUYER_INITIAL_GROSS_V4)?,
-                s(FILL_SCALAR_POLICY_FEE_BPS_V4)?,
-                s(FILL_SCALAR_FEE_DENOMINATOR_V4)?,
-                s(FILL_SCALAR_BUYER_INITIAL_FEE_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_BUYER_INITIAL_GROSS_V4)?,
-                s(FILL_SCALAR_BUYER_INITIAL_FEE_V4)?,
-                s(FILL_SCALAR_BUYER_INITIAL_RESERVE_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_BUYER_CUMULATIVE_GROSS_V4)?,
-                s(FILL_SCALAR_BUYER_CUMULATIVE_FEE_V4)?,
-                s(FILL_SCALAR_BUYER_SPENT_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_BUYER_INITIAL_RESERVE_V4)?,
-                s(FILL_SCALAR_BUYER_SPENT_V4)?,
-                s(FILL_SCALAR_BUYER_CURRENT_RESERVE_CHECK_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_BUYER_CURRENT_RESERVE_CHECK_V4)?,
-                s(FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_BUYER_RESERVED_CLAIMS_V4)?,
-                s(FILL_SCALAR_ZERO_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_SELLER_FILLED_V4)?,
-                s(FILL_SCALAR_QUANTITY_V4)?,
-                s(FILL_SCALAR_SELLER_FILLED_AFTER_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_FILLED_AFTER_V4)?,
-                s(FILL_SCALAR_SELLER_MAXIMUM_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_BUYER_FILLED_V4)?,
-                s(FILL_SCALAR_QUANTITY_V4)?,
-                s(FILL_SCALAR_BUYER_FILLED_AFTER_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_BUYER_FILLED_AFTER_V4)?,
-                s(FILL_SCALAR_BUYER_MAXIMUM_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_SELLER_MAXIMUM_V4)?,
-                s(FILL_SCALAR_SELLER_FILLED_AFTER_V4)?,
-                s(FILL_SCALAR_SELLER_REMAINING_AFTER_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_BUYER_MAXIMUM_V4)?,
-                s(FILL_SCALAR_BUYER_FILLED_AFTER_V4)?,
-                s(FILL_SCALAR_BUYER_REMAINING_AFTER_V4)?,
-            ),
-            InstructionV3::mul_div_exact(
-                s(FILL_SCALAR_QUANTITY_V4)?,
-                s(FILL_SCALAR_EXECUTION_PRICE_V4)?,
-                s(FILL_SCALAR_PRICE_SCALE_V4)?,
-                s(FILL_SCALAR_GROSS_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_SELLER_CUMULATIVE_GROSS_V4)?,
-                s(FILL_SCALAR_GROSS_V4)?,
-                s(FILL_SCALAR_SELLER_CUMULATIVE_GROSS_AFTER_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_BUYER_CUMULATIVE_GROSS_V4)?,
-                s(FILL_SCALAR_GROSS_V4)?,
-                s(FILL_SCALAR_BUYER_CUMULATIVE_GROSS_AFTER_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_SELLER_CUMULATIVE_GROSS_AFTER_V4)?,
-                s(FILL_SCALAR_SELLER_FILLED_AFTER_V4)?,
-            ),
-            InstructionV3::scalar_le(
-                s(FILL_SCALAR_BUYER_CUMULATIVE_GROSS_AFTER_V4)?,
-                s(FILL_SCALAR_BUYER_FILLED_AFTER_V4)?,
-            ),
-            InstructionV3::mul_div_floor(
-                s(FILL_SCALAR_SELLER_CUMULATIVE_GROSS_AFTER_V4)?,
-                s(FILL_SCALAR_POLICY_FEE_BPS_V4)?,
-                s(FILL_SCALAR_FEE_DENOMINATOR_V4)?,
-                s(FILL_SCALAR_SELLER_CUMULATIVE_FEE_AFTER_V4)?,
-            ),
-            InstructionV3::mul_div_floor(
-                s(FILL_SCALAR_BUYER_CUMULATIVE_GROSS_AFTER_V4)?,
-                s(FILL_SCALAR_POLICY_FEE_BPS_V4)?,
-                s(FILL_SCALAR_FEE_DENOMINATOR_V4)?,
-                s(FILL_SCALAR_BUYER_CUMULATIVE_FEE_AFTER_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_SELLER_CUMULATIVE_FEE_AFTER_V4)?,
-                s(FILL_SCALAR_SELLER_CUMULATIVE_FEE_V4)?,
-                s(FILL_SCALAR_SELLER_FEE_DELTA_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_BUYER_CUMULATIVE_FEE_AFTER_V4)?,
-                s(FILL_SCALAR_BUYER_CUMULATIVE_FEE_V4)?,
-                s(FILL_SCALAR_BUYER_FEE_DELTA_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_GROSS_V4)?,
-                s(FILL_SCALAR_SELLER_FEE_DELTA_V4)?,
-                s(FILL_SCALAR_SELLER_NET_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_GROSS_V4)?,
-                s(FILL_SCALAR_BUYER_FEE_DELTA_V4)?,
-                s(FILL_SCALAR_BUYER_DEBIT_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_SELLER_FEE_DELTA_V4)?,
-                s(FILL_SCALAR_BUYER_FEE_DELTA_V4)?,
-                s(FILL_SCALAR_TOTAL_FEE_V4)?,
-            ),
-            InstructionV3::checked_add_into(
-                s(FILL_SCALAR_SELLER_NET_V4)?,
-                s(FILL_SCALAR_TOTAL_FEE_V4)?,
-                s(FILL_SCALAR_CONSERVATION_V4)?,
-            ),
-            InstructionV3::scalar_eq(
-                s(FILL_SCALAR_CONSERVATION_V4)?,
-                s(FILL_SCALAR_BUYER_DEBIT_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_SELLER_RESERVED_CLAIMS_V4)?,
-                s(FILL_SCALAR_QUANTITY_V4)?,
-                s(FILL_SCALAR_SELLER_RESERVED_CLAIMS_AFTER_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4)?,
-                s(FILL_SCALAR_BUYER_DEBIT_V4)?,
-                s(FILL_SCALAR_BUYER_RESERVED_COLLATERAL_AFTER_V4)?,
-            ),
-            InstructionV3::load_const(s(FILL_SCALAR_SELLER_TERMINAL_V4)?, 0),
-            InstructionV3::select_zero(
-                s(FILL_SCALAR_SELLER_REMAINING_AFTER_V4)?,
-                s(FILL_SCALAR_ONE_V4)?,
-                s(FILL_SCALAR_SELLER_TERMINAL_V4)?,
-            ),
-            InstructionV3::load_const(s(FILL_SCALAR_BUYER_TERMINAL_V4)?, 0),
-            InstructionV3::select_zero(
-                s(FILL_SCALAR_BUYER_REMAINING_AFTER_V4)?,
-                s(FILL_SCALAR_ONE_V4)?,
-                s(FILL_SCALAR_BUYER_TERMINAL_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_SELLER_LIVE_COUNT_V4)?,
-                s(FILL_SCALAR_SELLER_TERMINAL_V4)?,
-                s(FILL_SCALAR_SELLER_LIVE_COUNT_AFTER_V4)?,
-            ),
-            InstructionV3::sub_into(
-                s(FILL_SCALAR_BUYER_LIVE_COUNT_V4)?,
-                s(FILL_SCALAR_BUYER_TERMINAL_V4)?,
-                s(FILL_SCALAR_BUYER_LIVE_COUNT_AFTER_V4)?,
-            ),
-            InstructionV3::increment_into(
-                s(FILL_SCALAR_CLAIM_SOURCE_REVISION_V4)?,
-                s(FILL_SCALAR_CLAIM_SOURCE_REVISION_AFTER_V4)?,
-            ),
-            InstructionV3::increment_into(
-                s(FILL_SCALAR_CLAIM_DESTINATION_REVISION_V4)?,
-                s(FILL_SCALAR_CLAIM_DESTINATION_REVISION_AFTER_V4)?,
-            ),
-            InstructionV3::increment_into(
-                s(FILL_SCALAR_CUSTODY_REVISION_V4)?,
-                s(FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4)?,
-            ),
-            InstructionV3::increment_into(
-                s(FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4)?,
-                s(FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4)?,
-            ),
-        ])
-    }
-
     fn scalar_request(
         value: usize,
     ) -> Result<ScalarRegisterV1, DirectRegisteredFillArtifactErrorV4> {
         Ok(ScalarRegisterV1::common(width16(value)?))
-    }
-
-    fn scalar_transition(
-        value: usize,
-    ) -> Result<ScalarRegisterV3, DirectRegisteredFillArtifactErrorV4> {
-        Ok(ScalarRegisterV3::common(width16(value)?))
-    }
-
-    fn identity_transition(
-        value: usize,
-    ) -> Result<IdentityRegisterV3, DirectRegisteredFillArtifactErrorV4> {
-        Ok(IdentityRegisterV3::common(width16(value)?))
     }
 
     fn width16(value: usize) -> Result<u16, DirectRegisteredFillArtifactErrorV4> {
@@ -845,15 +188,51 @@ mod host {
         use dclutch_request_profile_contract::{
             ProjectionRegistersV1, RequestProfileV1, project_atomic,
         };
-        use dclutch_transition_vm::v3::{
-            ProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
-        };
+        use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
 
         use super::*;
         use crate::{
             execution_v3::{DirectExecutionQuantityV3, DirectExecutionRequestV3},
             registered_requests_v4::encode_direct_registered_execution_request_v3_atomic,
         };
+
+        /// The emitted width and geometry are literals from Lean. This restates
+        /// the arithmetic the Rust side used to carry, so a regenerated program
+        /// that disagrees with its own header or section counts cannot land
+        /// silently.
+        #[test]
+        fn the_emitted_program_carries_its_own_derived_width_and_geometry() {
+            assert_eq!(
+                DIRECT_REGISTERED_FILL_TRANSITION_INSTRUCTIONS_V4,
+                DIRECT_REGISTERED_FILL_PRELUDE_INSTRUCTIONS_V4
+                    + DIRECT_REGISTERED_FILL_ITEM_INSTRUCTIONS_V4
+                    + DIRECT_REGISTERED_FILL_EPILOGUE_INSTRUCTIONS_V4
+            );
+            assert_eq!(
+                DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4,
+                dclutch_transition_vm::v3::HEADER_BYTES
+                    + DIRECT_REGISTERED_FILL_TRANSITION_INSTRUCTIONS_V4
+                        * dclutch_transition_vm::v3::INSTRUCTION_BYTES
+            );
+            let program =
+                ProgramV3::decode(&DIRECT_REGISTERED_FILL_TRANSITION_V4).expect("program decode");
+            assert_eq!(
+                usize::from(program.common_scalar_count()),
+                DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4
+            );
+            assert_eq!(
+                usize::from(program.common_identity_count()),
+                DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4
+            );
+            assert_eq!(
+                program.item_scalar_stride(),
+                DIRECT_REGISTERED_FILL_ITEM_SCALAR_STRIDE_V4
+            );
+            assert_eq!(
+                program.item_identity_stride(),
+                DIRECT_REGISTERED_FILL_ITEM_IDENTITY_STRIDE_V4
+            );
+        }
 
         fn valid_scalars() -> [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4] {
             let mut scalars = [0_u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4];
@@ -987,19 +366,16 @@ mod host {
             assert_eq!(output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4], 5);
         }
 
-        #[test]
-        fn substituted_market_or_nonintegral_quote_refuses_without_output_commit() {
+        fn refuses_without_output_commit(
+            scalars: [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4],
+            identities: [[u8; 32]; DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4],
+        ) {
             let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
                 .expect("transition");
             let transition = ProgramV3::decode(&bytes).expect("decode");
-            let mut input = valid_scalars();
-            input[FILL_SCALAR_QUANTITY_V4] = 3;
-            input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
-            let mut identities = valid_identities();
-            identities[FILL_IDENTITY_BUYER_INTENT_MARKET_V4] = [9; 32];
-            let mut scalar_scratch = input;
+            let mut scalar_scratch = scalars;
             let mut output = [0x55_u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4];
             let before = output;
             let mut identity_scratch = identities;
@@ -1009,7 +385,7 @@ mod host {
                     transition,
                     3,
                     RegisterInput {
-                        scalars: &input,
+                        scalars: &scalars,
                         identities: &identities,
                     },
                     RegisterOutput {
@@ -1024,6 +400,218 @@ mod host {
                 .is_err()
             );
             assert_eq!(output, before);
+        }
+
+        #[test]
+        fn substituted_market_or_nonintegral_quote_refuses_without_output_commit() {
+            let mut input = valid_scalars();
+            input[FILL_SCALAR_QUANTITY_V4] = 3;
+            input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
+            let mut identities = valid_identities();
+            identities[FILL_IDENTITY_BUYER_INTENT_MARKET_V4] = [9; 32];
+            refuses_without_output_commit(input, identities);
+        }
+
+        /// The clause `73f0793` landed on the ordinary program and this one did
+        /// not have. Above the denominator both fee legs can exceed the quote
+        /// they are taken from; the conservation clause is an identity in the
+        /// fee deltas and never noticed.
+        #[test]
+        fn a_venue_rate_above_the_denominator_refuses_without_output_commit() {
+            let mut input = valid_scalars();
+            input[FILL_SCALAR_QUANTITY_V4] = 10;
+            input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
+            input[FILL_SCALAR_POLICY_FEE_BPS_V4] = 10_001;
+            input[FILL_SCALAR_SELLER_FEE_BPS_V4] = 10_001;
+            input[FILL_SCALAR_BUYER_FEE_BPS_V4] = 10_001;
+            input[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 24;
+            refuses_without_output_commit(input, valid_identities());
+        }
+
+        /// WHY THIS PROGRAM CANNOT YET DRIVE AN `EffectProgramV4`.
+        ///
+        /// The registered fill's missing EffectV4 has to route one Claims
+        /// transfer and two Custody transfers -- the seller's net and the
+        /// combined fee -- out of the buyer record's Vault. Neither Custody leg
+        /// is unconditional: `CustodyRequestV1::validate` refuses
+        /// `amount == 0` for `OperationV1::Transfer`, and on the CANONICAL
+        /// admitted fill the combined fee is exactly zero, because both
+        /// cumulative-difference legs floor to nothing at a hundred basis
+        /// points. An effect that routes the fee leg unconditionally therefore
+        /// refuses the ordinary case.
+        ///
+        /// A route is disabled by an `enable_common_scalar` the TRANSITION
+        /// derives -- that is how the inline-ordinary family selects among its
+        /// four Custody route declarations, with
+        /// `SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3`,
+        /// `SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3` and
+        /// `SCALAR_FEE_SOLE_ROUTE_ENABLED_V3` authored in
+        /// `DirectOrdinaryV3.lean`. This program derives no such register: its
+        /// schema has none, and `named_identities_are_the_addressed_ones` and
+        /// the emitted constants are the whole of what it exposes.
+        ///
+        /// It also advances the Custody replay revision by exactly two,
+        /// unconditionally (`incrementInto custodyRevision
+        /// custodyRevisionAfterSeller` then again into
+        /// `custodyRevisionAfterFee`), which on this same canonical bank claims
+        /// two transfers where at most one can occur.
+        ///
+        /// So authoring the fill's Effect starts in
+        /// `formal/dclutch-semantics/DClutchSemantics/DirectRegisteredFillV4.lean`,
+        /// not in Rust: the enables and the conditional revision ladder are
+        /// program semantics, and `DirectOrdinaryV3.lean`'s block is the exact
+        /// shape to mirror. Doing it moves the emitted bytes, so the
+        /// hand-written AOT twin in
+        /// `crates/dclutch-direct-aot-v3-contract/src/registered.rs` moves with
+        /// it. Recorded here rather than discovered again.
+        #[test]
+        fn the_canonical_fill_takes_a_zero_fee_that_no_unconditional_custody_route_can_carry() {
+            let mut input = valid_scalars();
+            input[FILL_SCALAR_QUANTITY_V4] = 10;
+            input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
+            let identities = valid_identities();
+            let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
+                .expect("transition");
+            let transition = ProgramV3::decode(&bytes).expect("decode");
+            let mut scalar_scratch = input;
+            let mut output = input;
+            let mut identity_scratch = identities;
+            let mut identity_output = identities;
+            execute_fold_atomic(
+                transition,
+                3,
+                RegisterInput {
+                    scalars: &input,
+                    identities: &identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scalar_scratch,
+                    identities: &mut identity_scratch,
+                },
+                RegisterOutput {
+                    scalars: &mut output,
+                    identities: &mut identity_output,
+                },
+            )
+            .expect("execute");
+
+            // The canonical admitted fill quotes five and charges nothing.
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 5);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 0);
+
+            // A Custody Transfer carrying that fee refuses on its own terms.
+            let fee_leg = fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4]);
+            assert_eq!(
+                fee_leg.to_bytes().map(|_| ()),
+                Err(dclutch_custody_contract::Error::InvalidOperationShape)
+            );
+            // The seller leg, which is nonzero here, is well formed -- so it is
+            // the ENABLE that is missing, not the envelope.
+            assert!(
+                fee_transfer_template(output[FILL_SCALAR_SELLER_NET_V4])
+                    .to_bytes()
+                    .is_ok()
+            );
+
+            // And the revision ladder claims both transfers regardless.
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 2
+            );
+        }
+
+        /// One Custody `Transfer` envelope of the shape the fill's fee leg
+        /// needs, parameterised only by the amount under test.
+        fn fee_transfer_template(amount: u64) -> dclutch_custody_contract::CustodyRequestV1 {
+            use dclutch_custody_contract::{
+                CallerRoleV1, CompartmentV1, ContextV1, CustodyRequestV1, OperationV1,
+            };
+            let id = |value: u8| [value; 32];
+            CustodyRequestV1 {
+                operation: OperationV1::Transfer,
+                caller_role: CallerRoleV1::Trading,
+                source_compartment: CompartmentV1::TradingPrincipal,
+                destination_compartment: CompartmentV1::External,
+                release_set: id(1),
+                market: id(2),
+                realm: id(3),
+                context: id(4),
+                caller_program: id(5),
+                semantic: ContextV1 {
+                    candidate: [0; 32],
+                    source_owner: [0; 32],
+                    destination_owner: id(6),
+                    order: id(7),
+                    parent_request_digest: id(8),
+                    order_nonce: 1,
+                    generation: 1,
+                    page_index: 0,
+                    execution_index: 0,
+                    transfer_index: 1,
+                },
+                source: id(9),
+                destination: id(10),
+                source_vault_context: id(4),
+                destination_vault_context: [0; 32],
+                mint: id(11),
+                token_program: id(12),
+                payer: [0; 32],
+                rent_refund: [0; 32],
+                expected_revision: 1,
+                resulting_revision: 2,
+                amount,
+                rent_lamports: 0,
+            }
+        }
+
+        /// The boundary itself stays admissible: a venue rate exactly at the
+        /// denominator takes the whole quote as fee, which is a policy the
+        /// makers may sign.
+        #[test]
+        fn a_venue_rate_at_the_denominator_admits() {
+            let mut input = valid_scalars();
+            input[FILL_SCALAR_QUANTITY_V4] = 10;
+            input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
+            input[FILL_SCALAR_POLICY_FEE_BPS_V4] = 10_000;
+            input[FILL_SCALAR_SELLER_FEE_BPS_V4] = 10_000;
+            input[FILL_SCALAR_BUYER_FEE_BPS_V4] = 10_000;
+            input[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 24;
+            let identities = valid_identities();
+            let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
+                .expect("transition");
+            let transition = ProgramV3::decode(&bytes).expect("decode");
+            let mut scalar_scratch = input;
+            let mut output = input;
+            let mut identity_scratch = identities;
+            let mut identity_output = identities;
+            execute_fold_atomic(
+                transition,
+                3,
+                RegisterInput {
+                    scalars: &input,
+                    identities: &identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scalar_scratch,
+                    identities: &mut identity_scratch,
+                },
+                RegisterOutput {
+                    scalars: &mut output,
+                    identities: &mut identity_output,
+                },
+            )
+            .expect("execute");
+            assert_eq!(output[FILL_SCALAR_GROSS_V4], 5);
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 0);
+            assert_eq!(output[FILL_SCALAR_BUYER_DEBIT_V4], 10);
         }
     }
 }

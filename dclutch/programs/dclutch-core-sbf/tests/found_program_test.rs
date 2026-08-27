@@ -10,7 +10,7 @@ use dclutch_capability_contract::{
     MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_claims_svm::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
@@ -784,6 +784,7 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
         base.market.to_bytes(),
         GENERATION,
         selection,
+        SelectedRecordBumpsV1::default(),
     )
     .expect("root header");
     let root = Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID).0;
@@ -1593,6 +1594,23 @@ fn assert_refused_with(failure: &str, expected: u32, named: &str) {
     );
 }
 
+/// Solana's legacy transaction packet ceiling.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The exact wire extent of one signed transaction.
+///
+/// One shortvec byte for the signature count, 64 bytes per signature, then the
+/// serialised message. This is what a validator would receive.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's \
+         {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
 /// Submit one already-built transaction and, if asked, record it as evidence.
 async fn submit_and_record(
     context: &solana_program_test::ProgramTestContext,
@@ -1605,6 +1623,7 @@ async fn submit_and_record(
         .copied()
         .expect("a signed transaction has a signature")
         .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
     let outcome = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -1627,9 +1646,7 @@ async fn submit_and_record(
         error: failure.as_deref(),
         logs: &logs,
         compute_units_consumed: compute_units,
-        // This campaign does not measure its wire extent; `None` says so
-        // rather than implying the frame fits Solana's packet maximum.
-        wire_bytes: None,
+        wire_bytes: Some(wire_bytes),
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     failure

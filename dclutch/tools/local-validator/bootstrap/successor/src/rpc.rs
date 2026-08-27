@@ -98,17 +98,43 @@ impl Rpc {
             .request_id
             .checked_add(1)
             .ok_or_else(|| Error::new("RPC request ID overflow"))?;
-        let response = self
-            .client
-            .post(self.url.clone())
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "id": self.request_id,
-                "method": method,
-                "params": params,
-            }))
-            .send()
-            .map_err(|error| Error::new(format!("{method} transport: {error}")))?;
+        // A TRANSPORT failure against a loopback validator is retried a
+        // bounded number of times before it kills a multi-minute campaign: a
+        // local RPC can refuse one connection under snapshot or accept-queue
+        // pressure while the validator is healthy (observed 2026-08-27, a
+        // seven-minute founding dead at one getSignatureStatuses blip). Only
+        // the failure to SEND is retried — an HTTP error status or an RPC
+        // error object is an answer, and answers are never retried here.
+        // Retrying sendTransaction is admissible for the same reason it is
+        // safe on expiry: the bytes are already signed, so a duplicate lands
+        // as the same signature and the chain deduplicates it.
+        let mut attempt = 0_u32;
+        let response = loop {
+            let sent = self
+                .client
+                .post(self.url.clone())
+                .json(&json!({
+                    "jsonrpc": "2.0",
+                    "id": self.request_id,
+                    "method": method,
+                    "params": params,
+                }))
+                .send();
+            match sent {
+                Ok(response) => break response,
+                Err(error) => {
+                    attempt = attempt.saturating_add(1);
+                    if attempt >= 3 {
+                        return Err(Error::new(format!("{method} transport: {error}")));
+                    }
+                    eprintln!(
+                        "rpc: {method} transport failure (attempt {attempt} of 3): {error}; \
+                         retrying"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        };
         if !response.status().is_success() {
             return Err(Error::new(format!(
                 "{method} returned HTTP {}",

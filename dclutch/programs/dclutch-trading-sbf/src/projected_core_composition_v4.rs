@@ -597,17 +597,32 @@ mod tests {
                 Vec::new(),
             ));
         }
-        accounts[MARKET] = account(Pubkey::new_from_array([22; 32]), core, vec![23; 64]);
+        *accounts
+            .get_mut(MARKET)
+            .expect("Market slot inside the frame") =
+            account(Pubkey::new_from_array([22; 32]), core, vec![23; 64]);
         let permit_index = FUNDING_START + funding_count;
-        accounts[permit_index] = account(
+        *accounts
+            .get_mut(permit_index)
+            .expect("permit slot inside the frame") = account(
             Pubkey::new_from_array([24; 32]),
             core,
             vec![25; SERIES_FOUNDING_PERMIT_BYTES_V1],
         );
-        let list_id =
-            ordered_funding_list_id(&accounts[FUNDING_START..permit_index]).expect("funding list");
-        let market_data = accounts[MARKET].try_borrow_data().expect("market data");
-        let permit_data = accounts[permit_index]
+        let list_id = ordered_funding_list_id(
+            accounts
+                .get(FUNDING_START..permit_index)
+                .expect("funding span inside the frame"),
+        )
+        .expect("funding list");
+        let market_data = accounts
+            .get(MARKET)
+            .expect("Market slot inside the frame")
+            .try_borrow_data()
+            .expect("market data");
+        let permit_data = accounts
+            .get(permit_index)
+            .expect("permit slot inside the frame")
             .try_borrow_data()
             .expect("permit data");
         let post_resource = hashv(&[
@@ -623,7 +638,14 @@ mod tests {
         let acknowledgement = SeriesCoreFoundAckV2::new(
             request,
             Identity::new(core.to_bytes()).expect("Core"),
-            Identity::new(accounts[permit_index].key.to_bytes()).expect("permit"),
+            Identity::new(
+                accounts
+                    .get(permit_index)
+                    .expect("permit slot inside the frame")
+                    .key
+                    .to_bytes(),
+            )
+            .expect("permit"),
             Identity::new(request_digest).expect("request digest"),
             u8::try_from(funding_count).expect("bounded funding count"),
             Identity::new(list_id).expect("funding list"),
@@ -699,7 +721,10 @@ mod tests {
         );
 
         let (request, core, mut accounts, acknowledgement) = found_fixture(funding_count);
-        accounts[FUNDING_START] = account(Pubkey::new_unique(), Pubkey::new_unique(), Vec::new());
+        *accounts
+            .get_mut(FUNDING_START)
+            .expect("funding slot inside the frame") =
+            account(Pubkey::new_unique(), Pubkey::new_unique(), Vec::new());
         assert_eq!(
             authenticate_found_result(
                 execution(2),
@@ -716,9 +741,13 @@ mod tests {
 
         let (request, core, accounts, acknowledgement) = found_fixture(funding_count);
         let permit_index = FUNDING_START + funding_count;
-        accounts[permit_index]
+        *accounts
+            .get(permit_index)
+            .expect("permit slot inside the frame")
             .try_borrow_mut_data()
-            .expect("permit data")[0] ^= 1;
+            .expect("permit data")
+            .first_mut()
+            .expect("permit data is non-empty") ^= 1;
         assert_eq!(
             authenticate_found_result(
                 execution(2),

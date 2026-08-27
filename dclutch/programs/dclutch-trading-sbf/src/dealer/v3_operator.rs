@@ -453,23 +453,56 @@ mod tests {
 
     fn program_set(action: MultiLpRequestActionV3) -> std::vec::Vec<u8> {
         let mut bytes = std::vec![0; 72];
-        bytes[..8].copy_from_slice(b"DCLTCPS1");
-        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
-        bytes[10..12].copy_from_slice(&1_u16.to_le_bytes());
-        bytes[12..16].copy_from_slice(&DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3.to_le_bytes());
-        bytes[16] = 2;
-        bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
-        bytes[32..36].copy_from_slice(&u32::from(action.selector()).to_le_bytes());
-        bytes[36..68].copy_from_slice(&[42; 32]);
+        bytes
+            .get_mut(..8)
+            .expect("program set offset in bounds")
+            .copy_from_slice(b"DCLTCPS1");
+        bytes
+            .get_mut(8..10)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        bytes
+            .get_mut(10..12)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        bytes
+            .get_mut(12..16)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&DEALER_MULTI_LP_ACTION_SELECTOR_OFFSET_V3.to_le_bytes());
+        *bytes.get_mut(16).expect("program set offset in bounds") = 2;
+        bytes
+            .get_mut(18..20)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        bytes
+            .get_mut(32..36)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&u32::from(action.selector()).to_le_bytes());
+        bytes
+            .get_mut(36..68)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&[42; 32]);
         bytes
     }
 
     fn obligation_bytes(child_root: [u8; 32]) -> std::vec::Vec<u8> {
         let mut bytes = std::vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + 16];
-        bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
-        bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-        bytes[12..16].copy_from_slice(&2_u32.to_le_bytes());
-        bytes[16..24].copy_from_slice(&7_u64.to_le_bytes());
+        bytes
+            .get_mut(..8)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+        bytes
+            .get_mut(8..10)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+        bytes
+            .get_mut(12..16)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&2_u32.to_le_bytes());
+        bytes
+            .get_mut(16..24)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&7_u64.to_le_bytes());
         for (offset, identity) in [
             (24, [2; 32]),
             (56, [3; 32]),
@@ -477,11 +510,23 @@ mod tests {
             (120, [5; 32]),
             (152, child_root),
         ] {
-            bytes[offset..offset + 32].copy_from_slice(&identity);
+            bytes
+                .get_mut(offset..offset + 32)
+                .expect("obligation header offset in bounds")
+                .copy_from_slice(&identity);
         }
-        bytes[184..192].copy_from_slice(&10_u64.to_le_bytes());
-        bytes[192..200].copy_from_slice(&20_u64.to_le_bytes());
-        bytes[200..208].copy_from_slice(&21_u64.to_le_bytes());
+        bytes
+            .get_mut(184..192)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&10_u64.to_le_bytes());
+        bytes
+            .get_mut(192..200)
+            .expect("obligation value offset in bounds")
+            .copy_from_slice(&20_u64.to_le_bytes());
+        bytes
+            .get_mut(200..208)
+            .expect("obligation value offset in bounds")
+            .copy_from_slice(&21_u64.to_le_bytes());
         bytes
     }
 
@@ -566,7 +611,9 @@ mod tests {
 
         for index in [0, 8, 12] {
             let mut hostile = *unsigned.as_bytes();
-            hostile[index] ^= 1;
+            *hostile
+                .get_mut(index)
+                .expect("hostile byte inside the request") ^= 1;
             assert!(DealerMultiLpRequestV3::decode(&hostile).is_err());
         }
         let mut zero_rent = *unsigned.as_bytes();

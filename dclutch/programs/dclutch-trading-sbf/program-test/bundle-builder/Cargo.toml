@@ -1,0 +1,46 @@
+[package]
+name = "dclutch-chain-bundle-builder"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[dependencies]
+dclutch-account-profile-contract = { path = "../../../../crates/dclutch-account-profile-contract" }
+dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
+dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
+dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
+dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
+dclutch-effect-kernel = { path = "../../../../crates/dclutch-effect-kernel" }
+dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
+dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
+dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
+dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
+dclutch-request-profile-contract = { path = "../../../../crates/dclutch-request-profile-contract" }
+dclutch-transition-vm = { path = "../../../../crates/dclutch-transition-vm" }
+sha2 = { version = "=0.10.9", default-features = false }
+solana-account = "=4.3.2"
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+
+[dev-dependencies]
+dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+dclutch-general-adapter-contract = { path = "../../../../crates/dclutch-general-adapter-contract" }
+dclutch-general-codec = { path = "../../../../crates/dclutch-general-codec" }
+dclutch-direct-hot-program-test-support = { path = "../direct-hot" }
+dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

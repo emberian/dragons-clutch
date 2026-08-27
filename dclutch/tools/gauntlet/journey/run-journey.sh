@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# JRNY-1: run the whole-life journey campaign and fold it into the census.
+# JRNY: run the whole-life journey campaign and fold it into the census.
 #
 #   archive -> ELFs -> journey binary -> campaign -> witnesses -> census
 #
@@ -521,7 +521,7 @@ jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.progra
 
 # One copy of tier 1's bindings, merged at run time. See the header.
 jq -s '{campaign: "journey",
-        note: ("JRNY-1 whole-life journey. Tier 1'"'"'s bindings are merged in at run time from " +
+        note: ("Whole-life journey. Tier 1'"'"'s bindings are merged in at run time from " +
                "tools/gauntlet/tier1/bindings.json because the journey submits every tier-1 " +
                "transaction before its own; there is exactly one copy of them."),
         bindings: (.[0].bindings + .[1].bindings)}' \

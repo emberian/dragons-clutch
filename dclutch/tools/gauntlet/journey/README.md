@@ -1,4 +1,4 @@
-# JRNY-1 — the whole-life journey tier
+# JRNY — the whole-life journey tier
 
 The census answered *does each route run at all*. This tier asks a different
 question: **does a Market, founded the way a founder founds one, survive being
@@ -93,10 +93,23 @@ leaking atoms across the seams between them.
 | L4 | Hoard ≥ worst outcome × claim unit | the unit comes from the Registry's published `ProductBasisV3.payout_scale`, not from the Hoard divided by the supply |
 | L5 | observed collateral delta == DECLARED delta | a stage states what it will move before it runs; L1 alone balances for a transfer between two tracked accounts |
 | L6 | closed rent arrives somewhere watched | rent is the one value that is not collateral and still must not evaporate |
+| L7 | `payer_delta + fees + watched_growth == 0` | the trading stages forced it. L1..L5 are about collateral ATOMS and say nothing about the lamport side of a fill; L6 only fires when a watched account CLOSES. A route that quietly debits whoever submitted it, or places rent in an account nobody named, passes all six. This is "debit == credit + fee". |
 
 A law that cannot be evaluated at a boundary records itself `inapplicable` with
 a reason and is still counted. A law that quietly stops applying is how a
 conservation argument rots.
+
+**L7's fee term is never a prediction**: it is summed off the stage's own
+transaction evidence, so the law compares the chain against what the chain
+charged. Two consequences shape the code. The founding boundary records L7
+`inapplicable` — the founding's lamport placements are the tier-1 producer's,
+and restating them here would be re-deriving another campaign's arithmetic and
+calling the agreement evidence. And every account the journey creates is
+registered with the ledger BEFORE the first census (`stages::plan_holders`,
+`resolution::watch`, `provider::watch`), so the census preceding each creation
+records a checked vacancy rather than meeting a balance with no predecessor. A
+boundary that still admits a new label reports L7 inapplicable and NAMES the
+labels rather than counting a whole balance as growth.
 
 ## What executes
 
@@ -105,7 +118,60 @@ conservation argument rots.
 | founding through Open | the tier-1 campaign, called not copied |
 | collateral distribution | N synthetic holders open a Token-2022 account and receive a share. N is the load knob. |
 | holder-to-holder | a ring of transfers in which the founder is not a party |
+| resolution funding | `CreateFund` and `VerifyFundReady`, chain-derived, with an over-funded Fund and a double-create refusing first |
+| resolution transport | the real Wormhole router and Pyth receiver, a verified VAA, one posted update, and the two dClutch provider legs that carry the Market to `Terminal` |
 | rent recovery | `rent/process_sweep_v2#Sweep`, **executed for the first time by any tier**, with the adversarial half first |
+
+## The resolution half, and why it is reachable at all
+
+JRNY-1 stated resolution as a gap and said the gap was "a missing campaign, not
+a closed door". This is that campaign, and one fact makes it possible:
+`create_accounts` and `verify_accounts` in `dclutch-resolution-core-v3-operator`
+hand back frames in which **every `AccountMeta` is `is_signer: false`**. The
+whole funding ladder is wallet-constructible — a fee payer and nothing else —
+which is exactly what every Claims and Custody route is not. `rpc.rs`'s
+`finalized_observed_accounts` already returns the operator's own
+`ObservedAccount`, because `dclutch-versioned-message-operator` re-exports that
+type rather than declaring a second one that agrees today.
+
+**Two frames do not fit a legacy packet.** Measured, not predicted: the first
+execution of `CreateFund` was refused by the RPC at 2,016 bytes against the
+1,232 limit. `CreateFund`, `VerifyFundReady` and both provider frames ride
+finalized address lookup tables as v0 transactions, through the producer's own
+`publish_routing_table` rather than a second copy of the routing shape here.
+
+**What the first run of this stage found in the Market itself.** The demo
+Market's `SourceMaterialV2` named its source spec, window spec and statistic
+spec — and its failure policy — by domain-separated demo digests. A finalized
+record lives at an address derived from the hash of its own body, so those were
+records nobody could ever publish, and the Market could fund its resolution and
+then stop forever one step short of a certificate. Nothing refused; it simply
+had no next move. `market.rs::demo_market_input` now compiles the graph, every
+identity is its body's digest, `validate_market_input` checks exactly that, and
+the five records are published with the rest.
+
+## §12.3 is two clocks, and only one is a market parameter
+
+```
+observation_unix_seconds in [window.start, window.end]        -- what it is ABOUT
+publication_unix_seconds in [now - max_age, now + max_skew]   -- how FRESH it is
+```
+
+The window is a real 300-second terminal period ending at the captured
+publication. That width is TWIN's finding: a window forced to one instant is
+answered only when a publication happens to land on that exact second, and
+Pyth's SOL/USD cadence is nearer five minutes, so a degenerate window is a market
+nobody can resolve. It is legal, and it is a choice rather than the type's
+demand.
+
+`max_age_seconds` is **not** a market parameter here. The fixture's publication
+instant is frozen at its capture date and a validator's clock is wall-clock, so
+the quantity it bounds is THE AGE OF THE FIXTURE and it grows by 86,400 a day.
+It is stated as the fixture's declared shelf life, and `provider.rs` measures
+that age against the chain's own clock before submitting anything and refuses
+with an instruction to **recapture the fixture** — explicitly not to widen the
+number, which is the failure the bound exists to prevent. A Market resolving
+against a live feed states seconds there.
 
 **What N costs**, measured at N=4 and N=16: exactly `2N` transactions and
 `3,658 N` CU — 1,788 to open and fund a holder, 1,870 for one ring transfer,
@@ -185,6 +251,117 @@ not absent. When a post-Open stage grows into something with a real compute
 profile — the first Hot execution, terminal settlement — that is when this tier
 should add its own entry, and it should measure before it writes one.
 
+The resolution stages are the first of this tier's own transactions with a
+compute profile worth reading (`CreateFund`, `VerifyFundReady`, and the two
+provider legs, all under real ELFs). This tier still writes no budget row for
+them, on the same rule: measure first, across enough runs to know the band, and
+then pin. The transcript records the per-stage totals so that measurement exists
+before anybody writes a number down.
+
+## What the whole life costs, measured
+
+Run `20260827T172103Z-606c042e8416-h4`, N=4, one real validator, real ELFs: 161
+transactions, 17,293,041 CU, zero unexpected refusals, and the Market ends
+`Retiring` carrying a terminal receipt.
+
+| stage | tx | CU |
+|---|---|---|
+| founding through Open | 116 | 8,608,838 |
+| distribution + ring | 8 | 14,632 |
+| resolution funding | 10 | 4,514,578 |
+| resolution: Pyth transport to Terminal | 19 | 2,719,033 |
+| retirement: begin retiring + close the Source subtree | 6 | 1,273,097 |
+| rent recovery | 2 | 7,134 |
+
+The routes nobody had executed on a chain before:
+
+| route | CU |
+|---|---|
+| an Open Market creates its own Resolution Fund | 1,193,660 |
+| VerifyFundReady activates three ledgers | 1,181,368 |
+| the real router verifies the 13-of-19 signed VAA | 335,276 |
+| Resolution submits one update through the real receiver ELF | 1,054,022 |
+| Core admits the terminal state | 1,281,705 |
+| a resolved Market begins retiring | 62,425 |
+| Resolution closes the Source subtree | 1,210,372 |
+
+Reproducibility across the two runs that reached these: CreateFund 1,202,639 →
+1,193,660, VerifyFundReady 1,181,347 → 1,181,368 (21 apart), the submit leg
+1,054,017 → 1,054,022 (5 apart) — inside the ~1% bump-search band this tier
+documents above. Four of them sit at 84–92% of the 1,400,000 ceiling on routes
+that have no CU budget row.
+
+### The ledger's own bug, and how it was verified without a re-run
+
+That run reported three L7 violations, and all three were L7's fault. It summed
+watched accounts per LABEL, and four addresses carry more than one of the
+founding's evidence keys: the Market's rent beneficiary IS the founding's
+lifecycle credit, the fee payer is also a credit's refund wallet, `found31_market`
+IS `market`, and the normal and projected Custody replays are one account because
+the projection is realized in place. Every change to those four counted twice.
+
+It stayed invisible until a stage CLOSED accounts and REFUNDED rent through them
+— the first time this campaign ever did either — and then the residuals were the
+doubled amounts exactly.
+
+The fix sums by address. It was verified by recomputing both the old and the new
+arithmetic from the transcript's own recorded per-account addresses and lamports:
+**the new residual is zero at every boundary.** That is the argument for a
+transcript that records what it SAW and not only what it concluded — it can
+answer a question asked after the chain is gone.
+
+## Three findings the chain made that a fixture could not
+
+All three cost a full campaign each to discover, and all three are the same
+shape: a fact that looks settled in ProgramTest and is not settled on a chain.
+
+### A fixture that binds two roles to one key hides a role confusion
+
+`ProviderExecuteDeploymentV3.trading_program` means the TRADING role.
+`resolution_core_v3_lifecycle.rs` passes CUSTODY there and passes, because that
+fixture's release set binds Custody's key to the Trading role — the two are the
+same bytes, so the confusion has nowhere to show. A real five-role activation
+binds five different keys, and `provider_instruction_v3` authenticates accounts
+13/14 against `activation.role(ExecutionRoleV1::Trading).release().program()`.
+The defect is invisible in ProgramTest *by construction* and fatal on the first
+validator: `ResolutionRelease` (0x8005) after 681,773 CU. **Anywhere a fixture
+reuses one key for two roles, this class of hole is available.**
+
+### Two live readers of one field, with incompatible rules
+
+`ProviderReleaseV1.adapter_release_id`:
+
+| reader | demands | so the field means |
+|---|---|---|
+| `PythProviderAdapterObligationV1::from_material_view` | `PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1` | which provider EXTENSION this is |
+| `authenticate_provider_release` (V3 route) | `pyth_release.adapter_id()` | which adapter release the deployment carries |
+
+The two constants differ, so **no `ProviderReleaseV1` satisfies both.** The live
+V3 route joins through the V2 obligation, which does not check the extension, and
+then through `authenticate_provider_release` — so the second reading is the one a
+chain enforces. Both refusals this campaign collected were correct *given their
+own reading*, which is exactly why neither named the problem. Carried as an owner
+decision: delete V1's reading, or split the field into the two facts it is being
+asked to be.
+
+### A refusal taxonomy that erases a distinction its own contract calls
+load-bearing
+
+`normalize_authenticated_update`'s doc comment says it plainly:
+
+> A fresh publication about the wrong period and a stale publication about the
+> right one must both refuse, and **an operator reading the log should be able to
+> tell which happened.**
+
+They cannot. `InvalidObservationSchedule`, `InvalidPublicationTime` and
+`InvalidPythObservation` all reach the wire through
+`.map_err(|_| ProviderJoinErrorV3::Provider)`, and `map_provider_join_error`
+sends that single variant to the single code `ResolutionError::ProviderObservation`
+(0x800A). Three questions — *is this about the right period, is it fresh enough,
+is it a well-formed Pyth observation* — arrive as one number. This tier paid a
+diagnosis cycle to that collapse, which is the evidence that the doc comment was
+right about it mattering.
+
 ## What does not, and exactly why
 
 The transcript carries a gap register; `src/journey.rs::gap_register` is its
@@ -244,10 +421,18 @@ points, and two witnesses pin them: the founded Market at `Open+Consumed+false`
 and the canonical Found31 Market at `Founding+Prepaid`. A Source/provider tier
 needs no new campaign to reach either.
 
-What remains is **a missing campaign, not a closed door**: nothing yet composes
+That gap said: **a missing campaign, not a closed door** — nothing yet composed
 `CreateFund` → `VerifyFundReady` → posted provider evidence → Core-driven
-execution → `AdmitTerminal` against a live validator. The journey states that as
-its gap and does not build it.
+execution against a live validator. **JRNY-2 built it**, and it is the
+`resolution funding` and `resolution transport` stages above. Building it turned
+up the thing behind the gap: the campaign's Market named three source-graph
+records that could not exist. See "The resolution half" above.
+
+Worth keeping the whole arc visible, because it is the tier working as intended:
+JRNY-1 found by READING that an atomically founded Market could never be
+resolved; SRC-FOUND fixed the prestate and proved it against the compiled ELFs;
+JRNY-2 drove it on a chain and found that the door was open and the Market had
+no key. Each step needed the one before it, and none of them was a re-run.
 
 ### The campaign locks the entire collateral supply, and strands half of it
 
@@ -273,10 +458,17 @@ protocol.
 ## Files
 
 ```
-run-journey.sh   build -> campaign -> ledger -> witnesses -> census
-bindings.json    THIS campaign's transactions; tier 1's are merged in at run time
-witnesses.json   six, evaluated by the shared tier1/check-witnesses.sh
-src/ledger.rs    the six laws
-src/stages.rs    the post-Open stages
-src/journey.rs   orchestration, the transcript document, and the gap register
+run-journey.sh    build -> campaign -> ledger -> witnesses -> census
+bindings.json     THIS campaign's transactions; tier 1's are merged in at run time
+witnesses.json    evaluated by the shared tier1/check-witnesses.sh
+src/ledger.rs     the seven laws
+src/stages.rs     the collateral and rent stages
+src/resolution.rs the funding half of the resolution ladder
+src/provider.rs   the Pyth transport and the two provider legs
+src/journey.rs    orchestration, the transcript document, and the gap register
 ```
+
+**A stage that refuses does not discard the run.** The transcript and the
+complete conservation ledger are written first, the refusal is recorded on the
+stage and in `unexpected_refusals`, and the campaign fails afterwards. A wall is
+worth more beside a complete ledger than as an error that throws the rest away.

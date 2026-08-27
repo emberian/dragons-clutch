@@ -737,12 +737,30 @@ mod tests {
         let request = request(claims, trading, lock, &lock_bytes);
         let request_digest = hash(&request.to_bytes()).to_bytes();
         let mut accounts = (0..33).map(|_| account(Vec::new())).collect::<Vec<_>>();
-        accounts[AGGREGATE] = account(vec![1, 2]);
-        accounts[POSITION] = account(vec![3, 4]);
-        accounts[ADMISSION] = account(vec![5, 6]);
-        let aggregate = accounts[AGGREGATE].try_borrow_data().expect("aggregate");
-        let position = accounts[POSITION].try_borrow_data().expect("position");
-        let admission = accounts[ADMISSION].try_borrow_data().expect("admission");
+        *accounts
+            .get_mut(AGGREGATE)
+            .expect("aggregate slot inside the frame") = account(vec![1, 2]);
+        *accounts
+            .get_mut(POSITION)
+            .expect("position slot inside the frame") = account(vec![3, 4]);
+        *accounts
+            .get_mut(ADMISSION)
+            .expect("admission slot inside the frame") = account(vec![5, 6]);
+        let aggregate = accounts
+            .get(AGGREGATE)
+            .expect("aggregate slot inside the frame")
+            .try_borrow_data()
+            .expect("aggregate");
+        let position = accounts
+            .get(POSITION)
+            .expect("position slot inside the frame")
+            .try_borrow_data()
+            .expect("position");
+        let admission = accounts
+            .get(ADMISSION)
+            .expect("admission slot inside the frame")
+            .try_borrow_data()
+            .expect("admission");
         let receipt = ClaimsFoundingReceiptV5::new(
             request,
             request_digest,
@@ -766,7 +784,13 @@ mod tests {
             authenticate_result(request, request_digest, &accounts, claims, claims, &receipt),
             Ok(())
         );
-        accounts[POSITION].try_borrow_mut_data().expect("position")[0] ^= 1;
+        *accounts
+            .get(POSITION)
+            .expect("position slot inside the frame")
+            .try_borrow_mut_data()
+            .expect("position")
+            .first_mut()
+            .expect("position data is non-empty") ^= 1;
         assert_eq!(
             authenticate_result(request, request_digest, &accounts, claims, claims, &receipt),
             Err(TradingSbfError::Transition.into())

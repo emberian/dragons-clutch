@@ -12,7 +12,9 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
-use dclutch_capability_program_contract::v3::SCHEMA_RELEASE_ID as CAPABILITY_SCHEMA_ID_V3;
+use dclutch_capability_program_contract::{
+    hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3, v3::SCHEMA_RELEASE_ID as CAPABILITY_SCHEMA_ID_V3,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::{
     admitted_v3::{AdmittedInvocationContextV3, admitted_invocation_context_digest_v3},
@@ -47,7 +49,20 @@ pub const ADMITTED_ACCELERATOR_CALLER_AUTHORITY_ACCOUNT_V4: usize = 0;
 /// First account of the exact common Hot fixed frame.
 pub const ADMITTED_ACCELERATOR_HOT_FIXED_START_V4: usize = 1;
 /// Exact number of common Hot fixed accounts carried read-only into the accelerator.
-pub const ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4: usize = 38;
+///
+/// This is the common Hot fixed frame, entire — so it is DERIVED from the
+/// contract's own count and never written as a literal again. It was a literal
+/// `38`, correct when `b280850f` wrote it and wrong from `ca5e5f14` onward: that
+/// later commit added `HOT_CAPABILITY_SEAL_ACCOUNT_V3` at index 38 and moved
+/// `HOT_FIXED_ACCOUNT_COUNT_V3` to 39, and this copy did not follow.
+///
+/// A one-off drift, but it closed the admitted-accelerator lane from BOTH ends:
+/// the producer hands `validate_authenticated_frame` exactly
+/// `HOT_FIXED_ACCOUNT_COUNT_V3` accounts and the length check refused all 39 of
+/// them, while the accelerator's own `authenticate_accelerator_invocation_v4`
+/// sliced 38 out and handed them to `parse_accelerator_readonly`, which demands
+/// 39 (and reads index 38 for the capability seal, so 38 could never suffice).
+pub const ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
 /// First strategy-owned Certificate/Admission/Artifact/deployment evidence account.
 pub const ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4: usize =
     ADMITTED_ACCELERATOR_HOT_FIXED_START_V4 + ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4;

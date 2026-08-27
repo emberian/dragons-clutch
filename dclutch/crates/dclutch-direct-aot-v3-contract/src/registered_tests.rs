@@ -478,6 +478,21 @@ const HOSTILE_CORPUS: &[Case] = &[
     ("custody_revision_second_increment_saturated", |s, _i| {
         s[FILL_SCALAR_CUSTODY_REVISION_V4] = u64::MAX - 1;
     }),
+    // One basis point above the denominator. Nothing else in the program
+    // bounds the rate: the conservation clause is an identity in the fee
+    // deltas, so it holds for any rate whatever, and `sub_into` refuses only
+    // once a fee delta happens to exceed the quote it is taken from.
+    ("policy_fee_one_basis_point_above_denominator", |s, _i| {
+        s[FILL_SCALAR_POLICY_FEE_BPS_V4] = 10_001;
+        s[FILL_SCALAR_SELLER_FEE_BPS_V4] = 10_001;
+        s[FILL_SCALAR_BUYER_FEE_BPS_V4] = 10_001;
+        s[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 24;
+    }),
+    ("policy_fee_saturated", |s, _i| {
+        s[FILL_SCALAR_POLICY_FEE_BPS_V4] = u64::MAX;
+        s[FILL_SCALAR_SELLER_FEE_BPS_V4] = u64::MAX;
+        s[FILL_SCALAR_BUYER_FEE_BPS_V4] = u64::MAX;
+    }),
 ];
 
 /// Inputs that sit exactly on an admissible boundary: the just-inside twins of
@@ -498,6 +513,15 @@ const BOUNDARY_CORPUS: &[Case] = &[
     }),
     ("seller_limit_equals_execution_price", |s, _i| {
         s[FILL_SCALAR_SELLER_LIMIT_V4] = 50;
+    }),
+    // The just-inside twin of `policy_fee_one_basis_point_above_denominator`:
+    // a rate exactly at the denominator takes the whole quote as fee, which is
+    // a policy the makers may sign.
+    ("policy_fee_equals_denominator", |s, _i| {
+        s[FILL_SCALAR_POLICY_FEE_BPS_V4] = 10_000;
+        s[FILL_SCALAR_SELLER_FEE_BPS_V4] = 10_000;
+        s[FILL_SCALAR_BUYER_FEE_BPS_V4] = 10_000;
+        s[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 24;
     }),
     ("slot_equals_valid_from", |s, _i| {
         s[FILL_SCALAR_SELLER_VALID_FROM_V4] = 100;

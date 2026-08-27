@@ -1,5 +1,12 @@
 # Expansion frontier after the omission review — 2026-08-25
 
+> **Supersession notice (2026-08-27):** two days stale against a fast-moving
+> tree; several of the "current safe profiles" and prototype choices named
+> below have since moved (some lifted, some superseded, some deleted). This
+> banner is the only edit. Cross-check any specific claim against `WAVE.md`
+> before relying on it, and see `docs/ASPIRATION_LEDGER.md` (M-21) for the
+> full staleness accounting.
+
 Status: active product/theory and implementation direction. This document
 reopens conservative prototype choices without weakening the named invariants.
 It is not release, deployment, or formal-verification evidence.
@@ -117,6 +124,40 @@ an exact continuous payoff.
 Existing Product Payoff V2 exact-rational evaluation and wide checked
 arithmetic are starting material. Market and Claims layouts do not change
 until the pure theorem and hostile translation corpus are accepted.
+
+### Slice two, landed 2026-08-27: the degree-1–3 B-spline family
+
+The second slice is `LiabilityBasisV2Spline`. Each elementary claim is one
+B-spline basis function, so the outstanding supply vector is the control
+polygon and terminal liability is the spline curve at the resolved
+coordinate. The ramp's single apportionment boundary generalizes to every
+width: `cumulativeFloorBoundaryV2` floors the running weight sum and each
+claim receives the difference between consecutive floors, which is exact by
+telescoping — so there is still no second rounding decision and still no
+residue, at any width. `apportion_width_two` proves the ramp is its width-two
+instance.
+
+The gate above is met for this slice: the pure theorem and the hostile
+corpus both exist, and no layout has changed. Two things are **not** done and
+must not be assumed by a later lane.
+
+- **There is no degree ≥ 2 price-plane gate.** At degree ≥ 2 the simplex
+  condition stops being the no-arbitrage condition, and a Market that could
+  select such a basis without a price admission rule would carry an executable
+  arbitrage. Degree ≤ 1 is unaffected and provably so. **Trigger: before any
+  Market descriptor can select degree ≥ 2.** The named answer is *not* a
+  research problem: generation two's `clutch-price-measure`
+  (`verify_quantized_atom_mixture_v1`) is a sound integer hull-membership
+  certificate that refutes generation one's moment cone in both directions and
+  needs nothing from a basis but a deterministic integer evaluator — which is
+  exactly what `Basis` is. It has no Lean, which is the part worth adding here.
+  See `ASPIRATION_LEDGER.md` `G-1` and the eclipse scorecard's correction
+  section. A transplant needs a `docs/compost/` manifest.
+- **The kernel still has no consumer**, so `M-8` is unchanged by this slice.
+
+`docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` compares the result
+against generation one axis by axis, including where generation one is still
+ahead.
 
 ## Frontier 3: exact denominated claim shards
 

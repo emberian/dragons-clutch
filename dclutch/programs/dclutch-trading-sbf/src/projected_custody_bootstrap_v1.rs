@@ -1371,7 +1371,8 @@ mod tests {
         );
         // And an aliased tail is refused outright rather than hashing to
         // something.
-        assert!(generic_founding_funding_list_id_v1(&[keys[0], keys[0]]).is_err());
+        let aliased = *keys.first().expect("the funding key list is non-empty");
+        assert!(generic_founding_funding_list_id_v1(&[aliased, aliased]).is_err());
     }
 
     #[test]

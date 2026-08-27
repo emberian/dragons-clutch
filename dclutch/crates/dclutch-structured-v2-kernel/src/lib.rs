@@ -83,6 +83,7 @@ pub use generated_abi::{
     STRUCTURED_ROOT_RESERVED_HEADER_OFFSET_V2, STRUCTURED_ROOT_REVISION_OFFSET_V2,
     STRUCTURED_ROOT_SCHEMA_ID_V2, STRUCTURED_ROOT_SCHEMA_PREIMAGE_V2,
     STRUCTURED_ROOT_TERMS_OFFSET_V2, STRUCTURED_ROOT_VERSION_OFFSET_V2,
+    STRUCTURED_TERMS_RECEIPT_MINT_OFFSET_V2,
 };
 pub use projection_encode::{encode_structured_projection_v2, structured_projection_bytes_v2};
 pub use terms_encode::{

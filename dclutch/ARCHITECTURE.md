@@ -1,5 +1,14 @@
 # dClutch architecture
 
+> **Supersession notice (2026-08-27):** this document still narrates the
+> pre-`DCLTCOR2` `MarketRoot` era (`compact MarketRoot that persists as the
+> terminal replay authority`, below) — STRATUM's 2026-08-27 decision made
+> `DCLTCOR2` the one live Market representation, and `MarketRoot` now survives
+> with exactly two read-only consumers, neither of them a writer. This banner
+> is the only edit; the rest of the document is unchanged and may narrate
+> other superseded decisions too. See `WAVE.md` for current architecture and
+> `docs/ASPIRATION_LEDGER.md` (M-21) for the full staleness accounting.
+
 Status: architectural baseline for the new repository. It is not a deployment
 or completeness claim.
 

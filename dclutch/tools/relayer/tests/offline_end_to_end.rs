@@ -268,7 +268,7 @@ async fn one_cycle_observes_signs_folds_and_writes_verifiable_artifacts() {
     let set = account_set();
     // The minimum admitted page width, so the 1045-byte body needs three pages
     // and the multi-page path is the one under test.
-    let mut watcher = SetWatcher::new(set.clone(), CLUSTER, 448);
+    let mut watcher = SetWatcher::new(set.clone(), CLUSTER, None, 448);
     let cycle = watcher.observe(&rpc, &[], &signer).await.expect("observe");
 
     assert_eq!(cycle.observed_slot, OBSERVED_SLOT);
@@ -358,6 +358,7 @@ async fn one_cycle_observes_signs_folds_and_writes_verifiable_artifacts() {
                 &position.message_bytes,
                 &cycle.signer,
                 &position.signature,
+                cycle.rehearsal_observed_genesis.as_ref(),
             )
             .expect("record");
     }
@@ -371,6 +372,7 @@ async fn one_cycle_observes_signs_folds_and_writes_verifiable_artifacts() {
             &cycle.seal_bytes,
             &cycle.signer,
             &cycle.seal_signature,
+            cycle.rehearsal_observed_genesis.as_ref(),
         )
         .expect("record");
 

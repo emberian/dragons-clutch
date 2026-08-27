@@ -1136,7 +1136,8 @@ const fn hot_cu_profile_lifts_every_route_v1() -> bool {
 /// protocol default.
 ///
 /// Exhaustive and adapter-owned. The Hot execution path is deliberately absent:
-/// its 1,224-byte continuation packet has no room to carry a ComputeBudget
+/// its continuation packet -- 1,228 bytes of the 1,232-byte v0 ceiling, as
+/// `waist.rs` measures it -- has no room to carry a ComputeBudget
 /// instruction and its heap demand is being closed structurally. Adding a route
 /// here is the single visible act that takes it off the 32 KiB discipline, and
 /// it must be an instruction whose transaction has the packet room to actually
@@ -2488,7 +2489,10 @@ mod tests {
         assert!(bank.push(11).is_err());
         assert_eq!(bank.as_slice(), &[7, 9]);
         assert_eq!(&bank[..], &[7, 9]);
-        bank.as_mut_slice()[0] = 5;
+        *bank
+            .as_mut_slice()
+            .first_mut()
+            .expect("the bank holds two elements") = 5;
         assert_eq!(bank.as_slice(), &[5, 9]);
     }
 

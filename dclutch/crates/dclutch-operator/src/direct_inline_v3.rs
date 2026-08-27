@@ -16,7 +16,7 @@ use crate::{
 use dclutch_account_profile_contract::v2::PhysicalAccountDataGeometryV2;
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
         HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
@@ -1815,11 +1815,45 @@ mod tests {
         let release_set = [0x46; 32];
         state.release_set = release_set;
         state.generation = 9;
+        let registry = state
+            .fixed_accounts
+            .get(HOT_REGISTRY_PROGRAM_ACCOUNT_V3)
+            .expect("Registry")
+            .account
+            .key;
+        let record_bumps = |schema: [u8; 32], digest: [u8; 32]| {
+            (
+                Pubkey::find_program_address(
+                    &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+                    &registry,
+                )
+                .1,
+                Pubkey::find_program_address(
+                    &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+                    &registry,
+                )
+                .1,
+            )
+        };
+        let manifest_bumps =
+            record_bumps(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifest_digest);
+        let program_set_bumps = record_bumps(
+            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            program_set_digest,
+        );
+        let config_bumps = record_bumps(DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, config_digest);
         let header = CapabilityRootHeaderV1::new(
             core_id(release_set),
             market.to_bytes(),
             state.generation,
-            selection,
+            selection
+                .with_capability_release_record_bumps(program_set_bumps.0, program_set_bumps.1),
+            SelectedRecordBumpsV1::new(
+                manifest_bumps.0,
+                manifest_bumps.1,
+                config_bumps.0,
+                config_bumps.1,
+            ),
         )
         .expect("root header");
         let mut root_data = header.to_bytes().to_vec();

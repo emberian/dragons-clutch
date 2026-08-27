@@ -14,14 +14,14 @@
       "kind": "plan-jq",
       "query": "[.observations[].verdicts[] | select(.law == \"L4\" and .status == \"violated\")] | length | tostring",
       "expect": "0",
-      "provenance": "crates/dclutch-market-contract/src/market.rs: 'Each state cell owns one native claim. A complete set contains exactly one unit of every cell claim and is backed by one Hoard collateral atom.' The claim unit the law multiplies by is read from the Registry's published linked ProductBasisV3 record (`payout_scale`), NOT from the Hoard divided by the outstanding supply — deriving it from the founding poststate would make this assert that the founding equals itself."
+      "provenance": "crates/dclutch-market-contract/src/market.rs: 'Each state cell owns one native claim. A complete set contains exactly one unit of every cell claim and is backed by one Hoard collateral atom.' The claim unit the law multiplies by is read from the Registry's published linked ProductBasisV3 record (`payout_scale`), NOT from the Hoard divided by the outstanding supply \u2014 deriving it from the founding poststate would make this assert that the founding equals itself."
     },
     {
       "id": "no-conservation-law-was-violated-at-any-boundary",
       "kind": "plan-jq",
       "query": ".conservation_verdict",
       "expect": "conserved",
-      "provenance": "The six laws are stated in tools/gauntlet/journey/src/ledger.rs with their sources: L1/L2 against the token program's frozen supply, L3 against the Claims aggregate's own liability record versus the Positions it owes, L4 against the written complete-set invariant above, L5 against each stage's DECLARED delta stated before the stage runs, L6 against the rent a closed account carried. A law that cannot apply at a boundary records itself `inapplicable` with a reason and is counted, so this cannot go green by a law quietly ceasing to apply."
+      "provenance": "The seven laws are stated in tools/gauntlet/journey/src/ledger.rs with their sources: L1/L2 against the token program's frozen supply, L3 against the Claims aggregate's own liability record versus the Positions it owes, L4 against the written complete-set invariant above, L5 against each stage's DECLARED delta stated before the stage runs, L6 against the rent a closed account carried, L7 against the fees the CHAIN charged summed off the stage's own transaction evidence. A law that cannot apply at a boundary records itself `inapplicable` with a reason and is counted, so this cannot go green by a law quietly ceasing to apply."
     },
     {
       "id": "one-finalized-holder-transaction-per-declared-holder",
@@ -31,18 +31,46 @@
       "provenance": "A cross-check between two independent derivations: the load knob the campaign was invoked with, carried in the transcript, against the chain's own count of finalized error-free transactions carrying that label. Neither side reads the other. A holder that failed to open, or a retry that opened two, moves one side and not the other."
     },
     {
-      "id": "the-atomic-founding-leaves-an-admissible-resolution-prestate",
+      "id": "the-atomically-founded-market-reaches-a-terminal-certificate",
       "kind": "plan-jq",
-      "query": "[.markets[] | select(.label == \"founding_market\")] | .[0] | \"\\(.phase)+\\(.readiness)+\\(.terminal_receipt)\"",
-      "expect": "Open+Consumed+false",
-      "provenance": "The prestate an atomic founding leaves, pinned on chain. DCLTGMF1's commit-last stage is `open_series_market` (crates/dclutch-market-core-codec/src/generated.rs:922), which goes Founding+Prepaid -> Open+Consumed in ONE transition and never passes through Ready, so the Market this journey founds is Open, Consumed, and carries no terminal receipt. That combination USED to be a dead end: the only route that creates the SourceResolutionStateV2 every terminal receipt consumes admitted Founding+Prepaid alone, which made every atomically founded Market permanently unresolvable, and the first run of this tier reported exactly that. `edfcb24` admitted the second prestate and `60a2101` walked it end to end against the compiled ELFs. The gate is now `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386): (Founding, Prepaid) OR (Open, Consumed), and refused outright once a terminal receipt exists. So this witness now pins the OPPOSITE fact from the one it was written for -- the founded Market sits on an admissible resolution prestate -- and the `false` in the expected value is what keeps it admissible rather than already spent."
+      "query": "[.markets[] | select(.label == \"founding_market\")] | .[0] | .terminal_receipt | tostring",
+      "expect": "true",
+      "provenance": "The whole arc, pinned in one string. DCLTGMF1's commit-last stage is `open_series_market` (crates/dclutch-market-core-codec/src/generated.rs:922), which goes Founding+Prepaid -> Open+Consumed in ONE transition and never passes through Ready. That USED to be a dead end -- the only route creating the SourceResolutionStateV2 every terminal receipt consumes admitted Founding+Prepaid alone -- and the FIRST run of this tier reported exactly that, by reading the code. `edfcb24` admitted the second prestate and `60a2101` walked it against the compiled ELFs; the gate is now `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386). Then the SECOND run of this tier drove the ladder on a chain and found the Market had no key: its SourceMaterialV2 named its source spec, window spec and statistic spec by demo digests, and a finalized record lives at the hash of its own body, so it named records nobody could ever publish. With the graph compiled, this witness pins the end of the arc -- the Market this campaign founds now carries a real terminal receipt, minted from a real Pyth publication verified by a real Wormhole router. It reads the RECEIPT and not the phase on purpose: the retirement stage runs afterwards and leaves the Market at Retiring, and a witness that pinned `Terminal` would have to be edited every time a later stage moves the phase along. The receipt is the fact that cannot be un-made."
     },
     {
       "id": "the-found31-market-is-the-second-resolution-prestate",
       "kind": "plan-jq",
       "query": "[.markets[] | select(.label == \"found31_market\")] | .[0] | \"\\(.phase)+\\(.readiness)\"",
       "expect": "Founding+Prepaid",
-      "provenance": "The same gate read the other way. `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386) admits (Founding, Prepaid) as well as (Open, Consumed), and this campaign leaves exactly one Market of the first kind on the same ledger -- the canonical Found31 Market, which the atomic founding does not consume. A Source/provider tier therefore has BOTH admissible prestates sitting on one ledger and needs no new campaign to reach either; it needs this one. The witness pins that the prestate is really there, so the claim does not decay into a plan."
+      "provenance": "The same gate read the other way. `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386) admits (Founding, Prepaid) as well as (Open, Consumed), and this campaign leaves exactly one Market of the first kind on the same ledger -- the canonical Found31 Market, which the atomic founding does not consume. This campaign resolves the FIRST kind and deliberately leaves the second untouched, so one ledger carries both a resolved Market and an unresolved admissible prestate -- which is what a campaign testing the failure walk, or a second resolution, needs and would otherwise have to found for itself. The witness pins that the prestate is really there, so the claim does not decay into a plan."
+    },
+    {
+      "id": "the-seventh-law-was-evaluated-and-never-violated",
+      "kind": "plan-jq",
+      "query": "[.observations[].verdicts[] | select(.law == \"L7\" and .status == \"violated\")] | length | tostring",
+      "expect": "0",
+      "provenance": "L7 is `payer_delta + fees + watched_growth == 0`, and it exists because the other six cannot state it: L1..L5 are about collateral ATOMS and say nothing about the lamport side of a route, and L6 only fires when a watched account CLOSES. Its fee term is never a prediction -- it is summed off each stage's own transaction evidence, so the law compares the chain against what the chain charged. A route that quietly debited whoever submitted it, or placed rent into an account nobody named, breaks this and nothing else."
+    },
+    {
+      "id": "the-seventh-law-actually-applied-somewhere",
+      "kind": "plan-jq",
+      "query": "[.observations[].verdicts[] | select(.law == \"L7\" and .status == \"holds\")] | length > 0 | tostring",
+      "expect": "true",
+      "provenance": "The companion the violation count needs. L7 records `inapplicable` with a reason at boundaries it cannot evaluate -- the founding's lamports belong to the tier-1 producer, and a boundary that admits a watched label has no predecessor balance to difference against -- and a law that is inapplicable everywhere would satisfy the violation count while proving nothing at all. This pins that it HELD at least once, which is the difference between a law and a decoration."
+    },
+    {
+      "id": "every-stage-that-was-supposed-to-execute-did",
+      "kind": "plan-jq",
+      "query": ".unexpected_refusals | length | tostring",
+      "expect": "0",
+      "provenance": "A stage that refuses does not discard this campaign: the transcript and the complete conservation ledger are written first, the refusal is recorded on the stage AND here, and the run fails afterwards. That is deliberate -- a wall is worth more beside a complete ledger than as an error that throws the rest away -- and it means a green ledger is not by itself evidence that the journey got where it was going. This witness is the other half."
+    },
+    {
+      "id": "the-resolved-market-is-retiring-with-its-source-subtree-closed",
+      "kind": "plan-jq",
+      "query": "[.stages[] | select(.stage | startswith(\"retirement: begin retiring\")) | .outcome] | .[0]",
+      "expect": "executed",
+      "provenance": "BeginRetiring admits ONLY Phase::Terminal (core/begin_retiring), so this stage executing is a second, independent statement that the provider legs really resolved the Market -- independent because it is the CHAIN refusing or not refusing, rather than this campaign re-reading a field it just asserted. The stage also closes the whole Source subtree through CloseFund and asserts all three Resolution Funds are gone and the rent beneficiary gained exactly the lamports the operator declared."
     }
   ]
 }

@@ -5,51 +5,59 @@ use std::{collections::BTreeMap, vec, vec::Vec};
 use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    AcceleratorAckV2, AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2,
-    RequestTransportV2, ScratchPageKindV2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2,
-    ACCELERATOR_REQUEST_HEADER_BYTES_V2, SCRATCH_PAGE_HEADER_BYTES_V2,
+    ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
+    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
+    SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
+    collection_v1::{
+        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, authenticate_batch_candidate_v1,
+        authenticate_order_execution_v1, general_order_len_v1,
+    },
     hot_candidate_v3::{
-        general_hot_candidate_bank_len_v3, general_hot_scalar_count_v3, identity, scalar,
-        GENERAL_HOT_COMMON_IDENTITIES_V3,
+        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
+        general_hot_scalar_count_v3, identity, scalar,
     },
     local_state_v3::{
-        encode_general_local_state_v3_atomic, general_local_state_len_v3,
-        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3,
+        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
+        general_local_state_len_v3,
     },
-    runtime_manifest::{settlement_manifest_len_v2, SettlementManifestV2},
+    runtime_manifest::{SettlementManifestV2, settlement_manifest_len_v2},
     runtime_selection::{
-        consider_verified_candidate_v2, freeze_selection_v2, RuntimeSelectionCursorV2,
-        RuntimeSelectionPhaseV2, RUNTIME_SELECTION_CURSOR_BYTES_V2,
+        RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionCursorV2, RuntimeSelectionPhaseV2,
+        consider_verified_candidate_v2, freeze_selection_v2,
     },
     runtime_settlement::{
+        RuntimeSettlementActionV2, RuntimeSettlementBuffersV2, RuntimeSettlementViewV2,
         evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
-        runtime_settlement_effect_len_v2, RuntimeSettlementActionV2, RuntimeSettlementBuffersV2,
-        RuntimeSettlementViewV2,
+        runtime_settlement_effect_len_v2,
     },
     runtime_verify::{
-        evaluate_runtime_consider_row_with_manifest_v2, runtime_verifier_len_v2,
         AuthenticatedOrderTermsV2, RuntimeConsiderRowBuffersV2, RuntimeConsiderRowViewV2,
-        RuntimeManifestBuffersV2,
+        RuntimeManifestBuffersV2, evaluate_runtime_consider_row_with_manifest_v2,
+        runtime_verifier_len_v2,
     },
     runtime_width::{
-        candidate_len, execution_len, page_len, settlement_cursor_len, verified_candidate_len,
         CandidateHeaderV2, CandidateV2, ExecutionHeaderV2, ExecutionV2, PageHeaderV2, PageV2,
-        SettlementCursorV2, VerifiedCandidateHeaderV2, VerifiedCandidateV2,
+        SettlementCursorV2, VerifiedCandidateHeaderV2, VerifiedCandidateV2, candidate_len,
+        execution_len, page_len, settlement_cursor_len, verified_candidate_len,
     },
     state_artifacts_v3::{
-        general_readonly_evidence_v3, GeneralReadonlyEvidenceKindV3,
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralReadonlyEvidenceKindV3,
+        general_readonly_evidence_v3,
     },
 };
 use dclutch_general_codec::{
-    successor_request_v2::ControllerRequestV2, Action, SelectionCriterion, SelectionPolicyV1,
-    MAX_SELECTION_CRITERIA,
+    Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
+    successor_request_v2::ControllerRequestV2,
 };
-use dclutch_general_config_contract::v3::{GeneralConfigV3, GeneralConfigV3Input};
+use dclutch_general_config_contract::{
+    root::GeneralRootV2,
+    v3::{GeneralConfigV3, GeneralConfigV3Input},
+};
 use solana_account::Account;
 use solana_program::{
     hash::hash,
@@ -67,7 +75,13 @@ const CALLER: Pubkey = Pubkey::new_from_array([0xa2; 32]);
 const REQUEST_ACCOUNT: Pubkey = Pubkey::new_from_array([0xa3; 32]);
 const DUMMY: Pubkey = Pubkey::new_from_array([0xa4; 32]);
 const PRODUCT_RECORD: [u8; 64] = [0xb1; 64];
-const BATCH: [u8; 32] = [0xb2; 32];
+const MARKET: [u8; 32] = [0xb2; 32];
+const CONFIG_IDENTITY: [u8; 32] = [0xb6; 32];
+const GENERATION: u64 = 7;
+const COLLECTION_CLOSE_SLOT: u64 = 1_000;
+const SETTLEMENT_CLOSE_SLOT: u64 = 2_000;
+const ADMISSION_SLOT: u64 = 10;
+const BATCH_MAX_ORDERS: u32 = 8;
 const POLICY: [u8; 32] = [0xb3; 32];
 const FIRST_CANDIDATE: [u8; 32] = [0xb4; 32];
 const BEST_CANDIDATE: [u8; 32] = [0xb5; 32];
@@ -174,7 +188,7 @@ fn verified_candidate(
             revision,
             candidate_id,
             product_id: product_id(),
-            batch_id: BATCH,
+            batch_id: batch_id(width),
             filled_lots,
             quote_debit,
             quote_credit,
@@ -627,45 +641,118 @@ fn evidence_coordinate(action: Action, kind: GeneralReadonlyEvidenceKindV3) -> u
     }
 }
 
-fn order_id(low: u8) -> [u8; 32] {
-    let mut value = [0_u8; 32];
-    value[0] = low;
-    value
+/// The immutable opening of the one batch every candidate below names.
+fn batch_opening(width: u32) -> GeneralBatchOpeningV1 {
+    GeneralBatchOpeningV1 {
+        outcome_count: width,
+        sequence: 0,
+        generation: GENERATION,
+        market: MARKET,
+        product_id: product_id(),
+        config_id: CONFIG_IDENTITY,
+        price_scale: u64::from(width),
+        collection_close_slot: COLLECTION_CLOSE_SLOT,
+        settlement_close_slot: SETTLEMENT_CLOSE_SLOT,
+        max_orders: BATCH_MAX_ORDERS,
+    }
 }
 
+/// Open one real batch against one real root.
+///
+/// This is the whole point of the collection half: `batch_id` is no longer a
+/// literal. It is the digest of an opening that consumed the root's exact next
+/// sequence, so a candidate naming it is naming a batch that was really opened.
+fn opened_batch(width: u32) -> (GeneralRootV2, GeneralBatchV1) {
+    let mut root =
+        GeneralRootV2::active(MARKET, CONFIG_IDENTITY, GENERATION).expect("active General root");
+    let revision = root.revision();
+    let batch = GeneralBatchV1::open(&mut root, batch_opening(width), revision, ADMISSION_SLOT)
+        .expect("open batch");
+    (root, batch)
+}
+
+fn batch_id(width: u32) -> [u8; 32] {
+    opened_batch(width).1.batch_id()
+}
+
+/// One maker's signed portfolio order, as it would be placed into the batch.
+struct OrderSpec {
+    nonce: u64,
+    lots: u64,
+    receive: Vec<u64>,
+    deliver: Vec<u64>,
+    debit_limit: u64,
+}
+
+fn order_record(width: u32, batch_id: [u8; 32], spec: &OrderSpec) -> Vec<u8> {
+    let mut bytes = vec![0_u8; general_order_len_v1(width).expect("order width")];
+    GeneralOrderV1::encode_into(
+        GeneralOrderHeaderV1 {
+            outcome_count: width,
+            nonce: spec.nonce,
+            owner_id: OWNER,
+            market: MARKET,
+            batch_id,
+            generation: GENERATION,
+            max_lots: 10,
+            max_quote_debit_per_lot: spec.debit_limit,
+            valid_until_slot: SETTLEMENT_CLOSE_SLOT,
+        },
+        &spec.receive,
+        &spec.deliver,
+        GeneralOrderStateV1 {
+            phase: GeneralOrderPhaseV1::Placed,
+            admitted_slot: ADMISSION_SLOT,
+            released_slot: 0,
+        },
+        &mut bytes,
+    )
+    .expect("order record");
+    bytes
+}
+
+/// Build one compact Execution row from the immutable order it names.
+///
+/// The row's terms are not asserted here; they are returned by
+/// `authenticate_order_execution_v1`, which checks every field the row repeats
+/// against the record and checks the record's own digest against the `order_id`
+/// the row claims.
 fn execution_row(
     width: u32,
     page_coordinate: u32,
-    order_low: u8,
+    batch: GeneralBatchV1,
+    order_bytes: &[u8],
     lots: u64,
-    receive: &[u64],
-    deliver: &[u64],
-    debit_limit: u64,
 ) -> (Vec<u8>, AuthenticatedOrderTermsV2) {
-    let terms = AuthenticatedOrderTermsV2 {
-        order_id: order_id(order_low),
-        owner_id: OWNER,
-        nonce: u64::from(order_low),
-        max_lots: 10,
-        max_quote_debit_per_lot: debit_limit,
+    let order = GeneralOrderV1::decode(order_bytes).expect("order record");
+    let header = order.header();
+    let receive: Vec<u64> = (0..width)
+        .map(|index| order.receive_per_lot(index).expect("receive"))
+        .collect();
+    let deliver: Vec<u64> = (0..width)
+        .map(|index| order.deliver_per_lot(index).expect("deliver"))
+        .collect();
+    let execution = ExecutionHeaderV2 {
+        outcome_count: width,
+        page_coordinate,
+        execution_coordinate: 1,
+        nonce: header.nonce,
+        order_id: order.order_id(),
+        owner_id: header.owner_id,
+        max_lots: header.max_lots,
+        lots,
     };
     let mut bytes = vec![0_u8; execution_len(width).expect("execution width")];
-    ExecutionV2::encode_into(
-        ExecutionHeaderV2 {
-            outcome_count: width,
-            page_coordinate,
-            execution_coordinate: 1,
-            nonce: terms.nonce,
-            order_id: terms.order_id,
-            owner_id: terms.owner_id,
-            max_lots: terms.max_lots,
-            lots,
-        },
-        receive,
-        deliver,
-        &mut bytes,
+    ExecutionV2::encode_into(execution, &receive, &deliver, &mut bytes).expect("execution row");
+    // The row is authenticated as a whole record, tails included: the per-lot
+    // vectors are part of what the order record binds, so a header-only
+    // authentication could not see a substituted portfolio.
+    let terms = authenticate_order_execution_v1(
+        batch,
+        order,
+        ExecutionV2::decode(&bytes).expect("row decodes"),
     )
-    .expect("execution row");
+    .expect("execution row authenticates against its order record");
     (bytes, terms)
 }
 
@@ -673,6 +760,78 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
     let count = usize::try_from(width).expect("test width");
     let ones = vec![1; count];
     let zeros = vec![0; count];
+
+    // The real collection half: open a batch, place three signed orders into
+    // it, close it. The batch identity below is the digest of that opening and
+    // the terms below are projections of those order records.
+    let (mut root, mut batch) = opened_batch(width);
+    let specs = [
+        OrderSpec {
+            nonce: 1,
+            lots: 2,
+            receive: ones.clone(),
+            deliver: zeros.clone(),
+            debit_limit: 2,
+        },
+        OrderSpec {
+            nonce: 2,
+            lots: 1,
+            receive: zeros.clone(),
+            deliver: ones.clone(),
+            debit_limit: 0,
+        },
+        OrderSpec {
+            nonce: 3,
+            lots: 2,
+            receive: ones.clone(),
+            deliver: zeros.clone(),
+            debit_limit: 2,
+        },
+    ];
+    let identity = batch.batch_id();
+    let claims = vec![u64::MAX / 4; count];
+    let mut placed: Vec<(Vec<u8>, u64)> = specs
+        .iter()
+        .map(|spec| {
+            let bytes = order_record(width, identity, spec);
+            let order = GeneralOrderV1::decode(&bytes).expect("order record");
+            batch
+                .admit(
+                    order,
+                    MakerFundingV1 {
+                        owner_id: OWNER,
+                        available_quote: u64::MAX / 4,
+                        available_claims: &claims,
+                    },
+                    ADMISSION_SLOT,
+                )
+                .expect("admit order");
+            (bytes, spec.lots)
+        })
+        .collect();
+    assert_eq!(batch.state().order_count, 3);
+    let revision = root.revision();
+    let closed_identity = batch.close(&mut root, revision).expect("close batch");
+    assert_eq!(closed_identity, identity);
+    assert_eq!(root.open_batches(), 0);
+
+    // Candidate rows must be globally grouped by increasing order identity, and
+    // a real `order_id` is a digest rather than a chosen small integer. So the
+    // candidate builder sorts by identity; the candidate-wide aggregate this
+    // fixture depends on is invariant under that permutation.
+    //
+    // The order is the verifier's own: `runtime_verify::le_numeric_id` reads a
+    // 32-byte identity as a LITTLE-ENDIAN 256-bit integer, which is not the
+    // lexicographic order of `[u8; 32]`. The previous fixture could not tell the
+    // two apart -- its identities were `[low, 0, 0, ...]`, where every high byte
+    // is zero and both orders agree. A real digest distinguishes them, and
+    // sorting the wrong way refuses with `NonCanonicalOrder`.
+    placed.sort_by(|left, right| {
+        let left = GeneralOrderV1::decode(&left.0).expect("order").order_id();
+        let right = GeneralOrderV1::decode(&right.0).expect("order").order_id();
+        left.iter().rev().cmp(right.iter().rev())
+    });
+
     let mut candidate = vec![0_u8; candidate_len(width).expect("candidate width")];
     CandidateV2::encode_into(
         CandidateHeaderV2 {
@@ -682,20 +841,30 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
             price_scale: u64::from(width),
             candidate_id: BEST_CANDIDATE,
             product_id: product_id(),
-            batch_id: BATCH,
+            batch_id: identity,
         },
         &ones,
         &mut candidate,
     )
     .expect("candidate");
+    authenticate_batch_candidate_v1(
+        batch,
+        CandidateV2::decode(&candidate).expect("candidate").header(),
+    )
+    .expect("candidate authenticates against the closed batch");
 
     // Each page is deliberately unbalanced. The complete candidate alone has
     // the uniform relation required for a complete-set materialization.
-    let rows = [
-        execution_row(width, 1, 1, 2, &ones, &zeros, 2),
-        execution_row(width, 2, 2, 1, &zeros, &ones, 0),
-        execution_row(width, 3, 3, 2, &ones, &zeros, 2),
-    ];
+    let rows: [(Vec<u8>, AuthenticatedOrderTermsV2); 3] = core::array::from_fn(|index| {
+        let (bytes, lots) = placed.get(index).expect("placed order");
+        execution_row(
+            width,
+            u32::try_from(index).expect("page coordinate") + 1,
+            batch,
+            bytes,
+            *lots,
+        )
+    });
     let manifest_counts = [0_u32, 1, 2];
     let cursor_len = runtime_verifier_len_v2(width).expect("verifier width");
     let verified_len = verified_candidate_len(width).expect("verified width");

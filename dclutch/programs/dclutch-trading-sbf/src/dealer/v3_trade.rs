@@ -1118,14 +1118,26 @@ mod tests {
         obligations: &[u64],
     ) -> std::vec::Vec<u8> {
         let mut bytes = std::vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + obligations.len() * 8];
-        bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
-        bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-        bytes[12..16].copy_from_slice(
-            &u32::try_from(obligations.len())
-                .expect("bounded test width")
-                .to_le_bytes(),
-        );
-        bytes[16..24].copy_from_slice(&revision.to_le_bytes());
+        bytes
+            .get_mut(..8)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+        bytes
+            .get_mut(8..10)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+        bytes
+            .get_mut(12..16)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(
+                &u32::try_from(obligations.len())
+                    .expect("bounded test width")
+                    .to_le_bytes(),
+            );
+        bytes
+            .get_mut(16..24)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&revision.to_le_bytes());
         for (offset, identity) in [
             (24, [2; 32]),
             (56, [3; 32]),
@@ -1133,26 +1145,56 @@ mod tests {
             (120, [5; 32]),
             (152, child_root),
         ] {
-            bytes[offset..offset + 32].copy_from_slice(&identity);
+            bytes
+                .get_mut(offset..offset + 32)
+                .expect("obligation header offset in bounds")
+                .copy_from_slice(&identity);
         }
-        bytes[184..192].copy_from_slice(&10_u64.to_le_bytes());
+        bytes
+            .get_mut(184..192)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&10_u64.to_le_bytes());
         for (index, obligation) in obligations.iter().enumerate() {
             let offset = DEALER_OBLIGATION_HEADER_BYTES_V3 + index * 8;
-            bytes[offset..offset + 8].copy_from_slice(&obligation.to_le_bytes());
+            bytes
+                .get_mut(offset..offset + 8)
+                .expect("obligation value offset in bounds")
+                .copy_from_slice(&obligation.to_le_bytes());
         }
         bytes
     }
 
     fn program_set() -> std::vec::Vec<u8> {
         let mut bytes = std::vec![0; 72];
-        bytes[..8].copy_from_slice(b"DCLTCPS1");
-        bytes[8..10].copy_from_slice(&1_u16.to_le_bytes());
-        bytes[10..12].copy_from_slice(&1_u16.to_le_bytes());
-        bytes[12..16].copy_from_slice(&DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3.to_le_bytes());
-        bytes[16] = 2;
-        bytes[18..20].copy_from_slice(&1_u16.to_le_bytes());
-        bytes[32..36].copy_from_slice(&u32::from(DEALER_SCENARIO_TRADE_ACTION_V3).to_le_bytes());
-        bytes[36..68].copy_from_slice(&[42; 32]);
+        bytes
+            .get_mut(..8)
+            .expect("program set offset in bounds")
+            .copy_from_slice(b"DCLTCPS1");
+        bytes
+            .get_mut(8..10)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        bytes
+            .get_mut(10..12)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        bytes
+            .get_mut(12..16)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&DEALER_SCENARIO_TRADE_SELECTOR_OFFSET_V3.to_le_bytes());
+        *bytes.get_mut(16).expect("program set offset in bounds") = 2;
+        bytes
+            .get_mut(18..20)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        bytes
+            .get_mut(32..36)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&u32::from(DEALER_SCENARIO_TRADE_ACTION_V3).to_le_bytes());
+        bytes
+            .get_mut(36..68)
+            .expect("program set offset in bounds")
+            .copy_from_slice(&[42; 32]);
         bytes
     }
 
@@ -1223,7 +1265,10 @@ mod tests {
             output.get(..unsigned.request_bytes).expect("initialized"),
         )
         .expect("decode");
-        let accepted = output[..unsigned.request_bytes].to_vec();
+        let accepted = output
+            .get(..unsigned.request_bytes)
+            .expect("initialized request span")
+            .to_vec();
         assert_eq!(request.width, 3);
         assert!(matches!(request.claims_position_count, 1 | 2));
         assert!(request.evidence_span_count <= 3);
@@ -1259,7 +1304,11 @@ mod tests {
         );
 
         assert_eq!(
-            DealerScenarioTradeRequestV3::decode(&accepted[..accepted.len() - 1]),
+            DealerScenarioTradeRequestV3::decode(
+                accepted
+                    .get(..accepted.len() - 1)
+                    .expect("request is non-empty")
+            ),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let mut extra = accepted.clone();
@@ -1269,49 +1318,81 @@ mod tests {
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let mut swapped_width = accepted.clone();
-        swapped_width[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        swapped_width
+            .get_mut(12..16)
+            .expect("width offset inside the request")
+            .copy_from_slice(&2_u32.to_le_bytes());
         assert_eq!(
             DealerScenarioTradeRequestV3::decode(&swapped_width),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let mut substituted_evidence = accepted.clone();
-        substituted_evidence[DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3] =
-            request.dealer_evidence_count ^ 1;
+        *substituted_evidence
+            .get_mut(DEALER_SCENARIO_TRADE_DEALER_EVIDENCE_COUNT_OFFSET_V3)
+            .expect("evidence count offset inside the request") = request.dealer_evidence_count ^ 1;
         assert_eq!(
             DealerScenarioTradeRequestV3::decode(&substituted_evidence),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let mut oversized_evidence = accepted.clone();
-        oversized_evidence[DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3] = 4;
+        *oversized_evidence
+            .get_mut(DEALER_SCENARIO_TRADE_EVIDENCE_SPAN_COUNT_OFFSET_V3)
+            .expect("evidence span count offset inside the request") = 4;
         assert_eq!(
             DealerScenarioTradeRequestV3::decode(&oversized_evidence),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let mut legacy_version = accepted.clone();
-        legacy_version[8..10].copy_from_slice(&2_u16.to_le_bytes());
+        legacy_version
+            .get_mut(8..10)
+            .expect("version offset inside the request")
+            .copy_from_slice(&2_u16.to_le_bytes());
         assert_eq!(
             DealerScenarioTradeRequestV3::decode(&legacy_version),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let claims_start = scenario_trade_claims_packet_offset_v3(3).expect("offset");
-        let mut omitted_vector = accepted[..DEALER_SCENARIO_TRADE_HEADER_BYTES_V3].to_vec();
-        omitted_vector.extend_from_slice(&accepted[claims_start..]);
+        let mut omitted_vector = accepted
+            .get(..DEALER_SCENARIO_TRADE_HEADER_BYTES_V3)
+            .expect("request holds a full header")
+            .to_vec();
+        omitted_vector.extend_from_slice(
+            accepted
+                .get(claims_start..)
+                .expect("claims packet offset inside the request"),
+        );
         assert_eq!(
             DealerScenarioTradeRequestV3::decode(&omitted_vector),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
         let mut swapped_vector = accepted;
-        let first = swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
-            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8]
+        let first = swapped_vector
+            .get(
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8,
+            )
+            .expect("obligation offset inside the request")
             .to_vec();
-        let second = swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
-            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16]
+        let second = swapped_vector
+            .get(
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16,
+            )
+            .expect("obligation offset inside the request")
             .to_vec();
-        swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
-            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8]
+        swapped_vector
+            .get_mut(
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8,
+            )
+            .expect("obligation offset inside the request")
             .copy_from_slice(&second);
-        swapped_vector[DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
-            ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16]
+        swapped_vector
+            .get_mut(
+                DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 8
+                    ..DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3 + 16,
+            )
+            .expect("obligation offset inside the request")
             .copy_from_slice(&first);
         let swapped_vector =
             DealerScenarioTradeRequestV3::decode(&swapped_vector).expect("structurally valid");
@@ -1328,7 +1409,9 @@ mod tests {
         assert!(untouched.iter().all(|byte| *byte == 0xa5));
 
         let candidate_offset = DEALER_SCENARIO_TRADE_OBLIGATIONS_OFFSET_V3;
-        output[candidate_offset] ^= 1;
+        *output
+            .get_mut(candidate_offset)
+            .expect("obligation offset inside the request") ^= 1;
         let substituted = DealerScenarioTradeRequestV3::decode(
             output.get(..unsigned.request_bytes).expect("initialized"),
         )
@@ -1348,12 +1431,27 @@ mod tests {
     #[test]
     fn packetless_and_noncanonical_headers_refuse() {
         let mut bytes = std::vec![0; DEALER_SCENARIO_TRADE_HEADER_BYTES_V3];
-        bytes[..8].copy_from_slice(&DEALER_SCENARIO_TRADE_MAGIC_V3);
-        bytes[8..10].copy_from_slice(&DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes());
-        bytes[10..12].copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
-        bytes[12..16].copy_from_slice(&2_u32.to_le_bytes());
+        bytes
+            .get_mut(..8)
+            .expect("header offset in bounds")
+            .copy_from_slice(&DEALER_SCENARIO_TRADE_MAGIC_V3);
+        bytes
+            .get_mut(8..10)
+            .expect("header offset in bounds")
+            .copy_from_slice(&DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes());
+        bytes
+            .get_mut(10..12)
+            .expect("header offset in bounds")
+            .copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
+        bytes
+            .get_mut(12..16)
+            .expect("header offset in bounds")
+            .copy_from_slice(&2_u32.to_le_bytes());
         for offset in [16, 48, 80, 112, 144, 176, 208, 240, 272] {
-            bytes[offset..offset + 32].copy_from_slice(&[u8::try_from(offset).unwrap_or(1); 32]);
+            bytes
+                .get_mut(offset..offset + 32)
+                .expect("header offset in bounds")
+                .copy_from_slice(&[u8::try_from(offset).unwrap_or(1); 32]);
         }
         for (offset, value) in [
             (304, 1_u64),
@@ -1366,13 +1464,16 @@ mod tests {
             (360, 1),
             (368, 0),
         ] {
-            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+            bytes
+                .get_mut(offset..offset + 8)
+                .expect("header offset in bounds")
+                .copy_from_slice(&value.to_le_bytes());
         }
         assert_eq!(
             DealerScenarioTradeRequestV3::decode(&bytes),
             Err(ScenarioTradeErrorV3::InvalidRequest)
         );
-        bytes[377] = 1;
+        *bytes.get_mut(377).expect("header offset in bounds") = 1;
         assert_eq!(
             DealerScenarioTradeRequestV3::decode(&bytes),
             Err(ScenarioTradeErrorV3::InvalidRequest)

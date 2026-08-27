@@ -18,6 +18,7 @@ import DClutchSemantics.TransitionVMV2
 import DClutchSemantics.TransitionVMV3
 import DClutchSemantics.DirectProgram
 import DClutchSemantics.DirectOrdinaryV3
+import DClutchSemantics.DirectRegisteredFillV4
 import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.EconomicKernel
@@ -27,6 +28,8 @@ import DClutchSemantics.ExecutionRelease
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 import DClutchSemantics.SourceMaterialV2Abi
+import DClutchSemantics.SourcePrincipalCapacityV1
+import DClutchSemantics.SourceScheduledMedianV1
 import DClutchSemantics.SourceRecoveryPolicyV2Abi
 import DClutchSemantics.SourceResolutionStateV2Abi
 import DClutchSemantics.SourceResolutionTerminalV2Abi
@@ -40,6 +43,9 @@ import DClutchSemantics.ProductPayoff
 import DClutchSemantics.ProductPayoffExamples
 import DClutchSemantics.ProductPayoffAbi
 import DClutchSemantics.LiabilityBasisV2
+import DClutchSemantics.LiabilityBasisV2Spline
+import DClutchSemantics.LiabilityBasisV2SplineAbi
+import DClutchSemantics.LiabilityBasisV2SplineExamples
 import DClutchSemantics.ClaimsRepresentation
 import DClutchSemantics.ClaimsRepresentationExamples
 import DClutchSemantics.DealerLiquidity

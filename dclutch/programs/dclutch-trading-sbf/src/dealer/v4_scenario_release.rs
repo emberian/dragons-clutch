@@ -621,7 +621,7 @@ mod tests {
         let legacy = core::array::from_fn::<_, 8, _>(|index| {
             v3_descriptor(
                 u16::try_from(index + 1).expect("selector"),
-                40 + index as u8,
+                40 + u8::try_from(index).expect("descriptor index fits in a byte"),
             )
         });
         let scenario = scenario_descriptor(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4);

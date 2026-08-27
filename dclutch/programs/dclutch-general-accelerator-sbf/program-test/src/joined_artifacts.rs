@@ -32,9 +32,9 @@ use dclutch_general_adapter_contract::{
         GeneralArtifactBytesV3, GeneralArtifactSelectionV3, authenticate_general_artifacts_v3,
     },
     effect_artifacts_v3::{
-        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
-        general_effect_template_bytes_v3,
+        general_effect_program_bytes_v4, general_effect_template_bytes_v3,
     },
     release_v3::GENERAL_ACTIONS_V3,
     state_artifacts_v3::{
@@ -309,7 +309,7 @@ fn action_artifacts(
                 content(digest(&transition))?,
             ),
             effect: ArtifactReferenceV4::new(
-                content(dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID)?,
+                content(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4)?,
                 content(digest(&effect))?,
             ),
         },
@@ -400,14 +400,23 @@ fn effect(action: Action) -> Result<Vec<u8>, JoinedGeneralArtifactErrorV5> {
         .ok_or(JoinedGeneralArtifactErrorV5::Input)?;
     let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; count];
     let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
-    let bytes = general_effect_program_bytes_v3(action)
+    let base = general_effect_program_bytes_v3(action)
+        .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
+    let mut base_scratch = vec![0_u8; base];
+    let mut base_output = vec![0_u8; base];
+    // The RELEASE carries the V4 envelope: `process_hot_execution_v3` decodes
+    // no other effect schema, and `authenticate_general_artifacts_v3` -- which
+    // this ELF runs -- now requires it too.
+    let bytes = general_effect_program_bytes_v4(action)
         .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_general_effect_program_v3_atomic(
+    encode_general_effect_program_v4_atomic(
         action,
         &mut instructions,
         &mut templates,
+        &mut base_scratch,
+        &mut base_output,
         &mut scratch,
         &mut output,
     )

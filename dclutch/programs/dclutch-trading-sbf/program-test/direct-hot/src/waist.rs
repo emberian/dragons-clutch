@@ -330,7 +330,7 @@ pub fn direct_case_v2(
         immutable_programdata(&artifacts.core).len(),
     )
     .expect("real Direct deployment widths");
-    let mut chain = build_direct_hot_chain_fixture_v5(DirectHotChainInputV5 {
+    let input = DirectHotChainInputV5 {
         registry_program: REGISTRY_PROGRAM_ID,
         trading_program: TRADING_PROGRAM_ID,
         core_program: CORE_PROGRAM_ID,
@@ -349,8 +349,16 @@ pub fn direct_case_v2(
         // `add_release_waist` binds Trading at semantic release 0x33; the
         // validated-artifact seal is filed under exactly that release.
         trading_semantic_release: [0x33; 32],
-    })
-    .expect("canonical Profile14 Direct chain fixture");
+    };
+    let hand =
+        build_direct_hot_chain_fixture_v5(input).expect("canonical Profile14 Direct chain fixture");
+    // The campaign executes the BUILDER's bundle; the hand-built fixture rides
+    // along as a checked oracle, so every gate run is also a reproduction run.
+    let mut chain = crate::fixture::via_builder::build_direct_hot_chain_fixture_via_builder_v1(
+        input,
+    )
+    .expect("artifact-derived Direct chain bundle");
+    assert_builder_reproduces_hand(&chain, &hand);
     if corrupt_destination {
         let destination = chain.collateral_accounts[1];
         let account = chain
@@ -408,6 +416,36 @@ pub fn direct_case_v2(
         payer,
         makers,
     }
+}
+
+/// The builder's bundle is the hand-built one, byte for byte.
+///
+/// External-key order is the one normalized comparison: both sides consume
+/// that list only through `contains`.
+fn assert_builder_reproduces_hand(
+    built: &DirectHotChainFixtureV5,
+    hand: &DirectHotChainFixtureV5,
+) {
+    assert_eq!(built.hot_instruction, hand.hot_instruction);
+    assert_eq!(built.signed_messages, hand.signed_messages);
+    assert_eq!(built.accounts, hand.accounts);
+    assert_eq!(built.rollback_snapshot_keys, hand.rollback_snapshot_keys);
+    assert_eq!(built.market, hand.market);
+    assert_eq!(built.root, hand.root);
+    assert_eq!(built.claims_market, hand.claims_market);
+    assert_eq!(built.claims_positions, hand.claims_positions);
+    assert_eq!(built.maker_replays, hand.maker_replays);
+    assert_eq!(built.custody_replay, hand.custody_replay);
+    assert_eq!(built.collateral_accounts, hand.collateral_accounts);
+    assert_eq!(built.custody_routes, hand.custody_routes);
+    assert_eq!(built.capability_seal, hand.capability_seal);
+    assert_eq!(built.capability_seal_bytes, hand.capability_seal_bytes);
+    assert_eq!(built.descriptor_digest, hand.descriptor_digest);
+    let mut built_external = built.externally_installed_keys.clone();
+    let mut hand_external = hand.externally_installed_keys.clone();
+    built_external.sort_unstable_by_key(Pubkey::to_bytes);
+    hand_external.sort_unstable_by_key(Pubkey::to_bytes);
+    assert_eq!(built_external, hand_external);
 }
 
 pub fn registry_hot_instruction(releases: Releases, mut hot: Instruction) -> (Instruction, Pubkey) {

@@ -1370,10 +1370,26 @@ mod tests {
 
     fn obligation_bytes(values: &[u64], lp: u64) -> std::vec::Vec<u8> {
         let mut bytes = std::vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + values.len() * 8];
-        bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
-        bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-        bytes[12..16].copy_from_slice(&(values.len() as u32).to_le_bytes());
-        bytes[16..24].copy_from_slice(&9_u64.to_le_bytes());
+        bytes
+            .get_mut(..8)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+        bytes
+            .get_mut(8..10)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+        bytes
+            .get_mut(12..16)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(
+                &u32::try_from(values.len())
+                    .expect("obligation value count fits in u32")
+                    .to_le_bytes(),
+            );
+        bytes
+            .get_mut(16..24)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&9_u64.to_le_bytes());
         for (offset, value) in [
             (24, [1; 32]),
             (56, [2; 32]),
@@ -1381,12 +1397,21 @@ mod tests {
             (120, [4; 32]),
             (152, [5; 32]),
         ] {
-            bytes[offset..offset + 32].copy_from_slice(&value);
+            bytes
+                .get_mut(offset..offset + 32)
+                .expect("obligation header offset in bounds")
+                .copy_from_slice(&value);
         }
-        bytes[184..192].copy_from_slice(&lp.to_le_bytes());
+        bytes
+            .get_mut(184..192)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&lp.to_le_bytes());
         for (index, value) in values.iter().enumerate() {
             let offset = DEALER_OBLIGATION_HEADER_BYTES_V3 + index * 8;
-            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+            bytes
+                .get_mut(offset..offset + 8)
+                .expect("obligation value offset in bounds")
+                .copy_from_slice(&value.to_le_bytes());
         }
         bytes
     }
@@ -1453,15 +1478,17 @@ mod tests {
         }
     }
 
-    fn run(
-        action: MultiLpActionV3,
-    ) -> MultiLpResultV3<(
+    /// The plan, the staged obligation bytes, the staged LP position, and
+    /// the pre/post obligation rows a `run` produces.
+    type RunOutput = (
         MultiLpPlanV3,
         std::vec::Vec<u8>,
         [u8; DEALER_LP_POSITION_BYTES_V3],
         [u64; 3],
         [u64; 3],
-    )> {
+    );
+
+    fn run(action: MultiLpActionV3) -> MultiLpResultV3<RunOutput> {
         let trading = [9; 32];
         let custody = [13; 32];
         let context = context(trading, custody);

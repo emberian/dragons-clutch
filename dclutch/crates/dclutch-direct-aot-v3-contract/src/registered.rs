@@ -142,6 +142,10 @@ fn execute_candidate(scalars: &mut [u64], identities: &mut [[u8; 32]]) -> Result
         read(scalars, FILL_SCALAR_BUYER_LIMIT_V4)? <= read(scalars, FILL_SCALAR_PRICE_SCALE_V4)?,
     )?;
     require(
+        read(scalars, FILL_SCALAR_POLICY_FEE_BPS_V4)?
+            <= read(scalars, FILL_SCALAR_FEE_DENOMINATOR_V4)?,
+    )?;
+    require(
         read(scalars, FILL_SCALAR_SELLER_NONCE_V4)?
             < read(scalars, FILL_SCALAR_SELLER_NEXT_NONCE_V4)?,
     )?;

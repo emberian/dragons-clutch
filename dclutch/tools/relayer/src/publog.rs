@@ -133,6 +133,7 @@ impl PublicationLog {
         message: &[u8],
         signer: &[u8; ID_BYTES],
         signature: &[u8; 64],
+        rehearsal_observed_genesis: Option<&[u8; ID_BYTES]>,
     ) -> Result<()> {
         self.log.append(&serde_json::json!({
             "schema": "dclutch.relayer.publication.v1",
@@ -148,6 +149,12 @@ impl PublicationLog {
             "signature_hex": to_hex(signature),
             "signature_base58": bs58::encode(signature).into_string(),
             "wall_unix_seconds": wall_unix_seconds(),
+            // REHEARSAL LABEL: when set, the signed message claims a cluster
+            // that a loopback twin stood in for; the value is the twin's real
+            // genesis hash. A verifier must treat such a line as rehearsal
+            // evidence, never as an observation of the claimed cluster.
+            "rehearsal_twin_observed_genesis_base58":
+                rehearsal_observed_genesis.map(base58),
         }))
     }
 }
@@ -214,6 +221,7 @@ mod tests {
                 &[0xab, 0xcd],
                 &[3u8; ID_BYTES],
                 &[9u8; 64],
+                None,
             )
             .expect("record");
         }
@@ -226,6 +234,7 @@ mod tests {
             &[0x01],
             &[3u8; ID_BYTES],
             &[9u8; 64],
+            None,
         )
         .expect("record");
 

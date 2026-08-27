@@ -225,6 +225,7 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
         market_key.to_bytes(),
         GENERATION,
         selection,
+        dclutch_capability_program_contract::SelectedRecordBumpsV1::default(),
     )
     .expect("header");
     let root_key = general_capability_root_address_v3(header, &TRADING_PROGRAM).0;

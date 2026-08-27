@@ -18,12 +18,6 @@ use dclutch_capability_contract::{
     MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_capability_program_contract::{
-    activation_registers_v2::{
-        ACTIVATION_ACTION_SCALAR_V2, ACTIVATION_CONFIG_IDENTITY_V2,
-        ACTIVATION_FIRST_FUNDING_ACCOUNT_V2, ACTIVATION_GENERATION_SCALAR_V2,
-        ACTIVATION_MARKET_IDENTITY_V2, ACTIVATION_ROOT_ACCOUNT_V2, ACTIVATION_ROOT_IDENTITY_V2,
-        ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
-    },
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
     CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
@@ -31,11 +25,24 @@ use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_PROFILE_V2, CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET,
     CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRootAccountV1,
-    CapabilityRootHeaderV1,
+    CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+    activation_registers_v2::{
+        ACTIVATION_ACTION_SCALAR_V2, ACTIVATION_CONFIG_IDENTITY_V2,
+        ACTIVATION_FIRST_FUNDING_ACCOUNT_V2, ACTIVATION_GENERATION_SCALAR_V2,
+        ACTIVATION_MARKET_IDENTITY_V2, ACTIVATION_ROOT_ACCOUNT_V2, ACTIVATION_ROOT_IDENTITY_V2,
+        ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+    },
     set_v2::{
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
         CapabilityProgramSetEntryV2, SelectorWidthV2, encode_program_set_v2,
         encoded_program_set_bytes_v2,
+    },
+};
+use dclutch_effect_kernel::v2::{
+    SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA,
+    encode::{
+        EffectGeometryV2, EffectInstructionV2, effect_program_v2_bytes,
+        encode_effect_program_v2_atomic,
     },
 };
 use dclutch_general_config_contract::{
@@ -49,17 +56,6 @@ use dclutch_general_config_contract::{
     },
     root_v3::activate_general_owned_v3,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
-};
-use dclutch_effect_kernel::v2::{
-    SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA,
-    encode::{
-        EffectGeometryV2, EffectInstructionV2, effect_program_v2_bytes,
-        encode_effect_program_v2_atomic,
-    },
-};
-use dclutch_transition_vm::v2::encode::{
-    RegisterGeometryV2 as TransitionRegisterGeometryV2, TransitionInstructionV2,
-    encode_transition_program_v2_atomic, transition_program_v2_bytes,
 };
 use dclutch_market_core_codec::{
     CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
@@ -76,15 +72,19 @@ use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
+use dclutch_trading_sbf::TradingSbfError;
+use dclutch_transition_vm::v2::encode::{
+    RegisterGeometryV2 as TransitionRegisterGeometryV2, TransitionInstructionV2,
+    encode_transition_program_v2_atomic, transition_program_v2_bytes,
+};
 use solana_account::Account;
+use solana_program::instruction::InstructionError;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
 };
-use dclutch_trading_sbf::TradingSbfError;
-use solana_program::instruction::InstructionError;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::TransactionError;
@@ -820,8 +820,9 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&[entry], &mut manifest).expect("manifest");
     let manifest_id = ContentId::new(hash(&manifest).to_bytes()).expect("manifest ID");
-    let selection = CapabilityExecutionSelectionV1::new(0, manifest_id, kind, release_id, config_id)
-        .expect("selection");
+    let selection =
+        CapabilityExecutionSelectionV1::new(0, manifest_id, kind, release_id, config_id)
+            .expect("selection");
 
     let (release_set, cache_bytes) = activation_cache();
     let activation_cache = Pubkey::find_program_address(
@@ -886,6 +887,10 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         market.to_bytes(),
         GENERATION,
         selection,
+        // The activation under test is the authority that fills these in; this
+        // header exists only to derive the vacant root's address, and the root
+        // PDA seeds do not include them.
+        SelectedRecordBumpsV1::default(),
     )
     .expect("root header");
     let root = Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID).0;
@@ -932,7 +937,11 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         descriptor,
     );
     let release_record = match program_set_bytes {
-        Some(bytes) => add_record(&mut test, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, bytes),
+        Some(bytes) => add_record(
+            &mut test,
+            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            bytes,
+        ),
         None => descriptor_record,
     };
     let config_record = add_record(&mut test, config_schema.to_bytes(), config);
@@ -946,7 +955,21 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         rent.minimum_balance(32),
         vec![0xa5; 32],
     );
-    let manifest_raw = Pubkey::new_from_array([0xa2; 32]);
+    // The manifest account is the FINALIZED MANIFEST RECORD, so its address is
+    // derived, never chosen. It used to be the literal [0xa2; 32], which every
+    // hot action would have refused: `hot_v3` locates this record at exactly the
+    // coordinate below, and W2q made `process_activation` require it too rather
+    // than admitting any account whose bytes happen to hash to the selected
+    // manifest identity.
+    let manifest_raw = Pubkey::find_program_address(
+        &[
+            dclutch_record_contract::RAW_RECORD_PDA_SEED_V1,
+            &dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            &hash(&manifest).to_bytes(),
+        ],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
     add_account(
         &mut test,
         manifest_raw,
@@ -1220,7 +1243,10 @@ async fn general_activation_artifacts_create_a_real_general_root() {
         None,
     )
     .expect("General owned activation");
-    assert_eq!(activation.root_state().to_bytes().as_slice(), tail.as_slice());
+    assert_eq!(
+        activation.root_state().to_bytes().as_slice(),
+        tail.as_slice()
+    );
     assert_eq!(activation.funding_after(), funding_after);
 }
 
@@ -1378,7 +1404,6 @@ async fn a_tail_that_is_unwritten_or_the_wrong_width_refuses() {
         assert!(root.data.is_empty());
     }
 }
-
 
 /// The three artifacts are byte-identical to what this file hand-encoded.
 ///

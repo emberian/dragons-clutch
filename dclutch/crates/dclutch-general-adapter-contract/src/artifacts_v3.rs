@@ -41,6 +41,7 @@ use dclutch_custody_contract::{
 use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, RouteKindV3},
+    v4::ProgramV4 as EffectProgramV4,
 };
 use dclutch_execution_strategy_contract::v2::{
     AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2,
@@ -63,8 +64,8 @@ use dclutch_product_runtime_v2::{
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 use dclutch_request_profile_contract::{RequestProfileV1, validate_request};
+use dclutch_sha256_adapter::digest;
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
-use sha2::{Digest, Sha256};
 
 use crate::{
     account_rules_v3::{
@@ -319,12 +320,25 @@ pub fn authenticate_general_artifacts_v3<'a>(
         .map_err(|_| GeneralArtifactErrorV3::Transition)?;
 
     require_content(descriptor.effect().program().to_bytes(), artifacts.effect)?;
-    let effect = EffectProgramV3::decode_selected(
-        descriptor.effect().program().to_bytes(),
-        digest(artifacts.effect),
-        artifacts.effect,
-    )
-    .map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    // The published record is a V4 envelope and the semantic body is its V3
+    // base. `process_hot_execution_v3` decodes exactly one effect schema
+    // (`v4::SCHEMA_RELEASE_ID_V4`) and refuses every other with
+    // `UnsupportedContent`, so a bare V3 record -- which is what General
+    // published before this -- could never enter the Hot executor for any
+    // action. This join runs inside the DEPLOYED accelerator ELF as well as in
+    // Trading, so both sides had to learn the envelope together.
+    //
+    // Every rule below is still stated against the V3 base, because the base is
+    // where General's route and register geometry lives. The envelope adds a
+    // header and nothing else, and the two conjuncts here say so: a General
+    // effect declares no dynamic span (its sole span is declared by the
+    // ACCOUNT PROFILE) and no borrowed range.
+    let envelope =
+        EffectProgramV4::decode(artifacts.effect).map_err(|_| GeneralArtifactErrorV3::Effect)?;
+    if envelope.span_count() != 0 || envelope.range_count() != 0 {
+        return Err(GeneralArtifactErrorV3::Effect);
+    }
+    let effect: EffectProgramV3<'_> = envelope.base();
     let admitted_aot = validate_admitted_aot_v4(
         strategy_id,
         strategy,
@@ -384,7 +398,8 @@ fn validate_descriptor(descriptor: CapabilityProgramV4) -> Result<()> {
         || descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2
         || descriptor.transition().schema().to_bytes()
             != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID
-        || descriptor.effect().schema().to_bytes() != dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID
+        || descriptor.effect().schema().to_bytes()
+            != dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4
         || usize::try_from(descriptor.root_state_bytes())
             .map_err(|_| GeneralArtifactErrorV3::Geometry)?
             != GENERAL_ROOT_BYTES_V2
@@ -852,10 +867,6 @@ fn content(value: [u8; 32]) -> Result<ContentId> {
     ContentId::new(value).map_err(|_| GeneralArtifactErrorV3::ContentIdentity)
 }
 
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
-}
-
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -1010,21 +1021,26 @@ mod tests {
 
     fn effect_for(action: Action) -> Vec<u8> {
         use crate::effect_artifacts_v3::{
-            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
             general_effect_instruction_count_v3, general_effect_program_bytes_v3,
-            general_effect_template_bytes_v3,
+            general_effect_program_bytes_v4, general_effect_template_bytes_v3,
         };
 
         let (fixed, item) = general_effect_instruction_count_v3(action);
         let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; fixed + item];
         let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
-        let bytes = general_effect_program_bytes_v3(action).expect("effect width");
+        let base = general_effect_program_bytes_v3(action).expect("base width");
+        let mut base_scratch = vec![0_u8; base];
+        let mut base_output = vec![0x55_u8; base];
+        let bytes = general_effect_program_bytes_v4(action).expect("effect width");
         let mut scratch = vec![0_u8; bytes];
         let mut output = vec![0x55_u8; bytes];
-        encode_general_effect_program_v3_atomic(
+        encode_general_effect_program_v4_atomic(
             action,
             &mut instructions,
             &mut templates,
+            &mut base_scratch,
+            &mut base_output,
             &mut scratch,
             &mut output,
         )
@@ -1125,7 +1141,7 @@ mod tests {
                     id(digest(&transition)),
                 ),
                 effect: ArtifactReferenceV4::new(
-                    id(dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID),
+                    id(dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4),
                     id(digest(&effect)),
                 ),
             },
@@ -1434,6 +1450,59 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_v3_effect_record_is_refused_and_the_v4_envelope_is_the_release() {
+        use crate::effect_artifacts_v3::{
+            GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+            general_effect_instruction_count_v3, general_effect_program_bytes_v3,
+            general_effect_program_bytes_v4, general_effect_template_bytes_v3,
+        };
+
+        // This is the regression witness for the generation gap GEN-HOT found:
+        // `process_hot_execution_v3` decodes exactly one effect schema
+        // (`v4::SCHEMA_RELEASE_ID_V4`) and General published a bare V3 program,
+        // so no General release could enter the Hot executor for any action. It
+        // survived every fixture because the accelerator authenticated the same
+        // V3 shape it emitted -- two authors agreeing with each other.
+        for action in crate::release_v3::GENERAL_ACTIONS_V3 {
+            let (fixed, item) = general_effect_instruction_count_v3(action);
+            let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; fixed + item];
+            let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
+            let base_len = general_effect_program_bytes_v3(action).expect("base width");
+            let mut base_scratch = vec![0_u8; base_len];
+            let mut bare_v3 = vec![0_u8; base_len];
+            encode_general_effect_program_v3_atomic(
+                action,
+                &mut instructions,
+                &mut templates,
+                &mut base_scratch,
+                &mut bare_v3,
+            )
+            .expect("bare V3 program");
+
+            let envelope = effect_for(action);
+            assert_eq!(
+                envelope.len(),
+                general_effect_program_bytes_v4(action).expect("envelope width")
+            );
+            // The envelope adds a header and preserves the body byte for byte.
+            assert_eq!(
+                &envelope[envelope.len() - base_len..],
+                bare_v3.as_slice(),
+                "the V4 envelope must not rewrite its V3 base"
+            );
+            // The digest MOVED, which is the whole cost of the migration: the
+            // certificate, admission, strategy, descriptor, ProgramSet and
+            // capability seal are content-addressed on it and regenerate with it.
+            assert_ne!(digest(&envelope), digest(&bare_v3));
+            // And the old shape is now refused where it is authenticated.
+            assert!(EffectProgramV4::decode(&bare_v3).is_err());
+            let decoded = EffectProgramV4::decode(&envelope).expect("envelope decodes");
+            assert_eq!(decoded.span_count(), 0);
+            assert_eq!(decoded.range_count(), 0);
+        }
+    }
+
+    #[test]
     fn role_tag_and_one_byte_child_fakes_refuse_admission() {
         let mut fake = effect_for(Action::Collect);
         let request_offset = fake
@@ -1443,9 +1512,12 @@ mod tests {
             })
             .expect("canonical affine child request");
         *fake.get_mut(request_offset).expect("one-byte child fake") ^= 1;
-        let effect = EffectProgramV3::decode(&fake).expect("structurally valid fake");
+        // The published artifact is the V4 envelope; the rules are stated
+        // against its V3 base, so the fake is decoded the same way the
+        // authentication path decodes it.
+        let envelope = EffectProgramV4::decode(&fake).expect("structurally valid fake");
         assert_eq!(
-            validate_routes(Action::Collect, effect),
+            validate_routes(Action::Collect, envelope.base()),
             Err(GeneralArtifactErrorV3::Effect)
         );
     }

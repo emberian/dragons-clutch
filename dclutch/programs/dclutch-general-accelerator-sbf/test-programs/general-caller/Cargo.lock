@@ -275,8 +275,13 @@ dependencies = [
 name = "dclutch-general-accelerator-test-caller-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-refusal-registry",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
 
 [[package]]
 name = "der"

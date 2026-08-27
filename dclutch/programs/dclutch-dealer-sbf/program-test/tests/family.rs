@@ -133,6 +133,23 @@ const OUTCOMES: usize = 3;
 const CANDIDATE_ID: [u8; 32] = [0x63; 32];
 const RELEASE_SET_ID: [u8; 32] = [0x72; 32];
 
+/// Solana's legacy transaction packet ceiling.
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The exact wire extent of one signed transaction.
+///
+/// One shortvec byte for the signature count, 64 bytes per signature, then the
+/// serialised message. This is what a validator would receive.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's \
+         {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
 /// Load one real first-party artifact from the directory the gauntlet fills.
 fn elf(name: &str) -> Vec<u8> {
     let directory = env::var("SBF_OUT_DIR").expect(
@@ -583,6 +600,7 @@ async fn submit(
         .copied()
         .expect("a signed transaction has a signature")
         .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -615,9 +633,7 @@ async fn submit(
         error: failure.as_deref(),
         logs: &logs,
         compute_units_consumed: compute_units,
-        // This campaign does not measure its wire extent; `None` says so
-        // rather than implying the frame fits Solana's packet maximum.
-        wire_bytes: None,
+        wire_bytes: Some(wire_bytes),
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
     SUBMITTED.fetch_add(1, Ordering::Relaxed);

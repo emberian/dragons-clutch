@@ -101,7 +101,12 @@ pub struct AdmittedInvocationContextV3 {
     pub portfolio: ContentId,
     /// Exact authenticated Product-linked basis raw identity.
     pub linked_basis: ContentId,
-    /// SHA-256 of the exact complete family request.
+    /// `family_request_digest_v3` of the exact complete family request.
+    ///
+    /// Not a bare SHA-256 of the request bytes: it is the domain-separated,
+    /// length-prefixed form defined in [`crate::shadow_digest_v3`]. This
+    /// distinction is load-bearing, and a doc comment that described the bare
+    /// form once made a bare recomputation look correct.
     pub family_request_digest: ContentId,
     /// Digest of the exact AccountProfile-ordered read-only observations.
     pub runtime_observations_digest: ContentId,

@@ -369,6 +369,9 @@ mod tests {
 
     use super::*;
     use dclutch_account_profile_contract::lifecycle_v3::SUCCESSOR_SCHEMA_RELEASE_ID;
+    use dclutch_account_profile_contract::v2::{
+        ProjectionRegisterKindV2, ProjectionRegisterSpaceV2, ProjectionTargetV2,
+    };
     use dclutch_account_profile_contract::{
         EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS, lifecycle_v3,
         v2::AccountPrestateV2,
@@ -387,7 +390,13 @@ mod tests {
     use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
     use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
     use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+    use dclutch_request_profile_contract::{
+        ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionTargetV1,
+        v2::RequestProfileV2,
+    };
+    use dclutch_transition_vm::v3::{RegisterKindV3, RegisterSpaceV3, RegisterWriteTargetV3};
 
+    use crate::ordinary_v3::IDENTITY_PARENT_REQUEST_DIGEST_V3;
     use crate::{
         execution_v3::DirectExecutionActionV3,
         ordinary_effect_artifacts_v3::DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3,
@@ -522,6 +531,173 @@ mod tests {
             capacity_profile: [0x44; 32],
         })
         .expect("bundle")
+    }
+
+    /// The same witness the registered family carries, on the live path.
+    ///
+    /// Registered's version found the Buy Effect writing two registers nothing
+    /// wrote into the Custody `rent_lamports` field, which would have refused
+    /// every registered Buy at its first CPI. That family had never executed;
+    /// this one has, so a read with no writer here would be a live defect and
+    /// not a latent one. Running it on both families is what makes the finding
+    /// a property of the artifact set rather than of one lane's attention.
+    ///
+    /// The reads are MEASURED: each common register is perturbed in isolation
+    /// and every fixed AND item effect is resolved against both banks, so a
+    /// register counts as read exactly when it moves some resolved effect. The
+    /// writers are the artifacts' own static declarations.
+    #[test]
+    fn every_common_register_the_effect_reads_has_a_declared_writer() {
+        const TAIL: u32 = 3;
+        const PROBE_SCALAR: u64 = 0x5a5a_5a5a_5a5a_5a5a;
+        const PROBE_IDENTITY: [u8; 32] = [0x5a; 32];
+        let bundle = build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis"));
+        let effect = EffectProgramV4::decode(&bundle.effect).expect("effect");
+        let base = effect.base();
+
+        let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
+            + TAIL as usize * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
+        let identity_width = DIRECT_ORDINARY_COMMON_IDENTITIES_V3
+            + TAIL as usize * usize::from(DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3);
+        let baseline_scalars = vec![0_u64; scalar_width];
+        let baseline_identities = vec![[0_u8; 32]; identity_width];
+        let resolve_all = |scalars: &[u64], identities: &[[u8; 32]]| {
+            let mut seen = Vec::new();
+            for index in 0..base.fixed_operation_count() {
+                seen.push(base.resolved_fixed_effect(index, TAIL, scalars, identities));
+            }
+            for item in 0..TAIL {
+                for index in 0..base.item_operation_count() {
+                    seen.push(base.resolved_item_effect(item, index, TAIL, scalars, identities));
+                }
+            }
+            seen
+        };
+        let baseline = resolve_all(&baseline_scalars, &baseline_identities);
+
+        let account = AccountProfileV2::decode(&bundle.account_profile).expect("profile");
+        let request_id = digest(&bundle.request_profile);
+        let request =
+            RequestProfileV2::decode_selected(request_id, request_id, &bundle.request_profile)
+                .expect("request profile");
+        let transition = TransitionProgramV3::decode(&bundle.transition).expect("transition");
+        let lifecycle_id = digest(&bundle.lifecycle_policy);
+        let lifecycle = lifecycle_v3::StateLifecyclePolicyV5::decode_selected(
+            lifecycle_id,
+            lifecycle_id,
+            &bundle.lifecycle_policy,
+        )
+        .expect("lifecycle");
+        let action = DirectExecutionActionV3::InlineOrdinary as u32;
+        let lifecycle_writes = |scalar: bool, index: u16| {
+            let kind = if scalar {
+                lifecycle_v3::LifecycleRegisterKindV3::Scalar
+            } else {
+                lifecycle_v3::LifecycleRegisterKindV3::Identity
+            };
+            let quoted = scalar
+                && (0..lifecycle.current_rent_quote_count()).any(|ordinal| {
+                    lifecycle
+                        .current_rent_quote(ordinal)
+                        .expect("quote")
+                        .scalar_destination()
+                        .index()
+                        == index
+                });
+            let protected = (0..lifecycle.action_plan_count(action).expect("plans")).any(|plan| {
+                let selected = lifecycle.action_plan(action, plan).expect("plan");
+                (0..selected.protected_output_count().expect("outputs")).any(|ordinal| {
+                    let target = selected
+                        .protected_output_target(ordinal)
+                        .expect("protected target");
+                    target.kind() == kind
+                        && target.scope() == lifecycle_v3::CoordinateScopeV3::Fixed
+                        && target.index() == index
+                })
+            });
+            quoted || protected
+        };
+
+        let mut unwritten = Vec::new();
+        let mut read = 0_usize;
+        for index in 0..DIRECT_ORDINARY_COMMON_SCALARS_V3 {
+            let mut probe = baseline_scalars.clone();
+            *probe.get_mut(index).expect("scalar") = PROBE_SCALAR;
+            if resolve_all(&probe, &baseline_identities) == baseline {
+                continue;
+            }
+            read += 1;
+            let index = u16::try_from(index).expect("scalar register");
+            let written = account
+                .writes_register(ProjectionTargetV2 {
+                    kind: ProjectionRegisterKindV2::Scalar,
+                    space: ProjectionRegisterSpaceV2::Common,
+                    index,
+                })
+                .expect("profile writes")
+                || request
+                    .writes_register(ProjectionTargetV1 {
+                        kind: ProjectionRegisterKindV1::Scalar,
+                        space: ProjectionRegisterSpaceV1::Common,
+                        index,
+                    })
+                    .expect("request writes")
+                || transition
+                    .writes_register(RegisterWriteTargetV3 {
+                        kind: RegisterKindV3::Scalar,
+                        space: RegisterSpaceV3::Common,
+                        index,
+                    })
+                    .expect("transition writes")
+                || lifecycle_writes(true, index);
+            if !written {
+                unwritten.push(std::format!("scalar {index}"));
+            }
+        }
+        for index in 0..DIRECT_ORDINARY_COMMON_IDENTITIES_V3 {
+            let mut probe = baseline_identities.clone();
+            *probe.get_mut(index).expect("identity") = PROBE_IDENTITY;
+            if resolve_all(&baseline_scalars, &probe) == baseline {
+                continue;
+            }
+            read += 1;
+            let index = u16::try_from(index).expect("identity register");
+            let written = account
+                .writes_register(ProjectionTargetV2 {
+                    kind: ProjectionRegisterKindV2::Identity,
+                    space: ProjectionRegisterSpaceV2::Common,
+                    index,
+                })
+                .expect("profile writes")
+                || request
+                    .writes_register(ProjectionTargetV1 {
+                        kind: ProjectionRegisterKindV1::Identity,
+                        space: ProjectionRegisterSpaceV1::Common,
+                        index,
+                    })
+                    .expect("request writes")
+                || transition
+                    .writes_register(RegisterWriteTargetV3 {
+                        kind: RegisterKindV3::Identity,
+                        space: RegisterSpaceV3::Common,
+                        index,
+                    })
+                    .expect("transition writes")
+                || lifecycle_writes(false, index)
+                // Seeded by common Hot before any family artifact runs: the one
+                // register with an executor author rather than an artifact one.
+                || usize::from(index) == IDENTITY_PARENT_REQUEST_DIGEST_V3;
+            if !written {
+                unwritten.push(std::format!("identity {index}"));
+            }
+        }
+        assert!(
+            unwritten.is_empty(),
+            "the inline-ordinary Effect reads registers no artifact writes: {unwritten:?}"
+        );
+        // Not vacuous: a resolver that errored on every bank would report no
+        // reads at all and pass. This Effect reads most of its own banks.
+        assert!(read >= 40, "only {read} registers measured as read");
     }
 
     #[test]

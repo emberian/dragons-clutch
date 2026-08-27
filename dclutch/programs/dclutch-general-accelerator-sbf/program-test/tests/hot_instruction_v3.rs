@@ -39,7 +39,7 @@ use dclutch_capability_program_contract::v4::{
     SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, initialize_root_account_v4,
 };
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
@@ -277,6 +277,22 @@ fn record_pair(schema: [u8; 32], data: Vec<u8>) -> RecordPairV3 {
         raw: observed(raw, REGISTRY_PROGRAM, false, data),
         staging: observed(staging, system_program::ID, false, Vec::new()),
     }
+}
+
+/// The canonical raw/staging bumps of one finalized record under the Registry.
+fn record_bumps(schema: [u8; 32], content_digest: [u8; 32]) -> (u8, u8) {
+    (
+        Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, &schema, &content_digest],
+            &REGISTRY_PROGRAM,
+        )
+        .1,
+        Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &content_digest],
+            &REGISTRY_PROGRAM,
+        )
+        .1,
+    )
 }
 
 /// Read-only frame member: every fixed account but the root is read-only.
@@ -531,11 +547,30 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
         core_content(config_id),
     )
     .expect("capability execution selection");
+    // The activation this fixture stands in for derives these six bumps once
+    // and records them in the root; the hot path then reads them instead of
+    // searching. Same seeds, same Registry, same answer.
+    let program_set_bumps =
+        record_bumps(CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, program_set_id);
+    // This fixture files its manifest under its OWN schema label (see the
+    // `record_pair` call below); the bump must be derived from the same one, or
+    // the root would name an address no account in this snapshot occupies.
+    let manifest_bumps = record_bumps(
+        digest(b"dclutch/schema/capability-manifest/fixture"),
+        manifest_id,
+    );
+    let config_bumps = record_bumps(GENERAL_CONFIG_SCHEMA_ID_V3, config_id);
     let root_header = CapabilityRootHeaderV1::new(
         core_content(RELEASE_SET),
         market.to_bytes(),
         GENERATION,
-        selection,
+        selection.with_capability_release_record_bumps(program_set_bumps.0, program_set_bumps.1),
+        SelectedRecordBumpsV1::new(
+            manifest_bumps.0,
+            manifest_bumps.1,
+            config_bumps.0,
+            config_bumps.1,
+        ),
     )
     .expect("capability root header");
     let root = Pubkey::find_program_address(&root_header.seeds().as_slices(), &TRADING_PROGRAM).0;

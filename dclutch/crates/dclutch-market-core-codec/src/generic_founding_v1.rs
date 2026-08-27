@@ -5,8 +5,8 @@
 //! projected-Custody state.  Core still authenticates every repeated field
 //! against those semantic owners before creating a Market or a permit.
 
-use crate::{Error, Identity};
-use sha2::{Digest, Sha256};
+use crate::{Error, IDENTITY_BYTES, Identity};
+use dclutch_sha256_adapter::digest;
 
 /// Exact generic-founding request magic.
 pub const GENERIC_FOUNDING_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTGFQ1";
@@ -44,18 +44,30 @@ const REQUEST_TAIL_RESERVED_BYTES: usize = 6;
 const ACK_IDENTITIES_OFFSET: usize = 16;
 const ACK_GENERATION_OFFSET: usize = 240;
 
+/// Bytes before the first key in the canonical funding-list preimage.
+const FUNDING_LIST_PREFIX_BYTES_V1: usize = GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1.len() + 1 + 2;
+/// Widest canonical funding-list preimage, at the admitted maximum count.
+const FUNDING_LIST_PREIMAGE_BYTES_V1: usize =
+    FUNDING_LIST_PREFIX_BYTES_V1 + GENERIC_FOUNDING_MAX_FUNDING_STATES_V1 * IDENTITY_BYTES;
+
 /// Hash one exact ordered, nonempty, alias-free FundingState address list.
 ///
-/// The canonical preimage is `domain || 0 || u16_le(count) || key...`.
+/// The canonical preimage is `domain || 0 || u16_le(count) || key...`. It is
+/// materialized whole before the digest is taken, because the runtime computes
+/// SHA-256 in one call over a slice list rather than by absorbing a stream.
+/// The buffer is sized by the count bound this function already enforced.
 pub fn generic_founding_funding_list_id_v1(funding_states: &[Identity]) -> Result<Identity, Error> {
     if funding_states.is_empty() || funding_states.len() > GENERIC_FOUNDING_MAX_FUNDING_STATES_V1 {
         return Err(Error::InvalidCoordinates);
     }
     let count = u16::try_from(funding_states.len()).map_err(|_| Error::InvalidCoordinates)?;
-    let mut hasher = Sha256::new();
-    hasher.update(GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1);
-    hasher.update([0]);
-    hasher.update(count.to_le_bytes());
+    let mut preimage = [0_u8; FUNDING_LIST_PREIMAGE_BYTES_V1];
+    put(&mut preimage, 0, GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1)?;
+    put(
+        &mut preimage,
+        GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1.len() + 1,
+        &count.to_le_bytes(),
+    )?;
     for (index, key) in funding_states.iter().enumerate() {
         if funding_states
             .get(..index)
@@ -65,9 +77,16 @@ pub fn generic_founding_funding_list_id_v1(funding_states: &[Identity]) -> Resul
         {
             return Err(Error::InvalidCoordinates);
         }
-        hasher.update(key.to_bytes());
+        put(
+            &mut preimage,
+            FUNDING_LIST_PREFIX_BYTES_V1 + index * IDENTITY_BYTES,
+            &key.to_bytes(),
+        )?;
     }
-    Identity::new(hasher.finalize().into())
+    let written = FUNDING_LIST_PREFIX_BYTES_V1 + funding_states.len() * IDENTITY_BYTES;
+    Identity::new(digest(
+        preimage.get(..written).ok_or(Error::InvalidLength)?,
+    ))
 }
 
 /// Stage of the atomic generic founding protocol.
@@ -394,7 +413,7 @@ impl GenericFoundingRequestV1 {
     /// This is the sole value a Trading capability root may carry as its
     /// selection config when the root authorizes atomic generic founding.
     pub fn selection_config_id(self) -> Result<Identity, Error> {
-        Identity::new(Sha256::digest(self.selection_preimage()?).into())
+        Identity::new(digest(&self.selection_preimage()?))
     }
 
     /// Return the same artifact coordinates for the other atomic stage.
