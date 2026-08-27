@@ -304,7 +304,10 @@ artifacts in one transaction cannot fit under the 1,400,000 maximum. A partially
 activated cache cannot decode, so no reader can consume a half-activated set.
 
 Worst measured single activation locally: **Trading, 710,601 CU** — and that was
-at 1,287,728 bytes. At HEAD's 1,384,680 it is proportionally larger. Watch it.
+at 1,287,728 bytes, i.e. 0.552 CU per byte all-in. HEAD's Trading is 1,384,680
+bytes, which *projects* to ≈764,000 CU. That is a projection from one
+measurement, not a measurement; **re-measure it at the deploy commit.** It has
+~55% headroom today and Trading is the artifact most likely to keep growing.
 
 ### 3.4 Market lifecycle
 
