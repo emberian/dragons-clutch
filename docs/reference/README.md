@@ -19,7 +19,7 @@ with `tools/genref/generate.sh`, verify with
 `tools/genref/generate.sh --check`.
 
 Current totals: **13 programs**, **98 routes**
-(56 with an in-tree execution binding), **198 protocol
+(57 with an in-tree execution binding), **198 protocol
 refusal codes**.
 
 - [programs.md](programs.md) -- the on-chain programs, their entrypoints, and

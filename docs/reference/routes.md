@@ -19,7 +19,7 @@ campaign coverage, not a proof about all inputs. Blocked reasons are
 truncated to their first sentence -- the full entries live in
 `blocked.json`.
 
-Currently **1** of **98** routes
+Currently **0** of **98** routes
 have neither an execution binding nor a blocked entry.
 
 ## claims
@@ -153,7 +153,7 @@ have neither an execution binding nor a blocked entry.
 | `resolution/process_admit#AdmitTerminal` | action | variant `ResolutionCoreActionV1::AdmitTerminal` | blocked by rule `resolution/process_admit#AdmitTerminal`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:184` |
 | `resolution/process_append#AppendObservation` | action | variant `RelayInstructionV1::AppendObservation` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:175` |
 | `resolution/process_close#CloseFund` | action | variant `ResolutionCoreActionV1::CloseFund` | blocked by rule `resolution/process_close#CloseFund`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:193` |
-| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | NEVER-EXECUTED, no stated reason | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:185` |
+| `resolution/process_commit_deadline_failure#CommitDeadlineFailure` | action | variant `RelayInstructionV1::CommitDeadlineFailure` | executed (resolution-relayed-programtest); refused (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:185` |
 | `resolution/process_consume#ConsumeRecord` | action | variant `RelayInstructionV1::ConsumeRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:182` |
 | `resolution/process_create#CreateFund` | action | variant `ResolutionCoreActionV1::CreateFund` | blocked by rule `resolution/process_create#CreateFund`: The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. | `programs/dclutch-resolution-proof-sbf/src/core_effect.rs:166` |
 | `resolution/process_create_record#CreateRecord` | action | variant `RelayInstructionV1::CreateRecord` | executed (resolution-relayed-programtest) | `programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs:172` |
@@ -184,17 +184,3 @@ have neither an execution binding nor a blocked entry.
 | `trading/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:1` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:236` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:219` |
-
-## Bindings naming routes the census does not
-
-These route references appear in a bindings file but match no route id
-in the current inventory. Each is either a stale binding or a census gap;
-neither is silently droppable.
-
-| reference | bindings file | binding label |
-| --- | --- | --- |
-| `resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure` | `tools/gauntlet/resolution-relayed/bindings.json` | relayed liveness: a silent market walks to its pre-disclosed failure |
-| `resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure` | `tools/gauntlet/resolution-relayed/bindings.json` | relayed liveness: a walk before the deadline refuses |
-| `resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure` | `tools/gauntlet/resolution-relayed/bindings.json` | relayed liveness: a second walk cannot collect the bounty twice |
-| `resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure` | `tools/gauntlet/resolution-relayed/bindings.json` | relayed liveness: a live compartment that is not the escrow refuses |
-| `resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure` | `tools/gauntlet/resolution-relayed/bindings.json` | relayed liveness: an escrow one lamport short refuses |

@@ -62,7 +62,7 @@
       "routes": [
         "resolution/process_instruction",
         "resolution/relay_transport_v1::process_relay_transport_v1",
-        "resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure"
+        "resolution/process_commit_deadline_failure#CommitDeadlineFailure"
       ],
       "program": "resolution",
       "outcome": "executed",
@@ -73,7 +73,7 @@
       "routes": [
         "resolution/process_instruction",
         "resolution/relay_transport_v1::process_relay_transport_v1",
-        "resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure"
+        "resolution/process_commit_deadline_failure#CommitDeadlineFailure"
       ],
       "program": "resolution",
       "outcome": "refused",
@@ -85,7 +85,7 @@
       "routes": [
         "resolution/process_instruction",
         "resolution/relay_transport_v1::process_relay_transport_v1",
-        "resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure"
+        "resolution/process_commit_deadline_failure#CommitDeadlineFailure"
       ],
       "program": "resolution",
       "outcome": "refused",
@@ -97,7 +97,7 @@
       "routes": [
         "resolution/process_instruction",
         "resolution/relay_transport_v1::process_relay_transport_v1",
-        "resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure"
+        "resolution/process_commit_deadline_failure#CommitDeadlineFailure"
       ],
       "program": "resolution",
       "outcome": "refused",
@@ -109,7 +109,7 @@
       "routes": [
         "resolution/process_instruction",
         "resolution/relay_transport_v1::process_relay_transport_v1",
-        "resolution/relay_transport_v1::process_relay_transport_v1#CommitDeadlineFailure"
+        "resolution/process_commit_deadline_failure#CommitDeadlineFailure"
       ],
       "program": "resolution",
       "outcome": "refused",
