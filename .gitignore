@@ -3,3 +3,6 @@
 /.DS_Store
 *.swp
 *.tmp
+# tools/sbom/sbom_check.py now runs on every `npm test` (73f84c19), so every
+# lane that runs the web suite materialises this next to a tracked tool.
+__pycache__/
