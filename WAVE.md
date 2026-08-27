@@ -172,11 +172,26 @@ of silent loss.
    implemented (§4.11 unsatisfied, tools/relayer/README.md:211); submission
    never run against any cluster; root-workspace promotion an open decision.
    Plus the carried v0/ALT note for its two oversized transactions.
-4. **AOT/interpreter semantic divergence, permanently #[ignore]d**
-   (55616a8; direct-aot-v3-contract/src/tests.rs:520): the
-   `outcome >= tail_count` guard exists only in hand-written Rust, absent from
-   Lean-emitted DIRECT_ORDINARY_PRELUDE_V3. Unreachable today. Owner decision:
-   add the clause in Lean or delete the Rust guard.
+4. **AOT/interpreter semantic divergence — CLOSED** (73f0793, 20f28e0,
+   225af89). The premise was worse than recorded: `DIRECT_ORDINARY_PRELUDE_V3`
+   was never Lean-emitted, and the whole V3 TransitionVM line had no Lean
+   counterpart. `TransitionVMV3.lean` + `DirectOrdinaryV3.lean` +
+   `EmitDirectOrdinaryV3Rust.lean` now author it, gated on byte-identity with
+   the 1,616 bytes the hand-written array produced. The `outcome >= tail_count`
+   guard is deleted and replaced by a stronger authored clause: the item body
+   accumulates each Claims quantity and the epilogue requires the total to equal
+   the transferred quantity, so exactly one Product item must carry the traded
+   outcome. `policy_fee_bps <= fee_denominator` landed in the same prelude
+   (decision: prelude authoritative, `DirectExecutionConfigV1::new` is defence
+   in depth). u64::MAX rent principals: bound REFUTED with argument — the
+   principal is a fail-closed floor that never sizes a lamport movement, and
+   Create pins it to the Rent sysvar minimum by equality; what is owed is a
+   composition theorem at `direct/inline.rs:308`, queued below. Identities moved
+   once and swept tree-wide; the differential now runs with zero ignored tests.
+   **Successor debt**: `registered_fill_artifacts_v4.rs` is the same class — the
+   last V3 program in the tree authored as a hand-written Rust `InstructionV3`
+   array. Attach to tranche-A Direct; author it against `TransitionVMV3.lean`
+   with the same byte-identity gate.
 5. **RegisterBuy topology defects, reported-not-fixed** (9b99662):
    `validate_lengths` still pins System at width 0
    (registered_account_artifacts_v4.rs:562) and Exact loader/program widths the
