@@ -799,6 +799,127 @@ retired"* and none of these was. All live only on the board, in `/private/tmp`.
 | M-32 | **`GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1` is 33 bytes** — same defect class that made an entire transition dead at runtime; only Custody has the seed-length assertion | **CLOSED 2026-08-27 (GEN-CAND, `5987febc`).** The gen-3 constant is `b"dclutch-general-page-v1"` (23 bytes), and all three candidate-half domains carry the `const _: () = assert!(… ≤ 32)` guard Custody had and General did not. The class is closed by construction for this half, not by measurement |
 | M-33 | **`core-sbf/src/tests.rs:141` measures a frame 13 accounts narrower than the real one**, so its packet claim is understated | *"Core owner"* — never claimed. `WAVE.md:399` carries the packet claim but not the understatement |
 | M-34 | **Four independent ProgramTest-evidence emitters** from four lanes in one hour, plus `check-witnesses.sh` duplicated | *"Somebody should own converging these before a fifth"* |
+
+
+### DECOMP dispositions, 2026-08-27 (M-27 / M-28 / M-29 / M-31 / M-34)
+
+`WAVE.md`'s DECOMP charter routed five of these rows to one lane. Each below is
+either done, ruled, or priced with the arithmetic that priced it. None is left
+as "named".
+
+**M-27 — the visitor seam. The sharing half stands; the asymptotic half is NOT
+this bundle's lever, measured.** W2l's `ChildWalkResolutionV3` already removed
+the second Claims-composition decode and the second role-carrier resolution
+(78,146 CU, 1,465 bytes) and that is intact. The remaining claim was that
+`ProgramV4::resolved_invocation` is O(R²·I) through `route_request_start`'s
+prefix rescan. DECOMP profiled the shipped Direct continuation phase by phase
+and it is not where the compute is: both invocation resolutions together are
+`pf-invocation-resolved` 4,127 CU, against `p7-effect-projection` 164,290,
+`p5r-account-projection` 122,881 and `commit-non-root` 122,268. And the entire
+CROSS-SEED variance of the swept path — the thing that makes one draw in sixty
+approach the ceiling — is five phases, every one of them a PDA bump search
+(`p1-invocation` 3,000, `p1-root` 3,000, `request-lifecycle-preplan` 4,500,
+`pf-invocation-preflighted` 3,000, `cm-children` 4,501, at fixture seeds 9/13/1).
+The prefix rescan is real and is the right fix for a family with many routes;
+it is not the lever for Direct, and pricing it as "the single highest-value item
+in the tree" was inherited from a measurement of the SHARING half. Re-priced,
+still unowned, no longer mis-sold.
+
+**M-28 — the sysvar-parser convergence. Inventoried in full, and it is one
+missing accessor.** The two parsers are
+`native_signature::SysvarInstructionV1::read` (the borrowed record reader, with
+the ten-test adversarial corpus at `native_signature.rs:371`) and
+`entrypoint_adapter::admitted_heap_frame_bytes_from_sysvar_v1:1041` (the
+heap-admission scanner, which reaches `dispatch` on every invocation whose data
+satisfies `declares_extended_heap_profile_v1`). Their layout arithmetic is
+byte-identical — 2-byte count, 2-byte offset stride, 2-byte account count,
+33-byte metas, 32-byte program id, 2-byte data length — and both refuse with
+`TradingSbfError::NativeSignature`, so folding changes no refusal. The scanner
+needs only `program_id()` and `data()` of every instruction plus the leading
+count, so the fold is: add a count accessor to `SysvarInstructionV1`, loop
+`0..count` over `read(i, data)`, and delete the scanner's private `read_u16`
+(its `read_u32` stays for the grant payload). **The concrete gap the row names
+is real and sharper than "no corpus":** the admission tests' own `sysvar_bytes`
+helper hardcodes `accounts: Vec::new()`, so `accounts.checked_mul(META_BYTES)`
+is only ever exercised at zero — the crafted-offset-table, oversized-declared-
+account-count and substituted-meta classes have no analogue on the admission
+path at all. The in-code `QUEUED CONVERGENCE` note at
+`entrypoint_adapter.rs:1035` gives the original reason ("that reader is another
+lane's in-flight work"); that lane landed, and the reason has expired.
+
+**M-29 — the AccountInfo migration. PRICED, and the answer is not now.** The
+heap is not the binding wall and has not been since W2p. Peak 29,895 of 32,768
+leaves 2,873 bytes, 8.8% of the budget, and DECOMP's changes leave that peak
+exactly where it was. Compute is the binding wall, at 5,238–12,567 CU of a
+1,400,000 ceiling on the worst of sixty fixture draws — 0.4–0.9%. So the 4,776
+bytes are worth an order of magnitude less than the same effort spent on CU.
+And they are not even the next heap bytes available: W2p's own sized list has
+1,688 (the System-instruction clones in `lifecycle-creates`, for which
+`entrypoint_adapter::invoke_signed_owned_v1` already exists and the commit path
+does not use it), 912 (child-walk buffers reserved to the widest invocation) and
+720 (the preflight walk's frame and wire) — 3,320 bytes, more than the current
+margin, ahead of the floor. **Trigger, so this is a decision and not a
+deferral:** take the migration when the heap peak passes 31,000 with those three
+cuts already taken, or when a family lands whose runtime account count exceeds
+Direct's. Until then it is the last resort, not the next one.
+
+**M-31 — the allocator cfg. RULED: take it, and the incoherence is LIVE, which
+is not how it was previously argued.** W2h refused it partly because the
+motivating measurement (253 frame diagnostics) was stale — it is 0 today, and
+that is still true. But the underlying incoherence is not latent. Two SBF
+cdylibs build `dclutch-trading-sbf` with `no-entrypoint`
+(`dclutch-dealer-accelerator-sbf`, `program-test/test-programs/trading-outer`)
+and the accelerator executes `authenticate_accelerator_invocation_v4`, which is
+`hot_v3` code that Boxes and Vecs freely, under the SDK's allocator rather than
+the audited `BumpHeapV1` it was measured against. Worse, under
+`no-entrypoint` + `target_os = "solana"` the `scratch_backing` module takes its
+NEGATED, host arm inside an SBF program — and W2p already recorded what that
+costs: "the `thread_local!` in it made the trading-outer test program ELF
+UNLOADABLE… the runtime reports that as `UnsupportedProgramId` and names nothing
+about TLS. Cost one gate cycle." **The shipped Trading ELF does not move either
+way** (`no-entrypoint` is off there, so all the predicates already evaluate the
+same), which is what makes this safe to take.
+**The edit is NOT the two files TA-DLR's board post names**, and taking that
+post literally will not compile. It is: the `not(feature = "no-entrypoint")`
+term removed from EIGHT `#[cfg]` sites in `entrypoint_adapter.rs` (seven
+positive — the `#[global_allocator]` static, `program_heap_bytes_used_v1`,
+`program_heap_capacity_v1`, `program_heap_scratch_bytes_v1`, the on-chain
+`scratch_backing`, `admit_heap_frame_v1`, `lift_declared_heap_profile_v1` — plus
+the negated host `scratch_backing` arm, which must narrow to
+`not(target_os = "solana")`), the mirror pair at `hot_v3.rs:330/343` that gates
+`hot_heap_outstanding`, and `custom-heap` enabled on both cdylibs — where
+`trading-outer`'s `custom-heap` feature **does not exist yet and must be added**.
+The `not(shadow-accelerator-auth-only)` term the post says "stays" is gone from
+the tree entirely. **The trap for whoever takes it:** `trading-outer` is the
+outer program of `hot_heap_frame_is_inert`, the instrument that measures the
+32,768-byte heap wall. Changing its allocator changes the instrument, so the
+edit lands with a full re-measurement of the sweep, not beside one. DECOMP did
+not take it inside this lane for exactly that reason: it would have mixed the
+instrument with the measurement it was reporting.
+
+**M-34 — the four ProgramTest emitters. VERIFIED TWO-THIRDS STALE, and the real
+residue is not a convergence.** Of the four the board named, three no longer
+exist: `tools/gauntlet/programtest/evidence.rs` and `tools/gauntlet/tier3/producer/`
+were never committed (no git history for either path) and tier2's campaign was
+deleted in `cc21a7d7`. `check-witnesses.sh` has exactly ONE copy
+(`tools/gauntlet/tier1/`, whose own header says "SHARED by every tier. Do not
+fork it"); the duplicate the row complains about was untracked and is gone. The
+shell half already converged: all five ProgramTest run scripts fold through the
+one `fold-program-test-evidence` binary.
+What remains is two emitters, `tools/gauntlet/program-test-evidence` (the shared
+crate, ~11 suites) and `tools/gauntlet/direct/producer` (its own workspace, its
+own `dclutch-gauntlet-direct-campaign-evidence-v1` schema, serde_json). **They
+cannot simply be merged**: `direct/run-direct.sh` feeds the producer's document
+straight to `check-witnesses.sh`, and `direct/witnesses.json` plus
+`expectations.json` query `artifact.*`, `fast_lane.*` and `ack` — keys the
+shared `TransactionEvidence` shape does not carry. The scoped convergence that
+IS available: keep the Direct envelope and have its `transactions` entries be
+`TransactionEvidence`, which is the only part `census/src/ledger.rs` reads
+(it requires `transactions[].label`, `.signature`, `.logs[]`, optional
+`.compute_units_consumed`, and ignores every envelope key). **Blocked on a live
+claim, not on difficulty:** SN6 claimed `tools/gauntlet/direct/producer` under
+M-42 (`wire_bytes` is `None` there) on 2026-08-27 12:11. Whoever takes M-42
+should take this with it — it is the same file and the same afternoon.
 | M-35 | **The census cannot follow a dispatch through an `unsafe` block** — *"No Direct row can be claimed through Trading until it is closed"* | *"belongs to the census owner."* `WAVE.md:379` carries a *different* census gap |
 | M-36 | **590 literal byte offsets hand-mirrored in the browser** across 21 files (51 magics, 33 seed domains) | ratcheted by `lib/abiCoverage.test.ts`, never assigned a lane. Pattern 3 would kill the genus but does not name the inventory |
 | M-37 | **`REPLAY_STATE_BYTES` has no Rust or Lean authority anywhere** — the browser decides a replay-account width on its own | *"Owner should be the banish lane"* |
