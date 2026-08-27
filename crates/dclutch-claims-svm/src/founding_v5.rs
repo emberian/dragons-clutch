@@ -129,7 +129,10 @@ pub struct ClaimsFoundingRequestInputV5 {
     pub product_record_digest: [u8; 32],
     /// Exact Product instance content identity authenticated by that record.
     pub product_instance_id: [u8; 32],
-    /// Digest of the exact finalized linked LiabilityBasisV2 record.
+    /// Digest of the exact finalized Registry-owned `ProductBasisV3` record
+    /// the Product declares as its liability basis. Core authenticates this
+    /// record through `authenticate_product_basis_v3` before it commits the
+    /// permit, and Claims founding authenticates the same record again.
     pub linked_basis_record_digest: [u8; 32],
     /// Semantic LiabilityBasisV2 identity authenticated by the linked record.
     pub semantic_basis_id: [u8; 32],

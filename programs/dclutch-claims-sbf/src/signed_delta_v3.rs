@@ -28,7 +28,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::batch_v2::{AuthenticatedRoleBatchReceiptV2, RoleBatchRequestV2};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -42,7 +42,7 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use super::affine_batch_v2::authenticate_runtime_product_basis_core_v2;
+use super::affine_batch_v2::authenticate_runtime_product_basis_core_v3;
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
@@ -628,14 +628,12 @@ fn authenticate_product_and_basis(
     plan: SignedDeltaPlanV3<'_>,
     market: MarketViewV2,
 ) -> Result<(), ProgramError> {
-    Ok(authenticate_runtime_product_basis_core_v2(
+    Ok(authenticate_runtime_product_basis_core_v3(
         accounts.registry,
         accounts.rent,
         accounts.core_market,
         accounts.core_program,
-        accounts.basis_record,
-        accounts.basis_staging,
-        ProductRuntimeFrameV2 {
+        ProductRuntimeFrameV3 {
             product: FinalizedRecordFrameV2 {
                 raw: accounts.product_record,
                 staging: accounts.product_staging,
@@ -647,6 +645,10 @@ fn authenticate_product_and_basis(
             portfolio: FinalizedRecordFrameV2 {
                 raw: accounts.portfolio_record,
                 staging: accounts.portfolio_staging,
+            },
+            linked_basis: FinalizedRecordFrameV2 {
+                raw: accounts.basis_record,
+                staging: accounts.basis_staging,
             },
         },
         market,

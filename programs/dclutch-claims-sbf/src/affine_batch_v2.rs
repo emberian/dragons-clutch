@@ -23,13 +23,13 @@ use dclutch_claims_svm::{
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_liability_basis_v2_kernel::product_claims::{
-    BASIS_SEMANTIC_ID_DOMAIN_V2, LinkedBasisRecordV2, semantic_basis_preimage_v2,
-};
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
 };
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_product_runtime_v2_svm_reader::{
+    FinalizedRecordFrameV2, ProductRuntimeFrameV2, ProductRuntimeFrameV3,
+    authenticate_product_basis_v3,
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
@@ -45,8 +45,7 @@ use solana_sdk_ids::sysvar;
 use super::{product_runtime_v2::authenticate_product_runtime_v2, reauthenticate};
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
-    LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, MarketViewV2,
-    PositionViewV2, authenticate_self_finalized_record,
+    LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
 };
 
 /// Exact fixed affine-batch account count before the runtime Position tail.
@@ -495,14 +494,12 @@ fn authenticate_product_and_basis(
     plan: AffineBatchPlanV2<'_>,
     market: MarketViewV2,
 ) -> Result<(), ProgramError> {
-    authenticate_runtime_product_basis_core_v2(
+    authenticate_runtime_product_basis_core_v3(
         accounts.registry,
         accounts.rent,
         accounts.core_market,
         accounts.core_program,
-        accounts.basis_record,
-        accounts.basis_staging,
-        ProductRuntimeFrameV2 {
+        ProductRuntimeFrameV3 {
             product: FinalizedRecordFrameV2 {
                 raw: accounts.product_record,
                 staging: accounts.product_staging,
@@ -515,6 +512,10 @@ fn authenticate_product_and_basis(
                 raw: accounts.portfolio_record,
                 staging: accounts.portfolio_staging,
             },
+            linked_basis: FinalizedRecordFrameV2 {
+                raw: accounts.basis_record,
+                staging: accounts.basis_staging,
+            },
         },
         market,
         plan.product_record_digest(),
@@ -523,22 +524,23 @@ fn authenticate_product_and_basis(
     )
 }
 
-/// Independently authenticate the Product Runtime V2 graph, linked liability
-/// basis raw record, and exact open Core Market selected by an LBV2 Market.
+/// Independently authenticate the Product Runtime V2 graph, the canonical
+/// Registry-owned ProductBasisV3 record it selects, and the exact Core Market
+/// selected by an LBV2 Market.
 ///
-/// This is the reusable, read-only Claims admission boundary. The Product
+/// This is the reusable, read-only Claims admission boundary. The basis
+/// authority is [`authenticate_product_basis_v3`] — the same Registry-owned
+/// V3 record Core authenticates when it commits a founding permit. The Product
 /// graph-root digest, Product semantic identity, semantic basis identity, and
-/// linked-record digest remain distinct joins; no receipt or decoded DTO is a
-/// substitute for any of them.
+/// raw basis-record digest remain distinct joins; no receipt or decoded DTO is
+/// a substitute for any of them.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn authenticate_runtime_product_basis_core_v2(
+pub(crate) fn authenticate_runtime_product_basis_core_v3(
     registry: &AccountInfo<'_>,
     rent_account: &AccountInfo<'_>,
     core_market: &AccountInfo<'_>,
     core_program: &AccountInfo<'_>,
-    basis_record: &AccountInfo<'_>,
-    basis_staging: &AccountInfo<'_>,
-    product_frame: ProductRuntimeFrameV2<'_, '_>,
+    product_frame: ProductRuntimeFrameV3<'_, '_>,
     market: MarketViewV2,
     expected_product_record_digest: [u8; 32],
     expected_linked_basis_record_digest: [u8; 32],
@@ -546,46 +548,33 @@ pub(crate) fn authenticate_runtime_product_basis_core_v2(
 ) -> Result<(), ProgramError> {
     let rent =
         Rent::from_account_info(rent_account).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
-    let product = authenticate_product_runtime_v2(
+    let runtime = authenticate_product_runtime_v2(
         registry.key,
         &rent,
         expected_product_record_digest,
         None,
-        product_frame,
+        ProductRuntimeFrameV2 {
+            product: product_frame.product,
+            result_domain: product_frame.result_domain,
+            portfolio: product_frame.portfolio,
+        },
     )
     .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
-    authenticate_self_finalized_record(
-        core_program,
-        rent_account,
-        basis_record,
-        basis_staging,
-        LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
+    let product = authenticate_product_basis_v3(
+        registry.key,
+        &rent,
+        runtime,
+        product_frame.linked_basis,
     )
     .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
-    let basis_data = basis_record
-        .try_borrow_data()
-        .map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
-    if hash(&basis_data).to_bytes() != expected_linked_basis_record_digest {
-        return Err(AffineBatchSbfErrorV2::ProductBasis.into());
-    }
-    let linked = LinkedBasisRecordV2::decode(&basis_data)
-        .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
-    let embedded = linked.basis_record();
-    let semantic_preimage =
-        semantic_basis_preimage_v2(embedded).map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
-    let semantic_basis_id = hashv(&[
-        BASIS_SEMANTIC_ID_DOMAIN_V2,
-        semantic_preimage.prefix(),
-        semantic_preimage.suffix(),
-    ])
-    .to_bytes();
-    if product.product_record.content_digest.to_bytes() != expected_product_record_digest
-        || product.product_id.to_bytes() != market.product_instance_id
-        || product.liability_basis_id.to_bytes() != market.basis_id
-        || product.outcome_count != market.claim_count
-        || linked.product_instance_id().to_bytes() != product.product_id.to_bytes()
-        || linked.semantic_basis_id().to_bytes() != market.basis_id
-        || semantic_basis_id != market.basis_id
+    if product.runtime.product_record.content_digest.to_bytes() != expected_product_record_digest
+        || product.runtime.product_id.to_bytes() != market.product_instance_id
+        || product.runtime.liability_basis_id.to_bytes() != market.basis_id
+        || product.semantic_basis_id.to_bytes() != market.basis_id
+        || product.runtime.outcome_count != market.claim_count
+        || product.basis_width != market.claim_count
+        || product.linked_basis_record.content_digest.to_bytes()
+            != expected_linked_basis_record_digest
     {
         return Err(AffineBatchSbfErrorV2::ProductBasis.into());
     }

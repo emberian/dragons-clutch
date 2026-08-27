@@ -30,7 +30,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_market_core_codec::Phase as CorePhase;
-use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
+use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use solana_program::{
@@ -46,7 +46,7 @@ use solana_program::{
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
-use super::{affine_batch_v2::authenticate_runtime_product_basis_core_v2, reauthenticate};
+use super::{affine_batch_v2::authenticate_runtime_product_basis_core_v3, reauthenticate};
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     LiabilityBasisPositionInputV2, MarketViewV2, PositionViewV2,
@@ -344,14 +344,12 @@ fn process_admit(
 
     let product_digest = account_digest(accounts.product_record)?;
     let linked_digest = account_digest(accounts.basis_record)?;
-    authenticate_runtime_product_basis_core_v2(
+    authenticate_runtime_product_basis_core_v3(
         accounts.registry,
         accounts.rent,
         accounts.core_market,
         accounts.core_program,
-        accounts.basis_record,
-        accounts.basis_staging,
-        ProductRuntimeFrameV2 {
+        ProductRuntimeFrameV3 {
             product: FinalizedRecordFrameV2 {
                 raw: accounts.product_record,
                 staging: accounts.product_staging,
@@ -363,6 +361,10 @@ fn process_admit(
             portfolio: FinalizedRecordFrameV2 {
                 raw: accounts.portfolio_record,
                 staging: accounts.portfolio_staging,
+            },
+            linked_basis: FinalizedRecordFrameV2 {
+                raw: accounts.basis_record,
+                staging: accounts.basis_staging,
             },
         },
         market,
