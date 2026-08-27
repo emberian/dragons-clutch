@@ -16,16 +16,16 @@
 
 ^"roots"{
   @index: ~"./index.spw"
-  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @inventory: ~"../../archive/gen1/docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
   @agents: ~"../../AGENTS.md"
-  @project: ~"../../PROJECT.md"
+  @project: ~"../../archive/handoffs/PROJECT.md"
   @readme: ~"../../README.md"
-  @truth: ~"../../CURRENT_TRUTH.md"
-  @dual: ~"../../docs/research/DUAL_IS_THE_MEASURE.md"
-  @risk: ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
-  @economics: ~"../../docs/ECONOMICS.md"
-  @source_generation: ~"../../programs/clutch-sbf/program/src/source_generation.rs"
-  @profile: ~"../../research/liveness-policy-profile"
+  @truth: ~"../../archive/handoffs/CURRENT_TRUTH.md"
+  @dual: ~"../../archive/gen1/docs/research/DUAL_IS_THE_MEASURE.md"
+  @risk: ~"../../archive/gen1/docs/research/RISK_SUMMED_POSITIONS.md"
+  @economics: ~"../../archive/gen1/docs/ECONOMICS.md"
+  @source_generation: ~"../../archive/gen1/programs/clutch-sbf/program/src/source_generation.rs"
+  @profile: ~"../../archive/gen1/research/liveness-policy-profile"
 }
 
 ^"intent"{
@@ -42,7 +42,7 @@
     define = "The design default at every boundary: hostile bytes, ineligible fills, fractional lots, ambiguous evidence, and unadmitted sources are refused with typed errors before any mutation — a refusal is never weakened to make an integration pass."
     cite = "AGENTS.md (evidence and edits); PROJECT.md §6"
     source = ~"../../AGENTS.md"
-    corroborant = ~"../../PROJECT.md"
+    corroborant = ~"../../archive/handoffs/PROJECT.md"
     teaches = "P1"
     recurs = "P1-P7 (pervasive)"
     hub = true
@@ -70,7 +70,7 @@
     label = "claim plane (promotion)"
     define = "The nontransitive evidence vocabulary — PROVED-MODEL, CHECKED-RUST-SUBSET, CHECKED-FINITE, HOST-TESTED, SBF-EXECUTED, PROFILE-ADMITTED, MODEL-ONLY, PROPOSED, IN-FLIGHT, STOP — where every claim names its plane and no plane substitutes for another; promotion is crossing a named gate with artifacts from the final joined bytes."
     cite = "CURRENT_TRUTH.md §1, §7"
-    source = ~"../../CURRENT_TRUTH.md"
+    source = ~"../../archive/handoffs/CURRENT_TRUTH.md"
     teaches = "P7"
     hub = true
     binds = #[
@@ -108,7 +108,7 @@
     label = "lapse"
     define = "The clearing's honest failure mode: when no admissible certified candidate exists (provably, exactly when the LP's optimal dual face misses the admissible price box, in the analyzed cases), the epoch clears nothing rather than publish a false number."
     cite = "DUAL_IS_THE_MEASURE.md §6"
-    source = ~"../../docs/research/DUAL_IS_THE_MEASURE.md"
+    source = ~"../../archive/gen1/docs/research/DUAL_IS_THE_MEASURE.md"
     teaches = "P3"
     recurs = "P5"
     refines = #[ "at the venue plane -> refusal" ][reg=set]
@@ -121,7 +121,7 @@
     define = "The immutable evidence-derived resolution transition — the system's one non-isometry, a measurement that collapses the risk quotient to a point — evaluating the frozen basis at the uniquely admitted statistic and fixing the payout vector by largest remainder."
     cite = "README.md; PROJECT.md §6; RISK_SUMMED_POSITIONS.md §1.5"
     source = ~"../../README.md"
-    corroborant = ~"../../PROJECT.md"
+    corroborant = ~"../../archive/handoffs/PROJECT.md"
     teaches = "P4"
     uses = #[ largest_remainder, source_generation ][reg=set]
     binds = #[
@@ -138,7 +138,7 @@
     label = "source generation (V1 / v2)"
     define = "Which plane sealed a page of evidence — the V1 provider-neutral immutable price data account or the v2 pull profile's ephemeral receiver-posted update — carried as a tag rather than erased, because the two prove window maturity with different evidence and every other difference between them is a disjointness the seam must not smooth over."
     cite = "programs/clutch-sbf/program/src/source_generation.rs (module header; `SealedArchiveBindingV1::window_has_matured`)"
-    source = ~"../../programs/clutch-sbf/program/src/source_generation.rs"
+    source = ~"../../archive/gen1/programs/clutch-sbf/program/src/source_generation.rs"
     used_by = #[ hatch, custody_boundary ][reg=set]
     refuses = #[ "a page presented against the other generation's spec -> refusal" ][reg=set]
     fail_closed = "The choice of generation is not a caller input. It is read from the authenticated SourceSpec account's exact length, and the spec's own address is derived from the market's frozen Terms rather than accepted. Neither arm of `VerifiedSealedArchive` can be constructed from bytes: each comes from its own generation's verifier, which pins its own account tag (`0x71`/`0x74`), its own page-commitment domain, and its own source-spec type."

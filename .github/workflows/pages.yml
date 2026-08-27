@@ -2,7 +2,7 @@
 # export plus the generated protocol reference and guides, assembled by
 # dclutch/tools/genref/render-site.mjs (which link-checks the artifact and
 # refuses it on any broken internal link). This replaces the gen-1 microsite
-# in site/, which is no longer published.
+# in archive/gen1/site/, which is no longer published.
 #
 # Publication is deliberately manual. A repository push is not release or
 # publication authority, and the site describes an unreleased local

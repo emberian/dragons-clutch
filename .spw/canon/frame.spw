@@ -13,10 +13,10 @@
 
 ^"roots"{
   @index: ~"./index.spw"
-  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
-  @project: ~"../../PROJECT.md"
+  @inventory: ~"../../archive/gen1/docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @project: ~"../../archive/handoffs/PROJECT.md"
   @agents: ~"../../AGENTS.md"
-  @economics: ~"../../docs/ECONOMICS.md"
+  @economics: ~"../../archive/gen1/docs/ECONOMICS.md"
 }
 
 ^"intent"{
@@ -32,8 +32,8 @@
     label = "Realm & Hoard"
     define = "A Realm is the immutable collateral profile and version namespace a market lives in; its Hoard is the market-local vault whose principal pays only claimants — never keepers, rent, fees, or treasury — with liveness work independently prepaid at admission."
     cite = "PROJECT.md §2–3; ECONOMICS.md §1–2; AGENTS.md"
-    source = ~"../../PROJECT.md"
-    corroborant = ~"../../docs/ECONOMICS.md"
+    source = ~"../../archive/handoffs/PROJECT.md"
+    corroborant = ~"../../archive/gen1/docs/ECONOMICS.md"
     teaches = "P1"
     recurs = "P4"
     used_by = #[ custody_boundary ][reg=set]
@@ -56,7 +56,7 @@
     label = "Eggcrate (kernel)"
     define = "The pure deterministic verification-target transition kernel: `no_std`, no-alloc, safe, fixed-layout, total Rust with no Solana SDK, oracle SDK, or CPI — the semantic owner every adapter merely transports for."
     cite = "PROJECT.md §2, §4; AGENTS.md (kernel policy)"
-    source = ~"../../PROJECT.md"
+    source = ~"../../archive/handoffs/PROJECT.md"
     corroborant = ~"../../AGENTS.md"
     teaches = "P1"
     recurs = "P7"

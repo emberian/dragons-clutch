@@ -26,8 +26,8 @@
   @refusal: ~"./refusal.spw"
   @evidence: ~"./evidence.spw"
   @frame: ~"./frame.spw"
-  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
-  @site_map: ~"../../docs/site-plan/SITE_CONTENT_MAP_2026-08-20.md"
+  @inventory: ~"../../archive/gen1/docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @site_map: ~"../../archive/gen1/docs/site-plan/SITE_CONTENT_MAP_2026-08-20.md"
   @spw_index: ~"../index.spw"
 }
 
@@ -45,18 +45,18 @@
   # The landing records of the 2026-08-21 capability wave, in the order the
   # refresh read them. GOAL.md's done-log carries the wave's own summaries;
   # everything else is the object those summaries point at.
-  @log: ~"../../GOAL.md"
-  @cone: ~"../../docs/research/DUAL_IS_THE_MEASURE.md"
-  @partial_fill: ~"../../docs/design/PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md"
-  @bench: ~"../../docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
-  @settlement: ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
-  @reservation: ~"../../programs/solana-layout/src/reservation.rs"
-  @split: ~"../../programs/clutch-sbf/program/src/instructions/split.rs"
-  @relation: ~"../../crates/clutch-batch/src/relation_v1.rs"
-  @fee_shape: ~"../../research/batch-policy-identity/src/general_clearing_v1.rs"
-  @revenue_policy: ~"../../research/batch-policy-identity/src/revenue_policy_v1.rs"
-  @source_generation: ~"../../programs/clutch-sbf/program/src/source_generation.rs"
-  @keeper: ~"../../programs/clutch-sbf/keeper"
+  @log: ~"../../archive/handoffs/GOAL.md"
+  @cone: ~"../../archive/gen1/docs/research/DUAL_IS_THE_MEASURE.md"
+  @partial_fill: ~"../../archive/gen1/docs/design/PARTIAL_FILL_LEDGER_DESIGN_2026-08-21.md"
+  @bench: ~"../../archive/gen1/docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
+  @settlement: ~"../../archive/gen1/programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+  @reservation: ~"../../archive/gen1/programs/solana-layout/src/reservation.rs"
+  @split: ~"../../archive/gen1/programs/clutch-sbf/program/src/instructions/split.rs"
+  @relation: ~"../../archive/gen1/crates/clutch-batch/src/relation_v1.rs"
+  @fee_shape: ~"../../archive/gen1/research/batch-policy-identity/src/general_clearing_v1.rs"
+  @revenue_policy: ~"../../archive/gen1/research/batch-policy-identity/src/revenue_policy_v1.rs"
+  @source_generation: ~"../../archive/gen1/programs/clutch-sbf/program/src/source_generation.rs"
+  @keeper: ~"../../archive/gen1/programs/clutch-sbf/keeper"
   ~#headline: "SETTLEMENT_BLOCKERS: [] — the settlement ledger emptied, with its residuals named rather than dropped."
 }
 

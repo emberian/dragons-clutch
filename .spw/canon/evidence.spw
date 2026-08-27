@@ -18,14 +18,14 @@
 
 ^"roots"{
   @index: ~"./index.spw"
-  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
-  @truth: ~"../../CURRENT_TRUTH.md"
-  @goal: ~"../../GOAL.md"
-  @planned_vs_built: ~"../../docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
-  @settlement: ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
-  @bench: ~"../../docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
-  @pull_endow: ~"../../programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
-  @profile: ~"../../research/liveness-policy-profile"
+  @inventory: ~"../../archive/gen1/docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @truth: ~"../../archive/handoffs/CURRENT_TRUTH.md"
+  @goal: ~"../../archive/handoffs/GOAL.md"
+  @planned_vs_built: ~"../../archive/gen1/docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
+  @settlement: ~"../../archive/gen1/programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+  @bench: ~"../../archive/gen1/docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
+  @pull_endow: ~"../../archive/gen1/programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
+  @profile: ~"../../archive/gen1/research/liveness-policy-profile"
 }
 
 ^"intent"{
@@ -41,7 +41,7 @@
     label = "seal"
     define = "Binding a claim to exact bytes: a named commit fixes the ELF identity (SHA-256, byte length), its audit, and its measured behavior, so later statements are about *that artifact* and drift is machine-refused — byte-identical rebuilds are part of the seal."
     cite = "CURRENT_TRUTH.md §2"
-    source = ~"../../CURRENT_TRUTH.md"
+    source = ~"../../archive/handoffs/CURRENT_TRUTH.md"
     teaches = "P7"
     binds = #[
       "is consumed by the manifest and by -> attestation"
@@ -63,8 +63,8 @@
     define = "Success against mock infrastructure requires a distinct, explicitly non-production artifact; the default program's `SourceReleaseUnavailable` (`0x79`) is what an empty or unmatched source registry earns — incompleteness made machine-visible rather than papered over."
     seeded_define = "Success against mock infrastructure requires a distinct, explicitly non-production artifact; the default sealed program refuses value with `SourceReleaseUnavailable` (`0x79`) because its source registry is empty — incompleteness made machine-visible rather than papered over."
     cite = "CURRENT_TRUTH.md §4 (pooled custody row), §6.3; docs/reviews/PLANNED_VS_BUILT_2026-08-19.md; programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
-    source = ~"../../CURRENT_TRUTH.md"
-    corroborant = ~"../../docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
+    source = ~"../../archive/handoffs/CURRENT_TRUTH.md"
+    corroborant = ~"../../archive/gen1/docs/reviews/PLANNED_VS_BUILT_2026-08-19.md"
     teaches = "P7"
     refines = #[ "into release engineering -> refusal" ][reg=set]
     binds = #[
@@ -73,7 +73,7 @@
       "which registry a market's Terms point at is -> source_generation"
     ][reg=set]
     revised = "2026-08-21 — the registry is no longer empty by construction. The default artifact takes custody for a **registered v2 pull release**, and the discipline holds by narrowing rather than by universality: a structurally perfect v2 spec naming a parser release the ELF does not carry still refuses `0x79` and moves no atom, and the stock V1 plane still refuses `0x79`. The mock ELF remains a distinct artifact and the bench's non-production banner still names it."
-    evidence = ~"../../programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
+    evidence = ~"../../archive/gen1/programs/clutch-sbf/svm-tests/tests/r2_pull_endow.rs"
   }[reg=concept]
 
   attestation: .{
@@ -81,8 +81,8 @@
     label = "attestation"
     define = "Independent re-execution of the portable evidence on a second host from a fresh archive — gates PASS/STOP counted, files compared twice, the sealed ELF byte-verified in multiple contexts — recorded as a durable job, never as a release claim."
     cite = "CURRENT_TRUTH.md §2 (Persvati 41/41, 44/44 PASS 0 STOP); GOAL.md done-log Cycles B–D"
-    source = ~"../../CURRENT_TRUTH.md"
-    corroborant = ~"../../GOAL.md"
+    source = ~"../../archive/handoffs/CURRENT_TRUTH.md"
+    corroborant = ~"../../archive/handoffs/GOAL.md"
     teaches = "P7"
     uses = #[ seal ][reg=set]
     uses_external = #[ "the manifest" ][reg=set]
@@ -99,7 +99,7 @@
     label = "the blocker ledger"
     define = "The executable in-source list of lifecycle facts the general clearing plane needs and does not have, ordered by dependency rather than severity and pinned by its own test alongside the retired rows that state how each was discharged — so \"what is missing\" is a constant a compiler checks, never prose."
     cite = "programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs (`SettlementBlocker`, `SETTLEMENT_BLOCKERS`, `RETIRED_SETTLEMENT_BLOCKERS`)"
-    source = ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+    source = ~"../../archive/gen1/programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
     refines = #[ "into a machine-checked ledger -> two_elf_discipline" ][reg=set]
     used_by = #[ claim_plane ][reg=set]
     status = "`SETTLEMENT_BLOCKERS` is **empty**: ten rows retired, every one discharged by an executable seam with a real-bank campaign behind it. Four fell in this wave — `PartialFillLedger`, `RoundingPotRealization`, `VirtualPot`, `VirtualMergeCredit` — and two of those four were *born* in it, filed as new rows when a retiring row's residual turned out to be a missing settlement fact rather than a narrowing. A row that is opened and closed inside one wave is the grammar working, not churn."
@@ -118,7 +118,7 @@
     label = "recorded residual"
     define = "A named narrowing carried by an implemented join: the seam works, its admission is narrower than the relation's, and the gap is written down where it was created — with the coincidence that closes it *checked* rather than assumed — so the ledger can be empty without the tree pretending nothing refuses."
     cite = "programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs (the `SETTLEMENT_BLOCKERS` doc comment, \"The residuals standing right now\")"
-    source = ~"../../programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
+    source = ~"../../archive/gen1/programs/clutch-sbf/program/src/instructions/orders_batch/settlement.rs"
     refines = #[ "into a ledger discipline -> refusal" ][reg=set]
     used_by = #[ blocker_ledger ][reg=set]
     standing = #[
@@ -137,7 +137,7 @@
     label = "the operator bench (untrusted projection)"
     define = "A window onto the exact signed walk rather than a reimplementation of it, made honest structurally rather than editorially: \"The browser never builds a transaction.\" It has no RPC client, no wallet, no serializer and no key material, it receives decoded state over one event stream and POSTs intents, and every byte that reaches the bank is produced by the same harness builders the sealed lane uses — so a divergence between page and wire is not caught, it is impossible."
     cite = "docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md (the thesis; \"What this is evidence for, and what it is not\"; trade mode)"
-    source = ~"../../docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
+    source = ~"../../archive/gen1/docs/design/OPERATOR_BENCH_DESIGN_2026-08-21.md"
     refines = #[ "into something a person can watch -> attestation" ][reg=set]
     refuses = #[ "a second implementation of the wire format -> refusal" ][reg=set]
     honesty = "Structural rather than editorial: a permanent, non-dismissible header carrying `NON-PRODUCTION mock-source ELF`, the live-hashed ELF sha256, `LOCAL 127.0.0.1 ONLY`, `no value`, and the scope `SBF-EXECUTED (unpromoted)` — rendered before any data arrives and re-rendered from the daemon's own hash of the `.so` it actually loaded, not from a constant in the page. The UI's own prose never uses the word *verified*, and its claim vocabulary is reused verbatim rather than extended."

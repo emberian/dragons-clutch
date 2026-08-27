@@ -16,15 +16,15 @@
 
 ^"roots"{
   @index: ~"./index.spw"
-  @inventory: ~"../../docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
-  @project: ~"../../PROJECT.md"
-  @truth: ~"../../CURRENT_TRUTH.md"
-  @risk: ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
-  @bspline: ~"../../lean/DragonsClutch/BSpline.lean"
-  @tier2: ~"../../docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
-  @goal: ~"../../GOAL.md"
-  @degree_corpus: ~"../../verus/bspline/DEGREE_CORPUS.md"
-  @lifecycle: ~"../../programs/clutch-sbf/svm-tests/tests/joined_lifecycle.rs"
+  @inventory: ~"../../archive/gen1/docs/site-plan/CONCEPT_INVENTORY_2026-08-20.md"
+  @project: ~"../../archive/handoffs/PROJECT.md"
+  @truth: ~"../../archive/handoffs/CURRENT_TRUTH.md"
+  @risk: ~"../../archive/gen1/docs/research/RISK_SUMMED_POSITIONS.md"
+  @bspline: ~"../../archive/gen1/lean/DragonsClutch/BSpline.lean"
+  @tier2: ~"../../archive/gen1/docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
+  @goal: ~"../../archive/handoffs/GOAL.md"
+  @degree_corpus: ~"../../archive/gen1/verus/bspline/DEGREE_CORPUS.md"
+  @lifecycle: ~"../../archive/gen1/programs/clutch-sbf/svm-tests/tests/joined_lifecycle.rs"
 }
 
 ^"intent"{
@@ -40,7 +40,7 @@
     label = "Egg (claim)"
     define = "One native basis claim — categorical at degree zero, an open-clamped B-spline basis function at degrees one through three — that redeems according to its exact integer weight at the resolved value."
     cite = "PROJECT.md §1–2"
-    source = ~"../../PROJECT.md"
+    source = ~"../../archive/handoffs/PROJECT.md"
     teaches = "P1"
     recurs = "P2"
     uses = #[ partition_of_unity, degree ][reg=set]
@@ -56,8 +56,8 @@
     label = "Clutch (complete set)"
     define = "One unit of every Egg of a market — the constant payoff, worth exactly one collateral unit at every admissible resolved value, mintable and meltable at par."
     cite = "PROJECT.md §2; RISK_SUMMED_POSITIONS.md §1.1 (unitality)"
-    source = ~"../../PROJECT.md"
-    corroborant = ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
+    source = ~"../../archive/handoffs/PROJECT.md"
+    corroborant = ~"../../archive/gen1/docs/research/RISK_SUMMED_POSITIONS.md"
     teaches = "P1"
     hub = true
     uses = #[ egg, partition_of_unity ][reg=set]
@@ -73,8 +73,8 @@
     label = "degree (the ladder)"
     define = "The precision order of a market's basis: 0 is an exhaustive disjoint ordered partition; 1–3 are native smooth B-spline semantics that must never be silently lowered to one-hot bins."
     cite = "PROJECT.md §1; CURRENT_TRUTH.md §3"
-    source = ~"../../PROJECT.md"
-    corroborant = ~"../../CURRENT_TRUTH.md"
+    source = ~"../../archive/handoffs/PROJECT.md"
+    corroborant = ~"../../archive/handoffs/CURRENT_TRUTH.md"
     teaches = "P2"
     refines = #[ ][reg=set]
     refines_external = #[ "binary markets" ][reg=set]
@@ -86,7 +86,7 @@
     adjacent = #[ "knot grid", "open-clamped", "span" ][reg=set]
     revised = "2026-08-21 — the smooth rungs stopped being design-ahead. Three surfaces still said degrees two and three refuse at Terms admission; none had been true since 2026-08-19, and correcting the claim upgraded a risk rather than retiring one (the §7.4 no-arbitrage warning went live, which is what the moment-cone gate answers)."
     status = "Degrees two and three are admitted at Terms with every smooth side condition pinned against the Lean theorem whose hypothesis it is, driven end to end on a bank (`blank_bank_joined_lifecycle_degree_two` / `_degree_three`: create, split, resolve, redeem, CU measured), and checked by a 3,360-row Lean/Rust corpus that agrees byte for byte at degrees one through three with eight source mutants red."
-    evidence = ~"../../verus/bspline/DEGREE_CORPUS.md"
+    evidence = ~"../../archive/gen1/verus/bspline/DEGREE_CORPUS.md"
   }[reg=concept]
 
   partition_of_unity: .{
@@ -94,8 +94,8 @@
     label = "partition of unity"
     define = "The frozen basis property H1/H2 — every weight nonnegative and bounded, all weights summing exactly to the denominator at every admissible value — from which solvency, complete-set par value, and price normalization all descend."
     cite = "RISK_SUMMED_POSITIONS.md §1.1; lean/DragonsClutch/BSpline.lean"
-    source = ~"../../docs/research/RISK_SUMMED_POSITIONS.md"
-    corroborant = ~"../../lean/DragonsClutch/BSpline.lean"
+    source = ~"../../archive/gen1/docs/research/RISK_SUMMED_POSITIONS.md"
+    corroborant = ~"../../archive/gen1/lean/DragonsClutch/BSpline.lean"
     teaches = "P2"
     used_by = #[ egg, clutch, simplex_prices ][reg=set]
     plane = "machine-checked in the Lean model (P7)"
@@ -106,8 +106,8 @@
     label = "coefficient vector (portfolio)"
     define = "A payoff shape written exactly as integer coefficients over the native basis — one atomic asset, one order, one fill; a vector is not automatically an approximation."
     cite = "PROJECT.md §1; docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
-    source = ~"../../PROJECT.md"
-    corroborant = ~"../../docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
+    source = ~"../../archive/handoffs/PROJECT.md"
+    corroborant = ~"../../archive/gen1/docs/design/TIER2_PORTFOLIO_CLEARING_PLAN_2026-08-20.md"
     teaches = "P2"
     recurs = "P3"
     uses = #[ egg ][reg=set]
@@ -123,8 +123,8 @@
     label = "compatibility lowering"
     define = "The explicitly-labeled adapter that samples a shaped payoff onto degree-zero bins — always disclosed, always carrying an error statement when inexact, never a redefinition of the smooth product."
     cite = "CURRENT_TRUTH.md §3 item 3; PROJECT.md §1"
-    source = ~"../../CURRENT_TRUTH.md"
-    corroborant = ~"../../PROJECT.md"
+    source = ~"../../archive/handoffs/CURRENT_TRUTH.md"
+    corroborant = ~"../../archive/handoffs/PROJECT.md"
     teaches = "P2"
     refuses = #[ "silent substitution for -> degree" ][reg=set]
     binds = #[ "guarded by -> refusal" ][reg=set]
@@ -135,13 +135,13 @@
     label = "largest remainder"
     define = "The single deterministic rounding rule — canonical largest-remainder quantization with lowest-index ties — applied once at each named boundary so exactness is preserved or the discrepancy is named."
     cite = "PROJECT.md §6; CURRENT_TRUTH.md §3; lean/DragonsClutch/BSpline.lean (constructive uniqueness)"
-    source = ~"../../PROJECT.md"
-    corroborant = ~"../../lean/DragonsClutch/BSpline.lean"
+    source = ~"../../archive/handoffs/PROJECT.md"
+    corroborant = ~"../../archive/gen1/lean/DragonsClutch/BSpline.lean"
     teaches = "P4"
     used_by = #[ hatch, composite_fee_base, pot ][reg=set]
     plane = "proved canonical in the Lean model"
     revised = "2026-08-21 — the seed recorded `fee close` as a hole because no fee arithmetic existed. Two of its named boundaries are now executable: the composite base's terminal ceiling with its persisting carry, and the rounding pot's per-end conversion (ceiling for a payer, floor for a payee)."
-    evidence = ~"../../crates/clutch-batch/src/relation_v1.rs"
+    evidence = ~"../../archive/gen1/crates/clutch-batch/src/relation_v1.rs"
   }[reg=concept]
 }
 
