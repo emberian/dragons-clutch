@@ -70,6 +70,230 @@ pub const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x97; 32]);
 pub const LOOKUP_TABLE: Pubkey = Pubkey::new_from_array([0x96; 32]);
 pub const COMPUTE_LIMIT: u64 = 1_400_000;
 
+/// The exact upgrade authority a slot-pinned substrate's ProgramData carries
+/// and its `ExactAuthority` releases bind.
+///
+/// It signs nothing here. Its only role is to be the same 32 bytes on both
+/// sides of `slot_pinned_release_elf_digest_v1`'s authority equality, so a key
+/// distinct from every program identity above is exactly right.
+pub const UPGRADE_AUTHORITY: Pubkey = Pubkey::new_from_array([0x9a; 32]);
+
+/// The slot a pinned substrate's releases bind and its ProgramData reports.
+///
+/// Nonzero on purpose: zero is what an unpinned fixture writes, and a pin at
+/// zero would pass the `u64` equality for the wrong reason. The pair below is
+/// the devnet iteration runbook's own measured deploy/redeploy pair.
+pub const PINNED_DEPLOYMENT_SLOT: u64 = 167;
+
+/// The slot a SUPERSEDED substrate's ProgramData reports: strictly later than
+/// [`PINNED_DEPLOYMENT_SLOT`], which is what an `Upgrade` by the bound
+/// authority produces and what `slot_pin_refusal` names
+/// `ReleaseSupersededByUpgrade`.
+pub const UPGRADED_DEPLOYMENT_SLOT: u64 = 531;
+
+/// The bank slot a pinned substrate whose ProgramData has never moved runs at.
+///
+/// # This is a runtime constraint, not a preference
+///
+/// A Loader V3 program is visible from `deployment_slot + 1`
+/// (`DELAY_VISIBILITY_SLOT_OFFSET`), and the program cache additionally
+/// requires the deployment slot to be an ANCESTOR of the executing slot in the
+/// fork graph. So a bank at slot 1 can only execute a program whose ProgramData
+/// reports slot 0 -- which is why the unpinned fixture writes 0, and why a
+/// first attempt at a nonzero pin died in `ProgramCache::assign_program` with
+/// "Unexpected replacement of an entry" rather than with anything about the
+/// pin: the cache rejected an off-fork entry, reloaded it, and reloaded it
+/// again until the client's deadline expired.
+///
+/// `PINNED_DEPLOYMENT_SLOT + 1` is exactly the first slot where the pinned
+/// deployment is both effective and rooted, which is what
+/// `ProgramTestContext::warp_to_slot` leaves behind.
+///
+/// The Direct campaign's maker replays are valid for `clock_slot ± 1`, so
+/// `direct_case_v3` builds them around this slot and `start_with_substrate`
+/// warps the bank to it; the two must not be set independently.
+pub const PINNED_FIXTURE_BANK_SLOT: u64 = PINNED_DEPLOYMENT_SLOT + 1;
+
+/// The bank slot the SUPERSEDED substrate runs at: one past the upgrade.
+///
+/// It sits above [`UPGRADED_DEPLOYMENT_SLOT`] on purpose. A superseded
+/// substrate is one that WAS upgraded and now runs perfectly well; what refuses
+/// is the release whose pin no longer describes it. A bank too early to load
+/// the upgraded program would refuse for the wrong reason and prove nothing
+/// about decision 0012.
+pub const SUPERSEDED_FIXTURE_BANK_SLOT: u64 = UPGRADED_DEPLOYMENT_SLOT + 1;
+
+/// Which release substrate the fixture stages under the same real ELFs.
+///
+/// # Why this exists
+///
+/// Decision 0012 admitted a MUTABLE substrate onto the cached-digest path:
+/// `slot_pinned_release_elf_digest_v1` branches on the release's upgrade
+/// policy, and the `ExactAuthority` arm -- the whole of what 0012 added -- was
+/// unreachable from this fixture, because `release` built every release
+/// `Immutable` and the staged ProgramData wrote the authority option as `None`.
+/// Every compute figure this waist has ever produced took the `Immutable` arm.
+///
+/// Selected by `DCLUTCH_FIXTURE_SUBSTRATE`, in the same spirit as
+/// `DCLUTCH_FIXTURE_SEED`: the default is the immutable substrate every
+/// existing case was written against, so nothing moves unless a caller asks.
+///
+/// # The three measurable arms are not two
+///
+/// Comparing `Immutable` with `SlotPinned` does NOT isolate the digest arm.
+/// The policy byte, the bound authority and the bound slot are all inside
+/// `ArtifactReleaseV1::to_bytes`, so they move `artifact_id`, the release-set
+/// identity, and therefore every PDA seeded by it -- the Registry's activation
+/// cache and its Hot admission address both come off
+/// `Pubkey::find_program_address` on chain. Under ledger M-61 that is a
+/// REDRAWN LOTTERY, not a cost.
+///
+/// [`FixtureSubstrateV1::ImmutablePinned`] is the control that separates the
+/// two: it keeps the `Immutable` policy and absent authority -- so it takes the
+/// SAME digest arm as the default -- while binding the same nonzero slot, which
+/// gives it a DIFFERENT release identity. Its distance from `Immutable` is pure
+/// redraw, measured rather than assumed, and it is the yardstick the
+/// `SlotPinned` distance has to be read against.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FixtureSubstrateV1 {
+    /// `Immutable` releases, ProgramData with authority `None` and slot 0.
+    /// The pre-0012 substrate and every existing case's default.
+    Immutable,
+    /// `Immutable` releases pinned at [`PINNED_DEPLOYMENT_SLOT`], ProgramData
+    /// with authority `None` at that slot. Same digest arm as `Immutable`, a
+    /// different release identity: the redraw control.
+    ImmutablePinned,
+    /// `ExactAuthority` releases bound to [`UPGRADE_AUTHORITY`] and
+    /// [`PINNED_DEPLOYMENT_SLOT`], ProgramData carrying exactly those.
+    /// Decision 0012's arm.
+    SlotPinned,
+    /// The whole release set was redeployed at [`UPGRADED_DEPLOYMENT_SLOT`] by
+    /// the authority it names, and every release EXCEPT Trading's was
+    /// re-issued and re-pinned to the new slot. Trading's still binds
+    /// [`PINNED_DEPLOYMENT_SLOT`].
+    ///
+    /// Only one release is superseded, on purpose. A substrate where every pin
+    /// is stale would refuse too, and would prove far less: it could not
+    /// distinguish "the slot pin refuses the release that moved" from "this
+    /// fixture refuses". Here four pins hold and one does not, in the same
+    /// transaction, against the same ProgramData accounts.
+    SlotPinnedSuperseded,
+}
+
+impl FixtureSubstrateV1 {
+    /// Read the substrate from `DCLUTCH_FIXTURE_SUBSTRATE`.
+    ///
+    /// An unset variable is [`FixtureSubstrateV1::Immutable`]. An unrecognized
+    /// one PANICS rather than falling back: a sweep that silently measured the
+    /// default arm while its log said otherwise would be worse than no sweep.
+    pub fn from_env() -> Self {
+        match env::var("DCLUTCH_FIXTURE_SUBSTRATE").ok().as_deref() {
+            None | Some("") | Some("immutable") => Self::Immutable,
+            Some("immutable-pinned") => Self::ImmutablePinned,
+            Some("slot-pinned") => Self::SlotPinned,
+            Some("slot-pinned-superseded") => Self::SlotPinnedSuperseded,
+            Some(other) => panic!(
+                "DCLUTCH_FIXTURE_SUBSTRATE={other}: expected immutable, \
+                 immutable-pinned, slot-pinned or slot-pinned-superseded"
+            ),
+        }
+    }
+
+    /// The name this substrate answers to on the command line.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Immutable => "immutable",
+            Self::ImmutablePinned => "immutable-pinned",
+            Self::SlotPinned => "slot-pinned",
+            Self::SlotPinnedSuperseded => "slot-pinned-superseded",
+        }
+    }
+
+    /// The upgrade policy the staged releases carry.
+    pub const fn upgrade_policy(self) -> ArtifactUpgradePolicyV1 {
+        match self {
+            Self::Immutable | Self::ImmutablePinned => ArtifactUpgradePolicyV1::Immutable,
+            Self::SlotPinned | Self::SlotPinnedSuperseded => {
+                ArtifactUpgradePolicyV1::ExactAuthority
+            }
+        }
+    }
+
+    /// The authority the staged releases BIND, and the one their ProgramData
+    /// reports. `ArtifactReleaseV1::new` refuses any other pairing with
+    /// [`FixtureSubstrateV1::upgrade_policy`].
+    pub const fn upgrade_authority(self) -> Option<[u8; 32]> {
+        match self {
+            Self::Immutable | Self::ImmutablePinned => None,
+            Self::SlotPinned | Self::SlotPinnedSuperseded => Some(UPGRADE_AUTHORITY.to_bytes()),
+        }
+    }
+
+    /// The slot `program`'s staged release BINDS.
+    ///
+    /// Equal to [`FixtureSubstrateV1::observed_deployment_slot`] everywhere
+    /// except the superseded substrate's Trading release, where the divergence
+    /// IS the case: the bytes at that address moved and this release was never
+    /// re-issued, so it still names the slot its activation observed.
+    pub fn bound_deployment_slot(self, program: Pubkey) -> u64 {
+        if self == Self::SlotPinnedSuperseded && program == TRADING_PROGRAM_ID {
+            return PINNED_DEPLOYMENT_SLOT;
+        }
+        self.observed_deployment_slot()
+    }
+
+    /// The slot every staged ProgramData REPORTS.
+    ///
+    /// One value for the whole set rather than one per program, and that is a
+    /// runtime constraint, not a simplification: `solana-program-test` can hold
+    /// exactly one nonzero deployment generation on its fork at a time (see
+    /// [`PINNED_FIXTURE_BANK_SLOT`]), so a fixture staging two live generations
+    /// at once cannot load the older one at all.
+    pub const fn observed_deployment_slot(self) -> u64 {
+        match self {
+            Self::Immutable => 0,
+            Self::ImmutablePinned | Self::SlotPinned => PINNED_DEPLOYMENT_SLOT,
+            Self::SlotPinnedSuperseded => UPGRADED_DEPLOYMENT_SLOT,
+        }
+    }
+
+    /// The bank slot this substrate's campaign must execute at.
+    ///
+    /// The unpinned substrate keeps slot 1, which is where every existing case
+    /// in this tree runs and what the pre-0012 CU baseline was measured at.
+    pub const fn bank_slot(self) -> u64 {
+        match self {
+            Self::Immutable => 1,
+            Self::ImmutablePinned | Self::SlotPinned => PINNED_FIXTURE_BANK_SLOT,
+            Self::SlotPinnedSuperseded => SUPERSEDED_FIXTURE_BANK_SLOT,
+        }
+    }
+
+    /// The slots the bank must be walked through to reach
+    /// [`FixtureSubstrateV1::bank_slot`], in order.
+    ///
+    /// Exactly one warp, to one slot past the substrate's single deployment
+    /// generation. `warp_to_slot(T)` leaves `T - 1` as the root and drops every
+    /// bank below it, and the program cache admits an entry only when its
+    /// deployment slot is an ancestor of the executing slot -- with
+    /// `latest_root_slot` never advancing past 0 in this harness, that means
+    /// the ONLY visible nonzero deployment slot is `T - 1`. Warping twice, to
+    /// stage two generations at once, drops the first one off the fork and the
+    /// cache reloads it forever.
+    pub fn warp_slots(self) -> Vec<u64> {
+        match self {
+            Self::Immutable => Vec::new(),
+            Self::ImmutablePinned | Self::SlotPinned => vec![PINNED_FIXTURE_BANK_SLOT],
+            Self::SlotPinnedSuperseded => vec![SUPERSEDED_FIXTURE_BANK_SLOT],
+        }
+    }
+}
+
+/// The substrate this process stages, from the environment.
+pub fn fixture_substrate() -> FixtureSubstrateV1 {
+    FixtureSubstrateV1::from_env()
+}
+
 pub struct Elves {
     pub registry: Vec<u8>,
     pub trading: Vec<u8>,
@@ -119,6 +343,19 @@ pub fn elves() -> Elves {
 }
 
 pub fn immutable_programdata(elf: &[u8]) -> Vec<u8> {
+    programdata_v2(FixtureSubstrateV1::Immutable, elf)
+}
+
+/// Stage one Loader V3 ProgramData account body for `substrate`.
+///
+/// The header is fixed at 45 bytes under every substrate -- variant tag,
+/// deployment slot, authority option, and the 32-byte authority slot that
+/// exists whether or not the option is set -- so the account WIDTH does not
+/// depend on the substrate and neither do the deployment widths the chain
+/// fixture derives from it. What moves is the slot at 4..12 and the option at
+/// 12 with its key at 13..45, which is exactly the pair
+/// `slot_pinned_release_elf_digest_v1` compares.
+pub fn programdata_v2(substrate: FixtureSubstrateV1, elf: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0; 45 + elf.len()];
     bytes
         .get_mut(..4)
@@ -127,15 +364,34 @@ pub fn immutable_programdata(elf: &[u8]) -> Vec<u8> {
     bytes
         .get_mut(4..12)
         .expect("deployment slot")
-        .copy_from_slice(&0_u64.to_le_bytes());
-    *bytes.get_mut(12).expect("authority option") = 0;
+        .copy_from_slice(&substrate.observed_deployment_slot().to_le_bytes());
+    match substrate.upgrade_authority() {
+        None => *bytes.get_mut(12).expect("authority option") = 0,
+        Some(authority) => {
+            *bytes.get_mut(12).expect("authority option") = 1;
+            bytes
+                .get_mut(13..45)
+                .expect("upgrade authority")
+                .copy_from_slice(&authority);
+        }
+    }
     bytes.get_mut(45..).expect("ELF tail").copy_from_slice(elf);
     bytes
 }
 
 pub fn add_program(test: &mut ProgramTest, name: &'static str, program: Pubkey, elf: &[u8]) {
+    add_program_v2(test, name, program, elf, fixture_substrate());
+}
+
+pub fn add_program_v2(
+    test: &mut ProgramTest,
+    name: &'static str,
+    program: Pubkey,
+    elf: &[u8],
+    substrate: FixtureSubstrateV1,
+) {
     test.add_upgradeable_program_to_genesis(name, &program);
-    let bytes = immutable_programdata(elf);
+    let bytes = programdata_v2(substrate, elf);
     test.add_account(
         programdata(program),
         Account {
@@ -149,17 +405,32 @@ pub fn add_program(test: &mut ProgramTest, name: &'static str, program: Pubkey, 
 }
 
 pub fn release(program: Pubkey, semantic: u8, elf: &[u8]) -> ArtifactReleaseV1 {
+    release_v2(program, semantic, elf, fixture_substrate())
+}
+
+/// One artifact release on `substrate`.
+///
+/// The release binds the substrate's PINNED slot, never its observed one: a
+/// superseded substrate is precisely a release whose bound slot no longer
+/// matches what its ProgramData reports, and building the release from the
+/// observation would make the pin vacuous.
+pub fn release_v2(
+    program: Pubkey,
+    semantic: u8,
+    elf: &[u8],
+    substrate: FixtureSubstrateV1,
+) -> ArtifactReleaseV1 {
     ArtifactReleaseV1::new(
         program_identity(program),
         program_identity(bpf_loader_upgradeable::ID),
         programdata(program).to_bytes(),
         content([semantic; 32]),
         hash(elf).to_bytes(),
-        0,
-        ArtifactUpgradePolicyV1::Immutable,
-        None,
+        substrate.bound_deployment_slot(program),
+        substrate.upgrade_policy(),
+        substrate.upgrade_authority(),
     )
-    .expect("immutable artifact release")
+    .expect("canonical slot-pinned artifact release")
 }
 
 pub fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
@@ -192,10 +463,18 @@ pub fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
 }
 
 pub fn add_release_waist(test: &mut ProgramTest, artifacts: &Elves) -> Releases {
-    let core = release(CORE_PROGRAM_ID, 0x31, &artifacts.core);
-    let claims = release(CLAIMS_PROGRAM_ID, 0x32, &artifacts.claims);
-    let trading = release(TRADING_PROGRAM_ID, 0x33, &artifacts.trading);
-    let custody = release(CUSTODY_PROGRAM_ID, 0x34, &artifacts.custody);
+    add_release_waist_v2(test, artifacts, fixture_substrate())
+}
+
+pub fn add_release_waist_v2(
+    test: &mut ProgramTest,
+    artifacts: &Elves,
+    substrate: FixtureSubstrateV1,
+) -> Releases {
+    let core = release_v2(CORE_PROGRAM_ID, 0x31, &artifacts.core, substrate);
+    let claims = release_v2(CLAIMS_PROGRAM_ID, 0x32, &artifacts.claims, substrate);
+    let trading = release_v2(TRADING_PROGRAM_ID, 0x33, &artifacts.trading, substrate);
+    let custody = release_v2(CUSTODY_PROGRAM_ID, 0x34, &artifacts.custody, substrate);
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(claims),
@@ -307,10 +586,38 @@ pub fn direct_case_v2(
     corrupt_destination: bool,
     vacant_seal: bool,
 ) -> DirectCase {
+    direct_case_v3(
+        test,
+        releases,
+        artifacts,
+        corrupt_destination,
+        vacant_seal,
+        fixture_substrate(),
+    )
+}
+
+/// [`direct_case_v2`] against an explicitly named substrate.
+///
+/// The substrate reaches this function only through the ProgramData WIDTHS it
+/// implies, which are the same under all four; the assertion below is what
+/// keeps that true rather than assumed.
+pub fn direct_case_v3(
+    test: &mut ProgramTest,
+    releases: Releases,
+    artifacts: &Elves,
+    corrupt_destination: bool,
+    vacant_seal: bool,
+    substrate: FixtureSubstrateV1,
+) -> DirectCase {
     let payer = fixture_keypair(0);
     let makers = [fixture_keypair(1), fixture_keypair(2)];
+    // The maker replays this fixture signs are valid for `clock_slot +- 1` and
+    // `hot_v3` reads the live `Clock`, so the bank has to BE at this slot when
+    // the campaign submits. `start_with_substrate` is the other half; calling
+    // `ProgramTest::start_with_context` directly on a pinned substrate leaves
+    // the bank at slot 1, where the pinned programs are not yet visible.
     let clock = Clock {
-        slot: 1,
+        slot: substrate.bank_slot(),
         ..Clock::default()
     };
     test.add_sysvar_account(sysvar::clock::ID, &clock);
@@ -324,12 +631,29 @@ pub fn direct_case_v2(
             rent_epoch: 0,
         },
     );
+    // Substrate-invariant by construction: Loader V3's metadata header is 45
+    // bytes whether or not the authority option is set, so every substrate
+    // stages the same account WIDTH and the chain fixture derives the same
+    // deployment widths. Asserted below rather than assumed, because a width
+    // that silently moved with the substrate would put the CU difference
+    // between two sweeps into account data instead of into the digest arm --
+    // which is exactly the confound these arms exist to separate.
     let deployment_widths = DirectHotDeploymentWidthsV5::new(
-        immutable_programdata(&artifacts.trading).len(),
-        immutable_programdata(&artifacts.claims).len(),
-        immutable_programdata(&artifacts.core).len(),
+        programdata_v2(substrate, &artifacts.trading).len(),
+        programdata_v2(substrate, &artifacts.claims).len(),
+        programdata_v2(substrate, &artifacts.core).len(),
     )
     .expect("real Direct deployment widths");
+    assert_eq!(
+        deployment_widths,
+        DirectHotDeploymentWidthsV5::new(
+            immutable_programdata(&artifacts.trading).len(),
+            immutable_programdata(&artifacts.claims).len(),
+            immutable_programdata(&artifacts.core).len(),
+        )
+        .expect("immutable Direct deployment widths"),
+        "the staged substrate changed a ProgramData account width",
+    );
     let input = DirectHotChainInputV5 {
         registry_program: REGISTRY_PROGRAM_ID,
         trading_program: TRADING_PROGRAM_ID,
@@ -354,10 +678,9 @@ pub fn direct_case_v2(
         build_direct_hot_chain_fixture_v5(input).expect("canonical Profile14 Direct chain fixture");
     // The campaign executes the BUILDER's bundle; the hand-built fixture rides
     // along as a checked oracle, so every gate run is also a reproduction run.
-    let mut chain = crate::fixture::via_builder::build_direct_hot_chain_fixture_via_builder_v1(
-        input,
-    )
-    .expect("artifact-derived Direct chain bundle");
+    let mut chain =
+        crate::fixture::via_builder::build_direct_hot_chain_fixture_via_builder_v1(input)
+            .expect("artifact-derived Direct chain bundle");
     assert_builder_reproduces_hand(&chain, &hand);
     if corrupt_destination {
         let destination = chain.collateral_accounts[1];
@@ -422,10 +745,7 @@ pub fn direct_case_v2(
 ///
 /// External-key order is the one normalized comparison: both sides consume
 /// that list only through `contains`.
-fn assert_builder_reproduces_hand(
-    built: &DirectHotChainFixtureV5,
-    hand: &DirectHotChainFixtureV5,
-) {
+fn assert_builder_reproduces_hand(built: &DirectHotChainFixtureV5, hand: &DirectHotChainFixtureV5) {
     assert_eq!(built.hot_instruction, hand.hot_instruction);
     assert_eq!(built.signed_messages, hand.signed_messages);
     assert_eq!(built.accounts, hand.accounts);
@@ -595,6 +915,30 @@ pub fn add_lookup_table(test: &mut ProgramTest, addresses: &[Pubkey]) {
     );
 }
 
+/// Start the bank and put it where this substrate's pins require it.
+///
+/// A `ProgramTest` always starts at slot 1. That is correct for the unpinned
+/// substrate and unusable for a pinned one: a Loader V3 program becomes visible
+/// one slot after its ProgramData's deployment slot, so at slot 1 a pin at 167
+/// makes every program in the fixture invisible and the runtime reports it as a
+/// cache replacement, not as anything to do with the pin.
+///
+/// This is the ONLY correct way to start a pinned case, and it is paired with
+/// `direct_case_v3`'s clock: both read [`FixtureSubstrateV1::bank_slot`], so
+/// the signed maker replays and the bank agree by construction.
+pub async fn start_with_substrate(
+    test: ProgramTest,
+    substrate: FixtureSubstrateV1,
+) -> ProgramTestContext {
+    let mut context = test.start_with_context().await;
+    for slot in substrate.warp_slots() {
+        context
+            .warp_to_slot(slot)
+            .expect("warp the bank to the substrate's pinned slot");
+    }
+    context
+}
+
 pub async fn submit_v0(
     context: &mut ProgramTestContext,
     instructions: &[Instruction],
@@ -672,6 +1016,11 @@ pub async fn submit_v0(
         return Err(RefusedExecution {
             error: BanksClientError::TransactionError(error),
             logs,
+            compute_units_consumed: processed
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.compute_units_consumed)
+                .unwrap_or_default(),
         });
     }
     Ok(processed
@@ -688,6 +1037,15 @@ pub async fn submit_v0(
 pub struct RefusedExecution {
     pub error: BanksClientError,
     pub logs: Vec<String>,
+    /// Compute consumed before the refusal, when the runtime reported any.
+    ///
+    /// A refusal has a price too, and for a slot-pin refusal it is the whole
+    /// point: the pin is claimed to be reached early and cheaply, and a
+    /// measurement that only asserted the discriminant could not tell a refusal
+    /// raised at the Registry outer from one raised after most of a market
+    /// action had already been paid for. Zero when the runtime produced no
+    /// metadata, which is a transport failure rather than a program refusal.
+    pub compute_units_consumed: u64,
 }
 
 impl From<BanksClientError> for RefusedExecution {
@@ -695,6 +1053,7 @@ impl From<BanksClientError> for RefusedExecution {
         Self {
             error,
             logs: Vec::new(),
+            compute_units_consumed: 0,
         }
     }
 }
@@ -713,38 +1072,47 @@ impl RefusedExecution {
 }
 
 pub fn program_test(artifacts: &Elves) -> ProgramTest {
+    program_test_v2(artifacts, fixture_substrate())
+}
+
+pub fn program_test_v2(artifacts: &Elves, substrate: FixtureSubstrateV1) -> ProgramTest {
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.set_compute_max_units(COMPUTE_LIMIT);
-    add_program(
+    add_program_v2(
         &mut test,
         "dclutch_registry_sbf",
         REGISTRY_PROGRAM_ID,
         &artifacts.registry,
+        substrate,
     );
-    add_program(
+    add_program_v2(
         &mut test,
         "dclutch_trading_sbf",
         TRADING_PROGRAM_ID,
         &artifacts.trading,
+        substrate,
     );
-    add_program(
+    add_program_v2(
         &mut test,
         "dclutch_core_sbf",
         CORE_PROGRAM_ID,
         &artifacts.core,
+        substrate,
     );
-    add_program(
+    add_program_v2(
         &mut test,
         "dclutch_claims_sbf",
         CLAIMS_PROGRAM_ID,
         &artifacts.claims,
+        substrate,
     );
-    add_program(
+    add_program_v2(
         &mut test,
         "dclutch_custody_sbf",
         CUSTODY_PROGRAM_ID,
         &artifacts.custody,
+        substrate,
     );
     test
 }

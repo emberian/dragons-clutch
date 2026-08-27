@@ -46,9 +46,40 @@
 #
 # ============================================================================
 #
+# ============================================================================
+# THE SUBSTRATE ARMS (decision 0012)
+# ============================================================================
+#
+# `--substrate` selects which release substrate the fixture stages under the
+# SAME ELFs. It is `DCLUTCH_FIXTURE_SUBSTRATE`, whose four arms are declared in
+# `program-test/direct-hot/src/waist.rs::FixtureSubstrateV1`.
+#
+# Decision 0012 admitted a MUTABLE substrate onto the cached-digest path.
+# `slot_pinned_release_elf_digest_v1` branches on the release's upgrade policy,
+# and until this option existed the fixture could only ever build `Immutable`
+# releases over ProgramData with no authority -- so the ExactAuthority arm, the
+# whole of what 0012 added, had never executed against a validator and this
+# sweep could not say anything about its cost.
+#
+# THE THREE ARMS ARE NOT TWO. `slot-pinned` minus `immutable` is NOT 0012's
+# cost: the policy byte, the bound authority and the bound slot all live inside
+# `ArtifactReleaseV1::to_bytes`, so they move the artifact id, the release-set
+# identity, and every PDA seeded by it -- which under M-61 is a REDRAWN LOTTERY
+# worth tens of thousands of CU by itself. `immutable-pinned` is the control:
+# same `Immutable` digest arm, same absent authority, but the same nonzero bound
+# slot, so it has a DIFFERENT release identity and takes the SAME code path.
+#
+#   immutable-pinned - immutable   = REDRAW ALONE
+#   slot-pinned      - immutable   = REDRAW + whatever 0012 costs or saves
+#
+# The difference between those two differences is the signal. Sweep all three
+# against ONE ELF or the comparison means nothing, which is what the build reuse
+# below exists to guarantee.
+#
 # usage:
 #   tools/gauntlet/hot-cu/run-hot-cu.sh                      # build, sweep 20
 #   tools/gauntlet/hot-cu/run-hot-cu.sh --seeds 40
+#   tools/gauntlet/hot-cu/run-hot-cu.sh --substrate slot-pinned
 #   tools/gauntlet/hot-cu/run-hot-cu.sh --elf-dir /path/to/deploy   # no build
 #
 # Outputs land under --work (default /private/tmp/dclutch-hot-cu), never under
@@ -61,6 +92,11 @@ WORK="/private/tmp/dclutch-hot-cu"
 ELF_DIR=""
 COMMIT=""
 SEEDS=20
+SUBSTRATE="immutable"
+# The harness paths whose dirtiness the DIRTY flag cannot speak for: `--commit`
+# archives the BUILD, but the fixture derivation -- keys, substrate, staged
+# ProgramData -- is read out of --repo on every run, committed or not.
+HARNESS_PATHS="programs/dclutch-trading-sbf/program-test"
 
 usage() {
     cat <<'USAGE'
@@ -78,6 +114,12 @@ usage: tools/gauntlet/hot-cu/run-hot-cu.sh [options]
                    concurrent lane's uncommitted edit to any program in the
                    fixture redraws every seed (M-61).
   --seeds N        how many fixture seeds to sweep, 0..N-1 (default 20)
+  --substrate NAME which release substrate the fixture stages, one of
+                   immutable (default), immutable-pinned, slot-pinned,
+                   slot-pinned-superseded. Sets DCLUTCH_FIXTURE_SUBSTRATE.
+                   `immutable-pinned` is the REDRAW CONTROL for `slot-pinned`;
+                   see the substrate block at the top of this file. Each
+                   substrate keeps its own logs and summary under --work.
   -h, --help       show this message
 
 Prints PASS n/N, MEAN, MIN, MAX and the trading ELF sha256. Exits nonzero if
@@ -93,6 +135,7 @@ while [ "$#" -gt 0 ]; do
         --elf-dir) ELF_DIR="${2:?--elf-dir needs a value}"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --seeds) SEEDS="${2:?--seeds needs a value}"; shift 2 ;;
+        --substrate) SUBSTRATE="${2:?--substrate needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "hot-cu: unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -101,6 +144,13 @@ done
 case "$WORK" in /*) ;; *) echo "hot-cu: --work must be absolute" >&2; exit 2 ;; esac
 case "$SEEDS" in ''|*[!0-9]*) echo "hot-cu: --seeds must be a decimal count" >&2; exit 2 ;; esac
 [ "$SEEDS" -gt 0 ] || { echo "hot-cu: --seeds must be positive" >&2; exit 2; }
+# Refused here as well as in the fixture. `FixtureSubstrateV1::from_env` panics
+# on an unknown name, so a typo would already fail -- but it would fail twenty
+# times, after a full ELF build, with the reason buried in a per-seed log.
+case "$SUBSTRATE" in
+    immutable|immutable-pinned|slot-pinned|slot-pinned-superseded) ;;
+    *) echo "hot-cu: --substrate must be immutable, immutable-pinned, slot-pinned or slot-pinned-superseded" >&2; exit 2 ;;
+esac
 
 die() { echo "hot-cu: $*" >&2; exit 1; }
 say() { printf '\n== %s\n' "$*"; }
@@ -110,7 +160,12 @@ command -v cargo >/dev/null 2>&1 || die "cargo not found"
 [ -d "$REPO/.git" ] || die "not a repository: $REPO"
 
 LOGS="$WORK/logs"
-SWEEP="$WORK/sweep"
+# Per substrate, not shared. Three arms swept into one directory would blend
+# their pass counts through the `rm -f` below, and the whole point of the
+# `immutable-pinned` control is that its twenty figures stay separable from the
+# twenty they are the control FOR.
+SWEEP="$WORK/sweep/$SUBSTRATE"
+SUMMARY="$WORK/summary-$SUBSTRATE.json"
 BUILT_ELF="$WORK/elf"
 mkdir -p "$WORK" "$LOGS" "$SWEEP"
 # A re-run must not blend its pass count with a previous shape's logs.
@@ -119,6 +174,16 @@ rm -f "$SWEEP"/seed*.log
 REVISION="$(git -C "$REPO" rev-parse "${COMMIT:-HEAD}")"
 DIRTY="clean"
 git -C "$REPO" diff --quiet HEAD -- programs crates Cargo.toml Cargo.lock 2>/dev/null || DIRTY="DIRTY"
+# The HARNESS is a separate fact from the artifacts, and `--commit` does not
+# speak for it: the archive supplies the ELFs, but the fixture keys, the staged
+# ProgramData and the substrate arms are compiled out of --repo on every run.
+# Reporting only the build's cleanliness would let a figure drawn from an
+# uncommitted fixture edit be quoted as a clean-revision number.
+HARNESS_DIRTY="clean"
+git -C "$REPO" diff --quiet HEAD -- $HARNESS_PATHS 2>/dev/null || HARNESS_DIRTY="DIRTY"
+if [ -n "$(git -C "$REPO" ls-files --others --exclude-standard -- $HARNESS_PATHS 2>/dev/null)" ]; then
+    HARNESS_DIRTY="DIRTY"
+fi
 
 # ------------------------------------------------------------------ 1. the ELFs
 #
@@ -145,6 +210,8 @@ git -C "$REPO" diff --quiet HEAD -- programs crates Cargo.toml Cargo.lock 2>/dev
 BUILD_ROOT="$REPO"
 SBF_TARGET_DIR=""
 PROVENANCE=""
+STAMP=""
+NEEDS_BUILD="yes"
 if [ -n "$ELF_DIR" ]; then
     case "$ELF_DIR" in /*) ;; *) die "--elf-dir must be absolute" ;; esac
     [ -d "$ELF_DIR" ] || die "--elf-dir does not exist: $ELF_DIR"
@@ -155,12 +222,30 @@ if [ -n "$ELF_DIR" ]; then
     # exists to stop -- and it bites immediately, because another lane can
     # commit between the build and the sweep. The digest is the provenance here.
     PROVENANCE="artifacts supplied via --elf-dir; revision unknown to this run"
-else
-    if [ -n "$COMMIT" ]; then
-        BUILD_ROOT="$WORK/source-${REVISION:0:12}"
-        ELF_DIR="$WORK/elf-${REVISION:0:12}"
+    NEEDS_BUILD=""
+elif [ -n "$COMMIT" ]; then
+    BUILD_ROOT="$WORK/source-${REVISION:0:12}"
+    ELF_DIR="$WORK/elf-${REVISION:0:12}"
+    DIRTY="clean"
+    PROVENANCE="$REVISION (clean git archive)"
+    # A COMPLETED build of this exact revision is REUSED, and that is a
+    # requirement rather than an optimization. Two substrate arms can only be
+    # compared if both drew against the same ELF byte for byte: under M-61 a
+    # one-byte difference redraws every seed by up to +/-46,000 CU, which is
+    # larger than any effect a substrate arm could have. Two separate builds of
+    # one revision SHOULD agree; reuse means the comparison does not depend on
+    # that holding. The stamp is written only after all eight artifacts build,
+    # so a partial build is never reused -- and every run still recomputes and
+    # prints the digest, which is what a reader checks, not this stamp.
+    STAMP="$ELF_DIR/.hot-cu-built"
+    if [ "$(cat "$STAMP" 2>/dev/null || true)" = "$REVISION" ] \
+        && [ -f "$ELF_DIR/dclutch_trading_sbf.so" ]; then
+        say "stage archive: $REVISION already built at $ELF_DIR -- reused"
+        NEEDS_BUILD=""
+    else
         say "stage archive: $REVISION (clean, from git archive)"
         rm -rf "$BUILD_ROOT"
+        rm -f "$STAMP"
         mkdir -p "$BUILD_ROOT"
         git -C "$REPO" archive "$REVISION" | tar -x -C "$BUILD_ROOT"
         # The archive is a fresh tree, so its default target/ would be a cold
@@ -172,13 +257,14 @@ else
         # and an inherited CARGO_TARGET_DIR would point that build at the
         # archive's artifacts. It is applied to the SBF builds only.
         SBF_TARGET_DIR="$WORK/build-target"
-        DIRTY="clean"
-        PROVENANCE="$REVISION (clean git archive)"
-    else
-        ELF_DIR="$BUILT_ELF"
-        say "stage elf: $REVISION ($DIRTY working tree)"
-        PROVENANCE="$REVISION ($DIRTY working tree)"
     fi
+else
+    ELF_DIR="$BUILT_ELF"
+    say "stage elf: $REVISION ($DIRTY working tree)"
+    PROVENANCE="$REVISION ($DIRTY working tree)"
+fi
+
+if [ -n "$NEEDS_BUILD" ]; then
     mkdir -p "$ELF_DIR"
 
     # hbox is co-tenant with codex's HOL build. Containment is structural.
@@ -236,6 +322,11 @@ programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml"
         echo "hot-cu: the sweep still runs -- measuring a frame regression's CU cost is a reason this" >&2
         echo "hot-cu: tier exists -- but nothing it prints is evidence that these artifacts are sound." >&2
     fi
+    # Last, and only on the archived path: the stamp claims a COMPLETE build of
+    # a named revision, so it must not exist until every manifest above has
+    # succeeded. The working-tree build writes none -- an uncommitted tree is
+    # not a revision and nothing about it is reusable.
+    if [ -n "$STAMP" ]; then printf '%s\n' "$REVISION" > "$STAMP"; fi
 fi
 
 TRADING_ELF="$ELF_DIR/dclutch_trading_sbf.so"
@@ -243,7 +334,7 @@ TRADING_ELF="$ELF_DIR/dclutch_trading_sbf.so"
 TRADING_SHA="$(sha256 "$TRADING_ELF")"
 
 # --------------------------------------------------------------- 2. the sweep
-say "sweep: $SEEDS fixture seeds against trading ELF ${TRADING_SHA:0:16}..."
+say "sweep: $SEEDS fixture seeds on the $SUBSTRATE substrate, trading ELF ${TRADING_SHA:0:16}..."
 echo "seed  exit  CU          result"
 
 pass=0
@@ -257,6 +348,7 @@ for s in $(seq 0 $((SEEDS - 1))); do
     # keeps `set -e` from taking the failure.
     status=0
     ( cd "$REPO" && DCLUTCH_FIXTURE_SEED="$s" SBF_OUT_DIR="$ELF_DIR" \
+        DCLUTCH_FIXTURE_SUBSTRATE="$SUBSTRATE" \
         cargo test \
             --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
             --test hot_heap_frame_is_inert -- --nocapture ) \
@@ -309,17 +401,36 @@ else
 fi
 printf 'ELF  %s  dclutch_trading_sbf.so\n' "$TRADING_SHA"
 printf 'SRC  %s\n' "$PROVENANCE"
+printf 'SUB  %s  (DCLUTCH_FIXTURE_SUBSTRATE)\n' "$SUBSTRATE"
+# The harness is compiled out of --repo whatever --commit says about the ELFs,
+# and the fixture derivation is what turns a seed into a set of keys. A DIRTY
+# harness beside a clean-archive SRC is not automatically a wrong measurement --
+# it is the ordinary state of a lane measuring its own uncommitted fixture --
+# but it is a fact the number has to be quoted with.
+printf 'HARN %s (%s) %s\n' "${REVISION:0:12}" "$HARNESS_DIRTY" "$HARNESS_PATHS"
 echo
 echo "M-61: quote PASS and MEAN. MIN is not a margin and MAX is not a bound --"
 echo "      both are draws, and any one-byte change to the ELF above redraws"
 echo "      every seed. A number quoted without that digest means nothing."
+if [ "$SUBSTRATE" != "immutable" ]; then
+    echo
+    echo "0012: this arm's distance from \`--substrate immutable\` is NOT its cost."
+    echo "      Changing the substrate changes the release identity, which redraws"
+    echo "      every seed's bump search too. Sweep \`--substrate immutable-pinned\`"
+    echo "      against this same ELF: it takes the same digest arm as immutable"
+    echo "      with a different identity, so it measures the REDRAW ALONE, and"
+    echo "      only the difference of the two differences is a signal."
+fi
 
-cat > "$WORK/summary.json" <<EOF
+cat > "$SUMMARY" <<EOF
 {
   "schema": "dclutch-hot-cu-sweep-v1",
   "artifact_provenance": "$PROVENANCE",
   "trading_elf_sha256": "$TRADING_SHA",
   "elf_dir": "$ELF_DIR",
+  "substrate": "$SUBSTRATE",
+  "harness_revision": "$REVISION",
+  "harness_state": "$HARNESS_DIRTY",
   "seeds": $SEEDS,
   "pass": $pass,
   "fail": $fail,
@@ -328,10 +439,11 @@ cat > "$WORK/summary.json" <<EOF
   "max_cu": $MAX,
   "ceiling_cu": 1400000,
   "observed_cu": [$(paste -sd, - < "$OBSERVED")],
-  "statistic": "PASS and MEAN. min/max are the observed spread of a bump-search lottery (M-61), not bounds; they are keyed to trading_elf_sha256 and a one-byte ELF change redraws every seed."
+  "statistic": "PASS and MEAN. min/max are the observed spread of a bump-search lottery (M-61), not bounds; they are keyed to trading_elf_sha256 and a one-byte ELF change redraws every seed.",
+  "cross_substrate": "A difference between two substrates' means is redraw PLUS effect: the substrate moves the release identity and so redraws every seed. Subtract the immutable-pinned arm, which is the same digest arm at a different identity, to separate them."
 }
 EOF
 echo "logs:    $SWEEP"
-echo "summary: $WORK/summary.json"
+echo "summary: $SUMMARY"
 
 [ "$fail" -eq 0 ] || exit 1

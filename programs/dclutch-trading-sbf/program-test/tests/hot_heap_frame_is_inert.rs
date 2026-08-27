@@ -66,6 +66,7 @@ use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, CORE_PROGRAM_ID, CUSTODY_PROGRAM_ID, Elves, LOOKUP_TABLE,
     REGISTRY_PROGRAM_ID, TRADING_PROGRAM_ID, add_lookup_table, add_program, add_release_waist,
     canonical_lookup_addresses, direct_case, direct_registry_instructions, elves,
+    fixture_substrate, start_with_substrate,
 };
 
 /// The canonical v0 packet limit one continuation transaction must fit in.
@@ -159,7 +160,11 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     instructions.push(request_heap_frame(262_144));
     instructions.push(set_compute_unit_limit(1_400_000));
 
-    let context = test.start_with_context().await;
+    // Not `test.start_with_context()`: a pinned substrate's programs are not
+    // visible at slot 1, and `direct_case` built the maker replays around this
+    // substrate's bank slot. Under the default `Immutable` substrate this is
+    // exactly `start_with_context` and nothing about the measurement moves.
+    let context = start_with_substrate(test, fixture_substrate()).await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -227,12 +232,17 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
         metadata.compute_units_consumed <= 1_400_000,
         "the protocol ceiling is the ceiling",
     );
-    // Printed, not asserted: the margin is the lane's evidence and a single
-    // figure off this path is codegen noise of about +-20,000 CU. What is
-    // asserted is the ceiling.
+    // Printed, not asserted: what is asserted is the ceiling. A single figure
+    // off this path is ONE DRAW from a `find_program_address` bump search, not
+    // codegen noise -- the same ELF redraws across seeds, and the cross-seed
+    // spread measured at HEAD (POST-0012-SWEEP, 2026-08-27) was 49,499 CU,
+    // about thirty-three iterations at 1,500 CU each. Ledger M-61 is the rule
+    // this obeys: quote PASS n/20 and the MEAN with the ELF digest they belong
+    // to, never one seed and never a worst margin.
     println!(
-        "hot tail at the protocol default heap, fixture seed {}: {} CU of \
-         1,400,000 ({} spare)",
+        "hot tail at the protocol default heap, substrate {}, fixture seed {}: \
+         {} CU of 1,400,000 ({} spare)",
+        fixture_substrate().name(),
         std::env::var("DCLUTCH_FIXTURE_SEED").unwrap_or_else(|_| "0".to_owned()),
         metadata.compute_units_consumed,
         1_400_000_u64.saturating_sub(metadata.compute_units_consumed),
