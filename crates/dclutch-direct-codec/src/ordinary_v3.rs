@@ -520,7 +520,7 @@ mod tests {
             + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
         let mut output = std::vec![99_u64; scalar_width];
         execute(request(), context(config), &mut output).expect("ordinary transition");
-        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_616);
+        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_712);
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 5);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 10);
         assert_eq!(output[SCALAR_GROSS_V3], 10);

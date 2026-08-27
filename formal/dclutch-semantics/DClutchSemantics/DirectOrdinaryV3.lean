@@ -47,7 +47,7 @@ inductive ScalarSlot where
   | sellerIntermediateRouteEnabled | feeNonzero | custodyAfterSeller | custodyAfterFee
   | sellerBump | sellerRentPrincipalObservation | sellerRentPrincipal | buyerCreated
   | buyerBumpObservation | buyerBump | claimTransfer | feeSoleRouteEnabled
-  | makerCurrentRentMinimum
+  | makerCurrentRentMinimum | claimTailTotal
   deriving DecidableEq, Repr
 
 namespace ScalarSlot
@@ -69,7 +69,7 @@ def all : List ScalarSlot := [
   .sellerIntermediateRouteEnabled, .feeNonzero, .custodyAfterSeller, .custodyAfterFee,
   .sellerBump, .sellerRentPrincipalObservation, .sellerRentPrincipal, .buyerCreated,
   .buyerBumpObservation, .buyerBump, .claimTransfer, .feeSoleRouteEnabled,
-  .makerCurrentRentMinimum
+  .makerCurrentRentMinimum, .claimTailTotal
 ]
 
 @[simp] def index : ScalarSlot → Nat
@@ -138,6 +138,7 @@ def all : List ScalarSlot := [
   | .claimTransfer => 62
   | .feeSoleRouteEnabled => 63
   | .makerCurrentRentMinimum => 64
+  | .claimTailTotal => 65
 
 def rustName : ScalarSlot → String
   | .rootPhase => "SCALAR_ROOT_PHASE_V3"
@@ -205,6 +206,7 @@ def rustName : ScalarSlot → String
   | .claimTransfer => "SCALAR_CLAIM_TRANSFER_V3"
   | .feeSoleRouteEnabled => "SCALAR_FEE_SOLE_ROUTE_ENABLED_V3"
   | .makerCurrentRentMinimum => "SCALAR_MAKER_CURRENT_RENT_MINIMUM_V5"
+  | .claimTailTotal => "SCALAR_CLAIM_TAIL_TOTAL_V3"
 
 /-- Emitted Rust documentation for this coordinate. -/
 def doc : ScalarSlot → String
@@ -273,6 +275,7 @@ def doc : ScalarSlot → String
   | .claimTransfer => "Reserved for exact Claims transfer quantity."
   | .feeSoleRouteEnabled => "Derived terminal fee-only Custody route enable bit."
   | .makerCurrentRentMinimum => "Lifecycle V5 adapter-authenticated current Rent minimum for a 152-byte maker root."
+  | .claimTailTotal => "Program-owned total of the Claims quantities written across the Product tail."
 
 /-- The maker replay magic word is written into the fee-denominator coordinate
 after the floor-fee division has consumed it. The reuse is deliberate and the
@@ -503,6 +506,7 @@ def preludeOps : List Op := [
   .scalarLe (s .executionPrice) (s .priceScale),
   .scalarEq (s .sellerFeeBps) (s .policyFeeBps),
   .scalarEq (s .buyerFeeBps) (s .policyFeeBps),
+  .scalarLe (s .policyFeeBps) (s .feeDenominator),
   .mulDivExact (s .fill) (s .executionPrice) (s .priceScale) (s .gross),
   .mulDivFloor (s .gross) (s .policyFeeBps) (s .feeDenominator) (s .fee),
   .subInto (s .gross) (s .fee) (s .sellerNet),
@@ -531,6 +535,7 @@ def preludeOps : List Op := [
   .checkedAddInto (s .custodyAfterSeller) (s .sellerIntermediateRouteEnabled) (s .custodyAfterFee),
   .checkedAddInto (s .custodyAfterFee) (s .feeSoleRouteEnabled) (s .custodyAfterFee),
   .checkedAddInto (s .fill) (s .zero) (s .claimTransfer),
+  .loadConst (s .claimTailTotal) 0,
   .loadConst (s .makerVersion) DirectSuccessorAbi.version,
   .loadConst (s ScalarSlot.makerMagic) makerMagicWord
 ]
@@ -538,11 +543,20 @@ def preludeOps : List Op := [
 /-- The per-Product-item body, folded once per tail coordinate. -/
 def itemOps : List Op := [
   .loadConst (t .claimQuantity) 0,
-  .selectEq (t .outcomeCoordinate) (s .sellerOutcome) (s .claimTransfer) (t .claimQuantity)
+  .selectEq (t .outcomeCoordinate) (s .sellerOutcome) (s .claimTransfer) (t .claimQuantity),
+  .checkedAddInto (s .claimTailTotal) (t .claimQuantity) (s .claimTailTotal)
 ]
 
-/-- The closing checks, run once after the whole tail has folded. -/
-def epilogueOps : List Op := []
+/-- The closing checks, run once after the whole tail has folded.
+
+The Claims quantities the fold wrote across the Product tail must sum to exactly
+the quantity the transition transferred. Because `fill` is required nonzero and
+`claimTransfer` copies it, this holds only when exactly one item coordinate
+carries the traded outcome: a traded outcome outside the Product tail sums to
+zero, and a tail that repeats a coordinate sums to a multiple. -/
+def epilogueOps : List Op := [
+  .scalarEq (s .claimTailTotal) (s .claimTransfer)
+]
 
 /-- The one authored ordinary Direct V3 transition program. -/
 def program : Program := {
@@ -557,16 +571,127 @@ def program : Program := {
 
 theorem well_formed : program.wellFormed = true := by native_decide
 
-theorem prelude_count : program.prelude.length = 64 := by native_decide
+theorem prelude_count : program.prelude.length = 66 := by native_decide
 
-theorem item_count : program.itemBody.length = 2 := by native_decide
+theorem item_count : program.itemBody.length = 3 := by native_decide
 
-theorem epilogue_count : program.epilogue.length = 0 := by native_decide
+theorem epilogue_count : program.epilogue.length = 1 := by native_decide
 
-theorem common_scalar_count : program.commonScalars = 65 := by native_decide
+theorem common_scalar_count : program.commonScalars = 66 := by native_decide
 
 theorem common_identity_count : program.commonIdentities = 32 := by native_decide
 
-theorem encoded_width : (Codec.encodeProgram program).length = 1616 := by native_decide
+theorem encoded_width : (Codec.encodeProgram program).length = 1712 := by native_decide
+
+/-! ## Witnesses
+
+Concrete banks the program admits and refuses. These are decided executions of
+the authored program, not of any executor: a Rust translation that disagrees
+with one of them is wrong about the program, not about its own arithmetic. -/
+
+namespace Witness
+
+/-- Assignments of the canonical admitted frame: a signed fill of ten at an
+execution price of fifty against a scale of one hundred, a hundred-basis-point
+venue rate all three parties signed, and a three-outcome Product. -/
+def canonicalScalars : List (ScalarSlot × Nat) := [
+  (.slot, 100), (.sellerValidFrom, 90), (.sellerValidThrough, 110),
+  (.buyerValidFrom, 90), (.buyerValidThrough, 110), (.buyerSide, 1),
+  (.sellerGeneration, 7), (.buyerGeneration, 7), (.marketGeneration, 7),
+  (.sellerOutcome, 1), (.buyerOutcome, 1), (.outcomeCount, 3),
+  (.sellerLifecycle, 1), (.sellerMaximum, 10),
+  (.buyerLifecycle, 1), (.buyerMaximum, 10),
+  (.sellerNonce, 1), (.buyerNonce, 2),
+  (.sellerNextNonce, 1), (.buyerNextNonce, 2),
+  (.sellerLimit, 40), (.executionPrice, 50), (.buyerLimit, 60),
+  (.priceScale, 100), (.sellerFeeBps, 100), (.buyerFeeBps, 100),
+  (.policyFeeBps, 100), (.fill, 10), (.custodyRevision, 3), (.rootOpenCount, 2)
+]
+
+/-- The canonical input bank at one tail count. Every Product item carries its
+own canonical coordinate, which is what the projection writes. -/
+def scalars (tailCount : Nat) (overrides : List (ScalarSlot × Nat) := []) : Array Nat :=
+  let empty : Array Nat := Array.replicate (program.scalarWidth tailCount) 0
+  let common := (canonicalScalars ++ overrides).foldl
+    (fun bank (assignment : ScalarSlot × Nat) =>
+      bank.setIfInBounds assignment.1.index assignment.2) empty
+  (List.range tailCount).foldl
+    (fun bank ordinal =>
+      bank.setIfInBounds
+        (program.commonScalars + ordinal * program.itemScalarStride +
+          ItemScalarSlot.index .outcomeCoordinate)
+        ordinal)
+    common
+
+/-- The canonical identity bank: distinct makers, each bound to its own native
+signer and collateral account, both intents on the Market, both live states
+owned by the Trading program. -/
+def identities : Array Nat :=
+  let assignments : List (IdentitySlot × Nat) := [
+    (.market, 2), (.sellerIntentMarket, 2), (.buyerIntentMarket, 2),
+    (.sellerNativeSigner, 3), (.sellerRequestMaker, 3),
+    (.buyerNativeSigner, 4), (.buyerRequestMaker, 4),
+    (.sellerCollateralRequest, 5), (.sellerTokenAccount, 5),
+    (.buyerCollateralRequest, 6), (.buyerTokenAccount, 6),
+    (.tradingProgram, 7), (.sellerStateOwner, 7), (.buyerStateOwner, 7)
+  ]
+  assignments.foldl
+    (fun bank (assignment : IdentitySlot × Nat) =>
+      bank.setIfInBounds assignment.1.index assignment.2)
+    (Array.replicate program.commonIdentities 1)
+
+/-- Read three derived coordinates out of an admitted result. -/
+def quote (result : Option TransitionVMV3.State) : Option (Nat × Nat × Nat) :=
+  result.map fun state =>
+    (state.scalars[ScalarSlot.index .gross]!,
+      state.scalars[ScalarSlot.index .fee]!,
+      state.scalars[ScalarSlot.index .claimTailTotal]!)
+
+end Witness
+
+open Witness in
+/-- The canonical frame is admitted, and the Claims quantities the fold wrote
+across the tail sum to the transferred quantity. -/
+theorem canonical_frame_admits :
+    quote (program.execute 3 ⟨scalars 3, identities⟩) = some (5, 0, 10) := by
+  native_decide
+
+open Witness in
+/-- The divergence this clause closes. With an authenticated outcome count of
+five, a traded outcome of four, and a Product tail of three, no item carries the
+traded outcome: the fold writes nothing, and the epilogue refuses a fill whose
+Claims quantities are all zero. -/
+theorem a_traded_outcome_outside_the_product_tail_refuses :
+    program.execute 3
+        ⟨scalars 3 [(.outcomeCount, 5), (.sellerOutcome, 4), (.buyerOutcome, 4)],
+          identities⟩ = none := by
+  native_decide
+
+open Witness in
+/-- An empty Product tail is the same refusal: there is nowhere for the
+transferred Claims to land. -/
+theorem an_empty_product_tail_refuses :
+    program.execute 0 ⟨scalars 0, identities⟩ = none := by native_decide
+
+open Witness in
+/-- A venue rate exactly at the denominator is admitted: the fee equals the
+gross and the seller nets nothing, which is a policy the makers may sign. -/
+theorem a_venue_rate_at_the_denominator_admits :
+    quote (program.execute 3
+        ⟨scalars 3
+            [(.sellerFeeBps, 10000), (.buyerFeeBps, 10000), (.policyFeeBps, 10000)],
+          identities⟩) = some (5, 5, 10) := by
+  native_decide
+
+open Witness in
+/-- One basis point above the denominator is refused. Without this clause the
+floor fee can equal or exceed the gross, so the buyer is debited twice the
+quote while the seller nets nothing. -/
+theorem a_venue_rate_above_the_denominator_refuses :
+    program.execute 3
+        ⟨scalars 3
+            [(.sellerFeeBps, 10001), (.buyerFeeBps, 10001), (.policyFeeBps, 10001)],
+          identities⟩ = none := by
+  native_decide
 
 end DClutch.DirectOrdinaryV3

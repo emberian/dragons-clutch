@@ -1115,7 +1115,7 @@ mod tests {
         assert_eq!(profile.fixed_account_count(), 91);
         assert_eq!(profile.item_account_stride(), 0);
         assert_eq!(profile.dynamic_fixed_span_count(), 0);
-        assert_eq!(profile.common_scalar_count(), 65);
+        assert_eq!(profile.common_scalar_count(), 66);
         assert_eq!(profile.item_scalar_stride(), 2);
         assert_eq!(profile.common_identity_count(), 32);
         assert_eq!(profile.item_identity_stride(), 0);
