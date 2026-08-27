@@ -24,7 +24,8 @@ use solana_program::{
 };
 
 use crate::{
-    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    TradingSbfError,
+    child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
     hot_v3::DowngradedEffectAccountsV3,
 };
 
@@ -118,7 +119,17 @@ pub fn execute_custody_route_v3<'info>(
         });
     }
     let mut child_data = prepared.request_bytes.to_vec();
-    append_receipt_dependency_v3(prepared.invocation, &mut child_data, prior_receipt)?;
+    // `custody-sbf::process_instruction` dispatches on EXACT LENGTH -- 776
+    // delegated V2, 768 projected V1, 672 V1, or 800 V1 plus the 128-byte
+    // Registry continuation -- and nothing behind any of those four reads a
+    // producer receipt. So a declared dependency on this route is sequencing
+    // and verification only, and the wire Custody receives is its request.
+    deliver_receipt_dependency_v3(
+        prepared.invocation,
+        &mut child_data,
+        prior_receipt,
+        ReceiptDeliveryV3::VerifiedOnly,
+    )?;
     let instruction = Instruction {
         program_id: *custody_program.key,
         accounts: metas,

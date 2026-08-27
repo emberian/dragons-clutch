@@ -121,13 +121,42 @@ impl ChildReceiptBankV3 {
     }
 }
 
-/// Append the exact descriptor-selected ordered receipt suffix or refuse any
-/// caller-supplied bytes. Resolution has already selected every boundary in
-/// declared table order; this final check binds their exact aggregate width.
-pub(crate) fn append_receipt_dependency_v3(
+/// What one child's OWN instruction ABI does with its producer's receipt.
+///
+/// A declared receipt dependency binds TRADING, not the child. It orders the
+/// producer ahead of the consumer, and it verifies the producer's exact return
+/// data against provenance recomputed from the authenticated Effect program and
+/// request bank. Neither of those obligations requires putting bytes on the
+/// consumer's wire, and handing a child bytes it does not authenticate is a
+/// widening with no consumer.
+///
+/// Only the child's ABI decides whether it reads a suffix, and only the adapter
+/// that composes that ABI knows the answer, so each adapter states it here for
+/// the exact request kind it just built.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReceiptDeliveryV3 {
+    /// The child declares no receipt suffix. Its wire is exactly its own
+    /// request, byte for byte, and the verified receipt is not delivered.
+    VerifiedOnly,
+    /// The child's ABI reads the ordered producer receipts as an exact trailing
+    /// suffix and authenticates them itself.
+    ExactSuffix,
+}
+
+/// Bind the exact descriptor-selected ordered receipt width, and deliver it to
+/// the child only where the child's ABI reads one.
+///
+/// Resolution has already selected every boundary in declared table order; this
+/// final check binds their exact aggregate width. An unmet dependency, an
+/// over- or under-width receipt, and bytes offered where no dependency was
+/// declared are all refused here — under either delivery — before the child CPI
+/// is built, so the Trading-side requirement does not depend on which child is
+/// on the other end.
+pub(crate) fn deliver_receipt_dependency_v3(
     invocation: ResolvedInvocationV3,
     child_data: &mut Vec<u8>,
     receipt: Option<&[u8]>,
+    delivery: ReceiptDeliveryV3,
 ) -> Result<(), ProgramError> {
     let dependencies = invocation.receipt_dependencies;
     let expected = if dependencies.is_empty() {
@@ -140,6 +169,9 @@ pub(crate) fn append_receipt_dependency_v3(
     match (expected == 0, receipt) {
         (true, None) => Ok(()),
         (false, Some(receipt)) if usize::try_from(expected) == Ok(receipt.len()) => {
+            if delivery == ReceiptDeliveryV3::VerifiedOnly {
+                return Ok(());
+            }
             child_data
                 .try_reserve(receipt.len())
                 .map_err(|_| TradingSbfError::Content)?;
@@ -278,29 +310,152 @@ mod tests {
         );
     }
 
+    /// A producer that never ran cannot be resolved into a receipt, whatever
+    /// order the dependency claims.
     #[test]
-    fn append_is_exact_and_absence_cannot_smuggle_a_suffix() {
-        let mut bytes = vec![9_u8; 8];
-        append_receipt_dependency_v3(
-            invocation(Some(dependency())),
-            &mut bytes,
-            Some(b"RECEIPT1"),
-        )
-        .expect("append");
+    fn a_dependency_on_an_unexecuted_or_reordered_producer_is_unmet() {
+        let program = Pubkey::new_unique();
+        let provenance = ExpectedReceiptProvenanceV4 {
+            context_digest: [1; 32],
+            request_kind: *b"REQUEST1",
+            request_digest: [2; 32],
+        };
+        let empty = ChildReceiptBankV3::new();
         assert_eq!(
-            bytes,
+            empty.resolve(Some(dependency()), Some(&program), Some(provenance)),
+            Err(TradingSbfError::Transition.into())
+        );
+
+        let mut bank = ChildReceiptBankV3::new();
+        bank.record_exact(
+            FixedRole::Custody,
+            2,
+            3,
+            program,
+            [1; 32],
+            *b"REQUEST1",
+            [2; 32],
+            *b"RECEIPT1",
+            b"RECEIPT1".to_vec(),
+        )
+        .expect("record");
+        // The producer executed, but at another route or another invocation
+        // than the one this consumer declares.
+        for reordered in [
+            ResolvedReceiptDependencyV3 {
+                producer_route: 1,
+                ..dependency()
+            },
+            ResolvedReceiptDependencyV3 {
+                producer_invocation: 4,
+                ..dependency()
+            },
+            ResolvedReceiptDependencyV3 {
+                producer_role: FixedRole::Claims,
+                ..dependency()
+            },
+        ] {
+            assert_eq!(
+                bank.resolve(Some(reordered), Some(&program), Some(provenance)),
+                Err(TradingSbfError::Transition.into())
+            );
+        }
+        // A receipt whose declared width is not the width the producer
+        // returned is refused rather than truncated or padded.
+        assert_eq!(
+            bank.resolve(
+                Some(ResolvedReceiptDependencyV3 {
+                    expected_receipt_bytes: 7,
+                    ..dependency()
+                }),
+                Some(&program),
+                Some(provenance),
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+    }
+
+    /// Every Trading-side requirement holds under BOTH deliveries, and only
+    /// the child's own wire differs.
+    #[test]
+    fn delivery_binds_the_same_width_and_only_changes_the_child_wire() {
+        let request = vec![9_u8; 8];
+
+        let mut appended = request.clone();
+        deliver_receipt_dependency_v3(
+            invocation(Some(dependency())),
+            &mut appended,
+            Some(b"RECEIPT1"),
+            ReceiptDeliveryV3::ExactSuffix,
+        )
+        .expect("suffix-reading child receives it");
+        assert_eq!(
+            appended,
             [9_u8; 8]
                 .into_iter()
                 .chain(*b"RECEIPT1")
                 .collect::<Vec<_>>()
         );
 
-        let mut hostile = vec![9_u8; 8];
-        assert_eq!(
-            append_receipt_dependency_v3(invocation(None), &mut hostile, Some(&[1])),
-            Err(TradingSbfError::Content.into())
-        );
-        assert_eq!(hostile, vec![9_u8; 8]);
+        // The same satisfied dependency, for a child whose ABI reads no
+        // suffix: verified, sequenced, and NOT delivered. The wire is exactly
+        // the child's own request.
+        let mut clean = request.clone();
+        deliver_receipt_dependency_v3(
+            invocation(Some(dependency())),
+            &mut clean,
+            Some(b"RECEIPT1"),
+            ReceiptDeliveryV3::VerifiedOnly,
+        )
+        .expect("byte-clean child wire");
+        assert_eq!(clean, request);
+
+        for delivery in [
+            ReceiptDeliveryV3::ExactSuffix,
+            ReceiptDeliveryV3::VerifiedOnly,
+        ] {
+            // A declared dependency the walk could not satisfy refuses here,
+            // before the child CPI is built.
+            let mut unmet = request.clone();
+            assert_eq!(
+                deliver_receipt_dependency_v3(
+                    invocation(Some(dependency())),
+                    &mut unmet,
+                    None,
+                    delivery,
+                ),
+                Err(TradingSbfError::Content.into())
+            );
+            assert_eq!(unmet, request);
+
+            // A receipt of the wrong width is refused, not trimmed.
+            let mut mismatched = request.clone();
+            assert_eq!(
+                deliver_receipt_dependency_v3(
+                    invocation(Some(dependency())),
+                    &mut mismatched,
+                    Some(b"RECEIPT12"),
+                    delivery,
+                ),
+                Err(TradingSbfError::Content.into())
+            );
+            assert_eq!(mismatched, request);
+
+            // Bytes offered where no dependency was declared cannot smuggle a
+            // suffix onto either kind of child.
+            let mut hostile = request.clone();
+            assert_eq!(
+                deliver_receipt_dependency_v3(invocation(None), &mut hostile, Some(&[1]), delivery),
+                Err(TradingSbfError::Content.into())
+            );
+            assert_eq!(hostile, request);
+
+            // No dependency and no receipt leaves the wire alone.
+            let mut untouched = request.clone();
+            deliver_receipt_dependency_v3(invocation(None), &mut untouched, None, delivery)
+                .expect("no dependency");
+            assert_eq!(untouched, request);
+        }
 
         let oversized = ResolvedReceiptDependencyV3 {
             expected_receipt_bytes: u16::try_from(MAX_RETURN_DATA + 1).expect("u16 width"),

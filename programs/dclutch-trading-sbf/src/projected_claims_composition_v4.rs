@@ -33,7 +33,8 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{
-        ChildReceiptBankV3, ExpectedReceiptProvenanceV4, append_receipt_dependency_v3,
+        ChildReceiptBankV3, ExpectedReceiptProvenanceV4, ReceiptDeliveryV3,
+        deliver_receipt_dependency_v3,
     },
     hot_v3::DowngradedEffectAccountsV3,
     projected_core_composition_v4::AuthenticatedProjectedCorePrefixV4,
@@ -328,7 +329,14 @@ fn prepare(
     dependencies.extend_from_slice(lock_prefix.raw_receipt());
     dependencies.extend_from_slice(realize_prefix.raw_receipt());
     let mut child_data = request_bytes.to_vec();
-    append_receipt_dependency_v3(resolved.invocation, &mut child_data, Some(&dependencies))?;
+    // `claims-sbf::founding_v5::decode_instruction` requires exactly the
+    // request followed by the lock receipt and the projected receipt.
+    deliver_receipt_dependency_v3(
+        resolved.invocation,
+        &mut child_data,
+        Some(&dependencies),
+        ReceiptDeliveryV3::ExactSuffix,
+    )?;
     let authority_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set()).map_err(|_| TradingSbfError::Content)?,
         request.market(),
