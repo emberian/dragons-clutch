@@ -65,6 +65,18 @@ origin, whatever base it runs on. Read
 `deterministic_keypairs`, because a transcript that does not say which mode
 produced its numbers is a transcript whose numbers cannot be used.
 
+**What the seed does not fix, measured.** It pins the *rent* figures — every
+account whose address is derived from a keypair — and that is what the
+conservation ledger compares. It does **not** make compute reproducible. Two
+runs at one revision under one seed (`8aa6227`, N=4 and N=16) moved `DCLTGMF1`
+by 12,002 CU and `DCLTPCB1` by 5,998, every delta a multiple of ~1,500: the
+`find_program_address` bump search on the addresses that are *not* keypairs —
+the slot-derived routing table, and generation- and slot-derived record and
+compartment PDAs — which no keypair seed can reach. So a CU figure from this
+tier carries a ~1% band and a budget tolerance has to cover it; a rent figure
+does not. Do not read a small `DCLTGMF1` CU delta between two runs as a
+regression.
+
 ## The conservation ledger
 
 One object, threaded through the whole journey, that re-reads the economic state
@@ -94,6 +106,16 @@ conservation argument rots.
 | collateral distribution | N synthetic holders open a Token-2022 account and receive a share. N is the load knob. |
 | holder-to-holder | a ring of transfers in which the founder is not a party |
 | rent recovery | `rent/process_sweep_v2#Sweep`, **executed for the first time by any tier**, with the adversarial half first |
+
+**What N costs**, measured at N=4 and N=16: exactly `2N` transactions and
+`3,658 N` CU — 1,788 to open and fund a holder, 1,870 for one ring transfer,
+both identical per holder at either N. Rent recovery is 2 transactions and 7,268
+CU at any N, and the founding half does not move with N at all. There is no
+superlinear term to find yet, because these stages are SPL Token operations and
+nothing here invokes a dClutch program — which is also why this tier reports no
+heap figure for N: there is no dClutch heap in the part that scales. The load
+knob becomes interesting the day the Hot gate opens and the distribution stage
+starts routing through Claims.
 
 The sweep is the one worth reading. It takes three accounts, one of them a
 sysvar, and **needs no signature at all** — so the only thing between the
