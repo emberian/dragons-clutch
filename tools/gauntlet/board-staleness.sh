@@ -165,6 +165,13 @@ BEGIN { FS = "\n"; last_date = ""; pending = 0; heading = ""; body = "" }
 # older free-text style, e.g. "RELAY-REHOME -- START 2026-08-27" -- no,
 # those use an em dash, see below; this fallback is for headings with
 # neither).
+function is_status_word(word) {
+    return (word == "START" || word == "STARTING" || word == "FINISH" ||
+        word == "FINISHED" || word == "DONE" || word == "COMPLETE" ||
+        word == "CLOSED" || word == "YIELD" || word == "YIELDS" ||
+        word == "YIELDED" || word == "YIELDING" || word == "RESUME")
+}
+
 function lane_token(text,    sepidx, remainder, words, n, stripped, i) {
     sepidx = index(text, " -- ")
     if (sepidx > 0) {
@@ -182,12 +189,34 @@ function lane_token(text,    sepidx, remainder, words, n, stripped, i) {
     n = split(stripped, words, /[^A-Za-z0-9-]+/)
     for (i = 1; i <= n; i++) {
         if (words[i] == "") { continue }
+        # A status word is NEVER a lane name, and skipping it here is not
+        # cosmetic: the real heading "2026-08-27 sbf-toolchain-provisioning
+        # lane (START)" has no other capitalized word, so without this the
+        # fallback returned "START" and the report invented a phantom lane
+        # called START, flagged it ABANDONED, and never saw the real lane --
+        # which had in fact posted its FINISH (parsed as a second phantom
+        # lane called FINISH). A tripwire that reports a well-behaved lane as
+        # abandoned under a wrong name is worse than one that says nothing.
+        if (is_status_word(toupper(words[i]))) { continue }
         # A plain string/ASCII range compare here is locale-sensitive in awk
         # (case-insensitive collation under some UTF-8 locales quietly let
         # "orchestrator" match as if it were uppercase); a regex match
         # against the POSIX/ASCII class is not.
         if (words[i] ~ /^[A-Z]/) {
             return words[i]
+        }
+    }
+    # Last resort for the all-lowercase lane name: the board convention is
+    # "<name> lane" ("sbf-toolchain-provisioning lane", "W2c hot-executor
+    # lane"), so the token immediately before a literal "lane" is the lane.
+    # This deliberately does NOT accept any lowercase word: "orchestrator
+    # update (post-W2)" and "decided-and-handed-off, one contradiction
+    # closed." carry no "lane" and stay dropped as the section headers and
+    # orchestrator notes they are.
+    for (i = 2; i <= n; i++) {
+        if (tolower(words[i]) == "lane" && words[i - 1] != "" &&
+            !is_status_word(toupper(words[i - 1]))) {
+            return words[i - 1]
         }
     }
     return ""
@@ -200,7 +229,17 @@ function status_of(text,    up, uwords, nwords, i, w, found) {
     for (i = 1; i <= nwords; i++) {
         w = uwords[i]
         if (w == "START" || w == "STARTING") { found = "start" }
-        if (w == "FINISH" || w == "FINISHED" || w == "DONE" || w == "COMPLETE" || w == "CLOSED") {
+        # YIELD is in this list because it is THIS projects canonical finish
+        # word, not a synonym reached for: WAVE.mds close-out doctrine 2 is
+        # "A lane collects context, implements, commits, and YIELDS", and all
+        # seven YIELD headings on the live board are genuine lane finishes.
+        # LANDED is deliberately NOT here: measured on the same board, it is
+        # used as often for a mid-flight component landing ("Blocker C
+        # LANDED", "the flag is LANDED") as for a lane finish, so admitting
+        # it would mark live lanes finished -- the unsafe direction.
+        if (w == "FINISH" || w == "FINISHED" || w == "DONE" || w == "COMPLETE" ||
+            w == "CLOSED" || w == "YIELD" || w == "YIELDS" || w == "YIELDED" ||
+            w == "YIELDING") {
             return "finish"
         }
     }
