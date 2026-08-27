@@ -190,6 +190,7 @@ reasoning as a stale binding.
 | Dealer | `dealer/` | `solana-program-test` | the Dealer equity pool's rounding boundary |
 | Direct | `direct/` | `solana-program-test` | the stateless Direct V2 AOT accelerator |
 | Journey | `journey/` | localhost validator | JRNY-1: one Market's whole life, tier 1's founding continued in-process into post-Open collateral distribution to N holders, a holder ring, and rent recovery — under one conservation ledger |
+| Relayed vertical | `relayed-vertical/` | two localhost validators | DEMO-VERT: the relayed graduation market end to end — found with no recovery policy, the real relayer daemon observes a mainnet twin, seal, consume, terminalize — plus the silent-relayer sibling where the funded deadline walk pays a walker on a bare legacy packet; journey-shaped (tier 1 compiled in by `#[path]`, the journey's conservation ledger threaded, tier-1 bindings merged at fold time) |
 
 `journey/` is the first tier that is a **superset** of another rather than a
 sibling. It compiles the tier-1 producer's own source files into its binary by
