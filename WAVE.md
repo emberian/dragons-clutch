@@ -216,3 +216,21 @@ tail >=39,521 vs 32,768) + first-ever phase-8+ child CPI territory (W2i lane).
 URGENT unowned->now owned: DCLTGMF1 CU grew 84.6%->91.3% of ceiling in one
 evening from unrelated changes; CU-BUDGET lane adds checked-in budgets.
 The monolith is fully deleted (legacy copy removed; git history only).
+
+## Post-cook plan (ember, 2026-08-27 — after current lanes land)
+
+- Devnet budget is now 55 SOL (was 45).
+- 1. ADDRESS every item the returning lanes name (standing rule: reports'
+  named items get actioned, not archived).
+- 2. THE FABLE REVIEW WAVE: Fable-tier reviewers over the scar tissue —
+  derpage hunt, "omg I can't believe we're doing that" audit, cross-cutting
+  design coherence — after this swarmcycle + followups cook.
+- 3. GIT-MESSAGE ACTION SCAN: sweep all commit messages for named-but-unactioned
+  items (queued/flagged/deferred/not-done claims) and cross-check each against
+  reality; everything named gets actioned or explicitly retired.
+- 4. THE PUBLIC FACE (audited 2026-08-27, all "no"): Pages currently ships the
+  gen-1 microsite verbatim (manual dispatch, honestly labeled). Needed:
+  protocol reference manual, user guide, trader guide, operator guide, Pages
+  building + shipping the real frontend, and the dragons-clutch wrapper tidy
+  (= the graft: dclutch becomes the current tree; gen-1 handoff docs and
+  stale site retired to history).
