@@ -102,6 +102,14 @@ Trusted for this run: the pinned Lean and Rust toolchains, both compilers and
 runtimes, the host operating system/hardware, this corpus encoder/parser, and
 the checked-in generated transition-program include.
 
+The generated include lives at `src/generated_direct_program.rs` and is emitted
+by `formal/dclutch-semantics/EmitDirectProgramRust.lean`. It previously lived in
+`programs/dclutch-controller-proof-sbf`, which this validator reached into with
+an `include!`; that program was banished with the DCLTCAT1 stratum, so the
+artifact was rehomed to its remaining consumer. `check-generated.sh` re-emits it
+from Lean and byte-compares against the checked-in file, and `check.sh` runs that
+check before the corpus and still records the include's SHA-256 in its output.
+
 Unchecked: whether arbitrary safe Rust refines the Lean functions outside the
 finite corpus; lowering from Rust to SBF/LLVM; Solana loader and runtime
 behavior; native signature verification; PDA derivation; account creation,

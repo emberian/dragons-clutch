@@ -38,6 +38,8 @@ sha256_file() {
   lake env lean --run EmitRegisteredCreationTranslationCorpus.lean >> "$corpus"
 )
 
+"$validator_dir/check-generated.sh"
+
 cargo run --quiet --manifest-path "$validator_dir/Cargo.toml" -- "$corpus" | tee "$validator_result"
 cargo clippy --quiet --manifest-path "$validator_dir/Cargo.toml" --all-targets -- -D warnings
 
@@ -73,7 +75,7 @@ if [ -n "$evidence_dir" ]; then
   cp "$validator_dir/src/main.rs" "$evidence_dir/rust_validator.bin"
   cp "$validator_dir/src/registration.rs" "$evidence_dir/rust_registration_validator.bin"
   cp "$validator_dir/src/terminal.rs" "$evidence_dir/rust_terminal_validator.bin"
-  cp "$repository_dir/programs/dclutch-controller-proof-sbf/src/generated_direct_program.rs" \
+  cp "$validator_dir/src/generated_direct_program.rs" \
     "$evidence_dir/interpreter_program_include.bin"
   cp "$validator_result" "$evidence_dir/validator_result.bin"
   cp "$rustc_verbose" "$evidence_dir/rustc_verbose.bin"
@@ -114,5 +116,5 @@ printf 'rust_registration_validator_sha256=%s\n' \
 printf 'rust_validator_sha256=%s\n' \
   "$(sha256_file "$validator_dir/src/main.rs")"
 printf 'program_include_sha256=%s\n' \
-  "$(sha256_file "$repository_dir/programs/dclutch-controller-proof-sbf/src/generated_direct_program.rs")"
+  "$(sha256_file "$validator_dir/src/generated_direct_program.rs")"
 printf 'validator_cargo_lock_sha256=%s\n' "$(sha256_file "$validator_dir/Cargo.lock")"
