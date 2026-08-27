@@ -40,8 +40,8 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
-    CallerRoleV1, CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
@@ -578,13 +578,18 @@ fn authenticate_zero_custody_accounts(
     input: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestInputV3,
     custody_context: [u8; 32],
 ) -> Result<(), ProgramError> {
+    // The CLAIMS compartment of the Market's Custody namespace. The role is a
+    // seed, so this address is a different account from the Trading-role replay
+    // the founding realizes and the Core-role replay legacy Open creates — which
+    // is what makes a payout's replay reachable at all.
     let expected_replay = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            input.market.as_slice(),
-            input.release_set.as_slice(),
-            custody_context.as_slice(),
-        ],
+        &CustodyReplaySeedsV1::new(
+            input.market,
+            input.release_set,
+            CallerRoleV1::Claims,
+            custody_context,
+        )
+        .as_slices(),
         accounts[CUSTODY_PROGRAM].key,
     )
     .0;

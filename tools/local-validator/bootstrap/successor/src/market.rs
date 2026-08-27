@@ -19,8 +19,8 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
-    CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1, FoundingPrestateStageV1,
     OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
     PROJECTED_HOARD_CONTEXT_DOMAIN_V1, ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1,
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
@@ -1246,23 +1246,24 @@ fn derive_founding_coordinates(
         CompartmentV1::Settlement,
     );
     let source_vault = Pubkey::find_program_address(&source_seeds.as_slices(), &custody).0;
+    // Both coordinates are the ordinary replay namespace, whose seeds carry the
+    // executing role. The founding is Trading throughout: `open_source_compartment`
+    // mints a Trading-role source replay, and `RealizeAndClose` rewrites the
+    // projection in place as the Market's Trading-role live replay.
     let source_replay = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &market_bytes,
-            &release_set,
-            &context,
-        ],
+        &CustodyReplaySeedsV1::new(market_bytes, release_set, CallerRoleV1::Trading, context)
+            .as_slices(),
         &custody,
     )
     .0;
     let projected_replay = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &market_bytes,
-            &release_set,
-            &context_digest,
-        ],
+        &CustodyReplaySeedsV1::new(
+            market_bytes,
+            release_set,
+            CallerRoleV1::Trading,
+            context_digest,
+        )
+        .as_slices(),
         &custody,
     )
     .0;

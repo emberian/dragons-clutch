@@ -55,10 +55,9 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1,
-    ContextV1, CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1,
-    DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2,
-    OperationV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyReplaySeedsV1,
+    CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2, OperationV1,
 };
 use dclutch_direct_codec::{
     execution_v3::{
@@ -842,13 +841,17 @@ fn realm_fixture(
         REALM_SCHEMA_RELEASE_ID_V1,
         realm_bytes.to_vec(),
     );
+    // Direct's escrow replay is Trading-role; the role is a seed component of
+    // the replay namespace, so a fixture that derives it without one addresses
+    // an account the program will never look at.
     let replay = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &market.to_bytes(),
-            &input.release_set,
-            &context.to_bytes(),
-        ],
+        &CustodyReplaySeedsV1::new(
+            market.to_bytes(),
+            input.release_set,
+            CallerRoleV1::Trading,
+            context.to_bytes(),
+        )
+        .as_slices(),
         &input.custody_program,
     )
     .0;

@@ -1878,13 +1878,18 @@ fn authenticate_custody_poststate(
     let context = intent.ticket_context().to_bytes();
     let projected_context =
         hashv(&[PROJECTED_HOARD_CONTEXT_DOMAIN_V1, context.as_slice()]).to_bytes();
+    // The realized replay is the TRADING compartment of the Market's namespace,
+    // and the role is a seed. Composed through the owning type rather than
+    // restated: a restatement here is exactly what would have kept deriving the
+    // role-less address after the seeds moved, silently, with everything green.
     let replay_expected = Pubkey::find_program_address(
-        &[
-            dclutch_custody_contract::CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &request.market(),
-            &request.release_set(),
-            &projected_context,
-        ],
+        &dclutch_custody_contract::CustodyReplaySeedsV1::new(
+            request.market(),
+            request.release_set(),
+            CallerRoleV1::Trading,
+            projected_context,
+        )
+        .as_slices(),
         frame.custody_program.key,
     )
     .0;

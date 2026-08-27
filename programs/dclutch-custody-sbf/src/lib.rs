@@ -627,11 +627,11 @@ fn initialize_replay(
     let replay_seeds = CustodyReplaySeedsV1::from_request(request);
     let bump = Pubkey::find_program_address(&replay_seeds.as_slices(), program_id).1;
     let bump_seed = [bump];
-    let [domain, market, release, context] = replay_seeds.as_slices();
+    let [domain, market, release, role, context] = replay_seeds.as_slices();
     invoke_signed(
         &instruction,
         &[payer.clone(), replay.clone(), system.clone()],
-        &[&[domain, market, release, context, &bump_seed]],
+        &[&[domain, market, release, role, context, &bump_seed]],
     )
     .map_err(|_| CustodySbfError::Create)?;
     if replay.owner != program_id

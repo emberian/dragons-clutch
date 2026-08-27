@@ -178,31 +178,80 @@ pub enum ProjectedCustodyPhaseV1 {
 }
 
 /// Canonical projected-state PDA seeds under Custody.
+///
+/// This is the replay namespace under a different type name: a projection
+/// occupies the address its realization will rewrite in place, so the two must
+/// derive identically. It composes [`crate::CustodyReplaySeedsV1`] rather than
+/// restating the seed order, because the previous restatement is exactly what
+/// let the replay namespace acquire a role component at nine call sites a grep
+/// for the primary type never reached.
+///
+/// The role is pinned to [`ExecutionRoleV1::Trading`] and is not a request
+/// field. [`normal_replay_from_realization_v1`] mints a **Trading**-role replay
+/// out of this account, and the source compartment
+/// [`ProjectedCustodyStateV1::open_source_compartment`] creates is Trading-role
+/// too; a projection at any other role's address would realize into a replay
+/// whose bytes and address disagreed. The founding therefore claims exactly the
+/// Trading compartment of a Market's Custody namespace, not the whole of it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectedCustodyStateSeedsV1 {
-    market: [u8; 32],
-    release_set: [u8; 32],
-    context_digest: [u8; 32],
+    replay: crate::CustodyReplaySeedsV1,
 }
 
 impl ProjectedCustodyStateSeedsV1 {
+    /// The sole role a projected-Custody state realizes into.
+    pub const REALIZED_ROLE: ExecutionRoleV1 = ExecutionRoleV1::Trading;
+
     /// Project exact state seeds from one request.
     pub const fn from_request(request: ProjectedCustodyRequestV1) -> Self {
         Self {
-            market: request.market,
-            release_set: request.release_set,
-            context_digest: request.context_digest,
+            replay: crate::CustodyReplaySeedsV1::new(
+                request.market,
+                request.release_set,
+                Self::REALIZED_ROLE,
+                request.context_digest,
+            ),
         }
     }
 
     /// Borrow exact ordered seed slices, excluding bump.
-    pub fn as_slices(&self) -> [&[u8]; 4] {
-        [
-            crate::CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &self.market,
-            &self.release_set,
-            &self.context_digest,
-        ]
+    pub fn as_slices(&self) -> [&[u8]; 5] {
+        self.replay.as_slices()
+    }
+}
+
+/// Canonical seeds of the normal source replay a projected founding creates.
+///
+/// [`ProjectedCustodyStateV1::open_source_compartment`] mints a
+/// **Trading**-role [`CustodyReplayV1`] at `funding_source_context`, and
+/// [`ProjectedCustodyStateV1::lock_hoard_and_close_source`] reads and closes it.
+/// Both coordinates are the ordinary replay namespace, so both derive through
+/// [`crate::CustodyReplaySeedsV1`] and pick up the role seed with everything
+/// else.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectedCustodySourceReplaySeedsV1 {
+    replay: crate::CustodyReplaySeedsV1,
+}
+
+impl ProjectedCustodySourceReplaySeedsV1 {
+    /// The sole role a projected founding's source compartment carries.
+    pub const SOURCE_ROLE: ExecutionRoleV1 = ExecutionRoleV1::Trading;
+
+    /// Project exact source-replay seeds from one request.
+    pub const fn from_request(request: ProjectedCustodyRequestV1) -> Self {
+        Self {
+            replay: crate::CustodyReplaySeedsV1::new(
+                request.market,
+                request.release_set,
+                Self::SOURCE_ROLE,
+                request.funding_source_context,
+            ),
+        }
+    }
+
+    /// Borrow exact ordered seed slices, excluding bump.
+    pub fn as_slices(&self) -> [&[u8]; 5] {
+        self.replay.as_slices()
     }
 }
 

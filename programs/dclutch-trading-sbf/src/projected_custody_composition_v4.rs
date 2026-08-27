@@ -5,11 +5,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
-    PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
-    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1, ProjectedCallerRoleV1,
-    ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1,
+    PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
+    PROJECTED_CUSTODY_REQUEST_MAGIC_V1, ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1,
+    ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
+    ProjectedCustodyRequestV1, ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV1,
     ProjectedCustodyStateV1,
 };
 use dclutch_effect_kernel::{
@@ -340,12 +340,7 @@ fn authenticate_lock_frame_v4(
     let caller_seeds = ProjectedCustodyCallerSeedsV1::new(request, request_digest);
     let expected_caller = Pubkey::find_program_address(&caller_seeds.as_slices(), program_id).0;
     let expected_source_replay = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &request.market,
-            &request.release_set,
-            &request.funding_source_context,
-        ],
+        &ProjectedCustodySourceReplaySeedsV1::from_request(request).as_slices(),
         custody_program.key,
     )
     .0;

@@ -251,36 +251,92 @@ impl CustodyAuthoritySeedsV1 {
     }
 }
 
-/// Canonical per-context replay seeds under the Custody program.
+/// Canonical per-role, per-context replay seeds under the Custody program.
+///
+/// The caller role is a seed component, not merely a persisted field. One
+/// `(market, release_set, context)` therefore names one replay compartment PER
+/// EXECUTING ROLE rather than exactly one replay that the first role to arrive
+/// owns forever.
+///
+/// This is the resolution of decision 0008 §6 item 1. [`CustodyReplayV1::advance`]
+/// binds `request.caller_role == self.caller_role`, so before the role entered
+/// the seeds a single account had to serve every role that would ever transact
+/// against a namespace — and the projected founding realizes a **Trading** role
+/// replay while a Claims payout is **Claims** role, so a founded Market's
+/// principal was unreachable by the routes that pay it out. Nothing in the tree
+/// could make the transition, because a replay's role is immutable once written.
+///
+/// The role seed also makes an invariant structural that was previously only a
+/// convention: the role in a replay's BYTES and the role in its ADDRESS are the
+/// same `request.caller_role` field, so a replay at role R's address always
+/// decodes as role R. A hostile account carrying another role's bytes cannot sit
+/// at this address, and the same role's replay cannot sit at another's.
+///
+/// The Vault seeds deliberately do NOT take the role — see
+/// [`CustodyVaultSeedsV1`] and the decision 0008 addendum. A Market's Hoard is
+/// one principal pool; a replay is one caller's cursor over it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CustodyReplaySeedsV1 {
     market: [u8; 32],
     release_set: [u8; 32],
+    caller_role: [u8; 1],
     context: [u8; 32],
 }
 
 impl CustodyReplaySeedsV1 {
-    /// Project the sole replay tuple from one request.
-    pub const fn from_request(request: CustodyRequestV1) -> Self {
+    /// Construct the sole canonical replay seed tuple from its semantic facts.
+    pub const fn new(
+        market: [u8; 32],
+        release_set: [u8; 32],
+        caller_role: CallerRoleV1,
+        context: [u8; 32],
+    ) -> Self {
         Self {
-            market: request.market,
-            release_set: request.release_set,
-            context: request.context,
+            market,
+            release_set,
+            caller_role: [caller_role as u8],
+            context,
         }
     }
 
+    /// Project the sole replay tuple from one request.
+    pub const fn from_request(request: CustodyRequestV1) -> Self {
+        Self::new(
+            request.market,
+            request.release_set,
+            request.caller_role,
+            request.context,
+        )
+    }
+
     /// Borrow the exact ordered SVM seed slices, excluding the bump.
-    pub fn as_slices(&self) -> [&[u8]; 4] {
+    pub fn as_slices(&self) -> [&[u8]; 5] {
         [
             CUSTODY_REPLAY_PDA_DOMAIN_V1,
             &self.market,
             &self.release_set,
+            &self.caller_role,
             &self.context,
         ]
     }
 }
 
 /// Canonical compartment/context Vault seeds under the Custody program.
+///
+/// The caller role is deliberately absent, where [`CustodyReplaySeedsV1`] takes
+/// it. A Market's Hoard is ONE principal pool: the founding funds it, Claims
+/// pays redemptions out of it, and a retirement sweeps what is left. Putting the
+/// role in these seeds would give each role its own physically distinct Hoard
+/// and split one Market's collateral into as many pools as there are roles that
+/// touch it — the founding's principal would land somewhere no payout route
+/// could spend. A replay is the opposite kind of object: a per-caller optimistic
+/// cursor, whose whole content is one role's revision history.
+///
+/// Vault LIFECYCLE still cannot cross roles, and not because of a seed: the
+/// opener's replay counts the Vault in `open_vault_count`, and `CloseVault`
+/// decrements that same cursor, so a role that never opened a Vault under a
+/// context underflows to [`Error::VaultCountMismatch`] rather than closing
+/// another role's. Transfers out of a shared pool are exactly what is shared.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CustodyVaultSeedsV1 {
     market: [u8; 32],
