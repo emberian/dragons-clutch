@@ -188,8 +188,11 @@ pub struct TerminalPythCreationInputV1 {
     pub provider_release: ProviderReleaseV1,
     /// Exact real Pyth feed and integer-normalization configuration.
     pub pyth_adapter_config: PythAdapterConfigV1,
-    /// Terminal resolution instant.
-    pub target_unix_seconds: i64,
+    /// First second of the closed period this market sells an answer about.
+    pub window_open_unix_seconds: i64,
+    /// Last second of that period; the first admissible observation in
+    /// `[open, close]` resolves the market and a later one refuses.
+    pub window_close_unix_seconds: i64,
     /// Maximum admitted age of the provider observation.
     pub max_age_seconds: u32,
     /// Maximum admitted future skew of the provider observation.
@@ -229,8 +232,11 @@ pub struct TerminalPythArtifactInputV1 {
     pub provider_release: ProviderReleaseV1,
     /// Exact real Pyth feed and integer-normalization configuration.
     pub pyth_adapter_config: PythAdapterConfigV1,
-    /// Terminal resolution instant.
-    pub target_unix_seconds: i64,
+    /// First second of the closed period this market sells an answer about.
+    pub window_open_unix_seconds: i64,
+    /// Last second of that period; the first admissible observation in
+    /// `[open, close]` resolves the market and a later one refuses.
+    pub window_close_unix_seconds: i64,
     /// Maximum admitted age of the provider observation.
     pub max_age_seconds: u32,
     /// Maximum admitted future skew of the provider observation.
@@ -310,7 +316,8 @@ pub fn compile_terminal_pyth_creation_v1(
         source_capacity_profile: input.source_capacity_profile,
         provider_release: input.provider_release,
         pyth_adapter_config: input.pyth_adapter_config,
-        target_unix_seconds: input.target_unix_seconds,
+        window_open_unix_seconds: input.window_open_unix_seconds,
+        window_close_unix_seconds: input.window_close_unix_seconds,
         max_age_seconds: input.max_age_seconds,
         max_future_skew_seconds: input.max_future_skew_seconds,
         schedule_id: input.schedule_id,
@@ -399,8 +406,8 @@ pub fn compile_terminal_pyth_artifacts_v1(
     let window = WindowSpecV1::new(
         primary_source_id,
         WindowKind::Terminal,
-        input.target_unix_seconds,
-        input.target_unix_seconds,
+        input.window_open_unix_seconds,
+        input.window_close_unix_seconds,
         input.max_age_seconds,
         input.max_future_skew_seconds,
         input.schedule_id,

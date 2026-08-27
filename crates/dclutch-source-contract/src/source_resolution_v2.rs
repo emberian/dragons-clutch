@@ -819,14 +819,16 @@ mod tests {
         output
     }
 
-    /// A terminal window is one instant: `WindowSpecV1::new` refuses `start !=
-    /// end` for `WindowKind::Terminal`, so the deadline the walk waits for is
-    /// that instant plus the window's own liveness grace.
+    /// A terminal window sells the closed period `[end - width, end]`, and the
+    /// deadline the walk waits for is its upper bound plus the window's own
+    /// liveness grace. Only the upper bound is load-bearing here, but these
+    /// windows are given real width on purpose: the walk must not start
+    /// depending on a degeneracy that no market on a real provider cadence has.
     fn terminal_window(source_spec: ContentId, end: i64, grace: u32) -> WindowSpecV1 {
         WindowSpecV1::new(
             source_spec,
             crate::WindowKind::Terminal,
-            end,
+            end - 600,
             end,
             grace,
             1,

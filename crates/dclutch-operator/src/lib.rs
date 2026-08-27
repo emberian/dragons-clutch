@@ -1048,10 +1048,13 @@ mod tests {
             capacity_id,
         );
         let primary_source_id = source_id(hash(&source.to_bytes()).to_bytes());
+        // Width, not an instant. The upper bound stays where it was because
+        // the failure walk's deadline is `end + max_age`; what this fixture
+        // must stop asserting is that a terminal window is one second wide.
         let window = WindowSpecV1::new(
             primary_source_id,
             WindowKind::Terminal,
-            10,
+            1,
             10,
             10,
             2,

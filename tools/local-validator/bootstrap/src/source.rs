@@ -62,6 +62,16 @@ use super::{
 };
 
 const FRESHNESS_MARGIN_SECONDS: u32 = 300;
+/// Half-width of the terminal observation window this bootstrap sells.
+///
+/// A terminal window is a closed period, not an instant. Five minutes on each
+/// side of the captured publication is about one Pyth devnet publication
+/// cadence (measured p50 near 313 seconds on SOL/USD), so a market shaped like
+/// this one is resolvable by an ordinary publication rather than only by one
+/// that happens to land on a chosen second. Centring the window on the fixture
+/// also keeps the observation strictly interior, so this bootstrap stops being
+/// a window that was picked to match its own observation.
+const TERMINAL_WINDOW_HALF_WIDTH_SECONDS: i64 = 300;
 const RESOLUTION_BOUNTY_LAMPORTS: u64 = 100_000;
 
 pub(super) struct LocalProviderFacts {
@@ -210,7 +220,8 @@ pub(super) fn execute_integrated_source(
         source_capacity_profile,
         provider_release,
         pyth_adapter_config,
-        target_unix_seconds: fixture_publish_time,
+        window_open_unix_seconds: fixture_publish_time - TERMINAL_WINDOW_HALF_WIDTH_SECONDS,
+        window_close_unix_seconds: fixture_publish_time + TERMINAL_WINDOW_HALF_WIDTH_SECONDS,
         max_age_seconds,
         max_future_skew_seconds: 60,
         schedule_id,
@@ -244,7 +255,8 @@ pub(super) fn execute_integrated_source(
         source_capacity_profile,
         provider_release,
         pyth_adapter_config,
-        target_unix_seconds: fixture_publish_time,
+        window_open_unix_seconds: fixture_publish_time - TERMINAL_WINDOW_HALF_WIDTH_SECONDS,
+        window_close_unix_seconds: fixture_publish_time + TERMINAL_WINDOW_HALF_WIDTH_SECONDS,
         max_age_seconds,
         max_future_skew_seconds: 60,
         schedule_id,

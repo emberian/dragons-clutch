@@ -168,26 +168,36 @@ fn authenticate_graph(records: &AuthenticatedRelaySourceRecordsV1) -> Result<(),
 /// observation of the wrong week, or by a stale observation of the right one,
 /// and both must refuse.
 ///
-/// # Why only the upper bound
+/// # Both bounds, and why the lower one used to be missing
 ///
-/// `WindowSpecV1::new` refuses `start != end` for `WindowKind::Terminal`, so a
-/// terminal window is a single *instant* rather than a range. Requiring the
-/// attested foreign clock to also be at or after `start` would therefore require
-/// it to equal one exact second, and no read of a foreign cluster can be made to
-/// land there. That is not a bound, it is a route nothing can pass.
+/// This check enforces the whole closed interval `[start, end]`. It used to
+/// enforce only the upper bound, and the reason it gave was true at the time:
+/// `WindowSpecV1::new` refused `start != end` for `WindowKind::Terminal`, so
+/// requiring the attested foreign clock to also be at or after `start` would
+/// have required it to equal one exact second. That is not a bound, it is a
+/// route nothing can pass — so the lower bound was dropped rather than the
+/// degeneracy fixed, and an observation from *before the market opened* could
+/// resolve it.
 ///
-/// The bound that carries the Product's meaning is the upper one: the graduation
-/// has to have been observed at or before the deadline the Product sold. The
-/// lower bound is supplied by the two-clock join instead, which refuses anything
-/// older than `max_observation_age_seconds`, so an ancient observation still
-/// cannot resolve a fresh market. Together the admitted span is
-/// `[now - max_age, min(end, now + skew)]`, which is exactly the set a terminal
-/// graduation proposition should accept.
+/// A terminal window now has real width, so both bounds are ordinary and both
+/// are enforced. Together with the two-clock join
+/// (`require_observation_freshness`, which refuses anything the relayer sat on
+/// for longer than `max_observation_age_seconds`) the admitted span is
+/// `[max(start, now - max_age), min(end, now + skew)]`.
+///
+/// The two edges refuse for different reasons and the distinction is the
+/// Product's, not this function's: below `start` the observation is about a
+/// period the market had not started selling, and above `end` it is a *late*
+/// observation — the exact case a provider cadence straddling the deadline
+/// produces, which must refuse rather than resolve the market on a reading from
+/// after the question closed.
 fn require_window_admits(
     window: WindowSpecV1,
     observed_unix_seconds: i64,
 ) -> Result<(), RelayJoinErrorV1> {
-    if observed_unix_seconds > window.end_unix_seconds() {
+    if observed_unix_seconds < window.start_unix_seconds()
+        || observed_unix_seconds > window.end_unix_seconds()
+    {
         return Err(RelayJoinErrorV1::Window);
     }
     Ok(())

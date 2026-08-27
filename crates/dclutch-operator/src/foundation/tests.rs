@@ -353,10 +353,13 @@ fn source_material(
         capacity_id,
     );
     let primary_source_id = source_id(hash(&source.to_bytes()).to_bytes());
+    // A real-shaped terminal window: five minutes wide, which is about one
+    // Pyth devnet publication cadence. A one-second window would compile and
+    // pass every assertion here while being unresolvable on a real cluster.
     let window = WindowSpecV1::new(
         primary_source_id,
         WindowKind::Terminal,
-        1_800_000_010,
+        1_799_999_710,
         1_800_000_010,
         10,
         2,
@@ -781,7 +784,8 @@ fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() 
         pyth_adapter_config: material
             .primary_adapter_config()
             .expect("Pyth adapter config"),
-        target_unix_seconds: window.start_unix_seconds(),
+        window_open_unix_seconds: window.start_unix_seconds(),
+        window_close_unix_seconds: window.end_unix_seconds(),
         max_age_seconds: window.max_age_seconds(),
         max_future_skew_seconds: window.max_future_skew_seconds(),
         schedule_id: window.schedule_id(),
@@ -798,7 +802,8 @@ fn terminal_pyth_user_inputs_compile_the_canonical_product_and_source_records() 
         source_capacity_profile: input.source_capacity_profile,
         provider_release: input.provider_release,
         pyth_adapter_config: input.pyth_adapter_config,
-        target_unix_seconds: input.target_unix_seconds,
+        window_open_unix_seconds: input.window_open_unix_seconds,
+        window_close_unix_seconds: input.window_close_unix_seconds,
         max_age_seconds: input.max_age_seconds,
         max_future_skew_seconds: input.max_future_skew_seconds,
         schedule_id: input.schedule_id,
