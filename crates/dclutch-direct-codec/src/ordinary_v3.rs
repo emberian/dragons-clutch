@@ -7,238 +7,18 @@
 //! its exact canonical bytes to the finalized content identity before placing
 //! `price_scale`, `fee_basis_points`, and `fee_recipient` in the bank. Finalized
 //! config records are immutable and therefore have no mutable revision field.
+//!
+//! The register schema, the admission program, and its exact encoded bytes are
+//! authored in `formal/dclutch-semantics/DClutchSemantics/DirectOrdinaryV3.lean`
+//! and emitted into `generated_ordinary_v3.rs`. This module projects an
+//! authenticated request into that bank and republishes the emitted program
+//! after hostile decoding; it holds no admission relation of its own.
 
-use dclutch_transition_vm::v3::{
-    IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ScalarRegisterV3, encode_program_atomic,
-};
+use dclutch_transition_vm::v3::ProgramV3;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    execution_v3::DirectInlineOrdinaryRequestV3,
-    successor::{DIRECT_FEE_DENOMINATOR_V1, DirectExecutionConfigV1},
-};
-
-/// Exact common scalar-bank width for inline ordinary V3.
-pub const DIRECT_ORDINARY_COMMON_SCALARS_V3: usize = 65;
-/// Exact common identity-bank width for inline ordinary V3.
-pub const DIRECT_ORDINARY_COMMON_IDENTITIES_V3: usize = 32;
-/// Per-Product-item scalar stride: canonical item index plus Claims quantity.
-pub const DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3: u16 = 2;
-/// Ordinary has no Product-item identity tail.
-pub const DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3: u16 = 0;
-/// Exact prelude instruction count of the ordinary semantic program.
-pub const DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3: usize = 64;
-/// Exact per-Product-item instruction count of the ordinary semantic program.
-pub const DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3: usize = 2;
-/// Exact instruction count of the ordinary semantic program.
-pub const DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3: usize =
-    DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3 + DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3;
-/// Exact encoded ordinary TransitionVM V3 width.
-pub const DIRECT_ORDINARY_TRANSITION_BYTES_V3: usize = dclutch_transition_vm::v3::HEADER_BYTES
-    + DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
-
-/// Scalar register: Direct root phase (`Open = 0`).
-pub const SCALAR_ROOT_PHASE_V3: usize = 0;
-/// Scalar register: trusted Clock slot.
-pub const SCALAR_SLOT_V3: usize = 1;
-/// Scalar register: seller inclusive validity start.
-pub const SCALAR_SELLER_VALID_FROM_V3: usize = 2;
-/// Scalar register: seller inclusive validity end.
-pub const SCALAR_SELLER_VALID_THROUGH_V3: usize = 3;
-/// Scalar register: buyer inclusive validity start.
-pub const SCALAR_BUYER_VALID_FROM_V3: usize = 4;
-/// Scalar register: buyer inclusive validity end.
-pub const SCALAR_BUYER_VALID_THROUGH_V3: usize = 5;
-/// Scalar register: seller side tag.
-pub const SCALAR_SELLER_SIDE_V3: usize = 6;
-/// Scalar register: buyer side tag.
-pub const SCALAR_BUYER_SIDE_V3: usize = 7;
-/// Scalar register: seller generation.
-pub const SCALAR_SELLER_GENERATION_V3: usize = 8;
-/// Scalar register: buyer generation.
-pub const SCALAR_BUYER_GENERATION_V3: usize = 9;
-/// Scalar register: authenticated Core Market generation.
-pub const SCALAR_MARKET_GENERATION_V3: usize = 10;
-/// Scalar register: seller Product outcome coordinate.
-pub const SCALAR_SELLER_OUTCOME_V3: usize = 11;
-/// Scalar register: buyer Product outcome coordinate.
-pub const SCALAR_BUYER_OUTCOME_V3: usize = 12;
-/// Scalar register: authenticated Product runtime outcome count.
-pub const SCALAR_OUTCOME_COUNT_V3: usize = 13;
-/// Scalar register: seller inline lifecycle tag.
-pub const SCALAR_SELLER_LIFECYCLE_V3: usize = 14;
-/// Scalar register: seller maximum fill.
-pub const SCALAR_SELLER_MAXIMUM_V3: usize = 15;
-/// Scalar register: buyer inline lifecycle tag.
-pub const SCALAR_BUYER_LIFECYCLE_V3: usize = 16;
-/// Scalar register: buyer maximum fill.
-pub const SCALAR_BUYER_MAXIMUM_V3: usize = 17;
-/// Scalar register: seller signed nonce.
-pub const SCALAR_SELLER_NONCE_V3: usize = 18;
-/// Scalar register: buyer signed nonce.
-pub const SCALAR_BUYER_NONCE_V3: usize = 19;
-/// Scalar register: seller replay next nonce.
-pub const SCALAR_SELLER_NEXT_NONCE_V3: usize = 20;
-/// Scalar register: buyer replay next nonce.
-pub const SCALAR_BUYER_NEXT_NONCE_V3: usize = 21;
-/// Scalar register: seller minimum price.
-pub const SCALAR_SELLER_LIMIT_V3: usize = 22;
-/// Scalar register: matcher execution price.
-pub const SCALAR_EXECUTION_PRICE_V3: usize = 23;
-/// Scalar register: buyer maximum price.
-pub const SCALAR_BUYER_LIMIT_V3: usize = 24;
-/// Scalar register: immutable config price scale.
-pub const SCALAR_PRICE_SCALE_V3: usize = 25;
-/// Scalar register: seller-signed fee basis points.
-pub const SCALAR_SELLER_FEE_BPS_V3: usize = 26;
-/// Scalar register: buyer-signed fee basis points.
-pub const SCALAR_BUYER_FEE_BPS_V3: usize = 27;
-/// Scalar register: immutable config fee basis points.
-pub const SCALAR_POLICY_FEE_BPS_V3: usize = 28;
-/// Scalar register: positive matcher-selected fill.
-pub const SCALAR_FILL_V3: usize = 29;
-/// Scalar register: Claims aggregate pre-revision.
-pub const SCALAR_CLAIMS_MARKET_REVISION_V3: usize = 30;
-/// Scalar register: seller Position pre-revision.
-pub const SCALAR_SELLER_POSITION_REVISION_V3: usize = 31;
-/// Scalar register: buyer Position pre-revision.
-pub const SCALAR_BUYER_POSITION_REVISION_V3: usize = 32;
-/// Scalar register: Custody replay pre-revision.
-pub const SCALAR_CUSTODY_REVISION_V3: usize = 33;
-/// Scalar register: exact pre-transition open-maker-root count.
-pub const SCALAR_ROOT_OPEN_COUNT_V3: usize = 34;
-/// Scalar register: exact post-transition open-maker-root count.
-pub const SCALAR_ROOT_OPEN_COUNT_AFTER_V3: usize = 35;
-/// Scalar register: lifecycle-owned seller first-use bit.
-pub const SCALAR_SELLER_CREATED_V3: usize = 36;
-/// Scalar register: seller persisted bump observation.
-pub const SCALAR_SELLER_BUMP_OBSERVATION_V3: usize = 37;
-/// Program-owned zero constant.
-pub const SCALAR_ZERO_V3: usize = 38;
-/// Program-owned one constant.
-pub const SCALAR_ONE_V3: usize = 39;
-/// Program-owned basis-point denominator.
-pub const SCALAR_FEE_DENOMINATOR_V3: usize = 40;
-/// Derived seller successor nonce.
-pub const SCALAR_SELLER_NONCE_AFTER_V3: usize = 41;
-/// Derived buyer successor nonce.
-pub const SCALAR_BUYER_NONCE_AFTER_V3: usize = 42;
-/// Derived exact gross collateral.
-pub const SCALAR_GROSS_V3: usize = 43;
-/// Derived one-side cumulative floor fee.
-pub const SCALAR_FEE_V3: usize = 44;
-/// Derived seller-net collateral transfer.
-pub const SCALAR_SELLER_NET_V3: usize = 45;
-/// Derived total buyer collateral debit.
-pub const SCALAR_BUYER_DEBIT_V3: usize = 46;
-/// Derived combined seller-plus-buyer fee transfer.
-pub const SCALAR_COMBINED_FEE_V3: usize = 47;
-/// Derived terminal seller-only Custody route enable bit.
-pub const SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3: usize = 48;
-/// Buyer persisted historical-rent-principal observation.
-pub const SCALAR_BUYER_RENT_PRINCIPAL_OBSERVATION_V3: usize = 49;
-/// Lifecycle-owned buyer historical rent principal.
-pub const SCALAR_BUYER_RENT_PRINCIPAL_V3: usize = 50;
-/// Program-owned maker replay ABI version after Transition.
-pub const SCALAR_MAKER_VERSION_V3: usize = 51;
-/// Derived seller-intermediate plus fee-continuation route enable bit.
-pub const SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3: usize = 52;
-/// Derived nonzero combined-fee bit.
-pub const SCALAR_FEE_NONZERO_V3: usize = 53;
-/// Reserved for the replay revision after seller-net.
-pub const SCALAR_CUSTODY_AFTER_SELLER_V3: usize = 54;
-/// Reserved for the replay revision after combined fee.
-pub const SCALAR_CUSTODY_AFTER_FEE_V3: usize = 55;
-/// Lifecycle-owned seller canonical bump.
-pub const SCALAR_SELLER_BUMP_V3: usize = 56;
-/// Seller persisted historical-rent-principal observation.
-pub const SCALAR_SELLER_RENT_PRINCIPAL_OBSERVATION_V3: usize = 57;
-/// Lifecycle-owned seller historical rent principal.
-pub const SCALAR_SELLER_RENT_PRINCIPAL_V3: usize = 58;
-/// Scalar register: lifecycle-owned buyer first-use bit.
-pub const SCALAR_BUYER_CREATED_V3: usize = 59;
-/// Scalar register: buyer persisted bump observation.
-pub const SCALAR_BUYER_BUMP_OBSERVATION_V3: usize = 60;
-/// Lifecycle-owned buyer canonical bump.
-pub const SCALAR_BUYER_BUMP_V3: usize = 61;
-/// Reserved for exact Claims transfer quantity.
-pub const SCALAR_CLAIM_TRANSFER_V3: usize = 62;
-/// Derived terminal fee-only Custody route enable bit.
-pub const SCALAR_FEE_SOLE_ROUTE_ENABLED_V3: usize = 63;
-/// Lifecycle V5 adapter-authenticated current Rent minimum for a 152-byte maker root.
-pub const SCALAR_MAKER_CURRENT_RENT_MINIMUM_V5: usize = 64;
-/// Program-owned maker replay magic word after fee arithmetic completes.
-pub const SCALAR_MAKER_MAGIC_V3: usize = SCALAR_FEE_DENOMINATOR_V3;
-
-/// Per-item scalar slot containing the canonical Product item index.
-pub const ITEM_SCALAR_INDEX_V3: u16 = 0;
-/// Per-item scalar slot containing the exact Claims transfer quantity.
-pub const ITEM_SCALAR_CLAIM_QUANTITY_V3: u16 = 1;
-
-/// Identity register: SHA-256 of the complete family request.
-pub const IDENTITY_PARENT_REQUEST_DIGEST_V3: usize = 0;
-/// Lifecycle-owned seller immutable rent beneficiary.
-pub const IDENTITY_SELLER_RENT_BENEFICIARY_V3: usize = 1;
-/// Identity register: immutable config fee recipient.
-pub const IDENTITY_FEE_RECIPIENT_V3: usize = 2;
-/// Identity register: authenticated logical Core Market.
-pub const IDENTITY_MARKET_V3: usize = 3;
-/// Identity register: native-Ed25519 seller signer.
-pub const IDENTITY_SELLER_NATIVE_SIGNER_V3: usize = 4;
-/// Identity register: native-Ed25519 buyer signer.
-pub const IDENTITY_BUYER_NATIVE_SIGNER_V3: usize = 5;
-/// Identity register: request-carried seller maker.
-pub const IDENTITY_SELLER_REQUEST_MAKER_V3: usize = 6;
-/// Identity register: request-carried buyer maker.
-pub const IDENTITY_BUYER_REQUEST_MAKER_V3: usize = 7;
-/// Identity register: seller signed-intent Market.
-pub const IDENTITY_SELLER_INTENT_MARKET_V3: usize = 8;
-/// Identity register: buyer signed-intent Market.
-pub const IDENTITY_BUYER_INTENT_MARKET_V3: usize = 9;
-/// Identity register: immutable execution release set.
-pub const IDENTITY_RELEASE_SET_V3: usize = 10;
-/// Identity register: finalized Product record digest.
-pub const IDENTITY_PRODUCT_RECORD_DIGEST_V3: usize = 11;
-/// Identity register: semantic LiabilityBasis identity.
-pub const IDENTITY_SEMANTIC_BASIS_V3: usize = 12;
-/// Identity register: finalized linked-basis record digest.
-pub const IDENTITY_LINKED_BASIS_RECORD_V3: usize = 13;
-/// Identity register: current Registry-selected Trading program.
-pub const IDENTITY_TRADING_PROGRAM_V3: usize = 14;
-/// Lifecycle-owned seller state owner, equal to current Trading.
-pub const IDENTITY_SELLER_STATE_OWNER_V3: usize = 15;
-/// Lifecycle-owned buyer state owner, equal to current Trading.
-pub const IDENTITY_BUYER_STATE_OWNER_V3: usize = 16;
-/// Identity register: immutable Realm record identity.
-pub const IDENTITY_REALM_V3: usize = 17;
-/// Identity register: Realm-selected collateral mint.
-pub const IDENTITY_MINT_V3: usize = 18;
-/// Identity register: Realm-selected token program.
-pub const IDENTITY_TOKEN_PROGRAM_V3: usize = 19;
-/// Lifecycle-owned buyer immutable rent beneficiary.
-pub const IDENTITY_BUYER_RENT_BENEFICIARY_V3: usize = 20;
-/// Lifecycle-owned seller maker replay root.
-pub const IDENTITY_SELLER_MAKER_ROOT_V3: usize = 21;
-/// Lifecycle-owned buyer maker replay root and Custody context.
-pub const IDENTITY_BUYER_MAKER_ROOT_V3: usize = 22;
-/// Identity register: independently observed System Program.
-pub const IDENTITY_SYSTEM_PROGRAM_V3: usize = 23;
-/// Identity register: canonical Custody transfer authority.
-pub const IDENTITY_CUSTODY_AUTHORITY_V3: usize = 24;
-/// Seller persisted rent-beneficiary observation.
-pub const IDENTITY_SELLER_RENT_BENEFICIARY_OBSERVATION_V3: usize = 25;
-/// Buyer persisted rent-beneficiary observation.
-pub const IDENTITY_BUYER_RENT_BENEFICIARY_OBSERVATION_V3: usize = 26;
-/// Identity register: fee recipient's exact collateral token account.
-pub const IDENTITY_FEE_TOKEN_ACCOUNT_V3: usize = 27;
-/// Identity register: seller-signed collateral token account.
-pub const IDENTITY_SELLER_COLLATERAL_REQUEST_V3: usize = 28;
-/// Identity register: buyer-signed collateral token account.
-pub const IDENTITY_BUYER_COLLATERAL_REQUEST_V3: usize = 29;
-/// Identity register: authenticated seller destination token account.
-pub const IDENTITY_SELLER_TOKEN_ACCOUNT_V3: usize = 30;
-/// Identity register: authenticated buyer source token account.
-pub const IDENTITY_BUYER_TOKEN_ACCOUNT_V3: usize = 31;
+pub use crate::generated_ordinary_v3::*;
+use crate::{execution_v3::DirectInlineOrdinaryRequestV3, successor::DirectExecutionConfigV1};
 
 /// Stable register projection or program-emission refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -515,288 +295,23 @@ pub fn project_direct_ordinary_registers_v3(
     Ok(())
 }
 
-/// Emit the exact ordinary TransitionVM V3 program atomically.
+/// Republish the exact Lean-emitted ordinary TransitionVM V3 program.
+///
+/// The program is authored in Lean and emitted into `generated_ordinary_v3.rs`.
+/// This function hostile-decodes those bytes in caller-owned scratch and copies
+/// them to `output` only after the decoder accepts the complete result, so a
+/// caller never observes a partially written or undecodable program.
 pub fn encode_direct_ordinary_transition_v3(scratch: &mut [u8], output: &mut [u8]) -> Result<()> {
-    encode_program_atomic(
-        ProgramGeometryV3 {
-            common_scalars: u16::try_from(DIRECT_ORDINARY_COMMON_SCALARS_V3)
-                .map_err(|_| DirectOrdinaryRegisterErrorV3::TransitionProgram)?,
-            item_scalar_stride: DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3,
-            common_identities: u16::try_from(DIRECT_ORDINARY_COMMON_IDENTITIES_V3)
-                .map_err(|_| DirectOrdinaryRegisterErrorV3::TransitionProgram)?,
-            item_identity_stride: DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3,
-        },
-        &DIRECT_ORDINARY_PRELUDE_V3,
-        &DIRECT_ORDINARY_ITEM_V3,
-        &[],
-        scratch,
-        output,
-    )
-    .map_err(|_| DirectOrdinaryRegisterErrorV3::TransitionProgram)
+    if scratch.len() != DIRECT_ORDINARY_TRANSITION_BYTES_V3
+        || output.len() != DIRECT_ORDINARY_TRANSITION_BYTES_V3
+    {
+        return Err(DirectOrdinaryRegisterErrorV3::TransitionProgram);
+    }
+    scratch.copy_from_slice(&DIRECT_ORDINARY_TRANSITION_V3);
+    ProgramV3::decode(scratch).map_err(|_| DirectOrdinaryRegisterErrorV3::TransitionProgram)?;
+    output.copy_from_slice(scratch);
+    Ok(())
 }
-
-const fn scalar(index: usize) -> ScalarRegisterV3 {
-    assert!(index <= u16::MAX as usize);
-    #[allow(clippy::cast_possible_truncation)]
-    ScalarRegisterV3::common(index as u16)
-}
-
-const fn identity(index: usize) -> IdentityRegisterV3 {
-    assert!(index <= u16::MAX as usize);
-    #[allow(clippy::cast_possible_truncation)]
-    IdentityRegisterV3::common(index as u16)
-}
-
-const fn item_scalar(index: u16) -> ScalarRegisterV3 {
-    ScalarRegisterV3::item(index)
-}
-
-const DIRECT_ORDINARY_PRELUDE_V3: [InstructionV3; DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3] = [
-    InstructionV3::load_const(scalar(SCALAR_ZERO_V3), 0),
-    InstructionV3::load_const(scalar(SCALAR_ONE_V3), 1),
-    InstructionV3::load_const(
-        scalar(SCALAR_FEE_DENOMINATOR_V3),
-        DIRECT_FEE_DENOMINATOR_V1 as u64,
-    ),
-    InstructionV3::scalar_eq(scalar(SCALAR_ROOT_PHASE_V3), scalar(SCALAR_ZERO_V3)),
-    InstructionV3::nonzero(scalar(SCALAR_FILL_V3)),
-    InstructionV3::scalar_le(scalar(SCALAR_SELLER_VALID_FROM_V3), scalar(SCALAR_SLOT_V3)),
-    InstructionV3::scalar_le(
-        scalar(SCALAR_SLOT_V3),
-        scalar(SCALAR_SELLER_VALID_THROUGH_V3),
-    ),
-    InstructionV3::scalar_le(scalar(SCALAR_BUYER_VALID_FROM_V3), scalar(SCALAR_SLOT_V3)),
-    InstructionV3::scalar_le(
-        scalar(SCALAR_SLOT_V3),
-        scalar(SCALAR_BUYER_VALID_THROUGH_V3),
-    ),
-    InstructionV3::scalar_eq(scalar(SCALAR_SELLER_SIDE_V3), scalar(SCALAR_ZERO_V3)),
-    InstructionV3::scalar_eq(scalar(SCALAR_BUYER_SIDE_V3), scalar(SCALAR_ONE_V3)),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_SELLER_INTENT_MARKET_V3),
-        identity(IDENTITY_BUYER_INTENT_MARKET_V3),
-    ),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_SELLER_INTENT_MARKET_V3),
-        identity(IDENTITY_MARKET_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_SELLER_GENERATION_V3),
-        scalar(SCALAR_BUYER_GENERATION_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_SELLER_GENERATION_V3),
-        scalar(SCALAR_MARKET_GENERATION_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_SELLER_OUTCOME_V3),
-        scalar(SCALAR_BUYER_OUTCOME_V3),
-    ),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_SELLER_NATIVE_SIGNER_V3),
-        identity(IDENTITY_SELLER_REQUEST_MAKER_V3),
-    ),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_BUYER_NATIVE_SIGNER_V3),
-        identity(IDENTITY_BUYER_REQUEST_MAKER_V3),
-    ),
-    InstructionV3::identity_ne(
-        identity(IDENTITY_SELLER_REQUEST_MAKER_V3),
-        identity(IDENTITY_BUYER_REQUEST_MAKER_V3),
-    ),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_SELLER_COLLATERAL_REQUEST_V3),
-        identity(IDENTITY_SELLER_TOKEN_ACCOUNT_V3),
-    ),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_BUYER_COLLATERAL_REQUEST_V3),
-        identity(IDENTITY_BUYER_TOKEN_ACCOUNT_V3),
-    ),
-    InstructionV3::scalar_lt(
-        scalar(SCALAR_SELLER_OUTCOME_V3),
-        scalar(SCALAR_OUTCOME_COUNT_V3),
-    ),
-    InstructionV3::nonzero(scalar(SCALAR_PRICE_SCALE_V3)),
-    InstructionV3::lifecycle_accepts(
-        scalar(SCALAR_SELLER_LIFECYCLE_V3),
-        scalar(SCALAR_SELLER_MAXIMUM_V3),
-        scalar(SCALAR_FILL_V3),
-    ),
-    InstructionV3::lifecycle_accepts(
-        scalar(SCALAR_BUYER_LIFECYCLE_V3),
-        scalar(SCALAR_BUYER_MAXIMUM_V3),
-        scalar(SCALAR_FILL_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_SELLER_NONCE_V3),
-        scalar(SCALAR_SELLER_NEXT_NONCE_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_BUYER_NONCE_V3),
-        scalar(SCALAR_BUYER_NEXT_NONCE_V3),
-    ),
-    InstructionV3::increment_into(
-        scalar(SCALAR_SELLER_NEXT_NONCE_V3),
-        scalar(SCALAR_SELLER_NONCE_AFTER_V3),
-    ),
-    InstructionV3::increment_into(
-        scalar(SCALAR_BUYER_NEXT_NONCE_V3),
-        scalar(SCALAR_BUYER_NONCE_AFTER_V3),
-    ),
-    InstructionV3::scalar_le(
-        scalar(SCALAR_SELLER_LIMIT_V3),
-        scalar(SCALAR_EXECUTION_PRICE_V3),
-    ),
-    InstructionV3::scalar_le(
-        scalar(SCALAR_EXECUTION_PRICE_V3),
-        scalar(SCALAR_BUYER_LIMIT_V3),
-    ),
-    InstructionV3::scalar_le(
-        scalar(SCALAR_EXECUTION_PRICE_V3),
-        scalar(SCALAR_PRICE_SCALE_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_SELLER_FEE_BPS_V3),
-        scalar(SCALAR_POLICY_FEE_BPS_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_BUYER_FEE_BPS_V3),
-        scalar(SCALAR_POLICY_FEE_BPS_V3),
-    ),
-    InstructionV3::mul_div_exact(
-        scalar(SCALAR_FILL_V3),
-        scalar(SCALAR_EXECUTION_PRICE_V3),
-        scalar(SCALAR_PRICE_SCALE_V3),
-        scalar(SCALAR_GROSS_V3),
-    ),
-    InstructionV3::mul_div_floor(
-        scalar(SCALAR_GROSS_V3),
-        scalar(SCALAR_POLICY_FEE_BPS_V3),
-        scalar(SCALAR_FEE_DENOMINATOR_V3),
-        scalar(SCALAR_FEE_V3),
-    ),
-    InstructionV3::sub_into(
-        scalar(SCALAR_GROSS_V3),
-        scalar(SCALAR_FEE_V3),
-        scalar(SCALAR_SELLER_NET_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_GROSS_V3),
-        scalar(SCALAR_FEE_V3),
-        scalar(SCALAR_BUYER_DEBIT_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_FEE_V3),
-        scalar(SCALAR_FEE_V3),
-        scalar(SCALAR_COMBINED_FEE_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_SELLER_NET_V3),
-        scalar(SCALAR_COMBINED_FEE_V3),
-        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
-    ),
-    InstructionV3::scalar_eq(
-        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
-        scalar(SCALAR_BUYER_DEBIT_V3),
-    ),
-    InstructionV3::scalar_le(scalar(SCALAR_SELLER_CREATED_V3), scalar(SCALAR_ONE_V3)),
-    InstructionV3::scalar_le(scalar(SCALAR_BUYER_CREATED_V3), scalar(SCALAR_ONE_V3)),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_ROOT_OPEN_COUNT_V3),
-        scalar(SCALAR_SELLER_CREATED_V3),
-        scalar(SCALAR_ROOT_OPEN_COUNT_AFTER_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_ROOT_OPEN_COUNT_AFTER_V3),
-        scalar(SCALAR_BUYER_CREATED_V3),
-        scalar(SCALAR_ROOT_OPEN_COUNT_AFTER_V3),
-    ),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_SELLER_STATE_OWNER_V3),
-        identity(IDENTITY_TRADING_PROGRAM_V3),
-    ),
-    InstructionV3::identity_eq(
-        identity(IDENTITY_BUYER_STATE_OWNER_V3),
-        identity(IDENTITY_TRADING_PROGRAM_V3),
-    ),
-    InstructionV3::load_const(scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3), 1),
-    InstructionV3::select_zero(
-        scalar(SCALAR_SELLER_NET_V3),
-        scalar(SCALAR_ZERO_V3),
-        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
-    ),
-    InstructionV3::load_const(scalar(SCALAR_FEE_NONZERO_V3), 1),
-    InstructionV3::select_zero(
-        scalar(SCALAR_COMBINED_FEE_V3),
-        scalar(SCALAR_ZERO_V3),
-        scalar(SCALAR_FEE_NONZERO_V3),
-    ),
-    InstructionV3::load_const(scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3), 0),
-    InstructionV3::select_zero(
-        scalar(SCALAR_COMBINED_FEE_V3),
-        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
-        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_FEE_NONZERO_V3),
-        scalar(SCALAR_ZERO_V3),
-        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
-    ),
-    InstructionV3::select_zero(
-        scalar(SCALAR_SELLER_NET_V3),
-        scalar(SCALAR_ZERO_V3),
-        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
-    ),
-    InstructionV3::load_const(scalar(SCALAR_FEE_SOLE_ROUTE_ENABLED_V3), 0),
-    InstructionV3::select_zero(
-        scalar(SCALAR_SELLER_NET_V3),
-        scalar(SCALAR_FEE_NONZERO_V3),
-        scalar(SCALAR_FEE_SOLE_ROUTE_ENABLED_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3),
-        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
-        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_CUSTODY_REVISION_V3),
-        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
-        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_CUSTODY_AFTER_SELLER_V3),
-        scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3),
-        scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
-        scalar(SCALAR_FEE_SOLE_ROUTE_ENABLED_V3),
-        scalar(SCALAR_CUSTODY_AFTER_FEE_V3),
-    ),
-    InstructionV3::checked_add_into(
-        scalar(SCALAR_FILL_V3),
-        scalar(SCALAR_ZERO_V3),
-        scalar(SCALAR_CLAIM_TRANSFER_V3),
-    ),
-    InstructionV3::load_const(
-        scalar(SCALAR_MAKER_VERSION_V3),
-        crate::successor::DirectMakerReplayLayoutV1::ABI_VERSION as u64,
-    ),
-    InstructionV3::load_const(
-        scalar(SCALAR_MAKER_MAGIC_V3),
-        crate::successor::DirectMakerReplayLayoutV1::MAGIC_WORD,
-    ),
-];
-
-const DIRECT_ORDINARY_ITEM_V3: [InstructionV3; DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3] = [
-    InstructionV3::load_const(item_scalar(ITEM_SCALAR_CLAIM_QUANTITY_V3), 0),
-    InstructionV3::select_eq(
-        item_scalar(ITEM_SCALAR_INDEX_V3),
-        scalar(SCALAR_SELLER_OUTCOME_V3),
-        scalar(SCALAR_CLAIM_TRANSFER_V3),
-        item_scalar(ITEM_SCALAR_CLAIM_QUANTITY_V3),
-    ),
-];
 
 #[cfg(test)]
 #[allow(clippy::indexing_slicing)]
@@ -820,6 +335,42 @@ mod tests {
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
+    }
+
+    /// The emitted width and geometry are literals from Lean. This restates the
+    /// arithmetic the Rust side used to carry, so a regenerated program that
+    /// disagrees with its own header or section counts cannot land silently.
+    #[test]
+    fn the_emitted_program_carries_its_own_derived_width_and_geometry() {
+        assert_eq!(
+            DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3,
+            DIRECT_ORDINARY_PRELUDE_INSTRUCTIONS_V3
+                + DIRECT_ORDINARY_ITEM_INSTRUCTIONS_V3
+                + DIRECT_ORDINARY_EPILOGUE_INSTRUCTIONS_V3
+        );
+        assert_eq!(
+            DIRECT_ORDINARY_TRANSITION_BYTES_V3,
+            dclutch_transition_vm::v3::HEADER_BYTES
+                + DIRECT_ORDINARY_TRANSITION_INSTRUCTIONS_V3
+                    * dclutch_transition_vm::v3::INSTRUCTION_BYTES
+        );
+        let program = ProgramV3::decode(&DIRECT_ORDINARY_TRANSITION_V3).expect("program decode");
+        assert_eq!(
+            usize::from(program.common_scalar_count()),
+            DIRECT_ORDINARY_COMMON_SCALARS_V3
+        );
+        assert_eq!(
+            usize::from(program.common_identity_count()),
+            DIRECT_ORDINARY_COMMON_IDENTITIES_V3
+        );
+        assert_eq!(
+            program.item_scalar_stride(),
+            DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3
+        );
+        assert_eq!(
+            program.item_identity_stride(),
+            DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
+        );
     }
 
     fn request() -> DirectInlineOrdinaryRequestV3 {

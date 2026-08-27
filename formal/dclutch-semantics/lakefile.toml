@@ -94,6 +94,10 @@ name = "emit-direct-lifecycle-abi-rust"
 root = "EmitDirectLifecycleAbiRust"
 
 [[lean_exe]]
+name = "emit-direct-ordinary-v3-rust"
+root = "EmitDirectOrdinaryV3Rust"
+
+[[lean_exe]]
 name = "emit-direct-program"
 root = "EmitDirectProgram"
 
