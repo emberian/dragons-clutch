@@ -281,7 +281,10 @@ mod tests {
     }
 
     fn put<const N: usize>(target: &mut [u8], offset: usize, value: &[u8; N]) {
-        target[offset..offset + N].copy_from_slice(value);
+        target
+            .get_mut(offset..offset + N)
+            .expect("fixture offset in bounds")
+            .copy_from_slice(value);
     }
 
     fn node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {

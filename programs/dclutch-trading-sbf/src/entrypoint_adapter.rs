@@ -2488,7 +2488,10 @@ mod tests {
         assert!(bank.push(11).is_err());
         assert_eq!(bank.as_slice(), &[7, 9]);
         assert_eq!(&bank[..], &[7, 9]);
-        bank.as_mut_slice()[0] = 5;
+        *bank
+            .as_mut_slice()
+            .first_mut()
+            .expect("the bank holds two elements") = 5;
         assert_eq!(bank.as_slice(), &[5, 9]);
     }
 

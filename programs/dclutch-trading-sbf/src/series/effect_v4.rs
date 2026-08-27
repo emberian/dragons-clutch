@@ -626,7 +626,7 @@ pub(super) mod tests {
             EffectGeometryV3 {
                 fixed_accounts: SERIES_CONSUME_LOGICAL_ACCOUNT_BASE_V4,
                 item_account_stride: 0,
-                common_scalars: SCALARS as u16,
+                common_scalars: u16::try_from(SCALARS).expect("scalar count fits in u16"),
                 item_scalar_stride: 0,
                 common_identities: SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4,
                 item_identity_stride: 0,
@@ -724,7 +724,12 @@ pub(super) mod tests {
                     .program()
                     .resolved_borrowed_range(route, 0, &scalars)
                     .expect("proof range");
-                assert_eq!(range.slice(&request), Ok(request[128..].as_ref()));
+                assert_eq!(
+                    range.slice(&request),
+                    Ok(request
+                        .get(128..)
+                        .expect("request extends past the proof header"))
+                );
             }
         }
         for count in [0_u16, 17] {
