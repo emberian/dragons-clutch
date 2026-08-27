@@ -60,8 +60,9 @@ pub use super::generated_principal_capacity_v1::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1, MANIPULATION_FLOOR_V1_BYTES,
     MANIPULATION_FLOOR_V1_MAGIC, MANIPULATION_FLOOR_V1_MAGIC_OFFSET,
     MANIPULATION_FLOOR_V1_SCHEMA_VERSION, MANIPULATION_FLOOR_V1_VERSION_OFFSET,
-    PRINCIPAL_ADMISSION_CASES_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1,
-    PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1, SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1,
+    MARKET_PRINCIPAL_CAP_BYTES_V1, MARKET_PRINCIPAL_CAP_UNBOUNDED_V1, PRINCIPAL_ADMISSION_CASES_V1,
+    PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1,
+    PRINCIPAL_CARRIED_CAPS_V1, SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1,
     SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_BYTES_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_OFFSET_V1,
@@ -368,6 +369,179 @@ pub fn admit_founding_principal(
     capacity.admit(floor.floor_atoms(), total_principal_atoms)
 }
 
+/// The bound a founded Market carries, and the check a later route makes.
+///
+/// # Why a Market has to carry a number rather than re-derive one
+///
+/// [`admit_founding_principal`] needs the whole Source graph: κ off the capacity
+/// profile, the venue floor, and the three identities the floor is bound to. A
+/// founding route can have all of that in its account frame. A route that *grows*
+/// principal afterwards — a complete-set split — cannot, and re-deriving the
+/// predicate there would be worse than not checking it: [`ManipulationFloorV1`]
+/// binds the Source, the venue configuration and the collateral unit, but nothing
+/// pins *which* floor record carries those bindings, so two floors that agree on
+/// all three and disagree on `floor_atoms` both validate. A route that re-derives
+/// lets its caller choose its own bound.
+///
+/// So the number is computed once, where the graph is authenticated, and carried.
+/// `carried_cap_decides_exactly_what_the_graph_decides` in
+/// `formal/dclutch-semantics/DClutchSemantics/SourcePrincipalCapacityV1.lean` is
+/// the licence for that substitution: for a stated κ, comparing against the
+/// carried cap decides *exactly* what re-running §6.5 would have decided. The
+/// floored division loses nothing, because over ℕ `p ≤ ⌊n·f / d⌋` and
+/// `p · d ≤ n · f` are the same proposition.
+///
+/// # The three wire readings, and why zero is not "unbounded"
+///
+/// The cap is one `u128` little-endian field, [`MARKET_PRINCIPAL_CAP_BYTES_V1`]
+/// wide. Zero reads [`Self::Absent`] and refuses every principal-growing
+/// operation, which is the fail-closed reading a root that was never given a cap
+/// must have. A stated bound of zero — κ = 0, or a floor of zero, both of which
+/// mean "found nothing against this Source" — is the same bytes and the same
+/// decision, so nothing is lost by collapsing them.
+///
+/// An explicitly unbounded founding is [`MARKET_PRINCIPAL_CAP_UNBOUNDED_V1`], a
+/// deliberate sixteen bytes of `0xFF` that no zeroed record can produce by
+/// accident. It is not an escape hatch in the decision either: it is an ordinary
+/// cap whose value happens to exceed every principal the wire can express
+/// (`saturated_cap_admits_every_representable_principal`), so one comparison
+/// still decides the whole question.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarketPrincipalCapV1 {
+    /// No bound was ever written, or the bound written was zero.
+    ///
+    /// Refuses every principal-growing operation. A Market root that predates
+    /// the cap reads this way, which is why a founding route that means to found
+    /// unbounded must say so with [`Self::Unbounded`] rather than leave zeroes.
+    Absent,
+    /// An explicitly unbounded founding, named on the wire.
+    Unbounded,
+    /// The largest total principal this Market may carry, in collateral atoms.
+    Bounded(u128),
+}
+
+impl MarketPrincipalCapV1 {
+    /// Read one carried cap from its `u128` wire value.
+    #[must_use]
+    pub const fn read(atoms: u128) -> Self {
+        if atoms == 0 {
+            Self::Absent
+        } else if atoms == MARKET_PRINCIPAL_CAP_UNBOUNDED_V1 {
+            Self::Unbounded
+        } else {
+            Self::Bounded(atoms)
+        }
+    }
+
+    /// The exact `u128` this cap writes back to a Market root.
+    #[must_use]
+    pub const fn to_atoms(self) -> u128 {
+        match self {
+            Self::Absent => 0,
+            Self::Unbounded => MARKET_PRINCIPAL_CAP_UNBOUNDED_V1,
+            Self::Bounded(atoms) => atoms,
+        }
+    }
+
+    /// Encode the exact canonical little-endian cap field.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; MARKET_PRINCIPAL_CAP_BYTES_V1] {
+        self.to_atoms().to_le_bytes()
+    }
+
+    /// Hostile-decode one exact cap field off a Market root.
+    ///
+    /// Every sixteen-byte input is a valid cap: there is no noncanonical
+    /// *value*, because the fail-closed reading and the unbounded reading are
+    /// both real points of the space. The width, though, is exact in both
+    /// directions — a longer input is a different field, not this one with a
+    /// tail, and admitting it would let a caller aim a cap read at any offset
+    /// of a wider record.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != MARKET_PRINCIPAL_CAP_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        Ok(Self::read(u128::from_le_bytes(read_array(bytes, 0)?)))
+    }
+
+    /// Decide one total principal against the carried cap.
+    ///
+    /// This is the whole check a route with no Source graph in scope makes, and
+    /// it is the same decision [`admit_founding_principal`] would have made.
+    pub const fn admit(self, total_principal_atoms: u128) -> Result<()> {
+        if total_principal_atoms == 0 {
+            return Err(Error::ZeroCapacity);
+        }
+        match self {
+            Self::Absent => Err(Error::PrincipalCapacityUnstated),
+            Self::Unbounded => Ok(()),
+            Self::Bounded(cap_atoms) => {
+                if total_principal_atoms > cap_atoms {
+                    Err(Error::PrincipalExceedsCapacity)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+/// Compute the cap a founding writes to its Market root.
+///
+/// Takes exactly what [`admit_founding_principal`] takes, minus the principal:
+/// the bound does not depend on how large the founding happens to be, which is
+/// what makes it reusable at every later split. The floor's three bindings are
+/// validated here, at the one site that still has the Source graph, so no later
+/// route has to.
+///
+/// An unstated κ produces no cap and refuses, rather than producing a zero cap
+/// that a caller might later mistake for a bound it chose.
+pub fn derive_market_principal_cap(
+    capacity: PrincipalCapacityV1,
+    floor: ManipulationFloorV1,
+    source_spec_id: ContentId,
+    source: SourceSpecV1,
+    market_collateral_unit_id: ContentId,
+) -> Result<MarketPrincipalCapV1> {
+    floor.validate_binding(source_spec_id, source, market_collateral_unit_id)?;
+    let PrincipalCapacityV1::Bounded {
+        numerator,
+        denominator,
+    } = capacity
+    else {
+        return Err(Error::PrincipalCapacityUnstated);
+    };
+    if denominator == 0 {
+        return Err(Error::NonCanonicalCapacity);
+    }
+    let bound = u128::from(numerator)
+        .checked_mul(u128::from(floor.floor_atoms()))
+        .ok_or(Error::ArithmeticOverflow)?;
+    Ok(MarketPrincipalCapV1::read(bound / u128::from(denominator)))
+}
+
+/// The check every principal-growing route makes, at founding and at split.
+///
+/// `outstanding_principal_atoms` is what the Market already carries — zero at
+/// founding — and `added_principal_atoms` is what this operation would add. The
+/// sum is what the cap bounds: a founding-only check is not a cap, because
+/// principal grows at every later complete-set split.
+///
+/// A sum that overflows `u128` is refused as exceeding the cap rather than as an
+/// arithmetic accident, and that is exact: no cap, including
+/// [`MarketPrincipalCapV1::Unbounded`], admits a principal the wire cannot
+/// express.
+pub fn admit_principal_growth(
+    cap: MarketPrincipalCapV1,
+    outstanding_principal_atoms: u128,
+    added_principal_atoms: u128,
+) -> Result<()> {
+    let total = outstanding_principal_atoms
+        .checked_add(added_principal_atoms)
+        .ok_or(Error::PrincipalExceedsCapacity)?;
+    cap.admit(total)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +601,197 @@ mod tests {
                 observed.is_ok(),
                 case.admitted,
                 "Lean and Rust disagreed on {case:?}"
+            );
+        }
+    }
+
+    /// The lane's load-bearing property, at every case Lean states.
+    ///
+    /// A route holding only the carried cap must refuse exactly what a route
+    /// holding the whole Source graph refuses. Lean proves this in general
+    /// (`carried_cap_decides_exactly_what_the_graph_decides`); this is the
+    /// kernel agreeing case by case, against the caps Lean emitted rather than
+    /// against a second reading of the same arithmetic.
+    #[test]
+    fn the_carried_cap_refuses_exactly_what_the_source_graph_refuses() {
+        assert_eq!(
+            PRINCIPAL_ADMISSION_CASES_V1.len(),
+            PRINCIPAL_CARRIED_CAPS_V1.len(),
+            "the two Lean-emitted corpora must stay in step"
+        );
+        for (case, cap_atoms) in PRINCIPAL_ADMISSION_CASES_V1
+            .iter()
+            .zip(PRINCIPAL_CARRIED_CAPS_V1)
+        {
+            let carried = MarketPrincipalCapV1::read(cap_atoms);
+            assert_eq!(
+                carried.admit(case.principal_atoms).is_ok(),
+                case.admitted,
+                "the carried cap {cap_atoms} disagreed with the graph on {case:?}"
+            );
+        }
+    }
+
+    /// And the caps themselves are what the derivation produces, so the corpus
+    /// above is not grading the check against a number nothing computes.
+    #[test]
+    fn the_derivation_produces_exactly_the_caps_lean_emitted() {
+        for (case, cap_atoms) in PRINCIPAL_ADMISSION_CASES_V1
+            .iter()
+            .zip(PRINCIPAL_CARRIED_CAPS_V1)
+        {
+            let venue = floor(case.floor_atoms);
+            let derived =
+                PrincipalCapacityV1::read(case.numerator, case.denominator).and_then(|capacity| {
+                    derive_market_principal_cap(capacity, venue, id(9), source(), id(7))
+                });
+            match derived {
+                Ok(cap) => assert_eq!(
+                    cap.to_atoms(),
+                    cap_atoms,
+                    "derivation and Lean disagreed on {case:?}"
+                ),
+                // A κ with no denominator is not a rational and has no cap:
+                // unstated when the numerator is zero too, noncanonical when it
+                // is not. Lean's `n / 0 = 0` renders both as the zero cap, which
+                // is the same fail-closed decision these refusals make.
+                Err(refusal) => {
+                    assert_eq!(case.denominator, 0);
+                    assert_eq!(cap_atoms, 0);
+                    assert_eq!(
+                        refusal,
+                        if case.numerator == 0 {
+                            Error::PrincipalCapacityUnstated
+                        } else {
+                            Error::NonCanonicalCapacity
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    /// The number the demo graduation Market carries, and the atom that refuses.
+    /// Pinned against `default_graduation_cap_is_carried`.
+    #[test]
+    fn the_graduation_cap_is_the_lean_pinned_boundary_when_carried() {
+        let cap = derive_market_principal_cap(
+            PrincipalCapacityV1::DEFAULT_CHAIN_STATE,
+            floor(BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1),
+            id(9),
+            source(),
+            id(7),
+        )
+        .expect("the default κ against the graduation floor is a bound");
+        assert_eq!(cap, MarketPrincipalCapV1::Bounded(4_654_518_500));
+        assert_eq!(cap.admit(4_654_518_500), Ok(()));
+        assert_eq!(
+            cap.admit(4_654_518_501),
+            Err(Error::PrincipalExceedsCapacity)
+        );
+    }
+
+    /// The founding half and the split half are one cap, not two rules: a
+    /// founding at the cap admits, and the very next atom of a later split
+    /// refuses. This is the whole reason the bound is carried.
+    #[test]
+    fn a_split_past_the_cap_refuses_even_though_the_founding_admitted() {
+        let cap = MarketPrincipalCapV1::Bounded(4_654_518_500);
+        assert_eq!(admit_principal_growth(cap, 0, 4_654_518_500), Ok(()));
+        assert_eq!(
+            admit_principal_growth(cap, 4_654_518_500, 1),
+            Err(Error::PrincipalExceedsCapacity)
+        );
+        // A founding well under the cap leaves exactly the room it left.
+        assert_eq!(
+            admit_principal_growth(cap, 4_000_000_000, 654_518_500),
+            Ok(())
+        );
+        assert_eq!(
+            admit_principal_growth(cap, 4_000_000_000, 654_518_501),
+            Err(Error::PrincipalExceedsCapacity)
+        );
+        // A sum that leaves the wire is over every cap, including the unbounded
+        // one, and says so as an excess rather than as an arithmetic accident.
+        assert_eq!(
+            admit_principal_growth(MarketPrincipalCapV1::Unbounded, u128::MAX, 1),
+            Err(Error::PrincipalExceedsCapacity)
+        );
+    }
+
+    /// A zero cap is refusal, an unbounded cap is sixteen deliberate `0xFF`
+    /// bytes, and the two are not reachable from one another by accident.
+    #[test]
+    fn an_absent_cap_founds_nothing_and_unbounded_is_a_written_choice() {
+        assert_eq!(MarketPrincipalCapV1::read(0), MarketPrincipalCapV1::Absent);
+        assert_eq!(
+            MarketPrincipalCapV1::Absent.admit(1),
+            Err(Error::PrincipalCapacityUnstated)
+        );
+        assert_eq!(
+            admit_principal_growth(MarketPrincipalCapV1::Absent, 0, 1),
+            Err(Error::PrincipalCapacityUnstated)
+        );
+        // A Market root that predates the cap is all zeroes there and founds
+        // nothing, exactly as an unstated κ does.
+        assert_eq!(
+            MarketPrincipalCapV1::decode(&[0; MARKET_PRINCIPAL_CAP_BYTES_V1]),
+            Ok(MarketPrincipalCapV1::Absent)
+        );
+        assert_eq!(
+            MarketPrincipalCapV1::Unbounded.to_bytes(),
+            [0xFF; MARKET_PRINCIPAL_CAP_BYTES_V1]
+        );
+        assert_eq!(
+            MarketPrincipalCapV1::decode(&[0xFF; MARKET_PRINCIPAL_CAP_BYTES_V1]),
+            Ok(MarketPrincipalCapV1::Unbounded)
+        );
+        assert_eq!(MarketPrincipalCapV1::Unbounded.admit(u128::MAX), Ok(()));
+        // Zero principal is not a Market under either reading.
+        assert_eq!(
+            MarketPrincipalCapV1::Unbounded.admit(0),
+            Err(Error::ZeroCapacity)
+        );
+        // Every width but the exact one refuses.
+        let wide = [0xFF_u8; 32];
+        for width in [0, 8, 15, 17, 32] {
+            assert_eq!(
+                MarketPrincipalCapV1::decode(wide.get(..width).expect("prefix")),
+                Err(Error::InvalidLength),
+                "a {width}-byte cap field must refuse"
+            );
+        }
+        // The round trip is exact at every reading.
+        for cap in [
+            MarketPrincipalCapV1::Absent,
+            MarketPrincipalCapV1::Unbounded,
+            MarketPrincipalCapV1::Bounded(4_654_518_500),
+            MarketPrincipalCapV1::Bounded(1),
+        ] {
+            assert_eq!(MarketPrincipalCapV1::decode(&cap.to_bytes()), Ok(cap));
+        }
+    }
+
+    /// The floor bindings are checked at the derivation, so no later route has
+    /// to carry the Source graph to be safe from a substituted floor.
+    #[test]
+    fn a_substituted_floor_produces_no_cap_at_all() {
+        let capacity = PrincipalCapacityV1::DEFAULT_CHAIN_STATE;
+        let deeper = ManipulationFloorV1::new(
+            ManipulationFloorBasis::CurveDerived,
+            id(9),
+            id(4),
+            id(7),
+            ContentId::new(BONDING_CURVE_FLOOR_DERIVATION_ID_V1).expect("derivation"),
+            u64::MAX,
+        );
+        // Correctly bound, the deeper floor is admitted: the binding is what
+        // refuses, not the number.
+        assert!(derive_market_principal_cap(capacity, deeper, id(9), source(), id(7)).is_ok());
+        for (spec, unit) in [(id(8), id(7)), (id(9), id(6))] {
+            assert_eq!(
+                derive_market_principal_cap(capacity, deeper, spec, source(), unit),
+                Err(Error::LinkageMismatch)
             );
         }
     }
