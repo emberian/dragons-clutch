@@ -149,9 +149,14 @@ pub struct DirectRegisterSellHotBundleV4 {
     pub descriptor: [u8; DIRECT_REGISTER_SELL_DESCRIPTOR_BYTES_V4],
 }
 
-/// Stable registered bundle refusal.
+/// Stable registered-creation bundle refusal, shared by both sides.
+///
+/// One enum, because the two sides fail in the same seven ways and a caller
+/// that handles a Buy's refusal handles a Sell's. It was named for the Buy when
+/// the Buy was the only side; the name moved with the second side rather than
+/// the second side inheriting a name that was no longer true.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DirectRegisterBuyHotBundleErrorV4 {
+pub enum DirectRegisteredCreationHotBundleErrorV4 {
     /// A selected content identity or fixed geometry was invalid.
     Content,
     /// AccountProfile construction or decoding refused.
@@ -175,7 +180,7 @@ pub enum DirectRegisterBuyHotBundleErrorV4 {
 /// Emit and independently hostile-check one complete RegisterBuy Hot bundle.
 pub fn build_direct_register_buy_hot_bundle_v4(
     input: DirectRegisterBuyHotBundleInputV4<'_>,
-) -> Result<DirectRegisterBuyHotBundleV4, DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<DirectRegisterBuyHotBundleV4, DirectRegisteredCreationHotBundleErrorV4> {
     let action = DirectExecutionActionV3::RegisterBuy;
     let mut account_scratch = [0_u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4];
     let mut account_profile = [0_u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4];
@@ -184,7 +189,7 @@ pub fn build_direct_register_buy_hot_bundle_v4(
         &mut account_scratch,
         &mut account_profile,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::AccountProfile)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::AccountProfile)?;
 
     let mut lifecycle_scratch = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
     let mut lifecycle_policy = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
@@ -194,7 +199,7 @@ pub fn build_direct_register_buy_hot_bundle_v4(
         &mut lifecycle_scratch,
         &mut lifecycle_policy,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
 
     let mut request_v1_scratch = [0_u8; DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V1_BYTES_V4];
     let mut request_v1 = [0_u8; DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V1_BYTES_V4];
@@ -207,7 +212,7 @@ pub fn build_direct_register_buy_hot_bundle_v4(
         &mut request_v2_scratch,
         &mut request_profile,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::RequestProfile)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::RequestProfile)?;
 
     let mut transition_scratch = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
     let mut transition = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
@@ -216,15 +221,15 @@ pub fn build_direct_register_buy_hot_bundle_v4(
         &mut transition_scratch,
         &mut transition,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Transition)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Transition)?;
     let transition_id = digest(&transition);
     let strategy = direct_registered_creation_strategy_v4(transition_id)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Strategy)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Strategy)?;
 
     let mut effect_scratch = [0_u8; DIRECT_REGISTER_BUY_EFFECT_BYTES_V4];
     let mut effect = [0_u8; DIRECT_REGISTER_BUY_EFFECT_BYTES_V4];
     encode_direct_register_buy_effect_v4_atomic(&mut effect_scratch, &mut effect)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Effect)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Effect)?;
 
     let descriptor = creation_descriptor(
         digest(&account_profile),
@@ -252,7 +257,7 @@ pub fn build_direct_register_buy_hot_bundle_v4(
 pub fn validate_direct_register_buy_hot_bundle_v4(
     bundle: &DirectRegisterBuyHotBundleV4,
     capacity_profile: [u8; 32],
-) -> Result<(), DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<(), DirectRegisteredCreationHotBundleErrorV4> {
     let action = DirectExecutionActionV3::RegisterBuy;
     let descriptor = validate_creation_descriptor(
         &bundle.descriptor,
@@ -266,47 +271,47 @@ pub fn validate_direct_register_buy_hot_bundle_v4(
     )?;
 
     let account = AccountProfileV2::decode(&bundle.account_profile)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::AccountProfile)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::AccountProfile)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy);
     let lifecycle = StateLifecyclePolicyV5::decode_selected(
         lifecycle_id,
         lifecycle_id,
         &bundle.lifecycle_policy,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
     lifecycle
         .validate_account_profile(account)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
     if lifecycle
         .action_plan_count(action as u32)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?
         != 2
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Lifecycle);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Lifecycle);
     }
     let request_id = digest(&bundle.request_profile);
     let request =
         RequestProfileV2::decode_selected(request_id, request_id, &bundle.request_profile)
-            .map_err(|_| DirectRegisterBuyHotBundleErrorV4::RequestProfile)?;
+            .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::RequestProfile)?;
     let transition = TransitionProgramV3::decode(&bundle.transition)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Transition)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Strategy)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Strategy)?;
     if strategy.disposition() != StrategyDispositionV2::Interpreted
         || strategy.transition_schema() != descriptor.transition().schema()
         || strategy.transition_program() != descriptor.transition().program()
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Strategy);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Strategy);
     }
     let effect = EffectProgramV4::decode(&bundle.effect)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Effect)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Effect)?;
     if effect.span_count() != 0
         || effect.range_count() != 0
         || effect.semantic_prefix_bytes()
             != u32::try_from(DIRECT_REGISTRATION_REQUEST_BYTES_V3)
-                .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Geometry)?
+                .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Geometry)?
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Effect);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Effect);
     }
     let base = effect.base();
     validate_creation_geometry(
@@ -317,7 +322,7 @@ pub fn validate_direct_register_buy_hot_bundle_v4(
         DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4,
     )?;
     if base.route_count() != 3 {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Geometry);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Geometry);
     }
     for (route, start, count, dependencies) in [
         (0_u16, 12_u16, 12_u16, 0_u16),
@@ -326,13 +331,13 @@ pub fn validate_direct_register_buy_hot_bundle_v4(
     ] {
         let route = base
             .route(route)
-            .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Effect)?;
+            .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Effect)?;
         if route.role() != FixedRole::Custody
             || route.fixed_account_start() != start
             || route.fixed_account_count() != count
             || route.receipt_dependency_count() != dependencies
         {
-            return Err(DirectRegisterBuyHotBundleErrorV4::Effect);
+            return Err(DirectRegisteredCreationHotBundleErrorV4::Effect);
         }
     }
     Ok(())
@@ -341,7 +346,7 @@ pub fn validate_direct_register_buy_hot_bundle_v4(
 /// Emit and independently hostile-check one complete RegisterSell Hot bundle.
 pub fn build_direct_register_sell_hot_bundle_v4(
     input: DirectRegisterSellHotBundleInputV4<'_>,
-) -> Result<DirectRegisterSellHotBundleV4, DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<DirectRegisterSellHotBundleV4, DirectRegisteredCreationHotBundleErrorV4> {
     let action = DirectExecutionActionV3::RegisterSell;
     let mut account_scratch = [0_u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4];
     let mut account_profile = [0_u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4];
@@ -350,7 +355,7 @@ pub fn build_direct_register_sell_hot_bundle_v4(
         &mut account_scratch,
         &mut account_profile,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::AccountProfile)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::AccountProfile)?;
 
     let mut lifecycle_scratch = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
     let mut lifecycle_policy = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
@@ -360,7 +365,7 @@ pub fn build_direct_register_sell_hot_bundle_v4(
         &mut lifecycle_scratch,
         &mut lifecycle_policy,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
 
     let mut request_v1_scratch = [0_u8; DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V1_BYTES_V4];
     let mut request_v1 = [0_u8; DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V1_BYTES_V4];
@@ -373,7 +378,7 @@ pub fn build_direct_register_sell_hot_bundle_v4(
         &mut request_v2_scratch,
         &mut request_profile,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::RequestProfile)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::RequestProfile)?;
 
     let mut transition_scratch = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
     let mut transition = [0_u8; DIRECT_REGISTERED_CREATION_TRANSITION_BYTES_V4];
@@ -382,15 +387,15 @@ pub fn build_direct_register_sell_hot_bundle_v4(
         &mut transition_scratch,
         &mut transition,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Transition)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Transition)?;
     let transition_id = digest(&transition);
     let strategy = direct_registered_creation_strategy_v4(transition_id)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Strategy)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Strategy)?;
 
     let mut effect_scratch = [0_u8; DIRECT_REGISTER_SELL_EFFECT_BYTES_V4];
     let mut effect = [0_u8; DIRECT_REGISTER_SELL_EFFECT_BYTES_V4];
     encode_direct_register_sell_effect_v4_atomic(&mut effect_scratch, &mut effect)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Effect)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Effect)?;
 
     let descriptor = creation_descriptor(
         digest(&account_profile),
@@ -418,7 +423,7 @@ pub fn build_direct_register_sell_hot_bundle_v4(
 pub fn validate_direct_register_sell_hot_bundle_v4(
     bundle: &DirectRegisterSellHotBundleV4,
     capacity_profile: [u8; 32],
-) -> Result<(), DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<(), DirectRegisteredCreationHotBundleErrorV4> {
     let action = DirectExecutionActionV3::RegisterSell;
     let descriptor = validate_creation_descriptor(
         &bundle.descriptor,
@@ -431,53 +436,53 @@ pub fn validate_direct_register_sell_hot_bundle_v4(
         capacity_profile,
     )?;
     let account = AccountProfileV2::decode(&bundle.account_profile)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::AccountProfile)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::AccountProfile)?;
     let lifecycle_id = digest(&bundle.lifecycle_policy);
     let lifecycle = StateLifecyclePolicyV5::decode_selected(
         lifecycle_id,
         lifecycle_id,
         &bundle.lifecycle_policy,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?;
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
     lifecycle
         .validate_account_profile(account)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
     if lifecycle
         .action_plan_count(action as u32)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Lifecycle)?
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?
         != 2
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Lifecycle);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Lifecycle);
     }
     let request_id = digest(&bundle.request_profile);
     let request =
         RequestProfileV2::decode_selected(request_id, request_id, &bundle.request_profile)
-            .map_err(|_| DirectRegisterBuyHotBundleErrorV4::RequestProfile)?;
+            .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::RequestProfile)?;
     let transition = TransitionProgramV3::decode(&bundle.transition)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Transition)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Transition)?;
     let strategy = ExecutionStrategyProgramV2::decode(&bundle.strategy)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Strategy)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Strategy)?;
     if strategy.disposition() != StrategyDispositionV2::Interpreted
         || strategy.transition_schema() != descriptor.transition().schema()
         || strategy.transition_program() != descriptor.transition().program()
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Strategy);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Strategy);
     }
     let effect = EffectProgramV4::decode(&bundle.effect)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Effect)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Effect)?;
     if effect.span_count() != 0
         || effect.range_count() != 0
         || effect.semantic_prefix_bytes()
             != u32::try_from(DIRECT_REGISTRATION_REQUEST_BYTES_V3)
-                .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Geometry)?
+                .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Geometry)?
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Effect);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Effect);
     }
     let base = effect.base();
     // A Sell invokes no child program, so it declares no route. There is nothing
     // to order and nothing to bind a receipt dependency to.
     if base.route_count() != 0 || base.receipt_dependency_count() != 0 {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Effect);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Effect);
     }
     validate_creation_geometry(
         account,
@@ -503,7 +508,7 @@ fn creation_descriptor(
     strategy_id: [u8; 32],
     effect_id: [u8; 32],
     capacity_profile: [u8; 32],
-) -> Result<[u8; CAPABILITY_PROGRAM_V4_BYTES], DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<[u8; CAPABILITY_PROGRAM_V4_BYTES], DirectRegisteredCreationHotBundleErrorV4> {
     Ok(CapabilityProgramV4::new(
         content(DIRECT_SUCCESSOR_KIND_ID_V3)?,
         content(DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1)?,
@@ -520,9 +525,9 @@ fn creation_descriptor(
             effect: artifact(EFFECT_SCHEMA_ID_V4, effect_id)?,
         },
         u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
-            .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Geometry)?,
+            .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Geometry)?,
     )
-    .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Descriptor)?
+    .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Descriptor)?
     .encode())
 }
 
@@ -540,9 +545,9 @@ fn validate_creation_descriptor(
     strategy_id: [u8; 32],
     effect_id: [u8; 32],
     capacity_profile: [u8; 32],
-) -> Result<CapabilityProgramV4, DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<CapabilityProgramV4, DirectRegisteredCreationHotBundleErrorV4> {
     let descriptor = CapabilityProgramV4::decode(bytes)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Descriptor)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Descriptor)?;
     if descriptor.kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
         || descriptor.config_schema().to_bytes() != DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1
         || descriptor.request_schema().to_bytes() != DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3
@@ -560,9 +565,9 @@ fn validate_creation_descriptor(
         || descriptor.effect() != artifact(EFFECT_SCHEMA_ID_V4, effect_id)?
         || descriptor.root_state_bytes()
             != u32::try_from(DIRECT_ROOT_STATE_BYTES_V1)
-                .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Geometry)?
+                .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Geometry)?
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Descriptor);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Descriptor);
     }
     Ok(descriptor)
 }
@@ -582,11 +587,11 @@ fn validate_creation_geometry(
     transition: TransitionProgramV3<'_>,
     base: EffectProgramV3<'_>,
     fixed_accounts: u16,
-) -> Result<(), DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<(), DirectRegisteredCreationHotBundleErrorV4> {
     let common_scalars = u16::try_from(DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Geometry)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Geometry)?;
     let common_identities = u16::try_from(DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4)
-        .map_err(|_| DirectRegisterBuyHotBundleErrorV4::Geometry)?;
+        .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Geometry)?;
     if account.fixed_account_count() != fixed_accounts
         || account.item_account_stride() != 0
         || account.common_scalar_count() != common_scalars
@@ -608,19 +613,19 @@ fn validate_creation_geometry(
         || base.common_identity_count() != common_identities
         || base.item_identity_stride() != DIRECT_REGISTERED_CREATION_ITEM_IDENTITY_STRIDE_V4
     {
-        return Err(DirectRegisterBuyHotBundleErrorV4::Geometry);
+        return Err(DirectRegisteredCreationHotBundleErrorV4::Geometry);
     }
     Ok(())
 }
 
-fn content(bytes: [u8; 32]) -> Result<ContentId, DirectRegisterBuyHotBundleErrorV4> {
-    ContentId::new(bytes).map_err(|_| DirectRegisterBuyHotBundleErrorV4::Content)
+fn content(bytes: [u8; 32]) -> Result<ContentId, DirectRegisteredCreationHotBundleErrorV4> {
+    ContentId::new(bytes).map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Content)
 }
 
 fn artifact(
     schema: [u8; 32],
     program: [u8; 32],
-) -> Result<ArtifactReferenceV4, DirectRegisterBuyHotBundleErrorV4> {
+) -> Result<ArtifactReferenceV4, DirectRegisteredCreationHotBundleErrorV4> {
     Ok(ArtifactReferenceV4::new(
         content(schema)?,
         content(program)?,
@@ -1132,25 +1137,25 @@ mod tests {
         let bundle = build(736);
         assert_eq!(
             validate_direct_register_buy_hot_bundle_v4(&bundle, [0x45; 32]),
-            Err(DirectRegisterBuyHotBundleErrorV4::Descriptor)
+            Err(DirectRegisteredCreationHotBundleErrorV4::Descriptor)
         );
         let mut hostile = bundle;
         *hostile.effect.get_mut(128).expect("effect byte") ^= 1;
         assert_eq!(
             validate_direct_register_buy_hot_bundle_v4(&hostile, [0x44; 32]),
-            Err(DirectRegisterBuyHotBundleErrorV4::Descriptor)
+            Err(DirectRegisteredCreationHotBundleErrorV4::Descriptor)
         );
 
         let sell = build_sell(736);
         assert_eq!(
             validate_direct_register_sell_hot_bundle_v4(&sell, [0x45; 32]),
-            Err(DirectRegisterBuyHotBundleErrorV4::Descriptor)
+            Err(DirectRegisteredCreationHotBundleErrorV4::Descriptor)
         );
         let mut hostile = sell;
         *hostile.account_profile.get_mut(64).expect("profile byte") ^= 1;
         assert_eq!(
             validate_direct_register_sell_hot_bundle_v4(&hostile, [0x44; 32]),
-            Err(DirectRegisterBuyHotBundleErrorV4::Descriptor)
+            Err(DirectRegisteredCreationHotBundleErrorV4::Descriptor)
         );
         // THE SIDE SUBSTITUTION. The two Transitions are the same width, so a
         // Sell bundle carrying the Buy's Transition is a well-formed object --
@@ -1160,7 +1165,7 @@ mod tests {
         swapped.transition = build(736).transition;
         assert_eq!(
             validate_direct_register_sell_hot_bundle_v4(&swapped, [0x44; 32]),
-            Err(DirectRegisterBuyHotBundleErrorV4::Descriptor)
+            Err(DirectRegisteredCreationHotBundleErrorV4::Descriptor)
         );
     }
 }
