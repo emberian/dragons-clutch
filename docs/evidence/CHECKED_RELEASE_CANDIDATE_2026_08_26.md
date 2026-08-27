@@ -51,6 +51,45 @@ minute — see *Re-run cost* below.
 > now dead code. And `--keep-elf` re-stamps a STALE diagnostics total, because
 > the line that resets `build-diagnostics.txt` sits inside the build guard.
 
+> ### Regenerated 2026-08-27 at `d1378427`, GREEN, after finding 1 came back
+>
+> SMOKE-0 ran this pipeline at `b6e28707` on the way to the first devnet deploy
+> and it went **RED: 82 SBF frame diagnostics**, all of them the dealer
+> accelerator's monomorphization of `hot_v3::execute_child_routes_v3`. That is
+> finding 1's class on finding 1's link, on a different function, four weeks of
+> commits after finding 1 was closed. The refusal did its job: it fired before
+> any lamport moved on the artifact it was refusing.
+>
+> Closed at `9dc2a6bb`, gated at `d1378427`, and this is the regeneration:
+>
+> - `sbf_build_diagnostics_total=0`, `sbf_build_diagnostics_accepted=false`, no
+>   `--allow-build-diagnostics` passed. **THIRTEEN links at zero, not ten** --
+>   the runner now also frame-checks every program under `programs/` that the
+>   release role list does not name (`dclutch-dealer-sbf`,
+>   `dclutch-direct-aot-sbf`, `dclutch-product-runtime-v2-sbf`), enumerated from
+>   the directory rather than from a second list that can go stale. They enter
+>   no release set: only their counts join the total.
+> - Every verification ran and passed again: ten `create`/`verify`/`inspect`
+>   triples, the five-role set, the infrastructure join.
+> - Toolchain pins unmoved: solana-cli 4.0.2, cargo-build-sbf 4.0.0, platform
+>   tools v1.53, SBF rustc 1.89.0.
+> - `source_revision=d1378427c5e8cdac0a30586e805c1a03c6f5688c`,
+>   `source_digest=1f59bf691975083797b183a99f977bbdc1b929f3961225f22ddad883db6a5d29`.
+>   Summary at `/private/tmp/diag82/release/SUMMARY.txt`.
+> - `trading_elf_sha256=4c6dbd36...`, 1,325,128 bytes: **+440 on the fix, and the
+>   only role that moved by size since SMOKE-0's measurement.** Seven-role total
+>   4,560,064 B against SMOKE-0's 4,559,624 -- the same +440 and nothing else,
+>   which is the tightest available statement that the other six are untouched.
+>   Ten-role total 5,305,104 B.
+>
+> The rule the two instances share, and the reason a third is now harder: an
+> accelerator links `dclutch-trading-sbf` with `default-features = false` and its
+> own feature set. That is a DIFFERENT program from the Trading artifact, with
+> different inlining and different frames, and until `d1378427` this runner was
+> the only stage in the tree that built it -- which is why both instances were
+> found here, at release time, rather than in the lane that caused them. The
+> Trading seam's own runner and the Dealer tier build those links now.
+
 ## Reproducing it
 
 ```sh
@@ -204,6 +243,18 @@ fix there, not to relabel here.
 ten roles is 0.** The regeneration needed no `--allow-build-diagnostics` and did
 not pass it, so the runner's default refusal is now a gate that a real run
 clears rather than one every run has to be waved past.
+
+**REOPENED AND RE-CLOSED, 2026-08-27.** The class came back on the same link, on
+a different function. `3071fbe8` took
+`hot_v3::execute_child_routes_v3` to 5,184 bytes against the 4,096-byte bound in
+the dealer accelerator's monomorphization -- 82 diagnostics -- while Trading at
+default features stayed at zero, exactly as in the first instance. SMOKE-0 met
+the red here at `b6e28707` with a devnet deploy in flight. Fixed at `9dc2a6bb`
+(the Claims arm returns a digest instead of a 520-byte receipt; frame 2,752),
+and the gap that let it live for a wave is closed at `d1378427`: this runner is
+no longer the only stage that builds an accelerator link. **Two instances of one
+class, both found by this file's refusal and by nothing else, is the argument
+for that commit.**
 
 ### 2. The capability-execution bundle path cannot yet be exercised on real accelerators
 
