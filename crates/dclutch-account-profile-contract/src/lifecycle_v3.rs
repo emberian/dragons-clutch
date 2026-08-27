@@ -2430,8 +2430,14 @@ fn plan_lifecycle_with_values(
         context.tail_count,
         context.registers,
     )?;
+    // The System Program's canonical address IS the all-zero pubkey, so an
+    // all-zero `system_program` is the real identity and never an unset field.
+    // Refusing it refused every lifecycle plan any adapter has ever submitted:
+    // the sole live caller supplies `solana_sdk_ids::system_program::ID`, and
+    // no test caught it because the fixtures below all substitute a made-up
+    // non-zero address. The two fields that can meaningfully be defaulted are
+    // still refused, as is an executing program that claims to be the builtin.
     if context.trading_program == [0; 32]
-        || context.system_program == [0; 32]
         || context.trading_program == context.system_program
         || context.adapter_derived_pda == [0; 32]
     {
@@ -3358,7 +3364,10 @@ mod tests {
     const DIRECT_RECORD_DOMAIN: &[u8] = b"dclutch/direct-intent/v2";
     const POLICY_ID: [u8; 32] = [0x71; 32];
     const TRADING: [u8; 32] = [0x91; 32];
-    const SYSTEM: [u8; 32] = [0x81; 32];
+    /// The real System Program address. Every fixture below used a made-up
+    /// non-zero identity here, which is why no test ever exercised the guard
+    /// that refused the genuine builtin.
+    const SYSTEM: [u8; 32] = [0; 32];
     const PRODUCT_DATA: [u8; 4] = 3_u32.to_le_bytes();
     const CLOSED_STATE_DATA: [u8; 148] = [0x55; 148];
 
@@ -3571,6 +3580,48 @@ mod tests {
         assert_eq!(plan([0x44; 32], &[], state), Err(Error::InvalidState));
         assert_eq!(plan(TRADING, &live[..151], state), Err(Error::InvalidState));
         assert_eq!(plan(SYSTEM, &[], [0x55; 32]), Err(Error::IdentityMismatch));
+
+        // The `Create` acceptance above already runs against the genuine
+        // all-zero System Program address, which is the identity every live
+        // adapter supplies. What the guard can still establish is refused: a
+        // defaulted executing program, a defaulted derived address, and an
+        // executing program that claims to be the builtin.
+        let identities = |trading: [u8; 32], system: [u8; 32], derived: [u8; 32]| {
+            let accounts = [
+                AccountObservationV1::new(&state, &SYSTEM, 5, &[], false, true, false),
+                AccountObservationV1::new(&payer, &payer_owner, 100, &[], true, true, false),
+                AccountObservationV1::new(&credit, &[7; 32], 50, &[], false, false, false),
+            ];
+            plan_lifecycle(
+                selected,
+                LifecycleContextV3 {
+                    account_profile: profile,
+                    tail_count: 0,
+                    item_index: None,
+                    accounts: &accounts,
+                    registers,
+                    trading_program: trading,
+                    system_program: system,
+                    adapter_derived_pda: derived,
+                    rent_credit: Some(rent_credit),
+                    current_rent_minimum: Some(minimum),
+                },
+            )
+            .map(|_| ())
+        };
+        assert_eq!(identities(TRADING, SYSTEM, state), Ok(()));
+        assert_eq!(
+            identities([0; 32], SYSTEM, state),
+            Err(Error::IdentityMismatch)
+        );
+        assert_eq!(
+            identities(TRADING, SYSTEM, [0; 32]),
+            Err(Error::IdentityMismatch)
+        );
+        assert_eq!(
+            identities(TRADING, TRADING, state),
+            Err(Error::IdentityMismatch)
+        );
 
         let observations = [AccountObservationV1::new(
             &state,
