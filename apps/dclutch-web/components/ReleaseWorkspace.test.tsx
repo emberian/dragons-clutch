@@ -12,7 +12,16 @@ describe('Registry release presentation', () => {
     expect(html).toContain('Inspect immutable protocol infrastructure');
     expect(html).toContain('1,592-byte checked multiprogram');
     expect(html).toContain('2,280-byte checked infrastructure manifest');
-    expect(html).toContain('No wallet connector · no submit path');
+    expect(html).toContain('Sign the walk with a browser wallet');
+    // The un-gate is shut on a cold render and says so in the contract's terms.
+    expect(html).toContain('closed');
+    expect(html).toContain('No activation plan is green against this chain.');
+    expect(html).toContain('Signing stays closed. It opens only when one activation plan is green against this chain');
+    expect(html).not.toContain('This browser observed a chain whose finalized Registry records');
+    // Un-gating signing must never introduce a submit path.
+    expect(html).toContain('There is no submit path here, signed or unsigned.');
+    expect(html).toContain('Wallet signing only behind a green plan · no submit path');
+    expect(html).not.toContain('No wallet connector · no submit path');
     expect(html).toContain('No manifest or chain request has been made.');
     expect(html).toContain('No infrastructure snapshot has been reacquired.');
     expect(html).toContain('Registry program');
