@@ -19,6 +19,9 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 mod core_effect;
+/// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
+/// compartment a deadline-driven terminal spends.
+pub mod funded;
 mod provider_instruction_v3;
 mod provider_transport_v3;
 /// Current-ABI real-provider evidence composition shared by fixed Core and
