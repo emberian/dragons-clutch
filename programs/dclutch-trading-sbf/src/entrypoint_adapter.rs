@@ -299,6 +299,59 @@ const UNUSED_RENT_EPOCH_BYTES: usize = 8;
 /// Neither omission is a claim that this allocator is finished. Both are
 /// recorded so that reinstating either is a decision someone makes with the
 /// number in front of them.
+///
+/// # A third reclaim, asked for by name and ANSWERED NO: the region reset
+///
+/// The question put to this allocator (W2o, 2026-08-27) was whether a
+/// mark/reset at a phase boundary should be reinstated, on the ground that
+/// `hot_v3::process_hot_execution_v3` does
+/// `drop(observations); drop(runtime_data);` immediately before `before-commit`
+/// and releases about 5,968 bytes at exactly the point the child walk begins
+/// allocating. The measurement says no, and the reason is a fact about the
+/// SHAPE of that drop rather than about its size.
+///
+/// A bump allocator can release only its TOP block, and a region reset is that
+/// same release under a named scope: it is sound exactly when nothing allocated
+/// after the mark is live at the reset. Measured on the canonical Direct
+/// bundle, at the instruction where those two drops run, the bump position is
+/// **35,299** and the two dead blocks lie at roughly `[10,456, 11,920)` and
+/// `[12,656, 17,160)`. Between them and the top sit about **18,000 bytes that
+/// are all LIVE**: the alias table, the register pair the projection kept and
+/// the two the preplan arena rents from it, the preplan output pair, the
+/// account-input / permission / lamport / request / write-range / discipline
+/// banks the effect projection built, the decoded privilege bytes, the boxed
+/// Claims composition and the resolved role programs. Every one of them is read
+/// by the child walk or by the commit that follow.
+///
+/// So the drop pattern's shape is a **hole, not a region**. No mark can be
+/// placed that both precedes the observation bank and follows nothing live, and
+/// last-in-first-out will not fire on it for the same reason. Reclaiming it
+/// needs a free list -- the standing hazard recorded above -- or a reordering
+/// that moves every surviving allocation BELOW the observation bank, which
+/// means pre-allocating the projection's output banks before its input exists.
+/// That is a restructure of the middle of `process_hot_execution_v3`, not an
+/// allocator change, and it is where the next lane should look.
+///
+/// What a region reset WOULD reclaim on this path, provably, is the preflight
+/// walk: its account frame and its child wire are locals of
+/// `preflight_child_routes_v3`, nothing outside can hold a pointer into them,
+/// and they are the top block when it returns. That is about **720 bytes** as
+/// of this measurement. It is not carried, because 720 bytes does not buy a
+/// general release primitive in a module whose whole discipline is that the
+/// unsafe surface stays small enough to audit.
+///
+/// And the arithmetic that sizes the prize, so the next lane spends its effort
+/// where the bytes are. The peak is **42,784** against a 32,768 ceiling, and
+/// 35,299 of it is standing when the two drops run. A reclaim that returned
+/// the observation bank, the runtime-data guards and the preflight walk in
+/// full -- 6,689 bytes -- would leave 28,610 standing for the child walk and
+/// the commit to build their 7,485 on top of, for a peak of **36,095**: still
+/// about **3,300 bytes over**, but within reach of the structural cuts, which
+/// it is not today. So the reclaim is worth roughly **6,700 bytes and is the
+/// single largest lever left** -- and it is a FREE LIST, with everything that
+/// implies, or the reordering above. Neither is a mark and neither is
+/// last-in-first-out; do not reach for those again on the strength of the drop
+/// site alone.
 pub struct BumpHeapV1 {
     /// Absolute address of the heap floor.
     base: usize,
