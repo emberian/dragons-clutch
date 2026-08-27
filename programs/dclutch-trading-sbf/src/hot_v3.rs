@@ -10012,6 +10012,238 @@ mod tests {
         assert!(data.get(7..).expect("tail").iter().all(|byte| *byte == 0));
     }
 
+    /// One authored Effect artifact whose writes straddle the commit-last
+    /// boundary: two fixed writes (one non-root, one root) and one per-item
+    /// write whose first item aliases onto the root coordinate.
+    ///
+    /// The whole point of building a real artifact rather than hand-made
+    /// [`ResolvedEffectV3`] values is that `commit_local_effects` RESOLVES —
+    /// its ordinal walk, not just `commit_data_effect`, is what the two passes
+    /// share and what the commit-last ordering depends on.
+    struct CommitLastFixtureV1 {
+        artifact: Vec<u8>,
+        scalars: [u64; 5],
+        root_data_offset: u32,
+        item_data_offset: u32,
+        tail_count: u32,
+    }
+
+    fn commit_last_fixture_v1() -> CommitLastFixtureV1 {
+        use dclutch_effect_kernel::{
+            v3::{
+                HEADER_BYTES, OPERATION_BYTES,
+                encode::{
+                    AccountCoordinateV3, EffectGeometryV3, EffectInstructionV3, ScalarCoordinateV3,
+                    encode_effect_program_v3_atomic,
+                },
+            },
+            v4::{BorrowedRangePolicyV4, HEADER_BYTES_V4, encode_program_v4_atomic},
+        };
+        const ROOT_DATA_OFFSET: u32 = 40;
+        const ITEM_DATA_OFFSET: u32 = 32;
+        let fixed = [
+            // ordinal 0: non-root, committed by the first pass.
+            EffectInstructionV3::write_u64(
+                AccountCoordinateV3::fixed(1),
+                0,
+                ScalarCoordinateV3::common(0),
+            ),
+            // ordinal 1: root, committed by the second pass only.
+            EffectInstructionV3::write_u64(
+                AccountCoordinateV3::fixed(0),
+                ROOT_DATA_OFFSET,
+                ScalarCoordinateV3::common(1),
+            ),
+        ];
+        // ordinals 2..5: one per item. Item 0's account aliases onto the root,
+        // so exactly one ITEM ordinal also belongs to the second pass.
+        let item = [EffectInstructionV3::write_u64(
+            AccountCoordinateV3::item(0),
+            ITEM_DATA_OFFSET,
+            ScalarCoordinateV3::item(0),
+        )];
+        let base_bytes = HEADER_BYTES + (fixed.len() + item.len()) * OPERATION_BYTES;
+        let mut base_scratch = vec![0_u8; base_bytes];
+        let mut base = vec![0_u8; base_bytes];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: 2,
+                item_account_stride: 1,
+                common_scalars: 2,
+                item_scalar_stride: 1,
+                common_identities: 0,
+                item_identity_stride: 0,
+            },
+            &[],
+            &fixed,
+            &item,
+            &mut base_scratch,
+            &mut base,
+        )
+        .expect("commit-last base program");
+        let mut scratch = vec![0_u8; HEADER_BYTES_V4 + base_bytes];
+        let mut artifact = vec![0_u8; HEADER_BYTES_V4 + base_bytes];
+        encode_program_v4_atomic(
+            &base,
+            BorrowedRangePolicyV4::DisjointExactCoverage,
+            1,
+            &[],
+            &[],
+            &mut scratch,
+            &mut artifact,
+        )
+        .expect("commit-last successor");
+        CommitLastFixtureV1 {
+            artifact,
+            scalars: [0xa1a1_a1a1, 0xb2b2_b2b2, 0xc001, 0xc002, 0xc003],
+            root_data_offset: ROOT_DATA_OFFSET,
+            item_data_offset: ITEM_DATA_OFFSET,
+            tail_count: 3,
+        }
+    }
+
+    fn commit_last_account_v1(key: &'static Pubkey, lamports: u64) -> AccountInfo<'static> {
+        AccountInfo::new(
+            key,
+            false,
+            true,
+            Box::leak(Box::new(lamports)),
+            Box::leak(vec![0_u8; 64].into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::new_unique())),
+            false,
+        )
+    }
+
+    /// The commit-last split is a REAL ordering, and the second pass really
+    /// writes.
+    ///
+    /// `commit_prepared_post_children_v3` calls `commit_local_effects` twice,
+    /// non-root first and root second, so a Market's own state lands only after
+    /// every other account has been committed. Until this test nothing in the
+    /// tree executed the second call at all: the only path that reaches it is a
+    /// complete Hot execution past three child CPIs. Anything that changes how
+    /// the second pass selects its work — a recorded plan, a narrower sweep —
+    /// is now refutable here instead of landing silently green.
+    #[test]
+    fn commit_last_writes_the_root_only_after_every_other_coordinate() {
+        let fixture = commit_last_fixture_v1();
+        let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &fixture.artifact)
+            .expect("selected commit-last effect");
+        assert_eq!(effect.fixed_operation_count(), 2);
+        assert_eq!(effect.item_operation_count(), 1);
+
+        let rent = Rent::default();
+        let exempt = rent.minimum_balance(64);
+        let root = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let state = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_one = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_two = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let aliased = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        // Coordinate 2 (item 0's account) aliases onto the root coordinate.
+        let accounts = [&root, &state, &aliased, &item_one, &item_two];
+        let aliases = [0_usize, 1, 0, 3, 4];
+        let output_lamports = [exempt + 1_000, exempt + 500, exempt, exempt, exempt];
+
+        let commit = |root_only| {
+            commit_local_effects(
+                effect,
+                fixture.tail_count,
+                &fixture.scalars,
+                &[],
+                &accounts,
+                &aliases,
+                &output_lamports,
+                &rent,
+                root_only,
+            )
+        };
+
+        commit(false).expect("non-root commit pass");
+        let root_offset = usize::try_from(fixture.root_data_offset).expect("root offset");
+        let item_offset = usize::try_from(fixture.item_data_offset).expect("item offset");
+        assert!(
+            root.try_borrow_data()
+                .expect("root data")
+                .iter()
+                .all(|byte| *byte == 0),
+            "the first pass must not write the root coordinate"
+        );
+        assert_eq!(root.lamports(), exempt, "root lamports commit last too");
+        assert_eq!(
+            state.try_borrow_data().expect("state data").get(..8),
+            Some(fixture.scalars[0].to_le_bytes().as_slice())
+        );
+        assert_eq!(state.lamports(), exempt + 500);
+        for (account, scalar) in [
+            (&item_one, fixture.scalars[3]),
+            (&item_two, fixture.scalars[4]),
+        ] {
+            assert_eq!(
+                account
+                    .try_borrow_data()
+                    .expect("item data")
+                    .get(item_offset..item_offset + 8),
+                Some(scalar.to_le_bytes().as_slice())
+            );
+        }
+
+        commit(true).expect("root commit pass");
+        {
+            let data = root.try_borrow_data().expect("root data");
+            assert_eq!(
+                data.get(root_offset..root_offset + 8),
+                Some(fixture.scalars[1].to_le_bytes().as_slice()),
+                "the second pass writes the root's fixed effect"
+            );
+            assert_eq!(
+                data.get(item_offset..item_offset + 8),
+                Some(fixture.scalars[2].to_le_bytes().as_slice()),
+                "the second pass writes the item effect that aliases onto the root"
+            );
+        }
+        assert_eq!(root.lamports(), exempt + 1_000);
+        // Nothing the first pass committed moves when the second pass runs.
+        assert_eq!(state.lamports(), exempt + 500);
+        assert_eq!(
+            state.try_borrow_data().expect("state data").get(..8),
+            Some(fixture.scalars[0].to_le_bytes().as_slice())
+        );
+    }
+
+    /// A root coordinate left below its rent floor is refused by the pass that
+    /// owns it, not by the one that ran first.
+    #[test]
+    fn commit_last_refuses_a_root_left_below_the_rent_floor() {
+        let fixture = commit_last_fixture_v1();
+        let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &fixture.artifact)
+            .expect("selected commit-last effect");
+        let rent = Rent::default();
+        let exempt = rent.minimum_balance(64);
+        let root = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let state = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let aliased = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_one = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let item_two = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let accounts = [&root, &state, &aliased, &item_one, &item_two];
+        let aliases = [0_usize, 1, 0, 3, 4];
+        let output_lamports = [exempt - 1, exempt, exempt, exempt, exempt];
+        let commit = |root_only| {
+            commit_local_effects(
+                effect,
+                fixture.tail_count,
+                &fixture.scalars,
+                &[],
+                &accounts,
+                &aliases,
+                &output_lamports,
+                &rent,
+                root_only,
+            )
+        };
+        assert_eq!(commit(false), Ok(()));
+        assert_eq!(commit(true), Err(TradingSbfError::Commit.into()));
+    }
+
     #[test]
     fn lifecycle_candidate_updates_every_alias_and_reserves_nonroot_once() {
         let plan = PreparedLifecycleInvocationV3 {
