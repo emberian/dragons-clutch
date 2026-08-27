@@ -96,10 +96,16 @@ verify_fixtures() {
     [[ "$actual" = "$expected" ]] || die "fixture hash mismatch: $relative"
     listed=$((listed + 1))
   done < "$FIXTURE_SUMS"
-  [[ "$listed" -eq 10 ]] || die "expected ten pinned fixture artifacts, found $listed"
+  # The count is derived from the pin file, never hardcoded. A literal here
+  # turns "someone added a fixture artifact and regenerated the pins" into a
+  # launcher failure that reads like a tamper alarm, which is exactly what
+  # happened when the guardian-set observation landed. The real integrity
+  # property is the two-way cover below: every pin resolves to a file whose
+  # digest matches, and the directory holds no file that is not pinned.
+  [[ "$listed" -gt 0 ]] || die "fixture pin file lists no artifacts"
   local fixture_file_count
   fixture_file_count=$(find "$FIXTURE_DIR" -type f -print | wc -l | tr -d '[:space:]')
-  [[ "$fixture_file_count" -eq "$listed" ]] || die "fixture directory contains unpinned or missing artifacts"
+  [[ "$fixture_file_count" -eq "$listed" ]] || die "fixture directory contains unpinned or missing artifacts (pinned $listed, present $fixture_file_count)"
   assert_elf "$FIXTURE_DIR/receiver.so"
   assert_elf "$FIXTURE_DIR/router.so"
   printf 'verified %s committed Pyth fixture artifacts\n' "$listed"
