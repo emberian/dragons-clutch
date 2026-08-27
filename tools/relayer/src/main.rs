@@ -15,7 +15,7 @@ use clap::{Args, Parser, Subcommand};
 
 use dclutch_relay_contract::record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1};
 use dclutch_relayer::artifacts::ArtifactWriter;
-use dclutch_relayer::config::Config;
+use dclutch_relayer::config::{Config, endpoint_host_for_display};
 use dclutch_relayer::error::{RelayerError, Result};
 use dclutch_relayer::id32::{ID_BYTES, base58, to_hex};
 use dclutch_relayer::keys::{AttestationSigner, generate_keypair_file};
@@ -195,7 +195,15 @@ fn print_config(config: &Config) {
     println!("output dir:            {}", config.output_dir.display());
     println!("poll interval:         {}s", config.poll_interval.as_secs());
     println!("body page bytes:       {}", config.body_page_bytes);
-    println!("primary endpoint host: {}", config.primary_endpoint());
+    // HOSTS, NOT URLS, and the label was already telling the truth this line
+    // was not: a provider URL carries its API key in the query string, so the
+    // old `config.primary_endpoint()` printed a credential to the terminal and
+    // into whatever file an operator redirected it to. Found by reading a
+    // deployment's own `show-config` output back off the box.
+    println!(
+        "primary endpoint host: {}",
+        endpoint_host_for_display(config.primary_endpoint())
+    );
     println!(
         "cross-check endpoints: {}",
         config.cross_check_endpoints().len()
@@ -214,8 +222,10 @@ fn print_config(config: &Config) {
     }
     match &config.submit {
         Some(submit) => println!(
-            "submit:                {} (allow_public_submission = {})",
-            submit.endpoint, submit.allow_public_submission
+            "submit host:           {} (allow_public_submission = {}, genesis {})",
+            endpoint_host_for_display(&submit.endpoint),
+            submit.allow_public_submission,
+            base58(&submit.expected_genesis_hash)
         ),
         None => println!("submit:                (not configured)"),
     }

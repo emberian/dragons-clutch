@@ -497,6 +497,17 @@ impl Config {
     }
 }
 
+/// A URL's host for display, or a placeholder if it does not parse.
+///
+/// **Never print an endpoint URL.** A provider URL carries its API key in the
+/// query string, so a URL reaching a terminal, a log, or a file an operator
+/// redirects it into is a leaked credential. The artifact writer and the RPC
+/// read log already record hosts for exactly this reason; this is the same rule
+/// applied to the one surface that was still printing the whole thing.
+pub fn endpoint_host_for_display(url: &str) -> String {
+    url_host(url).unwrap_or_else(|| "unparseable-endpoint".to_owned())
+}
+
 /// A URL's host, lowercased, or `None` if it does not parse or names no host.
 ///
 /// Hosts are the comparison unit for the read/write separation check: a
