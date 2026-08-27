@@ -243,3 +243,13 @@ across "someone else's" seam; commit; let the swarm heal any breakage (git and
 the gates are the safety net). Yield back a blocker ONLY for a genuine
 authority decision (trust surface, principal, deploy, scope) — and then as a
 question with a recommended answer, not an inventory row.
+
+## Fable-wave agenda seeds (from FD3, 2026-08-27)
+
+- TWO live Market representations on chain: DCLTCAT1 (native Realm/Position
+  family, own Rust fixture generator) alongside DCLTCOR2 Core state — one
+  truth or a second authority? Architecture-coherence question for the Fable
+  reviewers, NOT a quick knife.
+- The Hoard vault has no chain-derivable address (namespaced by caller-chosen
+  founding context) — frontend refuses-with-reason today; decide whether the
+  context belongs in a discoverable record.
