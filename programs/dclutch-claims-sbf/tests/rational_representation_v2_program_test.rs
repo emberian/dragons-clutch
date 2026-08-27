@@ -10,6 +10,9 @@
 use std::{env, fs, path::PathBuf, vec::Vec};
 
 use dclutch_claims_sbf::ClaimsSbfError;
+use dclutch_claims_sbf::custody_replay_v1::{
+    CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1, expected_request_v1,
+};
 use dclutch_claims_sbf::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
     TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_liability_basis_market_v2,
@@ -17,7 +20,8 @@ use dclutch_claims_sbf::liability_basis_v2::{
 };
 use dclutch_claims_svm::{
     CallerRole,
-    liability_basis_state_v2::LiabilityBasisMarketLayoutV2,
+    custody_replay_v1::ClaimsCustodyReplayRequestV1,
+    liability_basis_state_v2::{LiabilityBasisMarketLayoutV2, LiabilityBasisMarketViewV2},
     product_basis_terminal_v3::{
         ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
         encode_product_basis_terminal_signed_delta_v3,
@@ -27,9 +31,9 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1,
-    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
-    PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    CUSTODY_REPLAY_BYTES_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
+    CustodyAuthoritySeedsV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
+    CustodyVaultSeedsV1, OperationV1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
 };
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
@@ -124,7 +128,15 @@ const SHARD_DECIMALS: [u8; 2] = [6, u8::MAX];
 const RECEIPT_DECIMALS: u8 = 19;
 const ACTOR_SHARDS: [u64; 2] = [19, 21];
 const STRUCTURED_SHARDS: [u64; 2] = [21, 49];
-const CUSTODY_EXPECTED_REVISION: u64 = 8;
+/// The cursor a freshly created Claims-role replay carries.
+///
+/// This used to be an arbitrary warm value (8) against a replay the fixture
+/// PLANTED. The campaign no longer plants one: `create_claims_custody_replay`
+/// submits the real `dclutch-claims-sbf` replay-creation route against the real
+/// ELFs, Custody creates the account, and the redemption then consumes the
+/// cursor that account actually carries. One is what `InitializeReplay` writes,
+/// so it is what the redemption must expect.
+const CUSTODY_EXPECTED_REVISION: u64 = 1;
 const INITIAL_RECIPIENT_ATOMS: u64 = 5;
 const INITIAL_HOARD_ATOMS: u64 = 9;
 const PACKET_LIMIT: usize = 1_232;
@@ -1301,6 +1313,62 @@ fn terminal_candidate_digest(
     .to_bytes()
 }
 
+/// The transfer a freshly created Claims-role replay must admit.
+///
+/// `InitializeReplay` writes a cursor at revision one with zero open Vaults, and
+/// the redemption's Custody request consumes exactly that. Asserted against the
+/// contract rather than against the chain so a campaign whose numbers drifted
+/// fails while the fixture is being built, not four transactions later inside a
+/// rolled-back instruction.
+fn replay_admissible_from_creation(transfer: CustodyRequestV1, payer: Pubkey) {
+    let creation = CustodyRequestV1 {
+        operation: OperationV1::InitializeReplay,
+        caller_role: CustodyCallerRoleV1::Claims,
+        source_compartment: CompartmentV1::None,
+        destination_compartment: CompartmentV1::None,
+        release_set: transfer.release_set,
+        market: transfer.market,
+        realm: transfer.realm,
+        context: transfer.context,
+        caller_program: transfer.caller_program,
+        semantic: ContextV1 {
+            candidate: [0; 32],
+            source_owner: [0; 32],
+            destination_owner: [0; 32],
+            order: [0; 32],
+            parent_request_digest: [0x92; 32],
+            order_nonce: 0,
+            generation: transfer.semantic.generation,
+            page_index: 0,
+            execution_index: 0,
+            transfer_index: 0,
+        },
+        source: [0; 32],
+        destination: [0; 32],
+        source_vault_context: [0; 32],
+        destination_vault_context: [0; 32],
+        mint: [0; 32],
+        token_program: [0; 32],
+        payer: payer.to_bytes(),
+        rent_refund: payer.to_bytes(),
+        expected_revision: 0,
+        resulting_revision: 1,
+        amount: 0,
+        rent_lamports: 1,
+    };
+    let created = CustodyReplayV1::initialize(creation, [0x92; 32], [0x93; 32])
+        .expect("InitializeReplay mints the Claims-role replay");
+    assert_eq!(created.next_revision, CUSTODY_EXPECTED_REVISION);
+    assert_eq!(created.open_vault_count, 0);
+    created
+        .advance(
+            transfer,
+            hash(&transfer.to_bytes().expect("Custody request")).to_bytes(),
+            [0x94; 32],
+        )
+        .expect("a created Claims-role replay admits the terminal transfer");
+}
+
 fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
@@ -1342,7 +1410,11 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     }
 
     let actor = Keypair::new_from_array(if terminal { [0x72; 32] } else { [0x71; 32] });
-    add_account(&mut test, actor.pubkey(), system_program::ID, Vec::new());
+    // The actor PREPAYS the Claims-role Custody replay in the terminal fixture,
+    // so it needs the replay's rent on top of its own rent exemption. Sized from
+    // the replay width rather than a round number: a fixture constant chosen to
+    // make a transfer succeed is a fixture deciding a protocol fact.
+    add_funded_empty(&mut test, actor.pubkey(), CUSTODY_REPLAY_BYTES_V1);
     let (release_set, cache_data) = activation_cache(&artifacts);
     let activation_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
@@ -1715,33 +1787,19 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             .0,
             "a Hoard namespaced by the Market address is a different account"
         );
-        let replay_state = CustodyReplayV1 {
-            caller_role: CustodyCallerRoleV1::Claims,
-            release_set: fixture.release_set,
-            market: fixture.market.to_bytes(),
-            realm: fixture.realm_id,
-            context: fixture.custody_context,
-            caller_program: CLAIMS_PROGRAM_ID.to_bytes(),
-            rent_refund: fixture.actor.pubkey().to_bytes(),
-            open_vault_count: 1,
-            next_revision: CUSTODY_EXPECTED_REVISION,
-            generation: GENERATION,
-            last_request_digest: [0x92; 32],
-            last_poststate_commitment: [0x93; 32],
-        };
-        replay_state
-            .advance(
-                custody_request,
-                hash(&custody_request.to_bytes().expect("Custody request")).to_bytes(),
-                [0x94; 32],
-            )
-            .expect("Custody replay admits terminal transfer");
-        add_account(
-            &mut test,
-            custody_replay,
-            CUSTODY_PROGRAM_ID,
-            replay_state.to_bytes().expect("Custody replay").to_vec(),
-        );
+        // NOTHING plants the replay. Until this campaign it added a Claims-role
+        // `CustodyReplayV1` straight into the ledger -- a prestate that, before
+        // the role entered the replay seeds, NO route in the tree could produce:
+        // the founding realizes a Trading-role replay at the namespace and
+        // legacy Open a Core-role one, and a replay's role is immutable once
+        // written. The redemption was therefore green against an account that
+        // could not exist. `create_claims_custody_replay` now creates it by
+        // executing the real route against the real ELFs, and every terminal
+        // test starts by doing so.
+        //
+        // The shape the fixture used to assert is still asserted, one layer up:
+        // the created replay must admit this exact transfer.
+        replay_admissible_from_creation(custody_request, fixture.actor.pubkey());
         add_account(
             &mut test,
             collateral_mint,
@@ -2227,6 +2285,189 @@ async fn submit_v0(
         wire_bytes,
         logs,
     })
+}
+
+/// Create this Market's Claims-role Custody replay by EXECUTING the route.
+///
+/// This is the piece the campaign was missing. The redemption's replay used to
+/// be a planted account; here it is created on chain by
+/// `dclutch-claims-sbf`'s replay-creation route, which forwards a Custody
+/// `InitializeReplay` under the Claims caller authority. Every terminal test
+/// runs it first, so the whole terminal half of this campaign now stands on a
+/// prestate the tree can actually produce.
+///
+/// The instruction is deliberately LEGACY, with no address-lookup table: a
+/// redeemer must be able to create the cursor with one ordinary transaction, and
+/// this asserts it fits.
+async fn create_claims_custody_replay(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> Submission {
+    submit_replay_creation(
+        context,
+        fixture,
+        ReplayCreationOverrides::default(),
+        "claims rational-representation-v2: create the Claims-role Custody replay",
+    )
+    .await
+}
+
+/// Accounts a hostile replay-creation submission substitutes.
+#[derive(Clone, Copy, Default)]
+struct ReplayCreationOverrides {
+    /// Stand something else in for the Claims aggregate that owns the namespace.
+    aggregate: Option<Pubkey>,
+    /// Stand something else in for the canonical Claims-role replay address.
+    replay: Option<Pubkey>,
+}
+
+async fn submit_replay_creation(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    overrides: ReplayCreationOverrides,
+    label: &str,
+) -> Submission {
+    let terminal = fixture
+        .terminal_accounts
+        .expect("terminal fixture required for a Claims Custody replay");
+    let aggregate_account = observed(context, fixture.aggregate).await;
+    let aggregate =
+        LiabilityBasisMarketViewV2::decode(&aggregate_account.data).expect("aggregate on chain");
+    assert_eq!(
+        aggregate.custody_context, fixture.custody_context,
+        "the aggregate is the sole persisted owner of the namespace"
+    );
+    let rent = context.banks_client.get_rent().await.expect("Rent sysvar");
+    let request = expected_request_v1(
+        aggregate,
+        CLAIMS_PROGRAM_ID.to_bytes(),
+        fixture.actor.pubkey().to_bytes(),
+        rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
+    )
+    .expect("the sole Custody request this route sends");
+    assert_eq!(request.caller_role, CustodyCallerRoleV1::Claims);
+    let replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::from_request(request).as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    assert_eq!(
+        replay, terminal.custody_replay,
+        "the created replay must be the account the redemption authenticates"
+    );
+    // The Trading compartment of the SAME namespace is a different account.
+    // Asserted here so every terminal test carries the separation, not just the
+    // one adversarial case that attacks it.
+    assert_ne!(
+        replay,
+        Pubkey::find_program_address(
+            &CustodyReplaySeedsV1::new(
+                request.market,
+                request.release_set,
+                CustodyCallerRoleV1::Trading,
+                request.context,
+            )
+            .as_slices(),
+            &CUSTODY_PROGRAM_ID,
+        )
+        .0,
+        "one namespace, one replay compartment per executing role"
+    );
+    let caller_seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(request.release_set).expect("release set"),
+        request.market,
+        ExecutionRoleV1::Claims,
+        request.context,
+        hash(&request.to_bytes().expect("Custody request")).to_bytes(),
+    )
+    .expect("Claims caller seeds");
+    let caller = Pubkey::find_program_address(&caller_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
+    let instruction = Instruction {
+        program_id: CLAIMS_PROGRAM_ID,
+        accounts: Vec::from([
+            AccountMeta::new_readonly(caller, false),
+            AccountMeta::new_readonly(fixture.market, false),
+            AccountMeta::new_readonly(fixture.activation_cache, false),
+            AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+            AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
+            AccountMeta::new_readonly(fixture.claims_programdata, false),
+            AccountMeta::new_readonly(terminal.realm_raw, false),
+            AccountMeta::new_readonly(terminal.realm_staging, false),
+            AccountMeta::new(overrides.replay.unwrap_or(terminal.custody_replay), false),
+            AccountMeta::new(fixture.actor.pubkey(), true),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+            AccountMeta::new_readonly(overrides.aggregate.unwrap_or(fixture.aggregate), false),
+        ]),
+        data: ClaimsCustodyReplayRequestV1::new(fixture.market.to_bytes())
+            .expect("replay-creation request")
+            .to_bytes()
+            .to_vec(),
+    };
+    assert_eq!(
+        instruction.accounts.len(),
+        CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1
+    );
+    submit_legacy_signed(context, fixture, instruction, label).await
+}
+
+/// Submit one legacy transaction signed by the fee payer and the fixture actor.
+async fn submit_legacy_signed(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    instruction: Instruction,
+    label: &str,
+) -> Submission {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&context.payer.pubkey()),
+        &[&context.payer, &fixture.actor],
+        blockhash,
+    );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message_data().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("legacy transaction processing");
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, compute_units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Submission {
+        accepted,
+        compute_units,
+        wire_bytes,
+        logs,
+    }
 }
 
 async fn observed(context: &mut ProgramTestContext, key: Pubkey) -> Account {
@@ -2721,6 +2962,23 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
 async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
     let (test, fixture) = fixture(true);
     let mut context = test.start_with_context().await;
+    // The Claims-role replay is CREATED, not planted. Everything below stands on
+    // an account the tree produced.
+    let created = create_claims_custody_replay(&mut context, &fixture).await;
+    assert!(
+        created.accepted,
+        "the Claims-role Custody replay must be creatable: {}",
+        created.logs.join("\n")
+    );
+    assert!(
+        created.wire_bytes <= PACKET_LIMIT,
+        "replay creation must fit a legacy packet without an ALT: {} bytes",
+        created.wire_bytes
+    );
+    eprintln!(
+        "Claims-role Custody replay created: legacy={} bytes (limit {PACKET_LIMIT}), CU={}",
+        created.wire_bytes, created.compute_units,
+    );
     let positive = wrapper_instruction(
         &fixture,
         RepresentationActionV2::RedeemTerminal,
@@ -2954,6 +3212,23 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
 async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
     let (test, fixture) = fixture(true);
     let mut context = test.start_with_context().await;
+    // The Claims-role replay is CREATED, not planted. Everything below stands on
+    // an account the tree produced.
+    let created = create_claims_custody_replay(&mut context, &fixture).await;
+    assert!(
+        created.accepted,
+        "the Claims-role Custody replay must be creatable: {}",
+        created.logs.join("\n")
+    );
+    assert!(
+        created.wire_bytes <= PACKET_LIMIT,
+        "replay creation must fit a legacy packet without an ALT: {} bytes",
+        created.wire_bytes
+    );
+    eprintln!(
+        "Claims-role Custody replay created: legacy={} bytes (limit {PACKET_LIMIT}), CU={}",
+        created.wire_bytes, created.compute_units,
+    );
     let losing = wrapper_instruction_for_selected(
         &fixture,
         RepresentationActionV2::RedeemTerminal,
@@ -3058,6 +3333,225 @@ async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
     );
 }
 
+/// The role is a SEED and a CHECKED FIELD, and neither half can be forged past
+/// the other.
+///
+/// Before decision 0008's addendum the two were independent: a replay's address
+/// said nothing about its role, so one namespace admitted exactly the first role
+/// that arrived and the payout routes' `caller_role != Claims` guard was the
+/// only thing standing between a founding's Trading cursor and a redemption.
+/// With the role in the seeds, a replay at the Claims address is written by an
+/// `InitializeReplay` whose `caller_role` is Claims, so the bytes and the
+/// address agree BY CONSTRUCTION.
+///
+/// This forges the bytes anyway -- writes a Trading-role replay straight into
+/// the Claims-role account, which no route could produce -- and requires the
+/// redemption to refuse and move nothing. Custody would refuse it too, one
+/// layer down, on `ReplayBindingMismatch`.
+#[tokio::test]
+async fn a_trading_role_replay_never_serves_a_claims_payout() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let created = create_claims_custody_replay(&mut context, &fixture).await;
+    assert!(created.accepted, "{}", created.logs.join("\n"));
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+
+    let honest = observed(&mut context, terminal.custody_replay).await;
+    let state = CustodyReplayV1::decode(&honest.data).expect("the created Claims-role replay");
+    assert_eq!(state.caller_role, CustodyCallerRoleV1::Claims);
+    assert_eq!(state.next_revision, CUSTODY_EXPECTED_REVISION);
+    assert_eq!(state.open_vault_count, 0);
+    assert_eq!(state.context, fixture.custody_context);
+    assert_eq!(state.rent_refund, fixture.actor.pubkey().to_bytes());
+
+    let mut forged = honest.clone();
+    let bytes = CustodyReplayV1 {
+        caller_role: CustodyCallerRoleV1::Trading,
+        ..state
+    }
+    .to_bytes()
+    .expect("a Trading-role replay");
+    forged.data.copy_from_slice(&bytes);
+    assert_ne!(forged.data, honest.data, "a forgery that forges nothing");
+    context.set_account(&terminal.custody_replay, &AccountSharedData::from(forged));
+
+    let positive = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::RedeemTerminal,
+        0,
+        false,
+        None,
+        None,
+    );
+    let payer = context.payer.pubkey();
+    let addresses = lookup_addresses(
+        payer,
+        fixture.actor.pubkey(),
+        std::slice::from_ref(&positive),
+    );
+    let (table, _) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: cross-role replay",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+    let result = submit_v0(
+        &mut context,
+        &fixture,
+        positive,
+        table,
+        &addresses,
+        "claims rational-representation-v2: a Trading-role replay at the Claims-role address",
+    )
+    .await
+    .expect("cross-role replay transaction");
+    assert!(
+        !result.accepted,
+        "a Trading-role replay must not pay a Claims redemption: {:#?}",
+        result.logs
+    );
+    assert!(
+        result.logs.iter().any(|log| log
+            == &format!(
+                "Program {CLAIMS_PROGRAM_ID} failed: custom program error: {:#x}",
+                ClaimsSbfError::Identity as u32
+            )),
+        "the refusal must be Claims' own identity join: {:#?}",
+        result.logs
+    );
+    let after = snapshot(&mut context, &fixture).await;
+    assert_account_content_eq(
+        after.hoard.as_ref().expect("Hoard"),
+        before.hoard.as_ref().expect("pre Hoard"),
+    );
+    assert_account_content_eq(
+        after.recipient.as_ref().expect("recipient"),
+        before.recipient.as_ref().expect("pre recipient"),
+    );
+}
+
+/// Creation authenticates by DERIVATION, not by what an account says.
+///
+/// Two substitutions, both of which would put a Claims-role replay somewhere the
+/// namespace's owner never named: an aggregate that is not the one the wire's
+/// Market derives, and a replay account that is not the Claims-role address the
+/// aggregate's namespace derives. The second is the role-seeded address spoof --
+/// the Trading compartment's own address, offered as the place to write a
+/// Claims-role cursor.
+#[tokio::test]
+async fn replay_creation_refuses_a_substituted_aggregate_or_replay() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let trading_replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::new(
+            fixture.market.to_bytes(),
+            fixture.release_set,
+            CustodyCallerRoleV1::Trading,
+            fixture.custody_context,
+        )
+        .as_slices(),
+        &CUSTODY_PROGRAM_ID,
+    )
+    .0;
+    assert_ne!(trading_replay, terminal.custody_replay);
+
+    for (overrides, label) in [
+        (
+            ReplayCreationOverrides {
+                aggregate: Some(fixture.market),
+                replay: None,
+            },
+            "the Core Market standing in for the Claims aggregate",
+        ),
+        (
+            ReplayCreationOverrides {
+                aggregate: None,
+                replay: Some(trading_replay),
+            },
+            "the Trading-role replay address offered for a Claims-role cursor",
+        ),
+    ] {
+        let result = submit_replay_creation(
+            &mut context,
+            &fixture,
+            overrides,
+            &format!("claims rational-representation-v2: replay creation with {label}"),
+        )
+        .await;
+        assert!(!result.accepted, "{label} must refuse: {:#?}", result.logs);
+        assert!(
+            result.logs.iter().any(|log| log
+                == &format!(
+                    "Program {CLAIMS_PROGRAM_ID} failed: custom program error: {:#x}",
+                    ClaimsSbfError::Identity as u32
+                )),
+            "{label} must refuse on Claims' identity join: {:#?}",
+            result.logs
+        );
+        assert!(
+            context
+                .banks_client
+                .get_account(terminal.custody_replay)
+                .await
+                .expect("account query")
+                .is_none(),
+            "{label} must not have created the canonical replay"
+        );
+        assert!(
+            context
+                .banks_client
+                .get_account(trading_replay)
+                .await
+                .expect("account query")
+                .is_none(),
+            "{label} must not have created the Trading compartment either"
+        );
+    }
+}
+
+/// The cursor is created once and only once.
+///
+/// Creation is permissionless -- anyone may prepay it -- so the second submitter
+/// has to lose harmlessly rather than reset a live cursor. It does: Claims
+/// requires the replay account to be vacant and System-owned before it forwards
+/// anything, so the second attempt refuses before Custody is reached and the
+/// first submitter's rent refund stands.
+#[tokio::test]
+async fn the_claims_role_replay_is_created_exactly_once() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let first = create_claims_custody_replay(&mut context, &fixture).await;
+    assert!(first.accepted, "{}", first.logs.join("\n"));
+    let created = observed(&mut context, terminal.custody_replay).await;
+
+    let second = submit_replay_creation(
+        &mut context,
+        &fixture,
+        ReplayCreationOverrides::default(),
+        "claims rational-representation-v2: a second replay creation",
+    )
+    .await;
+    assert!(
+        !second.accepted,
+        "a live replay must not be re-created: {:#?}",
+        second.logs
+    );
+    assert_account_content_eq(
+        &observed(&mut context, terminal.custody_replay).await,
+        &created,
+    );
+    assert_eq!(
+        CustodyReplayV1::decode(&created.data)
+            .expect("live replay")
+            .rent_refund,
+        fixture.actor.pubkey().to_bytes(),
+        "the first prepayer keeps the refund"
+    );
+}
+
 /// The persisted namespace is the ONLY thing that names the Hoard, so what
 /// happens when it is wrong is the whole safety question.
 ///
@@ -3080,6 +3574,23 @@ async fn a_substituted_custody_namespace_refuses(
 ) {
     let (test, fixture) = fixture(true);
     let mut context = test.start_with_context().await;
+    // The Claims-role replay is CREATED, not planted. Everything below stands on
+    // an account the tree produced.
+    let created = create_claims_custody_replay(&mut context, &fixture).await;
+    assert!(
+        created.accepted,
+        "the Claims-role Custody replay must be creatable: {}",
+        created.logs.join("\n")
+    );
+    assert!(
+        created.wire_bytes <= PACKET_LIMIT,
+        "replay creation must fit a legacy packet without an ALT: {} bytes",
+        created.wire_bytes
+    );
+    eprintln!(
+        "Claims-role Custody replay created: legacy={} bytes (limit {PACKET_LIMIT}), CU={}",
+        created.wire_bytes, created.compute_units,
+    );
     let substituted = substitute(&fixture);
     let positive = wrapper_instruction(
         &fixture,
