@@ -2350,12 +2350,14 @@ fn execute_authenticated_hot_v3(
         execute_interpreted_transition_v3(
             transition,
             tail_count,
-            &preplanned_lifecycle.scalars,
-            &preplanned_lifecycle.identities,
-            &mut preplan_scratch.next_scalars,
-            &mut preplan_scratch.next_identities,
-            request_output_scalars,
-            request_output_identities,
+            TransitionRegistersV3 {
+                input_scalars: &preplanned_lifecycle.scalars,
+                input_identities: &preplanned_lifecycle.identities,
+                scratch_scalars: &mut preplan_scratch.next_scalars,
+                scratch_identities: &mut preplan_scratch.next_identities,
+                output_scalars: request_output_scalars,
+                output_identities: request_output_identities,
+            },
         )?
     };
     hot_cu_checkpoint!("candidate");
@@ -2625,6 +2627,7 @@ fn execute_prepared_child_routes_v3(
         prepared.scalars,
         prepared.identities,
         prepared.effect_accounts,
+        prepared.aliases,
         prepared.request_bank,
         prepared.family_request,
         prepared.request_digest,
@@ -2997,20 +3000,39 @@ struct CandidateExecutionV3 {
 /// pair for scratch and then allocated a whole second pair for the output --
 /// which, on an allocator whose `dealloc` is a no-op, charged the heap a full
 /// pair while the rented one died here unrecoverably.
+/// The three register-bank pairs the fold runs on, named by their ROLE, which
+/// is the only thing distinguishing them: all three are the same width and two
+/// of them are borrowed from phases that are done with them.
+///
+/// Shaped like `ProjectionRegistersV2`, and for the same reason -- six
+/// same-typed banks passed positionally is six chances to transpose scratch and
+/// output, and the compiler catches none of them.
+struct TransitionRegistersV3<'a> {
+    input_scalars: &'a [u64],
+    input_identities: &'a [[u8; 32]],
+    /// The preplan arena's working pair, idle between the preplan and the replan.
+    scratch_scalars: &'a mut [u64],
+    scratch_identities: &'a mut [[u8; 32]],
+    /// The request-projection output pair, dead since the preplan copied it.
+    /// Returned as the candidate's registers rather than cloned from the input.
+    output_scalars: Vec<u64>,
+    output_identities: Vec<[u8; 32]>,
+}
+
 #[inline(never)]
 fn execute_interpreted_transition_v3(
     transition: TransitionProgramV3<'_>,
     tail_count: u32,
-    input_scalars: &[u64],
-    input_identities: &[[u8; 32]],
-    // The preplan arena's working pair, idle between the preplan and the replan.
-    scratch_scalars: &mut [u64],
-    scratch_identities: &mut [[u8; 32]],
-    // The request-projection output pair, dead since the preplan copied it.
-    // Returned as the candidate's registers rather than cloned from the input.
-    mut output_scalars: Vec<u64>,
-    mut output_identities: Vec<[u8; 32]>,
+    registers: TransitionRegistersV3<'_>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
+    let TransitionRegistersV3 {
+        input_scalars,
+        input_identities,
+        scratch_scalars,
+        scratch_identities,
+        mut output_scalars,
+        mut output_identities,
+    } = registers;
     if output_scalars.len() != input_scalars.len()
         || output_identities.len() != input_identities.len()
         || scratch_scalars.len() != input_scalars.len()
@@ -5636,6 +5658,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         Some(selected_role_program_v3(
             frame,
             effect_accounts,
+            aliases,
             ExecutionRoleV1::Claims,
             envelope.release_set(),
         )?)
@@ -5652,6 +5675,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             Some(selected_role_program_v3(
                 frame,
                 effect_accounts,
+                aliases,
                 ExecutionRoleV1::Custody,
                 envelope.release_set(),
             )?)
@@ -5669,6 +5693,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         Some(selected_role_program_v3(
             frame,
             effect_accounts,
+            aliases,
             ExecutionRoleV1::Resolution,
             envelope.release_set(),
         )?)
@@ -5834,6 +5859,10 @@ fn execute_child_routes_v3<'accounts, 'info>(
     scalars: &[u64],
     identities: &[[u8; 32]],
     effect_accounts: &[AccountInfo<'info>],
+    // The per-logical-coordinate representative table `effect_accounts` was
+    // downgraded at. Only `selected_role_program_v3` reads it here, to tell one
+    // physical account named several times from several physical accounts.
+    aliases: &[usize],
     request_bank: &[u8],
     family_request: &[u8],
     request_digest: [u8; 32],
@@ -5842,7 +5871,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     selected_capability_program: [u8; 32],
 ) -> Result<[u8; 32], ProgramError> {
     #[cfg(not(feature = "families"))]
-    let _ = (capability_program_set, selected_capability_program);
+    let _ = (capability_program_set, selected_capability_program, aliases);
     let mut execution = Box::new(ChildExecutionStateV3 {
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
         receipt_bank: ChildReceiptBankV3::new(),
@@ -5885,6 +5914,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
         Some(selected_role_program_v3(
             frame,
             effect_accounts,
+            aliases,
             ExecutionRoleV1::Claims,
             envelope.release_set(),
         )?)
@@ -5901,6 +5931,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
             Some(selected_role_program_v3(
                 frame,
                 effect_accounts,
+                aliases,
                 ExecutionRoleV1::Custody,
                 envelope.release_set(),
             )?)
@@ -5918,6 +5949,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
         Some(selected_role_program_v3(
             frame,
             effect_accounts,
+            aliases,
             ExecutionRoleV1::Resolution,
             envelope.release_set(),
         )?)
@@ -6470,6 +6502,7 @@ fn invocation_accounts_contain_program(
 fn selected_role_program_v3<'accounts, 'info>(
     frame: HotFrameV3<'_, 'info>,
     accounts: &'accounts [AccountInfo<'info>],
+    aliases: &[usize],
     role: ExecutionRoleV1,
     release_set: [u8; 32],
 ) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
@@ -6494,16 +6527,65 @@ fn selected_role_program_v3<'accounts, 'info>(
         .program()
         .to_bytes();
     drop(cache);
-    let mut found = None;
-    for account in accounts {
-        if account.key.to_bytes() == expected {
-            if found.is_some() || !account.executable || account.is_signer || account.is_writable {
+    resolve_role_carrier_v3(accounts, aliases, expected)
+}
+
+/// The one physical account in the downgraded logical vector carrying a role's
+/// activated program.
+///
+/// A role's callee must resolve to exactly one PHYSICAL account, not to exactly
+/// one logical coordinate. `downgraded_effect_accounts_v3` pushes one entry per
+/// logical coordinate, aliases included, and an `AuthenticatedRouteAlias` is
+/// downgraded with its representative's privileges rather than skipped -- so a
+/// program that several child frames legitimately name appears once per frame
+/// that names it. Three clones of one `AccountInfo` are one account named three
+/// times, and resolving it is unambiguous. The uniqueness test used to count
+/// logical coordinates where it meant physical accounts, which refused every
+/// topology whose callee is a member of a child frame: Series' three carriers
+/// of the Custody program, and Dealer's and General's new ones. Two DISTINCT
+/// physical accounts carrying the role's key stays refused, which is the case
+/// the test was written for.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+fn resolve_role_carrier_v3<'accounts, 'info>(
+    accounts: &'accounts [AccountInfo<'info>],
+    aliases: &[usize],
+    expected: [u8; 32],
+) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
+    // `accounts` is the downgraded LOGICAL vector and `aliases` is the
+    // per-logical-coordinate representative table built at the same registers.
+    // They are the same length by construction; refuse rather than assume it,
+    // because an `aliases` longer than `accounts` would read as a silent short
+    // scan rather than as an error.
+    if accounts.len() != aliases.len() {
+        return Err(TradingSbfError::Release.into());
+    }
+    let mut found: Option<(usize, &'accounts AccountInfo<'info>)> = None;
+    for (coordinate, account) in accounts.iter().enumerate() {
+        if account.key.to_bytes() != expected {
+            continue;
+        }
+        // Per-account, and BEFORE the dedup: a carrier that arrived writable or
+        // signing is refused on its own terms, never absorbed into a
+        // representative that happens to be clean.
+        if !account.executable || account.is_signer || account.is_writable {
+            return Err(TradingSbfError::Release.into());
+        }
+        let representative = representative_v3(coordinate, aliases)?;
+        match found {
+            Some((seen, _)) if seen != representative => {
                 return Err(TradingSbfError::Release.into());
             }
-            found = Some(account);
+            Some(_) => {}
+            None => found = Some((representative, account)),
         }
     }
-    found.ok_or_else(|| TradingSbfError::Release.into())
+    found
+        .map(|(_, account)| account)
+        .ok_or_else(|| TradingSbfError::Release.into())
 }
 
 #[cfg(any(
@@ -9143,6 +9225,81 @@ mod tests {
         assert!(downgraded_effect_accounts_v3(profile, 0, &[], &hostile).is_err());
         let inverted = [&program, &program, &program];
         assert!(downgraded_effect_accounts_v3(profile, 0, &[], &inverted).is_err());
+    }
+
+    /// A role callee is resolved by PHYSICAL account, not by coordinate count.
+    ///
+    /// `d5aed77` pins the precondition this depends on against real emitted
+    /// profile bytes: for each role program the carrier set has exactly one
+    /// representative, that representative is a readonly executable, and every
+    /// other carrier is an alias emitted privilege-free. A layout that split a
+    /// role's program across two physical accounts would break this resolution
+    /// as surely as it repairs the aliased one, so both directions are pinned.
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    #[test]
+    fn a_role_callee_is_one_physical_account_however_many_frames_name_it() {
+        let account = |signer, writable, executable| {
+            let key = Box::leak(Box::new(Pubkey::new_unique()));
+            let owner = Box::leak(Box::new(Pubkey::new_unique()));
+            let lamports = Box::leak(Box::new(0_u64));
+            let data = Box::leak(Vec::new().into_boxed_slice());
+            AccountInfo::new(key, signer, writable, lamports, data, owner, executable)
+        };
+        let carrier = account(false, false, true);
+        let expected = carrier.key.to_bytes();
+        let other = account(false, false, false);
+
+        // The Series consume shape: three logical coordinates, one physical
+        // account, all readonly executable. Coordinates 1 and 3 are aliases of
+        // 0, so the representative table maps all three to 0. This refused
+        // before the dedup, and it is a layout a frame cannot avoid -- three
+        // different child programs each need the callee in their own list.
+        let series = [
+            carrier.clone(),
+            carrier.clone(),
+            other.clone(),
+            carrier.clone(),
+        ];
+        let aliases = [0, 0, 2, 0];
+        assert_eq!(
+            resolve_role_carrier_v3(&series, &aliases, expected)
+                .expect("one account named three times resolves")
+                .key,
+            carrier.key
+        );
+
+        // Two DISTINCT physical accounts carrying the role's key: still
+        // refused. Same key, but self-representatives at two coordinates, so
+        // nothing says which one the CPI is made through.
+        let ambiguous = [carrier.clone(), other.clone(), carrier.clone()];
+        assert!(resolve_role_carrier_v3(&ambiguous, &[0, 1, 2], expected).is_err());
+
+        // An aliased carrier that arrived writable or signing is refused even
+        // though its representative is clean: the privilege check is per
+        // account and runs before the dedup, not after.
+        for hostile in [account(false, true, true), account(true, false, true)] {
+            let mut copy = hostile.clone();
+            copy.key = carrier.key;
+            let frame = [carrier.clone(), copy];
+            assert!(resolve_role_carrier_v3(&frame, &[0, 0], expected).is_err());
+        }
+
+        // A non-executable carrier is refused, and a role nothing carries has
+        // no answer at all.
+        let inert = {
+            let mut value = other.clone();
+            value.key = carrier.key;
+            value
+        };
+        assert!(resolve_role_carrier_v3(&[inert], &[0], expected).is_err());
+        assert!(resolve_role_carrier_v3(&[other.clone()], &[0], expected).is_err());
+
+        // The alias table has to be the one this vector was downgraded at.
+        assert!(resolve_role_carrier_v3(&series, &[0, 0, 2], expected).is_err());
     }
 
     #[test]
