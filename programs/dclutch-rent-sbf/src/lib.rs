@@ -897,9 +897,15 @@ mod tests {
     fn only_the_lifecycle_v2_magic_reaches_a_route() {
         let program_id = Pubkey::new_unique();
         let mut retired = vec![0_u8; 56];
-        retired[..8].copy_from_slice(b"DCLTRCI1");
-        retired[8..10].copy_from_slice(&1_u16.to_le_bytes());
-        retired[10] = 1;
+        retired
+            .get_mut(0..8)
+            .expect("retired offset in bounds")
+            .copy_from_slice(b"DCLTRCI1");
+        retired
+            .get_mut(8..10)
+            .expect("retired offset in bounds")
+            .copy_from_slice(&1_u16.to_le_bytes());
+        *retired.get_mut(10).expect("retired offset in bounds") = 1;
         assert_eq!(
             process_instruction(&program_id, &[], &retired),
             Err(RentSbfError::Instruction.into())

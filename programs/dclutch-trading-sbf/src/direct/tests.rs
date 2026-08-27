@@ -296,7 +296,8 @@ fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
         DirectRegisteredIntentV2::decode_selected(selected, width, &seller_record),
         match partial.seller.record {
             RegisteredRecordAfterFillV2::Live(record) => Ok(record),
-            RegisteredRecordAfterFillV2::Closed(_) => panic!("partial seller must remain live"),
+            RegisteredRecordAfterFillV2::Closed(_) =>
+                unreachable!("partial seller must remain live"),
         }
     );
 
@@ -1247,7 +1248,7 @@ fn sell_registration_admits_record_position_and_reserves_exact_claims() {
 
     let mut hostile_lifecycle = lifecycle;
     let StateLifecyclePlanV3::Create(record_create) = hostile_lifecycle.record else {
-        panic!("record create")
+        unreachable!("record create")
     };
     hostile_lifecycle.record = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
         beneficiary: id(99),
@@ -1412,7 +1413,7 @@ fn sell_unwind_refunds_residual_then_closes_to_persisted_rent_credit() {
     })
     .expect("zero Position close");
     let StateLifecyclePlanV3::Close(close_plan) = close_lifecycle else {
-        panic!("record close")
+        unreachable!("record close")
     };
     let hostile_lifecycle = StateLifecyclePlanV3::Close(CloseStatePlanV3 {
         beneficiary: id(99),
@@ -1609,7 +1610,7 @@ fn registered_buy_deposits_exact_reserve_into_record_keyed_custody() {
 
     let mut hostile_lifecycle = lifecycle;
     let StateLifecyclePlanV3::Create(record_create) = hostile_lifecycle.record else {
-        panic!("record create")
+        unreachable!("record create")
     };
     hostile_lifecycle.record = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
         historical_rent_principal: record_create.historical_rent_principal + 1,
@@ -1675,12 +1676,21 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
     )
     .expect("terminal escrow plan");
     assert_eq!(plan.request_count, 3);
-    let refund = plan.requests[0];
+    let refund = plan.requests.first().expect("collateral refund request");
     assert_eq!(refund.operation, OperationV1::Transfer);
     assert_eq!(refund.source, accounts.vault);
     assert_eq!(refund.amount, creation.record.reserved_collateral());
-    assert_eq!(plan.requests[1].operation, OperationV1::CloseVault);
-    assert_eq!(plan.requests[2].operation, OperationV1::CloseReplay);
+    assert_eq!(
+        plan.requests.get(1).expect("vault close request").operation,
+        OperationV1::CloseVault
+    );
+    assert_eq!(
+        plan.requests
+            .get(2)
+            .expect("replay close request")
+            .operation,
+        OperationV1::CloseReplay
+    );
     assert_eq!(plan.refund_destination_after, 76);
 
     let expired = terminate_registered_intent_v2(
@@ -1744,7 +1754,7 @@ fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
             assert_eq!(close.claim_refund, 0);
             close
         }
-        RegisteredRecordAfterFillV2::Live(_) => panic!("full fill must close"),
+        RegisteredRecordAfterFillV2::Live(_) => unreachable!("full fill must close"),
     };
     let plan = prepare_buy_escrow_full_fill_v2(
         &DirectBuyEscrowTerminalObservationV2 {
@@ -1770,8 +1780,20 @@ fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
     )
     .expect("full-fill close");
     assert_eq!(plan.request_count, 2);
-    assert_eq!(plan.requests[0].operation, OperationV1::CloseVault);
-    assert_eq!(plan.requests[1].operation, OperationV1::CloseReplay);
+    assert_eq!(
+        plan.requests
+            .first()
+            .expect("vault close request")
+            .operation,
+        OperationV1::CloseVault
+    );
+    assert_eq!(
+        plan.requests
+            .get(1)
+            .expect("replay close request")
+            .operation,
+        OperationV1::CloseReplay
+    );
     assert_eq!(plan.requests.len(), 2);
 
     assert_eq!(plan.refund_destination_after, 10);
@@ -1857,13 +1879,13 @@ fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
     assert_eq!(plan.seller_destination_after, 39);
     assert_eq!(plan.fee_destination_after, 42);
     assert_eq!(plan.buyer_refund_destination_after, 34);
-    let net = plan.requests[0];
+    let net = plan.requests.first().expect("net transfer request");
     assert_eq!(net.operation, OperationV1::Transfer);
     assert_eq!(net.source_compartment, CompartmentV1::TradingPrincipal);
     assert_eq!(net.source, input.accounts.vault);
     assert_eq!(net.amount, 9);
     assert_eq!(net.expected_revision, 3);
-    let fee = plan.requests[1];
+    let fee = plan.requests.get(1).expect("fee transfer request");
     assert_eq!(fee.amount, 2);
     assert_eq!(fee.expected_revision, 4);
     assert_eq!(plan.requests.len(), 2);
@@ -1872,7 +1894,10 @@ fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
     high_revision.replay.next_revision = 70_000;
     let high_revision_plan =
         prepare_buy_escrow_fill_v2(&high_revision).expect("u64 Custody replay revision");
-    let high_net = high_revision_plan.requests[0];
+    let high_net = high_revision_plan
+        .requests
+        .first()
+        .expect("net transfer request");
     assert_eq!(high_net.expected_revision, 70_000);
     assert_eq!(high_net.semantic.transfer_index, 0);
 
@@ -1906,11 +1931,35 @@ fn terminal_price_improved_buy_fill_refunds_and_closes_after_transfers() {
     assert_eq!(plan.seller_destination_after, 75);
     assert_eq!(plan.fee_destination_after, 50);
     assert_eq!(plan.buyer_refund_destination_after, 45);
-    assert_eq!(plan.requests[0].amount, 45);
-    assert_eq!(plan.requests[1].amount, 10);
-    assert_eq!(plan.requests[2].amount, 11);
-    assert_eq!(plan.requests[3].operation, OperationV1::CloseVault);
-    assert_eq!(plan.requests[4].operation, OperationV1::CloseReplay);
+    assert_eq!(
+        plan.requests
+            .first()
+            .expect("buyer refund transfer request")
+            .amount,
+        45
+    );
+    assert_eq!(
+        plan.requests
+            .get(1)
+            .expect("seller net transfer request")
+            .amount,
+        10
+    );
+    assert_eq!(
+        plan.requests.get(2).expect("fee transfer request").amount,
+        11
+    );
+    assert_eq!(
+        plan.requests.get(3).expect("vault close request").operation,
+        OperationV1::CloseVault
+    );
+    assert_eq!(
+        plan.requests
+            .get(4)
+            .expect("replay close request")
+            .operation,
+        OperationV1::CloseReplay
+    );
 }
 
 fn inline_compact(
@@ -2149,7 +2198,7 @@ fn maker_lifecycle_plan(
             payer_after: 1_000 - creation.top_up_lamports,
             bump: maker.bump(),
         }),
-        _ => panic!("semantic lifecycle pair"),
+        _ => unreachable!("semantic lifecycle pair"),
     }
 }
 
@@ -2502,7 +2551,7 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
 
     let mut substituted = first_lifecycle;
     let StateLifecyclePlanV3::Create(seller_create) = substituted.seller_maker else {
-        panic!("seller create")
+        unreachable!("seller create")
     };
     substituted.seller_maker = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
         beneficiary: id(92),
