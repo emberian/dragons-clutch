@@ -63,6 +63,7 @@ fn run() -> Result<()> {
     match arguments.next().as_deref() {
         Some("prepare") => run_prepare(arguments.collect()),
         Some("demo-market") => run_demo_market(arguments.collect()),
+        Some("devnet-market") => run_devnet_market(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
         Some("campaign") => run_campaign(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
@@ -207,6 +208,114 @@ fn run_demo_market(arguments: Vec<String>) -> Result<()> {
     }
     let registry = parse_pubkey(registry, "--registry-program-id")?;
     let input = market::demo_market_input(registry)?;
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+/// The devnet flagship's market input: a Pyth range-protection market bound
+/// to the committed devnet release row and a LIVE terminal window.
+///
+/// Every fact is explicit — there is no hidden clock. `--window-start` is unix
+/// seconds the operator states (typically now, `date +%s`), and the width is
+/// refused below the measured cadence floor rather than founded into a market
+/// that fails for provider reasons.
+fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
+    let mut registry = None;
+    let mut price_update = None;
+    let mut window_start = None;
+    let mut window_width = None;
+    let mut max_age = None;
+    let mut cut_denominator = None;
+    let mut cuts = None;
+    let mut coefficients = None;
+    let mut product_name = None;
+    let mut coordinate_domain_name = None;
+    let mut feed_label = None;
+    let mut generation = None;
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        let slot = match argument.as_str() {
+            "--registry-program-id" => &mut registry,
+            "--price-update" => &mut price_update,
+            "--window-start" => &mut window_start,
+            "--window-width-seconds" => &mut window_width,
+            "--max-age-seconds" => &mut max_age,
+            "--cut-denominator" => &mut cut_denominator,
+            "--cuts" => &mut cuts,
+            "--coefficients" => &mut coefficients,
+            "--product" => &mut product_name,
+            "--coordinate-domain" => &mut coordinate_domain_name,
+            "--feed" => &mut feed_label,
+            "--generation" => &mut generation,
+            _ => {
+                return Err(Error::new(format!(
+                    "unknown devnet-market argument: {argument}"
+                )));
+            }
+        };
+        if slot.replace(value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    fn decimal<T: std::str::FromStr>(value: Option<String>, label: &str) -> Result<T> {
+        required(value, label)?
+            .parse::<T>()
+            .map_err(|_| Error::new(format!("{label} must be a decimal number")))
+    }
+    fn comma_list<T: std::str::FromStr>(value: &str, label: &str) -> Result<Vec<T>> {
+        value
+            .split(',')
+            .map(|item| {
+                item.trim()
+                    .parse::<T>()
+                    .map_err(|_| Error::new(format!("{label} item {item:?} is not a number")))
+            })
+            .collect()
+    }
+    let registry = parse_pubkey(registry, "--registry-program-id")?;
+    let price_update = std::fs::read(absolute(price_update, "--price-update")?)?;
+    let spec = market::DevnetPythMarketSpecV1 {
+        registry,
+        price_update: &price_update,
+        product_name: product_name
+            .as_deref()
+            .unwrap_or("product/sol-usd-range-protection"),
+        coordinate_domain_name: coordinate_domain_name
+            .as_deref()
+            .unwrap_or("coordinate-domain/usd-cents-per-sol"),
+        feed_label: feed_label.as_deref().unwrap_or("sol-usd").as_bytes(),
+        window_start: decimal::<i64>(window_start, "--window-start")?,
+        // 1,800 s: ~5.75 measured cadences, ~99.7% coverage — the runbook's
+        // "a market that should not fail for provider reasons" width.
+        window_width_seconds: match window_width {
+            None => 1_800,
+            Some(value) => decimal::<u32>(Some(value), "--window-width-seconds")?,
+        },
+        // Submission-latency budget against the known 4,784 s devnet outage.
+        max_age_seconds: match max_age {
+            None => 7_200,
+            Some(value) => decimal::<u32>(Some(value), "--max-age-seconds")?,
+        },
+        cut_denominator: match cut_denominator {
+            None => 100,
+            Some(value) => decimal::<u64>(Some(value), "--cut-denominator")?,
+        },
+        cuts: comma_list::<i128>(cuts.as_deref().unwrap_or("12000,18000"), "--cuts")?,
+        coefficients: comma_list::<u64>(
+            coefficients.as_deref().unwrap_or("1,0,1,0"),
+            "--coefficients",
+        )?,
+        generation: match generation {
+            None => 1,
+            Some(value) => decimal::<u64>(Some(value), "--generation")?,
+        },
+    };
+    let input = market::devnet_market_input(spec)?;
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
     stdout.write_all(b"\n")?;
