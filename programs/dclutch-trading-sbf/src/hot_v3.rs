@@ -740,7 +740,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     if request.tail_count() != product_runtime.runtime.outcome_count {
         return Err(TradingSbfError::Content.into());
     }
-    let span_widths = authenticate_accelerator_artifacts_v4(
+    let geometry = authenticate_accelerator_artifacts_v4(
         frame,
         &rent,
         &descriptor,
@@ -763,6 +763,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         request,
         family_request,
         runtime_accounts,
+        &geometry.representatives,
         root_prestate,
     )?;
     authenticate_accelerator_caller_authority_v4(
@@ -783,7 +784,7 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         product_runtime,
         claims_program,
         custody_program,
-        span_widths,
+        span_widths: geometry.span_widths,
         input_bank,
         scalars,
         identities,
@@ -799,6 +800,17 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     }))
 }
 
+/// AccountProfile-derived geometry the accelerator must reproduce exactly.
+///
+/// `representatives` is here because the observation transcript needs it and
+/// this is the only place on the accelerator path that holds a decoded
+/// AccountProfile. See [`accelerator_runtime_observations_digest_v4`] for what
+/// went wrong while it was not carried.
+struct AcceleratorGeometryV4 {
+    span_widths: Vec<u32>,
+    representatives: Vec<usize>,
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn authenticate_accelerator_artifacts_v4(
@@ -810,7 +822,7 @@ fn authenticate_accelerator_artifacts_v4(
     family_request: &[u8],
     runtime_account_count: usize,
     scalars: &[u64],
-) -> Result<Vec<u32>, ProgramError> {
+) -> Result<AcceleratorGeometryV4, ProgramError> {
     let account_profile_data = borrow_finalized_record(
         frame,
         frame.account_profile_raw,
@@ -910,7 +922,19 @@ fn authenticate_accelerator_artifacts_v4(
         &span_widths,
         scalars,
     )?;
-    Ok(span_widths)
+    // Resolved here and nowhere else on this path: the observation transcript
+    // keys an aliased coordinate by its REPRESENTATIVE, and this is the only
+    // scope holding the decoded AccountProfile that can say what that is.
+    let representatives = representative_coordinates_v3(
+        account_profile,
+        request.tail_count(),
+        &span_widths,
+        runtime_account_count,
+    )?;
+    Ok(AcceleratorGeometryV4 {
+        span_widths,
+        representatives,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -927,10 +951,12 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
     request: AcceleratorRequestV2<'_>,
     family_request: &[u8],
     runtime_accounts: &[AccountInfo<'info>],
+    representatives: &[usize],
     root_prestate: [u8; 32],
 ) -> Result<Box<AdmittedInvocationContextV3>, ProgramError> {
     let runtime_observations_digest = accelerator_runtime_observations_digest_v4(
         runtime_accounts,
+        representatives,
         family_context.selection().config().to_bytes(),
         product_runtime
             .runtime
@@ -1410,13 +1436,36 @@ fn decode_accelerator_register_bank_v4(
     Ok((scalars, identities))
 }
 
+/// The accelerator's copy of the observation walk, keyed the way Trading keys it.
+///
+/// `representatives` is not optional and not a refinement. Trading keys an
+/// aliased coordinate by its representative
+/// (`logical_projection_key_v3(*aliases.get(coordinate)…)` in
+/// `execute_hot_v3`), and `logical_projection_key_v3` substitutes a *content
+/// digest* for coordinates 1..=4 and the *physical key* for everything else.
+/// Walking the raw `enumerate()` index here therefore produced a different
+/// transcript for every profile that route-aliases a later coordinate onto one
+/// of those four — which the shipped Dealer scenario profile does three times
+/// (`dealer::v3_trade_profile`, base rules 7/9/13 aliasing to 4/2/3). The
+/// context digests could not agree, so the admitted-AOT lane refused every
+/// well-formed invocation, in the same way and for the same reason as the bare
+/// `family_request` hash beside it.
+///
+/// The expression below is deliberately identical to Trading's rather than
+/// merely equivalent to it: this is the third copy of this walk in this file,
+/// and copies two and three had already been observed to agree only by
+/// inspection.
 fn accelerator_runtime_observations_digest_v4(
     runtime_accounts: &[AccountInfo<'_>],
+    representatives: &[usize],
     selected_config: [u8; 32],
     product_root: [u8; 32],
     portfolio: [u8; 32],
     linked_basis: [u8; 32],
 ) -> Result<ContentId, ProgramError> {
+    if representatives.len() != runtime_accounts.len() {
+        return Err(TradingSbfError::Content.into());
+    }
     let projected = LogicalProjectionKeysV3 {
         selected_config,
         product_root,
@@ -1440,7 +1489,11 @@ fn accelerator_runtime_observations_digest_v4(
         .zip(&runtime_data)
         .enumerate()
         .map(|(coordinate, (account, data))| ShadowRuntimeObservationV3 {
-            key: *logical_projection_key_v3(coordinate, account.key, &projected),
+            key: *logical_projection_key_v3(
+                *representatives.get(coordinate).unwrap_or(&coordinate),
+                account.key,
+                &projected,
+            ),
             owner: account.owner.to_bytes(),
             lamports: account.lamports(),
             data: data.as_ref(),
@@ -11655,5 +11708,157 @@ mod tests {
         assert_eq!(hot_admitted_runtime_accounts_start_v3(1, 1), Ok(48));
         assert_eq!(hot_admitted_runtime_accounts_start_v3(120, 2), Ok(49));
         assert!(hot_admitted_runtime_accounts_start_v3(0, 0).is_err());
+    }
+
+    fn leaked_readonly_account(
+        key: [u8; 32],
+        owner: [u8; 32],
+        data: Vec<u8>,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(Pubkey::new_from_array(key))),
+            false,
+            false,
+            Box::leak(Box::new(1_000_u64)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(Pubkey::new_from_array(owner))),
+            false,
+        )
+    }
+
+    /// Both admitted-AOT observation walks over one bank, compared directly.
+    ///
+    /// Trading and the accelerator each own a copy of this walk and each
+    /// commits its result to the same `AdmittedInvocationContextV3` field, so
+    /// the only thing that makes the lane executable is that the two produce
+    /// the same bytes. The accelerator's copy used to key by the raw
+    /// `enumerate()` index while Trading keys by the coordinate's
+    /// REPRESENTATIVE; the second half of this test is the substitution that
+    /// difference amounts to, and it is not subtle — an aliased coordinate is
+    /// keyed by a record's content digest on one side and by an account
+    /// address on the other.
+    #[test]
+    fn both_admitted_observation_walks_key_an_alias_by_its_representative() {
+        let projected = LogicalProjectionKeysV3 {
+            selected_config: [0x11; 32],
+            product_root: [0x22; 32],
+            portfolio: [0x33; 32],
+            linked_basis: [0x44; 32],
+        };
+        // Six logical coordinates over five physical accounts: coordinate 5
+        // route-aliases onto the Product root at coordinate 2, which is the
+        // shape the shipped Dealer scenario profile uses three times, so the
+        // two coordinates share one physical account.
+        let representatives = [0_usize, 1, 2, 3, 4, 2];
+        let accounts = (0..representatives.len())
+            .map(|coordinate| {
+                let representative = *representatives
+                    .get(coordinate)
+                    .expect("representative per coordinate");
+                let tag = u8::try_from(representative).expect("small coordinate");
+                leaked_readonly_account([0xa0 | tag; 32], [0x5c; 32], vec![tag; 8])
+            })
+            .collect::<Vec<_>>();
+        let borrowed = accounts.iter().collect::<Vec<_>>();
+
+        let accelerator = accelerator_runtime_observations_digest_v4(
+            &accounts,
+            &representatives,
+            projected.selected_config,
+            projected.product_root,
+            projected.portfolio,
+            projected.linked_basis,
+        )
+        .expect("accelerator transcript");
+
+        let trading_transcript = |walk: &[usize]| {
+            let data = accounts
+                .iter()
+                .map(|account| account.try_borrow_data().expect("readable account"))
+                .collect::<Vec<_>>();
+            let observations = accounts
+                .iter()
+                .zip(&data)
+                .enumerate()
+                .map(|(coordinate, (account, bytes))| {
+                    AccountObservationV1::new(
+                        logical_projection_key_v3(
+                            *walk.get(coordinate).unwrap_or(&coordinate),
+                            account.key,
+                            &projected,
+                        ),
+                        account.owner.as_array(),
+                        account.lamports(),
+                        bytes.as_ref(),
+                        false,
+                        false,
+                        account.executable,
+                    )
+                })
+                .collect::<Vec<_>>();
+            runtime_transcript_digest_v3(&observations, &borrowed).expect("Trading transcript")
+        };
+
+        assert_eq!(
+            accelerator,
+            trading_transcript(&representatives),
+            "the accelerator must reproduce Trading's transcript exactly"
+        );
+        // The pre-fix accelerator walk. Coordinate 5's key becomes its physical
+        // address instead of the Product root's content digest, so no
+        // well-formed invocation of a route-aliasing family could ever match.
+        let raw_index_walk = (0..representatives.len()).collect::<Vec<_>>();
+        assert_ne!(
+            accelerator,
+            trading_transcript(&raw_index_walk),
+            "keying by the raw coordinate must not accidentally agree"
+        );
+    }
+
+    /// The shipped Dealer scenario profile really does route-alias onto the
+    /// four projected coordinates, so the divergence above is reachable rather
+    /// than hypothetical. Three aliases, onto linked basis (4), Product root
+    /// (2) and portfolio (3).
+    #[cfg(feature = "dealer-family")]
+    #[test]
+    fn the_shipped_dealer_profile_aliases_onto_the_projected_coordinates() {
+        use crate::dealer::v3_trade_profile::{
+            DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DealerScenarioAccountProfileInputV4,
+            encode_dealer_scenario_account_profile_v4_atomic,
+        };
+
+        let mut scratch = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        let mut encoded = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        encode_dealer_scenario_account_profile_v4_atomic(
+            DealerScenarioAccountProfileInputV4 {
+                common_data_lengths: [64, 128, 96, 112, 128],
+            },
+            &mut scratch,
+            &mut encoded,
+        )
+        .expect("selector-9 profile");
+        let profile = AccountProfileV2::decode(&encoded).expect("decode profile");
+
+        let spans = [0_u32, 0, 0, 0, 1, 0, 0, 0, 6];
+        let tail_count = 1_u32;
+        let logical = profile
+            .logical_account_count_with_dynamic_spans(tail_count, &spans)
+            .expect("logical width");
+        let representatives = representative_coordinates_v3(profile, tail_count, &spans, logical)
+            .expect("representatives");
+        let projected_aliases = representatives
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(coordinate, representative)| {
+                representative != coordinate && (1..=4).contains(representative)
+            })
+            .map(|(_, representative)| representative)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            projected_aliases,
+            vec![4, 2, 3],
+            "selector 9 aliases Claims linked-basis, Product and portfolio onto the projected coordinates"
+        );
     }
 }
