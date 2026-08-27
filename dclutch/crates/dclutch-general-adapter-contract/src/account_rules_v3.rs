@@ -43,7 +43,7 @@ use crate::{
     effect_artifacts_v3::{
         GeneralChildFrameV3, general_custody_callee_account_count_v3,
         general_custody_callee_coordinate_v3, general_effect_account_count_v3,
-        general_effect_route_count_v3, general_effect_route_frame_v3,
+        general_effect_route_count_v3, general_effect_route_frame_v3, unauthored_actions,
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
@@ -196,8 +196,23 @@ pub const fn general_scratch_page_rule_v3() -> AccountRuleWithPrestateInputV2 {
 #[must_use]
 pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     match action {
+        // `211079f6` wrote the seven new actions out one by one at every
+        // dispatcher so the NEXT action forces a decision at each program. This
+        // catch-all escaped that sweep and would have handed an unauthored
+        // action the settlement operation list. Zero is the fail-closed answer
+        // and it cannot reach an encoder: `general_account_profile_bytes_v3`
+        // sizes itself from `general_account_profile_fixed_count_v3`, which
+        // refuses an unauthored action by name first. And a profile that
+        // projected no operations would leave `ROOT_LIFECYCLE_OBSERVATION` at
+        // zero, which is not `Active`, so every action would refuse.
+        unauthored_actions!() => 0,
         Action::Close => 9,
-        _ => 5,
+        Action::Consider
+        | Action::Freeze
+        | Action::InitializeSettlement
+        | Action::Collect
+        | Action::Materialize
+        | Action::Distribute => 5,
     }
 }
 

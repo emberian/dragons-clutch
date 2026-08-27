@@ -83,6 +83,8 @@ pub enum GeneralStateArtifactErrorV3 {
     Geometry,
     /// The generic lifecycle semantic owner refused the candidate.
     Lifecycle(dclutch_account_profile_contract::lifecycle_v3::Error),
+    /// The action is a declared protocol selector with no authored artifacts.
+    UnauthoredAction,
 }
 
 /// Product/release-authenticated child widths needed by Initialize rent quotes.
@@ -129,6 +131,13 @@ pub fn general_state_lifecycle_bytes_v5(action: Action) -> Result<usize> {
 }
 
 fn general_state_lifecycle_bytes(action: Action, current_rent_v5: bool) -> Result<usize> {
+    // An unauthored action had no plans, no seeds and no recipes, and so
+    // computed a header-only width and an encodable header-only policy. The
+    // artifact join refuses it downstream -- `action_plan_count` is zero -- but
+    // an EMITTER that produces a lifecycle artifact for an action with no
+    // triple is exactly the shape the seven were written out to prevent, and an
+    // if/else on `Close` is a catch-all wearing a condition.
+    require_authored(action)?;
     let (recipes, seeds, plans) = lifecycle_counts(action);
     recipes
         .checked_mul(RECIPE_BYTES)
@@ -198,10 +207,22 @@ pub fn general_readonly_evidence_v3(
 /// First readonly evidence coordinate after local lifecycle accounts.
 #[must_use]
 pub const fn general_readonly_evidence_start_v3(action: Action) -> u16 {
-    if matches!(action, Action::Close) {
-        9
-    } else {
-        8
+    match action {
+        Action::Close => 9,
+        // An unauthored action has no evidence and no child frame, so this is
+        // not a shape it has -- but the value stays at the common prefix so that
+        // `general_child_account_start_v3`'s addition cannot be read as a
+        // narrower frame than the one the prefix already occupies. Every
+        // fallible entry point refuses these actions by name before the sum is
+        // used; the arm exists so the next action forces a decision rather than
+        // inheriting the settlement prefix from a catch-all.
+        unauthored_actions!() => 8,
+        Action::Consider
+        | Action::Freeze
+        | Action::InitializeSettlement
+        | Action::Collect
+        | Action::Materialize
+        | Action::Distribute => 8,
     }
 }
 
@@ -520,7 +541,16 @@ fn general_current_rent_quotes_v5(
 const fn lifecycle_current_rent_quote_count(action: Action) -> usize {
     match action {
         Action::InitializeSettlement => 4,
-        _ => 0,
+        // Written out rather than defaulted, for the same reason the seven new
+        // actions are written out at every other dispatcher: the next action
+        // added must force a decision here instead of inheriting one.
+        unauthored_actions!() => 0,
+        Action::Consider
+        | Action::Freeze
+        | Action::Collect
+        | Action::Materialize
+        | Action::Distribute
+        | Action::Close => 0,
     }
 }
 
@@ -627,6 +657,15 @@ fn binding(
             .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
         canonical: LifecycleRegisterCoordinateV3::common(identity_u16(canonical)?),
     })
+}
+
+/// Refuse one action whose artifact triple has not been authored.
+const fn require_authored(action: Action) -> Result<()> {
+    if crate::effect_artifacts_v3::general_action_artifacts_authored_v3(action) {
+        Ok(())
+    } else {
+        Err(GeneralStateArtifactErrorV3::UnauthoredAction)
+    }
 }
 
 const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
