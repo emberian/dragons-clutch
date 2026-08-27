@@ -1701,11 +1701,14 @@ mod tests {
             profile.representative(ADMISSION_TAIL_V3, usize::from(coordinate)),
             Ok(usize::from(coordinate))
         );
-        assert!(
-            !ROUTE_ALIASES
-                .iter()
-                .any(|(account, _)| *account == coordinate)
-        );
+        // Neither an alias nor the representative of one. Both halves matter:
+        // the downgraded effect-account vector carries ONE entry per LOGICAL
+        // coordinate, aliases included, so a callee that any alias pointed at
+        // would appear in the scan more than once and the executor refuses a
+        // second match exactly as hard as it refuses none.
+        assert!(!ROUTE_ALIASES.iter().any(
+            |(account, representative)| *account == coordinate || *representative == coordinate
+        ));
         // It sits past every declared route range, so carrying it renumbers no
         // Claims or Custody frame.
         for (start, count) in [
@@ -1785,6 +1788,14 @@ mod tests {
                 profile.representative(ADMISSION_TAIL_V3, usize::from(coordinate)),
                 Ok(usize::from(coordinate)),
                 "{role:?} callee at {coordinate} is an alias"
+            );
+            // One logical coordinate, so one entry in the scan. An alias onto a
+            // callee is the second way to refuse the same lookup.
+            assert!(
+                !ROUTE_ALIASES
+                    .iter()
+                    .any(|(_, representative)| *representative == coordinate),
+                "{role:?} callee at {coordinate} is aliased and would match twice"
             );
             route += 1;
         }

@@ -938,6 +938,16 @@ mod tests {
                 Ok(usize::from(coordinate)),
                 "{role:?} callee at {coordinate} is an alias"
             );
+            // The downgraded effect-account vector carries ONE entry per
+            // LOGICAL coordinate, aliases included, so an alias onto the callee
+            // makes the executor's scan match twice -- refused exactly as hard
+            // as matching none.
+            assert!(
+                !ROUTE_ALIASES
+                    .iter()
+                    .any(|(_, representative)| *representative == coordinate),
+                "{role:?} callee at {coordinate} is aliased and would match twice"
+            );
             route += 1;
         }
     }
