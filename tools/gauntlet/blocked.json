@@ -2,21 +2,6 @@
   "note": "Routes that cannot be driven by any gauntlet tier today. Every entry names WHY and WHO. A route with no entry and no observation appears in the report's 'NO stated reason at all' row, which is the row that should make someone uncomfortable. 'No tier drives it yet' is a real and admissible reason; it is deliberately NOT phrased as 'blocked' when nothing structural prevents it, so that a missing test never launders itself into an external blocker. Rules: most specific matching rule wins; a trailing '*' is a prefix glob; keep an entry only while it is true, and delete it the moment its route executes.",
   "blocked": [
     {
-      "route": "claims-proof/*",
-      "reason": "Capability-child proof artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
-    },
-    {
-      "route": "custody-proof/*",
-      "reason": "Capability-child proof artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
-    },
-    {
-      "route": "controller-proof/*",
-      "reason": "Direct controller proof artifact, not part of the seven-role successor release set; no tier deploys it. Its campaign belongs with the Direct family tier.",
-      "owner": "cycle-2 tranche A (WAVE.md), Direct"
-    },
-    {
       "route": "dealer-accelerator/*",
       "reason": "Dealer accelerator, not part of the seven-role successor release set; no tier deploys it. THE FRAME-CLEANLINESS HALF OF THIS ROW IS RESOLVED (W2h, 2026-08-27): measured at c3c4950 and again at 5e25f8e, cargo build-sbf on programs/dclutch-dealer-accelerator-sbf emits ZERO 'overwrites values in the frame' diagnostics, against 253 measured on the same tree at the immediately preceding HEAD. TA-DLR's root cause was correct and is independent of the fix: with `no-entrypoint` set, dclutch-trading-sbf compiles without its own #[global_allocator], which leaves __rust_alloc an opaque extern that cannot be folded at its call sites and spills hot_v3::process_hot_execution_v3 past the SBPF v0 4,096-byte frame. What changed is the headroom, not the allocator: process_hot_execution_v3 used 3,904 bytes of that frame with the outgoing-argument area filling the rest, and c3c4950 split it into an authentication half (3,008 bytes) and an execution half (2,496), which absorbs the opaque extern. TA-DLR's two-edit patch is therefore NOT required for this row and is NOT applied. It remains the principled fix for the underlying incoherence -- a no-entrypoint library build of Trading still runs Hot code under whichever allocator its host executable installs, not the one the shipped Trading program uses -- and if it is taken: re-measure on top of c3c4950 rather than against the stale 253; land both halves together (either alone is a duplicate or a missing #[global_allocator], both hard errors); and per W1f keep admit_heap_frame_v1 and lift_declared_heap_profile_v1 reachable in the SHIPPED ELF, where DCLTPCB1 depends on them on chain now. Widening the cfg does not move the shipped build either way, since `no-entrypoint` is off there and both predicates already evaluate the same. The emitted accelerator .so was never contaminated in any case: process_hot_execution_v3 is dead-stripped from it.",
       "owner": "TA-DLR (the campaign); frame blocker cleared by W2h, the allocator-coherence question is an owner decision"

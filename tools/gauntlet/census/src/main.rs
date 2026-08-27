@@ -38,11 +38,8 @@ use model::{Bindings, BlockedSet, Inventory, Ledger, ProgramMap};
 /// exactly that reason, four months after `5b19626` deleted it. Delete a program's entry in the same commit that
 /// deletes the program.
 const TARGETS: &[(&str, &str)] = &[
-    ("dclutch-claims-proof-sbf", "claims-proof"),
     ("dclutch-claims-sbf", "claims"),
-    ("dclutch-controller-proof-sbf", "controller-proof"),
     ("dclutch-core-sbf", "core"),
-    ("dclutch-custody-proof-sbf", "custody-proof"),
     ("dclutch-custody-sbf", "custody"),
     ("dclutch-dealer-accelerator-sbf", "dealer-accelerator"),
     ("dclutch-dealer-sbf", "dealer"),

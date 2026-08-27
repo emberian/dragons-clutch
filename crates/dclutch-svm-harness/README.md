@@ -90,38 +90,12 @@ This is local real-SVM evidence. The captured update is synthetic-local, and
 the campaign is not provider availability, devnet, deployment, or mainnet
 evidence.
 
-The experimental Direct successor has a separate four-ELF physical campaign.
-Build `dclutch_claims_proof_sbf.so`, `dclutch_controller_proof_sbf.so`, and
-`dclutch_custody_proof_sbf.so` from their program manifests. Build
-`spl_token.so` from the pinned official source named in
-`docs/evidence/PHYSICAL_DIRECT_COMPOSITION_2026_08_25.md`, then run:
-
-```sh
-SBF_OUT_DIR=../../target/deploy \
-  cargo test --test physical_direct_composition -- --nocapture
-```
-
-That campaign uses no native protocol processor or mock token implementation.
-It also drives the official address lookup table program through create,
-extend, next-slot activation, an actual signed v0 physical fill, deactivate,
-the full SlotHashes cooldown, and close. It proves only the named runtime
-executions and rollback observations, not a complete Direct lifecycle or a
-Solana runtime theorem.
-
-An ignored transport campaign takes the same 990-byte v0 fill across a separate
-`solana-test-validator` process and JSON-RPC boundary:
-
-```sh
-SBF_OUT_DIR=../../target/deploy \
-SOLANA_TEST_VALIDATOR=/path/to/solana-test-validator \
-cargo test --test physical_direct_composition \
-  compiled_direct_crosses_the_local_validator_rpc_boundary \
-  -- --ignored --nocapture
-```
-
-It loads the three first-party ELFs, uses the validator's canonical Token and
-address lookup table programs, checks physical claim and custody mutations, and
-deactivates the table. All fixture accounts are imported into a temporary local
-genesis; this is not deployment/bootstrap, devnet, or mainnet evidence. The
-temporary ledger is removed on exit. The ordinary ProgramTest campaign covers
-the table's full 512-slot cooldown and close.
+The experimental Direct successor's four-ELF physical campaign is GONE, with the
+three first-party ELFs it drove. `physical_direct_composition.rs`,
+`claims_proof_target.rs` and `registered_claims_proof_target.rs` were banished
+to ~/dev/dclutch-legacy/svm-harness-tests/ together with
+`programs/dclutch-{claims,custody,controller}-proof-sbf`: they were the DCLTCAT1
+stratum's proof artifacts, and the Market representation they composed has no
+writer in this tree. The successor role programs carry their own campaigns.
+The lookup-table, rollback and token observations those campaigns made are not
+re-derived anywhere; they were evidence about programs that no longer exist.
