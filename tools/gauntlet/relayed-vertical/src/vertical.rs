@@ -449,8 +449,14 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     )?;
 
     // -------------------------------------------------- 6. the address book
+    // The book's worker is the CAMPAIGN's own payer: every frame the campaign
+    // submits (create, consume, and the prepaid probes) is signed by the
+    // authority, while the daemon derives its own frames — with its own fee
+    // payer as worker — inside its own process. The failure walk overrides
+    // the worker with the walker.
+    let authority_worker = authority.pubkey();
     let book_template = |record: Pubkey, record_bump: u8| RelayAddressBookV1 {
-        worker: fee_payer.pubkey(),
+        worker: authority_worker,
         market,
         core_program,
         activation,
