@@ -1,0 +1,7 @@
+# Non-test code is held to the protocol workspace's bar (see `[lints]` in
+# Cargo.toml).  Tests are allowed the ergonomic forms; a panicking assertion is
+# what a test is for.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
