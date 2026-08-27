@@ -24,7 +24,9 @@ use dclutch_claims_sbf::signed_delta_v3::SignedDeltaSbfErrorV3;
 use dclutch_claims_svm::{
     CallerRole,
     custody_replay_v1::ClaimsCustodyReplayRequestV1,
-    liability_basis_state_v2::{LiabilityBasisMarketLayoutV2, LiabilityBasisMarketViewV2},
+    liability_basis_state_v2::{
+        LiabilityBasisMarketLayoutV2, LiabilityBasisMarketViewV2, LiabilityBasisPositionLayoutV2,
+    },
     product_basis_terminal_v3::{
         ProductBasisTerminalInputV3, ProductClaimsTerminalAdmissionV3,
         ProductClaimsTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
@@ -5610,4 +5612,68 @@ async fn an_unresolved_market_pays_no_wallet_position() {
         before.hoard.as_ref().expect("pre Hoard"),
     );
     assert_account_content_eq(&after.actor_position, &before.actor_position);
+}
+
+/// A Position that belongs to ANOTHER Market's book is not payable here.
+///
+/// The wallet's own Position is forged in place -- through the bank, so the
+/// alteration actually reaches the chain -- to carry a different
+/// `market_account`. Everything else about the request is the one that just
+/// worked: the same signer, the same canonical PDA, the same aggregate. What is
+/// left is exactly the cross-Market join, which two independent readers make:
+/// the evaluator's `validate_joins` (which fires first) and
+/// `signed_delta_v3::build_candidates`.
+#[tokio::test]
+async fn a_cross_market_position_is_not_payable_here() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) =
+        wallet_payout_lookup_table(&mut context, &fixture, "claims rational-representation-v2: cross-market wallet payout").await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let honest = observed(&mut context, fixture.actor_position).await;
+    let mut forged = honest.clone();
+    // The Core Market account: a real address on this chain, and emphatically
+    // not this Claims aggregate. `LiabilityBasisPositionLayoutV2::MARKET` is
+    // imported rather than restated so a layout move breaks here loudly.
+    put(
+        &mut forged.data,
+        LiabilityBasisPositionLayoutV2::MARKET,
+        fixture.market.as_ref(),
+    );
+    assert_ne!(forged.data, honest.data);
+    context.set_account(&fixture.actor_position, &AccountSharedData::from(forged));
+
+    let result = submit_wallet_payout(
+        &mut context,
+        &fixture,
+        table,
+        &addresses,
+        WalletPayoutOverrides::default(),
+        "claims rational-representation-v2: a wallet payout against a cross-market Position",
+    )
+    .await;
+    assert_refused_with(
+        &result,
+        ClaimsSbfError::Economic as u32,
+        "a Position from another Market's book",
+    );
+    let after = snapshot(&mut context, &fixture).await;
+    assert_account_content_eq(
+        after.hoard.as_ref().expect("Hoard"),
+        before.hoard.as_ref().expect("pre Hoard"),
+    );
+    assert_account_content_eq(
+        after.recipient.as_ref().expect("recipient"),
+        before.recipient.as_ref().expect("pre recipient"),
+    );
+    assert_account_content_eq(&after.aggregate, &before.aggregate);
+    assert_account_content_eq(
+        after.custody_replay.as_ref().expect("Claims-role replay"),
+        before
+            .custody_replay
+            .as_ref()
+            .expect("pre Claims-role replay"),
+    );
 }

@@ -626,6 +626,31 @@
       "program": "",
       "outcome": "executed",
       "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: a wallet payout against a cross-market Position",
+      "routes": [
+        "claims/process_instruction",
+        "claims/terminal_settlement_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Economic",
+      "note": "HOSTILE. The wallet's own Position is forged in place -- through the bank, so the alteration reaches the chain -- to carry a different market_account, and everything else about the request is the one that just committed: same signer, same canonical PDA, same aggregate. What is left is exactly the cross-Market join. Economic (0x5005): the evaluator's validate_joins fires first, and signed_delta_v3::build_candidates would refuse the same frame again. A Position is scoped to the book it was admitted into, and a resolved Market pays only its own."
+    },
+    {
+      "label": "claims rational-representation-v2: cross-market wallet payout: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: cross-market wallet payout: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
     }
   ]
 }

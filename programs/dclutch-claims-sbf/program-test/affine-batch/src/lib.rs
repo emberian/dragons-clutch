@@ -25,9 +25,7 @@ use dclutch_market_core_codec::{
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
-    runtime_v3::{
-        ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
-    },
+    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
 };
 use dclutch_product_runtime_v2::{ContentId, ProductJoinV2, ResultDomainV2};
 use dclutch_product_runtime_v2_admission::{
@@ -541,8 +539,8 @@ fn authenticate_basis(
         observation.rent,
         Error::InvalidBasis,
     )?;
-    let basis =
-        ProductBasisV3::decode(observation.linked_basis.raw.data).map_err(|_| Error::InvalidBasis)?;
+    let basis = ProductBasisV3::decode(observation.linked_basis.raw.data)
+        .map_err(|_| Error::InvalidBasis)?;
     let semantic = semantic_basis_preimage_v3(observation.linked_basis.raw.data)
         .map_err(|_| Error::InvalidBasis)?;
     let semantic_basis_id = hashv(&[
@@ -654,9 +652,16 @@ fn authenticate_record(
     })
 }
 
+/// Map the affine wire's execution role onto the release set's.
+///
+/// The `Claims` arm makes the mapping total; it is not an admission. The affine
+/// wire's own `decode_role` refuses that byte, because its authority is a
+/// caller-program PDA and `Claims` (decision 0008 §8) is precisely the role with
+/// no caller program.
 const fn execution_role(role: CallerRole) -> ExecutionRoleV1 {
     match role {
         CallerRole::Core => ExecutionRoleV1::Core,
+        CallerRole::Claims => ExecutionRoleV1::Claims,
         CallerRole::Trading => ExecutionRoleV1::Trading,
     }
 }
