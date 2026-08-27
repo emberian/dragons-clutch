@@ -355,7 +355,16 @@ pub(crate) fn publish_routing_table(
     await_finalized_slot(rpc, minimum_slot)?;
     let (observation, tables) =
         rpc.finalized_observed_accounts(&[plan.lookup_table], minimum_slot)?;
-    Ok((plan.lookup_table, addresses, observation, tables))
+    // Return the CANONICAL order the plan actually extended on chain -- the
+    // builder sorts addresses by bytes -- never this function's insertion
+    // order. The daemon compiles lookup indexes against the list we hand it,
+    // and the runtime resolves those indexes against the on-chain table; a
+    // list in any other order delivers a PERMUTED account frame to the
+    // program, which refuses it as 0x8000 AccountFrame after the table looks
+    // perfectly healthy from every other angle. Found by decoding the extend
+    // transaction bytes out of the blockstore after three green-looking
+    // publications.
+    Ok((plan.lookup_table, plan.addresses, observation, tables))
 }
 
 pub(crate) fn await_finalized_slot(rpc: &mut Rpc, minimum_slot: u64) -> Result<()> {
@@ -415,4 +424,3 @@ pub(crate) fn require_source_phase(
     }
     Ok(decoded)
 }
-

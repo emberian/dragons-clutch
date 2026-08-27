@@ -140,11 +140,26 @@ impl RpcClient {
         };
         if let Some(error) = parsed.get("error") {
             let code = error.get("code").and_then(Value::as_i64).unwrap_or(0);
-            let message = error
+            let mut message = error
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("(no message)")
                 .to_owned();
+            // A preflight refusal's `data.logs` names the exact program-level
+            // refusal; a message that drops it reports "custom program error"
+            // with nothing an operator can act on.
+            if let Some(logs) = error
+                .get("data")
+                .and_then(|data| data.get("logs"))
+                .and_then(Value::as_array)
+            {
+                for line in logs {
+                    if let Some(text) = line.as_str() {
+                        message.push_str("\n  log: ");
+                        message.push_str(text);
+                    }
+                }
+            }
             self.log(method, detail, "rpc-error");
             return Err(RelayerError::RpcError {
                 endpoint: self.host.clone(),
