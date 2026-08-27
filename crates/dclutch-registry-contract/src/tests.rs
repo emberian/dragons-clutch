@@ -1,6 +1,6 @@
 extern crate std;
 
-use dclutch_core_contract::{ContentId, MarketIdentity};
+use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
     ProgramIdentityV1,
@@ -10,12 +10,10 @@ use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1,
     ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1, ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1,
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
-    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
-    EXECUTION_AUTHORITY_MANIFEST_BYTES_V1, EXECUTION_AUTHORITY_MANIFEST_MAGIC_V1, Error,
-    ExecutionAuthorityManifestV1, ExecutionReleaseActivationInputsV1,
+    Error, ExecutionReleaseActivationInputsV1,
     activate_execution_release_set_v1, activate_execution_role_into_v1,
-    authenticate_market_execution_v1, authenticate_market_execution_view_v1,
     initialize_activation_cache_v1,
 };
 
@@ -738,99 +736,4 @@ fn activation_cache_decoder_refuses_malformed_headers_and_role_identities() {
             dclutch_release_set_contract::Error::ZeroArtifactReleaseId
         ))
     );
-}
-
-#[test]
-fn market_authority_envelope_has_one_path_to_the_activated_release_set() {
-    let fixture = Fixture::distinct();
-    let authority_id = content(93);
-    let semantic_manifest_id = content(92);
-    let manifest = ExecutionAuthorityManifestV1::new(semantic_manifest_id, fixture.release_set_id)
-        .expect("distinct authority children");
-    let encoded = manifest.to_bytes();
-    assert_eq!(encoded.len(), EXECUTION_AUTHORITY_MANIFEST_BYTES_V1);
-    assert_eq!(&encoded[..8], &EXECUTION_AUTHORITY_MANIFEST_MAGIC_V1);
-    assert_eq!(&encoded[16..48], semantic_manifest_id.as_bytes());
-    assert_eq!(&encoded[48..80], fixture.release_set_id.as_bytes());
-    assert_eq!(ExecutionAuthorityManifestV1::decode(&encoded), Ok(manifest));
-
-    let market = MarketIdentity::new(
-        content(1),
-        content(2),
-        content(3),
-        content(4),
-        authority_id,
-        7,
-    );
-    let authenticated =
-        authenticate_market_execution_v1(market, authority_id, manifest, fixture.activate())
-            .expect("immutable market join closes");
-    assert_eq!(authenticated.market(), market);
-    assert_eq!(
-        authenticated.semantic_capability_manifest_id(),
-        semantic_manifest_id
-    );
-    assert_eq!(
-        authenticated.execution_release_set_id(),
-        fixture.release_set_id
-    );
-    let activation_bytes = fixture.activate().to_bytes();
-    let activation_view = ActivatedExecutionReleaseSetViewV1::decode(&activation_bytes)
-        .expect("borrowed activation view");
-    assert_eq!(
-        authenticate_market_execution_view_v1(market, authority_id, manifest, activation_view),
-        Ok(authenticated)
-    );
-
-    assert_eq!(
-        authenticate_market_execution_v1(market, content(94), manifest, fixture.activate()),
-        Err(Error::MarketAuthorityManifestMismatch)
-    );
-    let stale_activation =
-        activate_execution_release_set_v1(content(95), &fixture.release_set, &fixture.inputs())
-            .expect("alternate finalized identity is structurally valid at adapter boundary");
-    assert_eq!(
-        authenticate_market_execution_v1(market, authority_id, manifest, stale_activation),
-        Err(Error::ReleaseSetSelectionMismatch)
-    );
-}
-
-#[test]
-fn authority_envelope_decoder_refuses_aliases_and_malformed_bytes() {
-    assert_eq!(
-        ExecutionAuthorityManifestV1::new(content(92), content(92)),
-        Err(Error::ReleaseSetSelectionMismatch)
-    );
-    let encoded = ExecutionAuthorityManifestV1::new(content(92), content(91))
-        .expect("valid authority envelope")
-        .to_bytes();
-    assert_eq!(
-        ExecutionAuthorityManifestV1::decode(&encoded[..79]),
-        Err(Error::InvalidLength)
-    );
-    let mut extended = encoded.to_vec();
-    extended.push(0);
-    assert_eq!(
-        ExecutionAuthorityManifestV1::decode(&extended),
-        Err(Error::InvalidLength)
-    );
-    for (offset, expected) in [
-        (0, Error::InvalidMagic),
-        (8, Error::UnsupportedSchema),
-        (10, Error::UnsupportedArtifactProfile),
-        (12, Error::NonCanonicalReservedBytes),
-        (16, Error::ZeroIdentity),
-        (48, Error::ZeroIdentity),
-    ] {
-        let mut hostile = encoded;
-        if matches!(offset, 16 | 48) {
-            zero_range(&mut hostile, offset, 32);
-        } else {
-            flip_at(&mut hostile, offset);
-        }
-        assert_eq!(
-            ExecutionAuthorityManifestV1::decode(&hostile),
-            Err(expected)
-        );
-    }
 }

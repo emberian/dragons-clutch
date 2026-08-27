@@ -34,7 +34,6 @@ members = [
     "crates/dclutch-product-runtime-v2-operator",
     "crates/dclutch-product-runtime-v2-svm-reader",
     "crates/dclutch-provider-transport-v3-operator",
-    "crates/dclutch-product-admission-contract",
     "crates/dclutch-product-payoff-codec",
     "crates/dclutch-product-payoff-svm",
     "crates/dclutch-product-payoff-v2-codec",

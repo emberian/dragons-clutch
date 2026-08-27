@@ -25,7 +25,6 @@ pub mod funding;
 #[allow(missing_docs, dead_code)]
 pub(crate) mod generated_abi;
 /// SDK-free readiness account frames and state-transition planning.
-pub mod readiness_frame;
 /// Exact readiness instruction wires without SVM dependencies.
 pub mod readiness_instruction;
 /// Reusable capability templates and exact occurrence-manifest projection.
