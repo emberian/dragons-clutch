@@ -42,6 +42,7 @@ use dclutch_product_runtime_v2::{
     ContentId as RuntimeContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -1993,7 +1994,7 @@ fn lookup_addresses(payer: Pubkey, actor: Pubkey, instructions: &[Instruction]) 
     addresses
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) -> u64 {
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) -> u64 {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -2005,20 +2006,46 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed ALT transaction")
+        .to_string();
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message_data().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
         .expect("ALT lifecycle processing");
-    assert!(processed.result.is_ok(), "ALT lifecycle must commit");
-    processed
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
         .metadata
-        .map_or(0, |metadata| metadata.compute_units_consumed)
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert!(accepted, "ALT lifecycle must commit");
+    units
 }
 
 async fn create_live_lookup_table(
     context: &mut ProgramTestContext,
     addresses: &[Pubkey],
+    label_prefix: &str,
 ) -> (Pubkey, Vec<u64>) {
     let clock = context
         .banks_client
@@ -2030,12 +2057,15 @@ async fn create_live_lookup_table(
         .expect("make lookup-table slot recent");
     let payer = context.payer.pubkey();
     let (create, table) = create_lookup_table(payer, payer, clock.slot);
-    let mut compute_units = vec![process_legacy(context, create).await];
-    for chunk in addresses.chunks(20) {
+    let mut compute_units = vec![
+        process_legacy(context, create, &format!("{label_prefix}: create lookup table")).await,
+    ];
+    for (index, chunk) in addresses.chunks(20).enumerate() {
         compute_units.push(
             process_legacy(
                 context,
                 extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+                &format!("{label_prefix}: extend lookup table {index}"),
             )
             .await,
         );
@@ -2057,6 +2087,7 @@ async fn submit_v0(
     instruction: Instruction,
     table: Pubkey,
     addresses: &[Pubkey],
+    label: &str,
 ) -> Result<Submission, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
@@ -2073,17 +2104,43 @@ async fn submit_v0(
     );
     let transaction = VersionedTransaction::try_new(message, &[&context.payer, &fixture.actor])
         .expect("signed v0 transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
     let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message.serialize().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
+    let accepted = processed.result.is_ok();
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
     let (compute_units, logs) = processed
         .metadata
         .map(|metadata| (metadata.compute_units_consumed, metadata.log_messages))
         .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
     Ok(Submission {
-        accepted: processed.result.is_ok(),
+        accepted,
         compute_units,
         wire_bytes,
         logs,
@@ -2341,7 +2398,12 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
             obsolete_ata_substitution.clone(),
         ],
     );
-    let (table, lookup_cu) = create_live_lookup_table(&mut context, &addresses).await;
+    let (table, lookup_cu) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: open actions",
+    )
+    .await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -2373,6 +2435,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         obsolete_ata_substitution,
         table,
         &addresses,
+        "claims rational-representation-v2: issue against an obsolete structured ATA",
     )
     .await
     .expect("obsolete ATA substitution transaction");
@@ -2383,9 +2446,16 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         "obsolete ATA substitution must roll back every resource"
     );
 
-    let issued = submit_v0(&mut context, &fixture, issue.clone(), table, &addresses)
-        .await
-        .expect("IssueStructured transaction");
+    let issued = submit_v0(
+        &mut context,
+        &fixture,
+        issue.clone(),
+        table,
+        &addresses,
+        "claims rational-representation-v2: IssueStructured commits",
+    )
+    .await
+    .expect("IssueStructured transaction");
     assert!(issued.accepted, "IssueStructured must commit");
     assert!(
         issued.wire_bytes <= PACKET_LIMIT,
@@ -2427,9 +2497,16 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         assert_eq!(actor + structured, supply, "no hidden shard remainder");
     }
 
-    let unwrapped = submit_v0(&mut context, &fixture, unwrap, table, &addresses)
-        .await
-        .expect("UnwrapStructured transaction");
+    let unwrapped = submit_v0(
+        &mut context,
+        &fixture,
+        unwrap,
+        table,
+        &addresses,
+        "claims rational-representation-v2: UnwrapStructured commits",
+    )
+    .await
+    .expect("UnwrapStructured transaction");
     if !unwrapped.accepted {
         eprintln!(
             "UnwrapStructured refusal logs:\n{}",
@@ -2462,9 +2539,16 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         assert_account_content_eq(actual, expected);
     }
 
-    let denominated = submit_v0(&mut context, &fixture, denominate, table, &addresses)
-        .await
-        .expect("Denominate transaction");
+    let denominated = submit_v0(
+        &mut context,
+        &fixture,
+        denominate,
+        table,
+        &addresses,
+        "claims rational-representation-v2: Denominate commits",
+    )
+    .await
+    .expect("Denominate transaction");
     if !denominated.accepted {
         eprintln!("Denominate refusal logs:\n{}", denominated.logs.join("\n"));
     }
@@ -2485,9 +2569,16 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     assert_eq!(mint_supply(&after_denominate.shard_mints[1]), 80);
     assert_eq!(token_amount(&after_denominate.actor_shards[1]), 31);
 
-    let reconstituted = submit_v0(&mut context, &fixture, reconstitute, table, &addresses)
-        .await
-        .expect("Reconstitute transaction");
+    let reconstituted = submit_v0(
+        &mut context,
+        &fixture,
+        reconstitute,
+        table,
+        &addresses,
+        "claims rational-representation-v2: Reconstitute commits",
+    )
+    .await
+    .expect("Reconstitute transaction");
     if !reconstituted.accepted {
         eprintln!(
             "Reconstitute refusal logs:\n{}",
@@ -2599,7 +2690,12 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         graph_substitution.clone(),
     ];
     let addresses = lookup_addresses(payer, fixture.actor.pubkey(), &instructions);
-    let (table, lookup_cu) = create_live_lookup_table(&mut context, &addresses).await;
+    let (table, lookup_cu) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: terminal",
+    )
+    .await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -2623,9 +2719,16 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         ("same-width descriptor", descriptor_substitution),
         ("same-width graph", graph_substitution),
     ] {
-        let result = submit_v0(&mut context, &fixture, hostile, table, &addresses)
-            .await
-            .expect("hostile substitution transaction");
+        let result = submit_v0(
+            &mut context,
+            &fixture,
+            hostile,
+            table,
+            &addresses,
+            &format!("claims rational-representation-v2: terminal against a {label}"),
+        )
+        .await
+        .expect("hostile substitution transaction");
         assert!(!result.accepted, "{label} substitution must refuse");
         assert_eq!(
             snapshot(&mut context, &fixture).await,
@@ -2634,9 +2737,16 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         );
     }
 
-    let late_result = submit_v0(&mut context, &fixture, late, table, &addresses)
-        .await
-        .expect("late rollback transaction");
+    let late_result = submit_v0(
+        &mut context,
+        &fixture,
+        late,
+        table,
+        &addresses,
+        "claims rational-representation-v2: caller refuses after a complete terminal redemption",
+    )
+    .await
+    .expect("late rollback transaction");
     if !late_result.accepted {
         eprintln!(
             "Terminal late-refusal logs:\n{}",
@@ -2671,9 +2781,16 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         "late refusal must roll back rational replay, Claims, Token-2022, and Custody"
     );
 
-    let accepted = submit_v0(&mut context, &fixture, positive.clone(), table, &addresses)
-        .await
-        .expect("positive terminal transaction");
+    let accepted = submit_v0(
+        &mut context,
+        &fixture,
+        positive.clone(),
+        table,
+        &addresses,
+        "claims rational-representation-v2: winning terminal redemption commits",
+    )
+    .await
+    .expect("positive terminal transaction");
     assert!(accepted.accepted, "terminal composition must commit");
     assert!(
         accepted.wire_bytes <= PACKET_LIMIT,
@@ -2766,12 +2883,24 @@ async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
     );
     let payer = context.payer.pubkey();
     let addresses = lookup_addresses(payer, fixture.actor.pubkey(), std::slice::from_ref(&losing));
-    let (table, lookup_cu) = create_live_lookup_table(&mut context, &addresses).await;
+    let (table, lookup_cu) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: losing terminal",
+    )
+    .await;
     let before = snapshot(&mut context, &fixture).await;
 
-    let accepted = submit_v0(&mut context, &fixture, losing.clone(), table, &addresses)
-        .await
-        .expect("zero-payout terminal transaction");
+    let accepted = submit_v0(
+        &mut context,
+        &fixture,
+        losing.clone(),
+        table,
+        &addresses,
+        "claims rational-representation-v2: losing terminal redemption commits",
+    )
+    .await
+    .expect("zero-payout terminal transaction");
     if !accepted.accepted {
         eprintln!(
             "Zero-payout terminal refusal logs:\n{}",

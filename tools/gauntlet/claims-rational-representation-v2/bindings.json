@@ -1,0 +1,155 @@
+{
+  "campaign": "claims-rational-representation-v2-programtest",
+  "note": "Real-ELF ProgramTest for the canonical Rational Representation V2 waist -- open-market structured issuance/unwrap/denominate/reconstitute plus terminal redemption (blocked.json: 'A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet'). Real Claims, Custody, Registry and Core ELFs plus the genuine, canonically-built Token-2022 v11 runtime, with the Product graph and LiabilityBasisV2 aggregate INSTALLED directly. Campaign: programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs. Every submitted transaction goes through a test-only wrapper that CPIs into Claims, so a refusal Claims itself raises propagates the same numeric code to the wrapper's own top-level failure log -- a failed CPI aborts the whole transaction before the wrapper's Rust code regains control, so that repetition is the runtime's own account of the failure depth, not a second refusal.",
+  "bindings": [
+    {
+      "label": "claims rational-representation-v2: open actions: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: open actions: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: terminal: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: terminal: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: losing terminal: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: losing terminal: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: issue against an obsolete structured ATA",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. IssueStructured names a structured-custody token account that is not the canonical associated token account. Refuses Identity (2); the campaign asserts the whole resource snapshot is byte-identical to its prestate."
+    },
+    {
+      "label": "claims rational-representation-v2: IssueStructured commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Structured issuance: mints the receipt and both shard mints through the real, canonically-built Token-2022 v11 runtime."
+    },
+    {
+      "label": "claims rational-representation-v2: UnwrapStructured commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Unwraps the structured receipt back to its constituent shards, unchanged in aggregate."
+    },
+    {
+      "label": "claims rational-representation-v2: Denominate commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Converts raw shards into the LiabilityBasisV2-denominated Position at the winning outcome."
+    },
+    {
+      "label": "claims rational-representation-v2: Reconstitute commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The exact complement of Denominate: converts the LiabilityBasisV2 Position back into raw shards."
+    },
+    {
+      "label": "claims rational-representation-v2: terminal against a same-width descriptor",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The finalized descriptor raw/staging pair is substituted for another, same-width descriptor. Refuses Identity (2)."
+    },
+    {
+      "label": "claims rational-representation-v2: terminal against a same-width graph",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. The finalized Product graph raw/staging pair is substituted for another, same-width graph. Refuses Identity (2)."
+    },
+    {
+      "label": "claims rational-representation-v2: caller refuses after a complete terminal redemption",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 3,
+        "reason": "The test-only wrapper's DeliberateLateFailure, raised AFTER Claims, Custody and Token-2022 all logged success, to prove the terminal redemption rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+      },
+      "note": "The chain's own logs show `Program <claims> success`, real Custody and real Token-2022 invocations, all inside a transaction that did not commit."
+    },
+    {
+      "label": "claims rational-representation-v2: winning terminal redemption commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The canonical winning terminal: real Custody pays the winning shard's collateral through real Token-2022, and the receipt Mint's supply is conserved."
+    },
+    {
+      "label": "claims rational-representation-v2: losing terminal redemption commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The losing-outcome terminal: raw shards are burned through a real permissioned Token-2022 burn with no Custody payout, and the burned/held remainder is conserved exactly."
+    }
+  ]
+}
