@@ -1571,6 +1571,8 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
@@ -1774,6 +1776,21 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-record-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-registry-activation-auth-v1"
+version = "0.1.0"
+dependencies = [
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
 
 [[package]]
 name = "dclutch-registry-contract"
