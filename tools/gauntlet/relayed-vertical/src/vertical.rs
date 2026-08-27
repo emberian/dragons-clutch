@@ -804,6 +804,25 @@ fn success_walk(
         &submit_config,
         &artifacts.slot_dir,
     )?;
+    // §4.11's publication half, executed: the signed bytes push to a local
+    // static-serve directory a verifier can poll. Serving it publicly stays
+    // the separately authorized act.
+    let public_dir = request.work.join("public");
+    let publish_stdout =
+        daemon::publish_log(&request.relayer_bin, &request.work, &dry_config, &public_dir)?;
+    let latest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(public_dir.join("LATEST.json"))?)?;
+    let published_lines = latest
+        .get("lines")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if published_lines < 5 {
+        return Err(Error::new(format!(
+            "the publication push carries {published_lines} lines; four attestations and one              seal were signed, so at least five must be public"
+        )));
+    }
+    let _ = publish_stdout;
+
     let record_view_bytes = session
         .rpc
         .required_account(record, "observation record")?
@@ -906,6 +925,7 @@ fn success_walk(
         "certificate": book.certificate_of(RESOLUTION_SUCCESS_KIND).to_string(),
         "certificate_selector": certificate.selector,
         "failure_selector": domain.failure_selector(),
+        "publication_lines": published_lines,
     }))
 }
 

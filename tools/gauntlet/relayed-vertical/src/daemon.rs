@@ -194,6 +194,28 @@ pub(crate) fn observe_dry_run(
     })
 }
 
+/// Push the publication log to a local static-serve directory (§4.11's file
+/// target): append-only or nothing, with LATEST.json for a polling verifier.
+pub(crate) fn publish_log(
+    relayer_bin: &Path,
+    work: &Path,
+    config: &DaemonConfigV1,
+    to: &Path,
+) -> Result<String> {
+    run_relayer(
+        relayer_bin,
+        work,
+        "publish-log",
+        &[
+            "publish-log".into(),
+            "--config".into(),
+            config.path.display().to_string(),
+            "--to".into(),
+            to.display().to_string(),
+        ],
+    )
+}
+
 /// Submit the recorded observation: append x set-count, then seal.
 pub(crate) fn submit_artifacts(
     relayer_bin: &Path,
