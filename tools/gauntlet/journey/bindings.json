@@ -34,8 +34,8 @@
       "program": "core",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 0,
-        "reason": "PLACEHOLDER \u2014 replaced from the first green run's logs"
+        "code": 32782,
+        "reason": "Raised by the RESOLUTION program as ResolutionError::Funding (0x800E) and propagated verbatim through the Core effect that invoked it, so the code is credited here to no single census program rather than to the Core route the transaction names. The guard is `new_funding` in core_effect.rs: a Fund's ADDRESS is derived from its own FundingStateV1, which carries the custody observation, which carries the exact lamports -- so an over-funded Fund is not a mis-funded Fund, it is A DIFFERENT ACCOUNT, and `find_program_address(derivation.seed_components())` does not equal the account supplied. That is why over-funding refuses as hard as under-funding: there is no category for a donation because there is no address for one."
       },
       "note": "HOSTILE. A Fund's lamports must equal rent plus EXACTLY the native principal its own manifest entry quotes, and both directions matter: over-funding is not a donation a prepaid compartment may keep. The refusal must also roll the extra lamport back with it, or the Fund becomes permanently unfundable and the refusal is worse than useless \u2014 the campaign re-derives the creation report afterwards and refuses to continue if any top-up is nonzero."
     },
@@ -62,8 +62,8 @@
       "program": "core",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 0,
-        "reason": "PLACEHOLDER \u2014 replaced from the first green run's logs"
+        "code": 32770,
+        "reason": "Raised by the RESOLUTION program as ResolutionError::OutputState (0x8002) and propagated verbatim through the Core effect, so it is credited to no single census program rather than to the Core route the transaction names. The guard is `require_prepaid_output` in core_effect.rs, which admits only a System-owned, zero-length, writable, rent-covered account. After the first creation the Source PDA is Resolution-owned and carries state, so it fails the owner and the length test at once. One Source per Market generation, enforced by the shape of the account rather than by a flag anyone has to remember to set."
       },
       "note": "HOSTILE. The Source PDA is one per Market generation and the prepaid-output rule admits only a System-owned, empty account, so a second creation cannot overwrite the first. Submitted as the byte-identical frame that had just succeeded, which is the only version of this test that proves the guard rather than proving that two different frames differ."
     },
