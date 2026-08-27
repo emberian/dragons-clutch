@@ -223,7 +223,8 @@
     {
       "label": "DCLTPCB1 refuses a non-terminal projected-Custody request",
       "routes": [
-        "trading/entrypoint"
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction"
       ],
       "program": "trading",
       "outcome": "refused",
@@ -233,7 +234,8 @@
     {
       "label": "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
       "routes": [
-        "trading/entrypoint"
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction"
       ],
       "program": "trading",
       "outcome": "refused",
@@ -243,7 +245,8 @@
     {
       "label": "create the projected-Custody founding prestate (DCLTPCB1)",
       "routes": [
-        "trading/entrypoint",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/process_instruction",
         "custody/process_instruction",
         "custody/projected::process",
         "custody/initialize#Initialize",
@@ -268,7 +271,8 @@
     {
       "label": "DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back",
       "routes": [
-        "trading/entrypoint"
+        "trading/generic_market_founding_v1::process_generic_market_founding_v1",
+        "trading/process_instruction"
       ],
       "program": "trading",
       "outcome": "refused",
@@ -278,7 +282,8 @@
     {
       "label": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
       "routes": [
-        "trading/entrypoint",
+        "trading/generic_market_founding_v1::process_generic_market_founding_v1",
+        "trading/process_instruction",
         "custody/process_instruction",
         "custody/projected::process",
         "custody/lock_hoard_and_close_source#LockHoardAndCloseSource",
