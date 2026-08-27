@@ -265,3 +265,16 @@ question with a recommended answer, not an inventory row.
   the daemon must build v0/ALT for those two when it goes live. The failure
   walk deliberately stays legacy-fitting (991 B) — it must never depend on an
   ALT a silent operator never published.
+
+## Next-dispatch queue (at W2k's yield)
+
+- GEN-ART: public encode modules for the three artifact generations
+  (AccountProfileV1 / transition ProgramV2 / EffectProgramV2) in their owning
+  crates (effect-kernel shared with W2k — hence queued, not parallel), then
+  General's own activation artifacts from GEN-V3ACT-r's board design, then the
+  zombie refusal EXECUTED through the real runtime path (reachable as a
+  refusal even before phase-8 success). build_general_hot_instruction_v3
+  finally gets its caller.
+- Small batch: core-sbf tests.rs:141 packet claim (13 accounts narrow);
+  resume-validator.sh unsupervised exec; family runners' shared ledger.json
+  defaults; --keep-elf stale diagnostics re-stamp.
