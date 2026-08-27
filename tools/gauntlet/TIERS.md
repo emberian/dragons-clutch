@@ -217,3 +217,13 @@ tools/gauntlet/run.sh --from campaign
 
 On hbox, `run.sh` routes every build through `swarm-build` automatically when it
 is on `PATH`. hbox is co-tenant with codex's HOL build; keep waves small.
+
+`--mode full` is a **single global slot per machine**: the successor launcher is
+pinned to `127.0.0.1:20890` and refuses to start while anything else listens
+there, whatever `--work` root you pass. Coordinate on the wave board before a
+full run, and never kill a `solana-test-validator` whose `--ledger` is not under
+your own `--work` root. `--mode census` needs no port and may run concurrently.
+
+And never edit `run.sh` while a run is in flight — bash reads a script
+incrementally by byte offset, so a mid-run edit makes it re-execute or skip a
+block.

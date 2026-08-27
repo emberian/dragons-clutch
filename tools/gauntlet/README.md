@@ -41,6 +41,29 @@ working tree.
 | `runs/<stamp>/ledger/` | the validator ledger, kept as evidence |
 | `elf/*.so` | the seven SBF artifacts under test, digest-pinned |
 
+## One run at a time, machine-wide
+
+The successor launcher is pinned to the exact RPC origin `http://127.0.0.1:20890/`
+and refuses to start while anything else listens there. That makes a full
+gauntlet run a **single global slot on the machine**: two lanes cannot run
+`--mode full` concurrently, whatever `--work` roots they pass.
+
+`run.sh` preflights the port and refuses with
+
+    gauntlet: 127.0.0.1:20890 is occupied; the successor launcher is pinned to that origin
+
+rather than letting the launcher time out sixty seconds later. If you see it,
+another lane is mid-campaign — check the wave board before killing anything, and
+never kill a `solana-test-validator` whose `--ledger` is not under your own
+`--work` root.
+
+`--mode census` needs no chain and no port; run it freely and concurrently.
+
+A corollary that cost this lane an hour: **never edit `run.sh` while a run is in
+flight.** Bash reads a script incrementally by byte offset, so an edit mid-run
+shifts what it reads next and it will re-execute or skip a block. Wait for the
+run, or copy the tree.
+
 ## Ownership
 
 The gauntlet owns `tools/gauntlet/**` and nothing else. It is read-only toward
