@@ -26,6 +26,15 @@ usage: tools/gauntlet/run.sh [options]
                    campaign|census  (later stages always re-run)
   --keep-runs      keep previous campaign run directories (default: keep the
                    last three)
+  --record-publication MODE
+                   genesis | transaction  (default: genesis)
+                     genesis      the nine infrastructure record bodies are
+                                  injected as finalized account fixtures
+                     transaction  they are NOT at genesis; the campaign
+                                  publishes each through Registry
+                                  Begin/Append/Finalize. This is the only
+                                  shape a real cluster can reach, so it is
+                                  the devnet rehearsal.
   --allow-stale-fixture-pins
                    run even though the committed Pyth fixture pin list does not
                    verify, recording the exact drift in the run directory. Off
@@ -53,6 +62,7 @@ MODE="full"
 FROM=""
 KEEP_RUNS="false"
 ALLOW_STALE_PINS="false"
+RECORD_PUBLICATION="genesis"
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
@@ -62,6 +72,7 @@ while [ "$#" -gt 0 ]; do
         --from) FROM="${2:?--from needs a value}"; shift 2 ;;
         --keep-runs) KEEP_RUNS="true"; shift ;;
         --allow-stale-fixture-pins) ALLOW_STALE_PINS="true"; shift ;;
+        --record-publication) RECORD_PUBLICATION="${2:?--record-publication needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -72,6 +83,7 @@ if [ -z "$REPO" ]; then
 fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
 case "$MODE" in census|full) ;; *) echo "--mode must be census or full" >&2; exit 2 ;; esac
+case "$RECORD_PUBLICATION" in genesis|transaction) ;; *) echo "--record-publication must be genesis or transaction" >&2; exit 2 ;; esac
 
 GAUNTLET="$REPO/tools/gauntlet"
 SOURCE="$WORK/source"
@@ -268,7 +280,8 @@ if [ "$MODE" = "full" ]; then
     # Deliberately NOT keyed on the bindings file: authoring a binding must
     # never cost a 13-minute campaign re-run. Bindings are consumed by the
     # census stage, which is cheap and always re-runs.
-    SPEC_INPUT_DIGEST="$(printf '%s\n%s\n' "$SOURCE_REVISION" "$ELF_DIGESTS" | sha256_stdin)"
+    SPEC_INPUT_DIGEST="$(printf '%s\n%s\n%s\n' \
+        "$SOURCE_REVISION" "$ELF_DIGESTS" "$RECORD_PUBLICATION" | sha256_stdin)"
 
     if stage_needed campaign "$SPEC_INPUT_DIGEST"; then
         say "stage campaign (tier 1)"
@@ -419,6 +432,7 @@ PY
                 printf '    "attestation": "%s"\n' "$RUN/attestation/$role.json"
                 printf '  },\n'
             done
+            printf '  "record_publication": "%s",\n' "$RECORD_PUBLICATION"
             printf '  "market": '
             cat "$RUN/market.json"
             printf '\n}\n'
@@ -426,6 +440,7 @@ PY
         jq . "$SPEC.raw" > "$SPEC" || die "assembled run spec is not valid JSON"
 
         say "campaign: submitting real transactions to a fresh localhost ledger"
+        echo "record publication: $RECORD_PUBLICATION"
         echo "run directory: $RUN"
         if ! "$BOOTSTRAP_BIN" run --spec "$SPEC" > "$RUN/campaign.stdout" 2> "$RUN/campaign.stderr"; then
             tail -n 60 "$RUN/campaign.stderr" >&2
