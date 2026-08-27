@@ -7,15 +7,20 @@ publish = false
 # This crate is deliberately its own workspace: adding it to the protocol
 # workspace is a separate integration decision.
 [workspace]
+# The test-only caller programs declare their own workspaces (5c663da's
+# precedent for nested program-test harnesses); excluding them lets this
+# harness take one as a path dependency, which is what lets a campaign name
+# the caller's refusal instead of typing its number.
+exclude = ["test-programs/resolution-receipt-caller"]
 
 [dev-dependencies]
+dclutch-resolution-proof-sbf = { path = "../../programs/dclutch-resolution-proof-sbf", features = ["no-entrypoint"] }
+dclutch-resolution-receipt-test-caller-sbf = { path = "test-programs/resolution-receipt-caller", features = ["no-entrypoint"] }
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
-dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
-dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
 dclutch-market-open-v1-operator = { path = "../dclutch-market-open-v1-operator" }
 dclutch-market-retirement-v1-operator = { path = "../dclutch-market-retirement-v1-operator" }

@@ -7,19 +7,28 @@
 //!
 //! This crate deliberately owns no hashing or SVM account policy. An adapter
 //! computes a Realm content identity from [`RealmV1::to_bytes`], derives the
-//! Realm account from [`REALM_PDA_DOMAIN`] plus that identity, and derives a
-//! Position account from [`POSITION_PDA_DOMAIN`] plus the exact Market and
-//! owner seed components exposed by [`PositionV1`]. Token programs, mint
-//! accounts, transfers, rent, and account ownership remain adapter concerns.
+//! Realm account from [`REALM_PDA_DOMAIN`] plus that identity. Token programs,
+//! mint accounts, transfers, rent, and account ownership remain adapter
+//! concerns.
+//!
+//! The compact native `PositionV1` was banished with the DCLTCAT1 stratum; its
+//! only consumers were `dclutch-direct-contract` and the browser fixture
+//! generator, both deleted in that series. `generated_abi` still carries its
+//! Lean-emitted coordinates, because the same Lean schema drives the browser,
+//! where `POSITION_PDA_DOMAIN_V1` remains live for a DIFFERENT PDA family --
+//! the Direct controller's `[domain, market, maker, outcome]` positions. Two
+//! families share the domain string; only one of them has an account type
+//! here.
 
 use core::convert::TryInto;
 
-/// Lean-emitted byte coordinates for `RealmV1` and `PositionV1`.
+/// Lean-emitted byte coordinates for `RealmV1` and the retired `PositionV1`.
 ///
-/// This module is the crate's single authority for every Realm and Position
-/// width, offset, magic and seed domain; the constants below are projections
-/// of it. Some coordinates this crate does not itself read are still emitted,
-/// because the same Lean schema also drives the browser's decoder.
+/// This module is the crate's single authority for every Realm width, offset,
+/// magic and seed domain; the constants below are projections of it. It also
+/// emits the Position coordinates, which this crate no longer reads at all
+/// after the DCLTCAT1 burial, because the same Lean schema drives the
+/// browser's decoder and the Direct controller's Position seed domain.
 #[allow(missing_docs, dead_code)]
 mod generated_abi;
 mod realm_layout;
@@ -28,17 +37,6 @@ pub use realm_layout::RealmLayoutV1;
 
 /// Exact byte width of one immutable [`RealmV1`] record.
 pub const REALM_BYTES: usize = generated_abi::REALM_BYTES_V1;
-/// Fixed Position bytes before its `N` eight-byte outcome balances.
-pub const POSITION_BASE_BYTES: usize = generated_abi::POSITION_BASE_BYTES_V1;
-/// Exact byte width of a two-outcome Position.
-pub const BINARY_POSITION_BYTES: usize = generated_abi::BINARY_POSITION_BYTES_V1;
-/// Exact byte width of a sixteen-outcome Position.
-pub const MAX_POSITION_BYTES: usize = generated_abi::MAX_POSITION_BYTES_V1;
-/// Minimum categorical width represented by this measured profile.
-pub const MIN_OUTCOMES: usize = generated_abi::MIN_OUTCOMES_V1;
-/// Maximum categorical width in this provisional measured profile.
-pub const MAX_OUTCOMES: usize = generated_abi::MAX_OUTCOMES_V1;
-
 /// Canonical Realm account magic.
 pub const REALM_MAGIC: [u8; 8] = generated_abi::REALM_MAGIC_V1;
 /// Implemented Realm schema version.
@@ -53,13 +51,6 @@ pub const REALM_SCHEMA_RELEASE_ID_V1: [u8; 32] = [
 /// Domain seed preceding a Realm content identity in its SVM PDA derivation.
 pub const REALM_PDA_DOMAIN: &[u8] = generated_abi::REALM_PDA_DOMAIN_V1;
 
-/// Canonical native Position account magic.
-pub const POSITION_MAGIC: [u8; 8] = generated_abi::POSITION_MAGIC_V1;
-/// Implemented Position schema version.
-pub const POSITION_SCHEMA_VERSION: u16 = generated_abi::POSITION_SCHEMA_VERSION_V1;
-/// Domain seed preceding Market and owner keys in a Position PDA derivation.
-pub const POSITION_PDA_DOMAIN: &[u8] = generated_abi::POSITION_PDA_DOMAIN_V1;
-
 const REALM_MINT_AUTHORITY_POLICY_OFFSET: usize =
     generated_abi::REALM_MINT_AUTHORITY_POLICY_OFFSET_V1;
 const REALM_FREEZE_AUTHORITY_POLICY_OFFSET: usize =
@@ -70,15 +61,7 @@ const REALM_TOKEN_PROGRAM_OFFSET: usize = generated_abi::REALM_TOKEN_PROGRAM_OFF
 const REALM_COLLATERAL_MINT_OFFSET: usize = generated_abi::REALM_COLLATERAL_MINT_OFFSET_V1;
 const REALM_ADAPTER_RELEASE_ID_OFFSET: usize = generated_abi::REALM_ADAPTER_RELEASE_ID_OFFSET_V1;
 
-const POSITION_OUTCOME_COUNT_OFFSET: usize = generated_abi::POSITION_OUTCOME_COUNT_OFFSET_V1;
-const POSITION_RESERVED_OFFSET: usize = generated_abi::POSITION_RESERVED_OFFSET_V1;
-const POSITION_RESERVED_BYTES: usize = generated_abi::POSITION_RESERVED_BYTES_V1;
-const POSITION_MARKET_OFFSET: usize = generated_abi::POSITION_MARKET_OFFSET_V1;
-const POSITION_OWNER_OFFSET: usize = generated_abi::POSITION_OWNER_OFFSET_V1;
-const POSITION_GENERATION_OFFSET: usize = generated_abi::POSITION_GENERATION_OFFSET_V1;
-const POSITION_BALANCES_OFFSET: usize = generated_abi::POSITION_BASE_BYTES_V1;
-
-/// Explicit refusal returned by a Realm or Position contract.
+/// Explicit refusal returned by a Realm contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     /// An input or account did not have its one exact canonical width.
@@ -95,18 +78,6 @@ pub enum Error {
     UnknownAuthorityPolicy,
     /// A required program, mint, release, Market, or owner was zero.
     ZeroIdentifier,
-    /// A categorical outcome width was outside the measured profile.
-    InvalidOutcomeCount,
-    /// A quantity that must move claims was zero.
-    ZeroQuantity,
-    /// An outcome index was outside the active Position width.
-    InvalidOutcome,
-    /// Crediting a Position would exceed the exact integer domain.
-    ArithmeticOverflow,
-    /// Debiting a Position would exceed an owned outcome balance.
-    InsufficientBalance,
-    /// An operation requiring an empty Position observed a nonzero balance.
-    NonemptyPosition,
 }
 
 /// Result alias for this contract crate.
@@ -303,221 +274,9 @@ impl RealmV1 {
     }
 }
 
-/// Compact owned native-claim balances for one Market participant.
-///
-/// The SVM Position PDA seed tuple is exactly
-/// `POSITION_PDA_DOMAIN`, [`Self::market`], and [`Self::owner`], in that order.
-/// This type deliberately does not derive an SVM address or depend on Solana.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PositionV1<const N: usize> {
-    market: [u8; 32],
-    owner: [u8; 32],
-    generation: u64,
-    balances: [u64; N],
-}
-
-impl<const N: usize> PositionV1<N> {
-    /// Construct one validated Position from exact owned balances.
-    pub fn new(
-        market: [u8; 32],
-        owner: [u8; 32],
-        generation: u64,
-        balances: [u64; N],
-    ) -> Result<Self> {
-        validate_outcome_count(N)?;
-        require_nonzero(&market)?;
-        require_nonzero(&owner)?;
-        Ok(Self {
-            market,
-            owner,
-            generation,
-            balances,
-        })
-    }
-
-    /// Construct an empty Position for one Market generation and owner.
-    pub fn empty(market: [u8; 32], owner: [u8; 32], generation: u64) -> Result<Self> {
-        Self::new(market, owner, generation, [0; N])
-    }
-
-    /// Return the exact checked encoded length for this Position width.
-    pub fn encoded_len() -> Result<usize> {
-        validate_outcome_count(N)?;
-        N.checked_mul(8)
-            .and_then(|balances| POSITION_BASE_BYTES.checked_add(balances))
-            .ok_or(Error::InvalidLength)
-    }
-
-    /// Decode one exact canonical Position account.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        let expected = Self::encoded_len()?;
-        if bytes.len() != expected {
-            return Err(Error::InvalidLength);
-        }
-        if read_array::<8>(bytes, 0)? != POSITION_MAGIC {
-            return Err(Error::InvalidMagic);
-        }
-        if u16::from_le_bytes(read_array(bytes, 8)?) != POSITION_SCHEMA_VERSION {
-            return Err(Error::UnsupportedSchema);
-        }
-        if usize::from(read_byte(bytes, POSITION_OUTCOME_COUNT_OFFSET)?) != N {
-            return Err(Error::InvalidOutcomeCount);
-        }
-        require_zero(bytes, POSITION_RESERVED_OFFSET, POSITION_RESERVED_BYTES)?;
-
-        let mut balances = [0; N];
-        let mut index = 0usize;
-        while index < N {
-            let offset = POSITION_BALANCES_OFFSET + index * 8;
-            let destination = balances.get_mut(index).ok_or(Error::InvalidOutcome)?;
-            *destination = u64::from_le_bytes(read_array(bytes, offset)?);
-            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
-        }
-        Self::new(
-            read_array(bytes, POSITION_MARKET_OFFSET)?,
-            read_array(bytes, POSITION_OWNER_OFFSET)?,
-            u64::from_le_bytes(read_array(bytes, POSITION_GENERATION_OFFSET)?),
-            balances,
-        )
-    }
-
-    /// Encode into this width's exact caller-owned account buffer.
-    ///
-    /// Every refusal occurs before mutation, leaving `output` unchanged.
-    pub fn encode(&self, output: &mut [u8]) -> Result<()> {
-        let expected = Self::encoded_len()?;
-        if output.len() != expected {
-            return Err(Error::OutputLength);
-        }
-        require_nonzero(&self.market)?;
-        require_nonzero(&self.owner)?;
-        let count = u8::try_from(N).map_err(|_| Error::InvalidOutcomeCount)?;
-
-        output.fill(0);
-        put(output, 0, &POSITION_MAGIC);
-        put(output, 8, &POSITION_SCHEMA_VERSION.to_le_bytes());
-        put(output, POSITION_OUTCOME_COUNT_OFFSET, &[count]);
-        put(output, POSITION_MARKET_OFFSET, &self.market);
-        put(output, POSITION_OWNER_OFFSET, &self.owner);
-        put(
-            output,
-            POSITION_GENERATION_OFFSET,
-            &self.generation.to_le_bytes(),
-        );
-        for (index, balance) in self.balances.iter().enumerate() {
-            let offset = POSITION_BALANCES_OFFSET + index * 8;
-            put(output, offset, &balance.to_le_bytes());
-        }
-        Ok(())
-    }
-
-    /// Credit every outcome by one nonzero complete-set quantity atomically.
-    pub fn credit_complete_set(&mut self, quantity: u64) -> Result<()> {
-        require_nonzero_quantity(quantity)?;
-        let mut next = self.balances;
-        for balance in &mut next {
-            *balance = balance
-                .checked_add(quantity)
-                .ok_or(Error::ArithmeticOverflow)?;
-        }
-        self.balances = next;
-        Ok(())
-    }
-
-    /// Debit every outcome by one nonzero complete-set quantity atomically.
-    pub fn debit_complete_set(&mut self, quantity: u64) -> Result<()> {
-        require_nonzero_quantity(quantity)?;
-        let mut next = self.balances;
-        for balance in &mut next {
-            *balance = balance
-                .checked_sub(quantity)
-                .ok_or(Error::InsufficientBalance)?;
-        }
-        self.balances = next;
-        Ok(())
-    }
-
-    /// Credit one selected outcome by a nonzero quantity atomically.
-    pub fn credit_outcome(&mut self, outcome: usize, quantity: u64) -> Result<()> {
-        require_nonzero_quantity(quantity)?;
-        let mut next = self.balances;
-        let selected = next.get_mut(outcome).ok_or(Error::InvalidOutcome)?;
-        *selected = selected
-            .checked_add(quantity)
-            .ok_or(Error::ArithmeticOverflow)?;
-        self.balances = next;
-        Ok(())
-    }
-
-    /// Debit one selected outcome by a nonzero quantity atomically.
-    pub fn debit_outcome(&mut self, outcome: usize, quantity: u64) -> Result<()> {
-        require_nonzero_quantity(quantity)?;
-        let mut next = self.balances;
-        let selected = next.get_mut(outcome).ok_or(Error::InvalidOutcome)?;
-        *selected = selected
-            .checked_sub(quantity)
-            .ok_or(Error::InsufficientBalance)?;
-        self.balances = next;
-        Ok(())
-    }
-
-    /// Require every owned outcome balance to be exactly zero.
-    pub fn require_empty(&self) -> Result<()> {
-        if self.is_empty() {
-            Ok(())
-        } else {
-            Err(Error::NonemptyPosition)
-        }
-    }
-
-    /// Return whether every owned outcome balance is exactly zero.
-    pub fn is_empty(&self) -> bool {
-        self.balances.iter().all(|balance| *balance == 0)
-    }
-
-    /// Return the exact Market public-key bytes and second Position PDA seed.
-    pub const fn market(&self) -> &[u8; 32] {
-        &self.market
-    }
-
-    /// Return the exact owner public-key bytes and third Position PDA seed.
-    pub const fn owner(&self) -> &[u8; 32] {
-        &self.owner
-    }
-
-    /// Return the immutable Market generation.
-    pub const fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// Borrow the exact ordered owned outcome balances.
-    pub const fn balances(&self) -> &[u64; N] {
-        &self.balances
-    }
-
-    /// Consume the Position and return its exact validated composition parts.
-    pub const fn into_parts(self) -> ([u8; 32], [u8; 32], u64, [u64; N]) {
-        (self.market, self.owner, self.generation, self.balances)
-    }
-}
-
-fn validate_outcome_count(count: usize) -> Result<()> {
-    if !(MIN_OUTCOMES..=MAX_OUTCOMES).contains(&count) {
-        return Err(Error::InvalidOutcomeCount);
-    }
-    Ok(())
-}
-
 fn require_nonzero(identifier: &[u8; 32]) -> Result<()> {
     if identifier.iter().all(|byte| *byte == 0) {
         return Err(Error::ZeroIdentifier);
-    }
-    Ok(())
-}
-
-const fn require_nonzero_quantity(quantity: u64) -> Result<()> {
-    if quantity == 0 {
-        return Err(Error::ZeroQuantity);
     }
     Ok(())
 }
@@ -570,10 +329,6 @@ mod tests {
             mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
             freeze_authority_policy: FreezeAuthorityPolicy::AdmitIssuerControl,
         })
-    }
-
-    fn position<const N: usize>(balances: [u64; N]) -> Result<PositionV1<N>> {
-        PositionV1::new(id(5), id(6), 0x0807_0605_0403_0201, balances)
     }
 
     #[test]
@@ -656,162 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn position_exact_binary_and_maximum_layouts_round_trip() -> Result<()> {
-        assert_eq!(PositionV1::<2>::encoded_len(), Ok(BINARY_POSITION_BYTES));
-        assert_eq!(PositionV1::<16>::encoded_len(), Ok(MAX_POSITION_BYTES));
-
-        let binary = position([9, 8])?;
-        let mut binary_bytes = [0; BINARY_POSITION_BYTES];
-        binary.encode(&mut binary_bytes)?;
-        assert_eq!(binary_bytes.get(0..8), Some(&POSITION_MAGIC[..]));
-        assert_eq!(binary_bytes.get(8..10), Some(&1_u16.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(10), Some(&2));
-        assert_eq!(binary_bytes.get(11..16), Some(&[0; 5][..]));
-        assert_eq!(binary_bytes.get(16..48), Some(&id(5)[..]));
-        assert_eq!(binary_bytes.get(48..80), Some(&id(6)[..]));
-        assert_eq!(
-            binary_bytes.get(80..88),
-            Some(&0x0807_0605_0403_0201_u64.to_le_bytes()[..])
-        );
-        assert_eq!(binary_bytes.get(88..96), Some(&9_u64.to_le_bytes()[..]));
-        assert_eq!(binary_bytes.get(96..104), Some(&8_u64.to_le_bytes()[..]));
-        assert_eq!(PositionV1::<2>::decode(&binary_bytes), Ok(binary));
-
-        let maximum = position([7; 16])?;
-        let mut maximum_bytes = [0; MAX_POSITION_BYTES];
-        maximum.encode(&mut maximum_bytes)?;
-        assert_eq!(PositionV1::<16>::decode(&maximum_bytes), Ok(maximum));
-        assert_eq!(maximum_bytes.get(208..216), Some(&7_u64.to_le_bytes()[..]));
-        assert_eq!(maximum.market(), &id(5));
-        assert_eq!(maximum.owner(), &id(6));
-        Ok(())
-    }
-
-    #[test]
-    fn hostile_position_lengths_headers_count_reserved_and_ids_refuse() -> Result<()> {
-        let value = position([1, 2, 3])?;
-        let mut canonical = [0; POSITION_BASE_BYTES + 3 * 8];
-        value.encode(&mut canonical)?;
-        for length in 0..canonical.len() {
-            let short = canonical.get(..length).ok_or(Error::InvalidLength)?;
-            assert_eq!(PositionV1::<3>::decode(short), Err(Error::InvalidLength));
-        }
-        let mut long = [0; POSITION_BASE_BYTES + 3 * 8 + 1];
-        put(&mut long, 0, &canonical);
-        assert_eq!(PositionV1::<3>::decode(&long), Err(Error::InvalidLength));
-
-        let mut changed = canonical;
-        *changed.get_mut(0).ok_or(Error::InvalidLength)? ^= 1;
-        assert_eq!(PositionV1::<3>::decode(&changed), Err(Error::InvalidMagic));
-        let mut changed = canonical;
-        put(&mut changed, 8, &2_u16.to_le_bytes());
-        assert_eq!(
-            PositionV1::<3>::decode(&changed),
-            Err(Error::UnsupportedSchema)
-        );
-        let mut changed = canonical;
-        *changed.get_mut(10).ok_or(Error::InvalidLength)? = 2;
-        assert_eq!(
-            PositionV1::<3>::decode(&changed),
-            Err(Error::InvalidOutcomeCount)
-        );
-        let mut changed = canonical;
-        *changed.get_mut(11).ok_or(Error::InvalidLength)? = 1;
-        assert_eq!(
-            PositionV1::<3>::decode(&changed),
-            Err(Error::NonCanonicalReservedBytes)
-        );
-        for offset in [16, 48] {
-            let mut zero = canonical;
-            zero.get_mut(offset..offset + 32)
-                .ok_or(Error::InvalidLength)?
-                .fill(0);
-            assert_eq!(PositionV1::<3>::decode(&zero), Err(Error::ZeroIdentifier));
-        }
-        assert_eq!(
-            PositionV1::<1>::encoded_len(),
-            Err(Error::InvalidOutcomeCount)
-        );
-        assert_eq!(
-            PositionV1::<17>::encoded_len(),
-            Err(Error::InvalidOutcomeCount)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn position_output_length_refusal_is_atomic() -> Result<()> {
-        let value = position([1, 2])?;
-        let before = [0x5a; BINARY_POSITION_BYTES - 1];
-        let mut output = before;
-        assert_eq!(value.encode(&mut output), Err(Error::OutputLength));
-        assert_eq!(output, before);
-        Ok(())
-    }
-
-    #[test]
-    fn complete_set_and_outcome_transitions_are_exact() -> Result<()> {
-        let mut value = PositionV1::<3>::empty(id(1), id(2), 9)?;
-        assert!(value.is_empty());
-        assert_eq!(value.require_empty(), Ok(()));
-        value.credit_complete_set(10)?;
-        assert_eq!(value.balances(), &[10, 10, 10]);
-        value.credit_outcome(1, 3)?;
-        assert_eq!(value.balances(), &[10, 13, 10]);
-        value.debit_outcome(1, 3)?;
-        value.debit_complete_set(10)?;
-        assert!(value.is_empty());
-        assert_eq!(value.into_parts(), (id(1), id(2), 9, [0, 0, 0]));
-        Ok(())
-    }
-
-    #[test]
-    fn position_zero_invalid_index_overflow_and_underflow_are_atomic() -> Result<()> {
-        let mut value = position([4, 5, 6])?;
-        for refusal in [
-            value.credit_complete_set(0),
-            value.debit_complete_set(0),
-            value.credit_outcome(0, 0),
-            value.debit_outcome(0, 0),
-        ] {
-            assert_eq!(refusal, Err(Error::ZeroQuantity));
-        }
-        assert_eq!(value.balances(), &[4, 5, 6]);
-
-        let before = value;
-        assert_eq!(value.credit_outcome(3, 1), Err(Error::InvalidOutcome));
-        assert_eq!(value, before);
-        assert_eq!(value.debit_outcome(3, 1), Err(Error::InvalidOutcome));
-        assert_eq!(value, before);
-        assert_eq!(value.debit_complete_set(5), Err(Error::InsufficientBalance));
-        assert_eq!(value, before);
-        assert_eq!(value.debit_outcome(0, 5), Err(Error::InsufficientBalance));
-        assert_eq!(value, before);
-
-        let mut complete_overflow = position([u64::MAX, 0])?;
-        let before = complete_overflow;
-        assert_eq!(
-            complete_overflow.credit_complete_set(1),
-            Err(Error::ArithmeticOverflow)
-        );
-        assert_eq!(complete_overflow, before);
-        let mut outcome_overflow = position([0, u64::MAX])?;
-        let before = outcome_overflow;
-        assert_eq!(
-            outcome_overflow.credit_outcome(1, 1),
-            Err(Error::ArithmeticOverflow)
-        );
-        assert_eq!(outcome_overflow, before);
-        assert_eq!(value.require_empty(), Err(Error::NonemptyPosition));
-        Ok(())
-    }
-
-    #[test]
     fn pda_seed_components_are_owned_canonical_facts() -> Result<()> {
-        let value = PositionV1::<2>::empty(id(7), id(8), 11)?;
-        assert_eq!(POSITION_PDA_DOMAIN, b"dclutch/position/v1");
-        assert_eq!(value.market(), &id(7));
-        assert_eq!(value.owner(), &id(8));
         assert_eq!(REALM_PDA_DOMAIN, b"dclutch/realm/v1");
         Ok(())
     }
