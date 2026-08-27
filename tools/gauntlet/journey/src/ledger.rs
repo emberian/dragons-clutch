@@ -271,6 +271,16 @@ impl ConservationLedgerV1 {
             };
             let view = LiabilityBasisPositionViewV2::decode(&account.data)
                 .map_err(|error| Error::new(format!("{label} Position: {error:?}")))?;
+            // A Position narrower or wider than the aggregate would make L3 sum
+            // over a partial vector and still balance. Refuse instead: the law
+            // is only meaningful over one common outcome width.
+            if view.claim_count != outcome_count {
+                return Err(Error::new(format!(
+                    "{label} carries {} outcomes and the Claims aggregate owes over {outcome_count}; \
+                     a conservation law cannot be evaluated across two widths",
+                    view.claim_count
+                )));
+            }
             let mut balances = Vec::with_capacity(view.claim_count as usize);
             for index in 0..view.claim_count {
                 let balance = view
