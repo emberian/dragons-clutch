@@ -169,6 +169,15 @@ if [ "$REUSE_ELF" = 1 ] && [ "$ALL_ELVES_PRESENT" = 1 ]; then
     # sibling lane's mid-edit crate should not stop a campaign whose own
     # protocol inputs are already inside these artifacts. The transcript's
     # worktree caveat covers this too: not release evidence.
+    #
+    # The attestation binds each ELF's BUILD LOG digest, so reuse only works
+    # in a work root that also holds the logs; copying elf/*.so into a fresh
+    # root produces an empty build_log_sha256 and the successor validator
+    # refuses it with a message that names none of this. Refuse here, by name.
+    for entry in $ROLES; do
+        role="${entry%%:*}"
+        [ -f "$LOGS/build-$role.log" ] || die "--reuse-elf: $LOGS/build-$role.log is missing; the attestation binds the build log, so reuse the ORIGINAL work root that built these ELFs (or run without --reuse-elf and build here)"
+    done
     say "stage elf: REUSED WITHOUT A DIGEST CHECK (--reuse-elf, development only)"
 elif [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$ELF_INPUT_DIGEST" ]; then
     say "stage elf"
