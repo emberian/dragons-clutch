@@ -1,5 +1,5 @@
 //! Executable evidence for the `RelayedMainnetStateV1` observation-record
-//! transport, against the real compiled dClutch SBF ELF.
+//! transport, against the real compiled Resolution SBF ELF.
 //!
 //! **What this is, said at the exact resolution it holds.** A `ProgramTest`
 //! bank executes the real adapter over synthetic accounts. The Ed25519
@@ -11,6 +11,14 @@
 //! the strongest case below is "the bank accepted an attestation asserting
 //! mainnet state," never "the market observed mainnet."
 //!
+//! The adapter under test is `programs/dclutch-resolution-proof-sbf`. The
+//! transport moved there from the banished gen-2 monolith without its content
+//! changing: same Lean-authored wire, same hostile corpus, same real-ELF
+//! execution. What changed is who owns the record, and therefore what a Market
+//! is: a Core-owned `CoreState` at its derived address whose selected release
+//! set names this Resolution Program, rather than a Market account the adapter
+//! owned itself.
+//!
 //! The venue fixture is shaped from the published Meteora DBC source: a
 //! 424-byte `VirtualPool` account (8-byte Anchor discriminator
 //! `d5e005d1 6245775c` plus the 416-byte `PoolState` body) with
@@ -20,21 +28,23 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_core_contract::{ContentId, MarketIdentity, MarketRoot, Phase};
-use dclutch_market_contract::market::{CategoricalMarketV1, CategoricalSettlementSummaryV1};
-use dclutch_product_contract::{
-    ContentId as ProductContentId,
-    capacity::CapacityProfileId,
-    product::{InstanceV1, InstanceV1Input},
-    result_domain::{FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1, FiniteResultDomainV1},
+use dclutch_core_contract::ContentId;
+use dclutch_market_core_codec::{
+    CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ArtifactReleaseV1, ArtifactUpgradePolicyV1};
+use dclutch_registry_contract::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
+};
 use dclutch_relay_contract::{
-    RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1, RELAYED_FAMILY_RELEASE_ID_V1,
-    RELAYED_RECORD_PDA_DOMAIN_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1,
-    RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1, SHA256_EMPTY_DIGEST, SOLANA_DEVNET_GENESIS_HASH_V1,
-    SOLANA_MAINNET_GENESIS_HASH_V1,
+    RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1,
+    RELAYED_FAMILY_RELEASE_ID_V1, RELAYED_RECORD_PDA_DOMAIN_V1,
+    RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
+    RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1, SHA256_EMPTY_DIGEST,
+    SOLANA_DEVNET_GENESIS_HASH_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
     identity::{LOADER_V3_PROGRAM_ID, reconstruct_deployment_observation_v1},
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1, CreateRecordInstructionV1,
@@ -49,14 +59,19 @@ use dclutch_relay_contract::{
     signature::ED25519_PROGRAM_ID_3_0,
     wire::{AccountObservationV1, AttestationMessageV1, ObservationSetSealV1},
 };
-use dclutch_release_set_contract::ProgramIdentityV1;
+use dclutch_release_set_contract::{
+    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ProgramIdentityV1,
+};
 use dclutch_rent_contract::{RENT_CREDIT_PDA_DOMAIN_V1, RefundAuthority, RentCreditV1};
+use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
 use dclutch_source_contract::{
-    CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId, ProviderReleaseV1,
-    PythAdapterConfigV1, RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, ResolutionPolicyV1,
-    RoundingBoundary, SOURCE_MATERIAL_BYTES, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1,
-    SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialInputV1, SourceSpecV1,
-    StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1, encode_source_material_into_v1,
+    CapacityEnvelope as SourceCapacityEnvelope, ContentId as SourceContentId,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
+    RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    RoundingBoundary, SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV2, SourceSpecV1,
+    StatisticKind, StatisticSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
 };
 use solana_account::Account;
 use solana_program::{
@@ -67,13 +82,19 @@ use solana_program::{
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_program::instruction::InstructionError;
 use solana_transaction::{Transaction, TransactionError};
 
+/// The Resolution role Program: the executing adapter, and the record's owner.
 const PROGRAM_ID: Pubkey = Pubkey::new_from_array([71; 32]);
+/// The Core role Program: the Market's owner and derivation authority.
+const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([72; 32]);
+/// The Registry: the program that owns every finalized raw record.
+const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([73; 32]);
+/// The Rent program that owns the Market's persisted RentCredit beneficiary.
+const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([74; 32]);
 const GENERATION: u64 = 73;
-/// Two Market children exist before any record: the Fund and the custody child.
-const OPEN_CHILD_COUNT: u64 = 2;
 /// A finalized mainnet slot, as a number. Nothing was read to obtain it.
 const OBSERVED_SLOT: u64 = 423_941_138;
 const CREATED_UNIX: i64 = 1_756_000_000;
@@ -111,54 +132,171 @@ const DEPLOYMENT_SLOT: u64 = 423_941_138;
 const UPGRADE_AUTHORITY: [u8; 32] = [0x4a; 32];
 const ELF_DIGEST: [u8; 32] = [0xee; 32];
 
-fn require_real_elf() -> Vec<u8> {
-    let directory = env::var("SBF_OUT_DIR").expect(
-        "SBF_OUT_DIR is required; build the real adapter with `cargo build-sbf --manifest-path programs/dclutch-sbf/Cargo.toml` and point SBF_OUT_DIR at target/deploy",
+struct Elves {
+    core: Vec<u8>,
+    resolution: Vec<u8>,
+}
+
+fn artifacts() -> Elves {
+    let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect(
+        "SBF_OUT_DIR is required; build the Core and Resolution role programs with `cargo build-sbf --manifest-path programs/<name>/Cargo.toml` and point SBF_OUT_DIR at target/deploy",
+    ));
+    let resolution = fs::read(directory.join("dclutch_resolution_proof_sbf.so"))
+        .expect("compiled Resolution ELF");
+    assert_eq!(resolution.get(..4), Some(&[0x7f, b'E', b'L', b'F'][..]));
+    eprintln!(
+        "Resolution SBF ELF SHA-256: {:?}",
+        hash(&resolution).to_bytes()
     );
-    let artifact = PathBuf::from(directory).join("dclutch_sbf.so");
-    let bytes = fs::read(&artifact).unwrap_or_else(|error| {
-        panic!(
-            "cannot read the compiled dClutch SBF ELF {}: {error}",
-            artifact.display()
-        )
-    });
-    assert_eq!(bytes.get(..4), Some(&[0x7f, b'E', b'L', b'F'][..]));
-    eprintln!("dClutch SBF ELF SHA-256: {:?}", hash(&bytes).to_bytes());
+    Elves {
+        core: fs::read(directory.join("dclutch_core_sbf.so")).expect("compiled Core ELF"),
+        resolution,
+    }
+}
+
+fn programdata(program: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+fn immutable_programdata(elf: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0; 45 + elf.len()];
+    bytes[0..4].copy_from_slice(&3_u32.to_le_bytes());
+    bytes[4..12].copy_from_slice(&0_u64.to_le_bytes());
+    bytes[12] = 0;
+    bytes[45..].copy_from_slice(elf);
     bytes
 }
 
-fn protocol_account(data: Vec<u8>) -> Account {
+fn add_program(test: &mut ProgramTest, name: &'static str, program: Pubkey, elf: &[u8]) {
+    test.add_upgradeable_program_to_genesis(name, &program);
+    let data = immutable_programdata(elf);
+    test.add_account(
+        programdata(program),
+        Account {
+            lamports: Rent::default().minimum_balance(data.len()),
+            data,
+            owner: bpf_loader_upgradeable::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+}
+
+fn program_identity(program: Pubkey) -> ProgramIdentityV1 {
+    ProgramIdentityV1::new(program.to_bytes()).expect("nonzero program")
+}
+
+fn release(program: Pubkey, semantic: [u8; 32], elf: &[u8]) -> ArtifactReleaseV1 {
+    ArtifactReleaseV1::new(
+        program_identity(program),
+        program_identity(bpf_loader_upgradeable::ID),
+        programdata(program).to_bytes(),
+        ContentId::new(semantic).expect("semantic release"),
+        hash(elf).to_bytes(),
+        0,
+        ArtifactUpgradePolicyV1::Immutable,
+        None,
+    )
+    .expect("immutable artifact release")
+}
+
+fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
+    ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact identity")
+}
+
+fn binding(release: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
+    ExecutionRoleBindingV1::new(release.program(), artifact_id(release))
+}
+
+fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+    ArtifactActivationInputV1::new(
+        artifact_id(release),
+        release,
+        DeploymentObservationV1::new(
+            release.program().to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            true,
+            release.programdata(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            false,
+            release.programdata(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            release.deployment_slot(),
+            release.elf_digest(),
+            release.upgrade_authority(),
+        )
+        .expect("current deployment observation"),
+    )
+}
+
+/// The Registry activation cache for one five-role release set.
+///
+/// The relay routes never invoke Core or Custody; the set is complete because a
+/// release set IS five roles, and the one binding the adapter reads is
+/// Resolution's, which must name the executing Program.
+fn activation(core: ArtifactReleaseV1, resolution: ArtifactReleaseV1) -> ([u8; 32], Vec<u8>) {
+    let release_set = ExecutionReleaseSetV1::new(
+        binding(core),
+        binding(core),
+        binding(core),
+        binding(resolution),
+        binding(core),
+    )
+    .expect("execution release set");
+    let release_set_id = hash(&release_set.to_bytes()).to_bytes();
+    let content = ContentId::new(release_set_id).expect("release set identity");
+    let mut bytes = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+    initialize_activation_cache_v1(&mut bytes, content).expect("activation cache");
+    for (role, selected) in [
+        (ExecutionRoleV1::Core, core),
+        (ExecutionRoleV1::Claims, core),
+        (ExecutionRoleV1::Trading, core),
+        (ExecutionRoleV1::Resolution, resolution),
+        (ExecutionRoleV1::Custody, core),
+    ] {
+        activate_execution_role_into_v1(
+            &mut bytes,
+            content,
+            &release_set,
+            role,
+            &activation_input(selected),
+        )
+        .expect("activate execution role");
+    }
+    ActivatedExecutionReleaseSetV1::decode(&bytes).expect("complete activation cache");
+    (release_set_id, bytes)
+}
+
+fn protocol_account(owner: Pubkey, data: Vec<u8>) -> Account {
     Account {
         lamports: Rent::default().minimum_balance(data.len()).max(1),
         data,
-        owner: PROGRAM_ID,
+        owner,
         executable: false,
         rent_epoch: 0,
     }
 }
 
-fn finalized_record(schema_label: &[u8], content: Vec<u8>) -> (Pubkey, Pubkey, Account, [u8; 32]) {
-    let schema = hash(schema_label).to_bytes();
-    let digest = hash(&content).to_bytes();
-    let raw = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
-        &PROGRAM_ID,
-    )
-    .0;
-    let cursor = Pubkey::find_program_address(
-        &[
-            STAGING_CURSOR_PDA_SEED_V1,
-            schema.as_slice(),
-            digest.as_slice(),
-        ],
-        &PROGRAM_ID,
-    )
-    .0;
-    (raw, cursor, protocol_account(content), digest)
+struct RecordPair {
+    raw: Pubkey,
+    staging: Pubkey,
 }
 
-fn product_id(bytes: [u8; 32]) -> ProductContentId {
-    ProductContentId::new(bytes).expect("nonzero deterministic Product identity")
+/// Install one finalized Registry-owned raw record and its vacant staging PDA.
+fn add_record(test: &mut ProgramTest, schema: [u8; 32], data: Vec<u8>) -> (RecordPair, [u8; 32]) {
+    let digest = hash(&data).to_bytes();
+    let raw = Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    let staging = Pubkey::find_program_address(
+        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    test.add_account(raw, protocol_account(REGISTRY_PROGRAM_ID, data));
+    (RecordPair { raw, staging }, digest)
 }
 
 fn source_id(bytes: [u8; 32]) -> SourceContentId {
@@ -300,33 +438,26 @@ fn observation(position: &Position) -> AccountObservationV1<'_> {
     .expect("canonical observation body")
 }
 
-fn source_material_bytes(
-    account_set_id: [u8; 32],
+struct SourceGraph {
+    material: RecordPair,
+    material_id: [u8; 32],
+    spec: RecordPair,
+    spec_id: [u8; 32],
+    provider: RecordPair,
+    window: RecordPair,
+}
+
+/// Build and install the whole V2 Source record graph this family needs.
+///
+/// The compact V2 material names its components by content identity instead of
+/// carrying them inline, so every link below is a digest the adapter re-derives
+/// from a record it authenticated separately: material -> spec -> provider
+/// release, and material -> window.
+fn source_graph(
+    test: &mut ProgramTest,
     key_set_digest: [u8; 32],
     adapter_config_digest: [u8; 32],
-) -> (Vec<u8>, [u8; 32], [u8; 32], [u8; 32]) {
-    let _ = account_set_id;
-    let result_domain =
-        FiniteResultDomainV1::new(product_id([0xb1; 32]), product_id([0xb2; 32]), 1, &[])
-            .expect("canonical binary Product result domain");
-    let result_domain_bytes = result_domain.to_bytes();
-    let result_domain_digest = hashv(&[
-        FINITE_RESULT_DOMAIN_CONTENT_DOMAIN_V1,
-        &[0],
-        result_domain_bytes.as_slice(),
-    ])
-    .to_bytes();
-    let claim_id = [33; 32];
-    let instance = InstanceV1::new(InstanceV1Input {
-        terms_id: product_id([32; 32]),
-        occurrence_id: product_id([34; 32]),
-        claim_basis_id: product_id(claim_id),
-        result_domain_id: product_id(result_domain_digest),
-        capacity_profile_id: CapacityProfileId::new(product_id([35; 32])),
-        partition_cell_count: 2,
-    })
-    .expect("canonical Product instance");
-    let instance_digest = hash(&instance.to_bytes()).to_bytes();
+) -> SourceGraph {
     let capacity = SourceCapacityProfileV1::new(
         SourceCapacityEnvelope::Measured,
         1,
@@ -334,15 +465,17 @@ fn source_material_bytes(
         source_id([36; 32]),
         source_id([37; 32]),
         512,
-        // The record is a direct Market child, so the number of them a caller
-        // may impose on a Market is bounded here and nowhere else.
         4,
     )
     .expect("canonical Source capacity");
     let capacity_id = source_id(hash(&capacity.to_bytes()).to_bytes());
+    // The V1 material carried an inline Pyth-typed adapter config slot; the V2
+    // material does not, and the relayed family names its configuration through
+    // `decoding_rules_id` instead. The spec's `adapter_config_id` keeps a
+    // canonical placeholder so no Pyth-shaped slot is ever read for this family.
     let unused_inline =
         PythAdapterConfigV1::new([0x2a; 32], -8, 100).expect("inline slot placeholder");
-    let provider = ProviderReleaseV1::new(
+    let provider_value = ProviderReleaseV1::new(
         source_id(RELAYED_FAMILY_RELEASE_ID_V1),
         source_id(RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1),
         // The relayer key set IS the provider deployment release.
@@ -351,23 +484,29 @@ fn source_material_bytes(
         source_id(adapter_config_digest),
         source_id(RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1),
     );
-    let provider_id = source_id(hash(&provider.to_bytes()).to_bytes());
-    // The V1 material carries an inline Pyth-typed adapter config slot whose
-    // digest it binds to `adapter_config_id`. The relayed family cannot use that
-    // slot -- it is 64 bytes and Pyth-typed -- so the relay configuration is a
-    // separate raw record named by `decoding_rules_id`, and the inline slot is
-    // filled with a canonical placeholder. A V2 material would drop the slot.
-    let source = SourceSpecV1::new(
-        source_id(result_domain.coordinate_domain_id().to_bytes()),
-        source_id(result_domain.result_unit_id().to_bytes()),
-        provider_id,
+    let (provider, provider_digest) = add_record(
+        test,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        provider_value.to_bytes().to_vec(),
+    );
+
+    let unit = source_id([0x51; 32]);
+    let spec_value = SourceSpecV1::new(
+        source_id([0x50; 32]),
+        unit,
+        source_id(provider_digest),
         SourceAccessProfile::RelayedObservationRecord,
         source_id(hash(&unused_inline.to_bytes()).to_bytes()),
         capacity_id,
     );
-    let source_spec_id = source_id(hash(&source.to_bytes()).to_bytes());
-    let window = WindowSpecV1::new(
-        source_spec_id,
+    let (spec, spec_digest) = add_record(
+        test,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        spec_value.to_bytes().to_vec(),
+    );
+
+    let window_value = WindowSpecV1::new(
+        source_id(spec_digest),
         WindowKind::Terminal,
         CREATED_UNIX,
         CREATED_UNIX,
@@ -376,10 +515,15 @@ fn source_material_bytes(
         source_id([41; 32]),
     )
     .expect("pinned terminal window");
-    let window_id = source_id(hash(&window.to_bytes()).to_bytes());
-    let statistic = StatisticSpecV1::new(
-        source_id(result_domain.result_unit_id().to_bytes()),
-        source_id(result_domain.result_unit_id().to_bytes()),
+    let (window, window_digest) = add_record(
+        test,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        window_value.to_bytes().to_vec(),
+    );
+
+    let statistic_value = StatisticSpecV1::new(
+        unit,
+        unit,
         StatisticKind::TerminalSample,
         RoundingBoundary::ExactRational,
         1,
@@ -389,45 +533,48 @@ fn source_material_bytes(
         capacity,
     )
     .expect("canonical terminal statistic");
-    let statistic_id = source_id(hash(&statistic.to_bytes()).to_bytes());
-    let policy = ResolutionPolicyV1::new(
-        capacity_id,
-        source_id(instance_digest),
-        source_spec_id,
-        window_id,
-        statistic_id,
-        source_id(result_domain_digest),
-        None,
+    let (_, statistic_digest) = add_record(
+        test,
+        STATISTIC_SPEC_SCHEMA_ID_V1,
+        statistic_value.to_bytes().to_vec(),
     );
-    let mut material = vec![0; SOURCE_MATERIAL_BYTES];
-    encode_source_material_into_v1(
-        &mut material,
-        SourceMaterialInputV1 {
-            policy: &policy,
-            capacity_profile_id: capacity_id,
-            capacity_profile: &capacity,
-            primary_source_id: source_spec_id,
-            primary_source: &source,
-            primary_provider_release_id: provider_id,
-            primary_provider_release: &provider,
-            primary_adapter_config: &unused_inline,
-            window_id,
-            window: &window,
-            statistic_id,
-            statistic: &statistic,
-            product_instance_id: source_id(instance_digest),
-            product_instance: &instance,
-            result_domain: &result_domain,
-            recovery: None,
-        },
-    )
-    .expect("canonical Product-bound Source material");
-    (
+
+    let material_value = SourceMaterialV2::new(
+        source_id([0x52; 32]),
+        source_id(spec_digest),
+        source_id(window_digest),
+        source_id(statistic_digest),
+        None,
+        source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
+    );
+    // The graph the material claims is the graph the records make. Asserting it
+    // here turns a Custom(7) from the bank into a named fixture failure.
+    material_value
+        .validate_source_graph(
+            source_id(spec_digest),
+            spec_value,
+            source_id(window_digest),
+            window_value,
+            source_id(statistic_digest),
+            statistic_value,
+            None,
+            source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
+        )
+        .expect("the V2 material's own graph predicate holds");
+    let (material, material_digest) = add_record(
+        test,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        material_value.to_bytes().to_vec(),
+    );
+
+    SourceGraph {
         material,
-        instance_digest,
-        claim_id,
-        source_spec_id.to_bytes(),
-    )
+        material_id: material_digest,
+        spec,
+        spec_id: spec_digest,
+        provider,
+        window,
+    }
 }
 
 struct Fixture {
@@ -435,35 +582,55 @@ struct Fixture {
     relayer: Keypair,
     worker: Keypair,
     market: Pubkey,
+    activation: Pubkey,
+    decoy_activation: Pubkey,
     record: Pubkey,
     record_bump: u8,
-    material: Pubkey,
-    material_cursor: Pubkey,
-    material_id: [u8; 32],
-    source_spec_id: [u8; 32],
-    key_set: Pubkey,
-    key_set_cursor: Pubkey,
-    config: Pubkey,
-    config_cursor: Pubkey,
-    rent_credit: Pubkey,
+    graph: SourceGraph,
+    key_set: RecordPair,
+    config: RecordPair,
     rent_beneficiary: Pubkey,
     account_set_id: [u8; 32],
     positions: Vec<Position>,
 }
 
 fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
-    let elf = require_real_elf();
+    let elves = artifacts();
     let relayer = Keypair::new();
     let worker = Keypair::new();
     let (_, account_set_id) = account_set();
+
+    let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
+    test.set_compute_max_units(1_400_000);
+    add_program(&mut test, "dclutch_core_sbf", CORE_PROGRAM_ID, &elves.core);
+    add_program(
+        &mut test,
+        "dclutch_resolution_proof_sbf",
+        PROGRAM_ID,
+        &elves.resolution,
+    );
+
+    // The emitted schema identities are the hashes of the Lean-owned preimages.
+    // Naming both keeps the emitter honest at fixture-build time rather than at
+    // whatever the bank happens to refuse.
+    assert_eq!(
+        hash(RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+        RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1
+    );
+    assert_eq!(
+        hash(RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1).to_bytes(),
+        RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1
+    );
 
     let mut keys = vec![relayer.pubkey().to_bytes()];
     keys.extend_from_slice(extra_keys);
     keys.sort_unstable();
     let key_set_value =
         RelayerKeySetV1::new(&keys, seal_threshold).expect("canonical relayer key set");
-    let (key_set, key_set_cursor, key_set_account, key_set_digest) = finalized_record(
-        RELAYER_KEY_SET_SCHEMA_RELEASE_PREIMAGE_V1,
+    let (key_set, key_set_digest) = add_record(
+        &mut test,
+        RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
         key_set_value.to_bytes().expect("key set bytes").to_vec(),
     );
 
@@ -475,73 +642,92 @@ fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
         CLUSTER_SKEW_SECONDS,
     )
     .expect("canonical relayed adapter config");
-    let (config, config_cursor, config_account, config_digest) = finalized_record(
-        RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_PREIMAGE_V1,
+    let (config, config_digest) = add_record(
+        &mut test,
+        RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1,
         config_value.to_bytes().expect("config bytes").to_vec(),
     );
 
-    let (material_bytes, product_instance_id, claim_id, source_spec_id) =
-        source_material_bytes(account_set_id, key_set_digest, config_digest);
-    // The adapter-owned content links the record contract re-checks on
-    // authentication. Asserting them here turns a Custom(5) from the bank into
-    // a named fixture failure.
-    for (id_offset, value_offset, length) in [
-        (256usize, 288usize, 112usize),
-        (400, 432, 192),
-        (624, 656, 112),
-        (768, 800, 176),
-        (1360, 1392, 176),
-        (544, 1568, 64),
-    ] {
-        let expected = hash(&material_bytes[value_offset..value_offset + length]).to_bytes();
-        assert_eq!(
-            &material_bytes[id_offset..id_offset + 32],
-            expected.as_slice(),
-            "material content link at {id_offset} -> {value_offset} does not hold"
-        );
-    }
-    let (material, material_cursor, material_account, material_digest) =
-        finalized_record(SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V1, material_bytes);
-    let material_id = ContentId::new(material_digest).expect("SourceMaterial ID");
+    let graph = source_graph(&mut test, key_set_digest, config_digest);
 
-    let rent_beneficiary = Pubkey::new_from_array([0x61; 32]);
-    let refund_authority =
-        RefundAuthority::new(rent_beneficiary.to_bytes()).expect("refund authority");
-    let refund_authority_bytes = refund_authority.to_bytes();
-    let (rent_credit, rent_credit_bump) = Pubkey::find_program_address(
-        &[RENT_CREDIT_PDA_DOMAIN_V1, refund_authority_bytes.as_slice()],
-        &PROGRAM_ID,
+    let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
+    let resolution_release = release(
+        PROGRAM_ID,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+        &elves.resolution,
     );
-    let rent_credit_state = RentCreditV1::new(refund_authority, rent_credit_bump);
-
-    let identity = MarketIdentity::new(
-        ContentId::new([31; 32]).expect("Realm ID"),
-        ContentId::new(product_instance_id).expect("Product Instance ID"),
-        ContentId::new(claim_id).expect("Claim ID"),
-        material_id,
-        ContentId::new([25; 32]).expect("capability manifest ID"),
-        GENERATION,
-    );
-    let identity_digest = hash(&identity.to_bytes()).to_bytes();
-    let market = Pubkey::find_program_address(
-        &[b"dclutch/market-root/v1", identity_digest.as_slice()],
-        &PROGRAM_ID,
+    let (release_set, activation_data) = activation(core_release, resolution_release);
+    let activation_account = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
+        &REGISTRY_PROGRAM_ID,
     )
     .0;
-    let mut root =
-        MarketRoot::founding(identity, rent_beneficiary.to_bytes()).expect("founding root");
-    root.register_child(GENERATION, 0).expect("Fund child");
-    root.register_child(GENERATION, 1).expect("custody child");
-    root.transition_phase(GENERATION, Phase::Open)
-        .expect("Open prerequisite state");
-    let market_value =
-        CategoricalMarketV1::<2>::new(root, 0, [0, 0], CategoricalSettlementSummaryV1::empty())
-            .expect("provider-neutral Open Market");
-    let mut market_bytes =
-        vec![0_u8; CategoricalMarketV1::<2>::encoded_len().expect("binary Market width")];
-    market_value
-        .encode(&mut market_bytes)
-        .expect("canonical Open Market bytes");
+    test.add_account(
+        activation_account,
+        protocol_account(REGISTRY_PROGRAM_ID, activation_data),
+    );
+
+    // A complete, internally consistent, Registry-owned activation cache for a
+    // DIFFERENT release set -- one whose Resolution role is some other Program.
+    // It is exactly what an attacker would hold if activating a release set were
+    // enough to put records under this Program.
+    let (decoy_set, decoy_data) = activation(core_release, core_release);
+    let decoy_activation = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &decoy_set],
+        &REGISTRY_PROGRAM_ID,
+    )
+    .0;
+    assert_ne!(decoy_set, release_set, "the decoy must be a different set");
+    test.add_account(
+        decoy_activation,
+        protocol_account(REGISTRY_PROGRAM_ID, decoy_data),
+    );
+
+    // The Market's persisted beneficiary is a real RentCredit PDA under the Rent
+    // program. The relay adapter never derives it: Core already persists which
+    // account receives this Market's returned rent, and the adapter can only
+    // agree with that.
+    let refund_authority = RefundAuthority::new([0x61; 32]).expect("refund authority");
+    let (rent_beneficiary, rent_credit_bump) = Pubkey::find_program_address(
+        &[RENT_CREDIT_PDA_DOMAIN_V1, &refund_authority.to_bytes()],
+        &RENT_PROGRAM_ID,
+    );
+    let rent_credit_value = RentCreditV1::new(refund_authority, rent_credit_bump);
+    test.add_account(
+        rent_beneficiary,
+        protocol_account(RENT_PROGRAM_ID, rent_credit_value.to_bytes().to_vec()),
+    );
+
+    let mut identity = MarketIdentity {
+        market_id: CoreIdentity::new([0xff; 32]).expect("placeholder Market"),
+        realm_id: CoreIdentity::new([31; 32]).expect("Realm"),
+        product_record: CoreIdentity::new([0x52; 32]).expect("Product record"),
+        product_id: CoreIdentity::new([33; 32]).expect("Product"),
+        resolution_policy: CoreIdentity::new(graph.material_id).expect("Source material"),
+        capability_manifest: CoreIdentity::new([25; 32]).expect("manifest"),
+        selected_release_set: CoreIdentity::new(release_set).expect("release set"),
+        registry_program: CoreIdentity::new(REGISTRY_PROGRAM_ID.to_bytes()).expect("Registry"),
+        generation: GENERATION,
+    };
+    let market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(identity).as_slices(),
+        &CORE_PROGRAM_ID,
+    )
+    .0;
+    identity.market_id = CoreIdentity::new(market.to_bytes()).expect("Market");
+    let state = CoreState {
+        phase: Phase::Open,
+        readiness: Readiness::Consumed,
+        terminal_winner: 0,
+        identity,
+        outstanding_capabilities: 0,
+        rent_beneficiary: CoreIdentity::new(rent_beneficiary.to_bytes()).expect("beneficiary"),
+        terminal_receipt: None,
+    };
+    test.add_account(
+        market,
+        protocol_account(CORE_PROGRAM_ID, state.encode().expect("Core state").to_vec()),
+    );
 
     let (record, record_bump) = Pubkey::find_program_address(
         &[
@@ -554,21 +740,6 @@ fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
         &PROGRAM_ID,
     );
 
-    let mut test = ProgramTest::default();
-    test.prefer_bpf(true);
-    test.add_program("dclutch_sbf", PROGRAM_ID, None);
-    let _ = elf;
-    test.add_account(market, protocol_account(market_bytes));
-    test.add_account(material, material_account);
-    test.add_account(material_cursor, Account::new(0, 0, &system_program::ID));
-    test.add_account(key_set, key_set_account);
-    test.add_account(key_set_cursor, Account::new(0, 0, &system_program::ID));
-    test.add_account(config, config_account);
-    test.add_account(config_cursor, Account::new(0, 0, &system_program::ID));
-    test.add_account(
-        rent_credit,
-        protocol_account(rent_credit_state.to_bytes().to_vec()),
-    );
     test.add_account(
         worker.pubkey(),
         Account::new(1_000_000_000, 0, &system_program::ID),
@@ -579,50 +750,84 @@ fn fixture(seal_threshold: u8, extra_keys: &[[u8; 32]]) -> Fixture {
         relayer,
         worker,
         market,
+        activation: activation_account,
+        decoy_activation,
         record,
         record_bump,
-        material,
-        material_cursor,
-        material_id: material_digest,
-        source_spec_id,
+        graph,
         key_set,
-        key_set_cursor,
         config,
-        config_cursor,
-        rent_credit,
         rent_beneficiary,
         account_set_id,
         positions: positions(),
     }
 }
 
+/// One substitution a hostile create makes, and nothing else.
+///
+/// Each field names a fact the adapter must take from the authenticated Market
+/// or the content-addressed graph rather than from the caller. A `None` field
+/// is the honest value.
+#[derive(Clone, Copy, Default)]
+struct CreateSubstitution {
+    core_program: Option<Pubkey>,
+    activation: Option<Pubkey>,
+    rent_beneficiary: Option<Pubkey>,
+    source_spec_id: Option<[u8; 32]>,
+}
+
 impl Fixture {
     fn create_instruction(&self, set_count: u16, seal_threshold: u8) -> Instruction {
+        self.create_instruction_with(set_count, seal_threshold, CreateSubstitution::default())
+    }
+
+    fn create_instruction_with(
+        &self,
+        set_count: u16,
+        seal_threshold: u8,
+        substitution: CreateSubstitution,
+    ) -> Instruction {
         let request = CreateRecordInstructionV1::new(
             GENERATION,
             OBSERVED_SLOT,
-            OPEN_CHILD_COUNT,
             set_count,
             seal_threshold,
             self.record_bump,
-            self.material_id,
-            self.source_spec_id,
-            self.rent_beneficiary.to_bytes(),
+            self.graph.material_id,
+            substitution.source_spec_id.unwrap_or(self.graph.spec_id),
+            substitution
+                .rent_beneficiary
+                .unwrap_or(self.rent_beneficiary)
+                .to_bytes(),
         )
         .expect("create request");
         Instruction {
             program_id: PROGRAM_ID,
             accounts: vec![
                 AccountMeta::new(self.worker.pubkey(), true),
-                AccountMeta::new(self.market, false),
+                AccountMeta::new_readonly(self.market, false),
+                AccountMeta::new_readonly(
+                    substitution.core_program.unwrap_or(CORE_PROGRAM_ID),
+                    false,
+                ),
+                AccountMeta::new_readonly(substitution.activation.unwrap_or(self.activation), false),
                 AccountMeta::new(self.record, false),
-                AccountMeta::new_readonly(self.material, false),
-                AccountMeta::new_readonly(self.material_cursor, false),
-                AccountMeta::new_readonly(self.key_set, false),
-                AccountMeta::new_readonly(self.key_set_cursor, false),
-                AccountMeta::new_readonly(self.config, false),
-                AccountMeta::new_readonly(self.config_cursor, false),
-                AccountMeta::new_readonly(self.rent_credit, false),
+                AccountMeta::new_readonly(self.graph.material.raw, false),
+                AccountMeta::new_readonly(self.graph.material.staging, false),
+                AccountMeta::new_readonly(self.graph.spec.raw, false),
+                AccountMeta::new_readonly(self.graph.spec.staging, false),
+                AccountMeta::new_readonly(self.graph.provider.raw, false),
+                AccountMeta::new_readonly(self.graph.provider.staging, false),
+                AccountMeta::new_readonly(self.graph.window.raw, false),
+                AccountMeta::new_readonly(self.graph.window.staging, false),
+                AccountMeta::new_readonly(self.key_set.raw, false),
+                AccountMeta::new_readonly(self.key_set.staging, false),
+                AccountMeta::new_readonly(self.config.raw, false),
+                AccountMeta::new_readonly(self.config.staging, false),
+                AccountMeta::new_readonly(
+                    substitution.rent_beneficiary.unwrap_or(self.rent_beneficiary),
+                    false,
+                ),
                 AccountMeta::new_readonly(sysvar::rent::ID, false),
                 AccountMeta::new_readonly(sysvar::clock::ID, false),
                 AccountMeta::new_readonly(system_program::ID, false),
@@ -652,16 +857,7 @@ impl Fixture {
         data.extend_from_slice(message);
         Instruction {
             program_id: PROGRAM_ID,
-            accounts: vec![
-                AccountMeta::new(self.worker.pubkey(), true),
-                AccountMeta::new_readonly(self.market, false),
-                AccountMeta::new(self.record, false),
-                AccountMeta::new_readonly(self.key_set, false),
-                AccountMeta::new_readonly(self.key_set_cursor, false),
-                AccountMeta::new_readonly(sysvar::rent::ID, false),
-                AccountMeta::new_readonly(sysvar::instructions::ID, false),
-                AccountMeta::new_readonly(sysvar::clock::ID, false),
-            ],
+            accounts: self.signature_frame(),
             data,
         }
     }
@@ -671,24 +867,24 @@ impl Fixture {
             AccountMeta::new(self.worker.pubkey(), true),
             AccountMeta::new_readonly(self.market, false),
             AccountMeta::new(self.record, false),
-            AccountMeta::new_readonly(self.key_set, false),
-            AccountMeta::new_readonly(self.key_set_cursor, false),
+            AccountMeta::new_readonly(self.key_set.raw, false),
+            AccountMeta::new_readonly(self.key_set.staging, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
             AccountMeta::new_readonly(sysvar::instructions::ID, false),
             AccountMeta::new_readonly(sysvar::clock::ID, false),
         ]
     }
 
-    fn retire_instruction(&self, child_count: u64) -> Instruction {
+    fn retire_instruction(&self) -> Instruction {
         Instruction {
             program_id: PROGRAM_ID,
             accounts: vec![
                 AccountMeta::new(self.worker.pubkey(), true),
-                AccountMeta::new(self.market, false),
+                AccountMeta::new_readonly(self.market, false),
                 AccountMeta::new(self.record, false),
-                AccountMeta::new(self.rent_credit, false),
+                AccountMeta::new(self.rent_beneficiary, false),
             ],
-            data: RetireRecordInstructionV1::new(GENERATION, child_count)
+            data: RetireRecordInstructionV1::new(GENERATION)
                 .to_bytes()
                 .expect("retire bytes")
                 .to_vec(),
@@ -916,11 +1112,11 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
 
     submit(
         &mut context,
-        &[fixture.retire_instruction(OPEN_CHILD_COUNT + 1)],
+        &[fixture.retire_instruction()],
         &[&fixture.worker],
     )
     .await
-    .expect("retire the record into its RentCredit");
+    .expect("retire the record into the Market beneficiary");
     assert!(
         context
             .banks_client
@@ -953,6 +1149,25 @@ fn refused(result: Result<(), BanksClientError>) -> TransactionError {
     }
 }
 
+/// The Resolution refusal taxonomy, as the adapter's discriminants.
+///
+/// A hostile case that refuses for the wrong reason is not evidence, so the
+/// creation corpus below names the code it expects rather than accepting any
+/// failure. `AccountFrame` is deliberately absent: a substitution that trips
+/// the frame's no-alias rule has not reached the check it was written for.
+const REFUSAL_MARKET_AUTHORITY: u32 = 3;
+const REFUSAL_RESOLUTION_RELEASE: u32 = 5;
+const REFUSAL_SOURCE_MATERIAL: u32 = 7;
+const REFUSAL_TRANSITION: u32 = 12;
+
+fn refused_with(result: Result<(), BanksClientError>, code: u32) {
+    let error = refused(result);
+    let TransactionError::InstructionError(_, InstructionError::Custom(observed)) = error else {
+        panic!("expected a program refusal, got {error:?}");
+    };
+    assert_eq!(observed, code, "refused, but not for the reason under test");
+}
+
 #[tokio::test]
 async fn the_hostile_corpus_is_refused_by_the_real_adapter() {
     let outsider = Keypair::new();
@@ -963,6 +1178,67 @@ async fn the_hostile_corpus_is_refused_by_the_real_adapter() {
         .expect("test")
         .start_with_context()
         .await;
+
+    // Creation first, because these are the facts the new home introduced: who
+    // owns the Market, which release set that Market selected, where its rent
+    // returns, and which Source spec its material actually names. Each is a
+    // fact of authenticated state, and a caller that supplies a different one
+    // is refused before any account is created.
+    //
+    for (name, substitution, code) in [
+        (
+            "a Core Program the Market is not owned by",
+            CreateSubstitution {
+                core_program: Some(PROGRAM_ID),
+                ..CreateSubstitution::default()
+            },
+            REFUSAL_MARKET_AUTHORITY,
+        ),
+        (
+            "a complete activation cache for a release set this Market did not select",
+            CreateSubstitution {
+                activation: Some(fixture.decoy_activation),
+                ..CreateSubstitution::default()
+            },
+            REFUSAL_RESOLUTION_RELEASE,
+        ),
+        (
+            "a rent beneficiary the Market does not name",
+            CreateSubstitution {
+                rent_beneficiary: Some(Pubkey::new_from_array([0x66; 32])),
+                ..CreateSubstitution::default()
+            },
+            REFUSAL_MARKET_AUTHORITY,
+        ),
+        (
+            "a Source spec identity the authenticated material does not name",
+            CreateSubstitution {
+                source_spec_id: Some([0x9a; 32]),
+                ..CreateSubstitution::default()
+            },
+            REFUSAL_SOURCE_MATERIAL,
+        ),
+    ] {
+        let result = submit(
+            &mut context,
+            &[fixture.create_instruction_with(4, 1, substitution)],
+            &[&fixture.worker],
+        )
+        .await;
+        assert!(result.is_err(), "{name} was accepted");
+        refused_with(result, code);
+    }
+    // A seal threshold the release key set does not carry.
+    refused_with(
+        submit(
+            &mut context,
+            &[fixture.create_instruction(4, 2)],
+            &[&fixture.worker],
+        )
+        .await,
+        REFUSAL_TRANSITION,
+    );
+
     submit(
         &mut context,
         &[fixture.create_instruction(4, 1)],

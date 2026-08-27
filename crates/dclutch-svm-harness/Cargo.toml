@@ -29,7 +29,6 @@ dclutch-relay-contract = { path = "../dclutch-relay-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
-dclutch-product-contract = { path = "../dclutch-product-contract" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator", default-features = false }

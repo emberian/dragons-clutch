@@ -2420,7 +2420,6 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
- "dclutch-source-contract",
 ]
 
 [[package]]
@@ -2547,9 +2546,11 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
+ "dclutch-relay-contract",
  "dclutch-release-set-contract",
  "dclutch-resolution-codec",
  "dclutch-source-contract",
+ "solana-instructions-sysvar 3.0.1",
  "solana-program",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",

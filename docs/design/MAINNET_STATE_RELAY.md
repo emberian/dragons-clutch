@@ -1642,3 +1642,71 @@ Filling only moves bytes the signer committed to. For the same reason the
 attestation's `decoding_rules_id` is not compared at append: a relayer that
 echoes the wrong rules identity has signed a statement no resolution will
 accept.
+
+## 11. Where the adapter lives (RELAY-REHOME lane, 2026-08-27)
+
+§10 was written against `programs/dclutch-sbf`. That program was banished to
+`~/dev/dclutch-legacy` hours later with the rest of the gen-2 monolith, so this
+section records the successor address and the two facts that moved with it. It
+amends §4 and §10; the wire, the corpus and the refusals are unchanged.
+
+### 11.1 The home is the Resolution role, not a new Program
+
+`programs/dclutch-resolution-proof-sbf/src/relay_transport_v1.rs`.
+
+The relayed observation record is provider evidence. It is to
+`RelayedMainnetStateV1` what a Receiver-owned `PriceUpdateV2` is to Pyth, and
+the only structural difference is that no external program on this cluster will
+hold it — so dClutch must, and Resolution is the role that already does.
+`provider_transport_v3.rs` in the same program owns exactly that class of
+object for the Pyth family: a Resolution-owned, permissionlessly created,
+permissionlessly reclaimed account holding one Market's provider evidence until
+a resolution consumes it. A second owner for provider-transport custody would
+be a second authority over the same fact.
+
+A dedicated Program was the alternative and Decision 0003 refuses it in terms:
+the release set describes exactly five replaceable execution roles, and a
+genuinely state-owning sixth requires a new measured release-set profile and its
+own authority decision. This record needs neither. It is read by Resolution,
+held by Resolution, and reclaimed by Resolution, and the family's semantics stay
+content-addressed data either way.
+
+### 11.2 The record is transport, not a Market child
+
+The gen-2 adapter owned the Market account and incremented its outstanding-child
+counter in the same instruction that created a child. The successor `CoreState`
+is Core-owned, its counter counts capabilities, and Resolution holds no write
+authority over it, so `expected_market_child_count` is gone from the create and
+retire wires (136 and 24 bytes) and the Market is read-only in all four routes.
+
+What §4 attributed to the child-count bound is really the record's address: it
+is seeded by the observed slot, so one account set at one slot has exactly one
+place to live, and the worker who creates it funds it. Returned rent goes to
+`CoreState.rent_beneficiary` — the account Core already persists for this
+Market — which is the same destination Resolution's own funding closures use.
+The adapter therefore needs no RentCredit derivation and no Rent-program
+identity of its own.
+
+### 11.3 What creation proves, stated exactly
+
+Creation authenticates the Market as Core-owned state at its own
+`MarketCoreStateSeedsV2` address, and requires the Registry activation cache for
+**that Market's selected release set** to name the executing Program as its
+Resolution role. It does not hash this Program's ELF: whole-artifact
+authentication is what the Registry activation already performed, and repeating
+it per record would put a megabyte of SHA-256 on a permissionless route.
+
+Creation is otherwise permissionless and self-funded, and that is the honest
+bound rather than a gap. A caller who builds a record against a substituted
+Market spends their own rent on an account at an address no resolution will read,
+because the record's PDA is derived from the Market it names.
+
+The V1 material's inline component slots are gone with it. The compact V2
+material names `SourceSpecV1`, `WindowSpecV1` and (through the spec)
+`ProviderReleaseV1` by content identity, so the create frame carries each as its
+own Registry-owned raw record plus its staging vacancy: 21 accounts, against the
+gen-2 adapter's 13. Fill, seal and retire are unchanged at 8, 8 and 4, which
+keeps the §4 message budget where it was.
+
+Executable evidence: `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`
+against the compiled Core and Resolution ELFs.

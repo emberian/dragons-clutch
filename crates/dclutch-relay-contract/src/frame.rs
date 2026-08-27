@@ -51,8 +51,8 @@ pub enum RelayAccountNameV1 {
     AdapterConfig,
     /// The finalized staging vacancy proving the adapter config is immutable.
     AdapterConfigStagingVacancy,
-    /// The pre-existing RentCredit beneficiary.
-    RentCredit,
+    /// The Market's own persisted rent beneficiary.
+    RentBeneficiary,
     /// The Rent sysvar.
     RentSysvar,
     /// The Clock sysvar.
@@ -130,8 +130,10 @@ const CONFIG_STAGE: RelayAccountRoleV1 = role(
     false,
     false,
 );
-const CREDIT_READ: RelayAccountRoleV1 = role(RelayAccountNameV1::RentCredit, false, false);
-const CREDIT_WRITE: RelayAccountRoleV1 = role(RelayAccountNameV1::RentCredit, false, true);
+const BENEFICIARY_READ: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::RentBeneficiary, false, false);
+const BENEFICIARY_WRITE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::RentBeneficiary, false, true);
 const RENT: RelayAccountRoleV1 = role(RelayAccountNameV1::RentSysvar, false, false);
 const CLOCK: RelayAccountRoleV1 = role(RelayAccountNameV1::ClockSysvar, false, false);
 const INSTRUCTIONS: RelayAccountRoleV1 = role(RelayAccountNameV1::InstructionsSysvar, false, false);
@@ -167,7 +169,7 @@ pub const CREATE_RECORD_FRAME_V1: [RelayAccountRoleV1; 21] = [
     KEY_SET_STAGE,
     CONFIG,
     CONFIG_STAGE,
-    CREDIT_READ,
+    BENEFICIARY_READ,
     RENT,
     CLOCK,
     SYSTEM,
@@ -203,13 +205,13 @@ pub const SEAL_RECORD_FRAME_V1: [RelayAccountRoleV1; 8] = [
     CLOCK,
 ];
 
-/// Exact retirement and RentCredit closure frame.
+/// Exact retirement and rent-return frame.
 ///
 /// The Market is present and read-only: the record's own persisted binding is
 /// what says which Market it belongs to, and this position is where that claim
 /// is checked against a real account rather than taken on the record's word.
 pub const RETIRE_RECORD_FRAME_V1: [RelayAccountRoleV1; 4] =
-    [WORKER, MARKET_READ, RECORD, CREDIT_WRITE];
+    [WORKER, MARKET_READ, RECORD, BENEFICIARY_WRITE];
 
 /// Closed exact account-frame selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -248,9 +250,9 @@ pub struct RelayAccountPrivilegeV1 {
 /// Validate exact count, privileges and complete no-alias policy for one frame.
 ///
 /// The no-alias rule is not decoration: without it a caller could pass the
-/// record account in the RentCredit position and close a live record's lamports
-/// into itself, or pass the key-set record where the adapter config is expected
-/// and have both content-ID checks read the same bytes.
+/// record account in the beneficiary position and close a live record's
+/// lamports into itself, or pass the key-set record where the adapter config is
+/// expected and have both content-ID checks read the same bytes.
 pub fn validate_relay_frame_v1(
     kind: RelayFrameKindV1,
     accounts: &[RelayAccountPrivilegeV1],
@@ -354,7 +356,7 @@ mod tests {
     fn an_aliased_position_refuses_anywhere_in_the_frame() {
         let mut built = frame(RelayFrameKindV1::RetireRecord);
         let record_key = built.get(2).expect("record").key;
-        built.get_mut(3).expect("credit").key = record_key;
+        built.get_mut(3).expect("beneficiary").key = record_key;
         let exact = built.get(..4).expect("prefix");
         assert_eq!(
             validate_relay_frame_v1(RelayFrameKindV1::RetireRecord, exact),

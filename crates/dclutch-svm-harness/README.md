@@ -18,8 +18,22 @@ Every campaign that loaded the gen-2 monolith `dclutch_sbf.so`, or one of the
 gen-2 measurement programs, was banished with those programs on 2026-08-27; the
 deleted files are listed in `~/dev/dclutch-legacy/svm-harness-tests/` and remain
 in git history. The `RelayedMainnetStateV1` campaign was not banished: its
-adapter moved into the Resolution role program and `relayed_mainnet_state.rs`
-now loads `dclutch_resolution_proof_sbf.so`.
+adapter moved into the Resolution role program, and it now executes against the
+compiled Core and Resolution ELFs:
+
+```sh
+cargo build-sbf --manifest-path programs/dclutch-core-sbf/Cargo.toml \
+  --sbf-out-dir target/deploy
+cargo build-sbf --manifest-path programs/dclutch-resolution-proof-sbf/Cargo.toml \
+  --sbf-out-dir target/deploy
+SBF_OUT_DIR=../../target/deploy cargo test --test relayed_mainnet_state
+```
+
+Four cases: the create/append/seal/retire transport, the hostile corpus (five
+creation substitutions named by refusal code, plus the signature, cluster, slot
+and replay corpus), a below-threshold quorum, and the §4.10 swap tripwire. The
+signatures are cryptographically real; everything they attest is synthetic, so
+this is neither devnet nor mainnet evidence.
 
 The successor Resolution campaign executes the compiled Registry and
 Resolution ELFs against the provenance-pinned local-validator projection of
