@@ -592,7 +592,10 @@ pub struct ProjectedCustodyStateV1 {
 
 impl ProjectedCustodyStateV1 {
     /// Encode the sole persisted authority bytes.
-    pub fn encode(self) -> Result<[u8; PROJECTED_CUSTODY_STATE_BYTES_V1], ProjectedCustodyError> {
+    ///
+    /// Borrowed rather than by value: this state is over eight hundred bytes
+    /// and every SBF call site is inside a four-kilobyte stack budget.
+    pub fn encode(&self) -> Result<[u8; PROJECTED_CUSTODY_STATE_BYTES_V1], ProjectedCustodyError> {
         self.request.validate()?;
         nonzero(self.last_request_digest)?;
         let mut output = [0; PROJECTED_CUSTODY_STATE_BYTES_V1];
@@ -800,9 +803,16 @@ impl ProjectedCustodyStateV1 {
     /// The replay this returns is the kernel's, not the adapter's: every field
     /// is a function of the authenticated request, so the caller cannot choose
     /// what the Lock stage will later read back.
+    ///
+    /// This is the one projected transition that advances through `&mut self`
+    /// rather than returning a new value. Every check runs before any field
+    /// moves, so a refusal leaves the caller's copy byte-for-byte untouched and
+    /// only an `Ok` is ever written back to an account. It is shaped this way
+    /// because returning the advanced projection and the minted replay together
+    /// by value exceeds the SBF adapter's four-kilobyte stack budget.
     #[allow(clippy::too_many_arguments)]
     pub fn open_source_compartment(
-        mut self,
+        &mut self,
         request: ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
         source_replay_key: [u8; 32],
@@ -812,7 +822,7 @@ impl ProjectedCustodyStateV1 {
         source_after: u64,
         poststate_commitment: [u8; 32],
         market_vacant: bool,
-    ) -> Result<(Self, CustodyReplayV1), ProjectedCustodyError> {
+    ) -> Result<CustodyReplayV1, ProjectedCustodyError> {
         self.authenticate_next(&request, request_digest)?;
         nonzero(source_replay_key)?;
         nonzero(poststate_commitment)?;
@@ -843,7 +853,7 @@ impl ProjectedCustodyStateV1 {
         self.phase = ProjectedCustodyPhaseV1::SourceFunded;
         self.locked_amount = request.amount;
         self.advance(request, request_digest);
-        Ok((self, replay))
+        Ok(replay)
     }
 
     /// Credit exact principal into the projected Hoard before Found.
@@ -2062,7 +2072,7 @@ mod tests {
             state.authenticate_next(&lock, id(43)),
             Err(ProjectedCustodyError::Revision)
         );
-        let (state, replay) = state
+        let replay = state
             .open_source_compartment(
                 prestate.open_source,
                 id(42),
@@ -2116,7 +2126,7 @@ mod tests {
             500,
         );
         let open_source = lock.founding_prestate_v1().expect("prestate").open_source;
-        let state = ProjectedCustodyStateV1 {
+        let base = ProjectedCustodyStateV1 {
             bump: 254,
             phase: ProjectedCustodyPhaseV1::HoardOpen,
             request: open_source,
@@ -2133,17 +2143,20 @@ mod tests {
                     after,
                     commitment,
                     vacant| {
-            state.open_source_compartment(
-                request,
-                digest,
-                replay_key,
-                funder_before,
-                funder_after,
-                before,
-                after,
-                commitment,
-                vacant,
-            )
+            let mut state = base;
+            state
+                .open_source_compartment(
+                    request,
+                    digest,
+                    replay_key,
+                    funder_before,
+                    funder_after,
+                    before,
+                    after,
+                    commitment,
+                    vacant,
+                )
+                .map(|replay| (state, replay))
         };
 
         // A live Market is the inverse of this operation's whole admission.
@@ -2205,7 +2218,7 @@ mod tests {
             );
         }
         // Replay: a second creation at the same cursor is refused.
-        let (funded, _) = call(open_source, id(42), id(50), 900, 400, 0, 500, id(51), true)
+        let (mut funded, _) = call(open_source, id(42), id(50), 900, 400, 0, 500, id(51), true)
             .expect("open source compartment");
         assert_eq!(
             funded
@@ -2220,7 +2233,7 @@ mod tests {
                     id(51),
                     true,
                 )
-                .map(|(state, _)| state.phase),
+                .map(|replay| replay.next_revision),
             Err(ProjectedCustodyError::Revision)
         );
         // The funded phase is a dead end for every terminal but Lock, so real
@@ -2252,7 +2265,7 @@ mod tests {
             500,
         );
         let prestate = lock.founding_prestate_v1().expect("prestate");
-        let state = ProjectedCustodyStateV1 {
+        let mut funded = ProjectedCustodyStateV1 {
             bump: 254,
             phase: ProjectedCustodyPhaseV1::HoardOpen,
             request: prestate.open_hoard,
@@ -2260,7 +2273,7 @@ mod tests {
             locked_amount: 0,
             last_request_digest: id(40),
         };
-        let (funded, _) = state
+        funded
             .open_source_compartment(
                 prestate.open_source,
                 id(42),

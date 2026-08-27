@@ -502,7 +502,7 @@ fn initialize(
         bump,
     )
     .map_err(|_| CustodySbfError::Replay)?;
-    commit_state(state_account, state)
+    commit_state(state_account, &state)
 }
 
 #[inline(never)]
@@ -581,7 +581,7 @@ fn open_hoard(
     let next = current
         .open_hoard(request, request_digest, amount, true)
         .map_err(|_| CustodySbfError::Replay)?;
-    commit_state(account(accounts, STATE)?, next)
+    commit_state(account(accounts, STATE)?, &next)
 }
 
 #[inline(never)]
@@ -716,7 +716,7 @@ fn lock_hoard(
     let next = state
         .lock_hoard(request, request_digest, before, after, true)
         .map_err(|_| CustodySbfError::Replay)?;
-    commit_state(account(accounts, STATE)?, next)
+    commit_state(account(accounts, STATE)?, &next)
 }
 
 #[inline(never)]
@@ -1046,21 +1046,64 @@ fn open_source_compartment(
     {
         return Err(CustodySbfError::Create.into());
     }
+    let balances = create_and_fund_source_vault(
+        program_id,
+        vault,
+        authority,
+        mint,
+        token_program,
+        funder,
+        funder_owner,
+        payer,
+        system,
+        &request,
+    )?;
+    create_source_replay_account(program_id, replay, payer, system, &request)?;
+    advance_source_state(
+        account(accounts, STATE)?,
+        replay,
+        request,
+        request_digest,
+        balances,
+    )
+}
 
-    let vault_seeds = CustodyVaultSeedsV1::new(
+/// Exact token balances observed either side of the one funding transfer.
+#[derive(Clone, Copy)]
+struct SourceFundingBalancesV1 {
+    funder_before: u64,
+    funder_after: u64,
+    source_before: u64,
+    source_after: u64,
+}
+
+/// Create the source Vault, initialize it, and move the exact principal in.
+///
+/// Split out of the caller so the token instruction specifications and the
+/// creation seed vector never share a frame with the persisted projection
+/// state; together they exceed the SBF stack budget.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn create_and_fund_source_vault<'info>(
+    program_id: &Pubkey,
+    vault: &AccountInfo<'info>,
+    authority: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    token_program: &AccountInfo<'info>,
+    funder: &AccountInfo<'info>,
+    funder_owner: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    request: &ProjectedCustodyRequestV1,
+) -> Result<SourceFundingBalancesV1, ProgramError> {
+    let seeds = CustodyVaultSeedsV1::new(
         request.market,
         request.release_set,
         request.funding_source_context,
         request.funding_source_compartment,
     );
-    let vault_bump = [Pubkey::find_program_address(&vault_seeds.as_slices(), program_id).1];
-    let [
-        vault_domain,
-        vault_market,
-        vault_release,
-        vault_context,
-        vault_compartment,
-    ] = vault_seeds.as_slices();
+    let bump = [Pubkey::find_program_address(&seeds.as_slices(), program_id).1];
+    let [domain, market, release, context, compartment] = seeds.as_slices();
     top_up_allocate_assign(
         payer,
         vault,
@@ -1068,16 +1111,9 @@ fn open_source_compartment(
         request.funding_source_vault_rent_lamports,
         ACCOUNT_BYTES,
         token_program.key,
-        &[
-            vault_domain,
-            vault_market,
-            vault_release,
-            vault_context,
-            vault_compartment,
-            &vault_bump,
-        ],
+        &[domain, market, release, context, compartment, &bump],
     )?;
-    let spec = initialize_account3(
+    let initialize = initialize_account3(
         request.token_program,
         request.funding_source_vault,
         request.mint,
@@ -1085,22 +1121,22 @@ fn open_source_compartment(
     )
     .map_err(|_| CustodySbfError::TokenState)?;
     invoke(
-        &token_instruction(&spec),
+        &token_instruction(&initialize),
         &[vault.clone(), mint.clone(), token_program.clone()],
     )
     .map_err(|_| CustodySbfError::TokenCpi)?;
 
-    let funder_before = read_funder_amount(funder, request)?;
+    let funder_before = read_funder_amount(funder, *request)?;
+    let source_before = read_vault_amount(vault, authority, *request)?;
     let decimals = {
         let data = mint
             .try_borrow_data()
             .map_err(|_| CustodySbfError::TokenState)?;
-        collateral_profile(request)?
+        collateral_profile(*request)?
             .check_mint(request.token_program, &data)
             .map_err(|_| CustodySbfError::TokenState)?
             .decimals
     };
-    let source_before = read_vault_amount(vault, authority, request)?;
     let spec = transfer_checked(
         request.token_program,
         funder.key.to_bytes(),
@@ -1122,10 +1158,24 @@ fn open_source_compartment(
         ],
     )
     .map_err(|_| CustodySbfError::TokenCpi)?;
-    let funder_after = read_funder_amount(funder, request)?;
-    let source_after = read_vault_amount(vault, authority, request)?;
+    Ok(SourceFundingBalancesV1 {
+        funder_before,
+        funder_after: read_funder_amount(funder, *request)?,
+        source_before,
+        source_after: read_vault_amount(vault, authority, *request)?,
+    })
+}
 
-    let replay_bump = [Pubkey::find_program_address(
+/// Create the vacant source replay account under its canonical PDA.
+#[inline(never)]
+fn create_source_replay_account<'info>(
+    program_id: &Pubkey,
+    replay: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    system: &AccountInfo<'info>,
+    request: &ProjectedCustodyRequestV1,
+) -> Result<(), ProgramError> {
+    let bump = [Pubkey::find_program_address(
         &[
             CUSTODY_REPLAY_PDA_DOMAIN_V1,
             &request.market,
@@ -1147,43 +1197,66 @@ fn open_source_compartment(
             &request.market,
             &request.release_set,
             &request.funding_source_context,
-            &replay_bump,
+            &bump,
         ],
-    )?;
+    )
+}
 
+/// Advance the projection and write the replay the terminal Lock will read.
+///
+/// The replay bytes are the kernel's, not this adapter's: the transition
+/// returns the exact `CustodyReplayV1` the Lock stage authenticates. This is
+/// its own frame because the persisted projection state, the transition's
+/// two-value result, and the encoded replay together exceed the SBF stack
+/// budget when they share one.
+#[inline(never)]
+fn advance_source_state(
+    state: &AccountInfo<'_>,
+    replay: &AccountInfo<'_>,
+    request: ProjectedCustodyRequestV1,
+    request_digest: [u8; 32],
+    balances: SourceFundingBalancesV1,
+) -> Result<(), ProgramError> {
     let commitment = hashv(&[
         &request_digest,
         &request.funding_source_vault,
         &replay.key.to_bytes(),
-        &source_after.to_le_bytes(),
+        &balances.source_after.to_le_bytes(),
     ])
     .to_bytes();
-    let (next, source_replay) = read_state(account(accounts, STATE)?)?
+    let mut next = alloc::boxed::Box::new(read_state(state)?);
+    let source_replay = next
         .open_source_compartment(
             request,
             request_digest,
             replay.key.to_bytes(),
-            funder_before,
-            funder_after,
-            source_before,
-            source_after,
+            balances.funder_before,
+            balances.funder_after,
+            balances.source_before,
+            balances.source_after,
             commitment,
             true,
         )
         .map_err(|_| CustodySbfError::Replay)?;
-    let replay_bytes = source_replay
+    write_source_replay(replay, &source_replay)?;
+    commit_state(state, &next)
+}
+
+fn write_source_replay(
+    replay: &AccountInfo<'_>,
+    source_replay: &CustodyReplayV1,
+) -> Result<(), ProgramError> {
+    let bytes = source_replay
         .to_bytes()
         .map_err(|_| CustodySbfError::Commit)?;
-    {
-        let mut data = replay
-            .try_borrow_mut_data()
-            .map_err(|_| CustodySbfError::Commit)?;
-        if data.len() != replay_bytes.len() {
-            return Err(CustodySbfError::Commit.into());
-        }
-        data.copy_from_slice(&replay_bytes);
+    let mut data = replay
+        .try_borrow_mut_data()
+        .map_err(|_| CustodySbfError::Commit)?;
+    if data.len() != bytes.len() {
+        return Err(CustodySbfError::Commit.into());
     }
-    commit_state(account(accounts, STATE)?, next)
+    data.copy_from_slice(&bytes);
+    Ok(())
 }
 
 /// Authenticate the two vacant source coordinates and their token frame.
@@ -1352,7 +1425,7 @@ fn lock_hoard_and_close_source(
     if rent_credit.lamports() != expected {
         return Err(CustodySbfError::Postcondition.into());
     }
-    commit_state(account(accounts, STATE)?, next)?;
+    commit_state(account(accounts, STATE)?, &next)?;
     return_lock_receipt(receipt)
 }
 
@@ -1640,7 +1713,7 @@ fn read_source_replay(account: &AccountInfo<'_>) -> Result<CustodyReplayV1, Prog
 
 fn commit_state(
     account: &AccountInfo<'_>,
-    state: ProjectedCustodyStateV1,
+    state: &ProjectedCustodyStateV1,
 ) -> Result<(), ProgramError> {
     let bytes = state.encode().map_err(|_| CustodySbfError::Commit)?;
     let mut data = account
