@@ -17,6 +17,7 @@ const sources = Object.freeze({
   claimsState: readFileSync(new URL('crates/dclutch-claims-svm/src/liability_basis_state_v2.rs', root), 'utf8'),
   claimsPosition: readFileSync(new URL('crates/dclutch-claims-svm/src/protocol_position_v2.rs', root), 'utf8'),
   claimsFounding: readFileSync(new URL('crates/dclutch-claims-svm/src/founding_v5.rs', root), 'utf8'),
+  custody: readFileSync(new URL('crates/dclutch-custody-contract/src/lib.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/coreFound.ts', import.meta.url);
 
@@ -37,6 +38,14 @@ function byteString(source, name) {
   const match = sources[source].match(new RegExp(`(?:pub )?const ${name}: &\\[u8\\] = b"([^"]+)";`));
   if (!match) throw new Error(`missing Rust byte string ${source}.${name}`);
   return match[1];
+}
+
+function compartmentTag(variant) {
+  const enumeration = sources.custody.match(/pub enum CompartmentV1 \{([\s\S]*?)\n\}/);
+  if (!enumeration) throw new Error('missing Rust CompartmentV1 enumeration');
+  const match = enumeration[1].match(new RegExp(`\\n\\s*${variant} = ([0-9]+),`));
+  if (!match) throw new Error(`missing Rust CompartmentV1::${variant} discriminant`);
+  return Number(match[1]);
 }
 
 function array(name, values) {
@@ -151,18 +160,23 @@ for (const name of [
 output += `export const LIABILITY_BASIS_MARKET_SEED_V2 = new TextEncoder().encode('${aggregateSeed}');\n`;
 output += `export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().encode('${byteString('claimsPosition', 'PROTOCOL_POSITION_STATE_SEED_V2')}');\n`;
 
-// -------------------------------------------------------- the Realm record
-// A Market names its Realm by content identity, and on a live chain the
-// canonical body is a finalized Registry record rather than a Core account. The
-// browser reacquires it and re-hashes it, so it needs the body layout.
+// --------------------------------------------- the Market's Custody namespace
+// The Hoard Vault address is NOT a fact of the Market root: it is
+// `[custody-vault-domain, market, release_set, context, compartment]` under the
+// Custody program, and `context` is caller-chosen at founding. The Claims
+// aggregate persists it, so a reader holding a Market can now name the Hoard --
+// but only by taking these three coordinates from the crate that derives them
+// on chain, never by retyping them.
 output += '\n';
-output += array('REALM_MAGIC', bytes('realm', 'REALM_MAGIC'));
-output += `export const REALM_BYTES = ${scalar('realm', 'REALM_BYTES')} as const;\n`;
-output += `export const REALM_SCHEMA_VERSION = ${scalar('realm', 'REALM_SCHEMA_VERSION')} as const;\n`;
-for (const name of [
-  'REALM_MINT_AUTHORITY_POLICY_OFFSET', 'REALM_FREEZE_AUTHORITY_POLICY_OFFSET',
-  'REALM_TOKEN_PROGRAM_OFFSET', 'REALM_COLLATERAL_MINT_OFFSET', 'REALM_ADAPTER_RELEASE_ID_OFFSET',
-]) output += `export const ${name} = ${scalar('realm', name)} as const;\n`;
+output += `export const CUSTODY_VAULT_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('custody', 'CUSTODY_VAULT_PDA_DOMAIN_V1')}');\n`;
+output += `export const CUSTODY_AUTHORITY_PDA_DOMAIN_V1 = new TextEncoder().encode('${byteString('custody', 'CUSTODY_AUTHORITY_PDA_DOMAIN_V1')}');\n`;
+output += `export const CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1 = ${compartmentTag('HoardPrincipal')} as const;\n`;
+
+// -------------------------------------------------------- the Realm record
+// The Realm body layout used to be re-emitted here from the crate's literals.
+// It is now Lean-emitted directly into lib/generated/realmPositionV1.ts by
+// `npm run abi:realm-position`; a Realm coordinate stated in two generated
+// modules would be exactly the drift this pipeline exists to remove.
 
 if (process.argv.includes('--check')) {
   if (readFileSync(outputUrl, 'utf8') !== output) {

@@ -89,14 +89,29 @@ const ADMISSION_POSITION_OWNER_OFFSET: usize = 80;
 #[repr(u32)]
 pub enum SparseChainCallerError {
     /// Wrapper bytes did not carry one flag byte and the exact stage requests.
-    Instruction = 0,
+    Instruction = 0x10_5000,
     /// Claims program or a forwarded stage frame was malformed.
-    AccountFrame = 1,
+    AccountFrame = 0x10_5001,
     /// A stage refused, or returned no producer-authenticated receipt.
-    ClaimsCpi = 2,
+    ClaimsCpi = 0x10_5002,
     /// Deliberate refusal after the complete chain returned.
-    DeliberateLateFailure = 3,
+    DeliberateLateFailure = 0x10_5003,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    SparseChainCallerError::Instruction as u32
+        == dclutch_refusal_registry::TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE,
+    "SparseChainCallerError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (SparseChainCallerError::DeliberateLateFailure as u32)
+        < dclutch_refusal_registry::TEST_CLAIMS_SPARSE_CHAIN_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "SparseChainCallerError must not run past its registered refusal band"
+);
 
 impl From<SparseChainCallerError> for ProgramError {
     fn from(value: SparseChainCallerError) -> Self {

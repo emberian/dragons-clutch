@@ -67,7 +67,7 @@ These are not mathematical or product omissions.
 | P-002 | Capability manifest profile 1 admits at most sixteen entries and sixteen dependencies per entry | current safe profile | Finalized ordered paged graph with one aggregate commitment, unique kinds, and checked acyclicity |
 | P-003 | Current checked transition program has a finite instruction bound | current safe profile | Wider profiles, staged computation certificates, and AOT are valid; final economic commit remains bounded and atomic |
 | P-004 | Bearer/Structured V1 uses zero-decimal, narrowly admitted Token-2022 Mint and Account layouts | likely scar | Keep it as the strict default profile and add separately versioned Token behavior profiles |
-| P-005 | RentCredit V1 is permanent and has no close, drain, migration, or caller-selected redirect | likely scar | Lifecycle-scoped refund sink closes to its immutable wallet only after its authenticated producer subtree closes |
+| P-005 | RentCredit is Market-generation-scoped, sweeps only to its own immutable refund wallet, and closes only behind a completely retired Market | lifted 2026-08-27 | Done. The lifting path this row named — a lifecycle-scoped refund sink closing to its immutable wallet after its authenticated producer subtree closes — is `LifecycleRentCreditV2`, which tier 1 creates and sweeps. The permanent per-authority RentCredit V1 Create and Withdraw routes this row described were deleted the same day. What survives of V1 is the record type and its width, still read by `dclutch-direct-codec` at registered artifact coordinates 7 and 10; with no Create route no such record can be produced any more, so that pin is now a stated defect owned by DP2, not a profile restriction |
 
 ## Required work that is not an omission
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import fixture from '../fixtures/canonical-accounts.json';
+import fixture from '../fixtures/record-pda.json';
 import { deriveRecordAddresses } from './records';
 
 describe('finalized record address derivation', () => {

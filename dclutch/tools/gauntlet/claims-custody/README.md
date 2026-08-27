@@ -151,10 +151,16 @@ it says so.
 ## Refusals raised outside the census
 
 Both families prove rollback with a test-only caller that refuses AFTER the
-child committed. The chain then reports THAT program's code, which collides
-numerically with a first-party refusal it has nothing to do with — Custom(3) is
-the caller's `DeliberateLateFailure`, and it is also `claims/ClaimsSbfError::
-Release` and `custody/CustodySbfError::CallerAuthority`. Crediting the collision
-would make the census claim a refusal that never happened, so those bindings use
+child committed, and the chain then reports THAT program's code. That number
+used to collide with a first-party refusal it had nothing to do with — Custom(3)
+was the caller's `DeliberateLateFailure` and also `claims/ClaimsSbfError::
+Release` and `custody/CustodySbfError::CallerAuthority` — and crediting the
+collision would have made the census claim a refusal that never happened. Bands
+ended that (`docs/decisions/0007-namespaced-refusal-codes.md`): the Position
+lifecycle's caller raises `0x102003`, the sparse chain's raises `0x105003`, the
+Custody caller raises `0x107003`, and every one of those bands is above
+`0x100000`, where no deployed program can reach. What bands did not change is
+that a test caller is not an enumerated program, so there is no taxonomy entry
+to credit its refusal to. Those bindings therefore still use
 `unnamed_refusal { code, reason }`: the code is still checked against the chain,
 and no first-party taxonomy is credited.

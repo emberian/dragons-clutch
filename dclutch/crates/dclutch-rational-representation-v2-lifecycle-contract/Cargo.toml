@@ -11,7 +11,7 @@ dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-repres
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 
 [dev-dependencies]
-sha2 = "=0.10.9"
+sha2 = { version = "=0.10.9", default-features = false }
 
 [lints.rust]
 missing_docs = "deny"

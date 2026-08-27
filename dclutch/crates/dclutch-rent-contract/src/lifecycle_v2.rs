@@ -776,6 +776,52 @@ pub struct LifecycleAccountMetaV2 {
     pub executable: bool,
 }
 
+/// Validate the fixed four-account Create frame.
+///
+/// Ordered payer, credit, System Program, Rent sysvar. The adapter must
+/// additionally authenticate the payer as a System payer, the credit key as the
+/// vacant PDA derived from Create data, and the Rent value used to obtain the
+/// current minimum. No authority account exists: creation is a third-party
+/// reserve donation.
+///
+/// This policy came from `CreateRentCreditFrameV1`, which the V2 Create route
+/// had been borrowing; it moved here when the V1 routes were deleted on
+/// 2026-08-27, unchanged in what it admits.
+pub fn validate_create_frame_v2(
+    payer: LifecycleAccountMetaV2,
+    credit: LifecycleAccountMetaV2,
+    system: LifecycleAccountMetaV2,
+    rent: LifecycleAccountMetaV2,
+) -> LifecycleRentResultV2<()> {
+    if payer.key == [0; PUBKEY_BYTES]
+        || credit.key == [0; PUBKEY_BYTES]
+        || !payer.signer
+        || !payer.writable
+        || payer.executable
+        || credit.signer
+        || !credit.writable
+        || credit.executable
+        || system.key != SYSTEM_PROGRAM_ID
+        || system.signer
+        || system.writable
+        || !system.executable
+        || rent.key != RENT_SYSVAR_ID
+        || rent.signer
+        || rent.writable
+        || rent.executable
+        || payer.key == credit.key
+        || payer.key == system.key
+        || payer.key == rent.key
+        || credit.key == system.key
+        || credit.key == rent.key
+        || system.key == rent.key
+    {
+        Err(LifecycleRentErrorV2::InvalidFrame)
+    } else {
+        Ok(())
+    }
+}
+
 /// Validate the fixed three-account Sweep frame.
 pub fn validate_sweep_frame_v2(
     state: LifecycleRentCreditV2,

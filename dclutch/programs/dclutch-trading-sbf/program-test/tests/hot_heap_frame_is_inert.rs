@@ -22,11 +22,43 @@
 //!
 //! Either way the change is deliberate and visible here, rather than a
 //! doctrine living only in a doc comment.
+//!
+//! **The second one happened (W2p, 2026-08-27).** The Hot tail now executes to
+//! completion at the protocol default 32 KiB heap, so what this test asserts is
+//! success with the grant still inert. Hot stays off the extended-heap list and
+//! the packet assertion below still records why -- but nothing rides on it any
+//! more, which is the outcome the decision was holding out for.
+//!
+//! # And the compute ceiling is now the wall, at one failure in twenty
+//!
+//! Read the CU figure this prints as ONE DRAW, not as the number. The Hot path
+//! derives program addresses whose seeds include the fixture's maker keys, and
+//! `try_find_program_address` costs 1,500 CU per attempt, so the total is a
+//! function of how deep the bump search happens to go for the keys in play.
+//! `waist::fixture_keypair` pins those keys so this figure is reproducible;
+//! `DCLUTCH_FIXTURE_SEED=<n>` redraws them.
+//!
+//! Measured over seeds 0..=19 against ONE ELF
+//! (`14b22a31bb9cabf782047da15eee99ad4f7a1002d17a9f48c256137f6115a2c9`):
+//! nineteen succeeded, spanning 1,336,865 to 1,386,359 CU, and **seed 10 FAILED
+//! -- `exceeded CUs meter at BPF instruction`, 1,399,944 of 1,400,000.** The
+//! ceiling is not a margin this path has; it is a coin the makers' keys flip.
+//! 1,400,000 is also the runtime's maximum, so there is nothing to request.
+//!
+//! The lane that met this spread before it was pinned recorded it as "codegen
+//! noise of +-20,000 CU between builds of the same source". It is not codegen:
+//! the same ELF, run repeatedly with fresh keys, spans the same range, and with
+//! the keys pinned it is exact to the unit across runs. Anyone quoting a single
+//! CU figure for this path should say which seed produced it.
 
+use dclutch_trading_sbf::TradingSbfError;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
-use solana_program::{instruction::Instruction, pubkey::Pubkey};
+use solana_program::{
+    instruction::{Instruction, InstructionError},
+    pubkey::Pubkey,
+};
 use solana_program_test::ProgramTest;
-use solana_sdk::signature::Signer;
+use solana_sdk::{signature::Signer, transaction::TransactionError};
 use solana_sdk_ids::compute_budget;
 use solana_transaction::versioned::VersionedTransaction;
 
@@ -161,19 +193,48 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
         .await
         .expect("execution completed");
     let metadata = processed.metadata.expect("transaction metadata");
-    let refusal = processed
-        .result
-        .expect_err("Hot cannot yet execute its tail at the protocol default heap");
-    // `TradingSbfError::Content` is the named heap refusal -- fail-closed, never
-    // an abort. If this ever becomes an access violation, the grant has gone
-    // live without the packet room to carry it and the allocator is writing
-    // past a region the runtime did not map.
-    assert!(
-        format!("{refusal:?}").contains("Custom(3)"),
-        "Hot refused something other than its own heap refusal: {refusal:?}",
-    );
+    // THE SECOND OF THE TWO CHANGES THIS TEST'S HEADER NAMES HAS HAPPENED
+    // (W2p, 2026-08-27). The Hot tail's heap demand was closed structurally --
+    // the observation bank, the borrow guards and every register bank of the
+    // request/preplan/replan phases now come off the program heap's scratch
+    // end and are released before the child walk -- so the whole question is
+    // moot and this test's refusal has become success.
+    //
+    // What it now pins is stronger than what it pinned before: the canonical
+    // Direct continuation EXECUTES TO COMPLETION at the protocol default 32
+    // KiB heap, with the `RequestHeapFrame(262_144)` above still inert. That
+    // is the same inertness as before -- Hot is not on
+    // `declares_extended_heap_profile_v1`'s list and the packet assertion
+    // above still says why it cannot be -- but now with nothing riding on it.
+    //
+    // If this ever becomes a refusal again, read the code before assuming a
+    // regression in the heap: `TradingSbfError::Content` is the named heap
+    // refusal, fail-closed and never an abort, and it is what a heap
+    // regression would produce.
+    if let Err(refusal) = processed.result {
+        let TransactionError::InstructionError(_, InstructionError::Custom(code)) = refusal else {
+            panic!("Hot refused outside its own error taxonomy: {refusal:?}");
+        };
+        assert_ne!(
+            code,
+            TradingSbfError::Content as u32,
+            "the Hot tail no longer fits the protocol default heap -- this is \
+             the structural closure of W2p coming undone, not a new refusal",
+        );
+        panic!("Hot refused at the protocol default heap with Custom({code})");
+    }
     assert!(
         metadata.compute_units_consumed <= 1_400_000,
         "the protocol ceiling is the ceiling",
+    );
+    // Printed, not asserted: the margin is the lane's evidence and a single
+    // figure off this path is codegen noise of about +-20,000 CU. What is
+    // asserted is the ceiling.
+    println!(
+        "hot tail at the protocol default heap, fixture seed {}: {} CU of \
+         1,400,000 ({} spare)",
+        std::env::var("DCLUTCH_FIXTURE_SEED").unwrap_or_else(|_| "0".to_owned()),
+        metadata.compute_units_consumed,
+        1_400_000_u64.saturating_sub(metadata.compute_units_consumed),
     );
 }

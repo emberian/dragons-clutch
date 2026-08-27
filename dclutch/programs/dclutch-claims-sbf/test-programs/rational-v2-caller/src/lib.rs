@@ -30,16 +30,31 @@ use solana_program::{
 #[repr(u32)]
 pub enum RationalV2CallerError {
     /// Wrapper bytes did not contain one flag and one canonical request.
-    Instruction = 0,
+    Instruction = 0x10_4000,
     /// Claims program or forwarded account frame was malformed.
-    AccountFrame = 1,
+    AccountFrame = 0x10_4001,
     /// Production Claims composition refused or returned no exact receipt.
-    ClaimsCpi = 2,
+    ClaimsCpi = 0x10_4002,
     /// Deliberate refusal after the complete production composition returned.
-    DeliberateLateFailure = 3,
+    DeliberateLateFailure = 0x10_4003,
     /// Caller-authority seed material was not canonical.
-    Authority = 4,
+    Authority = 0x10_4004,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    RationalV2CallerError::Instruction as u32
+        == dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_V2_CALLER_BASE,
+    "RationalV2CallerError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (RationalV2CallerError::Authority as u32)
+        < dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_V2_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "RationalV2CallerError must not run past its registered refusal band"
+);
 
 impl From<RationalV2CallerError> for ProgramError {
     fn from(value: RationalV2CallerError) -> Self {

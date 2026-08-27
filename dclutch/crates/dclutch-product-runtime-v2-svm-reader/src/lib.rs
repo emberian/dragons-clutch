@@ -21,14 +21,12 @@
 //! superseded Core-owned `LinkedBasisRecordV2` expectation was deleted from
 //! each of those paths in the same cycle; no parallel decode fallback remains.
 //!
-//! One legacy consumer is deliberately left, with its reason recorded in
-//! `dclutch-claims-sbf::liability_basis_v2`: the `DCLLBX02` route. It has no
-//! producer anywhere in the tree and nothing on chain finalizes a `DCLTLNK2`
-//! raw record, so it is unreachable rather than a competing authority, and
-//! converging it is a port of the V2 kernel's evaluator plus an account-frame
-//! widening rather than a basis swap. It is queued behind the retirement of
-//! `dclutch-liability-basis-v2-kernel::product_claims`, which still defines
-//! `LinkedBasisRecordV2` for its own tests.
+//! There are no legacy consumers left. The one that was -- the `DCLLBX02`
+//! route in `dclutch-claims-sbf::liability_basis_v2`, which still expected a
+//! Core-owned `LinkedBasisRecordV2` -- was deleted rather than converged, and
+//! its module is now just the shared LBV2 state vocabulary. `LinkedBasisRecordV2`
+//! survives only inside `dclutch-liability-basis-v2-kernel::product_claims`,
+//! for that crate's own tests; no SBF path decodes it.
 
 #![no_std]
 #![forbid(unsafe_code)]

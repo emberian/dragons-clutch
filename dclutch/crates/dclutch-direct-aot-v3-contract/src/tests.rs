@@ -26,6 +26,11 @@ const SENTINEL_IDENTITY: [u8; 32] = [0x55; 32];
 const FOREIGN: [u8; 32] = [9; 32];
 /// Exact fee denominator the emitted program loads as a constant.
 const FEE_DENOMINATOR: u64 = dclutch_direct_codec::successor::DIRECT_FEE_DENOMINATOR_V1 as u64;
+/// Canonical coordinate register of the last Product item in this corpus width.
+#[allow(clippy::cast_possible_truncation)]
+const LAST_ITEM_COORDINATE: usize = DIRECT_ORDINARY_COMMON_SCALARS_V3
+    + (N as usize - 1) * DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3 as usize
+    + ITEM_SCALAR_INDEX_V3 as usize;
 
 type Scalars = [u64; SCALARS];
 type Identities = [[u8; 32]; DIRECT_ORDINARY_COMMON_IDENTITIES_V3];
@@ -351,6 +356,14 @@ const HOSTILE_CORPUS: &[Case] = &[
     ("inexact_gross_division", |s, _i| {
         s[SCALAR_EXECUTION_PRICE_V3] = 51;
     }),
+    // One basis point above the denominator. Without the prelude's bound the
+    // floor fee reaches the gross, so the buyer is debited twice the quote while
+    // the seller nets nothing.
+    ("fee_bps_above_denominator", |s, _i| {
+        s[SCALAR_POLICY_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
+        s[SCALAR_SELLER_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
+        s[SCALAR_BUYER_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
+    }),
     ("fee_bps_u64_max", |s, _i| {
         s[SCALAR_POLICY_FEE_BPS_V3] = u64::MAX;
         s[SCALAR_SELLER_FEE_BPS_V3] = u64::MAX;
@@ -384,6 +397,20 @@ const HOSTILE_CORPUS: &[Case] = &[
         s[SCALAR_SELLER_FEE_BPS_V3] = 2_000;
         s[SCALAR_BUYER_FEE_BPS_V3] = 2_000;
         s[SCALAR_CUSTODY_REVISION_V3] = u64::MAX - 1;
+    }),
+    // The closed AOT/interpreter divergence. An authenticated outcome count of
+    // five with a traded outcome of four leaves no Product item carrying that
+    // outcome, so the fold writes nothing: the epilogue refuses a fill whose
+    // Claims quantities are all zero rather than debiting the buyer for nothing.
+    ("traded_outcome_outside_the_product_tail", |s, _i| {
+        s[SCALAR_OUTCOME_COUNT_V3] = 5;
+        s[SCALAR_SELLER_OUTCOME_V3] = 4;
+        s[SCALAR_BUYER_OUTCOME_V3] = 4;
+    }),
+    // The other half of the same conservation clause: a tail that repeats a
+    // coordinate would transfer the fill twice.
+    ("product_tail_repeats_a_coordinate", |s, _i| {
+        s[LAST_ITEM_COORDINATE] = 1;
     }),
 ];
 
@@ -448,13 +475,6 @@ const BOUNDARY_CORPUS: &[Case] = &[
         s[SCALAR_SELLER_FEE_BPS_V3] = FEE_DENOMINATOR;
         s[SCALAR_BUYER_FEE_BPS_V3] = FEE_DENOMINATOR;
     }),
-    // The inline ordinary program carries no `fee_bps <= denominator` guard, so
-    // this input is admitted by both executors rather than refused.
-    ("fee_bps_above_denominator", |s, _i| {
-        s[SCALAR_POLICY_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
-        s[SCALAR_SELLER_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
-        s[SCALAR_BUYER_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
-    }),
     ("both_participants_created", |s, _i| {
         s[SCALAR_SELLER_CREATED_V3] = 1;
         s[SCALAR_BUYER_CREATED_V3] = 1;
@@ -510,28 +530,29 @@ fn boundary_corpus_matches_admission_and_banks() {
     }
 }
 
-/// The hand-written AOT translation carries a `seller_outcome < tail_count` guard
-/// that the emitted program does not: the emitted program only checks
-/// `seller_outcome < SCALAR_OUTCOME_COUNT_V3`, and its item body writes a claim
-/// quantity only where the item index matches. When the authenticated outcome
-/// count exceeds the Product tail count, the two executors split.
+/// The divergence that was permanently ignored here, now closed.
 ///
-/// Left failing on purpose. Ignored only so the rest of the corpus still runs.
+/// The hand-written AOT translation used to carry a `seller_outcome < tail_count`
+/// guard the emitted program did not, because the emitted program only checked
+/// `seller_outcome < SCALAR_OUTCOME_COUNT_V3`. When the authenticated outcome
+/// count exceeded the Product tail count the two executors split: the AOT refused
+/// and the interpreter admitted a fill whose item claim quantities were all zero.
+///
+/// The authored program now closes the tail: the Claims quantities written across
+/// the fold must sum to the transferred quantity. Both executors refuse, and the
+/// Rust guard that was the only holder of that authority is gone.
 #[test]
-#[ignore = "AOT refuses with CheckFailed while the interpreter admits: \
-            execute_inline_candidate adds an outcome < tail_count guard that the \
-            emitted DIRECT_ORDINARY_PRELUDE_V3 does not have. With \
-            SCALAR_OUTCOME_COUNT_V3 = 5, SCALAR_SELLER_OUTCOME_V3 = 4 and \
-            tail_count = 3 the interpreter admits a fill whose item claim \
-            quantities are all zero."]
-fn outcome_between_tail_count_and_outcome_count() {
+fn a_traded_outcome_outside_the_product_tail_is_refused_by_both() {
     let (mut scalars, identities) = input();
     scalars[SCALAR_OUTCOME_COUNT_V3] = 5;
     scalars[SCALAR_SELLER_OUTCOME_V3] = 4;
     scalars[SCALAR_BUYER_OUTCOME_V3] = 4;
-    assert_equivalent(
-        "outcome_between_tail_count_and_outcome_count",
-        &scalars,
-        &identities,
+    assert!(
+        !assert_equivalent(
+            "a_traded_outcome_outside_the_product_tail",
+            &scalars,
+            &identities,
+        ),
+        "expected refusal, both admitted"
     );
 }

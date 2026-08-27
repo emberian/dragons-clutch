@@ -25,7 +25,7 @@
       "program": "rent",
       "outcome": "refused",
       "refusal": "rent/RentSbfError::Balance",
-      "note": "HOSTILE, and the half that matters. Sweep needs NO signature at all — three accounts, one of them a sysvar — so the only thing standing between the lifecycle credit and being drained below its own rent minimum is the checked balance plan. A sweep of exactly one lamport more than the surplus must refuse Balance (4), 'exact checked contract balance plan refused'. The producer additionally asserts the credit's lamports did not move."
+      "note": "HOSTILE, and the half that matters. Sweep needs NO signature at all — three accounts, one of them a sysvar — so the only thing standing between the lifecycle credit and being drained below its own rent minimum is the checked balance plan. A sweep of exactly one lamport more than the surplus must refuse Balance (0x2004), 'exact checked contract balance plan refused'. The producer additionally asserts the credit's lamports did not move."
     },
     {
       "label": "journey: sweep lifecycle rent surplus to the refund wallet",

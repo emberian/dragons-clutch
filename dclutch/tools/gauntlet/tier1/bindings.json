@@ -18,7 +18,7 @@
       "program": "core",
       "outcome": "refused",
       "refusal": "core/CoreSbfError::Infrastructure",
-      "note": "HOSTILE. A wrong signer attempts the sole Core infrastructure-profile initialization. Refuses Infrastructure (15) \u2014 'Core bootstrap profile, artifact, Loader, or immutability authority refused' \u2014 which is the right refusal for a wrong immutability authority. The runner additionally asserts that no profile account exists afterwards."
+      "note": "HOSTILE. A wrong signer attempts the sole Core infrastructure-profile initialization. Refuses Infrastructure (0x300F) \u2014 'Core bootstrap profile, artifact, Loader, or immutability authority refused' \u2014 which is the right refusal for a wrong immutability authority. The runner additionally asserts that no profile account exists afterwards."
     },
     {
       "label": "initialize Core infrastructure profile",
@@ -67,7 +67,7 @@
       "program": "registry",
       "outcome": "refused",
       "refusal": "registry/RegistryError::Deployment",
-      "note": "HOSTILE, and the strongest rollback case in tier 1: a lamport transfer is placed FIRST in the same transaction as an activation whose role ProgramData coordinate has been substituted. Refuses Deployment (3) \u2014 'Loader Program, ProgramData, linkage, slot, ELF, or authority refused' \u2014 which is exactly the substituted coordinate. The runner asserts the recipient account does not exist afterwards and that the payer's delta is EXACTLY the transaction fee: byte-exact rollback, not merely 'it failed'."
+      "note": "HOSTILE, and the strongest rollback case in tier 1: a lamport transfer is placed FIRST in the same transaction as an activation whose role ProgramData coordinate has been substituted. Refuses Deployment (0x1003) \u2014 'Loader Program, ProgramData, linkage, slot, ELF, or authority refused' \u2014 which is exactly the substituted coordinate. The runner asserts the recipient account does not exist afterwards and that the payer's delta is EXACTLY the transaction fee: byte-exact rollback, not merely 'it failed'."
     },
     {
       "label": "create real Token-2022 collateral and raw-atom wallet",
@@ -187,7 +187,7 @@
       "program": "core",
       "outcome": "refused",
       "refusal": "core/CoreSbfError::AccountFrame",
-      "note": "HOSTILE. The lifecycle rent-credit coordinate is substituted. Refuses AccountFrame (1) \u2014 'account count, order, privilege, executable flag, or alias refused' \u2014 at 6,958 CU, before any protocol work: the substitution collides with another frame coordinate and the alias check catches it first. Recorded here rather than assumed: the refusal a hostile case ACTUALLY raises is a fact about the program, not a preference."
+      "note": "HOSTILE. The lifecycle rent-credit coordinate is substituted. Refuses AccountFrame (0x3001) \u2014 'account count, order, privilege, executable flag, or alias refused' \u2014 at 6,958 CU, before any protocol work: the substitution collides with another frame coordinate and the alias check catches it first. Recorded here rather than assumed: the refusal a hostile case ACTUALLY raises is a fact about the program, not a preference."
     },
     {
       "label": "Found31 refuses a substituted Market coordinate and rolls the transaction back",
@@ -198,7 +198,7 @@
       "program": "core",
       "outcome": "refused",
       "refusal": "core/CoreSbfError::RentCredit",
-      "note": "HOSTILE, and the sharpest one: a substituted Market coordinate under attacker-chosen address-lookup-table routing, in a multi-instruction transaction that must roll back to a fee-only debit. Refuses RentCredit (6) \u2014 'RentCredit owner, bytes, PDA, or persisted beneficiary refused'. Worth reading carefully: the Market substitution is caught by the rent-credit-to-Market PDA binding, not by a Market check, because the lifecycle credit is a PDA of [domain, market, generation]. Substituting the Market therefore breaks the credit's derivation before anything looks at the Market itself."
+      "note": "HOSTILE, and the sharpest one: a substituted Market coordinate under attacker-chosen address-lookup-table routing, in a multi-instruction transaction that must roll back to a fee-only debit. Refuses RentCredit (0x3006) \u2014 'RentCredit owner, bytes, PDA, or persisted beneficiary refused'. Worth reading carefully: the Market substitution is caught by the rent-credit-to-Market PDA binding, not by a Market check, because the lifecycle credit is a PDA of [domain, market, generation]. Substituting the Market therefore breaks the credit's derivation before anything looks at the Market itself."
     },
     {
       "label": "create canonical Found31 Market",

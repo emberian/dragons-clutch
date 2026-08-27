@@ -163,14 +163,19 @@
 
 use core::{
     alloc::{GlobalAlloc, Layout},
+    marker::PhantomData,
     mem::MaybeUninit,
-    ptr::null_mut,
+    ptr::{NonNull, null_mut},
     slice,
 };
+use std::vec::Vec;
 
+#[cfg(not(target_os = "solana"))]
+use solana_program::instruction::Instruction;
 use solana_program::{
     account_info::AccountInfo,
     entrypoint::{BPF_ALIGN_OF_U128, HEAP_LENGTH, MAX_PERMITTED_DATA_INCREASE},
+    instruction::AccountMeta,
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -219,16 +224,20 @@ const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
 /// Bytes the bump heap reserves at its floor for the allocator's own state.
 ///
 /// Word 0 is the bump position as an offset from the heap floor, word 1 is the
-/// admitted ceiling in bytes. Zero means "not yet written" for both, which is
-/// why the loader's zero-fill of the heap (trust-surface assumption 5) is
-/// load-bearing.
-const HEAP_HEADER_BYTES: usize = 16;
+/// admitted ceiling in bytes, word 2 is the scratch floor -- the offset the
+/// high-end scratch allocator has bumped DOWN to. Zero means "not yet written"
+/// for all three, which is why the loader's zero-fill of the heap
+/// (trust-surface assumption 5) is load-bearing.
+const HEAP_HEADER_BYTES: usize = 24;
 
 /// Byte offset of the bump-position word within the heap header.
 const HEAP_POSITION_WORD: usize = 0;
 
 /// Byte offset of the admitted-ceiling word within the heap header.
 const HEAP_CEILING_WORD: usize = 8;
+
+/// Byte offset of the scratch-floor word within the heap header.
+const HEAP_SCRATCH_WORD: usize = 16;
 
 /// Value the loader writes in place of an account record for a repeated account.
 ///
@@ -295,6 +304,82 @@ const UNUSED_RENT_EPOCH_BYTES: usize = 8;
 /// Neither omission is a claim that this allocator is finished. Both are
 /// recorded so that reinstating either is a decision someone makes with the
 /// number in front of them.
+///
+/// # A third reclaim, asked for by name, answered NO at one end and YES at the
+/// other: the region reset
+///
+/// **What follows is W2o's measurement and it still stands: a mark/reset of
+/// the UPWARD end cannot reclaim the observation bank.** What changed (W2p) is
+/// the conclusion drawn from it. The blocking fact is not that the bank is
+/// short-lived but that it is short-lived *underneath* eighteen kilobytes that
+/// are not, and the fix for that is not a mark -- it is to allocate it at the
+/// other end. This allocator now has one: [`Self::alloc_scratch`] bumps DOWN
+/// from the ceiling, the two ends refuse to cross, and
+/// [`HeapScratchRegionV1`] releases the whole high end in one store. A block
+/// served there is reclaimed no matter what was allocated at the upward end
+/// while it was live, so the reorder the paragraphs below ask for is not
+/// needed -- and the release's obligation, which on the upward end would have
+/// spanned four hundred lines and five calls, becomes a lexical scope the
+/// borrow checker enforces.
+///
+/// The original question and its measurement:
+///
+/// The question put to this allocator (W2o, 2026-08-27) was whether a
+/// mark/reset at a phase boundary should be reinstated, on the ground that
+/// `hot_v3::process_hot_execution_v3` does
+/// `drop(observations); drop(runtime_data);` immediately before `before-commit`
+/// and releases about 5,968 bytes at exactly the point the child walk begins
+/// allocating. The measurement says no, and the reason is a fact about the
+/// SHAPE of that drop rather than about its size.
+///
+/// A bump allocator can release only its TOP block, and a region reset is that
+/// same release under a named scope: it is sound exactly when nothing allocated
+/// after the mark is live at the reset. Measured on the canonical Direct
+/// bundle, at the instruction where those two drops run, the bump position is
+/// **35,299** and the two dead blocks lie at roughly `[10,456, 11,920)` and
+/// `[12,656, 17,160)`. Between them and the top sit about **18,000 bytes that
+/// are all LIVE**: the alias table, the register pair the projection kept and
+/// the two the preplan arena rents from it, the preplan output pair, the
+/// account-input / permission / lamport / request / write-range / discipline
+/// banks the effect projection built, the decoded privilege bytes, the boxed
+/// Claims composition and the resolved role programs. Every one of them is read
+/// by the child walk or by the commit that follow.
+///
+/// So the drop pattern's shape is a **hole, not a region**. No mark can be
+/// placed that both precedes the observation bank and follows nothing live, and
+/// last-in-first-out will not fire on it for the same reason. Reclaiming it
+/// needs a free list -- the standing hazard recorded above -- or a reordering
+/// that moves every surviving allocation BELOW the observation bank, which
+/// means pre-allocating the projection's output banks before its input exists.
+/// That is a restructure of the middle of `process_hot_execution_v3`, not an
+/// allocator change, and it is where the next lane should look.
+///
+/// What a region reset WOULD reclaim on this path, provably, is the preflight
+/// walk: its account frame and its child wire are locals of
+/// `preflight_child_routes_v3`, nothing outside can hold a pointer into them,
+/// and they are the top block when it returns. That is about **720 bytes** as
+/// of this measurement. It is not carried, because 720 bytes does not buy a
+/// general release primitive in a module whose whole discipline is that the
+/// unsafe surface stays small enough to audit.
+///
+/// And the arithmetic that sizes the prize, so the next lane spends its effort
+/// where the bytes are. The peak is **42,784** against a 32,768 ceiling, and
+/// 35,299 of it is standing when the two drops run. A reclaim that returned
+/// the observation bank, the runtime-data guards and the preflight walk in
+/// full -- 6,689 bytes -- would leave 28,610 standing for the child walk and
+/// the commit to build their 7,485 on top of, for a peak of **36,095**: still
+/// about **3,300 bytes over**, but within reach of the structural cuts, which
+/// it is not today. So the reclaim is worth roughly **6,700 bytes and is the
+/// single largest lever left** -- and it is a FREE LIST, with everything that
+/// implies, or the reordering above. Neither is a mark and neither is
+/// last-in-first-out; do not reach for those again on the strength of the drop
+/// site alone.
+///
+/// W2p reached for neither. It took the option the hole's SHAPE leaves once
+/// the shape rather than the size is read as the problem: **stop putting the
+/// short-lived bank underneath the long-lived ones.** The scratch end does
+/// that without moving one other allocation, and the reclaim it measures is
+/// the one the paragraph above sized.
 pub struct BumpHeapV1 {
     /// Absolute address of the heap floor.
     base: usize,
@@ -318,7 +403,8 @@ impl BumpHeapV1 {
     ///
     /// # Safety
     ///
-    /// `offset` must be `HEAP_POSITION_WORD` or `HEAP_CEILING_WORD`.
+    /// `offset` must be `HEAP_POSITION_WORD`, `HEAP_CEILING_WORD` or
+    /// `HEAP_SCRATCH_WORD`.
     #[inline(always)]
     unsafe fn header_word(&self, offset: usize) -> *mut usize {
         // SAFETY: `self.base` is the floor of a writable region of at least
@@ -401,6 +487,92 @@ impl BumpHeapV1 {
     pub fn bytes_capacity(&self) -> usize {
         self.ceiling()
     }
+
+    /// Lowest offset the scratch end has bumped down to.
+    ///
+    /// Equal to the ceiling exactly when no scratch region is open, which is
+    /// also what the loader's zero-fill means.
+    #[inline(always)]
+    fn scratch_floor(&self) -> usize {
+        // SAFETY: HEAP_SCRATCH_WORD is a header offset; see `header_word`.
+        let stored = unsafe { *self.header_word(HEAP_SCRATCH_WORD) };
+        if stored == 0 { self.ceiling() } else { stored }
+    }
+
+    /// Bytes outstanding at the scratch end.
+    #[must_use]
+    pub fn scratch_bytes_used(&self) -> usize {
+        self.ceiling().saturating_sub(self.scratch_floor())
+    }
+
+    /// Open the one scratch region.
+    ///
+    /// Refuses when a region is already open. See [`HeapScratchRegionV1`] for
+    /// why exactly one may be open at a time.
+    #[cfg_attr(not(target_os = "solana"), allow(dead_code))]
+    fn open_scratch(&self) -> Result<usize, ProgramError> {
+        let ceiling = self.ceiling();
+        if self.scratch_floor() != ceiling {
+            return Err(TradingSbfError::Content.into());
+        }
+        Ok(ceiling)
+    }
+
+    /// Return the scratch end to `mark`.
+    ///
+    /// # Safety
+    ///
+    /// Every block this allocator served from the scratch end above `mark`
+    /// must be dead: no live reference may point into `[mark, ceiling)`.
+    /// [`HeapScratchRegionV1`] is the only caller and discharges this by
+    /// construction -- a [`ScratchVecV1`] borrows the region, so the borrow
+    /// checker refuses to let one outlive the release.
+    #[cfg_attr(not(target_os = "solana"), allow(dead_code))]
+    unsafe fn release_scratch(&self, mark: usize) {
+        if mark < self.scratch_floor() {
+            return;
+        }
+        // SAFETY: HEAP_SCRATCH_WORD is a header offset; see `header_word`.
+        unsafe { *self.header_word(HEAP_SCRATCH_WORD) = mark };
+    }
+
+    /// Hand out `layout` from the scratch end, bumping DOWNWARD.
+    ///
+    /// The two ends meet in the middle and each refuses rather than crossing
+    /// the other: an upward allocation is bounded by [`Self::scratch_floor`]
+    /// and this one is bounded by [`Self::position`], so a block from either
+    /// end is disjoint from every block outstanding at the other.
+    ///
+    /// # Safety
+    ///
+    /// Same contract as [`GlobalAlloc::alloc`]: `layout` must have a non-zero
+    /// size.
+    #[cfg_attr(not(target_os = "solana"), allow(dead_code))]
+    unsafe fn alloc_scratch(&self, layout: Layout) -> *mut u8 {
+        let floor = self.scratch_floor();
+        let Some(unaligned) = self
+            .base
+            .checked_add(floor)
+            .and_then(|address| address.checked_sub(layout.size()))
+        else {
+            return null_mut();
+        };
+        // Align DOWN: the block starts at the highest correctly aligned
+        // address whose whole extent still lies below the current floor.
+        let start_address = unaligned & !(layout.align().wrapping_sub(1));
+        let Some(start) = start_address.checked_sub(self.base) else {
+            return null_mut();
+        };
+        if start < self.position() {
+            return null_mut();
+        }
+        // SAFETY: HEAP_SCRATCH_WORD is a header offset; see `header_word`.
+        unsafe { *self.header_word(HEAP_SCRATCH_WORD) = start };
+        // SAFETY: `start` is at least `position` and at most `floor <=
+        // ceiling`, and `[base, base + ceiling)` is mapped writable by the
+        // construction contract.
+        unsafe { (self.base as *mut u8).add(start) }
+    }
 }
 
 // SAFETY: SBF programs are single-threaded, so the interior mutation through
@@ -435,7 +607,10 @@ unsafe impl GlobalAlloc for BumpHeapV1 {
         let Some(end) = start.checked_add(layout.size()) else {
             return null_mut();
         };
-        if end > self.ceiling() {
+        // The bound is the scratch floor, not the ceiling: it IS the ceiling
+        // whenever no scratch region is open, and while one is it is the
+        // lowest byte the scratch end has handed out.
+        if end > self.scratch_floor() {
             return null_mut();
         }
         self.set_position(end);
@@ -486,6 +661,325 @@ pub fn program_heap_bytes_used_v1() -> usize {
 #[must_use]
 pub fn program_heap_capacity_v1() -> usize {
     PROGRAM_HEAP_V1.bytes_capacity()
+}
+
+/// Bytes outstanding at the program heap's scratch end.
+///
+/// Zero whenever no [`HeapScratchRegionV1`] is open, which is every instant
+/// outside the one region the Hot path opens.
+#[cfg(all(
+    target_os = "solana",
+    not(feature = "custom-heap"),
+    not(feature = "no-entrypoint")
+))]
+#[must_use]
+pub fn program_heap_scratch_bytes_v1() -> usize {
+    PROGRAM_HEAP_V1.scratch_bytes_used()
+}
+
+// ---------------------------------------------------------------------------
+// The scratch region
+// ---------------------------------------------------------------------------
+
+/// Where a [`ScratchVecV1`] gets its bytes, and what happens when it is
+/// dropped.
+///
+/// On chain this is the program heap's high end: [`BumpHeapV1::alloc_scratch`]
+/// hands out blocks going DOWN from the ceiling and an individual release is a
+/// no-op, exactly as the upward end's is, because [`HeapScratchRegionV1`]
+/// returns the whole end in one store. Off chain -- the host test build, and
+/// any build that is not the Trading executable -- there is no program heap to
+/// bump, so a scratch block is an ordinary global allocation that is really
+/// freed on drop. The host build therefore measures no heap and is not
+/// evidence about one; it exists so the same code type-checks and runs in unit
+/// tests.
+#[cfg(all(
+    target_os = "solana",
+    not(feature = "custom-heap"),
+    not(feature = "no-entrypoint")
+))]
+mod scratch_backing {
+    use super::{Layout, PROGRAM_HEAP_V1, ProgramError};
+
+    pub(super) fn open() -> Result<usize, ProgramError> {
+        PROGRAM_HEAP_V1.open_scratch()
+    }
+
+    /// # Safety
+    ///
+    /// Every scratch block above `mark` must be dead.
+    pub(super) unsafe fn close(mark: usize) {
+        // SAFETY: forwarded from `HeapScratchRegionV1::drop`, which holds the
+        // obligation; see that type.
+        unsafe { PROGRAM_HEAP_V1.release_scratch(mark) };
+    }
+
+    /// # Safety
+    ///
+    /// `layout` must have a non-zero size.
+    pub(super) unsafe fn alloc(layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded from `ScratchVecV1::with_capacity`, which refuses a
+        // zero-sized layout before calling.
+        unsafe { PROGRAM_HEAP_V1.alloc_scratch(layout) }
+    }
+
+    /// # Safety
+    ///
+    /// Unconditionally safe: the on-chain scratch end releases per region, not
+    /// per block, so this is the same no-op the upward end's `dealloc` is.
+    pub(super) const unsafe fn dealloc(_block: *mut u8, _layout: Layout) {}
+}
+
+#[cfg(not(all(
+    target_os = "solana",
+    not(feature = "custom-heap"),
+    not(feature = "no-entrypoint")
+)))]
+mod scratch_backing {
+    use super::{Layout, ProgramError};
+
+    // `OPEN` mirrors the on-chain "exactly one region open" invariant so a host
+    // test meets the same refusal a program would.
+    //
+    // Thread-local rather than a plain `static mut` because a host test binary
+    // runs its tests concurrently -- and it is `cfg`-ed off on SBF for the
+    // opposite reason: an SBF program has no thread-local storage at all, and
+    // an ELF that asks for some fails to load, which is reported as
+    // `UnsupportedProgramId` at the first invoke rather than as anything that
+    // names TLS. That is not a lost check on chain: the Trading executable
+    // takes the branch above, where the invariant lives in the heap header.
+    // What is left here is every OTHER SBF build -- `no-entrypoint` libraries
+    // linked into a test program, which have someone else's global allocator
+    // and no program heap to bump.
+    #[cfg(not(target_os = "solana"))]
+    std::thread_local! {
+        static OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[cfg(not(target_os = "solana"))]
+    pub(super) fn open() -> Result<usize, ProgramError> {
+        OPEN.with(|open| {
+            if open.get() {
+                Err(crate::TradingSbfError::Content.into())
+            } else {
+                open.set(true);
+                Ok(0)
+            }
+        })
+    }
+
+    #[cfg(target_os = "solana")]
+    pub(super) fn open() -> Result<usize, ProgramError> {
+        Ok(0)
+    }
+
+    /// # Safety
+    ///
+    /// Unconditionally safe here: every scratch block on this backing was
+    /// released by its own `dealloc` already.
+    pub(super) unsafe fn close(_mark: usize) {
+        #[cfg(not(target_os = "solana"))]
+        OPEN.with(|open| open.set(false));
+    }
+
+    /// # Safety
+    ///
+    /// `layout` must have a non-zero size.
+    pub(super) unsafe fn alloc(layout: Layout) -> *mut u8 {
+        // SAFETY: forwarded from `ScratchVecV1::with_capacity`, which refuses a
+        // zero-sized layout before calling.
+        unsafe { std::alloc::alloc(layout) }
+    }
+
+    /// # Safety
+    ///
+    /// `block` must be a live allocation of exactly `layout`.
+    pub(super) unsafe fn dealloc(block: *mut u8, layout: Layout) {
+        // SAFETY: forwarded from `ScratchVecV1::drop`, which passes back the
+        // pointer and layout its own `with_capacity` received.
+        unsafe { std::alloc::dealloc(block, layout) };
+    }
+}
+
+/// The one open scratch region, and the release of every block inside it.
+///
+/// # Why exactly one
+///
+/// The scratch end is a bump like the upward end, so a release is sound only
+/// when it returns the TOP of that end -- here, the most recently opened
+/// region. Two overlapping regions closed out of order would return a floor
+/// above blocks still live under it, and the next scratch allocation would
+/// hand those bytes out twice. Rather than track nesting, [`Self::open`]
+/// refuses while a region is already open: the invariant becomes one
+/// comparison, and any future caller that would have nested meets a refusal
+/// instead of corruption.
+///
+/// # Why this is sound without an audit
+///
+/// A [`ScratchVecV1`] borrows the region it allocates from, so the borrow
+/// checker refuses to let one outlive the release -- the obligation that a
+/// mark/reset on the upward end would have carried across four hundred lines
+/// and five calls is discharged here by a lifetime. Nothing else in the
+/// program can allocate at this end: [`GlobalAlloc::alloc`], and therefore
+/// every `Vec`, `Box` and `String`, serves the upward end only.
+pub struct HeapScratchRegionV1 {
+    mark: usize,
+    /// Not `Send`/`Sync`: the heap header is per-invocation interior state.
+    not_send: PhantomData<*const ()>,
+}
+
+impl HeapScratchRegionV1 {
+    /// Open the scratch region, or refuse because one is already open.
+    pub fn open() -> Result<Self, ProgramError> {
+        Ok(Self {
+            mark: scratch_backing::open()?,
+            not_send: PhantomData,
+        })
+    }
+}
+
+impl Drop for HeapScratchRegionV1 {
+    fn drop(&mut self) {
+        // SAFETY: every block served from this region lives in a
+        // `ScratchVecV1<'_, _>` that borrows `self`, so no such block can
+        // still be live at this point: the borrow checker rejects any program
+        // in which one outlives the region. See this type's documentation.
+        unsafe { scratch_backing::close(self.mark) };
+    }
+}
+
+/// An exactly-sized bank in the scratch region.
+///
+/// It is a `Vec` with three differences that are the whole point: its capacity
+/// is fixed at construction and a push past it refuses rather than reallocates
+/// (so a bank in the scratch region can never strand a smaller copy of itself
+/// there), its bytes come from the heap's high end, and it cannot outlive the
+/// [`HeapScratchRegionV1`] it borrows.
+pub struct ScratchVecV1<'region, T> {
+    block: NonNull<T>,
+    len: usize,
+    capacity: usize,
+    region: PhantomData<&'region HeapScratchRegionV1>,
+}
+
+impl<'region, T> ScratchVecV1<'region, T> {
+    /// Reserve exactly `capacity` elements, refusing when the region cannot
+    /// cover them.
+    ///
+    /// Refuses a zero-sized element type outright rather than growing a
+    /// special case: nothing on this path has one, and the allocator's
+    /// contract is stated for non-zero layouts.
+    pub fn with_capacity(
+        _region: &'region HeapScratchRegionV1,
+        capacity: usize,
+    ) -> Result<Self, ProgramError> {
+        if core::mem::size_of::<T>() == 0 {
+            return Err(TradingSbfError::Content.into());
+        }
+        let layout = Layout::array::<T>(capacity)
+            .map_err(|_| ProgramError::from(TradingSbfError::Content))?;
+        if layout.size() == 0 {
+            // A zero-length bank owns no block at all; `dangling` is the
+            // aligned non-null address `Vec` itself uses for this case.
+            return Ok(Self {
+                block: NonNull::dangling(),
+                len: 0,
+                capacity: 0,
+                region: PhantomData,
+            });
+        }
+        // SAFETY: `layout` has a non-zero size, which is this call's contract.
+        let block = unsafe { scratch_backing::alloc(layout) };
+        let Some(block) = NonNull::new(block.cast::<T>()) else {
+            return Err(TradingSbfError::Content.into());
+        };
+        Ok(Self {
+            block,
+            len: 0,
+            capacity,
+            region: PhantomData,
+        })
+    }
+
+    /// Reserve `len` elements and fill them with clones of `value`.
+    pub fn filled(
+        region: &'region HeapScratchRegionV1,
+        value: &T,
+        len: usize,
+    ) -> Result<Self, ProgramError>
+    where
+        T: Clone,
+    {
+        let mut bank = Self::with_capacity(region, len)?;
+        while bank.len < len {
+            bank.push(value.clone())?;
+        }
+        Ok(bank)
+    }
+
+    /// Append one element, refusing past the reserved capacity.
+    pub fn push(&mut self, value: T) -> Result<(), ProgramError> {
+        if self.len >= self.capacity {
+            return Err(TradingSbfError::Content.into());
+        }
+        // SAFETY: `len < capacity`, so `block + len` is inside the block this
+        // bank owns and is not yet initialized; the write initializes it and
+        // the length below makes it visible.
+        unsafe { self.block.as_ptr().add(self.len).write(value) };
+        self.len = self.len.saturating_add(1);
+        Ok(())
+    }
+
+    /// The initialized prefix.
+    #[must_use]
+    pub fn as_slice(&self) -> &[T] {
+        // SAFETY: the first `len` elements were initialized by `push` and the
+        // block is live for as long as this bank is.
+        unsafe { slice::from_raw_parts(self.block.as_ptr(), self.len) }
+    }
+
+    /// The initialized prefix, mutably.
+    #[must_use]
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        // SAFETY: as `as_slice`, and `&mut self` makes the borrow exclusive.
+        unsafe { slice::from_raw_parts_mut(self.block.as_ptr(), self.len) }
+    }
+}
+
+impl<T> Drop for ScratchVecV1<'_, T> {
+    fn drop(&mut self) {
+        // SAFETY: the first `len` elements are initialized and owned by this
+        // bank; dropping them in place is exactly what `Vec` does.
+        unsafe {
+            core::ptr::drop_in_place(core::ptr::slice_from_raw_parts_mut(
+                self.block.as_ptr(),
+                self.len,
+            ))
+        };
+        if self.capacity == 0 {
+            return;
+        }
+        let Ok(layout) = Layout::array::<T>(self.capacity) else {
+            return;
+        };
+        // SAFETY: `block` and `layout` are exactly what `with_capacity`
+        // received from the backing allocator, and this runs once.
+        unsafe { scratch_backing::dealloc(self.block.as_ptr().cast::<u8>(), layout) };
+    }
+}
+
+impl<T> core::ops::Deref for ScratchVecV1<'_, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> core::ops::DerefMut for ScratchVecV1<'_, T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        self.as_mut_slice()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +1195,221 @@ fn lift_declared_heap_profile_v1(accounts: &[AccountInfo<'_>], instruction_data:
     };
     let _ = admit_heap_frame_v1(instructions);
 }
+
+// ---------------------------------------------------------------------------
+// Child invocation
+// ---------------------------------------------------------------------------
+
+/// Invoke a child program from an instruction this program ALREADY OWNS.
+///
+/// # Why this is here rather than a call to `invoke_signed`
+///
+/// `solana_cpi::invoke_signed_unchecked` builds the runtime's stable layout
+/// with `StableInstruction::from(instruction.clone())`. It clones because it
+/// only holds a `&Instruction` and `StableInstruction::from` MOVES both `Vec`s
+/// out of the instruction it is given; an owner therefore pays nothing, and
+/// every caller in this executable owns its metas and its wire outright. On the
+/// SBF bump allocator, whose `dealloc` is a no-op, that clone is not a
+/// transient: **2,322 bytes for the two child CPIs of the canonical Direct
+/// bundle** stay charged for the rest of the instruction, measured at the point
+/// the heap is scarcest.
+///
+/// So this takes the two buffers by `&mut`, moves them into the SDK's OWN
+/// `StableInstruction` through the SDK's OWN `From<Vec<T>> for StableVec<T>`,
+/// makes the syscall the SDK makes with the arguments the SDK passes, and moves
+/// them back out through the SDK's OWN `From<StableVec<T>> for Vec<T>`. The
+/// caller's buffers come back with their allocation, length and capacity
+/// unchanged, ready to be cleared and refilled for the next invocation. Nothing
+/// about the layout the runtime reads is restated here.
+///
+/// # What is reproduced, and why it is reproduced rather than skipped
+///
+/// `invoke_signed` is `invoke_signed_unchecked` plus a `RefCell` consistency
+/// pre-check, and that pre-check is a runtime guarantee, not an optimisation:
+/// it is what turns a callee's write to an account this program is holding
+/// borrowed into a returned [`ProgramError::AccountBorrowFailed`] instead of
+/// undefined behaviour. [`require_cpi_borrowable_v1`] is that loop, conjunct
+/// for conjunct, over the metas that are about to become the instruction's
+/// account list. `child_invocation_borrow_check_matches_the_sdk` in this
+/// module's corpus runs both against the same frames and asserts they agree, on
+/// acceptance and on every borrow conflict.
+///
+/// The `_unchecked` variants are NOT what this replaces and their bargain is
+/// not taken: this is `invoke_signed`, minus a clone the caller does not need.
+///
+/// `#[inline(never)]`, and both halves below with it: the 80-byte
+/// `StableInstruction` and the syscall's five arguments belong to THIS frame,
+/// not to a composition's. Inlined, it put `execute_resolution_route_v3` 512
+/// bytes over the SBPF v0 4,096-byte static frame bound.
+#[inline(never)]
+pub fn invoke_signed_owned_v1(
+    program_id: &Pubkey,
+    metas: &mut Vec<AccountMeta>,
+    data: &mut Vec<u8>,
+    account_infos: &[AccountInfo<'_>],
+    signers_seeds: &[&[&[u8]]],
+) -> Result<(), ProgramError> {
+    require_cpi_borrowable_v1(metas, account_infos)?;
+    invoke_signed_owned_unchecked_v1(program_id, metas, data, account_infos, signers_seeds)
+}
+
+/// Refuse a child invocation whose account frame this program still holds
+/// borrowed in a way the callee's access would violate.
+///
+/// Sourced to `solana_cpi::invoke_signed` (3.1.0, `src/lib.rs:252`), whose
+/// whole body ahead of the syscall is this loop. It is reproduced rather than
+/// called because `invoke_signed` takes a `&Instruction` -- the very thing this
+/// module exists not to build -- and the loop reads only the account list.
+///
+/// The semantics that must survive the reproduction, all of them observable:
+///
+/// - the metas are walked in ORDER, and the FIRST `AccountInfo` whose key
+///   matches is the one checked (`break`), so a frame carrying the same account
+///   twice is checked once per meta against its first occurrence;
+/// - a writable meta demands BOTH mutable borrows, a readonly meta both shared
+///   borrows, and the borrow is released immediately (`let _ =`, never a
+///   binding that would hold it across the syscall);
+/// - a meta naming an account absent from `account_infos` is NOT an error here.
+///   The runtime refuses that, and refusing it earlier would be a different
+///   program.
+#[inline(never)]
+fn require_cpi_borrowable_v1(
+    metas: &[AccountMeta],
+    account_infos: &[AccountInfo<'_>],
+) -> Result<(), ProgramError> {
+    for account_meta in metas.iter() {
+        for account_info in account_infos.iter() {
+            if account_meta.pubkey == *account_info.key {
+                if account_meta.is_writable {
+                    let _ = account_info.try_borrow_mut_lamports()?;
+                    let _ = account_info.try_borrow_mut_data()?;
+                } else {
+                    let _ = account_info.try_borrow_lamports()?;
+                    let _ = account_info.try_borrow_data()?;
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The syscall half of [`invoke_signed_owned_v1`], on the SBF target.
+///
+/// Sourced to `solana_cpi::invoke_signed_unchecked` (3.1.0, `src/lib.rs:301`).
+/// The four pointer/length arguments are formed exactly as that function forms
+/// them, and the success discriminant is its `_SUCCESS`.
+#[cfg(target_os = "solana")]
+#[inline(never)]
+fn invoke_signed_owned_unchecked_v1(
+    program_id: &Pubkey,
+    metas: &mut Vec<AccountMeta>,
+    data: &mut Vec<u8>,
+    account_infos: &[AccountInfo<'_>],
+    signers_seeds: &[&[&[u8]]],
+) -> Result<(), ProgramError> {
+    #[allow(deprecated)]
+    use solana_program::{
+        stable_layout::{stable_instruction::StableInstruction, stable_vec::StableVec},
+        syscalls::sol_invoke_signed_rust,
+    };
+
+    let account_info_count =
+        u64::try_from(account_infos.len()).map_err(|_| TradingSbfError::Content)?;
+    let signers_seeds_count =
+        u64::try_from(signers_seeds.len()).map_err(|_| TradingSbfError::Content)?;
+    // `StableVec::from` is `Vec::into_raw_parts` under a `ManuallyDrop`: the
+    // caller's allocation, length and capacity, reinterpreted. No copy, no
+    // allocation, and the buffers are handed back below through the inverse
+    // conversion the same crate defines.
+    let stable = StableInstruction {
+        accounts: StableVec::from(core::mem::take(metas)),
+        data: StableVec::from(core::mem::take(data)),
+        program_id: *program_id,
+    };
+    // SAFETY: this is `solana_cpi::invoke_signed_unchecked`'s own call, with
+    // its own arguments, and the obligations it discharges are discharged here:
+    //
+    // 1. `&stable` points at a live `StableInstruction` -- the runtime's pinned
+    //    `#[repr(C)]` layout, built by the SDK's own conversions -- which is a
+    //    local binding of this function and so outlives the call.
+    // 2. `account_infos as *const _ as *const u8` is the slice's DATA address,
+    //    which is what the runtime reads `account_info_count` elements from;
+    //    the slice is borrowed for the whole call, so those elements are live.
+    // 3. `signers_seeds` likewise: the address of the first `&[&[u8]]`, and the
+    //    borrow keeps the seeds and everything they point at alive.
+    // 4. The `RefCell` consistency pre-check `invoke_signed` performs has
+    //    already run (`require_cpi_borrowable_v1`), so the runtime's writes
+    //    through these accounts cannot alias a borrow this program is holding.
+    // 5. The counts are the slices' own lengths, converted losslessly above.
+    let result = unsafe {
+        sol_invoke_signed_rust(
+            &stable as *const _ as *const u8,
+            account_infos as *const _ as *const u8,
+            account_info_count,
+            signers_seeds as *const _ as *const u8,
+            signers_seeds_count,
+        )
+    };
+    // Unconditionally, ahead of the result: on the error path these buffers are
+    // still the caller's, and `StableInstruction` carries no `Drop` of its own,
+    // so destructuring hands each `StableVec`'s release obligation to the `Vec`
+    // it came from.
+    let StableInstruction {
+        accounts,
+        data: invoked_data,
+        program_id: _,
+    } = stable;
+    *metas = Vec::from(accounts);
+    *data = Vec::from(invoked_data);
+    if result == CPI_SUCCESS_V1 {
+        Ok(())
+    } else {
+        Err(ProgramError::from(result))
+    }
+}
+
+/// The syscall half of [`invoke_signed_owned_v1`], off the SBF target.
+///
+/// Host builds have no syscall to make, so this is
+/// `solana_program::program::invoke_signed_unchecked` -- the stub path -- with
+/// the buffers moved in and back out so the two targets agree on what the
+/// caller's `metas` and `data` hold when the call returns.
+#[cfg(not(target_os = "solana"))]
+#[inline(never)]
+fn invoke_signed_owned_unchecked_v1(
+    program_id: &Pubkey,
+    metas: &mut Vec<AccountMeta>,
+    data: &mut Vec<u8>,
+    account_infos: &[AccountInfo<'_>],
+    signers_seeds: &[&[&[u8]]],
+) -> Result<(), ProgramError> {
+    let instruction = Instruction {
+        program_id: *program_id,
+        accounts: core::mem::take(metas),
+        data: core::mem::take(data),
+    };
+    let result = solana_program::program::invoke_signed_unchecked(
+        &instruction,
+        account_infos,
+        signers_seeds,
+    );
+    let Instruction {
+        program_id: _,
+        accounts,
+        data: invoked_data,
+    } = instruction;
+    *metas = accounts;
+    *data = invoked_data;
+    result
+}
+
+/// Syscall return value the CPI syscalls use for success.
+///
+/// Chain-derived: `solana_cpi`'s `_SUCCESS`, itself a copy of
+/// `solana_program_entrypoint::SUCCESS`.
+#[cfg_attr(not(target_os = "solana"), allow(dead_code))]
+const CPI_SUCCESS_V1: u64 = 0;
 
 // ---------------------------------------------------------------------------
 // Loader input deserialization
@@ -1703,6 +2412,127 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // The scratch end
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn scratch_end_bumps_downward_from_the_ceiling() {
+        let mut heap = TestHeap::new();
+        let allocator = heap.allocator();
+        assert_eq!(allocator.scratch_bytes_used(), 0);
+        let first = unsafe { allocator.alloc_scratch(layout(24, 8)) };
+        let second = unsafe { allocator.alloc_scratch(layout(24, 8)) };
+        assert!(!first.is_null() && !second.is_null());
+        assert!(
+            (second as usize) < first as usize,
+            "the scratch end must bump downward"
+        );
+        assert_eq!(
+            first as usize + 24,
+            allocator_base(&allocator) + ADAPTER_DEFAULT_HEAP_BYTES,
+            "the first scratch block ends exactly at the ceiling"
+        );
+        assert_eq!(allocator.scratch_bytes_used(), 48);
+        // The upward end is untouched by any of it.
+        assert_eq!(allocator.bytes_used(), HEAP_HEADER_BYTES);
+    }
+
+    #[test]
+    fn the_two_ends_refuse_to_cross_each_other() {
+        let mut heap = TestHeap::new();
+        let allocator = heap.allocator();
+        // Just under half the default heap each, so the two together leave a
+        // gap smaller than either.
+        let half = 16_000_usize;
+        let low = unsafe { allocator.alloc(layout(half, 8)) };
+        let high = unsafe { allocator.alloc_scratch(layout(half, 8)) };
+        assert!(!low.is_null() && !high.is_null());
+        assert!((low as usize) + half <= high as usize, "disjoint");
+        assert_eq!(allocator.bytes_used(), HEAP_HEADER_BYTES + half);
+        assert_eq!(allocator.scratch_bytes_used(), half);
+        // BOTH ends now refuse rather than handing out the other's bytes.
+        assert!(unsafe { allocator.alloc(layout(half, 8)) }.is_null());
+        assert!(unsafe { allocator.alloc_scratch(layout(half, 8)) }.is_null());
+    }
+
+    #[test]
+    fn releasing_the_scratch_end_returns_every_block_in_it_at_once() {
+        let mut heap = TestHeap::new();
+        let allocator = heap.allocator();
+        let mark = allocator.open_scratch().expect("no region open yet");
+        assert_eq!(mark, ADAPTER_DEFAULT_HEAP_BYTES);
+        let first = unsafe { allocator.alloc_scratch(layout(4_096, 8)) };
+        let _second = unsafe { allocator.alloc_scratch(layout(1_024, 8)) };
+        assert_eq!(allocator.scratch_bytes_used(), 5_120);
+        // A second region cannot be opened while this one is.
+        assert!(allocator.open_scratch().is_err());
+        unsafe { allocator.release_scratch(mark) };
+        assert_eq!(allocator.scratch_bytes_used(), 0);
+        assert!(allocator.open_scratch().is_ok(), "and reopening works");
+        // The next region starts back at the ceiling: the released bytes are
+        // handed out again, which is the whole point and also why a live
+        // reference into them would be a use-after-free. `ScratchVecV1`
+        // borrows the region so the borrow checker forbids one.
+        let again = unsafe { allocator.alloc_scratch(layout(4_096, 8)) };
+        assert_eq!(again, first);
+    }
+
+    #[test]
+    fn a_scratch_bank_refuses_past_its_reserved_capacity() {
+        let region = HeapScratchRegionV1::open().expect("region");
+        let mut bank = ScratchVecV1::<u32>::with_capacity(&region, 2).expect("bank");
+        assert!(bank.push(7).is_ok());
+        assert!(bank.push(9).is_ok());
+        // A `Vec` would reallocate here and strand the smaller copy; a scratch
+        // bank has one exact width and refuses instead.
+        assert!(bank.push(11).is_err());
+        assert_eq!(bank.as_slice(), &[7, 9]);
+        assert_eq!(&bank[..], &[7, 9]);
+        bank.as_mut_slice()[0] = 5;
+        assert_eq!(bank.as_slice(), &[5, 9]);
+    }
+
+    #[test]
+    fn a_scratch_bank_drops_the_elements_it_holds() {
+        use std::rc::Rc;
+
+        let region = HeapScratchRegionV1::open().expect("region");
+        let witness = Rc::new(());
+        {
+            let mut bank = ScratchVecV1::with_capacity(&region, 3).expect("bank");
+            bank.push(Rc::clone(&witness)).expect("push");
+            bank.push(Rc::clone(&witness)).expect("push");
+            assert_eq!(Rc::strong_count(&witness), 3);
+        }
+        assert_eq!(
+            Rc::strong_count(&witness),
+            1,
+            "the bank must run its elements' destructors"
+        );
+    }
+
+    #[test]
+    fn exactly_one_scratch_region_may_be_open() {
+        let region = HeapScratchRegionV1::open().expect("first");
+        assert!(
+            HeapScratchRegionV1::open().is_err(),
+            "a second region would be released out of order and hand live \
+             bytes out twice; it refuses instead"
+        );
+        drop(region);
+        assert!(HeapScratchRegionV1::open().is_ok());
+    }
+
+    #[test]
+    fn a_zero_length_scratch_bank_owns_no_block() {
+        let region = HeapScratchRegionV1::open().expect("region");
+        let bank = ScratchVecV1::<u64>::with_capacity(&region, 0).expect("bank");
+        assert!(bank.as_slice().is_empty());
+        let filled = ScratchVecV1::filled(&region, &0_u8, 4).expect("filled");
+        assert_eq!(filled.as_slice(), &[0, 0, 0, 0]);
+    }
+
+    // -----------------------------------------------------------------
     // Heap-frame admission out of the instructions sysvar
     // -----------------------------------------------------------------
     mod admission {
@@ -1890,5 +2720,232 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -----------------------------------------------------------------
+    // The child-invocation membrane
+    // -----------------------------------------------------------------
+
+    /// One account's backing storage, so an `AccountInfo` can hold `&mut` into
+    /// it for the whole of a case.
+    struct Backing {
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: [u8; 4],
+    }
+
+    impl Backing {
+        fn new(seed: u8) -> Self {
+            Self {
+                key: Pubkey::new_from_array([seed; 32]),
+                owner: Pubkey::new_from_array([seed.wrapping_add(64); 32]),
+                lamports: u64::from(seed),
+                data: [seed; 4],
+            }
+        }
+
+        fn info(&mut self) -> AccountInfo<'_> {
+            AccountInfo::new(
+                &self.key,
+                false,
+                true,
+                &mut self.lamports,
+                &mut self.data,
+                &self.owner,
+                false,
+            )
+        }
+    }
+
+    /// What both paths say about one frame: the membrane's answer and the
+    /// SDK's, from the SAME metas and the SAME accounts.
+    ///
+    /// On a host build `solana_program::program::invoke_signed` is exactly the
+    /// `RefCell` consistency pre-check followed by the default syscall stub,
+    /// which logs and returns `Ok(())`. So this comparison is precisely the
+    /// comparison that matters: the reproduced pre-check against the one it was
+    /// copied from, on acceptance and on refusal alike.
+    fn both_paths(
+        metas: &[AccountMeta],
+        infos: &[AccountInfo<'_>],
+    ) -> (Result<(), ProgramError>, Result<(), ProgramError>) {
+        let program_id = Pubkey::new_from_array([0xEE; 32]);
+        let mut membrane_metas = metas.to_vec();
+        let mut membrane_data = vec![7_u8, 8, 9];
+        let membrane = invoke_signed_owned_v1(
+            &program_id,
+            &mut membrane_metas,
+            &mut membrane_data,
+            infos,
+            &[],
+        );
+        // The buffers come back, whatever the answer was.
+        assert_eq!(membrane_metas, metas);
+        assert_eq!(membrane_data, vec![7_u8, 8, 9]);
+
+        let sdk = solana_program::program::invoke_signed(
+            &Instruction {
+                program_id,
+                accounts: metas.to_vec(),
+                data: vec![7_u8, 8, 9],
+            },
+            infos,
+            &[],
+        );
+        (membrane, sdk)
+    }
+
+    #[test]
+    fn child_invocation_borrow_check_matches_the_sdk() {
+        let borrow_failed: Result<(), ProgramError> = Err(ProgramError::AccountBorrowFailed);
+
+        // 1. Nothing borrowed: both admit, under either privilege.
+        {
+            let (mut a, mut b) = (Backing::new(1), Backing::new(2));
+            let infos = [a.info(), b.info()];
+            for writable in [false, true] {
+                let metas = [
+                    AccountMeta {
+                        pubkey: infos[0].key.to_bytes().into(),
+                        is_signer: false,
+                        is_writable: writable,
+                    },
+                    AccountMeta {
+                        pubkey: infos[1].key.to_bytes().into(),
+                        is_signer: false,
+                        is_writable: writable,
+                    },
+                ];
+                let (membrane, sdk) = both_paths(&metas, &infos);
+                assert_eq!(membrane, Ok(()));
+                assert_eq!(membrane, sdk);
+            }
+        }
+
+        // 2. A data borrow this program is still holding, against every
+        //    combination of borrow kind and declared privilege. The two that
+        //    conflict must refuse; the one that does not must not.
+        for (hold_exclusive, writable, expected) in [
+            (true, true, borrow_failed.clone()),
+            (true, false, borrow_failed.clone()),
+            (false, true, borrow_failed.clone()),
+            (false, false, Ok(())),
+        ] {
+            let mut a = Backing::new(3);
+            let infos = [a.info()];
+            let metas = [AccountMeta {
+                pubkey: infos[0].key.to_bytes().into(),
+                is_signer: false,
+                is_writable: writable,
+            }];
+            let answered = if hold_exclusive {
+                let guard = infos[0].try_borrow_mut_data().expect("exclusive");
+                let answered = both_paths(&metas, &infos);
+                drop(guard);
+                answered
+            } else {
+                let guard = infos[0].try_borrow_data().expect("shared");
+                let answered = both_paths(&metas, &infos);
+                drop(guard);
+                answered
+            };
+            let (membrane, sdk) = answered;
+            assert_eq!(
+                membrane, expected,
+                "exclusive={hold_exclusive} writable={writable}"
+            );
+            assert_eq!(
+                membrane, sdk,
+                "exclusive={hold_exclusive} writable={writable}"
+            );
+        }
+
+        // 3. The LAMPORTS cell is checked too, and separately from the data
+        //    cell: a held mutable lamports borrow refuses a writable meta whose
+        //    data cell is entirely free.
+        {
+            let mut a = Backing::new(4);
+            let infos = [a.info()];
+            let metas = [AccountMeta {
+                pubkey: infos[0].key.to_bytes().into(),
+                is_signer: false,
+                is_writable: true,
+            }];
+            let guard = infos[0].try_borrow_mut_lamports().expect("exclusive");
+            let (membrane, sdk) = both_paths(&metas, &infos);
+            assert_eq!(membrane, borrow_failed);
+            assert_eq!(membrane, sdk);
+            drop(guard);
+        }
+
+        // 4. A meta naming an account the frame does not carry is NOT an error
+        //    here. The runtime refuses that, and refusing it earlier would be a
+        //    different program.
+        {
+            let mut a = Backing::new(5);
+            let infos = [a.info()];
+            let metas = [AccountMeta {
+                pubkey: Pubkey::new_from_array([0x5A; 32]),
+                is_signer: false,
+                is_writable: true,
+            }];
+            let (membrane, sdk) = both_paths(&metas, &infos);
+            assert_eq!(membrane, Ok(()));
+            assert_eq!(membrane, sdk);
+        }
+
+        // 5. The FIRST match wins, and the loop stops there. A frame carrying
+        //    the same account twice, with the SECOND occurrence borrowed, is
+        //    admitted -- because the first occurrence answered for the meta.
+        //    This is the `break`, and it is observable.
+        {
+            let mut a = Backing::new(6);
+            let clean = a.info();
+            let duplicate = clean.clone();
+            let infos = [clean, duplicate];
+            let metas = [AccountMeta {
+                pubkey: infos[0].key.to_bytes().into(),
+                is_signer: false,
+                is_writable: true,
+            }];
+            // Both `AccountInfo`s share one `RefCell`, so borrowing through the
+            // second is borrowing through the first: the point of the case is
+            // the ORDER of the walk, which is why the answer is a refusal and
+            // both paths must give the same one.
+            let guard = infos[1].try_borrow_mut_data().expect("exclusive");
+            let (membrane, sdk) = both_paths(&metas, &infos);
+            assert_eq!(membrane, borrow_failed);
+            assert_eq!(membrane, sdk);
+            drop(guard);
+        }
+    }
+
+    /// The membrane hands the caller's buffers back with the allocation they
+    /// arrived with, which is the whole reason it takes them by `&mut`.
+    #[test]
+    fn the_membrane_returns_the_buffers_it_was_lent() {
+        let program_id = Pubkey::new_from_array([0xEE; 32]);
+        let mut a = Backing::new(7);
+        let infos = [a.info()];
+        let mut metas = Vec::with_capacity(8);
+        metas.push(AccountMeta {
+            pubkey: infos[0].key.to_bytes().into(),
+            is_signer: false,
+            is_writable: false,
+        });
+        let mut data = Vec::with_capacity(64);
+        data.extend_from_slice(b"child wire");
+        let (metas_ptr, metas_cap) = (metas.as_ptr(), metas.capacity());
+        let (data_ptr, data_cap) = (data.as_ptr(), data.capacity());
+
+        invoke_signed_owned_v1(&program_id, &mut metas, &mut data, &infos, &[]).expect("stub");
+
+        assert_eq!(metas.as_ptr(), metas_ptr);
+        assert_eq!(metas.capacity(), metas_cap);
+        assert_eq!(metas.len(), 1);
+        assert_eq!(data.as_ptr(), data_ptr);
+        assert_eq!(data.capacity(), data_cap);
+        assert_eq!(data, b"child wire");
     }
 }

@@ -251,6 +251,40 @@ pub fn add_release_waist(test: &mut ProgramTest, artifacts: &Elves) -> Releases 
     }
 }
 
+/// One fixture keypair, derived from a PINNED seed rather than drawn fresh.
+///
+/// # Why this is not `Keypair::new()` any more
+///
+/// It was, and that made every compute figure this fixture produces a DRAW
+/// rather than a measurement. The Hot path derives program addresses whose
+/// seeds include these keys, and `try_find_program_address` costs 1,500 CU per
+/// attempt, so the bump-search depth for a given set of keys is worth thousands
+/// of compute units. Measured (W2p, 2026-08-27) on ONE ELF, fifteen runs: the
+/// same bytes consumed anywhere from 1,342,859 to 1,386,358 CU -- a spread of
+/// 43,499 against a 1,400,000 ceiling. The lane that met that spread before
+/// recorded it as "codegen noise of +-20,000 CU between builds of the same
+/// source", which it is not: it is this, and it does not need two builds.
+///
+/// Pinning makes a single figure mean something. It does NOT make the spread go
+/// away -- on a real chain the makers are whoever they are, so that spread is a
+/// property of the protocol and a gate margin has to cover the WORST keys, not
+/// these. Sweep it with `DCLUTCH_FIXTURE_SEED=<n>`, which redraws every fixture
+/// key deterministically; the default is seed 0.
+///
+/// Any 32 bytes are a valid ed25519 secret key -- the signing scalar is derived
+/// by hashing them -- so a low-entropy seed still produces a public key that is
+/// a fair sample for a bump search.
+fn fixture_keypair(role: u8) -> Keypair {
+    let seed = env::var("DCLUTCH_FIXTURE_SEED")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let mut secret = [0_u8; 32];
+    secret[0] = role;
+    secret[1..9].copy_from_slice(&seed.to_le_bytes());
+    Keypair::new_from_array(secret)
+}
+
 pub fn direct_case(
     test: &mut ProgramTest,
     releases: Releases,
@@ -273,8 +307,8 @@ pub fn direct_case_v2(
     corrupt_destination: bool,
     vacant_seal: bool,
 ) -> DirectCase {
-    let payer = Keypair::new();
-    let makers = [Keypair::new(), Keypair::new()];
+    let payer = fixture_keypair(0);
+    let makers = [fixture_keypair(1), fixture_keypair(2)];
     let clock = Clock {
         slot: 1,
         ..Clock::default()

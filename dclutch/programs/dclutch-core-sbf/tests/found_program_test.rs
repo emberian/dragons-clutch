@@ -1577,6 +1577,22 @@ async fn execute_series(
     (fixture, context, failure)
 }
 
+/// Assert that a rendered `TransactionError` is exactly the named refusal.
+///
+/// The rendering is `{:?}` of a `TransactionError`, so the code arrives as
+/// `Custom(<decimal>)`. Deriving the token from the enum rather than typing the
+/// number keeps this honest through a renumber, and including the closing
+/// parenthesis makes it an exact match: the hand-written form was
+/// `contains("Custom(3)")`, which also accepts `Custom(30)` and `Custom(300)`.
+#[track_caller]
+fn assert_refused_with(failure: &str, expected: u32, named: &str) {
+    let token = format!("Custom({expected})");
+    assert!(
+        failure.contains(&token),
+        "expected {named} ({token}), got {failure}"
+    );
+}
+
 /// Submit one already-built transaction and, if asked, record it as evidence.
 async fn submit_and_record(
     context: &solana_program_test::ProgramTestContext,
@@ -1595,7 +1611,11 @@ async fn submit_and_record(
         .await
         .expect("the bank processed the transaction");
     let failure = outcome.result.err().map(|error| format!("{error:?}"));
-    let slot = context.banks_client.get_root_slot().await.unwrap_or_default();
+    let slot = context
+        .banks_client
+        .get_root_slot()
+        .await
+        .unwrap_or_default();
     let (logs, compute_units) = outcome.metadata.map_or_else(
         || (Vec::new(), None),
         |metadata| (metadata.log_messages, Some(metadata.compute_units_consumed)),
@@ -1861,7 +1881,11 @@ async fn assert_series_found_rollback(
 #[tokio::test]
 async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
     let fixture = series_fixture(SeriesFault::None);
-    let (fixture, context, failure) = execute_series(fixture, "Series occurrence Consume founds its Market with a Core permit").await;
+    let (fixture, context, failure) = execute_series(
+        fixture,
+        "Series occurrence Consume founds its Market with a Core permit",
+    )
+    .await;
     assert_eq!(failure, None, "Series Found must complete under 1.4M CU");
     assert_eq!(fixture.base.outcome_count, 258);
 
@@ -1908,11 +1932,16 @@ async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
 #[tokio::test]
 async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollback() {
     let fixture = series_fixture(SeriesFault::BatchClaimsProgramdata);
-    let (fixture, context, failure) = execute_series(fixture, "Series Consume refuses a substituted Claims ProgramData").await;
+    let (fixture, context, failure) = execute_series(
+        fixture,
+        "Series Consume refuses a substituted Claims ProgramData",
+    )
+    .await;
     let failure = failure.expect("substituted Claims ProgramData must refuse");
-    assert!(
-        failure.contains("Custom(3)"),
-        "Registry batch must expose its exact Deployment refusal, got {failure}"
+    assert_refused_with(
+        &failure,
+        dclutch_registry_sbf::RegistryError::Deployment as u32,
+        "the Registry batch's exact Deployment refusal",
     );
     assert_series_found_rollback(&fixture, &context).await;
 }
@@ -1960,25 +1989,28 @@ async fn series_consume_refuses_to_consume_the_same_ticket_twice() {
         permit.intent().market().to_bytes(),
         fixture.base.market.to_bytes()
     );
-    // Pinned to the exact code, not merely "some refusal". CoreSbfError::Market
-    // is 5: the Market PDA, owner, width, phase, or generation refused. That is
+    // Pinned to the exact code, not merely "some refusal". `CoreSbfError::Market`
+    // is the Market PDA, owner, width, phase, or generation refusing. That is
     // the honest guard for a replay -- the first Consume moved the Market out of
     // the prestate this occurrence requires, so the second cannot proceed. A
     // refactor that moved the refusal to a different guard has to say so here.
-    assert!(
-        replay.contains("Custom(5)"),
-        "a replayed ticket must be refused by CoreSbfError::Market, got {replay}"
+    assert_refused_with(
+        &replay,
+        dclutch_core_sbf::CoreSbfError::Market as u32,
+        "CoreSbfError::Market on a replayed ticket",
     );
 }
 
 #[tokio::test]
 async fn series_consume_late_hoard_refusal_rolls_back_found_and_all_replay_state() {
     let fixture = series_fixture(SeriesFault::LateHoardBalance);
-    let (fixture, context, failure) = execute_series(fixture, "Series Consume refuses a late Hoard postcondition").await;
+    let (fixture, context, failure) =
+        execute_series(fixture, "Series Consume refuses a late Hoard postcondition").await;
     let failure = failure.expect("late Hoard postcondition must refuse");
-    assert!(
-        failure.contains("Custom(11)"),
-        "late postcondition must be CoreSbfError::ChildAck, got {failure}"
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::ChildAck as u32,
+        "CoreSbfError::ChildAck on a late postcondition",
     );
     assert_series_found_rollback(&fixture, &context).await;
 }

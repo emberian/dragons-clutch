@@ -848,7 +848,10 @@ fn wrapper_instruction(
             AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false),
         ]),
         OperationV1::CloseReplay => {
-            accounts.push(AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false));
+            accounts.push(AccountMeta::new(
+                Pubkey::new_from_array(request.rent_refund),
+                false,
+            ));
         }
     }
     let mut data = Vec::with_capacity(dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1 + 1);
@@ -955,7 +958,10 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         .process_transaction_with_metadata(transaction)
         .await
         .expect("lookup-table lifecycle processing");
-    assert!(processed.result.is_ok(), "lookup-table lifecycle must commit");
+    assert!(
+        processed.result.is_ok(),
+        "lookup-table lifecycle must commit"
+    );
 }
 
 /// Create and activate one lookup table carrying every campaign address.
@@ -1036,7 +1042,13 @@ async fn submit(
         } else if *key == fixture.payer.pubkey() {
             signers.push(&fixture.payer);
         } else {
-            panic!("no keypair for required signer {key}");
+            // A required signer this harness cannot produce means the frame it
+            // just built is not the frame it thinks it built. Expressed as an
+            // unsatisfiable lookup rather than `panic!`, which the crate denies:
+            // the harness has exactly two keypairs and this says so.
+            return Err(BanksClientError::ClientError(
+                "the transaction requires a signer this harness has no keypair for",
+            ));
         }
     }
     let transaction = VersionedTransaction::try_new(message, &signers).expect("transaction");
@@ -1148,12 +1160,7 @@ async fn campaign(profile: Profile) {
     let (accepted, early_close_cu) = submit(
         &mut context,
         &fixture,
-        wrapper_instruction(
-            &fixture,
-            close_replay_request(&fixture, 2),
-            payer,
-            false,
-        ),
+        wrapper_instruction(&fixture, close_replay_request(&fixture, 2), payer, false),
         &lookup,
         &step("close replay under a live vault"),
     )
@@ -1370,12 +1377,7 @@ async fn campaign(profile: Profile) {
     let (accepted, close_stale_cu) = submit(
         &mut context,
         &fixture,
-        wrapper_instruction(
-            &fixture,
-            close_replay_request(&fixture, 5),
-            payer,
-            false,
-        ),
+        wrapper_instruction(&fixture, close_replay_request(&fixture, 5), payer, false),
         &lookup,
         &step("close replay at a stale revision"),
     )
@@ -1407,12 +1409,7 @@ async fn campaign(profile: Profile) {
     let (accepted, close_replay_cu) = submit(
         &mut context,
         &fixture,
-        wrapper_instruction(
-            &fixture,
-            close_replay_request(&fixture, 6),
-            payer,
-            false,
-        ),
+        wrapper_instruction(&fixture, close_replay_request(&fixture, 6), payer, false),
         &lookup,
         &step("close replay"),
     )

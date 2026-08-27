@@ -149,6 +149,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const [coreProgram, setCoreProgram] = useState('');
   const [registryProgram, setRegistryProgram] = useState('');
   const [claimsProgram, setClaimsProgram] = useState('');
+  const [custodyProgram, setCustodyProgram] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No finalized state has been read for this Market address.' });
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
@@ -164,6 +165,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         coreProgramId: coreProgram,
         registryProgramId: registryProgram === '' ? null : registryProgram,
         claimsProgramId: claimsProgram === '' ? null : claimsProgram,
+        custodyProgramId: custodyProgram === '' ? null : custodyProgram,
         address,
       });
       setState({ kind: 'ready', detail: next, facts, message: next.reason });
@@ -216,6 +218,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
         <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
         <label><span>Claims program · optional</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
+        <label><span>Custody program · optional</span><input value={custodyProgram} onChange={(event) => setCustodyProgram(event.target.value.trim())} /></label>
       </div>
       <div className="direct-actions">
         <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized Market state…' : 'Read this Market'}</button>
@@ -298,7 +301,16 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               ))}
             </ol>
             <h3 className="detail-subhead">Hoard</h3>
-            <p className="market-capability-refusal"><span>not derivable</span>{decoded.hoard.reason}</p>
+            {decoded.hoard.status === 'derived'
+              ? <dl className="detail-facts">
+                <Fact label="Principal (atoms)" value={decoded.hoard.principalAtoms} />
+                <Fact label="Vault" value={decoded.hoard.address} />
+                <Fact label="Custody transfer authority" value={decoded.hoard.custodyAuthority} />
+                <ContentId label="Custody namespace" value={decoded.hoard.custodyContext} />
+                <Fact label="Custody program" value={decoded.hoard.custodyProgramId} />
+                <Fact label="Finalized observed slot" value={decoded.hoard.observedSlot} />
+              </dl>
+              : <p className="market-capability-refusal"><span>Hoard {decoded.hoard.status}</span>{decoded.hoard.reason}</p>}
             <h3 className="detail-subhead">Terminal settlement</h3>
             {decoded.settlement.status === 'terminal'
               ? <dl className="detail-facts">

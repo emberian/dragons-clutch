@@ -38,6 +38,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 
 pub mod affine_batch_v2;
+pub mod custody_replay_v1;
 pub mod founding_v5;
 pub mod liability_basis_v2;
 pub mod market_closure_v1;
@@ -158,26 +159,39 @@ impl<'accounts, 'info> GenericAccounts<'accounts, 'info> {
 #[repr(u32)]
 pub enum ClaimsSbfError {
     /// Instruction bytes were hostile or selected no supported family.
-    Instruction = 0,
+    Instruction = 0x5000,
     /// Account count, privileges, owners, or executable flags were wrong.
-    Accounts = 1,
+    Accounts = 0x5001,
     /// Market or Position semantic identities did not join the packet.
-    Identity = 2,
+    Identity = 0x5002,
     /// Registry receipt or current deployment authentication failed.
-    Release = 3,
+    Release = 0x5003,
     /// Caller PDA authority did not authenticate the packet.
-    Authority = 4,
+    Authority = 0x5004,
     /// Claims economic transition refused.
-    Economic = 5,
+    Economic = 0x5005,
     /// This action requires the canonical Custody child composition.
-    CustodyRequired = 6,
+    CustodyRequired = 0x5006,
     /// Receipt construction or post-state commitment failed.
-    Receipt = 7,
+    Receipt = 0x5007,
     /// Representation descriptor/state or unified wrapper transition refused.
-    Representation = 8,
+    Representation = 0x5008,
     /// Token-2022 mint/account profile or CPI refused.
-    Token = 9,
+    Token = 0x5009,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    ClaimsSbfError::Instruction as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE,
+    "ClaimsSbfError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (ClaimsSbfError::Token as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "ClaimsSbfError must not run past its registered refusal band"
+);
 
 impl From<ClaimsSbfError> for ProgramError {
     fn from(value: ClaimsSbfError) -> Self {
@@ -193,11 +207,6 @@ pub fn process_instruction(
 ) -> ProgramResult {
     if instruction_data.get(..CORE_EFFECT_MAGIC_V1.len()) == Some(CORE_EFFECT_MAGIC_V1.as_slice()) {
         return process_core_effect(program_id, accounts, instruction_data);
-    }
-    if instruction_data.get(..liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.len())
-        == Some(liability_basis_v2::LIABILITY_BASIS_ACTION_MAGIC_V2.as_slice())
-    {
-        return liability_basis_v2::process(program_id, accounts, instruction_data);
     }
     if instruction_data
         .get(..dclutch_claims_svm::market_closure_v1::CLAIMS_MARKET_CLOSURE_REQUEST_MAGIC_V1.len())
@@ -239,6 +248,15 @@ pub fn process_instruction(
         == Some(dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_REQUEST_MAGIC_V5.as_slice())
     {
         return founding_v5::process(program_id, accounts, instruction_data);
+    }
+    if instruction_data
+        .get(..dclutch_claims_svm::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1.len())
+        == Some(
+            dclutch_claims_svm::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1
+                .as_slice(),
+        )
+    {
+        return custody_replay_v1::process(program_id, accounts, instruction_data);
     }
     if instruction_data.get(..protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.len())
         == Some(protocol_position_v2::PROTOCOL_POSITION_REQUEST_MAGIC_V2.as_slice())

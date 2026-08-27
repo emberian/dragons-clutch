@@ -21,13 +21,16 @@ mod kani_proofs;
 mod registration;
 mod terminal;
 
+/// The Lean-emitted transition program, included verbatim.
+///
+/// `src/generated_direct_program.rs` is written by
+/// `formal/dclutch-semantics/EmitDirectProgramRust.lean` and is never edited by
+/// hand; `check-generated.sh` re-emits it and byte-compares. This validator is
+/// its owning home: the emitted program has no other consumer in the tree.
 mod generated_program {
     #![allow(dead_code, unused_imports, unused_macros)]
 
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../programs/dclutch-controller-proof-sbf/src/generated_direct_program.rs"
-    ));
+    include!("generated_direct_program.rs");
 
     pub(super) fn bytes() -> &'static [u8] {
         &DIRECT_PROGRAM

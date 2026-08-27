@@ -972,7 +972,12 @@ impl Fixture {
             },
             source: [0x91; 32],
             destination: recipient_key.to_bytes(),
-            source_vault_context: self.market.to_bytes(),
+            // The Hoard Vault is namespaced by the aggregate's
+            // `custody_context`, which this fixture already uses for `context`
+            // above. Naming the Market here asserted two namespaces for one
+            // Market and matched the operator only because the operator made
+            // the same mistake.
+            source_vault_context: [0x69; 32],
             destination_vault_context: [0; 32],
             mint: collateral_mint_key.to_bytes(),
             token_program: TOKEN_2022_PROGRAM_ID,

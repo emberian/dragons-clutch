@@ -68,6 +68,7 @@ readonly MINT_PUBKEY="11111111111111111111111111111111"
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
 FIXTURE_DIR="$REPO_ROOT/fixtures/pyth/local-upgraded-2026-08-22"
+FIXTURE_SUMS="$SCRIPT_DIR/fixture-sha256.txt"
 PROFILE_NAME="dclutch-successor-validator-profile.json"
 SENTINEL_NAME=".dclutch-successor-validator-owner"
 PID_NAME="dclutch-successor-validator.pid"
@@ -201,6 +202,45 @@ sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 is_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
 is_pubkey() { [[ "$1" =~ ^[1-9A-HJ-NP-Za-km-z]{32,44}$ ]]; }
 require_command() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+assert_elf() {
+  local magic
+  magic=$(od -An -tx1 -N4 "$1" | tr -d '[:space:]')
+  [[ "$magic" = "7f454c46" ]] || die "not an ELF file: $1"
+}
+
+# Ported from dclutch-local-validator when that launcher was banished with the
+# DCLTCAT1 stratum. This launcher used to shell out to it for exactly this one
+# function; the pinned Pyth fixture set it verifies is live and this is now its
+# only reader.
+verify_fixtures() {
+  require_command shasum
+  [[ -d "$FIXTURE_DIR" ]] || die "missing fixture directory: $FIXTURE_DIR"
+  [[ -f "$FIXTURE_SUMS" ]] || die "missing pin file: $FIXTURE_SUMS"
+  local expected relative actual listed=0
+  while IFS='  ' read -r expected relative; do
+    [[ -z "$expected" || "$expected" = \#* ]] && continue
+    is_sha256 "$expected" || die "invalid fixture pin in $FIXTURE_SUMS"
+    [[ -n "$relative" && "$relative" != */* && "$relative" != .*/* ]] || die "unsafe fixture path in pin file"
+    [[ -f "$FIXTURE_DIR/$relative" ]] || die "missing pinned fixture: $relative"
+    actual=$(sha256 "$FIXTURE_DIR/$relative")
+    [[ "$actual" = "$expected" ]] || die "fixture hash mismatch: $relative"
+    listed=$((listed + 1))
+  done < "$FIXTURE_SUMS"
+  # The count is derived from the pin file, never hardcoded. A literal here
+  # turns "someone added a fixture artifact and regenerated the pins" into a
+  # launcher failure that reads like a tamper alarm, which is exactly what
+  # happened when the guardian-set observation landed. The real integrity
+  # property is the two-way cover below: every pin resolves to a file whose
+  # digest matches, and the directory holds no file that is not pinned.
+  [[ "$listed" -gt 0 ]] || die "fixture pin file lists no artifacts"
+  local fixture_file_count
+  fixture_file_count=$(find "$FIXTURE_DIR" -type f -print | wc -l | tr -d '[:space:]')
+  [[ "$fixture_file_count" -eq "$listed" ]] || die "fixture directory contains unpinned or missing artifacts (pinned $listed, present $fixture_file_count)"
+  assert_elf "$FIXTURE_DIR/receiver.so"
+  assert_elf "$FIXTURE_DIR/router.so"
+  printf 'verified %s committed Pyth fixture artifacts\n' "$listed"
+}
 
 canonical_file() {
   [[ "$1" = /* && -f "$1" && ! -L "$1" ]] || die "not an absolute regular file: $1"
@@ -483,7 +523,7 @@ start() {
   require_command jq
   require_command curl
   require_command solana-test-validator
-  "$SCRIPT_DIR/dclutch-local-validator" verify-fixtures >/dev/null
+  verify_fixtures >/dev/null
 
   local ledger account_dir plan registry_elf registry_attestation core_elf core_attestation claims_elf claims_attestation trading_elf trading_attestation resolution_elf resolution_attestation custody_elf custody_attestation rent_credit_elf rent_credit_attestation validator version
   ledger=$(canonical_new_ledger "$ledger_arg")

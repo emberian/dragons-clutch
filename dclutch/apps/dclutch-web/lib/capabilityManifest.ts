@@ -1,4 +1,71 @@
 import { ascii, hex, requireNonzero, requireZero, slice, u16, u64 } from './bytes';
+import {
+  CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1,
+  CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1,
+  CAPABILITY_ENTRY_BYTES_V1,
+  CAPABILITY_ENTRY_CAPACITY_PROFILE_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CHILD_DERIVATION_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CHILD_SCHEMA_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CONFIG_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_DEPENDENCIES_OFFSET_V1,
+  CAPABILITY_ENTRY_DEPENDENCY_COUNT_OFFSET_V1,
+  CAPABILITY_ENTRY_KIND_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_QUOTE_OFFSET_V1,
+  CAPABILITY_ENTRY_RELEASE_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_RESERVED_BYTES_V1,
+  CAPABILITY_ENTRY_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1,
+  CAPABILITY_FUNDING_ALLOCATION_RESERVED_BYTES_V1,
+  CAPABILITY_FUNDING_ALLOCATION_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1,
+  CAPABILITY_FUNDING_AMOUNTS_REALM_TOTAL_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_BENEFICIARY_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_BYTES_V1,
+  CAPABILITY_FUNDING_BINDING_MINT_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_REALM_ID_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_RELEASE_ID_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_TOKEN_PROGRAM_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_AMOUNTS_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_COLLATERAL_KIND_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_MAGIC_V1,
+  CAPABILITY_FUNDING_QUOTE_RESERVED_BYTES_V1,
+  CAPABILITY_FUNDING_QUOTE_RESERVED_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_SCHEMA_OFFSET_V1,
+  CAPABILITY_FUNDING_QUOTE_SCHEMA_VERSION_V1,
+  CAPABILITY_MANIFEST_ARTIFACT_PROFILE_V1,
+  CAPABILITY_MANIFEST_COUNT_OFFSET_V1,
+  CAPABILITY_MANIFEST_HEADER_BYTES_V1,
+  CAPABILITY_MANIFEST_HEADER_RESERVED_BYTES_V1,
+  CAPABILITY_MANIFEST_MAGIC_OFFSET_V1,
+  CAPABILITY_MANIFEST_MAGIC_V1,
+  CAPABILITY_MANIFEST_PROFILE_OFFSET_V1,
+  CAPABILITY_MANIFEST_RESERVED_OFFSET_V1,
+  CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1,
+  CAPABILITY_MANIFEST_SCHEMA_VERSION_V1,
+  FUNDING_COMPARTMENTS_V1,
+  MAX_CAPABILITIES_V1,
+  MAX_DEPENDENCIES_PER_CAPABILITY_V1,
+} from './generated/capabilityManifestV1';
+
+/**
+ * The generated coordinates other browser surfaces name. They are re-exported
+ * rather than restated so `lib/generated/capabilityManifestV1.ts` stays the one
+ * place any of these numbers is written down.
+ */
+export {
+  CAPABILITY_ENTRY_BYTES_V1,
+  CAPABILITY_ENTRY_QUOTE_OFFSET_V1,
+  CAPABILITY_FUNDING_ALLOCATION_BYTES_V1,
+  CAPABILITY_FUNDING_AMOUNTS_BYTES_V1,
+  CAPABILITY_FUNDING_BINDING_BYTES_V1,
+  CAPABILITY_FUNDING_QUOTE_BYTES_V1,
+  CAPABILITY_FUNDING_QUOTE_MAGIC_V1,
+  CAPABILITY_MANIFEST_HEADER_BYTES_V1,
+  CAPABILITY_MANIFEST_MAGIC_V1,
+  FUNDING_COMPARTMENTS_V1,
+  MAX_CAPABILITIES_V1,
+} from './generated/capabilityManifestV1';
 
 /**
  * The immutable `DCLTCAP1` capability manifest a Market root commits to by
@@ -12,11 +79,6 @@ import { ascii, hex, requireNonzero, requireZero, slice, u16, u64 } from './byte
  * checked, and cannot be shown a manifest the canonical contract would refuse.
  */
 
-export const CAPABILITY_MANIFEST_MAGIC = 'DCLTCAP1';
-export const CAPABILITY_MANIFEST_HEADER_BYTES = 16;
-export const CAPABILITY_MANIFEST_ENTRY_BYTES = 528;
-export const CAPABILITY_MANIFEST_MAX_ENTRIES = 16;
-
 /**
  * Typed capability funding.
  *
@@ -24,42 +86,35 @@ export const CAPABILITY_MANIFEST_MAX_ENTRIES = 16;
  * here sums or converts across them, and no surface may merge the seven
  * segregated compartments into a single "cost": the manifest keeps them
  * separate and so does this decoder.
- */
-
-export const CAPABILITY_FUNDING_QUOTE_OFFSET = 224;
-export const CAPABILITY_FUNDING_QUOTE_BYTES = 304;
-export const FUNDING_AMOUNTS_BYTES = 128;
-export const FUNDING_ALLOCATION_BYTES = 16;
-export const FUNDING_QUOTE_MAGIC = 'DCLTFQ01';
-export const REALM_COLLATERAL_BINDING_BYTES = 160;
-
-const QUOTE_COLLATERAL_KIND_OFFSET = 10;
-const QUOTE_RESERVED_OFFSET = 11;
-const QUOTE_RESERVED_BYTES = 5;
-const QUOTE_BINDING_OFFSET = 16;
-const QUOTE_AMOUNTS_OFFSET = QUOTE_BINDING_OFFSET + REALM_COLLATERAL_BINDING_BYTES;
-const ALLOCATION_RESERVED_OFFSET = 1;
-const ALLOCATION_RESERVED_BYTES = 7;
-const ALLOCATION_AMOUNT_OFFSET = 8;
-const AMOUNTS_NATIVE_TOTAL_OFFSET = 112;
-const AMOUNTS_REALM_TOTAL_OFFSET = 120;
-const MAX_U64 = (BigInt(1) << BigInt(64)) - BigInt(1);
-
-/**
- * The seven segregated compartments, in their canonical manifest order.
  *
- * `Rent` and `Creation` are intrinsically native lamports. The remaining five
- * carry whichever asset class the immutable capability quote selected.
+ * Every width, offset, magic and compartment coordinate below comes from
+ * `lib/generated/capabilityManifestV1.ts`, emitted from the same Lean schema
+ * `dclutch-capability-contract` compiles against, so this decoder refuses
+ * exactly what the chain refuses.
  */
-export const FUNDING_COMPARTMENTS_V1 = Object.freeze([
-  Object.freeze({ name: 'Rent', offset: 0, assetPolicy: 'native-lamports-only' }),
-  Object.freeze({ name: 'Creation', offset: 16, assetPolicy: 'native-lamports-only' }),
-  Object.freeze({ name: 'Work', offset: 32, assetPolicy: 'capability-selected' }),
-  Object.freeze({ name: 'Provider', offset: 48, assetPolicy: 'capability-selected' }),
-  Object.freeze({ name: 'Bounty', offset: 64, assetPolicy: 'capability-selected' }),
-  Object.freeze({ name: 'Liquidity', offset: 80, assetPolicy: 'capability-selected' }),
-  Object.freeze({ name: 'Service', offset: 96, assetPolicy: 'capability-selected' }),
-] as const);
+
+const MAX_U64 = (BigInt(1) << BigInt(64)) - BigInt(1);
+/** Width of one content-addressed identity coordinate. */
+const CONTENT_ID_BYTES = 32;
+
+/** The six content identities of one entry, in canonical manifest order. */
+const ENTRY_IDENTITY_OFFSETS_V1 = Object.freeze([
+  CAPABILITY_ENTRY_KIND_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_RELEASE_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CONFIG_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CAPACITY_PROFILE_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CHILD_SCHEMA_ID_OFFSET_V1,
+  CAPABILITY_ENTRY_CHILD_DERIVATION_ID_OFFSET_V1,
+]);
+
+/** The five identities of a Realm-collateral binding, in canonical order. */
+const BINDING_IDENTITY_OFFSETS_V1 = Object.freeze([
+  CAPABILITY_FUNDING_BINDING_REALM_ID_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_RELEASE_ID_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_TOKEN_PROGRAM_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_MINT_OFFSET_V1,
+  CAPABILITY_FUNDING_BINDING_BENEFICIARY_OFFSET_V1,
+]);
 
 export type FundingCompartmentNameV1 = (typeof FUNDING_COMPARTMENTS_V1)[number]['name'];
 export type FundingAssetPolicyV1 = (typeof FUNDING_COMPARTMENTS_V1)[number]['assetPolicy'];
@@ -92,10 +147,10 @@ export type CapabilityFundingQuoteV1 = Readonly<{
 function allocation(bytes: Uint8Array, base: number, index: number, field: string): CompartmentFundingV1 {
   const compartment = FUNDING_COMPARTMENTS_V1[index];
   const offset = base + compartment.offset;
-  requireZero(bytes, offset + ALLOCATION_RESERVED_OFFSET, ALLOCATION_RESERVED_BYTES, `${field} ${compartment.name} compartment`);
+  requireZero(bytes, offset + CAPABILITY_FUNDING_ALLOCATION_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_ALLOCATION_RESERVED_BYTES_V1, `${field} ${compartment.name} compartment`);
   const assetClass = ASSET_CLASSES[bytes[offset]];
   if (assetClass === undefined) throw new Error(`${field} ${compartment.name} compartment names asset class ${bytes[offset]}, which is undefined`);
-  const amount = u64(bytes, offset + ALLOCATION_AMOUNT_OFFSET);
+  const amount = u64(bytes, offset + CAPABILITY_FUNDING_ALLOCATION_AMOUNT_OFFSET_V1);
   if ((assetClass === 'not-applicable') !== (amount === BigInt(0))) {
     throw new Error(`${field} ${compartment.name} compartment is not one canonical typed amount`);
   }
@@ -116,7 +171,7 @@ function checkedTotal(compartments: ReadonlyArray<CompartmentFundingV1>, assetCl
 }
 
 function collateralBinding(bytes: Uint8Array, offset: number, field: string): RealmCollateralBindingV1 {
-  const parts = [0, 32, 64, 96, 128].map((relative) => slice(bytes, offset + relative, 32));
+  const parts = BINDING_IDENTITY_OFFSETS_V1.map((relative) => slice(bytes, offset + relative, CONTENT_ID_BYTES));
   const names = ['Realm identity', 'collateral release identity', 'token program', 'collateral mint', 'refund token beneficiary'] as const;
   parts.forEach((part, index) => requireNonzero(part, `${field} Realm collateral ${names[index]}`));
   return Object.freeze({
@@ -137,23 +192,24 @@ function collateralBinding(bytes: Uint8Array, offset: number, field: string): Re
  * present without collateral or absent with it.
  */
 export function decodeCapabilityFundingQuoteV1(bytes: Uint8Array, offset: number, field: string): CapabilityFundingQuoteV1 {
-  if (ascii(bytes, offset, 8) !== FUNDING_QUOTE_MAGIC) throw new Error(`${field} funding quote magic is not ${FUNDING_QUOTE_MAGIC}`);
-  if (u16(bytes, offset + 8) !== 1) throw new Error(`${field} funding quote schema ${u16(bytes, offset + 8)} is unsupported`);
-  requireZero(bytes, offset + QUOTE_RESERVED_OFFSET, QUOTE_RESERVED_BYTES, `${field} funding quote header`);
-  const amountsOffset = offset + QUOTE_AMOUNTS_OFFSET;
+  if (ascii(bytes, offset, 8) !== CAPABILITY_FUNDING_QUOTE_MAGIC_V1) throw new Error(`${field} funding quote magic is not ${CAPABILITY_FUNDING_QUOTE_MAGIC_V1}`);
+  const schema = u16(bytes, offset + CAPABILITY_FUNDING_QUOTE_SCHEMA_OFFSET_V1);
+  if (schema !== CAPABILITY_FUNDING_QUOTE_SCHEMA_VERSION_V1) throw new Error(`${field} funding quote schema ${schema} is unsupported`);
+  requireZero(bytes, offset + CAPABILITY_FUNDING_QUOTE_RESERVED_OFFSET_V1, CAPABILITY_FUNDING_QUOTE_RESERVED_BYTES_V1, `${field} funding quote header`);
+  const amountsOffset = offset + CAPABILITY_FUNDING_QUOTE_AMOUNTS_OFFSET_V1;
   const compartments = Object.freeze(FUNDING_COMPARTMENTS_V1.map((_, index) => allocation(bytes, amountsOffset, index, field)));
   const nativeLamportsTotal = checkedTotal(compartments, 'native-lamports', field);
   const realmCollateralTotal = checkedTotal(compartments, 'realm-collateral', field);
-  if (nativeLamportsTotal !== u64(bytes, amountsOffset + AMOUNTS_NATIVE_TOTAL_OFFSET)
-      || realmCollateralTotal !== u64(bytes, amountsOffset + AMOUNTS_REALM_TOTAL_OFFSET)) {
+  if (nativeLamportsTotal !== u64(bytes, amountsOffset + CAPABILITY_FUNDING_AMOUNTS_NATIVE_TOTAL_OFFSET_V1)
+      || realmCollateralTotal !== u64(bytes, amountsOffset + CAPABILITY_FUNDING_AMOUNTS_REALM_TOTAL_OFFSET_V1)) {
     throw new Error(`${field} funding quote asset totals differ from its own typed compartments`);
   }
-  const kind = bytes[offset + QUOTE_COLLATERAL_KIND_OFFSET];
+  const kind = bytes[offset + CAPABILITY_FUNDING_QUOTE_COLLATERAL_KIND_OFFSET_V1];
   let realmCollateral: RealmCollateralBindingV1 | null = null;
   if (kind === 0) {
-    requireZero(bytes, offset + QUOTE_BINDING_OFFSET, REALM_COLLATERAL_BINDING_BYTES, `${field} absent Realm collateral binding`);
+    requireZero(bytes, offset + CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1, CAPABILITY_FUNDING_BINDING_BYTES_V1, `${field} absent Realm collateral binding`);
   } else if (kind === 1) {
-    realmCollateral = collateralBinding(bytes, offset + QUOTE_BINDING_OFFSET, field);
+    realmCollateral = collateralBinding(bytes, offset + CAPABILITY_FUNDING_QUOTE_BINDING_OFFSET_V1, field);
   } else {
     throw new Error(`${field} funding quote collateral kind ${kind} is undefined`);
   }
@@ -181,42 +237,42 @@ export type CapabilityManifestEntryV1 = Readonly<{
 
 /** Decode and fully validate every entry of one capability manifest. */
 export function decodeCapabilityManifestV1(bytes: Uint8Array): ReadonlyArray<CapabilityManifestEntryV1> {
-  if (bytes.length < CAPABILITY_MANIFEST_HEADER_BYTES
-      || ascii(bytes, 0, 8) !== CAPABILITY_MANIFEST_MAGIC
-      || u16(bytes, 8) !== 1
-      || u16(bytes, 10) !== 1) {
+  if (bytes.length < CAPABILITY_MANIFEST_HEADER_BYTES_V1
+      || ascii(bytes, CAPABILITY_MANIFEST_MAGIC_OFFSET_V1, 8) !== CAPABILITY_MANIFEST_MAGIC_V1
+      || u16(bytes, CAPABILITY_MANIFEST_SCHEMA_OFFSET_V1) !== CAPABILITY_MANIFEST_SCHEMA_VERSION_V1
+      || u16(bytes, CAPABILITY_MANIFEST_PROFILE_OFFSET_V1) !== CAPABILITY_MANIFEST_ARTIFACT_PROFILE_V1) {
     throw new Error('capability manifest has the wrong exact header');
   }
-  requireZero(bytes, 14, 2, 'capability manifest header');
-  const count = u16(bytes, 12);
-  if (count === 0 || count > CAPABILITY_MANIFEST_MAX_ENTRIES
-      || bytes.length !== CAPABILITY_MANIFEST_HEADER_BYTES + CAPABILITY_MANIFEST_ENTRY_BYTES * count) {
+  requireZero(bytes, CAPABILITY_MANIFEST_RESERVED_OFFSET_V1, CAPABILITY_MANIFEST_HEADER_RESERVED_BYTES_V1, 'capability manifest header');
+  const count = u16(bytes, CAPABILITY_MANIFEST_COUNT_OFFSET_V1);
+  if (count === 0 || count > MAX_CAPABILITIES_V1
+      || bytes.length !== CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_BYTES_V1 * count) {
     throw new Error('capability manifest width is invalid');
   }
   let priorKind: Uint8Array | null = null;
   const entries: CapabilityManifestEntryV1[] = [];
   for (let index = 0; index < count; index += 1) {
-    const offset = CAPABILITY_MANIFEST_HEADER_BYTES + CAPABILITY_MANIFEST_ENTRY_BYTES * index;
-    const identities = [0, 32, 64, 96, 128, 160].map((relative) => slice(bytes, offset + relative, 32));
+    const offset = CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_BYTES_V1 * index;
+    const identities = ENTRY_IDENTITY_OFFSETS_V1.map((relative) => slice(bytes, offset + relative, CONTENT_ID_BYTES));
     identities.forEach((identity, coordinate) => requireNonzero(identity, `capability manifest entry ${index} identity ${coordinate}`));
     if (priorKind !== null) {
       let order = 0;
-      while (order < 32 && priorKind[order] === identities[0][order]) order += 1;
-      if (order === 32 || (priorKind[order] ?? 0) > (identities[0][order] ?? 0)) throw new Error('capability manifest kinds are not strictly ordered');
+      while (order < CONTENT_ID_BYTES && priorKind[order] === identities[0][order]) order += 1;
+      if (order === CONTENT_ID_BYTES || (priorKind[order] ?? 0) > (identities[0][order] ?? 0)) throw new Error('capability manifest kinds are not strictly ordered');
     }
     priorKind = identities[0];
-    requireZero(bytes, offset + 194, 6, `capability manifest entry ${index}`);
-    const policy = bytes[offset + 192];
-    const deadline = u64(bytes, offset + 200);
+    requireZero(bytes, offset + CAPABILITY_ENTRY_RESERVED_OFFSET_V1, CAPABILITY_ENTRY_RESERVED_BYTES_V1, `capability manifest entry ${index}`);
+    const policy = bytes[offset + CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1];
+    const deadline = u64(bytes, offset + CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1);
     if ((policy !== 0 && policy !== 1) || (policy === 0 && deadline !== BigInt(0)) || (policy === 1 && deadline === BigInt(0))) {
       throw new Error('capability manifest activation policy is noncanonical');
     }
-    const dependencyCount = bytes[offset + 193] ?? 0;
-    if (dependencyCount > CAPABILITY_MANIFEST_MAX_ENTRIES) throw new Error('capability manifest dependency count exceeds its bound');
+    const dependencyCount = bytes[offset + CAPABILITY_ENTRY_DEPENDENCY_COUNT_OFFSET_V1] ?? 0;
+    if (dependencyCount > MAX_DEPENDENCIES_PER_CAPABILITY_V1) throw new Error('capability manifest dependency count exceeds its bound');
     const dependencies: number[] = [];
     let priorDependency = -1;
-    for (let position = 0; position < CAPABILITY_MANIFEST_MAX_ENTRIES; position += 1) {
-      const dependency = bytes[offset + 208 + position] ?? 0;
+    for (let position = 0; position < MAX_DEPENDENCIES_PER_CAPABILITY_V1; position += 1) {
+      const dependency = bytes[offset + CAPABILITY_ENTRY_DEPENDENCIES_OFFSET_V1 + position] ?? 0;
       if (position < dependencyCount) {
         if (dependency >= count || dependency === index || dependency <= priorDependency) throw new Error('capability manifest dependency list is noncanonical');
         priorDependency = dependency;
@@ -236,7 +292,7 @@ export function decodeCapabilityManifestV1(bytes: Uint8Array): ReadonlyArray<Cap
       activation: policy === 0 ? 'immediate' : 'deadline',
       deadline,
       dependencies: Object.freeze(dependencies),
-      funding: decodeCapabilityFundingQuoteV1(bytes, offset + CAPABILITY_FUNDING_QUOTE_OFFSET, `capability manifest entry ${index}`),
+      funding: decodeCapabilityFundingQuoteV1(bytes, offset + CAPABILITY_ENTRY_QUOTE_OFFSET_V1, `capability manifest entry ${index}`),
     }));
   }
   return Object.freeze(entries);

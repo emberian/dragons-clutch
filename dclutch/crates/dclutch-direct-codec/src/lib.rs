@@ -12,6 +12,8 @@ mod generated_registered_controller;
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated_intent_v2;
+#[rustfmt::skip]
+mod generated_ordinary_v3;
 pub mod artifacts_v4;
 pub mod execution_v3;
 pub mod intent_v2;

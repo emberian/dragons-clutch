@@ -19,6 +19,7 @@ custom-panic = []
 [dependencies]
 solana-program = { version = "=3.0.0", default-features = false }
 
+dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
 [workspace]
 
 [lints.rust]

@@ -1,20 +1,12 @@
-import { AddressLookupTableAccount, PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import {
-  PAYOFF_ADMISSION_REQUEST_BYTES_V1,
-  PAYOFF_REQUEST_BYTES_V2,
-  PRODUCT_EVALUATOR_ACCOUNT_COUNT,
-  PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT,
   PRODUCT_V2_BYTES,
   compileProductV2,
-  compileProductV2LiabilityTransaction,
   evaluateProductV2,
   parseProductKnots,
   parseProductTerms,
 } from './productV2';
-
-function key(seed: number): string { return new PublicKey(new Uint8Array(32).fill(seed)).toBase58(); }
 
 async function fixture() {
   return compileProductV2({
@@ -77,48 +69,10 @@ describe('Product V2 exact signed-rational studio', () => {
     expect(() => evaluateProductV2(product, 1n << 127n, 1n)).toThrow('i128');
   });
 
-  it('builds one unsigned packet-bounded 10-account evidence plus 28-account admission transaction', () => {
-    const payer = key(1); const evaluatorProgram = key(2); const admissionProgram = key(3);
-    const evaluatorAccounts = [payer, ...Array.from({ length: PRODUCT_EVALUATOR_ACCOUNT_COUNT - 1 }, (_, index) => key(4 + index))];
-    const admissionAccounts = [payer, ...Array.from({ length: PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT - 1 }, (_, index) => key(20 + index))];
-    const lookupTable = new AddressLookupTableAccount({
-      key: new PublicKey(key(90)),
-      state: {
-        deactivationSlot: 18_446_744_073_709_551_615n,
-        lastExtendedSlot: 77,
-        lastExtendedSlotStartIndex: 0,
-        authority: new PublicKey(key(91)),
-        addresses: [...evaluatorAccounts.slice(1), ...admissionAccounts.slice(1)].map((address) => new PublicKey(address)),
-      },
-    });
-    const compiled = compileProductV2LiabilityTransaction({
-      payer,
-      recentBlockhash: key(92),
-      computeUnitLimit: 900_000,
-      lookupTable,
-      request: new Uint8Array(PAYOFF_REQUEST_BYTES_V2),
-      admissionRequest: new Uint8Array(PAYOFF_ADMISSION_REQUEST_BYTES_V1),
-      evaluatorProgram,
-      admissionProgram,
-      evaluatorAccounts,
-      admissionAccounts,
-    });
-    expect(compiled.wireBytes.length).toBeLessThanOrEqual(1_232);
-    expect(compiled.requiredSigners).toEqual([payer]);
-    expect(compiled.lookupAddressesUsed).toBe((PRODUCT_EVALUATOR_ACCOUNT_COUNT - 1) + (PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT - 1));
-    expect(compiled.transaction.message.compiledInstructions).toHaveLength(3);
-    expect(compiled.transaction.message.compiledInstructions[1].accountKeyIndexes).toHaveLength(PRODUCT_EVALUATOR_ACCOUNT_COUNT);
-    expect(compiled.transaction.message.compiledInstructions[2].accountKeyIndexes).toHaveLength(PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT);
-  });
-
-  it('refuses aliased or deactivated transaction authority', () => {
-    const payer = key(1); const evaluatorAccounts = [payer, ...Array.from({ length: PRODUCT_EVALUATOR_ACCOUNT_COUNT - 1 }, (_, index) => key(4 + index))]; const admissionAccounts = [payer, ...Array.from({ length: PRODUCT_LIABILITY_ADMISSION_ACCOUNT_COUNT - 1 }, (_, index) => key(20 + index))];
-    const transaction = (deactivationSlot: bigint, accounts = evaluatorAccounts) => compileProductV2LiabilityTransaction({
-      payer, recentBlockhash: key(92), computeUnitLimit: 1, evaluatorProgram: key(2), admissionProgram: key(3), evaluatorAccounts: accounts, admissionAccounts,
-      request: new Uint8Array(PAYOFF_REQUEST_BYTES_V2), admissionRequest: new Uint8Array(PAYOFF_ADMISSION_REQUEST_BYTES_V1),
-      lookupTable: new AddressLookupTableAccount({ key: new PublicKey(key(90)), state: { deactivationSlot, lastExtendedSlot: 1, lastExtendedSlotStartIndex: 0, authority: undefined, addresses: [] } }),
-    });
-    expect(() => transaction(18_446_744_073_709_551_615n, [payer, payer, ...evaluatorAccounts.slice(2)])).toThrow('aliases');
-    expect(() => transaction(0n)).toThrow('deactivated');
-  });
+  // The two transaction tests that stood here were deleted with the surface they
+  // covered: a 10-account evidence plus 28-account liability-admission pair aimed
+  // at two crates no program links (`dclutch-product-payoff-v2-svm`,
+  // `dclutch-product-admission-contract`), whose on-chain half
+  // (`programs/dclutch-product-evidence-sbf`) was already banished. They asserted
+  // the packet shape of a transaction no deployed program could execute.
 });

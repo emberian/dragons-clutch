@@ -19,8 +19,8 @@ use dclutch_claims_svm::{
     sparse_native_transfer_v1::{SparseNativeTransferReceiptV1, SparseNativeTransferV1},
 };
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CUSTODY_VAULT_PDA_DOMAIN_V1,
-    CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyReplayV1, DelegatedCustodyReceiptV2,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_VAULT_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1,
+    CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, DelegatedCustodyReceiptV2,
     OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_direct_codec::{
@@ -513,7 +513,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     );
     let (replay, _) = derive_pda(
         custody_program,
-        &[CUSTODY_REPLAY_PDA_DOMAIN_V1, &market, &release_set, &record],
+        &CustodyReplaySeedsV1::new(market, release_set, CallerRoleV1::Trading, record).as_slices(),
     );
     let compartment = [CompartmentV1::TradingPrincipal.tag()];
     let (vault, _) = derive_pda(
@@ -1494,7 +1494,7 @@ fn buy_escrow_fixture() -> (
     );
     let (replay, _) = derive_pda(
         custody_program,
-        &[CUSTODY_REPLAY_PDA_DOMAIN_V1, &market, &release_set, &record],
+        &CustodyReplaySeedsV1::new(market, release_set, CallerRoleV1::Trading, record).as_slices(),
     );
     let compartment = [CompartmentV1::TradingPrincipal.tag()];
     let (vault, _) = derive_pda(
@@ -2029,7 +2029,7 @@ fn inline_physical_fixture(
         derive_pda(id(20), &[CUSTODY_AUTHORITY_PDA_DOMAIN_V1, &id(1), &release]);
     let (custody_replay, _) = derive_pda(
         id(20),
-        &[CUSTODY_REPLAY_PDA_DOMAIN_V1, &id(1), &release, &buyer_key],
+        &CustodyReplaySeedsV1::new(id(1), release, CallerRoleV1::Trading, buyer_key).as_slices(),
     );
     (
         InlineOrdinaryInputV2 {

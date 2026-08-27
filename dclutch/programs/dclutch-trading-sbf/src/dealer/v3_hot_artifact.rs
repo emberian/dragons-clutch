@@ -62,7 +62,7 @@ pub const DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3: u16 = 2;
 /// frame can carry it. The family-neutral Hot executor resolves a child route's
 /// callee by scanning the downgraded effect accounts for the key the Registry
 /// activation cache names for that role, so the topology has to declare exactly
-/// one coordinate for it or every Custody route refuses `Custom(1)` before any
+/// one coordinate for it or every Custody route refuses `AccountFrame` before any
 /// CPI. Claims needs no such coordinate: `SignedDeltaFrameSpecV3` declares
 /// `ClaimsProgram` inside its own frame, which is why only Custody was missing
 /// and why the defect stayed invisible.

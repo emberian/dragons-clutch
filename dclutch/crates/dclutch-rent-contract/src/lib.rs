@@ -2,17 +2,36 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Exact SDK-free semantics for permanent per-authority native-rent credit.
+//! Exact SDK-free semantics for native-rent credit.
 //!
-//! `RentCreditV1` is a program-owned, non-closeable 48-byte account. A
-//! source's legacy `rent_refund` bytes remain the refund/beneficiary authority,
-//! never a direct payout account. The composing adapter derives this credit
-//! PDA and credits it when closing each source. Only the authority may withdraw
-//! presently claimable surplus to a separately supplied System wallet.
+//! The live rent path is [`lifecycle_v2`]: the Market-generation-scoped
+//! `LifecycleRentCreditV2` that tier 1 creates, sweeps, and closes. Its whole
+//! grammar lives in that module.
 //!
-//! This crate owns byte canonicality, instruction grammar, role/alias policy,
-//! and exact balance plans. It does not derive PDAs, inspect account owners or
-//! data, deserialize Rent, invoke System, transfer lamports, or close accounts.
+//! What remains at this root is the V1 record and its accounting primitives.
+//! `RentCreditV1` is a program-owned, non-closeable 48-byte account whose
+//! immutable field is a source's `rent_refund` refund/beneficiary authority,
+//! never a direct payout account.
+//!
+//! The V1 Create and Withdraw INSTRUCTIONS were deleted on 2026-08-27 (the
+//! answered supersession decision in tools/gauntlet/blocked.json; AGENTS.md
+//! forbids preserving parallel legacy and current authority paths). With them
+//! went the action/instruction grammar, both account frames, the role and alias
+//! policy, `SystemWalletFactsV1`, and `WithdrawBalancePlanV1`.
+//! [`CreateBalancePlanV1`] survives its name: the lifecycle V2 Create path uses
+//! the same exact fund-at-current-Rent-minimum plan.
+//!
+//! Consequence, stated rather than hidden: with no Create route, no new
+//! `RentCreditV1` account can come into existence. The type, its width, and its
+//! PDA domain are kept because live code still reads them — most consequentially
+//! `dclutch-direct-codec`, which pins `RENT_CREDIT_BYTES_V1` at registered
+//! artifact coordinates 7 and 10, where the RentCredit V1/V2 width skew is a
+//! known emitter defect owned by DP2. That migration retires the last of V1;
+//! this crate does not front-run it under a live emitter lane.
+//!
+//! This crate owns byte canonicality and exact balance plans. It does not derive
+//! PDAs, inspect account owners or data, deserialize Rent, invoke System,
+//! transfer lamports, or close accounts.
 
 /// Lifecycle-scoped successor state and Market-retirement closure semantics.
 pub mod lifecycle_v2;
@@ -23,12 +42,6 @@ use core::convert::TryInto;
 pub const PUBKEY_BYTES: usize = 32;
 /// Exact width of a persistent V1 rent-credit record.
 pub const RENT_CREDIT_BYTES_V1: usize = 48;
-/// Exact width of the shared instruction header.
-pub const RENT_CREDIT_INSTRUCTION_HEADER_BYTES_V1: usize = 16;
-/// Exact width of a canonical permissionless Create instruction.
-pub const CREATE_RENT_CREDIT_BYTES_V1: usize = 56;
-/// Exact width of a canonical Withdraw instruction.
-pub const WITHDRAW_RENT_CREDIT_BYTES_V1: usize = 24;
 
 /// PDA domain for one permanent rent credit per refund authority.
 ///
@@ -39,8 +52,6 @@ pub const RENT_CREDIT_PDA_DOMAIN_BYTES_V1: usize = 22;
 
 /// Canonical persistent-account magic.
 pub const RENT_CREDIT_MAGIC_V1: [u8; 8] = *b"DCLTRNT1";
-/// Canonical rent-credit instruction magic.
-pub const RENT_CREDIT_INSTRUCTION_MAGIC_V1: [u8; 8] = *b"DCLTRCI1";
 /// Implemented persistent-account and instruction schema version.
 pub const RENT_CREDIT_SCHEMA_VERSION_V1: u16 = 1;
 
@@ -60,14 +71,6 @@ pub const RENT_SYSVAR_ID: [u8; PUBKEY_BYTES] = [
     6, 167, 213, 23, 25, 44, 92, 81, 33, 140, 201, 76, 61, 74, 241, 127, 88, 218, 238, 8, 155, 161,
     253, 68, 227, 219, 217, 138, 0, 0, 0, 0,
 ];
-
-const HEADER_SCHEMA_OFFSET: usize = 8;
-const HEADER_ACTION_OFFSET: usize = 10;
-const HEADER_RESERVED_OFFSET: usize = 11;
-const CREATE_AUTHORITY_OFFSET: usize = 16;
-const CREATE_BUMP_OFFSET: usize = 48;
-const CREATE_RESERVED_OFFSET: usize = 49;
-const WITHDRAW_AMOUNT_OFFSET: usize = 16;
 
 /// Refusal from a hostile decoder, frame checker, or exact accounting plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -235,328 +238,6 @@ impl RentCreditPdaSeedsV1 {
     /// Return the persisted bump seed.
     pub const fn bump(self) -> u8 {
         self.bump
-    }
-}
-
-/// V1 rent-credit action discriminator.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RentCreditActionV1 {
-    /// Permissionlessly create and fund a credit.
-    Create,
-    /// Withdraw exact current surplus.
-    Withdraw,
-}
-
-impl RentCreditActionV1 {
-    fn decode(byte: u8) -> Result<Self> {
-        match byte {
-            1 => Ok(Self::Create),
-            2 => Ok(Self::Withdraw),
-            _ => Err(Error::UnknownAction),
-        }
-    }
-    const fn byte(self) -> u8 {
-        match self {
-            Self::Create => 1,
-            Self::Withdraw => 2,
-        }
-    }
-}
-
-/// Exact canonical rent-credit instruction wire.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RentCreditInstructionV1 {
-    /// Permissionless creation data.
-    Create(CreateRentCreditV1),
-    /// Authority-signed withdrawal data.
-    Withdraw(WithdrawRentCreditV1),
-}
-
-impl RentCreditInstructionV1 {
-    /// Hostile-decode one exact V1 Create or Withdraw wire, rejecting trailing bytes.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        decode_instruction_header(bytes)?;
-        match RentCreditActionV1::decode(read_byte(bytes, HEADER_ACTION_OFFSET)?)? {
-            RentCreditActionV1::Create => Ok(Self::Create(CreateRentCreditV1::decode(bytes)?)),
-            RentCreditActionV1::Withdraw => {
-                Ok(Self::Withdraw(WithdrawRentCreditV1::decode(bytes)?))
-            }
-        }
-    }
-}
-
-/// Permissionless Create instruction contents.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CreateRentCreditV1 {
-    refund_authority: RefundAuthority,
-    pda_bump: u8,
-}
-
-impl CreateRentCreditV1 {
-    /// Construct creation data for the authority's one derived credit PDA.
-    pub const fn new(refund_authority: RefundAuthority, pda_bump: u8) -> Self {
-        Self {
-            refund_authority,
-            pda_bump,
-        }
-    }
-    /// Hostile-decode one exact canonical Create wire.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        decode_exact_instruction(
-            bytes,
-            RentCreditActionV1::Create,
-            CREATE_RENT_CREDIT_BYTES_V1,
-        )?;
-        require_zero(bytes, CREATE_RESERVED_OFFSET, 7)?;
-        Ok(Self::new(
-            RefundAuthority::new(read_array(bytes, CREATE_AUTHORITY_OFFSET)?)?,
-            read_byte(bytes, CREATE_BUMP_OFFSET)?,
-        ))
-    }
-    /// Return the exact canonical Create wire.
-    pub fn to_bytes(self) -> [u8; CREATE_RENT_CREDIT_BYTES_V1] {
-        let mut output = header_56(RentCreditActionV1::Create);
-        put(
-            &mut output,
-            CREATE_AUTHORITY_OFFSET,
-            &self.refund_authority.to_bytes(),
-        );
-        output[CREATE_BUMP_OFFSET] = self.pda_bump;
-        output
-    }
-    /// Return the authority encoded in data rather than supplied as an account.
-    pub const fn refund_authority(self) -> RefundAuthority {
-        self.refund_authority
-    }
-    /// Return the derived PDA bump encoded in data and persisted in state.
-    pub const fn pda_bump(self) -> u8 {
-        self.pda_bump
-    }
-    /// Return the exact persistent account state this request creates.
-    pub const fn credit(self) -> RentCreditV1 {
-        RentCreditV1::new(self.refund_authority, self.pda_bump)
-    }
-}
-
-/// Exact requested native-lamport withdrawal instruction contents.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WithdrawRentCreditV1 {
-    requested_lamports: u64,
-}
-
-impl WithdrawRentCreditV1 {
-    /// Construct a nonzero exact withdrawal request.
-    pub fn new(requested_lamports: u64) -> Result<Self> {
-        if requested_lamports == 0 {
-            return Err(Error::ZeroWithdrawal);
-        }
-        Ok(Self { requested_lamports })
-    }
-    /// Hostile-decode one exact canonical Withdraw wire.
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        decode_exact_instruction(
-            bytes,
-            RentCreditActionV1::Withdraw,
-            WITHDRAW_RENT_CREDIT_BYTES_V1,
-        )?;
-        Self::new(read_u64(bytes, WITHDRAW_AMOUNT_OFFSET)?)
-    }
-    /// Return the exact canonical Withdraw wire.
-    pub fn to_bytes(self) -> [u8; WITHDRAW_RENT_CREDIT_BYTES_V1] {
-        let mut output = header_24(RentCreditActionV1::Withdraw);
-        put(
-            &mut output,
-            WITHDRAW_AMOUNT_OFFSET,
-            &self.requested_lamports.to_le_bytes(),
-        );
-        output
-    }
-    /// Return the exact requested amount; no implicit partial withdrawal exists.
-    pub const fn requested_lamports(self) -> u64 {
-        self.requested_lamports
-    }
-}
-
-/// Runtime privilege projection supplied by the SVM adapter for one account.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AccountMetaV1 {
-    /// Exact account key bytes.
-    pub key: [u8; PUBKEY_BYTES],
-    /// Whether the runtime marks this account as a signer.
-    pub is_signer: bool,
-    /// Whether the runtime marks this account writable.
-    pub is_writable: bool,
-    /// Whether the runtime marks this account executable.
-    pub is_executable: bool,
-}
-
-/// Exact ordered Create account roles.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CreateRentCreditRoleV1 {
-    /// Writable signer supplying the exact current rent minimum.
-    Payer,
-    /// Vacant writable PDA that becomes the permanent credit account.
-    RentCredit,
-    /// Canonical executable System Program.
-    SystemProgram,
-    /// Canonical nonexecutable Rent sysvar.
-    RentSysvar,
-}
-
-/// Exact ordered Create frame, independent of Solana SDK account types.
-pub const CREATE_RENT_CREDIT_FRAME_V1: [CreateRentCreditRoleV1; 4] = [
-    CreateRentCreditRoleV1::Payer,
-    CreateRentCreditRoleV1::RentCredit,
-    CreateRentCreditRoleV1::SystemProgram,
-    CreateRentCreditRoleV1::RentSysvar,
-];
-
-/// Hostile runtime projection for the four ordered Create accounts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CreateRentCreditFrameV1 {
-    accounts: [AccountMetaV1; 4],
-}
-
-impl CreateRentCreditFrameV1 {
-    /// Validate ordering, privileges, System/Rent identities, and no aliases.
-    ///
-    /// The adapter must additionally authenticate the payer as a System payer,
-    /// the credit key as the vacant PDA derived from Create data, and the Rent
-    /// value used to obtain the current minimum. No authority account exists:
-    /// creation is a third-party reserve donation.
-    pub fn new(accounts: [AccountMetaV1; 4]) -> Result<Self> {
-        let payer = accounts[0];
-        let credit = accounts[1];
-        let system = accounts[2];
-        let rent = accounts[3];
-        ordinary_key(payer.key)?;
-        ordinary_key(credit.key)?;
-        if !payer.is_signer
-            || !payer.is_writable
-            || payer.is_executable
-            || credit.is_signer
-            || !credit.is_writable
-            || credit.is_executable
-        {
-            return Err(Error::InvalidAccountPrivilege);
-        }
-        validate_system_program(system)?;
-        validate_rent_sysvar(rent)?;
-        require_distinct(&[payer.key, credit.key, system.key, rent.key])?;
-        Ok(Self { accounts })
-    }
-
-    /// Return exact ordered runtime accounts after validation.
-    pub const fn accounts(self) -> [AccountMetaV1; 4] {
-        self.accounts
-    }
-}
-
-/// Exact ordered Withdraw account roles.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WithdrawRentCreditRoleV1 {
-    /// Writable permanent program-owned credit PDA.
-    RentCredit,
-    /// Readonly signer matching the credit's immutable refund authority.
-    Authority,
-    /// Writable data-empty System wallet receiving exact surplus.
-    Recipient,
-    /// Canonical nonexecutable Rent sysvar.
-    RentSysvar,
-}
-
-/// Exact ordered Withdraw frame.
-pub const WITHDRAW_RENT_CREDIT_FRAME_V1: [WithdrawRentCreditRoleV1; 4] = [
-    WithdrawRentCreditRoleV1::RentCredit,
-    WithdrawRentCreditRoleV1::Authority,
-    WithdrawRentCreditRoleV1::Recipient,
-    WithdrawRentCreditRoleV1::RentSysvar,
-];
-
-/// Authenticated adapter facts establishing that a recipient is a System wallet.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SystemWalletFactsV1 {
-    /// Whether the adapter authenticated the account owner as the System Program.
-    pub is_system_owned: bool,
-    /// Exact observed account-data length; V1 recipient must be data-empty.
-    pub data_len: u64,
-}
-
-impl SystemWalletFactsV1 {
-    /// Construct exact facts for a data-empty System-owned native wallet.
-    pub fn new(is_system_owned: bool, data_len: u64) -> Result<Self> {
-        if !is_system_owned || data_len != 0 {
-            return Err(Error::InvalidSystemWallet);
-        }
-        Ok(Self {
-            is_system_owned,
-            data_len,
-        })
-    }
-}
-
-/// Hostile runtime projection for the four ordered Withdraw accounts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WithdrawRentCreditFrameV1 {
-    accounts: [AccountMetaV1; 4],
-}
-
-impl WithdrawRentCreditFrameV1 {
-    /// Validate exact Withdraw role privileges and V1 aliases.
-    ///
-    /// Authority may equal recipient only under runtime privilege union: that
-    /// one key is signer and writable. Otherwise authority is readonly signer
-    /// and recipient is nonsigner writable. For a distinct authority this
-    /// checker intentionally does not inspect executable, owner, data, or
-    /// lamport facts. The adapter separately authenticates credit PDA/ownership,
-    /// authority binding, and recipient wallet facts.
-    pub fn new(accounts: [AccountMetaV1; 4], recipient: SystemWalletFactsV1) -> Result<Self> {
-        let credit = accounts[0];
-        let authority = accounts[1];
-        let destination = accounts[2];
-        let rent = accounts[3];
-        ordinary_key(credit.key)?;
-        ordinary_key(authority.key)?;
-        ordinary_key(destination.key)?;
-        if credit.is_signer || !credit.is_writable || credit.is_executable {
-            return Err(Error::InvalidAccountPrivilege);
-        }
-        validate_rent_sysvar(rent)?;
-        if authority.key == destination.key {
-            if !authority.is_signer
-                || !authority.is_writable
-                || authority.is_executable
-                || !destination.is_signer
-                || !destination.is_writable
-                || destination.is_executable
-            {
-                return Err(Error::InvalidAccountPrivilege);
-            }
-        } else if !authority.is_signer
-            || authority.is_writable
-            || destination.is_signer
-            || !destination.is_writable
-            || destination.is_executable
-        {
-            return Err(Error::InvalidAccountPrivilege);
-        }
-        if !recipient.is_system_owned || recipient.data_len != 0 {
-            return Err(Error::InvalidSystemWallet);
-        }
-        if credit.key == authority.key
-            || credit.key == destination.key
-            || credit.key == rent.key
-            || authority.key == rent.key
-            || destination.key == rent.key
-        {
-            return Err(Error::AccountAlias);
-        }
-        Ok(Self { accounts })
-    }
-
-    /// Return exact ordered runtime accounts after validation.
-    pub const fn accounts(self) -> [AccountMetaV1; 4] {
-        self.accounts
     }
 }
 
@@ -740,168 +421,6 @@ pub const fn claimable_lamports(observed_lamports: u64, current_rent_minimum: u6
     observed_lamports.saturating_sub(current_rent_minimum)
 }
 
-/// Exact successful withdrawal balance transition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WithdrawBalancePlanV1 {
-    credit_before: u64,
-    credit_after: u64,
-    recipient_before: u64,
-    recipient_after: u64,
-    current_rent_minimum: u64,
-    requested_lamports: u64,
-}
-
-impl WithdrawBalancePlanV1 {
-    /// Build the sole admitted nonzero exact-withdrawal plan.
-    pub fn new(
-        credit_before: u64,
-        recipient_before: u64,
-        current_rent_minimum: u64,
-        request: WithdrawRentCreditV1,
-    ) -> Result<Self> {
-        let requested_lamports = request.requested_lamports();
-        if requested_lamports > claimable_lamports(credit_before, current_rent_minimum) {
-            return Err(Error::WithdrawalExceedsClaimable);
-        }
-        let credit_after = credit_before
-            .checked_sub(requested_lamports)
-            .ok_or(Error::ArithmeticOverflow)?;
-        let recipient_after = recipient_before
-            .checked_add(requested_lamports)
-            .ok_or(Error::ArithmeticOverflow)?;
-        Ok(Self {
-            credit_before,
-            credit_after,
-            recipient_before,
-            recipient_after,
-            current_rent_minimum,
-            requested_lamports,
-        })
-    }
-    /// Verify observed post-balances after exact transfer.
-    pub fn validate_post(self, credit_after: u64, recipient_after: u64) -> Result<()> {
-        if credit_after != self.credit_after || recipient_after != self.recipient_after {
-            return Err(Error::WithdrawalExceedsClaimable);
-        }
-        Ok(())
-    }
-    /// Return credit lamports before withdrawal.
-    pub const fn credit_before(self) -> u64 {
-        self.credit_before
-    }
-    /// Return credit lamports after withdrawal.
-    pub const fn credit_after(self) -> u64 {
-        self.credit_after
-    }
-    /// Return recipient lamports before withdrawal.
-    pub const fn recipient_before(self) -> u64 {
-        self.recipient_before
-    }
-    /// Return recipient lamports after withdrawal.
-    pub const fn recipient_after(self) -> u64 {
-        self.recipient_after
-    }
-    /// Return Rent minimum used for withdrawal floor.
-    pub const fn current_rent_minimum(self) -> u64 {
-        self.current_rent_minimum
-    }
-    /// Return one exact requested transferred amount.
-    pub const fn requested_lamports(self) -> u64 {
-        self.requested_lamports
-    }
-}
-
-/// Refuse closure explicitly: V1 never closes, drains, or redirects credit.
-pub fn close_rent_credit_v1() -> Result<()> {
-    Err(Error::CloseNotSupported)
-}
-
-fn decode_instruction_header(bytes: &[u8]) -> Result<()> {
-    if bytes.len() < RENT_CREDIT_INSTRUCTION_HEADER_BYTES_V1 {
-        return Err(Error::InvalidLength);
-    }
-    if read_array(bytes, 0)? != RENT_CREDIT_INSTRUCTION_MAGIC_V1 {
-        return Err(Error::InvalidMagic);
-    }
-    if read_u16(bytes, HEADER_SCHEMA_OFFSET)? != RENT_CREDIT_SCHEMA_VERSION_V1 {
-        return Err(Error::UnsupportedSchema);
-    }
-    require_zero(bytes, HEADER_RESERVED_OFFSET, 5)
-}
-
-fn decode_exact_instruction(bytes: &[u8], action: RentCreditActionV1, width: usize) -> Result<()> {
-    if bytes.len() != width {
-        return Err(Error::InvalidLength);
-    }
-    decode_instruction_header(bytes)?;
-    if read_byte(bytes, HEADER_ACTION_OFFSET)? != action.byte() {
-        return Err(Error::UnknownAction);
-    }
-    Ok(())
-}
-
-fn header_56(action: RentCreditActionV1) -> [u8; CREATE_RENT_CREDIT_BYTES_V1] {
-    let mut output = [0; CREATE_RENT_CREDIT_BYTES_V1];
-    put(&mut output, 0, &RENT_CREDIT_INSTRUCTION_MAGIC_V1);
-    put(
-        &mut output,
-        HEADER_SCHEMA_OFFSET,
-        &RENT_CREDIT_SCHEMA_VERSION_V1.to_le_bytes(),
-    );
-    output[HEADER_ACTION_OFFSET] = action.byte();
-    output
-}
-
-fn header_24(action: RentCreditActionV1) -> [u8; WITHDRAW_RENT_CREDIT_BYTES_V1] {
-    let mut output = [0; WITHDRAW_RENT_CREDIT_BYTES_V1];
-    put(&mut output, 0, &RENT_CREDIT_INSTRUCTION_MAGIC_V1);
-    put(
-        &mut output,
-        HEADER_SCHEMA_OFFSET,
-        &RENT_CREDIT_SCHEMA_VERSION_V1.to_le_bytes(),
-    );
-    output[HEADER_ACTION_OFFSET] = action.byte();
-    output
-}
-
-fn validate_system_program(account: AccountMetaV1) -> Result<()> {
-    if account.key != SYSTEM_PROGRAM_ID
-        || account.is_signer
-        || account.is_writable
-        || !account.is_executable
-    {
-        return Err(Error::InvalidSystemProgram);
-    }
-    Ok(())
-}
-
-fn validate_rent_sysvar(account: AccountMetaV1) -> Result<()> {
-    if account.key != RENT_SYSVAR_ID
-        || account.is_signer
-        || account.is_writable
-        || account.is_executable
-    {
-        return Err(Error::InvalidRentSysvar);
-    }
-    Ok(())
-}
-
-fn ordinary_key(key: [u8; PUBKEY_BYTES]) -> Result<()> {
-    if is_zero(&key) {
-        return Err(Error::ZeroAuthorityOrAccount);
-    }
-    Ok(())
-}
-
-fn require_distinct(keys: &[[u8; PUBKEY_BYTES]]) -> Result<()> {
-    for (index, key) in keys.iter().enumerate() {
-        if keys.iter().take(index).any(|prior| prior == key) {
-            return Err(Error::AccountAlias);
-        }
-    }
-    Ok(())
-}
-
 fn is_zero(bytes: &[u8; PUBKEY_BYTES]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
@@ -934,9 +453,6 @@ fn read_byte(bytes: &[u8], offset: usize) -> Result<u8> {
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_le_bytes(read_array(bytes, offset)?))
 }
-fn read_u64(bytes: &[u8], offset: usize) -> Result<u64> {
-    Ok(u64::from_le_bytes(read_array(bytes, offset)?))
-}
 
 fn put(output: &mut [u8], offset: usize, value: &[u8]) {
     if let Some(destination) = output.get_mut(offset..offset.saturating_add(value.len())) {
@@ -954,18 +470,6 @@ mod tests {
     fn authority(value: u8) -> RefundAuthority {
         RefundAuthority::new(key(value)).expect("authority")
     }
-    fn meta(key: [u8; 32], signer: bool, writable: bool, executable: bool) -> AccountMetaV1 {
-        AccountMetaV1 {
-            key,
-            is_signer: signer,
-            is_writable: writable,
-            is_executable: executable,
-        }
-    }
-    fn rent() -> AccountMetaV1 {
-        meta(RENT_SYSVAR_ID, false, false, false)
-    }
-
     #[test]
     fn canonical_roundtrip_bump_and_binding() {
         let record = RentCreditV1::new(authority(7), 254);
@@ -996,38 +500,13 @@ mod tests {
             RentCreditV1::decode(&zero),
             Err(Error::ZeroAuthorityOrAccount)
         );
-        let create = CreateRentCreditV1::new(authority(4), 9);
-        let canonical = create.to_bytes();
-        assert_eq!(
-            RentCreditInstructionV1::decode(&canonical),
-            Ok(RentCreditInstructionV1::Create(create))
-        );
-        let mut trailing = [0u8; 57];
-        trailing[..56].copy_from_slice(&canonical);
-        assert_eq!(
-            RentCreditInstructionV1::decode(&trailing),
-            Err(Error::InvalidLength)
-        );
-        let mut dirty_create = canonical;
-        dirty_create[55] = 1;
-        assert_eq!(
-            CreateRentCreditV1::decode(&dirty_create),
-            Err(Error::NonCanonicalReservedBytes)
-        );
     }
 
     #[test]
-    fn create_is_permissionless_and_funds_exact_current_minimum() {
-        let request = CreateRentCreditV1::new(authority(5), 17);
-        let frame = CreateRentCreditFrameV1::new([
-            meta(key(1), true, true, false),
-            meta(key(2), false, true, false),
-            meta(SYSTEM_PROGRAM_ID, false, false, true),
-            rent(),
-        ])
-        .expect("frame");
-        assert_eq!(frame.accounts()[0].key, key(1));
-        assert_eq!(request.credit(), RentCreditV1::new(authority(5), 17));
+    // The V1 Create route is deleted; this plan is not. Lifecycle V2's Create
+    // funds a credit by the same exact rule, so its coverage stays here.
+    #[test]
+    fn creation_funds_exactly_the_current_rent_minimum() {
         let plan = CreateBalancePlanV1::new(120, 0, 100).expect("plan");
         assert_eq!((plan.payer_after(), plan.credit_after()), (20, 100));
         assert_eq!(plan.validate_post(20, 100), Ok(()));
@@ -1081,82 +560,5 @@ mod tests {
             CreditBalancePlanV1::new(u64::MAX, 1),
             Err(Error::ArithmeticOverflow)
         );
-    }
-
-    #[test]
-    fn withdraw_reserve_floor_zero_and_overflow() {
-        assert_eq!(WithdrawRentCreditV1::new(0), Err(Error::ZeroWithdrawal));
-        let request = WithdrawRentCreditV1::new(20).expect("nonzero");
-        let plan = WithdrawBalancePlanV1::new(120, 7, 100, request).expect("claimable");
-        assert_eq!((plan.credit_after(), plan.recipient_after()), (100, 27));
-        assert_eq!(
-            WithdrawBalancePlanV1::new(
-                120,
-                7,
-                100,
-                WithdrawRentCreditV1::new(21).expect("request")
-            ),
-            Err(Error::WithdrawalExceedsClaimable)
-        );
-        assert_eq!(
-            WithdrawBalancePlanV1::new(120, u64::MAX, 100, request),
-            Err(Error::ArithmeticOverflow)
-        );
-    }
-
-    #[test]
-    fn alias_policy_allows_only_authority_destination_privilege_union() {
-        let facts = SystemWalletFactsV1::new(true, 0).expect("wallet");
-        let executable_authority = WithdrawRentCreditFrameV1::new(
-            [
-                meta(key(1), false, true, false),
-                meta(key(2), true, false, true),
-                meta(key(3), false, true, false),
-                rent(),
-            ],
-            facts,
-        )
-        .expect("distinct authority executable status is irrelevant");
-        assert_eq!(executable_authority.accounts()[1].key, key(2));
-        let aliased = WithdrawRentCreditFrameV1::new(
-            [
-                meta(key(1), false, true, false),
-                meta(key(2), true, true, false),
-                meta(key(2), true, true, false),
-                rent(),
-            ],
-            facts,
-        )
-        .expect("union");
-        assert_eq!(aliased.accounts()[1].key, aliased.accounts()[2].key);
-        assert_eq!(
-            WithdrawRentCreditFrameV1::new(
-                [
-                    meta(key(1), false, true, false),
-                    meta(key(2), true, false, false),
-                    meta(key(2), true, false, false),
-                    rent(),
-                ],
-                facts
-            ),
-            Err(Error::InvalidAccountPrivilege)
-        );
-        assert_eq!(
-            WithdrawRentCreditFrameV1::new(
-                [
-                    meta(key(1), false, true, false),
-                    meta(key(1), true, false, false),
-                    meta(key(3), false, true, false),
-                    rent(),
-                ],
-                facts
-            ),
-            Err(Error::AccountAlias)
-        );
-    }
-
-    #[test]
-    fn v1_explicitly_refuses_close_semantics() {
-        assert_eq!(close_rent_credit_v1(), Err(Error::CloseNotSupported));
     }
 }

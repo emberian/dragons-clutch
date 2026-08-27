@@ -55,10 +55,9 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1,
-    ContextV1, CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1,
-    DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2,
-    OperationV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1, ContextV1, CustodyReplaySeedsV1,
+    CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2, OperationV1,
 };
 use dclutch_direct_codec::{
     execution_v3::{
@@ -102,7 +101,7 @@ use dclutch_rent_contract::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
-use dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID;
+use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
     hash::{hash, hashv},
@@ -842,13 +841,17 @@ fn realm_fixture(
         REALM_SCHEMA_RELEASE_ID_V1,
         realm_bytes.to_vec(),
     );
+    // Direct's escrow replay is Trading-role; the role is a seed component of
+    // the replay namespace, so a fixture that derives it without one addresses
+    // an account the program will never look at.
     let replay = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &market.to_bytes(),
-            &input.release_set,
-            &context.to_bytes(),
-        ],
+        &CustodyReplaySeedsV1::new(
+            market.to_bytes(),
+            input.release_set,
+            CallerRoleV1::Trading,
+            context.to_bytes(),
+        )
+        .as_slices(),
         &input.custody_program,
     )
     .0;
@@ -895,7 +898,14 @@ fn realm_record(
     RealmV1::new(RealmV1Input {
         token_program: LEGACY_TOKEN_PROGRAM_ID,
         collateral_mint: key(0xa4).to_bytes(),
-        collateral_adapter_release_id: [0xa5; 32],
+        // Custody selects the collateral adapter by matching this against
+        // `hash(release.to_bytes())` over its own production catalog, and
+        // refuses `Realm` when nothing matches. A placeholder digest here was a
+        // Realm no live Custody route could ever accept, and it was invisible
+        // for as long as nothing reached Custody's body. The legacy exact
+        // transfer profile is the one whose `program_id()` is the
+        // `token_program` this Realm names.
+        collateral_adapter_release_id: hash(&PRODUCTION_ADAPTER_RELEASES[0].to_bytes()).to_bytes(),
         mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
         freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
     })
@@ -1110,11 +1120,7 @@ fn custody_request_bytes(
         destination_compartment: CompartmentV1::External,
         release_set: input.release_set,
         market: state.market.to_bytes(),
-        // `project_key(REALM_ACCOUNT, IDENTITY_REALM_V3)` projects the Realm
-        // ACCOUNT ADDRESS, not the finalized record digest. Seeding this field
-        // with the digest produced a request whose bytes -- and therefore whose
-        // caller-authority PDA -- no chain execution could ever reproduce.
-        realm: realm.realm.raw.to_bytes(),
+        realm: realm.realm.digest,
         context: capability.buyer_maker.to_bytes(),
         caller_program: input.trading_program.to_bytes(),
         semantic: ContextV1 {
@@ -1210,7 +1216,8 @@ fn custody_route_authorities(
         request_digest: [0; 32],
     }; 4];
     for (slot, route) in derived.iter_mut().zip(CUSTODY_ROUTES_V3) {
-        let bytes = custody_request_bytes(route, input, product, state, capability, realm, request)?;
+        let bytes =
+            custody_request_bytes(route, input, product, state, capability, realm, request)?;
         let request_digest = hash(&bytes).to_bytes();
         let seeds = CallerAuthoritySeedsV1::new(
             core_content(input.release_set)?,
@@ -1538,17 +1545,18 @@ fn logical_accounts(
     request: &[u8],
     custody_routes: &[CustodyRouteAuthorityV3; 4],
 ) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
-    let custody_route_account = |index: usize| -> Result<ChainAccount, DirectHotChainFixtureErrorV5> {
-        Ok(external_empty(
-            custody_routes
-                .get(index)
-                .ok_or(DirectHotChainFixtureErrorV5::Encoding)?
-                .authority,
-            system_program::ID,
-            false,
-            false,
-        ))
-    };
+    let custody_route_account =
+        |index: usize| -> Result<ChainAccount, DirectHotChainFixtureErrorV5> {
+            Ok(external_empty(
+                custody_routes
+                    .get(index)
+                    .ok_or(DirectHotChainFixtureErrorV5::Encoding)?
+                    .authority,
+                system_program::ID,
+                false,
+                false,
+            ))
+        };
     let mut logical = (0..usize::from(DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3))
         .map(|index| {
             ordinary(

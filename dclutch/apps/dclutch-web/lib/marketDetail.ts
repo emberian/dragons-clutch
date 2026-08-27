@@ -82,6 +82,7 @@ export type MarketDetailRequestV1 = Readonly<{
   coreProgramId: string;
   registryProgramId?: string | null;
   claimsProgramId?: string | null;
+  custodyProgramId?: string | null;
   address: string;
 }>;
 
@@ -89,6 +90,7 @@ export type MarketDetailV1 = Readonly<{
   coreProgramId: string;
   registryProgramId: string | null;
   claimsProgramId: string | null;
+  custodyProgramId: string | null;
   floorSlot: string;
   address: string;
   card: MarketDiscoveryCardV1;
@@ -108,6 +110,7 @@ export async function inspectMarketDetailV1(
     coreProgramId: request.coreProgramId,
     registryProgramId: request.registryProgramId ?? null,
     claimsProgramId: request.claimsProgramId ?? null,
+    custodyProgramId: request.custodyProgramId ?? null,
     addresses: [request.address],
   });
   const card = discovery.cards[0];
@@ -117,6 +120,7 @@ export async function inspectMarketDetailV1(
     coreProgramId: discovery.coreProgramId,
     registryProgramId: discovery.registryProgramId,
     claimsProgramId: discovery.claimsProgramId,
+    custodyProgramId: discovery.custodyProgramId,
     floorSlot: discovery.floorSlot,
     address: card.address,
     card,

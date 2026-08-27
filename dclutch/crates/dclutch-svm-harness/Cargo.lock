@@ -1603,14 +1603,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-direct-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-realm-contract",
- "dclutch-rent-contract",
-]
-
-[[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1625,19 +1617,6 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-release-set-contract",
  "sha2 0.10.9",
-]
-
-[[package]]
-name = "dclutch-kernel"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-market-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-kernel",
- "dclutch-product-contract",
 ]
 
 [[package]]
@@ -1713,6 +1692,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-product-runtime-v2-svm-reader"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-record-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-program-test-evidence"
 version = "0.1.0"
 
@@ -1769,6 +1762,10 @@ version = "0.1.0"
 
 [[package]]
 name = "dclutch-record-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]
@@ -1845,6 +1842,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-resolution-proof-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-pyth-svm",
+ "dclutch-record-contract",
+ "dclutch-refusal-registry",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-relay-contract",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "dclutch-source-contract",
+ "solana-instructions-sysvar 3.0.1",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
+]
+
+[[package]]
+name = "dclutch-resolution-receipt-test-caller-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-refusal-registry",
+ "dclutch-resolution-codec",
+ "dclutch-source-contract",
+ "solana-program",
+]
+
+[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
@@ -1862,8 +1896,6 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-direct-codec",
- "dclutch-direct-contract",
- "dclutch-market-contract",
  "dclutch-market-core-codec",
  "dclutch-market-open-v1-operator",
  "dclutch-market-retirement-v1-operator",
@@ -1881,6 +1913,8 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-resolution-codec",
  "dclutch-resolution-core-v3-operator",
+ "dclutch-resolution-proof-sbf",
+ "dclutch-resolution-receipt-test-caller-sbf",
  "dclutch-source-contract",
  "dclutch-token-svm",
  "serde_json",

@@ -2,21 +2,6 @@
   "note": "Routes that cannot be driven by any gauntlet tier today. Every entry names WHY and WHO. A route with no entry and no observation appears in the report's 'NO stated reason at all' row, which is the row that should make someone uncomfortable. 'No tier drives it yet' is a real and admissible reason; it is deliberately NOT phrased as 'blocked' when nothing structural prevents it, so that a missing test never launders itself into an external blocker. Rules: most specific matching rule wins; a trailing '*' is a prefix glob; keep an entry only while it is true, and delete it the moment its route executes.",
   "blocked": [
     {
-      "route": "claims-proof/*",
-      "reason": "Capability-child proof artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
-    },
-    {
-      "route": "custody-proof/*",
-      "reason": "Capability-child proof artifact, not part of the seven-role successor release set; no tier deploys it.",
-      "owner": "cycle-2 tranche A (WAVE.md)"
-    },
-    {
-      "route": "controller-proof/*",
-      "reason": "Direct controller proof artifact, not part of the seven-role successor release set; no tier deploys it. Its campaign belongs with the Direct family tier.",
-      "owner": "cycle-2 tranche A (WAVE.md), Direct"
-    },
-    {
       "route": "dealer-accelerator/*",
       "reason": "Dealer accelerator, not part of the seven-role successor release set; no tier deploys it. THE FRAME-CLEANLINESS HALF OF THIS ROW IS RESOLVED (W2h, 2026-08-27): measured at c3c4950 and again at 5e25f8e, cargo build-sbf on programs/dclutch-dealer-accelerator-sbf emits ZERO 'overwrites values in the frame' diagnostics, against 253 measured on the same tree at the immediately preceding HEAD. TA-DLR's root cause was correct and is independent of the fix: with `no-entrypoint` set, dclutch-trading-sbf compiles without its own #[global_allocator], which leaves __rust_alloc an opaque extern that cannot be folded at its call sites and spills hot_v3::process_hot_execution_v3 past the SBPF v0 4,096-byte frame. What changed is the headroom, not the allocator: process_hot_execution_v3 used 3,904 bytes of that frame with the outgoing-argument area filling the rest, and c3c4950 split it into an authentication half (3,008 bytes) and an execution half (2,496), which absorbs the opaque extern. TA-DLR's two-edit patch is therefore NOT required for this row and is NOT applied. It remains the principled fix for the underlying incoherence -- a no-entrypoint library build of Trading still runs Hot code under whichever allocator its host executable installs, not the one the shipped Trading program uses -- and if it is taken: re-measure on top of c3c4950 rather than against the stale 253; land both halves together (either alone is a duplicate or a missing #[global_allocator], both hard errors); and per W1f keep admit_heap_frame_v1 and lift_declared_heap_profile_v1 reachable in the SHIPPED ELF, where DCLTPCB1 depends on them on chain now. Widening the cfg does not move the shipped build either way, since `no-entrypoint` is off there and both predicates already evaluate the same. The emitted accelerator .so was never contaminated in any case: process_hot_execution_v3 is dead-stripped from it.",
       "owner": "TA-DLR (the campaign); frame blocker cleared by W2h, the allocator-coherence question is an owner decision"
@@ -38,7 +23,7 @@
     },
     {
       "route": "claims/terminal_settlement_v3::process",
-      "reason": "No campaign drives it. The test caller exists (programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller) and the route needs no open Market and no Hot execution, so a ProgramTest can reach it -- the work is the prestate, not the wiring. Its 35-account frame is the SignedDeltaV3 fixed 20 plus one runtime Position plus fourteen terminal accounts, and authenticate_and_prepare requires, beyond what the shared Product/LBV2 fixture already builds: (a) a Core Market in a TERMINAL state -- `terminal_receipt` Some and `terminal_winner` below the Product outcome count -- where compile_product_lbv2_fixture_v2 builds Phase::Open with terminal_receipt None; (b) a finalized composition-exposure record and vacant staging cursor under COMPOSITION_EXPOSURE_SCHEMA_ID_V3 (dclutch-representation-composition-v3-kernel); (c) a finalized terminal-coordinate record and staging cursor under TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2 whose scenario matches the basis kind (CategoricalQ1 in the shared fixture); (d) the whole Custody leg -- a CustodyReplayV1, a Hoard token account, a recipient token account, the custody-authority PDA and a real token program, i.e. the fixture programs/dclutch-custody-sbf/tests/program_test.rs already builds; and (e) a Realm record plus staging cursor. Nothing here is structurally blocked; it is the union of two existing fixtures plus two record kinds nobody has compiled in a test yet.",
+      "reason": "No campaign drives it. The test caller exists (programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller) and the route needs no open Market and no Hot execution, so a ProgramTest can reach it -- the work is the prestate, not the wiring. Its 35-account frame is the SignedDeltaV3 fixed 20 plus one runtime Position plus fourteen terminal accounts, and authenticate_and_prepare requires, beyond what the shared Product/LBV2 fixture already builds: (a) a Core Market in a TERMINAL state -- `terminal_receipt` Some and `terminal_winner` below the Product outcome count -- where compile_product_lbv2_fixture_v2 builds Phase::Open with terminal_receipt None; (b) a finalized composition-exposure record and vacant staging cursor under COMPOSITION_EXPOSURE_SCHEMA_ID_V3 (dclutch-representation-composition-v3-kernel); (c) a finalized terminal-coordinate record and staging cursor under TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2 whose scenario matches the basis kind (CategoricalQ1 in the shared fixture); (d) the whole Custody leg -- a CustodyReplayV1, a Hoard token account, a recipient token account, the custody-authority PDA and a real token program, i.e. the fixture programs/dclutch-custody-sbf/tests/program_test.rs already builds -- and per decision 0008 the Hoard Vault and the replay must BOTH sit at the aggregate's custody_context, not at the Market address; a fixture that puts the Hoard at the Market address reproduces the exact bug this route had and passes vacuously (the rational-representation-v2 campaign did that for its whole life, see 612fda2); and (e) a Realm record plus staging cursor. Nothing here is structurally blocked; it is the union of two existing fixtures plus two record kinds nobody has compiled in a test yet.",
       "owner": "TA-CL claims/custody lane, next element"
     },
     {
@@ -103,7 +88,7 @@
     },
     {
       "route": "trading/hot_v3::process_hot_execution_v3",
-      "reason": "Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses Custom(3) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). Compute and heap are no longer the blocker; the emitter is.",
+      "reason": "Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses `TradingSbfError::Content` (0x4003) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). Compute and heap are no longer the blocker; the emitter is.",
       "owner": "DP2 (Direct emitter repairs); W2d (per-Market authentication cache) for the remaining ~640,861 CU of repeated artifact decode-and-validate"
     },
     {
@@ -202,24 +187,9 @@
       "owner": "cycle-2 (WAVE.md), retirement"
     },
     {
-      "route": "rent/process_create#Create",
-      "reason": "RentCreditV1 Create. Superseded on the live path by the Market-scoped LifecycleRentCreditV2 that tier 1 does exercise; AGENTS.md forbids preserving parallel legacy/current authority paths, so this is a supersession decision, not a missing test.",
-      "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
-    },
-    {
-      "route": "rent/process_withdraw#Withdraw",
-      "reason": "RentCreditV1 Withdraw; same supersession question as V1 Create.",
-      "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
-    },
-    {
       "route": "rent/process_close_v2#Close",
       "reason": "LifecycleRentCreditV2 Close. JRNY-1 now executes the Sweep half of rent recovery, and Close is the other half: it is not a structural blocker either, it needs a RETIRED Market plus a Core close-authority signer, and no campaign reaches a retired Market yet. A tier that drives a Market to Terminal and retires it discharges this.",
       "owner": "cycle-2 retirement (behind a terminal Market), then JRNY-1"
-    },
-    {
-      "route": "registry/batch_v2::process",
-      "reason": "DCLTRGB2, the role-batch request route. Tier 1 activates one role per transaction (whole-ELF hashing makes a five-role transaction exceed the maximum), so the batch route is not on its path.",
-      "owner": "UNASSIGNED \u2014 needs a decision on whether batch activation is still reachable at real ELF sizes"
     },
     {
       "route": "registry/continuation_v1::process",

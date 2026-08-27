@@ -27,6 +27,7 @@ solana-instructions-sysvar = "=3.0.1"
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

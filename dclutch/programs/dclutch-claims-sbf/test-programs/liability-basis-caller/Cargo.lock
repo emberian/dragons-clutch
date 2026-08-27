@@ -276,12 +276,17 @@ name = "dclutch-claims-liability-basis-test-caller-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "dclutch-refusal-registry",
  "dclutch-release-set-contract",
  "solana-program",
 ]
 
 [[package]]
 name = "dclutch-core-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]

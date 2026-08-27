@@ -32,12 +32,27 @@ pub const GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1: &[u8] =
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralAcceleratorTestCallerErrorV1 {
     /// The request/program/frame accounts were missing or malformed.
-    Frame = 0,
+    Frame = 0x10_9000,
     /// The canonical caller-authority PDA differed.
-    Authority = 1,
+    Authority = 0x10_9001,
     /// The accelerator returned no typed bytes or another producer returned.
-    ReturnData = 2,
+    ReturnData = 0x10_9002,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    GeneralAcceleratorTestCallerErrorV1::Frame as u32
+        == dclutch_refusal_registry::TEST_GENERAL_ACCELERATOR_CALLER_BASE,
+    "GeneralAcceleratorTestCallerErrorV1 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (GeneralAcceleratorTestCallerErrorV1::ReturnData as u32)
+        < dclutch_refusal_registry::TEST_GENERAL_ACCELERATOR_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "GeneralAcceleratorTestCallerErrorV1 must not run past its registered refusal band"
+);
 
 impl From<GeneralAcceleratorTestCallerErrorV1> for ProgramError {
     fn from(value: GeneralAcceleratorTestCallerErrorV1) -> Self {

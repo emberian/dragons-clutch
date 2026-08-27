@@ -73,7 +73,7 @@ pub enum Error {
     /// The categorical Pyth policy failed its kernel semantic validator.
     InvalidPolicy {
         /// Exact kernel policy refusal.
-        error: dclutch_kernel::resolution::categorical_pyth_v1::PythV1Error,
+        error: dclutch_resolution_policy_kernel::categorical_pyth_v1::PythV1Error,
     },
 }
 

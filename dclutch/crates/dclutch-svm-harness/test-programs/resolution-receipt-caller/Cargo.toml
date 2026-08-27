@@ -17,6 +17,7 @@ custom-panic = []
 
 [dependencies]
 dclutch-capability-contract = { path = "../../../dclutch-capability-contract" }
+dclutch-refusal-registry = { path = "../../../dclutch-refusal-registry" }
 dclutch-resolution-codec = { path = "../../../dclutch-resolution-codec" }
 dclutch-source-contract = { path = "../../../dclutch-source-contract" }
 solana-program = { version = "=3.0.0", default-features = false }

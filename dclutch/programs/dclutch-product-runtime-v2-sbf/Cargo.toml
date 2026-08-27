@@ -23,6 +23,7 @@ dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-r
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 [dev-dependencies]
 dclutch-product-runtime-v2-operator = { path = "../../crates/dclutch-product-runtime-v2-operator" }
 solana-account = "=4.6.0"

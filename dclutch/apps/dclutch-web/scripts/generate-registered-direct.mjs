@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 const root = new URL('../../../', import.meta.url);
 const lifecycle = readFileSync(new URL('crates/dclutch-direct-codec/src/generated_lifecycle.rs', root), 'utf8');
 const controller = readFileSync(new URL('crates/dclutch-direct-codec/src/generated_registered_controller.rs', root), 'utf8');
-const controllerProof = readFileSync(new URL('programs/dclutch-controller-proof-sbf/src/lib.rs', root), 'utf8');
 const outputUrl = new URL('../lib/generated/registeredDirect.ts', import.meta.url);
 
 function scalar(source, name) {
@@ -47,7 +46,6 @@ const scalars = [
   ['REGISTERED_RETIRE_MAGIC_OFFSET', controller], ['REGISTERED_RETIRE_VERSION_OFFSET', controller],
   ['REGISTERED_RETIRE_CONTROLLER_BUMP_OFFSET', controller], ['REGISTERED_RETIRE_REGISTRATION_BUMP_OFFSET', controller],
   ['REGISTERED_RETIRE_RESERVED_OFFSET', controller],
-  ['REPLAY_STATE_BYTES', controllerProof],
 ];
 
 const arrays = [

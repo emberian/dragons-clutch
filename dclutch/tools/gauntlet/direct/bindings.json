@@ -28,7 +28,7 @@
       "program": "direct-aot",
       "outcome": "refused",
       "refusal": "direct-aot/DirectAotSbfError::NonStatelessFrame",
-      "note": "HOSTILE. The stateless route's first act is to refuse any invocation carrying an account at all -- there is no signer, no writable state, no rent and no CPI authority at this boundary, and an accepted account would be the first crack in that. Refuses NonStatelessFrame (0)."
+      "note": "HOSTILE. The stateless route's first act is to refuse any invocation carrying an account at all -- there is no signer, no writable state, no rent and no CPI authority at this boundary, and an accepted account would be the first crack in that. Refuses NonStatelessFrame (0xA000)."
     },
     {
       "label": "Direct AOT wire refuses *",
@@ -38,7 +38,7 @@
       "program": "direct-aot",
       "outcome": "refused",
       "refusal": "direct-aot/DirectAotSbfError::InvalidRequest",
-      "note": "HOSTILE. Seven wires the request adapter must reject before any admission runs: an empty instruction, a request one byte short, a request one byte long, a foreign eight-byte magic, a nonzero reserved header span, and two requests whose header declares an internally consistent but non-Direct bank width (one scalar short, one identity short). They are kept distinct rather than collapsed to one case because they exercise different decoder clauses, and a decoder that lost one of them would still pass a single-case test. All seven refuse InvalidRequest (1)."
+      "note": "HOSTILE. Seven wires the request adapter must reject before any admission runs: an empty instruction, a request one byte short, a request one byte long, a foreign eight-byte magic, a nonzero reserved header span, and two requests whose header declares an internally consistent but non-Direct bank width (one scalar short, one identity short). They are kept distinct rather than collapsed to one case because they exercise different decoder clauses, and a decoder that lost one of them would still pass a single-case test. All seven refuse InvalidRequest (0xA001)."
     }
   ]
 }

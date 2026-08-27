@@ -645,20 +645,27 @@ async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
         let artifacts = elves();
         let mut test = program_test(&artifacts);
         let releases = add_release_waist(&mut test, &artifacts);
-        let mut direct = direct_case(&mut test, releases, &artifacts, false);
+        let direct = direct_case(&mut test, releases, &artifacts, false);
         let seal = direct.chain.capability_seal;
-        let account = direct
-            .chain
-            .accounts
-            .iter_mut()
-            .find(|value| value.key == seal)
-            .expect("seal fixture account");
-        let byte = account.account.data.get_mut(offset).expect("seal byte");
-        *byte ^= 0xff;
         let instructions = direct_registry_instructions(releases, &direct);
         let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
         add_lookup_table(&mut test, &addresses);
         let mut context = test.start_with_context().await;
+        // The alteration is made THROUGH THE BANK, and this is not a style
+        // choice. It used to be made against `direct.chain.accounts` after
+        // `direct_case` returned -- and `direct_case` installs those accounts
+        // into the `ProgramTest` before it returns, so the flipped byte never
+        // reached the chain and every iteration of this loop submitted the
+        // canonical, unaltered seal. The assertion still passed, because for
+        // the whole of the heap-wall era every submission of this bundle
+        // refused on the heap before it read a seal at all. W2p took the wall
+        // down and the vacuity surfaced as this test's first real failure.
+        let mut account = maybe_account(&mut context, seal)
+            .await
+            .expect("the seal fixture is installed");
+        let byte = account.data.get_mut(offset).expect("seal byte");
+        *byte ^= 0xff;
+        context.set_account(&seal, &AccountSharedData::from(account));
         assert!(
             submit_v0(
                 &mut context,

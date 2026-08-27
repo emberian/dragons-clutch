@@ -50,14 +50,28 @@ const _: () = assert!(DIRECT_AOT_ACCEPTED_ACK_BYTES_V1 == 160 + DIRECT_AOT_BANK_
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectAotSbfError {
     /// The invocation supplied any account, signer, writable state, or child.
-    NonStatelessFrame = 0,
+    NonStatelessFrame = 0xA000,
     /// The request wire or its runtime bank counts were not exact Direct V2.
-    InvalidRequest = 1,
+    InvalidRequest = 0xA001,
     /// The scalar-then-identity input bank was malformed.
-    InvalidBank = 2,
+    InvalidBank = 0xA002,
     /// An accepted output or acknowledgement could not be encoded canonically.
-    InvalidAck = 3,
+    InvalidAck = 0xA003,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    DirectAotSbfError::NonStatelessFrame as u32
+        == dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE,
+    "DirectAotSbfError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (DirectAotSbfError::InvalidAck as u32)
+        < dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "DirectAotSbfError must not run past its registered refusal band"
+);
 
 impl From<DirectAotSbfError> for ProgramError {
     fn from(value: DirectAotSbfError) -> Self {

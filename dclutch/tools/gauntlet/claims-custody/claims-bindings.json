@@ -24,7 +24,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/ProtocolPositionSbfErrorV2::Position",
-      "note": "HOSTILE. The admission names a Position owner the caller-authority PDA does not authorize. Refuses Position (145); the campaign asserts the Position account is byte-identical to its prestate."
+      "note": "HOSTILE. The admission names a Position owner the caller-authority PDA does not authorize. Refuses Position (0x5145); the campaign asserts the Position account is byte-identical to its prestate."
     },
     {
       "label": "claims position: admit",
@@ -47,8 +47,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 3,
-        "reason": "The test-only caller's DeliberateLateFailure, raised AFTER Claims logged success, to prove the allocation and the admission record roll back together. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+        "code": 1056771,
+        "reason": "LiabilityBasisTestCallerError::DeliberateLateFailure (0x102003) -- the Position lifecycle campaign drives its rollback case through the generic forwarding caller at programs/dclutch-claims-sbf/test-programs/liability-basis-caller -- raised AFTER Claims logged success, to prove the allocation and the admission record roll back together. Band 0x102 is that caller's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit. The campaign asserts the admission account is byte-identical to its prestate."
     },
@@ -60,7 +60,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/ProtocolPositionSbfErrorV2::Position",
-      "note": "HOSTILE replay. The request declares a Vacant prestate for a Position that now exists. Refuses Position (145)."
+      "note": "HOSTILE replay. The request declares a Vacant prestate for a Position that now exists. Refuses Position (0x5145)."
     },
     {
       "label": "claims position: close a zero Position",
@@ -125,8 +125,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 3,
-        "reason": "The test-only chain caller's DeliberateLateFailure, raised AFTER all three Claims stages returned, to prove that a completed three-route composition rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+        "code": 1069059,
+        "reason": "SparseChainCallerError::DeliberateLateFailure (0x105003), raised by the test-only chain caller at programs/dclutch-claims-sbf/test-programs/sparse-chain-caller AFTER all three Claims stages returned, to prove that a completed three-route composition rolls back whole. Band 0x105 is that caller's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The strongest rollback case in this tier: three routes, an allocation, an admission record, a liability transfer and a rent reclamation, all undone. The campaign asserts every touched account is byte-identical to its prestate and that the chain's own logs carry three `Program <claims> success` lines inside the failed transaction."
     },

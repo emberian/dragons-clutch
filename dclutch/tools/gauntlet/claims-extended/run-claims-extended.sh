@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the five Claims-family ProgramTest campaigns wired into the census
+# Run the four Claims-family ProgramTest campaigns wired into the census
 # evidence path (2026-08-27) and fold them into the shared ledger.
 #
 # This is a ProgramTest FAST LANE. Read TIERS.md's fast-lane bar before
@@ -7,7 +7,7 @@
 # campaigns deploy through Loader-v3, and ProgramTest has no finalized
 # commitment.
 #
-# Five independent campaigns, each in its own tools/gauntlet/claims-<name>/
+# Four independent campaigns, each in its own tools/gauntlet/claims-<name>/
 # directory (own bindings.json/witnesses.json/programs.json, since each pins
 # different fixture program addresses):
 #
@@ -18,11 +18,6 @@
 #   claims-rational-lifecycle          ActivateReceipt/ActivateCoordinate/
 #                                       RetireCoordinate/RetireReceipt against
 #                                       real Token-2022
-#   claims-liability-basis-v2          the DCLLBX02 route at the shape the tree
-#                                       has: two committing merges, a late
-#                                       rollback across two CPI boundaries, and
-#                                       the two refusals that used to be
-#                                       positive cases
 #
 # NOT included: claims-custody, which owns its own run-claims-custody.sh already.
 #
@@ -124,7 +119,6 @@ affine-batch:programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml:af
 fractional-signed-delta:programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml:fractional_signed_delta:claims-fractional-signed-delta:manifest
 rational-representation-v2:dclutch-claims-sbf:rational_representation_v2_program_test:claims-rational-representation-v2:package
 rational-lifecycle:programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml:lifecycle:claims-rational-lifecycle:manifest
-liability-basis-v2:dclutch-claims-sbf:liability_basis_v2_program_test:claims-liability-basis-v2:package
 "
 
 for entry in $campaigns; do

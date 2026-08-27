@@ -1580,14 +1580,6 @@ name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-claims-proof-sbf"
-version = "0.1.0"
-dependencies = [
- "dclutch-direct-codec",
- "dclutch-transition-vm",
-]
-
-[[package]]
 name = "dclutch-claims-representation-codec"
 version = "0.1.0"
 
@@ -1599,7 +1591,6 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-economic-slice-kernel",
- "dclutch-liability-basis-v2-kernel",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
  "dclutch-product-payoff-v2-codec",
@@ -1612,6 +1603,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
@@ -1650,33 +1642,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-collateral-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-realm-contract",
-]
-
-[[package]]
-name = "dclutch-controller-proof-sbf"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-core-contract",
- "dclutch-direct-codec",
- "dclutch-direct-contract",
- "dclutch-market-contract",
- "dclutch-realm-contract",
- "dclutch-record-contract",
- "dclutch-token-svm",
- "dclutch-transition-vm",
- "solana-instructions-sysvar 3.0.1",
- "solana-program",
- "solana-sdk-ids",
- "solana-system-interface 2.0.0",
-]
-
-[[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
@@ -1699,8 +1664,10 @@ dependencies = [
  "dclutch-program-test-evidence",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
+ "dclutch-registry-sbf",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
@@ -1732,14 +1699,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-custody-proof-sbf"
-version = "0.1.0"
-dependencies = [
- "dclutch-token-svm",
- "solana-program",
-]
-
-[[package]]
 name = "dclutch-custody-sbf"
 version = "0.1.0"
 dependencies = [
@@ -1749,6 +1708,7 @@ dependencies = [
  "dclutch-program-test-evidence",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
@@ -1776,6 +1736,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-execution-strategy-contract",
+ "dclutch-refusal-registry",
  "dclutch-trading-sbf",
  "solana-program",
 ]
@@ -1798,6 +1759,7 @@ dependencies = [
  "dclutch-economic-slice-kernel",
  "dclutch-market-core-codec",
  "dclutch-realm-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-activation-auth-v1",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
@@ -1824,6 +1786,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-direct-aot-contract",
  "dclutch-execution-strategy-contract",
+ "dclutch-refusal-registry",
  "solana-hash 4.6.0",
  "solana-message 4.5.0",
  "solana-program",
@@ -1863,15 +1826,6 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-transition-vm",
  "sha2 0.10.9",
-]
-
-[[package]]
-name = "dclutch-direct-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-effect-kernel",
- "dclutch-realm-contract",
- "dclutch-rent-contract",
 ]
 
 [[package]]
@@ -1976,6 +1930,7 @@ dependencies = [
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
+ "dclutch-refusal-registry",
  "solana-instructions-sysvar 3.0.1",
  "solana-program",
  "solana-sdk-ids",
@@ -2016,21 +1971,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-kernel"
-version = "0.1.0"
-
-[[package]]
 name = "dclutch-liability-basis-v2-kernel"
 version = "0.1.0"
-
-[[package]]
-name = "dclutch-market-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-kernel",
- "dclutch-product-contract",
-]
 
 [[package]]
 name = "dclutch-market-core-codec"
@@ -2101,27 +2043,21 @@ dependencies = [
  "dclutch-bearer-v2-operator",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
- "dclutch-collateral-contract",
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-direct-codec",
- "dclutch-direct-contract",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
  "dclutch-general-adapter-contract",
  "dclutch-general-codec",
  "dclutch-general-config-contract",
- "dclutch-market-contract",
  "dclutch-market-core-codec",
  "dclutch-market-open-v1-operator",
- "dclutch-product-contract",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
  "dclutch-provider-transport-v3-operator",
- "dclutch-pyth-contract",
- "dclutch-pyth-svm",
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
@@ -2131,8 +2067,6 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-resolution-core-v3-operator",
  "dclutch-series-v3-kernel",
- "dclutch-source-contract",
- "dclutch-token-svm",
  "dclutch-trading-sbf",
  "dclutch-versioned-message-operator",
  "solana-address-lookup-table-interface",
@@ -2142,18 +2076,6 @@ dependencies = [
  "solana-program",
  "solana-sdk-ids",
  "spl-token-2022-interface",
-]
-
-[[package]]
-name = "dclutch-product-admission-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-core-contract",
- "dclutch-product-contract",
- "dclutch-product-payoff-v2-codec",
- "dclutch-product-payoff-v2-svm",
- "dclutch-resolution-codec",
 ]
 
 [[package]]
@@ -2231,6 +2153,7 @@ dependencies = [
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
  "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-refusal-registry",
  "solana-account 4.6.0",
  "solana-program",
  "solana-program-test",
@@ -2283,7 +2206,7 @@ name = "dclutch-pyth-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
- "dclutch-kernel",
+ "dclutch-resolution-policy-kernel",
 ]
 
 [[package]]
@@ -2386,6 +2309,10 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-registry-activation-auth-v1"
 version = "0.1.0"
 dependencies = [
@@ -2412,6 +2339,7 @@ dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
@@ -2473,19 +2401,15 @@ name = "dclutch-rent-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
- "solana-account 4.6.0",
  "solana-program",
- "solana-program-test",
- "solana-sdk",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
- "solana-transaction 4.2.0",
- "tokio",
 ]
 
 [[package]]
@@ -2549,6 +2473,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-resolution-policy-kernel"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-resolution-proof-sbf"
 version = "0.1.0"
 dependencies = [
@@ -2556,13 +2484,13 @@ dependencies = [
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
- "dclutch-market-contract",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-svm-reader",
  "dclutch-pyth-svm",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-relay-contract",
@@ -2587,6 +2515,7 @@ dependencies = [
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2-svm-reader",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-request-profile-contract",
  "dclutch-series-v3-kernel",
  "dclutch-shadow-accelerator-auth-v4",
@@ -2655,14 +2584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-terminal-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-core-contract",
- "dclutch-market-contract",
-]
-
-[[package]]
 name = "dclutch-token-svm"
 version = "0.1.0"
 dependencies = [
@@ -2698,6 +2619,7 @@ dependencies = [
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",

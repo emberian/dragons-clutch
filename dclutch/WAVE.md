@@ -59,7 +59,7 @@ gates. It is not release evidence.
 
 | Lane | Scope | State |
 |---|---|---|
-| W2b hot-heap | `hot_v3.rs` heap wall + AccountObservationV1 shape | active |
+| W2b hot-heap | `hot_v3.rs` heap wall + AccountObservationV1 shape | **landed 2026-08-27 (W2p): 42,784 → 29,895 bytes, gate 15/15** |
 | W1b foundability | founding-root ADR + projected-Custody wiring + ELF fast-path adoption + campaign rerun | active |
 | ST structured-v2 | Lean/kernel/operator, new files | active |
 | LB liability-basis-v2 | ramp/complement theorem + kernel + corpus | active |
@@ -106,6 +106,19 @@ Cross-lane board: /private/tmp/dclutch-wave-board.md (append-only, not authority
 
 ## Cycle-2 sequencing (revised at LINGER₂)
 
+**THE HEAP GATE LANDED (W2p, 2026-08-27, commits f6e41b0…4a711e5), so Tranche A
+is unblocked.** The canonical Direct continuation executes to completion at the
+real 32,768-byte heap: peak 42,784 → 29,895, `registry_hot_continuation` 15/15
+across three runs (from 12/3), `late_custody_refusal` reaching its named depth.
+The bump allocator grew a second, downward end and the short-lived banks live
+there. **The wall that replaces it is COMPUTE**: the shipped path spends
+1,336,865–1,386,359 CU depending on the PDA bump-search depth for the keys in
+play, and one draw in twenty (fixture seed 10) exceeds 1,400,000 outright. That
+is a protocol cost, not measurement noise, and the recommended fix — store each
+canonical bump in the record it belongs to, as the capability seal already does
+for the sealed roles — is an authority decision on record layout. See the board
+for the phase-level attribution.
+
 Tranche A (Direct, Claims→Custody→Token-2022 terminal, Series chains) launches
 when W2b lands the heap gate — family ProgramTest campaigns do NOT wait for the
 open market. The open-market path (W1b) runs in parallel and gates only the
@@ -133,28 +146,109 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
   `{1}` is substantive dynamic-span WIP); `stash@{2}` is source-contract WIP,
   unowned.
 
-## Queue (next linger points)
+## Queue (next linger points) — reconciled by GIT-SCAN 2026-08-27
 
-- **LINGER₂ Sonnet batch** (one batched Opus reviewer behind it): fold all
-  satellite workspaces into the root workspace (no dependency skew exists —
-  every lock pins solana-program 3.0.0); delete the two empty skeleton dirs
-  (`crates/dclutch-series-v2-kernel`, `programs/dclutch-effect-proof-sbf` —
-  owner check first); un-gitignore `programs/dclutch-series-sbf/Cargo.lock`;
-  clear the 30-warning `dealer_chain` fixture debt.
-- **Frontend ABI convergence** (small Opus): `302ad80` made the Registry
-  continuation headerless and deleted `DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3`;
-  the web generator + checked-in `lib/generated/directInlineV3.ts` are stale
-  against the protocol. Also the two pre-existing verify failures
-  (`abi:found` marker, `abi:rational-terminal-v3` ENOENT) and converging
-  `productV2.decodeCapability` onto `lib/capabilityManifest.ts`.
-- **Cycle-2 General charter item**: general-sbf's activation handler
-  (`c1cdc82`-era) needs the missing contract-side counterpart — the
-  `GENERAL_ROOT_PDA_DOMAIN_V2` preimage is a protocol fact its owner must mint.
-- **Cycle-3 pull-forwards** (from L3): `/markets/:market` detail before the
-  wizard; portfolio via direct Position-PDA derivation (`[POSITION_SEED,
-  market, owner]` — no indexer needed); wizard = compose `/product-v2` →
-  `/found` carrying compiled Product identity. The missing market *indexer*
-  remains the one honest discovery gap.
+- **LINGER₂ Sonnet batch — DONE.** Satellites folded (root `exclude` is now
+  empty; nested program-test harness workspaces stay per 5c663da precedent);
+  both skeleton dirs deleted; `dealer_chain` warnings cleared (21df8e5).
+  The series-sbf lock item is OBSOLETE — the program was banished.
+- **Frontend ABI convergence — DONE** (d2f2e60, 48ece27, 4478897, c25de02,
+  127c5a4, 413c3db; every `abi:*:verify` plus `fixtures:verify` green since
+  839edc8/822e5da).
+- **Cycle-2 General charter item — OBSOLETE**: 5b19626 ruled
+  `GENERAL_ROOT_PDA_DOMAIN_V2` must NOT exist (decision 0003) and deleted
+  general-sbf. The real remaining General work is the next-dispatch queue
+  below (eighth set entry, exactly-seven relaxation, GEN-HOT, DCLTCPR1
+  encoder).
+- **Cycle-3 pull-forwards**: `/markets/:address` detail (73da1ab) and
+  `/portfolio` (fbb926b) are DONE. Remaining: the wizard (compose
+  `/product-v2` → `/found`), and the missing market *indexer* — still the one
+  honest discovery gap.
+
+## GIT-SCAN still-open ledger (2026-08-27 — named in commits, carried nowhere)
+
+Sweep of all 1,509 commit messages; each item below was promised/deferred in a
+commit and is NOT covered by any queue above or by blocked.json. Ranked by risk
+of silent loss.
+
+1. **activation-role-resolution CU budget WILL red-row the next genesis run**
+   (9fbbab4; CU_BUDGETS.md "mode caveat"): the Resolution artifact grew 18,944
+   bytes at 87e4590 (the funded failure walk — legitimate) and its owner lane
+   yielded. Re-pin the row with provenance. Small batch, do before the next
+   tier-1 run.
+2. **Relayed recovery leg unsupported**: `RecoveryMaterialSlotV1::new` is still
+   Pyth-only (source-contract lib.rs:2286), so §4.8's "silent relayer degrades
+   to a named alternative source" has no relayed form — it walks straight to
+   the failure outcome (425a3c9 §10.5). Relayer/Source lane, or an explicit
+   decision that the v1 demo accepts direct-to-failure.
+3. **Relayer daemon gaps** (2b920d6): publication-log public push NOT
+   implemented (§4.11 unsatisfied, tools/relayer/README.md:211); submission
+   never run against any cluster; root-workspace promotion an open decision.
+   Plus the carried v0/ALT note for its two oversized transactions.
+4. **AOT/interpreter semantic divergence — CLOSED** (73f0793, 20f28e0,
+   225af89). The premise was worse than recorded: `DIRECT_ORDINARY_PRELUDE_V3`
+   was never Lean-emitted, and the whole V3 TransitionVM line had no Lean
+   counterpart. `TransitionVMV3.lean` + `DirectOrdinaryV3.lean` +
+   `EmitDirectOrdinaryV3Rust.lean` now author it, gated on byte-identity with
+   the 1,616 bytes the hand-written array produced. The `outcome >= tail_count`
+   guard is deleted and replaced by a stronger authored clause: the item body
+   accumulates each Claims quantity and the epilogue requires the total to equal
+   the transferred quantity, so exactly one Product item must carry the traded
+   outcome. `policy_fee_bps <= fee_denominator` landed in the same prelude
+   (decision: prelude authoritative, `DirectExecutionConfigV1::new` is defence
+   in depth). u64::MAX rent principals: bound REFUTED with argument — the
+   principal is a fail-closed floor that never sizes a lamport movement, and
+   Create pins it to the Rent sysvar minimum by equality; what is owed is a
+   composition theorem at `direct/inline.rs:308`, queued below. Identities moved
+   once and swept tree-wide; the differential now runs with zero ignored tests.
+   **Successor debt**: `registered_fill_artifacts_v4.rs` is the same class — the
+   last V3 program in the tree authored as a hand-written Rust `InstructionV3`
+   array. Attach to tranche-A Direct; author it against `TransitionVMV3.lean`
+   with the same byte-identity gate.
+5. **RegisterBuy topology defects, reported-not-fixed** (9b99662):
+   `validate_lengths` still pins System at width 0
+   (registered_account_artifacts_v4.rs:562) and Exact loader/program widths the
+   opaque ruling should cover — refuses on any real validator. Attach to the
+   tranche-A Direct family charter.
+6. **Dealer equity profile migration** to the FixedDataPredicate profile
+   (d64d0c2 "QUEUED, NOT DONE") so its callee can be `opaque(executable)`.
+   Attach to tranche-A Dealer.
+7. **blocked.json's two UNASSIGNED owner decisions — CLOSED 2026-08-27
+   (DELDEC), both answered "delete".** RentCreditV1 Create/Withdraw are gone
+   (`LifecycleRentCreditV2` is the exercised path; OMISSION_INDEX P-005 lifted),
+   and registry/batch_v2's standalone DCLTRGB2 route is gone (the five per-role
+   activation pins sum to 2,407,858 CU against a 1,400,000 ceiling, so a batch
+   was never executable; its read-only `authenticate_request` stays, live under
+   both continuation routes). blocked.json now carries no UNASSIGNED row at all:
+   44 rows → 41, census 101 routes → 98, refusal codes unchanged at 193.
+   **Carried forward, one row:** with no V1 Create route, no `RentCreditV1`
+   account can be created, and `dclutch-direct-codec` still pins
+   `RENT_CREDIT_BYTES_V1` at registered artifact coordinates 7 and 10 — the
+   V1/V2 width skew already owned by DP2. That migration retires the last of V1;
+   DELDEC did not front-run it under a live emitter lane.
+8. **sha2 default-features latent no_std breakage** in 7 on-chain-reachable
+   manifests (7123164; verified: general-config-contract,
+   rational-representation-v2-lifecycle-contract, registry-svm,
+   structured-v2-contract, structured-v2-kernel, token-svm,
+   fractional-claim-kernel). Mechanical small batch.
+9. **DEVNET_DEMO_DEPLOY.md blocker C is STALE**: the doc says the web
+   Core/Registry conflation "is open"; it was removed (3645eed) and exercised
+   against a real chain (5129362). Runbook correction — a stale blocker on
+   deploy day misdirects.
+10. **stash@{0} wip-source-borrowed-view**: still uninspected, unowned
+    (verified). Inspect, land or drop.
+11. **claims-svm test-module clippy debt** (b82feed): product_basis_terminal_v3
+    `too_many_arguments`, terminal_settlement_v3 `indexing_slicing` — left for
+    owner. Trivial.
+
+Doctrine-debt audit (same scan): 01a2246 annotates its mixed lock hunk in its
+own message; ea4954a's carried tier2/README is annotated in cc21a7d; the
+46f03df-era contaminated commit never reached main (dangling; re-split as
+f26863c, recorded in the Cycle-1 log above). The 35fb8ed→2f55c81
+revert/reapply sandwich of 2a35720 (29 seconds, net zero) carries only stock
+messages — its explanation lives on the W2c board entry; recorded here so the
+history stays legible after the board expires. 15ac612's revert of the
+demo-cut WAVE edit is explained by the no-scope-cut direction above.
 
 ## The demo is the completed dClutch (direction set by ember, 2026-08-26 night)
 
@@ -200,10 +294,17 @@ pool prices, majors). Cross-cluster truth transport:
    ~/dev/dclutch-legacy (copy for grep convenience; git history is the
    authoritative record). Banished so far: the gen-2 monolith
    (programs/dclutch-sbf), series-sbf, effect-sbf, economic-sbf,
-   product-payoff-sbf, product-evidence-sbf. In progress (integrator lane):
-   the verticals live/dead split, dealer/general contracts, the remaining
-   gen-2 cascade, and the census denominator correction. The repo's contents
-   converge to ONLY the active built system.
+   product-payoff-sbf, product-evidence-sbf; and **the whole DCLTCAT1 stratum**
+   (STRATUM lane, 2026-08-27) — claims/custody/controller-proof-sbf and their
+   three svm-harness campaigns, market/collateral/direct/terminal-contract,
+   realm-contract's PositionV1, dclutch-kernel's CategoricalLedger, the
+   operator's foundation/compiled_direct/registered_direct/source_resolution
+   modules AND its 1,474-line crate root, the gen-2 local-validator launchers
+   and old bootstrap, the browser's Rust fixture generator, and the
+   MarketRoot-reading test-only modules (product-admission-contract,
+   registry-contract's authority, capability-contract's readiness_frame).
+   Plus **DCLLBX02**, the liability-basis V2 issuance route. ~38,000 lines.
+   The repo's contents converge to ONLY the active built system.
 
 ## MILESTONE: THE MARKET IS OPEN (2026-08-27, run 6, 67e441d)
 
@@ -246,20 +347,39 @@ question with a recommended answer, not an inventory row.
 
 ## Fable-wave agenda seeds (from FD3, 2026-08-27)
 
-- TWO live Market representations on chain: DCLTCAT1 (native Realm/Position
-  family, own Rust fixture generator) alongside DCLTCOR2 Core state — one
-  truth or a second authority? Architecture-coherence question for the Fable
-  reviewers, NOT a quick knife.
+- ~~TWO live Market representations on chain: DCLTCAT1 alongside DCLTCOR2~~
+  **ANSWERED AND EXECUTED (STRATUM, 2026-08-27): DCLTCOR2 is the one Market
+  truth.** DCLTCAT1 had no writer in the tree — its only founding route needed
+  the deleted monolith ELF — so it was never a second authority, only a second
+  vocabulary waiting to become one. Buried with carve-outs. Two residues are
+  NAMED, not swept: (a) core-contract's `MarketRoot`/`MarketIdentity` survive
+  with exactly two readers — general-config's test-only
+  `plan_general_activation_v2`/`v3`, and
+  `trading-sbf/src/dealer/v3_accelerator_accounts.rs:499`, which decodes a
+  232-byte `MarketRoot` out of the 352-byte `CoreState` the chain actually
+  holds and therefore ALWAYS refuses (three sibling sites in the same program
+  get it right); (b) the browser's `lib/decoders.ts` DCLTCAT1 arm waits on
+  `lib/economicSuccessor.ts`, which is itself stratum and belongs to the
+  economic-web lane.
 - The Hoard vault has no chain-derivable address (namespaced by caller-chosen
   founding context) — frontend refuses-with-reason today; decide whether the
   context belongs in a discoverable record.
 
-- DCLLBX02 (liability-basis V2 route): campaign green + census EXECUTED, but
-  its ONLY issuance path (Split) composes an External source compartment that
-  Custody refuses by design (84b1426), and nothing on chain finalizes its
-  record type (CL's earlier finding). Live route or superseded second truth?
-  Fable-wave architecture call; the candidate fix (compose the DCLCUDQ2
-  delegated V2 wire in liability_basis_v2.rs) is real protocol work either way.
+- ~~DCLLBX02 (liability-basis V2 route): live route or superseded second
+  truth?~~ **ANSWERED AND EXECUTED (STRATUM, 2026-08-27): deleted.** Dead on
+  both ends — no producer built the instruction, nothing on chain finalized the
+  `DCLTLNK2` record it decoded — and its own deletion note had queued it behind
+  "whoever retires the V2 liability-basis kernel", an event that will never
+  arrive because that kernel has an active lane. The shared LBV2 state
+  vocabulary (`MarketViewV2`, seeds, widths, encoders; ~20 live consumers
+  including the web portfolio) is INTACT in
+  `dclutch-claims-svm::liability_basis_state_v2`. Correction for whoever reads
+  the old note: `test-programs/liability-basis-caller` is LIVE and was NOT
+  deleted — it is the `trading` program in the protocol-position ProgramTest.
+  Census note: the route was never enumerated by the census inventory in the
+  first place, so no denominator moved; its dispatch shape
+  (`instruction_data.get(..MAGIC.len()) == Some(...)`) is invisible to the
+  enumerator, which is a census gap worth closing.
 - Relayer daemon slice note: consumption (1,534 B) and full-body append
   (1,377 B) exceed legacy packets — witnessed by label in the relayed tier;
   the daemon must build v0/ALT for those two when it goes live. The failure
@@ -314,3 +434,97 @@ General root real; three artifact generations have one encoder each; the
 funded failure walk executes; terminal windows have width and a one-answer
 proof. Formatting: use `rustup run 1.97.1 rustfmt --edition 2024` — bare
 rustfmt is unpinned and reflows ~178 lines of hot_v3.
+
+## The closing pattern language (orientation, 2026-08-27)
+
+~45 open items collapse into seven patterns; five have one-stone moves:
+1. BUNDLE BUILDER: one family-generic chain-fixture builder derived from the
+   emitted artifacts themselves (direct-hot is the reference to generalize).
+   Kills GEN-HOT/DLR-HOT/physical verticals/most census reds AND the
+   fixture-bent-to-wrong-side genus. Dispatch after W2n lands (it owns
+   direct-hot fixtures today).
+2. EXACT-PIN GENUS WITNESS: census extension enumerating every Exact
+   width/count/length constraint in profiles+dispatchers, verdicted against
+   live-cluster shapes. RegisterBuy's defects become rows; unknown genus
+   members surface.
+3. ONE-AUTHORITY COMPLETION: DCLTCPR1 encoder + coreFound convergence + a TS
+   BACKEND on the Lean emitters (kills the web hand-mirror genus permanently),
+   with a grep-driven completeness inventory as the done-criterion.
+4. THE DEMO VERTICAL: recovery leg + daemon runtime + v0/ALT wires + product
+   records + wizard defaults + devnet rehearsal = ONE journey-shaped lane
+   ending in a real graduation market resolving on devnet.
+5. GENERATED REFERENCE: the protocol manual generated from the same
+   authorities (ABIs, refusal tables, census, budgets, ADRs); guides
+   hand-written thin on top; one pipeline also ships the real app to Pages.
+6. UNIVERSAL LEDGER: the six-law conservation engine becomes every family
+   campaign's gate once (1) exists.
+7. LANE WRAPPER: tools/lane.sh — enforced --only, pinned rustfmt, board
+   helper; retires four recurring accident classes.
+Sizing: patterned ≈ 10–14 lanes ≈ 2–3 swarmcycles to closed-or-explicitly-
+parked (vs ~25 bespoke). Parked: the universal round-trip and refinement theorems — today's evidence
+is per-case corpora and emitter checks, which prove the cases and nothing
+else. That gap is real debt, parked by decision, not covered by anything.
+
+## Doctrine, distilled by the Fable derpage review from the whole board
+
+1. Never-executed is the default: a route/guard/PDA domain ships with the
+   census row that executes it, or ships marked NEVER-EXECUTED.
+2. The fixture is never the authority: a fixture field chosen to make a test
+   pass carries a derivation or citation; address-vs-digest gets a newtype.
+3. One fact, one author — and a guard's other side is a different author.
+4. Sweep the siblings before you close (including the one that fails the
+   opposite way).
+5. No estimate is a total; no silence is a result.
+Anti-finding, recorded: entrypoint_adapter.rs is the named standard for an
+unsafe membrane (every SAFETY audited and holding).
+
+## Fable-wave verdicts, remaining dispositions (2026-08-27)
+
+DISPATCHED: HOARD (ADR-0007, custody-namespace owner — ruled, ember veto
+window open), STRATUM (CAT1 world + DCLLBX02 burial with carve-outs), REFCODE,
+DELDEC, LEANGUARD, WEBGHOST-pending (economic/generalSuccessor deletion +
+productV2 split + DCLTPRQ2 collision + abi:verify into npm test — launches
+when DELDEC yields to avoid productV2.ts collision).
+QUEUED with owners:
+- Tranche-A Dealer: v3_accelerator_accounts.rs:499 decodes bare MarketRoot
+  where the chain holds CoreState — the campaign is representation-broken
+  before it starts (Fable P5a).
+- U-014 owner: the Direct AOT inversion — deployed accelerator accelerates
+  the superseded V2 descriptor; the V3 AOT is selectable by nothing and
+  carries one recorded admission disagreement (P5g).
+- Post-W2 decomposition lane: hot_v3 palimpsest split (accelerator auth out
+  to a contract crate, seal to its own module) BEFORE GEN-HOT lands (derp 8).
+- Static-assert genus lane: import-don't-restate + asserts at every literal
+  pin; controller-proof's length-only dispatch gets a magic tag (derp 9).
+- Islands needing owner decisions, sized (P5f): product-admission island,
+  representation-composition-v3-operator + rational-lifecycle-hot-v3 (9,448
+  LOC), fractional-claim-operator (8,582 LOC), market-retirement-v1-operator,
+  dclutch-svm-harness CAT1-era tests (~15k, mostly stratum).
+- Renames (small batch): resolution-proof-sbf -> resolution-sbf;
+  fractional-claims-kernel doc-rename; DEMO_ACTIVATION profile id (verdict
+  settled, P6).
+- Docs pattern-5 opener: the REPRESENTATION MAP (fact -> live magic -> owner
+  -> writer) — the highest-value artifact for every future reviewer (P5i);
+  ARCHITECTURE.md still narrates the MarketRoot era.
+- Banish checklist gains: sweep apps/dclutch-web for the deleted program's
+  vocabulary in the same commit; abi:*:verify wired into npm test.
+
+- U-014 owner, sharpened by the late sweep: the accelerator migration is
+  PARTIAL — schema identity is V2 tree-wide (~20 consumers) but
+  direct-aot-sbf still decodes the V1 wire (AcceleratorRequestV1/AckV1).
+  The two orphan V1 schema IDs are clean deletes; the wire types are NOT
+  until that program migrates. Never delete "V1 accelerator" as one unit.
+
+- Tranche-A Direct, method ready: registered_fill_artifacts_v4.rs is the LAST
+  hand-written V3 program — author in TransitionVMV3.lean, gate on byte
+  identity, then strengthen (LEANGUARD's 73f0793 is the worked example).
+- Small batch: fixtures:verify provenance regen for realm-contract/src/lib.rs
+  (moved by TSGEN's f5dfe5d); the direct-inline alias-table retirement once
+  W2o yields; the inline.rs:308 composition theorem LEANGUARD queued.
+
+- Tranche-A Direct: THREE items converge on registered_fill_artifacts_v4.rs —
+  Lean-author it (the last hand-written V3 program; LEANGUARD's method),
+  migrate its V1 credits at coords 7/10 to LifecycleRentCreditV2 (DP2 fixed
+  ordinary only; DELDEC's resisted-deletion find), and its real-validator
+  width defects (System width 0, Exact loader widths). One lane, one file
+  family, one identity regeneration.

@@ -64,8 +64,8 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::{ContentId, MarketRoot};
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1,
-    ContextV1, CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1, CustodyReplayV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1, ContextV1,
+    CustodyAuthoritySeedsV1, CustodyFrameRoleV1, CustodyFrameSpecV1, CustodyReplayV1,
     CustodyRequestV1, CustodyVaultSeedsV1, DelegatedCustodyRequestV2, OperationV1,
 };
 use dclutch_dealer_codec::{

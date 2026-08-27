@@ -36,16 +36,31 @@ use solana_program::{
 #[repr(u32)]
 pub enum TerminalSettlementCallerError {
     /// Wrapper bytes did not contain one flag and one canonical request.
-    Instruction = 0,
+    Instruction = 0x10_6000,
     /// Claims program or forwarded account frame was malformed.
-    AccountFrame = 1,
+    AccountFrame = 0x10_6001,
     /// Release-scoped caller authority did not match the request.
-    Authority = 2,
+    Authority = 0x10_6002,
     /// Production Claims settlement refused or returned no exact typed receipt.
-    ClaimsCpi = 3,
+    ClaimsCpi = 0x10_6003,
     /// Deliberate refusal after Claims and every required child returned.
-    DeliberateLateFailure = 4,
+    DeliberateLateFailure = 0x10_6004,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    TerminalSettlementCallerError::Instruction as u32
+        == dclutch_refusal_registry::TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE,
+    "TerminalSettlementCallerError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (TerminalSettlementCallerError::DeliberateLateFailure as u32)
+        < dclutch_refusal_registry::TEST_CLAIMS_TERMINAL_SETTLEMENT_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "TerminalSettlementCallerError must not run past its registered refusal band"
+);
 
 impl From<TerminalSettlementCallerError> for ProgramError {
     fn from(value: TerminalSettlementCallerError) -> Self {

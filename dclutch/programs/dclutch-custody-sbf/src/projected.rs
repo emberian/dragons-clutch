@@ -4,14 +4,14 @@ use alloc::vec::Vec;
 use core::convert::TryFrom;
 
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
-    CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
-    PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyError,
-    ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1,
-    ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyReplayV1,
+    CustodyVaultSeedsV1, PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
+    ProjectedCustodyCallerSeedsV1, ProjectedCustodyError, ProjectedCustodyLockReceiptV1,
+    ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
+    ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
     normal_replay_from_realization_v1,
 };
 use dclutch_market_core_codec::{
@@ -491,7 +491,7 @@ fn initialize(
     let seeds = ProjectedCustodyStateSeedsV1::from_request(request);
     let bump = Pubkey::find_program_address(&seeds.as_slices(), program_id).1;
     let bump_seed = [bump];
-    let [domain, market, release, context] = seeds.as_slices();
+    let [domain, market, release, role, context] = seeds.as_slices();
     top_up_allocate_assign(
         payer,
         state_account,
@@ -499,7 +499,7 @@ fn initialize(
         lamports,
         PROJECTED_CUSTODY_STATE_BYTES_V1,
         program_id,
-        &[domain, market, release, context, &bump_seed],
+        &[domain, market, release, role, context, &bump_seed],
     )?;
     let current_slot = Clock::get().map_err(|_| CustodySbfError::Create)?.slot;
     let state = ProjectedCustodyStateV1::initialize(
@@ -1435,16 +1435,9 @@ fn create_source_replay_account<'info>(
     system: &AccountInfo<'info>,
     request: &ProjectedCustodyRequestV1,
 ) -> Result<(), ProgramError> {
-    let bump = [Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &request.market,
-            &request.release_set,
-            &request.funding_source_context,
-        ],
-        program_id,
-    )
-    .1];
+    let seeds = ProjectedCustodySourceReplaySeedsV1::from_request(*request);
+    let bump = [Pubkey::find_program_address(&seeds.as_slices(), program_id).1];
+    let [domain, market, release, role, context] = seeds.as_slices();
     top_up_allocate_assign(
         payer,
         replay,
@@ -1452,13 +1445,7 @@ fn create_source_replay_account<'info>(
         request.funding_source_state_rent_lamports,
         CUSTODY_REPLAY_BYTES_V1,
         program_id,
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &request.market,
-            &request.release_set,
-            &request.funding_source_context,
-            &bump,
-        ],
+        &[domain, market, release, role, context, &bump],
     )
 }
 
@@ -1552,12 +1539,7 @@ fn authenticate_source_creation_frame(
     )
     .0;
     let replay_expected = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &request.market,
-            &request.release_set,
-            &request.funding_source_context,
-        ],
+        &ProjectedCustodySourceReplaySeedsV1::from_request(request).as_slices(),
         program_id,
     )
     .0;
@@ -1879,12 +1861,7 @@ fn authenticate_source_frame(
         request.funding_source_compartment,
     );
     let replay_expected = Pubkey::find_program_address(
-        &[
-            CUSTODY_REPLAY_PDA_DOMAIN_V1,
-            &request.market,
-            &request.release_set,
-            &request.funding_source_context,
-        ],
+        &ProjectedCustodySourceReplaySeedsV1::from_request(request).as_slices(),
         program_id,
     )
     .0;

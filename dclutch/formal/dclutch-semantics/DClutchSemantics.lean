@@ -15,7 +15,9 @@ import DClutchSemantics.Physical
 import DClutchSemantics.ClaimSbfProfile
 import DClutchSemantics.TransitionVM
 import DClutchSemantics.TransitionVMV2
+import DClutchSemantics.TransitionVMV3
 import DClutchSemantics.DirectProgram
+import DClutchSemantics.DirectOrdinaryV3
 import DClutchSemantics.CompiledPhysical
 import DClutchSemantics.DirectControllerCodec
 import DClutchSemantics.EconomicKernel
@@ -64,6 +66,9 @@ import DClutchSemantics.RationalCrossDomainV3
 import DClutchSemantics.StructuredV2
 import DClutchSemantics.StructuredV2Abi
 import DClutchSemantics.StructuredV2Examples
+import DClutchSemantics.RealmPositionAbi
+import DClutchSemantics.CapabilityManifestV1Abi
+import DClutchSemantics.TsEmit
 
 /-!
 Fresh Lean-owned semantics for dClutch's compact protocol specializer.

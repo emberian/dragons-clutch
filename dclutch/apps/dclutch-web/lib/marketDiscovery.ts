@@ -9,11 +9,13 @@ import {
 } from './capabilityManifest';
 import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CORE_STATE_MAGIC, REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
 import {
-  MARKET_HOARD_UNDERIVABLE_V1,
+  MARKET_HOARD_UNAUTHENTICATED_V1,
   decodeClaimsAggregateV2,
   decodeMarketCoreStateV2,
   deriveClaimsAggregateAddressV2,
+  deriveCustodyAuthorityAddressV1,
   deriveMarketCoreAddressV2,
+  deriveMarketHoardAddressV1,
   type MarketCorePhaseV2,
   type MarketCoreReadinessV2,
   type MarketCoreSettlementV2,
@@ -43,8 +45,11 @@ import { type BindingCheck } from './decoders';
  *      body hashes to the identity the Market committed to, reacquired and
  *      re-hashed here the same way the capability manifest is.
  *
- * The Hoard has no honest place on this surface at all: see
- * `MARKET_HOARD_UNDERIVABLE_V1`.
+ *   4. The Hoard is a Custody Vault namespaced by the founding's action
+ *      context. That context is not a fact of the Market root and never can be
+ *      -- it is caller-chosen -- but the Claims aggregate persists it, so a card
+ *      that read the aggregate can name and AUTHENTICATE the Hoard, and a card
+ *      that did not says so.
  */
 
 export const MARKET_DISCOVERY_MAX_ADDRESSES = 32;
@@ -118,6 +123,7 @@ export type MarketLiabilityV1 =
     revision: string;
     generation: string;
     liabilityBasisId: string;
+    custodyContext: string;
     supplyAtoms: ReadonlyArray<string>;
     requiredBackingAtoms: string;
     requiredBackingBasis: RequiredBackingBasisV2;
@@ -125,8 +131,30 @@ export type MarketLiabilityV1 =
   | Readonly<{ status: 'unread'; reason: string }>
   | Readonly<{ status: 'refused'; aggregateAddress: string | null; reason: string }>;
 
-/** The Hoard, and the exact reason no reader can name it from a Market. */
-export type MarketHoardV1 = Readonly<{ status: 'not-derivable'; reason: string }>;
+/**
+ * The Market's collateral principal, derived and then authenticated.
+ *
+ * `derived` is the only status that carries a figure, and it is reached only
+ * when the account at the derived Vault address is owned by the Realm's token
+ * program, holds the Realm's collateral mint, and is owned by the Market's own
+ * context-free Custody transfer authority. Anything short of that is `unread`
+ * (a coordinate was not supplied) or `refused` (a coordinate was supplied and
+ * did not authenticate) -- never a number.
+ */
+export type MarketHoardV1 =
+  | Readonly<{
+    status: 'derived';
+    observedSlot: string;
+    address: string;
+    custodyProgramId: string;
+    custodyContext: string;
+    custodyAuthority: string;
+    collateralMint: string;
+    tokenProgram: string;
+    principalAtoms: string;
+  }>
+  | Readonly<{ status: 'unread'; reason: string }>
+  | Readonly<{ status: 'refused'; address: string | null; reason: string }>;
 
 /**
  * The immutable identities one Market root commits to, plus the exact artifact
@@ -183,6 +211,7 @@ export type MarketDiscoveryV1 = Readonly<{
   coreProgramId: string;
   registryProgramId: string | null;
   claimsProgramId: string | null;
+  custodyProgramId: string | null;
   floorSlot: string;
   enumeration: MarketEnumerationV1;
   cards: ReadonlyArray<MarketDiscoveryCardV1>;
@@ -193,6 +222,7 @@ export type MarketDiscoveryRequestV1 = Readonly<{
   coreProgramId: string;
   registryProgramId?: string | null;
   claimsProgramId?: string | null;
+  custodyProgramId?: string | null;
   addresses: ReadonlyArray<string>;
   enumeration?: MarketEnumerationV1;
 }>;
@@ -428,6 +458,7 @@ async function readLiability(
       revision: aggregate.revision,
       generation: aggregate.generation,
       liabilityBasisId: aggregate.liabilityBasisId,
+      custodyContext: aggregate.custodyContext,
       supplyAtoms: aggregate.supplyAtoms,
       requiredBackingAtoms: aggregate.maximumSupplyAtoms,
       requiredBackingBasis: settled ? 'winning-claim-supply' : 'maximum-claim-supply',
@@ -441,7 +472,99 @@ async function readLiability(
   }
 }
 
-const HOARD_V1: MarketHoardV1 = Object.freeze({ status: 'not-derivable', reason: MARKET_HOARD_UNDERIVABLE_V1 });
+/** Exact base SPL Token account width, shared by both token programs. */
+const TOKEN_ACCOUNT_BYTES_V1 = 165;
+
+/**
+ * Read one Market's Hoard, at the coordinate the chain itself derives.
+ *
+ * Four facts have to be in hand and each comes from a different authority: the
+ * Market address and its selected release set from the Core root, the Custody
+ * namespace from the Claims aggregate, and the collateral mint and token
+ * program from the finalized Realm record. Missing any one of them is `unread`.
+ *
+ * Then the account is authenticated rather than assumed. The Vault seeds pin
+ * `market` and `release_set` either side of the namespace, so a substituted
+ * context can only ever name a compartment of THIS Market -- but a compartment
+ * the founding never funded is still not a Hoard. The checks below are the ones
+ * `claims-sbf` runs on the same account before it will move a payout: exact
+ * width, the Realm's token program as account owner, the Realm's collateral
+ * mint, the context-free Custody transfer authority as token owner, initialized,
+ * and no delegate, native reserve, or close authority.
+ */
+async function readHoard(
+  client: DiscoveryClient,
+  custodyProgramId: string | null,
+  marketAddress: string,
+  selectedReleaseSetId: string,
+  collateral: MarketCollateralV1,
+  liability: MarketLiabilityV1,
+  floor: string,
+): Promise<MarketHoardV1> {
+  if (custodyProgramId === null) {
+    return Object.freeze({
+      status: 'unread',
+      reason: 'No Custody program was selected. The Hoard is a Custody Vault, so without the program that owns it there is no address to derive and no authority to check.',
+    });
+  }
+  if (liability.status !== 'bound') {
+    return Object.freeze({
+      status: 'unread',
+      reason: 'The Claims aggregate is the only account that records this Market\'s Custody namespace, and it was not read. The founding chooses that namespace; it is not a function of the Market address.',
+    });
+  }
+  if (collateral.status !== 'bound') {
+    return Object.freeze({
+      status: 'unread',
+      reason: 'The Realm record names the collateral mint and token program a Hoard must hold, and it was not authenticated. An unauthenticated token account is not shown as a principal.',
+    });
+  }
+  let address: string | null = null;
+  try {
+    address = deriveMarketHoardAddressV1(custodyProgramId, marketAddress, selectedReleaseSetId, liability.custodyContext);
+    const authority = deriveCustodyAuthorityAddressV1(custodyProgramId, marketAddress, selectedReleaseSetId);
+    const batch = await client.multipleAccounts([address], floor);
+    const account = batch.accounts[0]?.account ?? null;
+    if (account === null) throw new Error(`no account exists at the derived Hoard Vault ${address} at finalized slot ${batch.slot}`);
+    if (account.executable) throw new Error('the derived Hoard Vault address holds an executable account');
+    if (account.owner !== collateral.tokenProgram) throw new Error(`the derived Hoard Vault is owned by ${account.owner}, not the Realm's token program ${collateral.tokenProgram}`);
+    const bytes = account.data;
+    if (bytes.length < TOKEN_ACCOUNT_BYTES_V1) throw new Error(`the derived Hoard Vault is ${bytes.length} bytes; a Token account is at least ${TOKEN_ACCOUNT_BYTES_V1}`);
+    const mint = new PublicKey(bytes.slice(0, 32)).toBase58();
+    const owner = new PublicKey(bytes.slice(32, 64)).toBase58();
+    if (mint !== collateral.collateralMint) throw new Error(`the derived Hoard Vault holds mint ${mint}, not the Realm's collateral mint ${collateral.collateralMint}`);
+    if (owner !== authority) throw new Error(`the derived Hoard Vault is owned by ${owner}, not this Market's Custody transfer authority ${authority}`);
+    if (bytes[108] !== 1) throw new Error(bytes[108] === 2 ? 'the derived Hoard Vault is frozen' : 'the derived Hoard Vault is not initialized');
+    if (readU32(bytes, 72) !== 0 || readU64(bytes, 121) !== 0n) throw new Error('the derived Hoard Vault has a delegate');
+    if (readU32(bytes, 109) !== 0) throw new Error('the derived Hoard Vault has a native reserve');
+    if (readU32(bytes, 129) !== 0) throw new Error('the derived Hoard Vault has a separate close authority');
+    return Object.freeze({
+      status: 'derived',
+      observedSlot: batch.slot,
+      address,
+      custodyProgramId,
+      custodyContext: liability.custodyContext,
+      custodyAuthority: authority,
+      collateralMint: mint,
+      tokenProgram: collateral.tokenProgram,
+      principalAtoms: readU64(bytes, 64).toString(),
+    });
+  } catch (error) {
+    return Object.freeze({
+      status: 'refused',
+      address,
+      reason: error instanceof Error ? error.message : MARKET_HOARD_UNAUTHENTICATED_V1,
+    });
+  }
+}
+
+function readU32(bytes: Uint8Array, offset: number): number {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, true);
+}
+
+function readU64(bytes: Uint8Array, offset: number): bigint {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(offset, true);
+}
 
 /**
  * Read one finalized Market discovery listing.
@@ -457,6 +580,7 @@ export async function inspectMarketDiscoveryV1(
   const coreProgramId = canonical(request.coreProgramId, 'Core program');
   const registryProgramId = optional(request.registryProgramId, 'Registry program');
   const claimsProgramId = optional(request.claimsProgramId, 'Claims program');
+  const custodyProgramId = optional(request.custodyProgramId, 'Custody program');
   const addresses = Object.freeze([...new Set(request.addresses.map((address, index) => canonical(address, `Market address ${index + 1}`)))]);
   if (addresses.length > MARKET_DISCOVERY_MAX_ADDRESSES) {
     throw new Error(`discovery requested ${addresses.length} Markets, above the explicit ${MARKET_DISCOVERY_MAX_ADDRESSES}-Market browser bound`);
@@ -472,6 +596,7 @@ export async function inspectMarketDiscoveryV1(
       coreProgramId,
       registryProgramId,
       claimsProgramId,
+      custodyProgramId,
       floorSlot: floor,
       enumeration,
       cards: Object.freeze([]),
@@ -518,6 +643,7 @@ export async function inspectMarketDiscoveryV1(
 
     const collateral = await authenticateCollateral(client, registryProgramId, state.identity.realmId, floor);
     const liability = await readLiability(client, claimsProgramId, address, state.identity.generation, state.settlement.status === 'terminal', floor);
+    const hoard = await readHoard(client, custodyProgramId, address, state.identity.selectedReleaseSetId, collateral, liability, floor);
     const capabilities: MarketCapabilityManifestV1 = registryProgramId === null
       ? Object.freeze({
         status: 'unread',
@@ -552,7 +678,7 @@ export async function inspectMarketDiscoveryV1(
       }),
       collateral,
       liability,
-      hoard: HOARD_V1,
+      hoard,
       capabilities,
       bindings: Object.freeze(bindings),
       refusal: null,
@@ -564,6 +690,7 @@ export async function inspectMarketDiscoveryV1(
     coreProgramId,
     registryProgramId,
     claimsProgramId,
+    custodyProgramId,
     floorSlot: floor,
     enumeration,
     cards: Object.freeze(cards),

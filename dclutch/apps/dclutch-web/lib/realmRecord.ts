@@ -1,14 +1,18 @@
 import { ascii, hex, pubkey, requireNonzero, requireZero, slice, u16 } from './bytes';
 import {
-  REALM_ADAPTER_RELEASE_ID_OFFSET,
-  REALM_BYTES,
-  REALM_COLLATERAL_MINT_OFFSET,
-  REALM_FREEZE_AUTHORITY_POLICY_OFFSET,
-  REALM_MAGIC,
-  REALM_MINT_AUTHORITY_POLICY_OFFSET,
-  REALM_SCHEMA_VERSION,
-  REALM_TOKEN_PROGRAM_OFFSET,
-} from './generated/coreFound';
+  REALM_ADAPTER_RELEASE_ID_OFFSET_V1 as REALM_ADAPTER_RELEASE_ID_OFFSET,
+  REALM_BYTES_V1 as REALM_BYTES,
+  REALM_COLLATERAL_MINT_OFFSET_V1 as REALM_COLLATERAL_MINT_OFFSET,
+  REALM_FREEZE_AUTHORITY_POLICY_OFFSET_V1 as REALM_FREEZE_AUTHORITY_POLICY_OFFSET,
+  REALM_MAGIC_OFFSET_V1,
+  REALM_MAGIC_V1,
+  REALM_MINT_AUTHORITY_POLICY_OFFSET_V1 as REALM_MINT_AUTHORITY_POLICY_OFFSET,
+  REALM_RESERVED_BYTES_V1,
+  REALM_RESERVED_OFFSET_V1,
+  REALM_SCHEMA_VERSION_OFFSET_V1,
+  REALM_SCHEMA_VERSION_V1 as REALM_SCHEMA_VERSION,
+  REALM_TOKEN_PROGRAM_OFFSET_V1 as REALM_TOKEN_PROGRAM_OFFSET,
+} from './generated/realmPositionV1';
 
 /**
  * The Realm body, as a finalized Registry record.
@@ -41,10 +45,10 @@ function policy(value: number, field: string): RealmAuthorityPolicy {
 /** Decode one canonical `DCLTRLM1` Realm body. */
 export function decodeRealmRecordV1(bytes: Uint8Array): RealmRecordV1 {
   if (bytes.length !== REALM_BYTES) throw new Error(`Realm body is ${bytes.length} bytes; the exact width is ${REALM_BYTES}`);
-  if (ascii(bytes, 0, 8) !== ascii(REALM_MAGIC, 0, 8)) throw new Error(`Realm magic is not ${ascii(REALM_MAGIC, 0, 8)}`);
-  const version = u16(bytes, 8);
+  if (ascii(bytes, REALM_MAGIC_OFFSET_V1, 8) !== REALM_MAGIC_V1) throw new Error(`Realm magic is not ${REALM_MAGIC_V1}`);
+  const version = u16(bytes, REALM_SCHEMA_VERSION_OFFSET_V1);
   if (version !== REALM_SCHEMA_VERSION) throw new Error(`Realm schema version ${version} is unsupported`);
-  requireZero(bytes, 12, 4, 'Realm header');
+  requireZero(bytes, REALM_RESERVED_OFFSET_V1, REALM_RESERVED_BYTES_V1, 'Realm header');
   const adapterRelease = slice(bytes, REALM_ADAPTER_RELEASE_ID_OFFSET, 32);
   requireNonzero(adapterRelease, 'collateral adapter release identity');
   return Object.freeze({

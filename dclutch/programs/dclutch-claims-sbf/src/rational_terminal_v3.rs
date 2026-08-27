@@ -339,7 +339,12 @@ pub(crate) fn execute_terminal_custody_v3(
         },
         source: frame.hoard.key.to_bytes(),
         destination: frame.recipient.key.to_bytes(),
-        source_vault_context: input.market,
+        // The Hoard Vault lives in the Market's Custody namespace, which the
+        // Claims aggregate persists and this route must not re-guess. The
+        // replay coordinate above already reads the field; naming the Market
+        // here was the half that did not, and it is what put the founded
+        // Market's principal out of reach of every payout route.
+        source_vault_context: input.custody_context,
         destination_vault_context: [0; 32],
         mint: frame.collateral_mint.key.to_bytes(),
         token_program: frame.token_program.key.to_bytes(),

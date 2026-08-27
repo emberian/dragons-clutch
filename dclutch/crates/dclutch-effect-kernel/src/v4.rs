@@ -940,8 +940,38 @@ impl<'a> ProgramV4<'a> {
 pub fn project_atomic(
     program: ProgramV4<'_>,
     tail_count: u32,
+    projection: ProjectionV3<'_>,
+    write_ranges: &mut [ResolvedWriteRangeV4],
+) -> ResultV4<()> {
+    project_atomic_visiting(program, tail_count, projection, write_ranges, &mut |_| {
+        Ok(())
+    })
+}
+
+/// [`project_atomic`], with every resolved operation offered to a caller
+/// predicate before it is applied.
+///
+/// Resolving ONE operation of this program costs an artifact
+/// `Operation::decode`, a register resolve, and a walk of the span table per
+/// account coordinate -- orders of magnitude more than any predicate applied to
+/// the result. A caller that has to see every operation of the same program at
+/// the same registers therefore cannot afford its own walk: on the canonical
+/// Direct bundle a second full walk of the 131-operation program measured
+/// **139,214 CU**, and the projection's own walk had already produced and
+/// discarded every value it recomputed.
+///
+/// `visit` sees each operation exactly once, in ordinal order, AFTER the
+/// runtime-write overlap refusal has accepted it and BEFORE `project_effect`
+/// applies it. A `visit` that refuses aborts the projection where a refusal
+/// from the walk itself would: the output banks are then partially written and
+/// are not a result, which is the same contract every other refusal in this
+/// function already has.
+pub fn project_atomic_visiting(
+    program: ProgramV4<'_>,
+    tail_count: u32,
     mut projection: ProjectionV3<'_>,
     write_ranges: &mut [ResolvedWriteRangeV4],
+    visit: &mut dyn FnMut(ResolvedEffectV3) -> ResultV4<()>,
 ) -> ResultV4<()> {
     let accounts = program.account_count(tail_count, projection.scalars)?;
     let scalar_count = program.base.scalar_count(tail_count)?;
@@ -965,14 +995,9 @@ pub fn project_atomic(
         projection.accounts,
         projection.permissions,
     )?;
-    validate_runtime_write_nonoverlap_v4(
-        program,
-        tail_count,
-        projection.scalars,
-        projection.identities,
-        projection.aliases,
-        write_ranges,
-    )?;
+    if write_ranges.len() != program.data_write_operation_count(tail_count)? {
+        return Err(ErrorV4::BaseProgram);
+    }
     initialize_requests(program.base, tail_count, projection.requests)?;
     for (output, input) in projection
         .scratch_lamports
@@ -981,33 +1006,46 @@ pub fn project_atomic(
     {
         *output = input.lamports;
     }
+    // How many entries of `write_ranges` carry a resolved write so far.
+    // Operations that write no account data contribute none.
+    let mut resolved_writes = 0_usize;
     let mut fixed = 0_u16;
     while fixed < program.base.fixed_operation_count() {
-        project_effect(
-            program.resolved_fixed_effect(
-                fixed,
-                tail_count,
-                projection.scalars,
-                projection.identities,
-            )?,
-            &mut projection,
+        let resolved = program.resolved_fixed_effect(
+            fixed,
+            tail_count,
+            projection.scalars,
+            projection.identities,
         )?;
+        record_nonoverlapping_write_v4(
+            resolved,
+            projection.aliases,
+            write_ranges,
+            &mut resolved_writes,
+        )?;
+        visit(resolved)?;
+        project_effect(resolved, &mut projection)?;
         fixed = fixed.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
     }
     let mut item = 0_u32;
     while item < tail_count {
         let mut operation = 0_u16;
         while operation < program.base.item_operation_count() {
-            project_effect(
-                program.resolved_item_effect(
-                    item,
-                    operation,
-                    tail_count,
-                    projection.scalars,
-                    projection.identities,
-                )?,
-                &mut projection,
+            let resolved = program.resolved_item_effect(
+                item,
+                operation,
+                tail_count,
+                projection.scalars,
+                projection.identities,
             )?;
+            record_nonoverlapping_write_v4(
+                resolved,
+                projection.aliases,
+                write_ranges,
+                &mut resolved_writes,
+            )?;
+            visit(resolved)?;
+            project_effect(resolved, &mut projection)?;
             operation = operation.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
         }
         item = item.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
@@ -1103,92 +1141,46 @@ impl ResolvedWriteRangeV4 {
 /// full resolutions of a program whose answer for a given ordinal cannot change
 /// within one projection -- each of them an artifact `Operation::decode`, a
 /// register resolve, and a walk of the whole span table per account coordinate.
+/// Then it was one ordinal-ordered pre-pass, which resolved every operation a
+/// SECOND time: the projection walk that follows resolves exactly the same
+/// operations at exactly the same registers, in exactly the same order. On the
+/// canonical Direct bundle that duplicate pre-pass measured **117,900 CU**.
 ///
-/// Every ordinal is now resolved exactly once, in order, and compared against
-/// the ranges already resolved. Same pairs, same refusal, same order of first
-/// failure: `total` resolutions and integer comparisons for the rest.
+/// It is now one call per operation ON the projection walk, immediately before
+/// that operation is applied. Same pairs, same refusal, same order of first
+/// failure -- an overlapping write is still refused before it is applied, and
+/// before every operation after it is resolved at all.
 ///
 /// `ranges` is a caller-owned scratch bank exactly
 /// [`ProgramV4::data_write_operation_count`] entries wide -- the number of
 /// ordinals that will actually record a range, not the number that will be
-/// resolved. Its incoming contents are not read.
-fn validate_runtime_write_nonoverlap_v4(
-    program: ProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
+/// resolved. Its incoming contents are not read, and `resolved_writes` counts
+/// how many of its entries the walk has filled so far.
+fn record_nonoverlapping_write_v4(
+    resolved: ResolvedEffectV3,
     aliases: &[usize],
     ranges: &mut [ResolvedWriteRangeV4],
+    resolved_writes: &mut usize,
 ) -> ResultV4<()> {
-    let total = program.resolved_operation_count(tail_count)?;
-    if ranges.len() != program.data_write_operation_count(tail_count)? {
-        return Err(ErrorV4::BaseProgram);
-    }
-    // How many entries of `ranges` carry a resolved write. Operations that
-    // write no account data contribute none, exactly as they entered no pair
-    // before.
-    let mut resolved_writes = 0_usize;
-    let mut ordinal = 0_usize;
-    while ordinal < total {
-        if let Some((account, start, width)) = resolved_data_range(
-            resolved_by_ordinal_v4(
-                program,
-                u64::try_from(ordinal).map_err(|_| ErrorV4::Arithmetic)?,
-                tail_count,
-                scalars,
-                identities,
-            )?,
-            aliases,
-        )? {
-            let account = u32::try_from(account).map_err(|_| ErrorV4::Arithmetic)?;
-            let prior = ranges.get(..resolved_writes).ok_or(ErrorV4::Arithmetic)?;
-            for earlier in prior {
-                if earlier.account == account
-                    && overlaps(earlier.start, earlier.width, start, width)?
-                {
-                    return Err(ErrorV4::BaseProgram);
-                }
-            }
-            *ranges.get_mut(resolved_writes).ok_or(ErrorV4::Arithmetic)? = ResolvedWriteRangeV4 {
-                account,
-                start,
-                width,
-            };
-            resolved_writes = resolved_writes.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
+    let Some((account, start, width)) = resolved_data_range(resolved, aliases)? else {
+        return Ok(());
+    };
+    let account = u32::try_from(account).map_err(|_| ErrorV4::Arithmetic)?;
+    let prior = ranges.get(..*resolved_writes).ok_or(ErrorV4::Arithmetic)?;
+    for earlier in prior {
+        if earlier.account == account && overlaps(earlier.start, earlier.width, start, width)? {
+            return Err(ErrorV4::BaseProgram);
         }
-        ordinal = ordinal.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
     }
+    *ranges
+        .get_mut(*resolved_writes)
+        .ok_or(ErrorV4::Arithmetic)? = ResolvedWriteRangeV4 {
+        account,
+        start,
+        width,
+    };
+    *resolved_writes = resolved_writes.checked_add(1).ok_or(ErrorV4::Arithmetic)?;
     Ok(())
-}
-
-fn resolved_by_ordinal_v4(
-    program: ProgramV4<'_>,
-    ordinal: u64,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
-) -> ResultV4<ResolvedEffectV3> {
-    let fixed = u64::from(program.base.fixed_operation_count());
-    if ordinal < fixed {
-        return program.resolved_fixed_effect(
-            u16::try_from(ordinal).map_err(|_| ErrorV4::Arithmetic)?,
-            tail_count,
-            scalars,
-            identities,
-        );
-    }
-    let item_operations = u64::from(program.base.item_operation_count());
-    if item_operations == 0 {
-        return Err(ErrorV4::BaseProgram);
-    }
-    let tail_ordinal = ordinal.checked_sub(fixed).ok_or(ErrorV4::Arithmetic)?;
-    program.resolved_item_effect(
-        u32::try_from(tail_ordinal / item_operations).map_err(|_| ErrorV4::Arithmetic)?,
-        u16::try_from(tail_ordinal % item_operations).map_err(|_| ErrorV4::Arithmetic)?,
-        tail_count,
-        scalars,
-        identities,
-    )
 }
 
 /// Encode one exact successor program atomically around canonical V3 bytes.

@@ -71,12 +71,13 @@ zero. `EnterTerminal` and `Unwind` moved into the zero class with the two
 liquidity actions; they had carried a slot no transition ever read.
 
 - `both-liquidity-actions-reach-the-release-stage-at-a-real-slot` — both now
-  refuse at the Registry CPI (`Release`, 5) like the other five actions. A
-  reintroduced Clock disagreement shows up here as code 4.
+  refuse at the Registry CPI (`Release`, `0x7005`) like the other five
+  actions. A reintroduced Clock disagreement shows up here as `Clock`, `0x7004`.
 - `a-slot-in-the-padding-is-refused-at-decode` — a slot patched straight into
   the wire bytes of RemoveLiquidity, EnterTerminal and Unwind refuses at decode
-  (`Instruction`, 0). Relaxing the padding rule instead would have admitted 2^64
-  encodings of the same liquidity adjustment, each with its own request digest.
+  (`Instruction`, `0x7000`). Relaxing the padding rule instead would have
+  admitted 2^64 encodings of the same liquidity adjustment, each with its own
+  request digest.
 
 ## The fast-lane bar
 

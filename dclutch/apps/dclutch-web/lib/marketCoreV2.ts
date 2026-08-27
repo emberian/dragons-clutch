@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { ascii, hex, isZero, pubkey, requireNonzero, slice, u16, u64 } from './bytes';
+import { ascii, fromHex, hex, isZero, pubkey, requireNonzero, slice, u16, u64 } from './bytes';
 import {
   CORE_PHASE_FOUNDING_TAG,
   CORE_PHASE_OPEN_TAG,
@@ -51,6 +51,9 @@ import {
   LIABILITY_BASIS_POSITION_REVISION_OFFSET,
   LIABILITY_BASIS_POSITION_SEED_V2,
   LIABILITY_BASIS_STATE_VERSION_V2,
+  CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+  CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1,
+  CUSTODY_VAULT_PDA_DOMAIN_V1,
   MARKET_CORE_STATE_PDA_DOMAIN_V2,
 } from './generated/coreFound';
 
@@ -71,7 +74,8 @@ import {
  *   - each owner's BALANCE vector lives in a LiabilityBasisV2 Position
  *     (`DCLLBP02`) at a PDA derived from that aggregate and the owner;
  *   - the Hoard is a Custody vault whose address is namespaced by the
- *     founding's action context — see `MARKET_HOARD_UNDERIVABLE_V1`.
+ *     founding's action context, which the Claims aggregate persists and the
+ *     Market root does not — see `deriveMarketHoardAddressV1`.
  *
  * So a surface that wants to show a Market's economics has to go and read the
  * accounts that hold them. It must not read a number off the Market root,
@@ -96,19 +100,71 @@ const READINESS_BY_TAG: ReadonlyMap<number, MarketCoreReadinessV2> = new Map([
 ]);
 
 /**
- * Why no Hoard figure can be derived from a Market address alone.
+ * Where this Market's collateral principal actually sits.
  *
- * The Hoard is a Custody vault at
- * `[market, release_set, sha256(projected-hoard-context-domain ‖ context), HoardPrincipal]`
- * under the Custody program. `context` is chosen by whoever founded the Market —
- * the local campaign's own context domain is
- * `dclutch/local-campaign/founding-context/v1`, a campaign-local string, not a
- * protocol constant — and the Market root records neither the context nor the
- * vault. A reader holding a Market address therefore cannot name this Market's
- * Hoard, and this browser will not present an unauthenticated token account as
- * one.
+ * The Hoard is a Custody Vault at
+ * `[custody-vault-domain, market, release_set, context, HoardPrincipal]`. The
+ * `context` is chosen by whoever founded the Market — the atomic founding pins
+ * `SHA-256(projected-hoard-context-domain ‖ found.context)` and the local
+ * campaign's own action-context domain is a campaign-local string, not a
+ * protocol constant — so it is not, and can never be, a function of the Market
+ * address.
+ *
+ * It is not a secret either. The Claims aggregate persists it: `FoundingV5`
+ * writes the namespace it authenticated against the Core-owned permit, the Lock
+ * receipt, the realization receipt and the live replay, and every on-chain
+ * payout route derives from that same field. A reader holding the aggregate
+ * therefore names the Hoard by exactly the derivation the chain uses.
+ *
+ * This browser used to refuse the Hoard outright, because the aggregate said
+ * `market` where the founding meant a digest and there was no honest coordinate
+ * to read. That field now tells the truth, so the refusal retired with it.
+ * Deriving an address is still not the same as authenticating one: see
+ * `MARKET_HOARD_UNAUTHENTICATED_V1` and the checks the discovery surface runs
+ * before it will show a figure.
  */
-export const MARKET_HOARD_UNDERIVABLE_V1 = 'The Hoard is a Custody vault whose address is namespaced by the founding action context. The Market root records neither that context nor the vault, so no Hoard account can be derived from a Market address, and this browser will not present an unauthenticated token account as this Market\'s collateral principal.';
+export function deriveMarketHoardAddressV1(
+  custodyProgramId: string,
+  marketAddress: string,
+  selectedReleaseSetId: string,
+  custodyContext: string,
+): string {
+  return PublicKey.findProgramAddressSync(
+    [
+      CUSTODY_VAULT_PDA_DOMAIN_V1,
+      new PublicKey(marketAddress).toBytes(),
+      fromHex(selectedReleaseSetId, 'selected release set'),
+      fromHex(custodyContext, 'Custody namespace'),
+      Uint8Array.from([CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1]),
+    ],
+    new PublicKey(custodyProgramId),
+  )[0].toBase58();
+}
+
+/**
+ * The one transfer authority every Vault of one Market/release set shares.
+ *
+ * Context-free on purpose: `CustodyAuthoritySeedsV1` is `[domain, market,
+ * release_set]`. A token account claiming to be this Market's Hoard whose owner
+ * is not this address is somebody else's account at a colliding name.
+ */
+export function deriveCustodyAuthorityAddressV1(
+  custodyProgramId: string,
+  marketAddress: string,
+  selectedReleaseSetId: string,
+): string {
+  return PublicKey.findProgramAddressSync(
+    [
+      CUSTODY_AUTHORITY_PDA_DOMAIN_V1,
+      new PublicKey(marketAddress).toBytes(),
+      fromHex(selectedReleaseSetId, 'selected release set'),
+    ],
+    new PublicKey(custodyProgramId),
+  )[0].toBase58();
+}
+
+/** Why a derived Hoard address is still not a Hoard figure. */
+export const MARKET_HOARD_UNAUTHENTICATED_V1 = 'A Hoard address can be derived from the Market, its release set and the Custody namespace the Claims aggregate persists, but an address is not an authentication. This browser shows a principal only for an account the Custody program owns the authority of, holding the Realm\'s collateral mint, under that authority.';
 
 /** The nine ordered seeds a Core V2 Market state address is derived from. */
 export type MarketCoreIdentityV2 = Readonly<{

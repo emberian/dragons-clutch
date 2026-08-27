@@ -73,16 +73,31 @@ use solana_sdk_ids::sysvar;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralAcceleratorSbfErrorV3 {
     /// Accelerator request transport or register geometry differed.
-    InvalidRequest = 0,
+    InvalidRequest = 0xC000,
     /// The fixed admitted frame or readonly runtime frame differed.
-    InvalidFrame = 1,
+    InvalidFrame = 0xC001,
     /// The current top-level Trading instruction could not be authenticated.
-    InvalidTopLevelInstruction = 2,
+    InvalidTopLevelInstruction = 0xC002,
     /// A Trading-owned scratch page or whole-bank digest differed.
-    InvalidScratchBank = 3,
+    InvalidScratchBank = 0xC003,
     /// The exact acknowledgement could not be encoded.
-    InvalidAcknowledgement = 4,
+    InvalidAcknowledgement = 0xC004,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    GeneralAcceleratorSbfErrorV3::InvalidRequest as u32
+        == dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE,
+    "GeneralAcceleratorSbfErrorV3 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement as u32)
+        < dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "GeneralAcceleratorSbfErrorV3 must not run past its registered refusal band"
+);
 
 impl From<GeneralAcceleratorSbfErrorV3> for ProgramError {
     fn from(value: GeneralAcceleratorSbfErrorV3) -> Self {

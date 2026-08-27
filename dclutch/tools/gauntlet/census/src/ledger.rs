@@ -97,16 +97,62 @@ fn programs_invoked(logs: &[String]) -> Vec<String> {
     found
 }
 
-/// The `custom program error: 0xN` the chain reported, if any.
-fn reported_custom_code(logs: &[String], error: Option<&str>) -> Option<u64> {
+/// The custom program error the chain reported, and the program that raised it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReportedRefusal {
+    code: u64,
+    /// Address of the program whose own `failed:` line originated the code, if
+    /// the logs name one.
+    program: Option<String>,
+}
+
+/// Parse one `Program <id> failed: custom program error: 0xN` line.
+fn failed_line(line: &str) -> Option<(String, u64)> {
+    let rest = line.strip_prefix("Program ")?;
+    let (address, tail) = rest.split_once(" failed: ")?;
+    let hex = tail.strip_prefix("custom program error: 0x")?;
+    let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
+    let code = u64::from_str_radix(&digits, 16).ok()?;
+    Some((address.to_string(), code))
+}
+
+/// The `custom program error: 0xN` the chain reported, with its program.
+///
+/// The code is the LAST one in the log: that is what the transaction error
+/// carries, and a frame that catches a child's refusal and raises its own has
+/// the last word. The program is the FIRST frame to report that code, because
+/// a propagated refusal is re-reported by every frame it unwinds through and
+/// only the innermost one originated it.
+///
+/// Attribution is the whole point. Before it, this function returned a bare
+/// number and the fold credited it to whichever first-party refusal shared it
+/// -- so a test caller's deliberate late failure could be recorded as coverage
+/// of a Claims refusal it had nothing to do with. Namespacing the codes
+/// (decision 0007) makes that collision impossible by construction; parsing
+/// the program off the line makes the census stop depending on that.
+fn reported_custom_code(logs: &[String], error: Option<&str>) -> Option<ReportedRefusal> {
+    let reported: Vec<(String, u64)> = logs.iter().filter_map(|line| failed_line(line)).collect();
+    if let Some(code) = reported.last().map(|(_, code)| *code) {
+        let program = reported
+            .iter()
+            .find(|(_, held)| *held == code)
+            .map(|(address, _)| address.clone());
+        return Some(ReportedRefusal { code, program });
+    }
+
+    // A log line without the `Program <id> failed:` prefix still carries the
+    // code; take it, and say honestly that no program was named.
     for line in logs.iter().rev() {
         if let Some(index) = line.find("custom program error: 0x") {
             let hex: String = line[index + "custom program error: 0x".len()..]
                 .chars()
                 .take_while(char::is_ascii_hexdigit)
                 .collect();
-            if let Ok(value) = u64::from_str_radix(&hex, 16) {
-                return Some(value);
+            if let Ok(code) = u64::from_str_radix(&hex, 16) {
+                return Some(ReportedRefusal {
+                    code,
+                    program: None,
+                });
             }
         }
     }
@@ -118,7 +164,10 @@ fn reported_custom_code(logs: &[String], error: Option<&str>) -> Option<u64> {
         .chars()
         .take_while(char::is_ascii_digit)
         .collect();
-    digits.parse().ok()
+    digits.parse().ok().map(|code| ReportedRefusal {
+        code,
+        program: None,
+    })
 }
 
 /// `*` matches any run of characters, anywhere in the pattern. Deliberately the
@@ -308,39 +357,63 @@ pub fn fold(
         }
 
         let mut refusal = None;
+        let mut refusal_program = None;
         if observed_outcome == Outcome::Refused
             && let Some(unnamed) = binding.unnamed_refusal.as_ref()
         {
             // The code is still checked against the chain; it is simply not
             // credited to any enumerated program's taxonomy.
             let reported = reported_custom_code(&transaction.logs, transaction.error.as_deref());
-            if reported != Some(u64::from(unnamed.code)) {
+            if reported.as_ref().map(|held| held.code) != Some(u64::from(unnamed.code)) {
                 problems.push(format!(
                     "`{}` expects the uncredited refusal {} ({}) but the chain reported {}",
                     transaction.label,
                     unnamed.code,
                     unnamed.reason,
-                    reported.map_or_else(|| "no custom program error".to_owned(), |code| code
-                        .to_string())
+                    reported.as_ref().map_or_else(
+                        || "no custom program error".to_owned(),
+                        |held| held.code.to_string()
+                    )
                 ));
                 continue;
             }
+            refusal_program = reported.and_then(|held| held.program);
         } else if observed_outcome == Outcome::Refused {
             let expected = binding.refusal.as_deref().unwrap_or_default();
             let expected_code = known_refusals.get(expected).copied().flatten();
             let reported = reported_custom_code(&transaction.logs, transaction.error.as_deref());
             match (expected_code, reported) {
                 (Some(expected_code), Some(reported)) => {
-                    if i64::try_from(reported) == Ok(expected_code) {
-                        refusal = Some(expected.to_string());
-                    } else {
+                    if i64::try_from(reported.code) != Ok(expected_code) {
                         problems.push(format!(
                             "`{}` expected {expected} (code {expected_code}) but the chain \
-                             reported custom program error {reported}",
+                             reported custom program error {}",
+                            transaction.label, reported.code
+                        ));
+                        continue;
+                    }
+                    // The code matching is not enough on its own. A refusal id
+                    // is `<program label>/<Enum>::<Variant>`, so the chain has
+                    // to agree that THAT program raised it -- otherwise a
+                    // number shared with a program the binding never named
+                    // gets credited as coverage of a route it never touched.
+                    // Namespaced codes make the coincidence impossible; this
+                    // check makes the census stop relying on that.
+                    let owner = expected.split('/').next().unwrap_or_default();
+                    if let (Some(raiser), Some(owner_address)) =
+                        (reported.program.as_deref(), programs.get(owner))
+                        && raiser != owner_address
+                    {
+                        problems.push(format!(
+                            "`{}` credits {expected} (code {expected_code}), but the chain says \
+                             {raiser} raised it, not {owner} ({owner_address}). A refusal is \
+                             coverage of the program that raised it or of nothing.",
                             transaction.label
                         ));
                         continue;
                     }
+                    refusal = Some(expected.to_string());
+                    refusal_program = reported.program;
                 }
                 (_, None) => {
                     // A refusal raised before the program's own error taxonomy
@@ -351,8 +424,8 @@ pub fn fold(
                 (None, Some(reported)) => {
                     problems.push(format!(
                         "`{}` names refusal {expected}, which carries no numeric code, \
-                         while the chain reported custom program error {reported}",
-                        transaction.label
+                         while the chain reported custom program error {}",
+                        transaction.label, reported.code
                     ));
                     continue;
                 }
@@ -368,6 +441,7 @@ pub fn fold(
                 slot: transaction.slot,
                 outcome: observed_outcome,
                 refusal: refusal.clone(),
+                refusal_program: refusal_program.clone(),
                 compute_units: transaction.compute_units,
                 programs_invoked: invoked.clone(),
                 evidence_sha256: evidence_sha256.clone(),
@@ -650,6 +724,42 @@ mod tests {
     }
 
     #[test]
+    fn a_propagated_refusal_is_attributed_to_the_frame_that_raised_it() {
+        // Core invokes a child, the child refuses 0x6, and Core unwinds by
+        // returning the same code. Both frames log it. The code the
+        // transaction carries is the last one; the program that RAISED it is
+        // the first frame to report it, because everything after is unwinding.
+        let logs = [
+            "Program CoreProgram1111 invoke [1]".to_string(),
+            "Program ChildProgram111 invoke [2]".to_string(),
+            "Program ChildProgram111 failed: custom program error: 0x6".to_string(),
+            "Program CoreProgram1111 failed: custom program error: 0x6".to_string(),
+        ];
+        let reported = reported_custom_code(&logs, None).expect("a reported refusal");
+        assert_eq!(reported.code, 6);
+        assert_eq!(reported.program.as_deref(), Some("ChildProgram111"));
+
+        // A frame that catches its child and raises its OWN code has the last
+        // word on the code, and owns it.
+        let caught = [
+            "Program CoreProgram1111 invoke [1]".to_string(),
+            "Program ChildProgram111 invoke [2]".to_string(),
+            "Program ChildProgram111 failed: custom program error: 0xa".to_string(),
+            "Program CoreProgram1111 failed: custom program error: 0x3005".to_string(),
+        ];
+        let reported = reported_custom_code(&caught, None).expect("a reported refusal");
+        assert_eq!(reported.code, 0x3005);
+        assert_eq!(reported.program.as_deref(), Some("CoreProgram1111"));
+
+        // A runtime refusal that names no program is reported honestly as
+        // having none, rather than being pinned on whoever ran last.
+        let unattributed = ["custom program error: 0x7".to_string()];
+        let reported = reported_custom_code(&unattributed, None).expect("a reported refusal");
+        assert_eq!(reported.code, 7);
+        assert_eq!(reported.program, None);
+    }
+
+    #[test]
     fn a_refusal_from_outside_the_census_is_checked_but_never_credited() {
         // A test-only caller that refuses AFTER the child committed reports its
         // own code. Here that code is 6, which collides exactly with
@@ -671,9 +781,22 @@ mod tests {
         lying.outcome = Outcome::Refused;
         lying.refusal = Some("core/CoreSbfError::RentCredit".into());
         let report = run(&bindings(lying), &evidence(&refused));
-        // The census cannot tell this apart from a real Core refusal, which is
-        // exactly why the honest form has to be available and used.
-        assert_eq!(report.admitted, 1);
+        // This assertion used to read `admitted == 1`, with a comment saying
+        // the census could not tell the collision apart from a real Core
+        // refusal. It can now: the logs name TestCaller11111 as the frame that
+        // raised 0x6, and the binding credits a `core/` refusal, so the claim
+        // is rejected instead of recorded. Decision 0007 also makes the shared
+        // number impossible going forward -- this is the belt to that braces,
+        // and it is the half that would still hold if a band were misallocated.
+        assert_eq!(report.admitted, 0);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("raised it, not core")),
+            "{:?}",
+            report.problems
+        );
 
         let mut both = executed_binding();
         both.label = "caller refuses after Found31 committed".into();

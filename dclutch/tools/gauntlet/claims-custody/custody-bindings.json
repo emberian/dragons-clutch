@@ -30,7 +30,7 @@
       "program": "custody",
       "outcome": "refused",
       "refusal": "custody/CustodySbfError::Replay",
-      "note": "HOSTILE. One vault is open, so the replay cannot be retired. Refuses Replay (5)."
+      "note": "HOSTILE. One vault is open, so the replay cannot be retired. Refuses Replay (0x6005)."
     },
     {
       "label": "custody *: V1 external debit without a delegate",
@@ -71,7 +71,7 @@
       "program": "custody",
       "outcome": "refused",
       "refusal": "custody/CustodySbfError::TokenState",
-      "note": "HOSTILE. Source and destination are swapped so the debited account carries no matching delegate. Refuses TokenState (6)."
+      "note": "HOSTILE. Source and destination are swapped so the debited account carries no matching delegate. Refuses TokenState (0x6006)."
     },
     {
       "label": "custody *: delegated transfer at a stale replay revision",
@@ -112,8 +112,8 @@
       "program": "custody",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 3,
-        "reason": "The test-only caller's DeliberateLateFailure, raised AFTER Custody returned its receipt, to prove the token CPI, the delegate exhaustion and the replay roll back together. It is not a Custody refusal, and it collides numerically with custody/CustodySbfError::CallerAuthority, which is exactly why it is not credited to one."
+        "code": 1077251,
+        "reason": "TestCallerError::DeliberateLateFailure (0x107003), raised by the test-only caller at programs/dclutch-custody-sbf/test-programs/caller AFTER Custody returned its receipt, to prove the token CPI, the delegate exhaustion and the replay roll back together. Band 0x107 is that caller's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The strongest rollback case in this campaign: the campaign asserts the replay, vault, source and destination accounts are byte-identical to their prestate."
     },

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  CAPABILITY_FUNDING_QUOTE_OFFSET,
-  CAPABILITY_MANIFEST_ENTRY_BYTES,
-  CAPABILITY_MANIFEST_HEADER_BYTES,
+  CAPABILITY_ENTRY_BYTES_V1,
+  CAPABILITY_ENTRY_QUOTE_OFFSET_V1,
+  CAPABILITY_MANIFEST_HEADER_BYTES_V1,
   decodeCapabilityManifestV1,
   FUNDING_COMPARTMENTS_V1,
   recognizeCapabilityKindV1,
@@ -41,14 +41,14 @@ function quote(bytes: Uint8Array, view: DataView, offset: number, entry: Entry):
 }
 
 function manifest(entries: ReadonlyArray<Entry>): Uint8Array {
-  const bytes = new Uint8Array(CAPABILITY_MANIFEST_HEADER_BYTES + CAPABILITY_MANIFEST_ENTRY_BYTES * entries.length);
+  const bytes = new Uint8Array(CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_BYTES_V1 * entries.length);
   bytes.set(new TextEncoder().encode('DCLTCAP1'));
   const view = new DataView(bytes.buffer);
   view.setUint16(8, 1, true);
   view.setUint16(10, 1, true);
   view.setUint16(12, entries.length, true);
   entries.forEach((entry, index) => {
-    const offset = CAPABILITY_MANIFEST_HEADER_BYTES + CAPABILITY_MANIFEST_ENTRY_BYTES * index;
+    const offset = CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_BYTES_V1 * index;
     for (let identity = 0; identity < 6; identity += 1) {
       bytes.fill(entry.kind + identity, offset + identity * 32, offset + identity * 32 + 32);
     }
@@ -58,7 +58,7 @@ function manifest(entries: ReadonlyArray<Entry>): Uint8Array {
     bytes[offset + 193] = dependencies.length;
     view.setBigUint64(offset + 200, entry.deadline ?? BigInt(0), true);
     dependencies.forEach((dependency, position) => { bytes[offset + 208 + position] = dependency; });
-    quote(bytes, view, offset + CAPABILITY_FUNDING_QUOTE_OFFSET, entry);
+    quote(bytes, view, offset + CAPABILITY_ENTRY_QUOTE_OFFSET_V1, entry);
   });
   return bytes;
 }
@@ -90,11 +90,11 @@ describe('immutable capability manifest', () => {
     expect(() => decodeCapabilityManifestV1(manifest([{ kind: 1 }, { kind: 9, dependencies: [3] }]))).toThrow(/dependency list is noncanonical/);
 
     const zeroIdentity = manifest([{ kind: 1 }]);
-    zeroIdentity.fill(0, CAPABILITY_MANIFEST_HEADER_BYTES + 64, CAPABILITY_MANIFEST_HEADER_BYTES + 96);
+    zeroIdentity.fill(0, CAPABILITY_MANIFEST_HEADER_BYTES_V1 + 64, CAPABILITY_MANIFEST_HEADER_BYTES_V1 + 96);
     expect(() => decodeCapabilityManifestV1(zeroIdentity)).toThrow(/identity 2/);
 
     const stray = manifest([{ kind: 1 }]);
-    stray[CAPABILITY_MANIFEST_HEADER_BYTES + 208] = 1;
+    stray[CAPABILITY_MANIFEST_HEADER_BYTES_V1 + 208] = 1;
     expect(() => decodeCapabilityManifestV1(stray)).toThrow(/inactive dependency is nonzero/);
   });
 
@@ -131,11 +131,11 @@ describe('immutable capability manifest', () => {
 
   it('refuses a funding quote the canonical contract would refuse', () => {
     const absent = manifest([{ kind: 1 }]);
-    absent.fill(0, CAPABILITY_MANIFEST_HEADER_BYTES + CAPABILITY_FUNDING_QUOTE_OFFSET);
+    absent.fill(0, CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_QUOTE_OFFSET_V1);
     expect(() => decodeCapabilityManifestV1(absent)).toThrow(/funding quote magic is not DCLTFQ01/);
 
     const strayTotal = manifest([{ kind: 1, compartments: [{ name: 'Work', assetClass: 1, amount: BigInt(9) }] }]);
-    const nativeTotal = CAPABILITY_MANIFEST_HEADER_BYTES + CAPABILITY_FUNDING_QUOTE_OFFSET + 176 + 112;
+    const nativeTotal = CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_QUOTE_OFFSET_V1 + 176 + 112;
     new DataView(strayTotal.buffer).setBigUint64(nativeTotal, BigInt(10), true);
     expect(() => decodeCapabilityManifestV1(strayTotal)).toThrow(/asset totals differ from its own typed compartments/);
 
@@ -158,7 +158,7 @@ describe('immutable capability manifest', () => {
     expect(() => decodeCapabilityManifestV1(strayBinding)).toThrow(/binding does not match its own collateral total/);
 
     const zeroMint = manifest([{ kind: 1, binding: 40, compartments: [{ name: 'Work', assetClass: 2, amount: BigInt(4) }] }]);
-    const mintOffset = CAPABILITY_MANIFEST_HEADER_BYTES + CAPABILITY_FUNDING_QUOTE_OFFSET + 16 + 96;
+    const mintOffset = CAPABILITY_MANIFEST_HEADER_BYTES_V1 + CAPABILITY_ENTRY_QUOTE_OFFSET_V1 + 16 + 96;
     zeroMint.fill(0, mintOffset, mintOffset + 32);
     expect(() => decodeCapabilityManifestV1(zeroMint)).toThrow(/Realm collateral collateral mint is the reserved all-zero identity/);
   });

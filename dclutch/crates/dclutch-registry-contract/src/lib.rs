@@ -14,12 +14,10 @@
 
 mod activation;
 mod artifact;
-mod authority;
 mod immutable_registry;
 
 pub use activation::*;
 pub use artifact::*;
-pub use authority::*;
 pub use immutable_registry::*;
 
 /// Bytes in every identity and digest coordinate.

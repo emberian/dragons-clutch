@@ -367,9 +367,14 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-rational-representation-v2-contract",
+ "dclutch-refusal-registry",
  "dclutch-release-set-contract",
  "solana-program",
 ]
+
+[[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-release-set-contract"

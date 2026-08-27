@@ -2156,29 +2156,36 @@ mod tests {
             .expect("projected field")
             .copy_from_slice(&0x4433_2211_u32.to_le_bytes());
         let live_lifecycle = [0_u8; 152];
-        let project = |variable: AccountObservationV1<'_>,
-                       output: &mut [u64; 3]|
-         -> crate::v2::Result<()> {
-            let accounts = [
-                variable,
-                AccountObservationV1::new(&[3; 32], &[4; 32], 9, &live_lifecycle, false, true, false),
-            ];
-            let input = [0_u64, 77_777, 0];
-            let mut scratch = [0_u64; 3];
-            project_atomic(
-                profile,
-                0,
-                &accounts,
-                ProjectionRegistersV2 {
-                    input_scalars: &input,
-                    input_identities: &[],
-                    scratch_scalars: &mut scratch,
-                    scratch_identities: &mut [],
-                    output_scalars: output,
-                    output_identities: &mut [],
-                },
-            )
-        };
+        let project =
+            |variable: AccountObservationV1<'_>, output: &mut [u64; 3]| -> crate::v2::Result<()> {
+                let accounts = [
+                    variable,
+                    AccountObservationV1::new(
+                        &[3; 32],
+                        &[4; 32],
+                        9,
+                        &live_lifecycle,
+                        false,
+                        true,
+                        false,
+                    ),
+                ];
+                let input = [0_u64, 77_777, 0];
+                let mut scratch = [0_u64; 3];
+                project_atomic(
+                    profile,
+                    0,
+                    &accounts,
+                    ProjectionRegistersV2 {
+                        input_scalars: &input,
+                        input_identities: &[],
+                        scratch_scalars: &mut scratch,
+                        scratch_identities: &mut [],
+                        output_scalars: output,
+                        output_identities: &mut [],
+                    },
+                )
+            };
 
         let trusted = AccountObservationV1::new_adapter_authenticated_variable_data(
             &[1; 32],
@@ -2729,7 +2736,9 @@ mod tests {
         let mut accounts = std::vec::Vec::with_capacity(15);
         for coordinate in 0_u8..15 {
             let observation = match coordinate {
-                0 => AccountObservationV1::new(&[200; 32], &[2; 32], 7, &state, false, false, false),
+                0 => {
+                    AccountObservationV1::new(&[200; 32], &[2; 32], 7, &state, false, false, false)
+                }
                 4 => AccountObservationV1::new_adapter_authenticated_variable_data(
                     &[4; 32], &[5; 32], 9, &basis, false, false, false,
                 ),
@@ -3771,7 +3780,8 @@ mod tests {
             ],
             Error::PrivilegeMismatch,
         );
-        let substituted = AccountObservationV1::new(&[9; 32], &[2; 32], 9, &body, false, true, false);
+        let substituted =
+            AccountObservationV1::new(&[9; 32], &[2; 32], 9, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -3781,7 +3791,8 @@ mod tests {
             ],
             Error::AliasMismatch,
         );
-        let wrong_owner = AccountObservationV1::new(&[1; 32], &[9; 32], 9, &body, false, true, false);
+        let wrong_owner =
+            AccountObservationV1::new(&[1; 32], &[9; 32], 9, &body, false, true, false);
         assert_refuses(
             &[
                 representative_observation,
@@ -4441,7 +4452,15 @@ mod tests {
         let profile = AccountProfileV2::decode(&output).expect("Profile13");
         let tail_count_bytes = 2_u32.to_le_bytes();
         let accounts = [
-            AccountObservationV1::new(&[1; 32], &[2; 32], 1, &tail_count_bytes, false, false, false),
+            AccountObservationV1::new(
+                &[1; 32],
+                &[2; 32],
+                1,
+                &tail_count_bytes,
+                false,
+                false,
+                false,
+            ),
             AccountObservationV1::new(&[3; 32], &[4; 32], 1, &[], false, false, false),
         ];
         let input_scalars = [1_u64, 0, 99, 99];

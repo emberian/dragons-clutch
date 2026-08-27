@@ -80,22 +80,36 @@ const RESOURCE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/claims/sparse-native-post/v1"
 #[repr(u32)]
 pub enum SparseNativeTransferSbfErrorV1 {
     /// Request bytes refused the canonical fixed codec.
-    Instruction = 260,
+    Instruction = 0x5260,
     /// Account count, privilege, owner, or alias refused.
-    Accounts = 261,
+    Accounts = 0x5261,
     /// Registry current-role or caller authority refused.
-    Release = 262,
+    Release = 0x5262,
     /// Product Runtime V3, linked basis, or Core join refused.
-    Product = 263,
+    Product = 0x5263,
     /// Aggregate or Position identity, width, PDA, or revision refused.
-    ClaimsState = 264,
+    ClaimsState = 0x5264,
     /// Debit, credit, revision, or conservation arithmetic refused.
-    Candidate = 265,
+    Candidate = 0x5265,
     /// Candidate accounts could not all be borrowed and committed last.
-    Commit = 266,
+    Commit = 0x5266,
     /// Exact success receipt construction refused.
-    Receipt = 267,
+    Receipt = 0x5267,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    SparseNativeTransferSbfErrorV1::Instruction as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x260,
+    "SparseNativeTransferSbfErrorV1 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (SparseNativeTransferSbfErrorV1::Receipt as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "SparseNativeTransferSbfErrorV1 must not run past its registered refusal band"
+);
 
 impl From<SparseNativeTransferSbfErrorV1> for ProgramError {
     fn from(value: SparseNativeTransferSbfErrorV1) -> Self {

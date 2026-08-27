@@ -70,8 +70,9 @@ use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3},
     v4::{
-        ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
-        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4, project_atomic as project_effects_v4_atomic,
+        ErrorV4 as EffectKernelErrorV4, ProgramV4 as EffectProgramV4, ResolvedWriteRangeV4,
+        SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
+        project_atomic_visiting as project_effects_v4_atomic_visiting,
     },
 };
 use dclutch_execution_strategy_contract::{
@@ -157,6 +158,7 @@ use crate::{
         PhysicalAccountsV4, dynamic_declared_privileges_v4, dynamic_logical_account_count_v4,
         expand_dynamic_physical_accounts_v4,
     },
+    entrypoint_adapter::{HeapScratchRegionV1, ScratchVecV1},
     execution_strategy_v2::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
         INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2, SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2,
@@ -279,45 +281,78 @@ const CHILD_REQUEST_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:hot-child-request:v4";
 /// enough of its frame to make the profiled executable overwrite its own
 /// caller frame, which silently invalidates every number it prints.
 ///
-/// Reports both bytes used against the protocol 32KB heap and the raw bump
-/// offset from the heap floor, so a deliberately oversized diagnostic heap can
-/// be read from the same log.
+/// Reports the total outstanding first, then the two ends it is the sum of, so
+/// a deliberately oversized diagnostic heap can be read from the same log.
+///
+/// **The first number is the one to read.** The upward position alone stopped
+/// being the heap requirement when the allocator grew a scratch end (W2p): a
+/// bank in the scratch region is outstanding heap that the upward position
+/// does not see. Every figure in a W2p phase table is
+/// `upward + scratch`.
 #[cfg(feature = "hot-cu-profile")]
 #[inline(never)]
 fn hot_checkpoint(phase: &str) {
     solana_program::log::sol_log(phase);
     solana_program::log::sol_log_compute_units();
-    let probe = Vec::<u8>::with_capacity(1);
-    let position = probe.as_ptr() as usize;
-    let floor = solana_program::entrypoint::HEAP_START_ADDRESS as usize;
-    let ceiling = floor.saturating_add(solana_program::entrypoint::HEAP_LENGTH);
-    solana_program::log::sol_log_64(
-        ceiling.saturating_sub(position) as u64,
-        position.saturating_sub(floor) as u64,
-        0,
-        0,
-        0,
-    );
+    let (position, scratch) = hot_heap_outstanding();
+    solana_program::log::sol_log_64(position.saturating_add(scratch), position, scratch, 0, 0);
 }
 
-/// Diagnostic-only allocation mark: label and bump position, no compute read.
+/// Diagnostic-only allocation mark: label and heap outstanding, no compute
+/// read.
 ///
 /// A phase checkpoint answers "how much heap had this phase spent"; it cannot
 /// say which bank inside a phase spent it. Attributing the wall needs marks
 /// between individual allocations, and at that density the two extra syscalls
 /// `hot_checkpoint` makes are themselves the measurement's biggest cost. This
-/// logs one line: the label and the bump offset from the heap floor.
+/// logs one line, in the same three-number shape as a checkpoint.
 ///
 /// The subtraction between two consecutive marks is the exact charge of what
-/// lies between them, because the SBF bump allocator never frees.
+/// lies between them at the upward end, and the exact release of a scratch
+/// region at the other.
 #[cfg(feature = "hot-cu-profile")]
 #[inline(never)]
 fn hot_heap_mark(label: &str) {
-    let probe = Vec::<u8>::with_capacity(1);
-    let position = probe.as_ptr() as usize;
-    let floor = solana_program::entrypoint::HEAP_START_ADDRESS as usize;
+    let (position, scratch) = hot_heap_outstanding();
     solana_program::log::sol_log(label);
-    solana_program::log::sol_log_64(position.saturating_sub(floor) as u64, 0, 0, 0, 0);
+    solana_program::log::sol_log_64(position.saturating_add(scratch), position, scratch, 0, 0);
+}
+
+/// The bump position and the scratch bytes outstanding, both as offsets from
+/// the heap floor.
+///
+/// On chain both come from the allocator's own header, so a mark costs no
+/// allocation of its own. Off chain there is no program heap: a probe
+/// allocation still reads a monotone position, which is all the host build
+/// ever used this for.
+#[cfg(feature = "hot-cu-profile")]
+fn hot_heap_outstanding() -> (u64, u64) {
+    #[cfg(all(
+        target_os = "solana",
+        not(feature = "custom-heap"),
+        not(feature = "no-entrypoint")
+    ))]
+    {
+        (
+            u64::try_from(crate::entrypoint_adapter::program_heap_bytes_used_v1())
+                .unwrap_or(u64::MAX),
+            u64::try_from(crate::entrypoint_adapter::program_heap_scratch_bytes_v1())
+                .unwrap_or(u64::MAX),
+        )
+    }
+    #[cfg(not(all(
+        target_os = "solana",
+        not(feature = "custom-heap"),
+        not(feature = "no-entrypoint")
+    )))]
+    {
+        let probe = Vec::<u8>::with_capacity(1);
+        let floor = usize::try_from(solana_program::entrypoint::HEAP_START_ADDRESS).unwrap_or(0);
+        (
+            u64::try_from((probe.as_ptr() as usize).saturating_sub(floor)).unwrap_or(u64::MAX),
+            0,
+        )
+    }
 }
 
 #[cfg(feature = "hot-cu-profile")]
@@ -2121,18 +2156,26 @@ fn execute_authenticated_hot_v3(
     if runtime_accounts.len() > MAX_HOT_RUNTIME_ACCOUNTS_V3 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
+    // The borrow guards and the observation bank they back are the two banks
+    // this execution allocates EARLY and stops reading EARLIEST -- and they
+    // were the hole W2o measured: 5,968 bytes dying underneath eighteen
+    // kilobytes that do not. They are the scratch region's whole reason to
+    // exist. Both come off the heap's high end, so the reclaim below does not
+    // depend on the order anything else was allocated in, and neither can
+    // outlive `scratch`: `ScratchVecV1` borrows it.
+    let scratch = HeapScratchRegionV1::open()?;
     // Exact capacity, not `collect::<Result<Vec<_>, _>>()`. A fallible collect
     // reports a zero lower bound, so the SBF bump allocator - which never frees
     // - is walked through the whole doubling ladder and charges several times
     // the live width for every fallible bank on this path.
     hot_heap_mark!("runtime-accounts");
-    let mut runtime_data = Vec::with_capacity(runtime_accounts.len());
+    let mut runtime_data = ScratchVecV1::with_capacity(&scratch, runtime_accounts.len())?;
     for account in &runtime_accounts {
         runtime_data.push(
             account
                 .try_borrow_data()
                 .map_err(|_| TradingSbfError::Content)?,
-        );
+        )?;
     }
     hot_heap_mark!("runtime-data");
     let tail_count = project_tail_count(account_profile, product_outcome_count)?;
@@ -2163,16 +2206,16 @@ fn execute_authenticated_hot_v3(
         .map_err(|_| TradingSbfError::Content)?
         .prestate()
         == AccountPrestateV2::AdapterAuthenticatedVariableData;
-    let observations = runtime_accounts
-        .iter()
-        .zip(&runtime_data)
-        .enumerate()
-        .map(|(coordinate, (account, data))| {
-            let key = logical_projection_key_v3(
-                *aliases.get(coordinate).unwrap_or(&coordinate),
-                account.key,
-                &projected_keys,
-            );
+    let mut observations = ScratchVecV1::with_capacity(&scratch, runtime_accounts.len())?;
+    for (coordinate, (account, data)) in
+        runtime_accounts.iter().zip(runtime_data.iter()).enumerate()
+    {
+        let key = logical_projection_key_v3(
+            *aliases.get(coordinate).unwrap_or(&coordinate),
+            account.key,
+            &projected_keys,
+        );
+        observations.push(
             if coordinate == HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3
                 || (coordinate == HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3
                     && selected_config_is_variable)
@@ -2200,9 +2243,9 @@ fn execute_authenticated_hot_v3(
                     account.is_writable,
                     account.executable,
                 )
-            }
-        })
-        .collect::<Vec<_>>();
+            },
+        )?;
+    }
     hot_cu_checkpoint!("runtime-observations");
 
     require_geometry(
@@ -2235,7 +2278,16 @@ fn execute_authenticated_hot_v3(
     hot_heap_mark!("rent-quotes");
     hot_cu_checkpoint!("p5-geometry-rent");
 
-    let projected_request = project_account_and_request_registers_v3(
+    // Destructured at the call: every one of the four banks borrows the
+    // scratch region, and a named binding of the whole struct would own that
+    // borrow until the end of the function, past the release.
+    let ProjectedRequestRegistersV3 {
+        scalars: request_output_scalars,
+        identities: request_output_identities,
+        spare_scalars,
+        spare_identities,
+    } = project_account_and_request_registers_v3(
+        &scratch,
         invocation.current_instruction,
         invocation.native_message_offset_bias,
         instruction_data,
@@ -2257,8 +2309,6 @@ fn execute_authenticated_hot_v3(
     )?;
     hot_heap_mark!("request-registers");
     hot_cu_checkpoint!("p5-request-registers");
-    let request_output_scalars = projected_request.scalars;
-    let request_output_identities = projected_request.identities;
     sealed_ownership
         .require(
             selected_action,
@@ -2276,23 +2326,30 @@ fn execute_authenticated_hot_v3(
     // an allocator whose `dealloc` is a no-op, each of those rentals is a whole
     // pair of `scalar_count` and `identity_count` banks that is never charged.
     let mut preplan_scratch = LifecyclePreplanScratchV4::new(
+        &scratch,
         &observations,
         &runtime_accounts,
         scalar_count,
         identity_count,
-        projected_request.spare_scalars,
-        projected_request.spare_identities,
+        spare_scalars,
+        spare_identities,
     )?;
     // The one pair this phase genuinely has to allocate: the preplan's input is
     // the request output and the arena holds the other two, so nothing dead is
     // available to rent yet. It is handed to the replan later rather than
     // dropped.
     hot_heap_mark!("preplan-arena");
-    let preplan_output_scalars = vec![0_u64; scalar_count];
-    let preplan_output_identities = vec![[0_u8; 32]; identity_count];
+    let preplan_output_scalars = ScratchVecV1::filled(&scratch, &0_u64, scalar_count)?;
+    let preplan_output_identities = ScratchVecV1::filled(&scratch, &[0_u8; 32], identity_count)?;
     hot_heap_mark!("preplan-output");
     hot_cu_checkpoint!("p5-sealed-ownership-arena");
-    let preplanned_lifecycle = prepare_lifecycle_v4(
+    // Destructured at the call, for the reason the request projection above
+    // is: both register banks borrow the scratch region.
+    let PreparedLifecycleBatchV4 {
+        plans: preplanned_plans,
+        scalars: replan_output_scalars,
+        identities: replan_output_identities,
+    } = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
         envelope.release_set(),
@@ -2337,29 +2394,34 @@ fn execute_authenticated_hot_v3(
             selected_program,
             selected_action,
             tail_count,
-            scalars: &preplanned_lifecycle.scalars,
-            identities: &preplanned_lifecycle.identities,
+            scalars: &replan_output_scalars,
+            identities: &replan_output_identities,
         })?
     } else {
-        // The request-profile banks have been copied into the independently
-        // prepared lifecycle batch, so they are dead here and are moved in as
-        // the fold's output. Moving them, rather than dropping them and
-        // cloning the input again, is what keeps the SBF caller frame from
-        // retaining two register-bank owners across this noinline semantic
-        // boundary and keeps the allocator from being asked for a pair it
-        // already handed out. The fold's scratch is rented from the preplan
-        // arena, which is idle here between its two passes, so this phase
-        // allocates no register bank at all.
+        // The fold's OUTPUT pair is the one register bank of this execution
+        // that survives the scratch release: the commit reads it, the child
+        // walk reads it, and the effect projection is derived from it. So it
+        // is the one pair allocated at the upward end, and it is allocated
+        // fresh here rather than moved in from the request projection.
+        //
+        // W2n moved the dead request-projection pair in instead, to avoid
+        // asking an allocator that never frees for a pair it had already
+        // handed out. On an allocator that now DOES give the scratch end back
+        // that trade inverts: reusing the request pair would pin the whole
+        // three-pair projection, the preplan output pair and the arena --
+        // 7,219 bytes on the canonical Direct bundle -- for the rest of the
+        // instruction, to save allocating 1,600. The fold's scratch is still
+        // rented from the preplan arena, which is idle between its two passes.
         execute_interpreted_transition_v3(
             transition,
             tail_count,
             TransitionRegistersV3 {
-                input_scalars: &preplanned_lifecycle.scalars,
-                input_identities: &preplanned_lifecycle.identities,
+                input_scalars: &replan_output_scalars,
+                input_identities: &replan_output_identities,
                 scratch_scalars: &mut preplan_scratch.next_scalars,
                 scratch_identities: &mut preplan_scratch.next_identities,
-                output_scalars: request_output_scalars,
-                output_identities: request_output_identities,
+                output_scalars: try_projection_bank_v3(&0_u64, scalar_count)?,
+                output_identities: try_projection_bank_v3(&[0_u8; 32], identity_count)?,
             },
         )?
     };
@@ -2368,11 +2430,6 @@ fn execute_authenticated_hot_v3(
     // consumed them, and the replan needs exactly one pair of that width. It
     // rents these; only `plans` is still read after this point, by the replan
     // agreement.
-    let PreparedLifecycleBatchV4 {
-        plans: preplanned_plans,
-        scalars: replan_output_scalars,
-        identities: replan_output_identities,
-    } = preplanned_lifecycle;
     let transition_output_scalars = candidate.scalars;
     let transition_output_identities = candidate.identities;
     let admitted_execution_digest = candidate.transcript_digest;
@@ -2407,33 +2464,22 @@ fn execute_authenticated_hot_v3(
     )?;
     hot_cu_checkpoint!("p7-borrowed-witness");
 
-    let projected_effects = project_hot_effects_v3(
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &observations,
-        &preplanned_plans,
-        account_profile,
-        &dynamic_spans.widths,
-        &aliases,
-        runtime_accounts.len(),
-        request_bytes,
-    )?;
-    let output_lamports = projected_effects.lamports;
-    let output_requests = projected_effects.requests;
-    hot_cu_checkpoint!("p7-effect-projection");
-
-    let locally_mutated = require_local_effect_discipline_v5(
-        &preplanned_plans,
-        effect,
-        tail_count,
-        &transition_output_scalars,
-        &transition_output_identities,
-        &aliases,
-    )?;
-    hot_cu_checkpoint!("p7-local-effect-discipline");
-    let revalidated_lifecycle = prepare_lifecycle_v4(
+    // The replan runs BEFORE the effect projection, and the order is
+    // load-bearing rather than cosmetic. These two are independent -- each
+    // reads the same preplanned table and the same transition outputs, and
+    // neither reads anything the other writes -- but the replan is the LAST
+    // reader of the observation bank, and the effect projection is where the
+    // heap is deepest. Running the plan agreement first lets the scratch
+    // region close before that depth is reached, which is what keeps the
+    // intermediate high-water under the 32 KiB ceiling rather than merely the
+    // final one. It is also the more conservative order: the transition's
+    // outputs are held to the plan they were given before any effect is
+    // projected from them.
+    let PreparedLifecycleBatchV4 {
+        plans: _replan_plans,
+        scalars: revalidated_scalars,
+        identities: revalidated_identities,
+    } = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
         envelope.release_set(),
@@ -2456,7 +2502,8 @@ fn execute_authenticated_hot_v3(
     )?;
     hot_cu_checkpoint!("p7-replan");
     require_lifecycle_replan_agreement_v4(
-        &revalidated_lifecycle,
+        &revalidated_scalars,
+        &revalidated_identities,
         &transition_output_scalars,
         &transition_output_identities,
     )?;
@@ -2465,6 +2512,60 @@ fn execute_authenticated_hot_v3(
     // building a duplicate of it, so the table the commit executes is the one
     // the transition was handed and the replan reproduced.
     let lifecycle_plans = preplanned_plans;
+
+    // What the effect projection reads out of the observation bank is two
+    // numbers per coordinate, and it read them by walking the bank itself.
+    // Taking them here instead is what frees the bank: sixteen bytes per
+    // coordinate survive the release in place of forty-eight plus a borrow
+    // guard.
+    let account_inputs = account_inputs_v3(&observations)?;
+    // The shadow strategy's only reading of the bank is a digest OF it, and
+    // the digest is taken here for the same reason.
+    let shadow_runtime_digest = if shadow_caller_authority.is_some() {
+        Some(runtime_transcript_digest_v3(
+            &observations,
+            &runtime_accounts,
+        )?)
+    } else {
+        None
+    };
+    // Every reader of the scratch region has run. The list is exhaustive by
+    // construction rather than by inspection: each of these borrows `scratch`,
+    // so the borrow checker refuses this `drop(scratch)` while any one of them
+    // is still in scope. The whole high end goes back in one store -- 13,043
+    // bytes on the canonical Direct bundle -- before the effect projection,
+    // the child walk and the commit build their own.
+    drop(observations);
+    drop(runtime_data);
+    drop(request_output_scalars);
+    drop(request_output_identities);
+    drop(preplan_scratch);
+    drop(revalidated_scalars);
+    drop(revalidated_identities);
+    drop(scratch);
+    hot_cu_checkpoint!("observations-released");
+
+    let projected_effects = project_hot_effects_v3(
+        effect,
+        tail_count,
+        &transition_output_scalars,
+        &transition_output_identities,
+        account_inputs,
+        &lifecycle_plans,
+        account_profile,
+        &dynamic_spans.widths,
+        &aliases,
+        runtime_accounts.len(),
+        request_bytes,
+    )?;
+    let output_lamports = projected_effects.lamports;
+    let output_requests = projected_effects.requests;
+    // The local-effect discipline is folded into the projection walk above, so
+    // this checkpoint now brackets nothing: it is kept so the phase table stays
+    // comparable across the lanes that measured the separate walk.
+    let locally_mutated = projected_effects.locally_mutated;
+    hot_cu_checkpoint!("p7-effect-projection");
+    hot_cu_checkpoint!("p7-local-effect-discipline");
     // One byte per logical coordinate, decoded once, whole frame checked here.
     let effect_privileges = child_route_privileges_v3(
         account_profile,
@@ -2516,7 +2617,7 @@ fn execute_authenticated_hot_v3(
             caller_authority,
             strategy_extras,
             runtime_accounts: &runtime_accounts,
-            observations: &observations,
+            runtime_observations_digest: shadow_runtime_digest.ok_or(TradingSbfError::Content)?,
             envelope,
             descriptor,
             strategy,
@@ -2535,8 +2636,6 @@ fn execute_authenticated_hot_v3(
         admitted_execution_digest
     };
     hot_cu_checkpoint!("children-shadow");
-    drop(observations);
-    drop(runtime_data);
     hot_cu_checkpoint!("before-commit");
     let commit_status = commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
         program_id,
@@ -3109,6 +3208,10 @@ fn execute_interpreted_transition_v3(
 struct ProjectedEffectsV3 {
     lamports: Vec<u64>,
     requests: Vec<u8>,
+    /// One flag per representative coordinate the local effects mutate, or
+    /// `None` when the Effect declares no child route and the answer has no
+    /// consumer. Folded out of the projection's own walk.
+    locally_mutated: Option<Vec<bool>>,
 }
 
 /// One exactly-sized projection bank, refused rather than aborted when the heap
@@ -3121,6 +3224,53 @@ struct ProjectedEffectsV3 {
 /// projection needs has its exact width before it is filled, so the same
 /// allocation can be asked for fallibly and answered with the refusal the rest
 /// of this boundary speaks.
+/// The two numbers per coordinate the effect projection reads out of the
+/// observation bank.
+///
+/// Taken as its own bank so the observation bank -- forty-eight bytes per
+/// coordinate plus a sixteen-byte borrow guard, both in the scratch region --
+/// can be released before the projection runs. It is `Vec` rather than a
+/// scratch bank because the projection mutates it in place through
+/// [`apply_lifecycle_candidates_v3`] and reads it for the whole walk.
+fn account_inputs_v3(
+    observations: &[AccountObservationV1<'_>],
+) -> Result<Vec<AccountInput>, ProgramError> {
+    let mut account_inputs: Vec<AccountInput> = Vec::new();
+    account_inputs
+        .try_reserve_exact(observations.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    account_inputs.extend(observations.iter().map(|observation| AccountInput {
+        lamports: observation.lamports(),
+        data_len: observation.data().len(),
+    }));
+    Ok(account_inputs)
+}
+
+/// The accelerator transcript digest over one observation bank.
+///
+/// Both accelerator dispositions committed to exactly this value and each had
+/// its own copy of the walk; the shadow one now takes it before the bank is
+/// released, so the two agree by construction rather than by inspection.
+fn runtime_transcript_digest_v3(
+    observations: &[AccountObservationV1<'_>],
+    runtime_accounts: &[&AccountInfo<'_>],
+) -> Result<ContentId, ProgramError> {
+    let runtime_transcript = observations
+        .iter()
+        .zip(runtime_accounts)
+        .map(|(observation, account)| ShadowRuntimeObservationV3 {
+            key: observation.key(),
+            owner: observation.owner(),
+            lamports: observation.lamports(),
+            data: observation.data(),
+            signer: false,
+            writable: false,
+            executable: account.executable,
+        })
+        .collect::<Vec<_>>();
+    runtime_observations_digest_v3(&runtime_transcript).map_err(|_| TradingSbfError::Content.into())
+}
+
 fn try_projection_bank_v3<T: Clone>(value: &T, len: usize) -> Result<Vec<T>, ProgramError> {
     let mut bank = Vec::new();
     bank.try_reserve_exact(len)
@@ -3138,7 +3288,10 @@ fn project_hot_effects_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    observations: &[AccountObservationV1<'_>],
+    // Taken by value from [`account_inputs_v3`], which the caller runs while
+    // the observation bank is still live. This function never sees that bank:
+    // it is released before this runs.
+    mut account_inputs: Vec<AccountInput>,
     lifecycle_plans: &[PreparedLifecycleInvocationV3],
     account_profile: AccountProfileV2<'_>,
     span_counts: &[u32],
@@ -3146,18 +3299,23 @@ fn project_hot_effects_v3(
     runtime_account_count: usize,
     request_bytes: usize,
 ) -> Result<ProjectedEffectsV3, ProgramError> {
-    let mut account_inputs: Vec<AccountInput> = Vec::new();
-    account_inputs
-        .try_reserve_exact(observations.len())
-        .map_err(|_| TradingSbfError::Content)?;
-    account_inputs.extend(observations.iter().map(|observation| AccountInput {
-        lamports: observation.lamports(),
-        data_len: observation.data().len(),
-    }));
+    if account_inputs.len() != runtime_account_count {
+        return Err(TradingSbfError::Content.into());
+    }
     hot_heap_mark!("effects-account-inputs");
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
-    let mut permissions =
-        try_projection_bank_v3(&AccountPermission::read_only(), runtime_account_count)?;
+    // Four of this projection's six banks are read only by the kernel walk
+    // below and are dead the instant it returns, and the two that are not are
+    // the ones this function returns. Splitting them by END rather than by
+    // name is what makes the split reclaimable: the phase-local four come off
+    // the scratch end and go back in one store when `phase` drops, whatever
+    // the two survivors were allocated between.
+    let phase = HeapScratchRegionV1::open()?;
+    let mut permissions = ScratchVecV1::filled(
+        &phase,
+        &AccountPermission::read_only(),
+        runtime_account_count,
+    )?;
     hot_heap_mark!("effects-permissions");
     if account_profile.uses_dynamic_fixed_spans() {
         derive_effect_permissions_with_dynamic_spans(
@@ -3187,7 +3345,7 @@ fn project_hot_effects_v3(
         return Err(TradingSbfError::Content.into());
     }
     hot_heap_mark!("effects-count-checked");
-    let mut scratch_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
+    let mut scratch_lamports = ScratchVecV1::filled(&phase, &0_u64, effect_account_count)?;
     // One lamport output bank, not two. The projection's own output bank was a
     // separate `effect_account_count`-wide allocation whose entire contents were
     // then copied into the prefix of the wider bank this function returns -- so
@@ -3220,7 +3378,8 @@ fn project_hot_effects_v3(
     // resolve each local-effect ordinal once instead of once per PAIR of them,
     // and it is twelve bytes per ordinal that RECORDS a range -- not per
     // ordinal. A Direct walk resolves 131 and records two of them.
-    let mut write_ranges = try_projection_bank_v3(
+    let mut write_ranges = ScratchVecV1::filled(
+        &phase,
         &ResolvedWriteRangeV4::vacant(),
         effect
             .successor
@@ -3228,8 +3387,29 @@ fn project_hot_effects_v3(
             .map_err(|_| TradingSbfError::Content)?,
     )?;
     hot_heap_mark!("effects-write-ranges");
+    // The local-effect discipline rides this projection's walk instead of
+    // making its own. Both see every operation of the same Effect at the same
+    // registers and in the same order; the second walk measured 139,214 CU on
+    // the canonical Direct bundle and resolved nothing the first had not.
+    let mut binding_count = 0_usize;
+    for prepared in lifecycle_plans {
+        binding_count = binding_count
+            .checked_add(prepared.immutable_identity_bindings.len())
+            .ok_or(TradingSbfError::Transition)?;
+    }
+    let mut written = ScratchVecV1::filled(&phase, &false, binding_count)?;
+    let mut locally_mutated = if effect.route_count() == 0 {
+        None
+    } else {
+        Some(try_projection_bank_v3(&false, aliases.len())?)
+    };
+    hot_heap_mark!("effects-discipline-banks");
     hot_cu_checkpoint!("p7e-banks");
-    project_effects_v4_atomic(
+    // A refusal from the visitor is the visitor's own refusal, carried out
+    // through the kernel's single error channel and re-raised here so its exact
+    // code survives.
+    let mut refused: Option<ProgramError> = None;
+    let outcome = project_effects_v4_atomic_visiting(
         effect.successor,
         tail_count,
         ProjectionV3 {
@@ -3251,12 +3431,30 @@ fn project_hot_effects_v3(
             requests: &mut requests,
         },
         &mut write_ranges,
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
+        &mut |resolved| match inspect_local_effect_discipline_v5(
+            lifecycle_plans,
+            resolved,
+            aliases,
+            &mut written,
+            locally_mutated.as_deref_mut(),
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                refused = Some(error);
+                Err(EffectKernelErrorV4::BaseProgram)
+            }
+        },
+    );
+    if let Some(error) = refused {
+        return Err(error);
+    }
+    outcome.map_err(|_| TradingSbfError::Transition)?;
+    require_lifecycle_binding_coverage_v4(lifecycle_plans, &written)?;
     hot_heap_mark!("effects-projected");
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
         requests,
+        locally_mutated,
     })
 }
 
@@ -3402,13 +3600,17 @@ fn execute_admitted_candidate_v3(
     })
 }
 
-struct ShadowCandidateViewV3<'a, 'data, 'accounts, 'info> {
+struct ShadowCandidateViewV3<'a, 'accounts, 'info> {
     program_id: &'a Pubkey,
     frame: &'a HotFrameV3<'accounts, 'info>,
     caller_authority: &'a AccountInfo<'info>,
     strategy_extras: &'a [AccountInfo<'info>],
     runtime_accounts: &'a [&'accounts AccountInfo<'info>],
-    observations: &'a [AccountObservationV1<'data>],
+    /// The transcript digest, not the bank it is taken over. The observation
+    /// bank lives in the scratch region and is released before this runs; the
+    /// digest is the only thing this candidate ever read out of it, and
+    /// [`runtime_transcript_digest_v3`] takes it while the bank is still live.
+    runtime_observations_digest: ContentId,
     envelope: HotExecutionEnvelopeV3,
     descriptor: &'a CapabilityProgramV4,
     strategy: &'a AuthenticatedExecutionStrategyV2,
@@ -3426,7 +3628,7 @@ struct ShadowCandidateViewV3<'a, 'data, 'accounts, 'info> {
 
 #[inline(never)]
 fn execute_shadow_candidate_v3(
-    view: ShadowCandidateViewV3<'_, '_, '_, '_>,
+    view: ShadowCandidateViewV3<'_, '_, '_>,
 ) -> Result<[u8; 32], ProgramError> {
     let accelerator_program = view
         .strategy_extras
@@ -3438,22 +3640,7 @@ fn execute_shadow_candidate_v3(
         .ok_or(TradingSbfError::Content)?;
     let family_digest =
         family_request_digest_v3(view.family_request).map_err(|_| TradingSbfError::Content)?;
-    let runtime_transcript = view
-        .observations
-        .iter()
-        .zip(view.runtime_accounts)
-        .map(|(observation, account)| ShadowRuntimeObservationV3 {
-            key: observation.key(),
-            owner: observation.owner(),
-            lamports: observation.lamports(),
-            data: observation.data(),
-            signer: false,
-            writable: false,
-            executable: account.executable,
-        })
-        .collect::<Vec<_>>();
-    let runtime_digest = runtime_observations_digest_v3(&runtime_transcript)
-        .map_err(|_| TradingSbfError::Content)?;
+    let runtime_digest = view.runtime_observations_digest;
     let candidate_digest = candidate_digest_v3(view.tail_count, view.scalars, view.identities)
         .map_err(|_| TradingSbfError::Content)?;
     let routes = shadow_routes_v3(view.effect, view.tail_count, view.scalars, view.identities)?;
@@ -3986,6 +4173,62 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
             .count())
     }
 
+    /// One child account vector, allocated ONCE at the exact width this
+    /// invocation will fill plus the child program every composition pushes on
+    /// the end.
+    ///
+    /// Every composition started this buffer empty and grew it through
+    /// `extend_window`. On the SBF bump allocator, which never frees, that is
+    /// the whole doubling ladder AND a final reallocation for the push, and
+    /// every buffer it walked through stays charged for the rest of the
+    /// instruction. Measured on the canonical Direct bundle at the moment the
+    /// heap is scarcest -- inside the child-route walk, past the projection --
+    /// **7,195 bytes for one Claims invocation and 5,691 for one Custody
+    /// invocation**, against a live width of 48 bytes per account.
+    ///
+    /// The width is a fact about the resolved invocation, known before the
+    /// first window is appended: the fixed frame, plus one item subframe per
+    /// repeated item, plus the program. `extend_window`'s own `try_reserve` is
+    /// then satisfied and never grows.
+    ///
+    /// It is bounded by the logical frame because a hostile geometry must
+    /// refuse rather than ask the allocator for the refusal.
+    ///
+    /// It takes the buffer by `&mut` rather than returning a fresh one so the
+    /// walk can hand the SAME buffer to every invocation: on this allocator a
+    /// per-invocation frame is a per-invocation charge, and an `Each` route
+    /// over N items charged N of them. Clearing keeps the capacity, so the
+    /// reservation is satisfied by whatever the widest invocation so far
+    /// already bought.
+    pub fn reserve_invocation_frame(
+        self,
+        output: &mut Vec<AccountInfo<'info>>,
+        invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
+    ) -> Result<(), ProgramError> {
+        let items = usize::try_from(invocation.repeated_item_count)
+            .map_err(|_| TradingSbfError::Content)?
+            .checked_mul(usize::from(invocation.item_account_count))
+            .ok_or(TradingSbfError::Content)?;
+        let exact = usize::from(invocation.fixed_account_count)
+            .checked_add(items)
+            .and_then(|total| total.checked_add(1))
+            .ok_or(TradingSbfError::Content)?;
+        if exact
+            > self
+                .logical
+                .len()
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        output.clear();
+        output
+            .try_reserve_exact(exact)
+            .map_err(|_| TradingSbfError::Content)?;
+        Ok(())
+    }
+
     /// Append one contiguous window's child views to a caller-owned buffer.
     ///
     /// This is the only shape any consumer ever needed: each composition's
@@ -4010,6 +4253,153 @@ impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
             coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         Ok(())
+    }
+}
+
+/// ONE set of child-CPI buffers, owned by a child walk and reused by every
+/// invocation on that walk.
+///
+/// # The measurement this exists for
+///
+/// Nothing in the child walk used to be reused across invocations. Each
+/// invocation allocated its own account frame, its own meta vector, its own
+/// copy of the child wire and its own return-data vector, and the SBF bump
+/// allocator returns none of them: two invocations charged two of everything,
+/// and an `Each` route over N items charged N. Measured on the canonical Direct
+/// bundle at the moment the heap is scarcest -- inside the child walk, past the
+/// six lifecycle creates -- the Claims invocation charged 6,160 bytes and the
+/// Custody invocation 5,379, against live widths of 1,104 and 720.
+///
+/// So the walk owns one set, sized by whatever the widest invocation so far
+/// needed, and every composition fills it instead of allocating. `clear()`
+/// keeps capacity, so the second invocation's reservations are already
+/// satisfied and charge nothing at all.
+///
+/// # The one buffer that is NOT reused, and why
+///
+/// [`Self::returned`] is refilled from the return-data syscall each time,
+/// because its bytes do not die with the invocation: they are MOVED into the
+/// receipt bank, where a later route resolves its declared dependency against
+/// them. Reusing that allocation would hand the bank a buffer the next
+/// invocation overwrites. What this type does own about it is that the syscall
+/// is read EXACTLY ONCE per child -- the composition verifies the receipt and
+/// the walk banks it out of the same vector, where before each read the syscall
+/// again into a second vector of its own.
+pub struct ChildInvocationBuffersV3<'info> {
+    /// The resolved child account frame, with the callee appended last.
+    pub accounts: Vec<AccountInfo<'info>>,
+    /// The child instruction's account list, in frame order.
+    pub metas: Vec<AccountMeta>,
+    /// The child instruction's wire.
+    pub data: Vec<u8>,
+    /// Producer the return-data syscall named for the last invocation.
+    pub producer: Pubkey,
+    /// Bytes the last invocation returned, read from the syscall exactly once.
+    pub returned: Vec<u8>,
+}
+
+impl<'info> ChildInvocationBuffersV3<'info> {
+    /// An empty set. Every buffer buys its capacity at its first invocation.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            accounts: Vec::new(),
+            metas: Vec::new(),
+            data: Vec::new(),
+            producer: Pubkey::new_from_array([0; 32]),
+            returned: Vec::new(),
+        }
+    }
+
+    /// Replace the child wire with `request`, reusing the buffer's capacity.
+    pub fn set_wire(&mut self, request: &[u8]) -> Result<(), ProgramError> {
+        self.data.clear();
+        self.data
+            .try_reserve(request.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        self.data.extend_from_slice(request);
+        Ok(())
+    }
+
+    /// Derive the child's account list from the frame gathered so far.
+    ///
+    /// The privilege rule is the one every composition on this walk applied
+    /// for itself: the account's own declared writability, and signer for the
+    /// release-pinned caller authority at coordinate 0 or wherever the frame
+    /// already declares one. Call this BEFORE the callee is appended -- the
+    /// callee is not a member of the child's account list.
+    #[inline(never)]
+    pub fn fill_metas(&mut self) -> Result<(), ProgramError> {
+        self.metas.clear();
+        self.metas
+            .try_reserve(self.accounts.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        for (index, account) in self.accounts.iter().enumerate() {
+            let signer = index == 0 || account.is_signer;
+            self.metas.push(if account.is_writable {
+                AccountMeta::new(*account.key, signer)
+            } else {
+                AccountMeta::new_readonly(*account.key, signer)
+            });
+        }
+        Ok(())
+    }
+
+    /// Append the callee to the account frame the CPI passes to the runtime.
+    pub fn push_callee(&mut self, callee: &AccountInfo<'info>) -> Result<(), ProgramError> {
+        self.accounts
+            .try_reserve(1)
+            .map_err(|_| TradingSbfError::Content)?;
+        self.accounts.push(callee.clone());
+        Ok(())
+    }
+
+    /// Invoke the callee with the buffers this set holds.
+    ///
+    /// The buffers are handed to the membrane by `&mut` and come back with
+    /// their allocations intact; see
+    /// [`crate::entrypoint_adapter::invoke_signed_owned_v1`] for what that
+    /// saves and what it reproduces.
+    #[inline(never)]
+    pub fn invoke(
+        &mut self,
+        callee: &Pubkey,
+        signers_seeds: &[&[&[u8]]],
+    ) -> Result<(), ProgramError> {
+        let Self {
+            accounts,
+            metas,
+            data,
+            ..
+        } = self;
+        crate::entrypoint_adapter::invoke_signed_owned_v1(
+            callee,
+            metas,
+            data,
+            accounts,
+            signers_seeds,
+        )
+    }
+
+    /// Read the return-data syscall ONCE for the invocation just made.
+    #[inline(never)]
+    pub fn capture_return(&mut self) -> Result<(), ProgramError> {
+        let (producer, returned) = get_return_data().ok_or(TradingSbfError::Transition)?;
+        self.producer = producer;
+        self.returned = returned;
+        Ok(())
+    }
+
+    /// Move the captured return data out, for the receipt bank to own.
+    #[must_use]
+    pub fn take_returned(&mut self) -> Vec<u8> {
+        core::mem::take(&mut self.returned)
+    }
+}
+
+impl Default for ChildInvocationBuffersV3<'_> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -4490,11 +4880,10 @@ struct PreparedLifecycleInvocationV3 {
     immutable_identity_bindings: Vec<PreparedImmutableIdentityBindingV4>,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct PreparedLifecycleBatchV4 {
+struct PreparedLifecycleBatchV4<'region> {
     plans: Vec<PreparedLifecycleInvocationV3>,
-    scalars: Vec<u64>,
-    identities: Vec<[u8; 32]>,
+    scalars: ScratchVecV1<'region, u64>,
+    identities: ScratchVecV1<'region, [u8; 32]>,
 }
 
 /// Where one prepared lifecycle invocation goes.
@@ -4827,16 +5216,20 @@ fn set_candidate_lamports_v3(
 /// fresh 90-coordinate planned-balance overlay, four register banks and a state
 /// reservation bank against total-ever-allocated for a pass whose only purpose
 /// is to agree with the first.
-struct LifecyclePreplanScratchV4 {
-    planned_lamports: Vec<u64>,
-    scalar_scratch: Vec<u64>,
-    identity_scratch: Vec<[u8; 32]>,
-    next_scalars: Vec<u64>,
-    next_identities: Vec<[u8; 32]>,
-    used_states: Vec<bool>,
+///
+/// Every bank in it is dead the moment the replan agrees, which is why the
+/// whole arena lives in the scratch region: 4,019 bytes on the canonical
+/// Direct bundle that used to stand until the invocation ended.
+struct LifecyclePreplanScratchV4<'region> {
+    planned_lamports: ScratchVecV1<'region, u64>,
+    scalar_scratch: ScratchVecV1<'region, u64>,
+    identity_scratch: ScratchVecV1<'region, [u8; 32]>,
+    next_scalars: ScratchVecV1<'region, u64>,
+    next_identities: ScratchVecV1<'region, [u8; 32]>,
+    used_states: ScratchVecV1<'region, bool>,
 }
 
-impl LifecyclePreplanScratchV4 {
+impl<'region> LifecyclePreplanScratchV4<'region> {
     /// Build the arena, renting the two register-bank pairs the request
     /// projection finished with instead of allocating two fresh ones.
     ///
@@ -4848,12 +5241,13 @@ impl LifecyclePreplanScratchV4 {
     /// `vec![0; n]` produced, reached without asking an allocator that never
     /// frees for a second copy of a buffer that already exists.
     fn new(
+        region: &'region HeapScratchRegionV1,
         observations: &[AccountObservationV1<'_>],
         accounts: &[&AccountInfo<'_>],
         scalar_count: usize,
         identity_count: usize,
-        spare_scalars: [Vec<u64>; 2],
-        spare_identities: [Vec<[u8; 32]>; 2],
+        spare_scalars: [ScratchVecV1<'region, u64>; 2],
+        spare_identities: [ScratchVecV1<'region, [u8; 32]>; 2],
     ) -> Result<Box<Self>, ProgramError> {
         if observations.len() != accounts.len() {
             return Err(TradingSbfError::Content.into());
@@ -4871,12 +5265,9 @@ impl LifecyclePreplanScratchV4 {
         next_scalars.fill(0);
         identity_scratch.fill([0_u8; 32]);
         next_identities.fill([0_u8; 32]);
-        let mut planned_lamports = Vec::new();
-        planned_lamports
-            .try_reserve_exact(observations.len())
-            .map_err(|_| TradingSbfError::Content)?;
+        let mut planned_lamports = ScratchVecV1::with_capacity(region, observations.len())?;
         for observation in observations {
-            planned_lamports.push(observation.lamports());
+            planned_lamports.push(observation.lamports())?;
         }
         // Boxed, and boxed here rather than at the call site: seven register
         // and observation banks are 168 bytes of `Vec` headers, and
@@ -4890,14 +5281,14 @@ impl LifecyclePreplanScratchV4 {
             identity_scratch,
             next_scalars,
             next_identities,
-            used_states: vec![false; observations.len()],
+            used_states: ScratchVecV1::filled(region, &false, observations.len())?,
         }))
     }
 }
 
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn prepare_lifecycle_v4<'a>(
+fn prepare_lifecycle_v4<'a, 'region>(
     program_id: &Pubkey,
     expected_market: [u8; 32],
     expected_release_set: [u8; 32],
@@ -4917,14 +5308,14 @@ fn prepare_lifecycle_v4<'a>(
     // which reproduces it: see [`LifecycleBatchSinkV4`] for why the second
     // evaluation is not redundant and why it allocates nothing.
     expected: Option<&[PreparedLifecycleInvocationV3]>,
-    scratch: &mut LifecyclePreplanScratchV4,
+    scratch: &mut LifecyclePreplanScratchV4<'region>,
     // Rented, never allocated. Both preplan passes want a working copy of the
     // register banks they were handed, and on an allocator that never frees a
     // `to_vec()` per pass charges the heap two whole pairs for two copies that
     // are never live at the same time as the bank they came from.
-    mut output_scalars: Vec<u64>,
-    mut output_identities: Vec<[u8; 32]>,
-) -> Result<PreparedLifecycleBatchV4, ProgramError> {
+    mut output_scalars: ScratchVecV1<'region, u64>,
+    mut output_identities: ScratchVecV1<'region, [u8; 32]>,
+) -> Result<PreparedLifecycleBatchV4<'region>, ProgramError> {
     if observations.len() != accounts.len()
         || aliases.len() != accounts.len()
         || scratch.planned_lamports.len() != accounts.len()
@@ -5250,11 +5641,12 @@ fn absorb_immutable_identity_bindings_v4(
 /// The preplan's own register banks are rented out to the replan by the time
 /// this runs and were never part of this agreement.
 fn require_lifecycle_replan_agreement_v4(
-    revalidated: &PreparedLifecycleBatchV4,
+    revalidated_scalars: &[u64],
+    revalidated_identities: &[[u8; 32]],
     transition_scalars: &[u64],
     transition_identities: &[[u8; 32]],
 ) -> Result<(), ProgramError> {
-    if revalidated.scalars != transition_scalars || revalidated.identities != transition_identities
+    if revalidated_scalars != transition_scalars || revalidated_identities != transition_identities
     {
         Err(TradingSbfError::Transition.into())
     } else {
@@ -5262,18 +5654,24 @@ fn require_lifecycle_replan_agreement_v4(
     }
 }
 
-/// Require every local Effect operation to leave the root header alone and to
-/// write each created state's immutable identity binding exactly once, never
-/// overlapped by anything else.
+/// Apply the three local-effect predicates to ONE resolved Effect operation:
+/// leave the root header alone, mark each created state's immutable identity
+/// binding it writes, and record which representative it mutates.
 ///
-/// Two predicates, one resolution pass. Resolving one Effect operation costs
-/// orders of magnitude more than either predicate applied to the result, and
-/// both predicates have to see every operation of the same program at the same
-/// registers, so running them as two passes resolved the whole program twice to
-/// answer two questions about the same object. Measured on the canonical Direct
-/// bundle at full depth: the second pass was **110,284 CU, 7.9% of the
-/// 1,400,000 ceiling**, and it computed nothing the first pass had not already
-/// produced and discarded.
+/// Three predicates, no resolution pass of its own. Resolving one Effect
+/// operation costs orders of magnitude more than any predicate applied to the
+/// result, and all three have to see every operation of the same program at the
+/// same registers, so each pass that asked its own question walked the whole
+/// program again. Measured on the canonical Direct bundle at full depth, in the
+/// order they were folded together: the binding pass was **110,284 CU**, the
+/// route-disjointness pass a further **108,759 CU**, and the surviving joint
+/// pass **139,214 CU** — every one of them recomputing what the projection's
+/// own walk had already produced and discarded.
+///
+/// There is now exactly one walk. `project_atomic_visiting` offers each
+/// operation to this function after the runtime-write overlap refusal has
+/// accepted it and before the projection applies it, so these predicates ride
+/// the walk the projection was making anyway.
 ///
 /// The scan is over the Effect, not over the bindings: there are far more
 /// operations than bindings, and asking each binding separately re-resolved the
@@ -5291,75 +5689,32 @@ fn require_lifecycle_replan_agreement_v4(
 /// conjunction written in the other order - and the agreement still refuses
 /// first-class if they ever disagree.
 ///
-/// The third question rides along for the same reason: when the Effect has
-/// child routes at all, every route's accounts must be disjoint from what the
-/// local effects mutate, and deciding that needs one `bool` per representative
-/// folded out of exactly these resolved operations. Asking it in its own walk
-/// cost a further **108,759 CU** on the canonical Direct bundle - a third of a
-/// million compute units, across the three walks, to resolve one program three
-/// times. Returns `None` when the Effect declares no route, which is precisely
-/// when the answer has no consumer.
-#[inline(never)]
-fn require_local_effect_discipline_v5(
+/// `locally_mutated` is `None` when the Effect declares no child route, which
+/// is precisely when route disjointness has no consumer.
+fn inspect_local_effect_discipline_v5(
     plans: &[PreparedLifecycleInvocationV3],
-    effect: SelectedEffectProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
+    resolved: ResolvedEffectV3,
     aliases: &[usize],
-) -> Result<Option<Vec<bool>>, ProgramError> {
-    let mut binding_count = 0_usize;
-    for prepared in plans {
-        binding_count = binding_count
-            .checked_add(prepared.immutable_identity_bindings.len())
-            .ok_or(TradingSbfError::Transition)?;
+    written: &mut [bool],
+    locally_mutated: Option<&mut [bool]>,
+) -> Result<(), ProgramError> {
+    require_root_write_is_state_only(resolved, aliases)?;
+    inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, written)?;
+    if let Some(bank) = locally_mutated {
+        mark_local_mutation(resolved, aliases, bank)?;
     }
-    let mut written = Vec::new();
-    written
-        .try_reserve_exact(binding_count)
-        .map_err(|_| TradingSbfError::Transition)?;
-    written.resize(binding_count, false);
-    let mut locally_mutated = if effect.route_count() == 0 {
-        None
-    } else {
-        let mut bank = Vec::new();
-        bank.try_reserve_exact(aliases.len())
-            .map_err(|_| TradingSbfError::Content)?;
-        bank.resize(aliases.len(), false);
-        Some(bank)
-    };
+    Ok(())
+}
 
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        let resolved = effect
-            .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-            .map_err(|_| TradingSbfError::Transition)?;
-        require_root_write_is_state_only(resolved, aliases)?;
-        inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
-        if let Some(bank) = locally_mutated.as_deref_mut() {
-            mark_local_mutation(resolved, aliases, bank)?;
-        }
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            let resolved = effect
-                .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Transition)?;
-            require_root_write_is_state_only(resolved, aliases)?;
-            inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
-            if let Some(bank) = locally_mutated.as_deref_mut() {
-                mark_local_mutation(resolved, aliases, bank)?;
-            }
-            operation = operation
-                .checked_add(1)
-                .ok_or(TradingSbfError::Transition)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Transition)?;
-    }
-
+/// Require every created state's immutable identity binding to have been
+/// written by exactly one of the operations the walk offered.
+///
+/// This is the only half of the discipline that cannot ride an operation: it is
+/// a fact about the whole program, answered once the walk has ended.
+fn require_lifecycle_binding_coverage_v4(
+    plans: &[PreparedLifecycleInvocationV3],
+    written: &[bool],
+) -> Result<(), ProgramError> {
     let mut ordinal = 0_usize;
     for prepared in plans {
         for _ in &prepared.immutable_identity_bindings {
@@ -5371,7 +5726,7 @@ fn require_local_effect_discipline_v5(
             ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Transition)?;
         }
     }
-    Ok(locally_mutated)
+    Ok(())
 }
 
 /// Fold one resolved Effect write against every planned binding.
@@ -6064,6 +6419,11 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     let resolution_program = resolved.roles.resolution.as_ref();
 
     hot_cu_checkpoint!("pf-role-programs");
+    // ONE frame for the whole preflight walk, for the same reason the execution
+    // walk has one: a per-invocation frame is a per-invocation charge on an
+    // allocator that never gives one back.
+    let mut preflight_frame: Vec<AccountInfo<'info>> = Vec::new();
+    let mut preflight_wire: Vec<u8> = Vec::new();
     let mut route = 0_u16;
     while route < effect.route_count() {
         let count = effect
@@ -6091,6 +6451,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     effect_accounts,
                     request_bank,
                     family_request,
+                    &mut preflight_frame,
+                    &mut preflight_wire,
                     frame.core_program,
                     CoreCompositionParentV3 {
                         release_set: envelope.release_set(),
@@ -6144,6 +6506,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         identities,
                         effect_accounts,
                         request_bank,
+                        &mut preflight_frame,
                         custody_program.ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
                             release_set: envelope.release_set(),
@@ -6173,6 +6536,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         effect_accounts,
                         request_bank,
                         family_request,
+                        &mut preflight_frame,
+                        &mut preflight_wire,
                         resolution_program.ok_or(TradingSbfError::Release)?,
                         ResolutionCompositionParentV3 {
                             release_set: envelope.release_set(),
@@ -6199,18 +6564,24 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     Ok(())
 }
 
-struct ChildExecutionStateV3 {
+struct ChildExecutionStateV3<'info> {
     transcript: [u8; 32],
     receipt_bank: ChildReceiptBankV3,
     prior_receipt_bytes: Vec<u8>,
+    // The walk's ONE set of child-CPI buffers. It lives inside this boxed
+    // header rather than on the walk's frame because `execute_child_routes_v3`
+    // is against the SBPF v0 4,096-byte static frame bound; only the box
+    // pointer is on the frame either way.
+    buffers: ChildInvocationBuffersV3<'info>,
     route: u16,
 }
 
 // The sole additional allocation introduced by the verifier-frame split is
-// this bounded 88-byte header. Receipt payloads already lived in Vec-backed
-// storage before this split; no authenticated fact or commit authority moves
-// from account data into the heap.
-const _: [(); 88] = [(); core::mem::size_of::<ChildExecutionStateV3>()];
+// this bounded header. Receipt payloads already lived in Vec-backed storage
+// before this split; no authenticated fact or commit authority moves from
+// account data into the heap. The child-CPI buffer set added 128 bytes of
+// header to save thousands of bytes of per-invocation duplication.
+const _: [(); 216] = [(); core::mem::size_of::<ChildExecutionStateV3<'_>>()];
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -6249,8 +6620,10 @@ fn execute_child_routes_v3<'accounts, 'info>(
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
         receipt_bank: ChildReceiptBankV3::new(),
         prior_receipt_bytes: Vec::new(),
+        buffers: ChildInvocationBuffersV3::new(),
         route: 0,
     });
+    hot_heap_mark!("child-execution-state");
     if effect.route_count() == 0 {
         return Ok(execution.transcript);
     }
@@ -6280,6 +6653,13 @@ fn execute_child_routes_v3<'accounts, 'info>(
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
+        // The bank buys this route's room from the count the walk has just
+        // resolved for its own loop bound, so the exact reservation costs no
+        // extra resolution at all -- and resolving one here is not free:
+        // re-deriving what both walks need was measured at 78,146 CU.
+        execution
+            .receipt_bank
+            .reserve_additional(usize::try_from(count).map_err(|_| TradingSbfError::Content)?)?;
         let mut invocation = 0_u32;
         while invocation < count {
             let resolved = effect
@@ -6349,10 +6729,21 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     .checked_add(1)
                     .ok_or(TradingSbfError::Content)?;
             }
-            let prior_receipt = if execution.prior_receipt_bytes.is_empty() {
+            hot_heap_mark!("child-dependencies");
+            // Split the boxed header once, so the composition can hold the
+            // walk's buffer set mutably while the prior receipt is still
+            // borrowed out of the same header.
+            let ChildExecutionStateV3 {
+                transcript,
+                receipt_bank,
+                prior_receipt_bytes,
+                buffers,
+                route: _,
+            } = &mut *execution;
+            let prior_receipt = if prior_receipt_bytes.is_empty() {
                 None
             } else {
-                Some(execution.prior_receipt_bytes.as_slice())
+                Some(prior_receipt_bytes.as_slice())
             };
             let (role, child_digest, child_program) = match resolved.role {
                 FixedRole::Core => (
@@ -6369,6 +6760,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         request_bank,
                         family_request,
                         prior_receipt,
+                        buffers,
                         frame.core_program,
                         CoreCompositionParentV3 {
                             release_set: envelope.release_set(),
@@ -6400,6 +6792,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
+                            buffers,
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )?;
                         (
@@ -6433,6 +6826,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             prior_receipt,
+                            buffers,
                             custody_program.ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
@@ -6470,6 +6864,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
+                            buffers,
                             resolution_program.ok_or(TradingSbfError::Release)?,
                             ResolutionCompositionParentV3 {
                                 release_set: envelope.release_set(),
@@ -6492,7 +6887,16 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             };
-            let (producer, receipt_bytes) = get_return_data().ok_or(TradingSbfError::Transition)?;
+            hot_heap_mark!("child-invoked");
+            // The return-data syscall was read ONCE, by the composition that
+            // verified the receipt against its own request. It used to be read
+            // a second time here, into a second vector this allocator never
+            // gave back -- 938 bytes across the two child CPIs of the canonical
+            // Direct bundle. The bytes the composition already owns are moved
+            // straight into the bank instead.
+            let producer = buffers.producer;
+            let receipt_bytes = buffers.take_returned();
+            hot_heap_mark!("child-return-data");
             if producer != *child_program.key {
                 return Err(TradingSbfError::Transition.into());
             }
@@ -6516,7 +6920,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 .try_into()
                 .map_err(|_| TradingSbfError::Transition)?;
             let receipt_digest = hash(&receipt_bytes).to_bytes();
-            execution.receipt_bank.record_exact(
+            receipt_bank.record_exact(
                 role,
                 route,
                 invocation,
@@ -6527,9 +6931,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 receipt_kind,
                 receipt_bytes,
             )?;
-            execution.transcript = hashv(&[
+            *transcript = hashv(&[
                 CHILD_EXECUTION_DIGEST_DOMAIN_V3,
-                &execution.transcript,
+                &*transcript,
                 &[fixed_role_tag_v3(role)],
                 &route.to_le_bytes(),
                 &invocation.to_le_bytes(),
@@ -6538,6 +6942,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                 &child_digest,
             ])
             .to_bytes();
+            hot_heap_mark!("child-banked");
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         execution.route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
@@ -6681,17 +7086,41 @@ fn mark_local_mutation(
     Ok(())
 }
 
+/// Refuse a child invocation that reaches a coordinate this Effect's own local
+/// operations mutate.
+///
+/// The coordinates are ENUMERATED, never COLLECTED. This used to gather them
+/// into a `Vec<usize>` and then walk it, once per invocation, on an allocator
+/// that gives nothing back -- 184 bytes for a Claims frame and again for a
+/// Custody one, in the preflight walk, on top of the doubling ladder the
+/// second `extend` pays for. The check is per coordinate and order-independent,
+/// so the window walk answers directly and the first offending coordinate
+/// refuses in exactly the same place it did before.
 fn require_child_disjoint_from_local(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     aliases: &[usize],
     locally_mutated: &[bool],
 ) -> Result<(), ProgramError> {
-    let mut coordinates = Vec::new();
+    let refuse_window = |start: usize, end: usize| -> Result<(), ProgramError> {
+        let mut coordinate = start;
+        while coordinate < end {
+            let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Content)?;
+            if locally_mutated
+                .get(representative)
+                .copied()
+                .ok_or(TradingSbfError::Content)?
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Ok(())
+    };
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    coordinates.extend(fixed_start..fixed_end);
+    refuse_window(fixed_start, fixed_end)?;
     let item_count = usize::from(invocation.item_account_count);
     let stride = usize::from(invocation.item_account_stride);
     let mut item = 0_u32;
@@ -6708,18 +7137,8 @@ fn require_child_disjoint_from_local(
         let end = start
             .checked_add(item_count)
             .ok_or(TradingSbfError::Content)?;
-        coordinates.extend(start..end);
+        refuse_window(start, end)?;
         item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    for coordinate in coordinates {
-        let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Content)?;
-        if locally_mutated
-            .get(representative)
-            .copied()
-            .ok_or(TradingSbfError::Content)?
-        {
-            return Err(TradingSbfError::Content.into());
-        }
     }
     Ok(())
 }
@@ -7519,11 +7938,16 @@ fn require_projected_tail_count_agreement_v3(
 /// preplan arena therefore costs the heap two whole pairs to obtain buffers
 /// that already exist and are already dead. They are handed back instead of
 /// dropped, and the phases downstream rent them rather than allocate.
-struct ProjectedRequestRegistersV3 {
-    scalars: Vec<u64>,
-    identities: Vec<[u8; 32]>,
-    spare_scalars: [Vec<u64>; 2],
-    spare_identities: [Vec<[u8; 32]>; 2],
+/// Every bank here is in the Hot execution's scratch region, and every one of
+/// them is dead by the replan: the preplan copies the output pair into its own
+/// working banks and the arena rents the two spares. Nothing that survives the
+/// replan is in this struct -- the transition writes its outputs into a bank
+/// the caller allocates at the upward end for exactly that reason.
+struct ProjectedRequestRegistersV3<'region> {
+    scalars: ScratchVecV1<'region, u64>,
+    identities: ScratchVecV1<'region, [u8; 32]>,
+    spare_scalars: [ScratchVecV1<'region, u64>; 2],
+    spare_identities: [ScratchVecV1<'region, [u8; 32]>; 2],
 }
 
 /// Keep the transient Account/Request projection banks in one noinline phase.
@@ -7531,7 +7955,8 @@ struct ProjectedRequestRegistersV3 {
 /// remain live across child CPI or commit-last execution.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
+fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info>(
+    region: &'region HeapScratchRegionV1,
     current_instruction: u16,
     native_message_offset_bias: u16,
     instruction_data: &'artifact [u8],
@@ -7550,9 +7975,9 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     authenticated_product_tail_count: u32,
     scalar_count: usize,
     identity_count: usize,
-) -> Result<ProjectedRequestRegistersV3, ProgramError> {
-    let mut input_scalars = vec![0_u64; scalar_count];
-    let mut input_identities = vec![[0_u8; 32]; identity_count];
+) -> Result<ProjectedRequestRegistersV3<'region>, ProgramError> {
+    let mut input_scalars = ScratchVecV1::filled(region, &0_u64, scalar_count)?;
+    let mut input_identities = ScratchVecV1::filled(region, &[0_u8; 32], identity_count)?;
     *input_identities
         .get_mut(HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3)
         .ok_or(TradingSbfError::Content)? = request_digest;
@@ -7588,10 +8013,10 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     // of total-ever-allocated for a chain that is never more than three deep.
     let mut current_scalars = input_scalars;
     let mut current_identities = input_identities;
-    let mut scratch_scalars = vec![0_u64; scalar_count];
-    let mut scratch_identities = vec![[0_u8; 32]; identity_count];
-    let mut next_scalars = vec![0_u64; scalar_count];
-    let mut next_identities = vec![[0_u8; 32]; identity_count];
+    let mut scratch_scalars = ScratchVecV1::filled(region, &0_u64, scalar_count)?;
+    let mut scratch_identities = ScratchVecV1::filled(region, &[0_u8; 32], identity_count)?;
+    let mut next_scalars = ScratchVecV1::filled(region, &0_u64, scalar_count)?;
+    let mut next_identities = ScratchVecV1::filled(region, &[0_u8; 32], identity_count)?;
     hot_heap_mark!("projection-three-pairs");
 
     let account_registers = ProjectionRegistersV2 {
@@ -7675,11 +8100,11 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     core::mem::swap(&mut current_scalars, &mut next_scalars);
     core::mem::swap(&mut current_identities, &mut next_identities);
     if account_profile.uses_dynamic_fixed_spans() {
-        let mut revalidated = vec![0_u32; span_counts.len()];
+        let mut revalidated = ScratchVecV1::filled(region, &0_u32, span_counts.len())?;
         account_profile
             .dynamic_span_widths_from_scalars(&current_scalars, &mut revalidated)
             .map_err(|_| TradingSbfError::Content)?;
-        if revalidated != span_counts {
+        if revalidated.as_slice() != span_counts {
             return Err(TradingSbfError::Content.into());
         }
     }
@@ -8096,6 +8521,24 @@ fn commit_output_lamports_v3(
     Ok(())
 }
 
+/// Require every account this commit could have changed to be left rent-exempt.
+///
+/// **Only the writable ones.** This is a POSTCONDITION of the commit, and the
+/// commit can only reach an account the transaction made writable: both writes
+/// it performs -- `commit_output_lamports_v3`'s `try_borrow_mut_lamports` and
+/// `commit_data_effect`'s `try_borrow_mut_data` -- refuse on a readonly
+/// account, and so does every child CPI. Asserting exemption of a readonly
+/// coordinate is therefore never a fact about this execution; it is a fact
+/// about someone else's account, and it is one that is false on every cluster
+/// for the coordinates a Direct frame carries.
+///
+/// Measured, the first time this pass ever ran to completion: the canonical
+/// bundle refused `Commit` here on **coordinate 11, the System Program** -- 1
+/// lamport against a 21-byte NativeLoader record whose exemption minimum is
+/// 1,036,528. Builtins are not rent-exempt and never have been. The frame also
+/// carries the collateral token program, four child program records and the
+/// loader's ProgramData accounts, none of them writable and none of them this
+/// instruction's to underwrite.
 fn require_committed_rent_exemption_v3(
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
@@ -8105,6 +8548,7 @@ fn require_committed_rent_exemption_v3(
     for (coordinate, account) in accounts.iter().enumerate() {
         if *aliases.get(coordinate).ok_or(TradingSbfError::Commit)? == coordinate
             && (coordinate == 0) == root_only
+            && account.is_writable
             && account.data_len() != 0
             && !rent.is_exempt(account.lamports(), account.data_len())
         {

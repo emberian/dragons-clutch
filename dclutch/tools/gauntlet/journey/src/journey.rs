@@ -81,8 +81,13 @@ pub(crate) fn execute(
     let addresses = MarketAddressesV1::from_evidence(&session.accounts)?;
 
     let mut ledger = ConservationLedgerV1::new(addresses.mint);
-    let (claim_unit_atoms, decimals) =
-        stages::admit_open_market(&mut session.rpc, &addresses, &session.accounts, &mut ledger)?;
+    let (claim_unit_atoms, decimals) = stages::admit_open_market(
+        &mut session.rpc,
+        &addresses,
+        &session.accounts,
+        crate::plan::pubkey(&session.plan.custody.program_id)?,
+        &mut ledger,
+    )?;
     ledger.observe(&mut session.rpc, "founding through Open", 0, 0)?;
 
     let mut stages = vec![StageReportV1 {

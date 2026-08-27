@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
+use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_market_core_codec::{CoreState, Phase};
 use dclutch_product_payoff_v2_codec::runtime_v3::ProductBasisV3;
 use dclutch_rent_contract::lifecycle_v2::{
@@ -119,6 +121,7 @@ pub(crate) fn admit_open_market(
     rpc: &mut Rpc,
     addresses: &MarketAddressesV1,
     evidence: &BTreeMap<String, AccountEvidence>,
+    custody_program: Pubkey,
     ledger: &mut ConservationLedgerV1,
 ) -> Result<(u64, u8)> {
     let market = rpc.required_account(addresses.founding_market, "founded Market")?;
@@ -162,6 +165,36 @@ pub(crate) fn admit_open_market(
         .map_err(|error| Error::new(format!("collateral Mint: {error:?}")))?
         .decimals
     };
+
+    // The Hoard the laws are about is the one a REDEEMER would find, not the
+    // one the founding happened to label. Those were different accounts until
+    // decision 0008: the founding creates the Vault under its own action
+    // context digest while the Claims aggregate persisted the Market address,
+    // so every payout route derived an account that has never existed. Taking
+    // the address from the founding's evidence and never re-deriving it is
+    // exactly how a journey stays green over a Market nobody can redeem.
+    let aggregate_account = rpc.required_account(addresses.aggregate, "Claims aggregate")?;
+    let aggregate = LiabilityBasisMarketViewV2::decode(&aggregate_account.data)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
+    let derived_hoard = Pubkey::find_program_address(
+        &CustodyVaultSeedsV1::new(
+            addresses.founding_market.to_bytes(),
+            aggregate.release_set,
+            aggregate.custody_context,
+            CompartmentV1::HoardPrincipal,
+        )
+        .as_slices(),
+        &custody_program,
+    )
+    .0;
+    if derived_hoard != addresses.hoard {
+        return Err(Error::new(format!(
+            "the Claims aggregate's Custody namespace names Hoard {derived_hoard}, but the \
+             founding funded {}; this Market's principal is unreachable by every payout route \
+             (docs/decisions/0008-custody-namespace-owner.md)",
+            addresses.hoard
+        )));
+    }
 
     ledger.track_token_account("founder_collateral_wallet", addresses.founder_wallet);
     ledger.admit_founding(addresses.hoard, addresses.aggregate, claim_unit_atoms);

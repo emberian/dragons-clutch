@@ -46,6 +46,21 @@ impl ChildReceiptBankV3 {
         }
     }
 
+    /// Buy room for one route's invocations, exactly.
+    ///
+    /// The receipts vector grew from empty, one `push` at a time, and on the
+    /// SBF bump allocator every rung of that doubling ladder stays charged for
+    /// the rest of the instruction. The walk resolves each route's invocation
+    /// count for its own loop bound; this spends that same number here, so the
+    /// ladder becomes one exact step per route and costs no extra resolution.
+    /// It is the INVOCATION count, never the route count: a declared route
+    /// whose invocation count resolves to zero must not buy a slot.
+    pub(crate) fn reserve_additional(&mut self, invocations: usize) -> Result<(), ProgramError> {
+        self.receipts
+            .try_reserve_exact(invocations)
+            .map_err(|_| TradingSbfError::Content.into())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_exact(
         &mut self,

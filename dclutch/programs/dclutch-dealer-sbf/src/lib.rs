@@ -106,26 +106,39 @@ const CLAIMS_PACKET_MAX_BYTES: usize = CLAIMS_PLAN_HEADER_BYTES_V1 + MAX_OUTCOME
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DealerSbfError {
     /// Instruction bytes did not encode one canonical Dealer request.
-    Instruction = 0,
+    Instruction = 0x7000,
     /// Account count, order, privilege, aliasing, or executable status refused.
-    AccountFrame = 1,
+    AccountFrame = 0x7001,
     /// Policy, Candidate, or State owner/PDA/width authentication refused.
-    AccountIdentity = 2,
+    AccountIdentity = 0x7002,
     /// Actor signature or action-specific actor identity refused.
-    Signature = 3,
+    Signature = 0x7003,
     /// Clock account or request time binding refused.
-    Clock = 4,
+    Clock = 0x7004,
     /// Registry CPI, receipt provenance, role, program, or release join refused.
-    Release = 5,
+    Release = 0x7005,
     /// The total Dealer interpreter refused the transition.
-    Semantic = 6,
+    Semantic = 0x7006,
     /// The canonical Claims child action or receipt refused.
-    Claims = 7,
+    Claims = 0x7007,
     /// A canonical Custody child transfer, receipt, or postcondition refused.
-    Custody = 8,
+    Custody = 0x7008,
     /// State data could not be borrowed or commit width changed.
-    Commit = 9,
+    Commit = 0x7009,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    DealerSbfError::Instruction as u32 == dclutch_refusal_registry::DEALER_REFUSAL_BASE,
+    "DealerSbfError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (DealerSbfError::Commit as u32)
+        < dclutch_refusal_registry::DEALER_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "DealerSbfError must not run past its registered refusal band"
+);
 
 impl From<DealerSbfError> for ProgramError {
     fn from(value: DealerSbfError) -> Self {

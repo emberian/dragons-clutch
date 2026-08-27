@@ -21,7 +21,6 @@ dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
-dclutch-liability-basis-v2-kernel = { path = "../../crates/dclutch-liability-basis-v2-kernel" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
 dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
@@ -29,6 +28,7 @@ dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" 
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
 dclutch-rational-representation-v2-contract = { path = "../../crates/dclutch-rational-representation-v2-contract" }
 dclutch-rational-representation-v2-kernel = { path = "../../crates/dclutch-rational-representation-v2-kernel" }
+dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-representation-composition-v3-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }

@@ -267,7 +267,7 @@ chain's number, not ours.
 | `activation-role-core` | 566,984 | 546,984 | 20,000 | 853,016 (60.9%) |
 | `activation-role-claims` | 593,441 | 573,441 | 20,000 | 826,559 (59.0%) |
 | `activation-role-trading` | 741,945 | 721,945 | 20,000 | 678,055 (48.4%) |
-| `activation-role-resolution` | 313,713 | 293,713 | 20,000 | 1,106,287 (79.0%) |
+| `activation-role-resolution` | 350,385 | 330,385 | 20,000 | 1,069,615 (76.4%) |
 | `activation-role-custody` | 255,103 | 235,103 | 20,000 | 1,164,897 (83.2%) |
 | `activation-refuses-pre-revocation-core` | 555,927 | 535,927 | 20,000 | 864,073 (61.7%) |
 | `dcltpca1-unwind` | 189,496 | 159,496 | 30,000 | 1,240,504 (88.6%) |
@@ -281,7 +281,9 @@ seeded campaigns at `5465341` came in 24/24 green with real headroom
 (`dcltgmf1-whole` drew 1,176,793 and 1,185,797 against a 1,348,747 budget —
 other lanes took `DCLTGMF1` well below the 1,278,747 pin). Tightening every row
 onto those draws would produce a table that `activation-role-resolution`
-ALREADY violates at HEAD, for the measured reason in "The mode caveat" below,
+already violated at the time, for the measured reason in "The mode caveat"
+below (that row has since been re-pinned UP at `1435e08` with the reason in
+its `provenance`; the JSON is the enforced authority and this table follows it),
 and this file's own rule is that a budget moves with a reason recorded in
 `provenance`, not ahead of one. The bands are recorded in
 `CU_BUDGETS.json`'s `tolerance_rule.measured_bands` so the next re-pin does not
@@ -412,8 +414,10 @@ run put `activation-role-resolution` OVER by 16,672 CU, and it was real. The
 Resolution artifact had grown **18,944 bytes** at `87e4590` and activation
 authenticates the artifact, so the cost moved with it at roughly 1.13 CU per
 byte — far outside anything the mode difference explains. Owner: the lane that
-grew it. **This row will red-row the next `genesis`-mode campaign too**, and it
-should: that is what the row is for.
+grew it. The row DID red-row and was then re-pinned at `1435e08` (measured
+330,385, orchestrator-accepted, reason in `provenance`): the gate fired, the
+growth was named, and the number moved with a recorded reason — that is what
+the row is for.
 
 ## Re-pinning a number
 

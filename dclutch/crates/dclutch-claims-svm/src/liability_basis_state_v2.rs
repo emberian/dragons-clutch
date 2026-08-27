@@ -62,7 +62,7 @@ impl LiabilityBasisMarketLayoutV2 {
     pub const BASIS: usize = MARKET_BASIS_OFFSET;
     /// Immutable Realm content identity.
     pub const REALM: usize = MARKET_REALM_OFFSET;
-    /// Custody replay namespace.
+    /// The Market's Custody namespace: replay AND every Vault compartment.
     pub const CUSTODY_CONTEXT: usize = MARKET_CUSTODY_CONTEXT_OFFSET;
     /// Immutable Market generation.
     pub const GENERATION: usize = MARKET_GENERATION_OFFSET;
@@ -146,7 +146,21 @@ pub struct LiabilityBasisMarketInputV2 {
     pub basis_id: [u8; 32],
     /// Immutable Realm digest.
     pub realm_id: [u8; 32],
-    /// Custody replay namespace.
+    /// The Market's Custody namespace, and the sole persisted owner of it.
+    ///
+    /// One `context` coordinate, used for BOTH the Custody replay
+    /// (`[replay-domain, market, release_set, CALLER ROLE, context]`) and every
+    /// Vault of this Market (`[vault-domain, market, release_set, context,
+    /// compartment]`). `FoundingV5` writes the value it authenticated against
+    /// the Core-owned permit; no consumer may re-guess it, and in particular it
+    /// is NOT the Market address — see
+    /// `docs/decisions/0008-custody-namespace-owner.md`.
+    ///
+    /// The replay seeds carry the executing ROLE and the Vault seeds do not:
+    /// one namespace holds one Hoard and one replay cursor PER ROLE that
+    /// transacts against it. That asymmetry is the 0008 addendum, and it is why
+    /// a Claims payout and the Trading replay a founding realizes are two
+    /// different accounts over one pool of principal.
     pub custody_context: [u8; 32],
     /// Immutable Market generation.
     pub generation: u64,
@@ -184,7 +198,21 @@ pub struct LiabilityBasisMarketViewV2 {
     pub basis_id: [u8; 32],
     /// Immutable Realm digest.
     pub realm_id: [u8; 32],
-    /// Custody replay namespace.
+    /// The Market's Custody namespace, and the sole persisted owner of it.
+    ///
+    /// One `context` coordinate, used for BOTH the Custody replay
+    /// (`[replay-domain, market, release_set, CALLER ROLE, context]`) and every
+    /// Vault of this Market (`[vault-domain, market, release_set, context,
+    /// compartment]`). `FoundingV5` writes the value it authenticated against
+    /// the Core-owned permit; no consumer may re-guess it, and in particular it
+    /// is NOT the Market address — see
+    /// `docs/decisions/0008-custody-namespace-owner.md`.
+    ///
+    /// The replay seeds carry the executing ROLE and the Vault seeds do not:
+    /// one namespace holds one Hoard and one replay cursor PER ROLE that
+    /// transacts against it. That asymmetry is the 0008 addendum, and it is why
+    /// a Claims payout and the Trading replay a founding realizes are two
+    /// different accounts over one pool of principal.
     pub custody_context: [u8; 32],
     /// Immutable Market generation.
     pub generation: u64,

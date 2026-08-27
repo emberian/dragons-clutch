@@ -69,22 +69,36 @@ const SCALAR_BYTES: usize = 8;
 #[repr(u32)]
 pub enum SignedDeltaSbfErrorV3 {
     /// Instruction bytes did not decode as the canonical public ABI.
-    Instruction = 200,
+    Instruction = 0x5200,
     /// Account count, order, privileges, owners, or aliases refused.
-    Accounts = 201,
+    Accounts = 0x5201,
     /// Registry current-release authentication or caller authority refused.
-    Release = 202,
+    Release = 0x5202,
     /// Product graph, linked basis, semantic identity, or Core join refused.
-    ProductBasis = 203,
+    ProductBasis = 0x5203,
     /// Aggregate or Position PDA, width, identity, or revision refused.
-    ClaimsState = 204,
+    ClaimsState = 0x5204,
     /// An exact signed delta overflowed or underflowed a resource.
-    Candidate = 205,
+    Candidate = 0x5205,
     /// Complete candidate buffers could not all be borrowed and committed last.
-    Commit = 206,
+    Commit = 0x5206,
     /// The canonical success receipt could not be constructed.
-    Receipt = 207,
+    Receipt = 0x5207,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    SignedDeltaSbfErrorV3::Instruction as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x200,
+    "SignedDeltaSbfErrorV3 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (SignedDeltaSbfErrorV3::Receipt as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "SignedDeltaSbfErrorV3 must not run past its registered refusal band"
+);
 
 impl From<SignedDeltaSbfErrorV3> for ProgramError {
     fn from(value: SignedDeltaSbfErrorV3) -> Self {

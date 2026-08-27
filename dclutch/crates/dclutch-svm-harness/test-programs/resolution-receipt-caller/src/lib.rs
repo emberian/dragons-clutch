@@ -42,20 +42,35 @@ pub const TEST_FUNDED_ACCOUNT_COUNT_V1: usize = 19;
 #[repr(u32)]
 pub enum TestReceiptCallerError {
     /// Wrapper bytes or fail flag were malformed.
-    Instruction = 0,
+    Instruction = 0x10_A000,
     /// Resolution program or forwarded account frame was malformed.
-    AccountFrame = 1,
+    AccountFrame = 0x10_A001,
     /// Production Resolution CPI refused.
-    ResolutionCpi = 2,
+    ResolutionCpi = 0x10_A002,
     /// Return data was missing, malformed, or produced by another program.
-    ReturnData = 3,
+    ReturnData = 0x10_A003,
     /// Receipt did not bind the exact request, accounts, or poststate.
-    ReceiptMismatch = 4,
+    ReceiptMismatch = 0x10_A004,
     /// Deliberate refusal after complete receipt validation.
-    DeliberateLateFailure = 5,
+    DeliberateLateFailure = 0x10_A005,
     /// Checked payout arithmetic failed.
-    Arithmetic = 6,
+    Arithmetic = 0x10_A006,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    TestReceiptCallerError::Instruction as u32
+        == dclutch_refusal_registry::TEST_RESOLUTION_RECEIPT_CALLER_BASE,
+    "TestReceiptCallerError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (TestReceiptCallerError::Arithmetic as u32)
+        < dclutch_refusal_registry::TEST_RESOLUTION_RECEIPT_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "TestReceiptCallerError must not run past its registered refusal band"
+);
 
 impl From<TestReceiptCallerError> for ProgramError {
     fn from(value: TestReceiptCallerError) -> Self {

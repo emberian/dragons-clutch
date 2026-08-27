@@ -1653,7 +1653,12 @@ fn derive_terminal_after_request(
         },
         source: common.descriptor.market_id(),
         destination: terminal.collateral_recipient.key.to_bytes(),
-        source_vault_context: common.descriptor.market_id(),
+        // The Hoard Vault's namespace is the aggregate's persisted
+        // `custody_context`, the same coordinate `context` above already uses.
+        // Naming the Market here made this constructor build a request the
+        // program refuses for every Market not founded at its own address --
+        // which is every Market the atomic founding creates.
+        source_vault_context: common.claims_custody_context,
         destination_vault_context: [0; 32],
         mint: *context.realm.collateral_mint(),
         token_program: *context.realm.token_program(),

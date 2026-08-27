@@ -8,6 +8,13 @@
 //! CapabilityProgram selects it only through an exact translation certificate,
 //! immutable Registry admission, checked executable release, and the same
 //! authenticated input bank as the canonical TransitionVM program.
+//!
+//! It is also not an admission authority. Every relation below mirrors one
+//! operation of a program authored in Lean and emitted into the codec; a
+//! relation that appears here and not there is a defect in this file, never a
+//! guard the canonical program is missing. The `seller_outcome < tail_count`
+//! guard that once lived only here is gone: the authored program closes the
+//! Product tail with a conservation clause the fold and epilogue enforce.
 
 use dclutch_direct_codec::ordinary_v3::*;
 
@@ -156,6 +163,9 @@ fn execute_inline_candidate(
     require(read(scalars, SCALAR_EXECUTION_PRICE_V3)? <= read(scalars, SCALAR_PRICE_SCALE_V3)?)?;
     require(read(scalars, SCALAR_SELLER_FEE_BPS_V3)? == read(scalars, SCALAR_POLICY_FEE_BPS_V3)?)?;
     require(read(scalars, SCALAR_BUYER_FEE_BPS_V3)? == read(scalars, SCALAR_POLICY_FEE_BPS_V3)?)?;
+    require(
+        read(scalars, SCALAR_POLICY_FEE_BPS_V3)? <= read(scalars, SCALAR_FEE_DENOMINATOR_V3)?,
+    )?;
     let gross = mul_div_exact(
         read(scalars, SCALAR_FILL_V3)?,
         read(scalars, SCALAR_EXECUTION_PRICE_V3)?,
@@ -226,6 +236,7 @@ fn execute_inline_candidate(
     write(scalars, SCALAR_CUSTODY_AFTER_FEE_V3, custody_after_fee)?;
     let claim_transfer = read(scalars, SCALAR_FILL_V3)?;
     write(scalars, SCALAR_CLAIM_TRANSFER_V3, claim_transfer)?;
+    write(scalars, SCALAR_CLAIM_TAIL_TOTAL_V3, 0)?;
     write(
         scalars,
         SCALAR_MAKER_VERSION_V3,
@@ -237,12 +248,9 @@ fn execute_inline_candidate(
         dclutch_direct_codec::successor::DirectMakerReplayLayoutV1::MAGIC_WORD,
     )?;
 
-    let outcome =
-        usize::try_from(read(scalars, SCALAR_SELLER_OUTCOME_V3)?).map_err(|_| Error::Arithmetic)?;
+    let outcome = read(scalars, SCALAR_SELLER_OUTCOME_V3)?;
     let count = usize::try_from(tail_count).map_err(|_| Error::Arithmetic)?;
-    if outcome >= count {
-        return Err(Error::CheckFailed);
-    }
+    let mut claim_tail_total = 0_u64;
     let mut item = 0_usize;
     while item < count {
         let base = item_scalar_base(item)?;
@@ -254,11 +262,14 @@ fn execute_inline_candidate(
             .ok_or(Error::Arithmetic)?;
         let item_index = read(scalars, item_index_register)?;
         write(scalars, item_quantity_register, 0)?;
-        if item_index == u64::try_from(outcome).map_err(|_| Error::Arithmetic)? {
+        if item_index == outcome {
             write(scalars, item_quantity_register, claim_transfer)?;
         }
+        claim_tail_total = checked_add(claim_tail_total, read(scalars, item_quantity_register)?)?;
+        write(scalars, SCALAR_CLAIM_TAIL_TOTAL_V3, claim_tail_total)?;
         item = item.checked_add(1).ok_or(Error::Arithmetic)?;
     }
+    require(claim_tail_total == claim_transfer)?;
     Ok(())
 }
 

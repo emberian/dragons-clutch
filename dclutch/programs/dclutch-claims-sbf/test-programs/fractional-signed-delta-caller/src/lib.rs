@@ -57,14 +57,29 @@ const POST_REVISION_OFFSET: usize = POST_RESERVE_OFFSET + 8;
 #[repr(u32)]
 pub enum FractionalSignedDeltaTestCallerError {
     /// Wrapper or canonical SignedDelta bytes were malformed.
-    Instruction = 0,
+    Instruction = 0x10_1000,
     /// Claims program or forwarded account frame was malformed.
-    AccountFrame = 1,
+    AccountFrame = 0x10_1001,
     /// Claims refused or returned another receipt/post-resource commitment.
-    ClaimsCpi = 2,
+    ClaimsCpi = 0x10_1002,
     /// Deliberate refusal after Claims returned and the receipt validated.
-    DeliberateLateFailure = 3,
+    DeliberateLateFailure = 0x10_1003,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    FractionalSignedDeltaTestCallerError::Instruction as u32
+        == dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_SIGNED_DELTA_CALLER_BASE,
+    "FractionalSignedDeltaTestCallerError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (FractionalSignedDeltaTestCallerError::DeliberateLateFailure as u32)
+        < dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_SIGNED_DELTA_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "FractionalSignedDeltaTestCallerError must not run past its registered refusal band"
+);
 
 impl From<FractionalSignedDeltaTestCallerError> for ProgramError {
     fn from(value: FractionalSignedDeltaTestCallerError) -> Self {

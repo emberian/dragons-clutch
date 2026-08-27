@@ -44,8 +44,6 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
 };
@@ -53,7 +51,7 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
-    hot_v3::DowngradedEffectAccountsV3,
+    hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
 /// Exact receipt returned by one canonical Claims route.
@@ -91,6 +89,7 @@ pub fn execute_claims_route_v3<'info>(
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
+    buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if effect
@@ -110,9 +109,10 @@ pub fn execute_claims_route_v3<'info>(
         return Err(TradingSbfError::Content.into());
     }
     let request = invocation_request(invocation, request_bank, family_request)?;
-    let mut child_accounts = invocation_accounts(invocation, effect_accounts)?;
-    if child_accounts.is_empty()
-        || child_accounts
+    gather_invocation_accounts(&mut buffers.accounts, invocation, effect_accounts)?;
+    if buffers.accounts.is_empty()
+        || buffers
+            .accounts
             .iter()
             .filter(|account| account.key == claims_program.key)
             .count()
@@ -123,76 +123,60 @@ pub fn execute_claims_route_v3<'info>(
     let (authority_seeds, receipt_kind) = route_authority(request, invocation.kind)?;
     let (expected_authority, bump) =
         Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
-    if child_accounts
+    if buffers
+        .accounts
         .first()
         .is_none_or(|account| account.key != &expected_authority)
     {
         return Err(TradingSbfError::Release.into());
     }
 
-    let mut metas = Vec::with_capacity(child_accounts.len());
-    for (index, account) in child_accounts.iter().enumerate() {
-        metas.push(child_account_meta_v3(index, account));
-    }
-    let mut child_data = request.to_vec();
+    buffers.fill_metas()?;
+    buffers.set_wire(request)?;
     deliver_receipt_dependency_v3(
         invocation,
-        &mut child_data,
+        &mut buffers.data,
         prior_receipt,
         receipt_kind.delivery(),
     )?;
-    let instruction = Instruction {
-        program_id: *claims_program.key,
-        accounts: metas,
-        data: child_data,
-    };
-    child_accounts.push(claims_program.clone());
+    buffers.push_callee(claims_program)?;
     let bump_seed = [bump];
     let [domain, release, market, role, context, digest] = authority_seeds.as_slices();
-    invoke_signed(
-        &instruction,
-        &child_accounts,
-        &[&[domain, release, market, role, context, digest, &bump_seed]],
-    )
-    .map_err(|_| TradingSbfError::Transition)?;
-    let (producer, receipt) = get_return_data().ok_or(TradingSbfError::Transition)?;
-    if producer != *claims_program.key {
+    buffers
+        .invoke(
+            claims_program.key,
+            &[&[domain, release, market, role, context, digest, &bump_seed]],
+        )
+        .map_err(|_| TradingSbfError::Transition)?;
+    buffers.capture_return()?;
+    if buffers.producer != *claims_program.key {
         return Err(TradingSbfError::Transition.into());
     }
     let post_resources = match receipt_kind {
         ReceiptKindV3::SignedDelta => {
             PostResourceEvidenceV3::Single(signed_delta_post_resource_digest(
-                &child_accounts,
+                &buffers.accounts,
                 SignedDeltaPlanV3::decode(request)
                     .map_err(|_| TradingSbfError::Content)?
                     .position_count(),
             )?)
         }
         ReceiptKindV3::SparseNativeTransfer => {
-            PostResourceEvidenceV3::Single(sparse_native_post_resource_digest(&child_accounts)?)
+            PostResourceEvidenceV3::Single(sparse_native_post_resource_digest(&buffers.accounts)?)
         }
         ReceiptKindV3::Founding => {
-            PostResourceEvidenceV3::Founding(founding_post_resource_digests(&child_accounts)?)
+            PostResourceEvidenceV3::Founding(founding_post_resource_digests(&buffers.accounts)?)
         }
         _ => PostResourceEvidenceV3::None,
     };
     verify_route_receipt(
         receipt_kind,
         request,
-        &receipt,
+        &buffers.returned,
         claims_program.key.to_bytes(),
         program_id.to_bytes(),
         post_resources,
     )
-}
-
-fn child_account_meta_v3(index: usize, account: &AccountInfo<'_>) -> AccountMeta {
-    let signer = index == 0 || account.is_signer;
-    if account.is_writable {
-        AccountMeta::new(*account.key, signer)
-    } else {
-        AccountMeta::new_readonly(*account.key, signer)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -294,17 +278,23 @@ fn invocation_request<'a>(
     }
 }
 
-fn invocation_accounts<'info>(
+/// Gather this invocation's account windows into a caller-owned buffer.
+///
+/// The buffer is cleared and reserved at the exact width the windows fill, so
+/// the appends below never grow it -- and on a second invocation the capacity
+/// the first one bought already satisfies the reservation.
+fn gather_invocation_accounts<'info>(
+    output: &mut Vec<AccountInfo<'info>>,
     invocation: ResolvedInvocationV3,
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    let mut output = Vec::new();
+) -> Result<(), ProgramError> {
+    accounts.reserve_invocation_frame(output, invocation)?;
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
     accounts.extend_window(
-        &mut output,
+        output,
         fixed_start,
         fixed_end
             .checked_sub(fixed_start)
@@ -322,7 +312,7 @@ fn invocation_accounts<'info>(
                 .ok_or(TradingSbfError::Content)?;
             let end = start.checked_add(count).ok_or(TradingSbfError::Content)?;
             accounts.extend_window(
-                &mut output,
+                output,
                 start,
                 end.checked_sub(start).ok_or(TradingSbfError::Content)?,
             )?;
@@ -331,7 +321,7 @@ fn invocation_accounts<'info>(
     } else if invocation.item_account_count != 0 || invocation.repeated_item_count != 0 {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(output)
+    Ok(())
 }
 
 fn route_authority(
@@ -707,27 +697,56 @@ fn signed_delta_post_resource_digest(
     if child_accounts.len() != expected {
         return Err(TradingSbfError::Content.into());
     }
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(b"dclutch/claims/signed-delta-post-resources/v3");
-    let market = child_accounts
-        .get(1)
-        .ok_or(TradingSbfError::Content)?
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Transition)?;
-    preimage.extend_from_slice(&market);
+    // The preimage is HASHED, never kept, so it is never CONCATENATED either.
+    // This used to grow one `Vec<u8>` from empty through `extend_from_slice`,
+    // which on the SBF bump allocator is the whole doubling ladder plus a live
+    // copy of every account body it walked: 985 bytes charged for the rest of
+    // the instruction, measured inside the child walk where the heap is
+    // scarcest. `hashv` takes the parts, so what is carried is the parts --
+    // one borrow guard and one fat pointer per account, reserved exactly.
     let end = 20_usize
         .checked_add(positions)
         .ok_or(TradingSbfError::Content)?;
-    for account in child_accounts
+    let bodies = child_accounts
         .get(20..end)
-        .ok_or(TradingSbfError::Content)?
-    {
-        let data = account
+        .ok_or(TradingSbfError::Content)?;
+    let mut guards = Vec::new();
+    guards
+        .try_reserve_exact(
+            bodies
+                .len()
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    guards.push(
+        child_accounts
+            .get(1)
+            .ok_or(TradingSbfError::Content)?
             .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
-        preimage.extend_from_slice(&data);
+            .map_err(|_| TradingSbfError::Transition)?,
+    );
+    for account in bodies {
+        guards.push(
+            account
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Transition)?,
+        );
     }
-    Ok(hash(&preimage).to_bytes())
+    let mut parts: Vec<&[u8]> = Vec::new();
+    parts
+        .try_reserve_exact(
+            guards
+                .len()
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    parts.push(b"dclutch/claims/signed-delta-post-resources/v3");
+    for guard in &guards {
+        parts.push(guard);
+    }
+    Ok(hashv(&parts).to_bytes())
 }
 
 fn sparse_native_post_resource_digest(
@@ -736,17 +755,33 @@ fn sparse_native_post_resource_digest(
     if child_accounts.len() != 23 {
         return Err(TradingSbfError::Content.into());
     }
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(b"dclutch/claims/sparse-native-post/v1");
-    for index in [1_usize, 20, 21] {
-        let data = child_accounts
-            .get(index)
-            .ok_or(TradingSbfError::Content)?
-            .try_borrow_data()
-            .map_err(|_| TradingSbfError::Transition)?;
-        preimage.extend_from_slice(&data);
-    }
-    Ok(hash(&preimage).to_bytes())
+    // Three accounts at fixed coordinates and a domain: the parts are known at
+    // compile time, so this hashes them where they lie and allocates nothing at
+    // all. It used to concatenate all three bodies into a `Vec<u8>` grown from
+    // empty -- the doubling ladder plus a live copy, on an allocator that never
+    // gives either back. Same fact, same bytes, same order.
+    let market = child_accounts
+        .get(1)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let position = child_accounts
+        .get(20)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    let admission = child_accounts
+        .get(21)
+        .ok_or(TradingSbfError::Content)?
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Transition)?;
+    Ok(hashv(&[
+        b"dclutch/claims/sparse-native-post/v1",
+        &market,
+        &position,
+        &admission,
+    ])
+    .to_bytes())
 }
 
 fn founding_post_resource_digests(
@@ -831,16 +866,28 @@ mod tests {
         AccountInfo::new(key, signer, writable, lamports, data, owner, false)
     }
 
+    /// The privilege rule now lives once, in the walk's shared buffer set, and
+    /// this is still the frame that states it: coordinate 0 is the
+    /// release-pinned caller authority and signs; an ordinary coordinate does
+    /// not; a coordinate the frame already declares a signer keeps it.
     #[test]
     fn authority_signing_is_added_and_existing_actor_signer_is_preserved() {
-        let authority = account_info(false, false);
-        let ordinary = account_info(false, true);
-        let actor = account_info(true, false);
+        let mut buffers = ChildInvocationBuffersV3::new();
+        buffers.accounts.push(account_info(false, false));
+        buffers.accounts.push(account_info(false, true));
+        buffers.accounts.push(account_info(false, true));
+        buffers.accounts.push(account_info(true, false));
+        buffers.fill_metas().expect("metas");
 
-        assert!(child_account_meta_v3(0, &authority).is_signer);
-        assert!(!child_account_meta_v3(1, &ordinary).is_signer);
-        assert!(child_account_meta_v3(3, &actor).is_signer);
-        assert!(!child_account_meta_v3(3, &ordinary).is_signer);
+        let signer = |index: usize| buffers.metas.get(index).expect("meta").is_signer;
+        assert!(signer(0));
+        assert!(!signer(1));
+        assert!(!signer(2));
+        assert!(signer(3));
+        let writable = |index: usize| buffers.metas.get(index).expect("meta").is_writable;
+        assert!(!writable(0));
+        assert!(writable(1));
+        assert!(!writable(3));
     }
 
     fn position(action: ProtocolPositionActionV2) -> ProtocolPositionRequestV2 {

@@ -109,28 +109,42 @@ const CLOSE_RESOURCE_DOMAIN_V2: &[u8] = b"dclutch/claims/protocol-position-close
 #[repr(u32)]
 pub enum ProtocolPositionSbfErrorV2 {
     /// Instruction bytes did not decode as the canonical lifecycle ABI.
-    Instruction = 140,
+    Instruction = 0x5140,
     /// Account count, privilege, executable, or alias facts refused.
-    Accounts = 141,
+    Accounts = 0x5141,
     /// Current release selection or caller authority refused.
-    Release = 142,
+    Release = 0x5142,
     /// Claims aggregate identity, revision, release, or generation refused.
-    Market = 143,
+    Market = 0x5143,
     /// Product graph, linked basis, Core, or runtime width refused.
-    ProductBasis = 144,
+    ProductBasis = 0x5144,
     /// Position/admission PDA vacancy, shape, owner, or balance refused.
-    Position = 145,
+    Position = 0x5145,
     /// Prepaid rent or authenticated RentCredit facts refused.
-    Rent = 146,
+    Rent = 0x5146,
     /// System allocation or assignment refused.
-    Allocation = 147,
+    Allocation = 0x5147,
     /// Persisted admission did not join the requested terminal close.
-    Admission = 148,
+    Admission = 0x5148,
     /// Complete candidate state or rent-credit reclamation did not commit.
-    Commit = 149,
+    Commit = 0x5149,
     /// Immediate receipt construction or poststate commitment refused.
-    Receipt = 150,
+    Receipt = 0x514A,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    ProtocolPositionSbfErrorV2::Instruction as u32
+        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x140,
+    "ProtocolPositionSbfErrorV2 must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (ProtocolPositionSbfErrorV2::Receipt as u32)
+        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+    "ProtocolPositionSbfErrorV2 must not run past its registered refusal band"
+);
 
 impl From<ProtocolPositionSbfErrorV2> for ProgramError {
     fn from(value: ProtocolPositionSbfErrorV2) -> Self {

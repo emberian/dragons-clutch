@@ -18,6 +18,7 @@ custom-panic = []
 [dependencies]
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-refusal-registry = { path = "../../../../crates/dclutch-refusal-registry" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 solana-program = { version = "=3.0.0", default-features = false }
 

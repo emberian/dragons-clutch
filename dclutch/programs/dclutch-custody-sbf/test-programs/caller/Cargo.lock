@@ -289,6 +289,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
+ "dclutch-refusal-registry",
  "dclutch-release-set-contract",
  "solana-program",
 ]
@@ -300,6 +301,10 @@ dependencies = [
  "dclutch-release-set-contract",
  "sha2",
 ]
+
+[[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-release-set-contract"

@@ -18,7 +18,6 @@ import {
   buildRegisteredFillTransaction,
   buildRegisteredTerminalTransaction,
   decodeRegisteredIntentStateV1,
-  decodeMakerReplayObservationV1,
   deriveRegisteredCreateAddresses,
   deriveRegisteredAddress,
   encodeRegisteredFillInstructionV1,
@@ -26,7 +25,6 @@ import {
   encodeRegisteredRetireInstructionV1,
   encodeRegisteredIntentStateV1,
   encodeRegisteredTerminal,
-  REPLAY_STATE_BYTES,
   registeredBuyerReserve,
   registeredRetirementDelegation,
   scanRegisteredDirectStates,
@@ -128,17 +126,7 @@ describe('Lean-emitted registered Direct browser ABI', () => {
     expect(() => buildRegisteredCreateTransaction({ ...input, route: { ...input.route, venue: input.route.mint } })).toThrow(/aliases two fixed/);
   });
 
-  it('strictly projects absent/existing replay roots and refuses stale creation authority', () => {
-    const controllerProgram = key(67);
-    const addresses = deriveRegisteredCreateAddresses(controllerProgram.toBase58(), key(4).toBase58(), 3n, key(5).toBase58(), 0n);
-    expect(decodeMakerReplayObservationV1(null, addresses.controller)).toEqual({ exists: false, nextNonce: 0n });
-    const data = new Uint8Array(REPLAY_STATE_BYTES);
-    data.set(Uint8Array.of(0x44, 0x43, 0x52, 0x50, 1, 0, 0, 0));
-    data.set(addresses.controller.toBytes(), 8);
-    new DataView(data.buffer).setBigUint64(40, 7n, true);
-    expect(decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: REPLAY_STATE_BYTES }, addresses.controller)).toEqual({ exists: true, nextNonce: 7n });
-    data[8] ^= 1;
-    expect(() => decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: REPLAY_STATE_BYTES }, addresses.controller)).toThrow(/canonical controller/);
+  it('refuses a buyer reserve outside the 1e6 price scale', () => {
     expect(() => registeredBuyerReserve(2_000n, 1_000_001n, 25)).toThrow(/1e6 scale/);
   });
 

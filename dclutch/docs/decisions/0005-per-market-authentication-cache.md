@@ -22,7 +22,9 @@ Measured on the canonical Direct Profile14 bundle at HEAD, with
 `hot-cu-profile` checkpoints, on the real 32,768-byte heap, 3,000,000-CU
 diagnostic budget. The bundle refuses with `Custom(3)` inside the lifecycle
 preplan on a Direct emitter defect owned by another lane; everything before that
-refusal is exact.
+refusal is exact. (`Custom(3)` was `TradingSbfError::Content`. Decision 0007
+later namespaced every refusal code and it is `0x4003` now; the number here is
+left as it was measured.)
 
 | step | CU | heap |
 | --- | ---: | ---: |
@@ -383,7 +385,7 @@ The converged implementation must include adversarial coverage for:
 ## What this bought, measured
 
 Converged at `ca5e5f1`. Canonical Direct Profile14 bundle, COMPUTE_LIMIT
-1,400,000, the real 32,768-byte heap, at the same DP2-owned `Custom(3)` refusal
+1,400,000, the real 32,768-byte heap, at the same DP2-owned `Custom(3)` refusal (`TradingSbfError::Content`, `0x4003` since decision 0007)
 in the lifecycle preplan, with the suite result unchanged (the same three Direct
 emitter failures before and after):
 

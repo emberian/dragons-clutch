@@ -7,6 +7,10 @@ import {
 } from '@solana/web3.js';
 
 import { ascii, hex, requireNonzero, requireZero, slice, u16, u64 } from './bytes';
+import {
+  LIABILITY_BASIS_MARKET_SEED_V2 as CLAIMS_AGGREGATE_SEED,
+  LIABILITY_BASIS_POSITION_SEED_V2 as POSITION_SEED,
+} from './generated/coreFound';
 import * as Hot from './generated/directInlineV3';
 import {
   OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3,
@@ -38,8 +42,6 @@ import { inspectRationalCapabilityCommonV4 } from './rationalCapabilityChainV4';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const ASSOCIATED_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
-const CLAIMS_AGGREGATE_SEED = new TextEncoder().encode('dclutch:lbv2:market');
-const POSITION_SEED = new TextEncoder().encode('dclutch:lbv2:position');
 const CUSTODY_OWNER_SEED = new TextEncoder().encode('dclutch:rational-claims:v2');
 const SHARD_MINT_SEED = new TextEncoder().encode('dclutch:rational-shard-mint:v2');
 const STRUCTURED_CUSTODY_SEED = new TextEncoder().encode('dclutch:rational-structured:v2');

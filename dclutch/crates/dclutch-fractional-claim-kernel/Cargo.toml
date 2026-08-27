@@ -11,7 +11,7 @@ publish = false
 dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
 
 [dev-dependencies]
-sha2 = "=0.10.9"
+sha2 = { version = "=0.10.9", default-features = false }
 
 [lints.rust]
 missing_docs = "deny"

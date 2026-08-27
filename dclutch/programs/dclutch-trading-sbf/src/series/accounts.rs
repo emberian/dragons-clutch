@@ -36,23 +36,36 @@ pub const SERIES_ROOT_ACCOUNT_BYTES_V3: usize =
     CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3;
 
 /// Refusal from the Series account and persistence boundary.
+///
+/// Trading's sub-band `0x4100` (decision 0007). The discriminants are written
+/// out rather than left implicit and shifted inside the `From` impl: the
+/// shifted form reported `80 + n` on chain while reporting `0 + n` to anything
+/// reading the source, and because the enum carried no `#[repr]` the gauntlet
+/// census -- which admits a refusal taxonomy only from `#[repr]`-annotated
+/// enums -- could not see this boundary at all.
+#[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SeriesAccountErrorV3 {
     /// Owner, width, key, phase, or canonical bytes refused.
-    State,
+    State = 0x4100,
     /// Signer, writable, executable, System, or alias contract refused.
-    Frame,
+    Frame = 0x4101,
     /// Exact native funding or checked arithmetic refused.
-    Funding,
+    Funding = 0x4102,
     /// System creation or direct lamport transfer failed.
-    Creation,
+    Creation = 0x4103,
     /// Core acknowledgement or final state write refused.
-    Commit,
+    Commit = 0x4104,
 }
+
+const _: () = assert!(
+    SeriesAccountErrorV3::State as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE + 0x100,
+    "the Series account boundary must sit in Trading's registered band"
+);
 
 impl From<SeriesAccountErrorV3> for ProgramError {
     fn from(value: SeriesAccountErrorV3) -> Self {
-        ProgramError::Custom(80_u32.saturating_add(value as u32))
+        ProgramError::Custom(value as u32)
     }
 }
 

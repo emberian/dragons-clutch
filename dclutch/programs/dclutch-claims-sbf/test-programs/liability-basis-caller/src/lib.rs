@@ -34,14 +34,29 @@ const PROTOCOL_POSITION_BYTES_V2: usize = 320;
 #[repr(u32)]
 pub enum LiabilityBasisTestCallerError {
     /// Wrapper bytes were malformed.
-    Instruction = 0,
+    Instruction = 0x10_2000,
     /// Claims program or forwarded account frame was malformed.
-    AccountFrame = 1,
+    AccountFrame = 0x10_2001,
     /// Production Claims/Custody composition refused or returned no receipt.
-    ClaimsCpi = 2,
+    ClaimsCpi = 0x10_2002,
     /// Deliberate refusal after the complete production composition returned.
-    DeliberateLateFailure = 3,
+    DeliberateLateFailure = 0x10_2003,
 }
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+const _: () = assert!(
+    LiabilityBasisTestCallerError::Instruction as u32
+        == dclutch_refusal_registry::TEST_CLAIMS_LIABILITY_BASIS_CALLER_BASE,
+    "LiabilityBasisTestCallerError must start at its registered refusal band base"
+);
+const _: () = assert!(
+    (LiabilityBasisTestCallerError::DeliberateLateFailure as u32)
+        < dclutch_refusal_registry::TEST_CLAIMS_LIABILITY_BASIS_CALLER_BASE
+            + dclutch_refusal_registry::BAND_SPAN,
+    "LiabilityBasisTestCallerError must not run past its registered refusal band"
+);
 
 impl From<LiabilityBasisTestCallerError> for ProgramError {
     fn from(value: LiabilityBasisTestCallerError) -> Self {
