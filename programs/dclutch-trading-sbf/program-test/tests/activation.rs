@@ -3,18 +3,26 @@
 use std::vec::Vec;
 
 use dclutch_account_profile_contract::{
-    ACCOUNT_PROFILE_ARTIFACT_PROFILE_V1, ACCOUNT_PROFILE_HEADER_BYTES_V1, ACCOUNT_PROFILE_MAGIC_V1,
-    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, ACCOUNT_PROFILE_SCHEMA_VERSION_V1,
-    EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
-    EFFECT_PERMISSION_WRITE_DATA,
+    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
+    encode_v1::{
+        AccountAliasInputV1, AccountEffectPermissionsV1, AccountOperationInputV1,
+        AccountPrivilegesV1, AccountRuleInputV1, RegisterGeometryV1, account_profile_v1_bytes,
+        encode_account_profile_v1_atomic,
+    },
 };
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityFundingDerivationV1,
-    CapabilityManifestV1, CompartmentFundingV1, ContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
-    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, FundingStatus,
-    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    CapabilityManifestV1, CompartmentFundingV1, ContentId, FUNDING_STATE_BYTES,
+    FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1, FundingAmountsV1, FundingCustodyObservationV1,
+    FundingQuoteV1, FundingStateV1, FundingStatus, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_capability_program_contract::{
+    activation_registers_v2::{
+        ACTIVATION_ACTION_SCALAR_V2, ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
+        ACTIVATION_GENERATION_SCALAR_V2, ACTIVATION_MARKET_IDENTITY_V2, ACTIVATION_ROOT_ACCOUNT_V2,
+        ACTIVATION_ROOT_IDENTITY_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+    },
     CAPABILITY_PROGRAM_ACCOUNT_PROFILE_OFFSET, CAPABILITY_PROGRAM_CAPACITY_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_CONFIG_SCHEMA_OFFSET, CAPABILITY_PROGRAM_DERIVATION_POLICY_OFFSET,
     CAPABILITY_PROGRAM_EFFECT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_HEADER_BYTES_V1,
@@ -29,7 +37,17 @@ use dclutch_capability_program_contract::{
         encoded_program_set_bytes_v2,
     },
 };
-use dclutch_effect_kernel::v2::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA;
+use dclutch_effect_kernel::v2::{
+    SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA,
+    encode::{
+        EffectGeometryV2, EffectInstructionV2, effect_program_v2_bytes,
+        encode_effect_program_v2_atomic,
+    },
+};
+use dclutch_transition_vm::v2::encode::{
+    RegisterGeometryV2 as TransitionRegisterGeometryV2, TransitionInstructionV2,
+    encode_transition_program_v2_atomic, transition_program_v2_bytes,
+};
 use dclutch_market_core_codec::{
     CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
     MarketIdentity, Phase, Readiness, Role,
@@ -82,19 +100,19 @@ const ROOT_INITIAL_DUST: u64 = 1;
 /// descriptor declares and the exact bytes the effect program's request buffer
 /// projects.
 const ROOT_TAIL_BYTES: usize = 40;
-/// Tail offset of the projected generation scalar (common scalar register 1).
+/// Tail offset of the projected generation scalar.
 const TAIL_GENERATION_OFFSET: u32 = 0;
-/// Tail offset of the projected Market identity (common identity register 4).
+/// Tail offset of the projected Market identity.
 const TAIL_MARKET_OFFSET: u32 = 8;
-/// Common scalar register seeded with the Market generation.
-const GENERATION_SCALAR_REGISTER: u16 = 1;
-/// Common identity register seeded with the Market address.
-const MARKET_IDENTITY_REGISTER: u16 = 4;
+/// Scalar the profile projects the FundingState's remaining Rent quote into.
+///
+/// It is past the eight common slots the seam seeds, so nothing the outer wrote
+/// is overwritten -- the register ABI's own boundary, not a coincidence.
+const FUNDING_RENT_SCALAR_REGISTER: u16 = 6;
+/// Scalar the profile projects the vacant root's prestate lamports into.
+const ROOT_PRESTATE_SCALAR_REGISTER: u16 = 7;
 
-const PROFILE_RULE_BYTES: usize = 16;
-const PROFILE_OPERATION_BYTES: usize = 16;
 const PROFILE_ACCOUNT_COUNT: u16 = 2;
-const PROFILE_OPERATION_COUNT: u16 = 4;
 const SCALAR_COUNT: u16 = 8;
 const IDENTITY_COUNT: u16 = 12;
 
@@ -190,149 +208,143 @@ fn put_u32(output: &mut [u8], offset: usize, value: u32) {
     put(output, offset, &value.to_le_bytes());
 }
 
-fn account_profile() -> Vec<u8> {
-    let mut output = vec![
-        0_u8;
-        ACCOUNT_PROFILE_HEADER_BYTES_V1
-            + usize::from(PROFILE_ACCOUNT_COUNT) * PROFILE_RULE_BYTES
-            + usize::from(PROFILE_OPERATION_COUNT) * PROFILE_OPERATION_BYTES
-    ];
-    put(&mut output, 0, &ACCOUNT_PROFILE_MAGIC_V1);
-    put_u16(&mut output, 8, ACCOUNT_PROFILE_SCHEMA_VERSION_V1);
-    put_u16(&mut output, 10, ACCOUNT_PROFILE_ARTIFACT_PROFILE_V1);
-    put_u16(&mut output, 12, PROFILE_ACCOUNT_COUNT);
-    put_u16(&mut output, 14, PROFILE_OPERATION_COUNT);
-    put_u16(&mut output, 16, SCALAR_COUNT);
-    put_u16(&mut output, 18, IDENTITY_COUNT);
-    let root_rule = ACCOUNT_PROFILE_HEADER_BYTES_V1;
-    *output.get_mut(root_rule).expect("root privileges") = 0x02;
-    *output.get_mut(root_rule + 1).expect("root permission") = EFFECT_PERMISSION_CREDIT_LAMPORTS;
-    put_u16(&mut output, root_rule + 2, 0);
-    let funding_rule = root_rule + PROFILE_RULE_BYTES;
-    *output.get_mut(funding_rule).expect("funding privileges") = 0x02;
-    *output
-        .get_mut(funding_rule + 1)
-        .expect("funding permission") =
-        EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA;
-    put_u16(&mut output, funding_rule + 2, 1);
-    put_u32(
-        &mut output,
-        funding_rule + 4,
-        u32::try_from(FUNDING_STATE_BYTES).expect("funding width"),
-    );
-    let operations =
-        ACCOUNT_PROFILE_HEADER_BYTES_V1 + usize::from(PROFILE_ACCOUNT_COUNT) * PROFILE_RULE_BYTES;
-    // Root key equals common identity register 11.
-    encode_profile_operation(&mut output, operations, 1, 0, 11, 0);
-    // Funding owner equals common Trading identity register 0.
-    encode_profile_operation(
-        &mut output,
-        operations + PROFILE_OPERATION_BYTES,
-        2,
-        1,
-        0,
-        0,
-    );
-    // Funding Rent amount at state offset 64 + allocation amount offset 8.
-    encode_profile_operation(
-        &mut output,
-        operations + 2 * PROFILE_OPERATION_BYTES,
-        6,
-        1,
-        6,
-        72,
-    );
-    // Observe vacant-root dust for the late effect check.
-    encode_profile_operation(
-        &mut output,
-        operations + 3 * PROFILE_OPERATION_BYTES,
-        5,
-        0,
-        7,
-        0,
-    );
+/// Encode one artifact through its owning crate's public encoder.
+///
+/// Every artifact below is built this way. The three generations' offsets and
+/// opcodes are private to their crates, so before they had encoders this file
+/// wrote `b"DCTV"`, `b"DCE2"` and the AccountProfile header at literal offsets
+/// and passed bare opcode integers with comments -- a second ABI authority
+/// living in a test. Nothing here writes an artifact byte any more.
+fn encoded<E, T>(width: usize, encode: E) -> Vec<u8>
+where
+    E: Fn(&mut [u8], &mut [u8]) -> Result<(), T>,
+    T: core::fmt::Debug,
+{
+    let mut scratch = vec![0_u8; width];
+    let mut output = vec![0_u8; width];
+    encode(&mut scratch, &mut output).expect("artifact encodes");
     output
 }
 
-fn encode_profile_operation(
-    output: &mut [u8],
-    offset: usize,
-    opcode: u8,
-    account: u16,
-    register: u16,
-    data_offset: u32,
-) {
-    *output.get_mut(offset).expect("profile opcode") = opcode;
-    put_u16(output, offset + 2, account);
-    put_u16(output, offset + 4, register);
-    put_u32(output, offset + 8, data_offset);
+fn account_profile() -> Vec<u8> {
+    let rules = [
+        // The composite root: vacant, credited by the funding transfer.
+        AccountRuleInputV1 {
+            privileges: AccountPrivilegesV1::new(false, true, false),
+            effect_permissions: AccountEffectPermissionsV1::new(false, true, false),
+            alias: AccountAliasInputV1::SelfRepresentative,
+            data_length: 0,
+        },
+        // The FundingState: debited, and rewritten by the outer's own commit.
+        AccountRuleInputV1 {
+            privileges: AccountPrivilegesV1::new(false, true, false),
+            effect_permissions: AccountEffectPermissionsV1::new(true, false, true),
+            alias: AccountAliasInputV1::SelfRepresentative,
+            data_length: u32::try_from(FUNDING_STATE_BYTES).expect("funding width"),
+        },
+    ];
+    let operations = [
+        AccountOperationInputV1::RequireKey {
+            account: ACTIVATION_ROOT_ACCOUNT_V2,
+            expected: ACTIVATION_ROOT_IDENTITY_V2,
+        },
+        AccountOperationInputV1::RequireOwner {
+            account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
+            expected: ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+        },
+        AccountOperationInputV1::ProjectDataU64 {
+            account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
+            data_offset: u32::try_from(FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1)
+                .expect("rent quote offset"),
+            destination: FUNDING_RENT_SCALAR_REGISTER,
+        },
+        // Observe vacant-root dust for the late effect check.
+        AccountOperationInputV1::ProjectLamports {
+            account: ACTIVATION_ROOT_ACCOUNT_V2,
+            destination: ROOT_PRESTATE_SCALAR_REGISTER,
+        },
+    ];
+    let width = account_profile_v1_bytes(rules.len(), operations.len()).expect("profile width");
+    encoded(width, |scratch, output| {
+        encode_account_profile_v1_atomic(
+            &rules,
+            &operations,
+            RegisterGeometryV1 {
+                scalars: SCALAR_COUNT,
+                identities: IDENTITY_COUNT,
+            },
+            scratch,
+            output,
+        )
+    })
 }
 
 fn transition_program() -> Vec<u8> {
-    let mut output = vec![0_u8; 40];
-    put(&mut output, 0, b"DCTV");
-    *output.get_mut(4).expect("transition version") = 2;
-    put_u16(&mut output, 6, 1);
-    put_u16(&mut output, 8, SCALAR_COUNT);
-    put_u16(&mut output, 10, IDENTITY_COUNT);
     // loadConst scalar[0] = activation action. Other projected registers survive.
-    *output.get_mut(16).expect("transition opcode") = 0;
-    put_u16(&mut output, 18, 0);
-    put(
-        &mut output,
-        32,
-        &(CoreEffectActionV1::ActivateCapability as u64).to_le_bytes(),
-    );
-    output
+    let instructions = [TransitionInstructionV2::load_const(
+        ACTIVATION_ACTION_SCALAR_V2,
+        CoreEffectActionV1::ActivateCapability as u64,
+    )];
+    let width = transition_program_v2_bytes(instructions.len()).expect("transition width");
+    encoded(width, |scratch, output| {
+        encode_transition_program_v2_atomic(
+            TransitionRegisterGeometryV2 {
+                scalars: SCALAR_COUNT,
+                identities: IDENTITY_COUNT,
+            },
+            &instructions,
+            scratch,
+            output,
+        )
+    })
 }
 
 fn effect_program(campaign: Campaign) -> Vec<u8> {
     // Instruction 0 is always the funding transfer. The two request writes that
     // compose the family root tail follow it, except in `UnwrittenTail`. The late
     // requirement, when present, is last so it runs after the transfer.
-    let tail_writes = u16::from(!matches!(campaign, Campaign::UnwrittenTail)) * 2;
-    let late = u16::from(matches!(campaign, Campaign::LateEffectRefusal));
-    let instruction_count = 1 + tail_writes + late;
+    let mut instructions = vec![EffectInstructionV2::transfer_lamports(
+        ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
+        ACTIVATION_ROOT_ACCOUNT_V2,
+        FUNDING_RENT_SCALAR_REGISTER,
+    )];
+    if !matches!(campaign, Campaign::UnwrittenTail) {
+        // Tail[0..8] = the projected Market generation.
+        instructions.push(EffectInstructionV2::write_request_u64(
+            TAIL_GENERATION_OFFSET,
+            ACTIVATION_GENERATION_SCALAR_V2,
+        ));
+        // Tail[8..40] = the projected Market address.
+        instructions.push(EffectInstructionV2::write_request_identity(
+            TAIL_MARKET_OFFSET,
+            ACTIVATION_MARKET_IDENTITY_V2,
+        ));
+    }
+    if matches!(campaign, Campaign::LateEffectRefusal) {
+        // After the transfer, root lamports cannot still equal prestate scalar[7].
+        instructions.push(EffectInstructionV2::require_lamports_eq(
+            ACTIVATION_ROOT_ACCOUNT_V2,
+            ROOT_PRESTATE_SCALAR_REGISTER,
+        ));
+    }
     let request_bytes = match campaign {
         Campaign::MismatchedTailWidth => ROOT_TAIL_BYTES + 8,
         _ => ROOT_TAIL_BYTES,
     };
-    let mut output = vec![0_u8; 16 + usize::from(instruction_count) * 16];
-    put(&mut output, 0, b"DCE2");
-    *output.get_mut(4).expect("effect version") = 2;
-    put_u16(&mut output, 6, instruction_count);
-    put_u16(&mut output, 8, PROFILE_ACCOUNT_COUNT);
-    put_u16(&mut output, 10, SCALAR_COUNT);
-    put_u16(&mut output, 12, IDENTITY_COUNT);
-    put_u16(
-        &mut output,
-        14,
-        u16::try_from(request_bytes).expect("request width"),
-    );
-    // Transfer projected Funding Rent scalar[6] from FundingState to root.
-    put_u16(&mut output, 18, 1);
-    put_u16(&mut output, 20, 0);
-    put_u16(&mut output, 22, 6);
-    let mut next = 32_usize;
-    if tail_writes != 0 {
-        // Tail[0..8] = the projected Market generation.
-        *output.get_mut(next).expect("request scalar opcode") = 4;
-        put_u16(&mut output, next + 6, GENERATION_SCALAR_REGISTER);
-        put_u32(&mut output, next + 8, TAIL_GENERATION_OFFSET);
-        next += 16;
-        // Tail[8..40] = the projected Market address.
-        *output.get_mut(next).expect("request identity opcode") = 5;
-        put_u16(&mut output, next + 6, MARKET_IDENTITY_REGISTER);
-        put_u32(&mut output, next + 8, TAIL_MARKET_OFFSET);
-        next += 16;
-    }
-    if late != 0 {
-        // After the transfer, root lamports cannot still equal prestate scalar[7].
-        *output.get_mut(next).expect("late requirement opcode") = 3;
-        put_u16(&mut output, next + 2, 0);
-        put_u16(&mut output, next + 6, 7);
-    }
-    output
+    let width = effect_program_v2_bytes(instructions.len()).expect("effect width");
+    encoded(width, |scratch, output| {
+        encode_effect_program_v2_atomic(
+            EffectGeometryV2 {
+                accounts: PROFILE_ACCOUNT_COUNT,
+                scalars: SCALAR_COUNT,
+                identities: IDENTITY_COUNT,
+                request_bytes: u16::try_from(request_bytes).expect("request width"),
+            },
+            &instructions,
+            scratch,
+            output,
+        )
+    })
 }
 
 fn descriptor(
@@ -994,4 +1006,46 @@ async fn a_tail_that_is_unwritten_or_the_wrong_width_refuses() {
         assert_eq!(root.owner, system_program::ID);
         assert!(root.data.is_empty());
     }
+}
+
+
+/// The three artifacts are byte-identical to what this file hand-encoded.
+///
+/// Before `73f7ec7`/`f98d439`/`d18c32d` gave the three generations public
+/// encoders, this file wrote all three wire formats itself. The replacement is
+/// only worth having if it moved nothing: these are the exact bytes the deleted
+/// hand-encoders produced, captured first. They are also the record digests the
+/// descriptor names and the PDA seeds every raw record sits at, so a byte that
+/// moved here would move five addresses.
+#[test]
+fn the_public_encoders_reproduce_the_prior_artifact_bytes() {
+    const PROFILE: [u8; 128] = [
+        0x44, 0x43, 0x4c, 0x54, 0x41, 0x50, 0x30, 0x31, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00, 0x04,
+        0x00, 0x08, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x02, 0x05, 0x01, 0x00, 0x40, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00, 0x00, 0x48,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    const TRANSITION: [u8; 40] = [
+        0x44, 0x43, 0x54, 0x56, 0x02, 0x00, 0x01, 0x00, 0x08, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    const EFFECT: [u8; 64] = [
+        0x44, 0x43, 0x45, 0x32, 0x02, 0x00, 0x03, 0x00, 0x02, 0x00, 0x08, 0x00, 0x0c, 0x00, 0x28,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+    assert_eq!(account_profile().as_slice(), PROFILE.as_slice());
+    assert_eq!(transition_program().as_slice(), TRANSITION.as_slice());
+    assert_eq!(
+        effect_program(Campaign::Success).as_slice(),
+        EFFECT.as_slice()
+    );
 }
