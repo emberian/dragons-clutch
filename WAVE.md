@@ -815,3 +815,10 @@ chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
   (32 bytes; profile has 16 free) — closing the REAL hole that two floors
   with identical bindings both validate, letting a caller pick the biggest.
   The Found-frame +6 accounts rides the same migration.
+
+- M-61 (DIAG-82), a reporting rule: the sweep's per-seed CU is a BUMP-SEARCH
+  LOTTERY re-rolled by the trading ELF digest itself (deltas = n×1,500 ± ~50;
+  ±46,000 across seeds). "Worst margin" is not a property of the code — CU
+  claims report the PASS COUNT and 20-seed MEAN; M-46's bisect uses those.
+  Watchlist the new frame gate prints: four functions within 512 B of the
+  4,096 wall (3,904/3,840/3,776/3,776/3,584).
