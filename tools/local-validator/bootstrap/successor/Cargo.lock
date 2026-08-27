@@ -440,7 +440,7 @@ name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
- "sha2 0.10.9",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -474,7 +474,7 @@ name = "dclutch-product-payoff-v2-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-runtime-v2",
- "sha2 0.10.9",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -601,6 +601,14 @@ dependencies = [
  "dclutch-source-contract",
  "solana-program",
  "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-sha256-adapter"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "solana-sha256-hasher",
 ]
 
 [[package]]
