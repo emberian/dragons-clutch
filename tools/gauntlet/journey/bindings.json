@@ -35,7 +35,7 @@
       ],
       "program": "rent",
       "outcome": "executed",
-      "note": "Rent recovery, and the first execution of this route by any tier. The lifecycle credit accumulated the rent of every account the founding closed into it; Sweep is the only route that moves that surplus back out while the Market is alive. The producer asserts the credit is left holding EXACTLY the rent minimum and that the refund wallet's delta is the surplus less the transaction fee — the wallet is also the fee payer here, so anything vaguer than that is a direction-of-travel observation rather than a check."
+      "note": "Rent recovery, and the first execution of this route by any tier. The founding leaves SEVERAL lifecycle credits — one per projected-Custody prestate lane plus Found31's — and only the lane that actually closed accounts into its credit carries a surplus, so the stage discovers the credit by surplus rather than naming one. Sweep is the only route that moves that surplus back out while the Market is alive. The producer asserts the credit is left holding EXACTLY the rent minimum, that the refund wallet the credit's own bytes name gains exactly the surplus, and — because that wallet is NOT the fee payer here — that the payer's balance moved by exactly the fee and nothing else. Anything vaguer than that is a direction-of-travel observation rather than a check."
     }
   ]
 }

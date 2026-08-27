@@ -96,8 +96,20 @@ sysvar, and **needs no signature at all** — so the only thing between the
 lifecycle credit and being drained below its own rent minimum is the checked
 balance plan. The tier submits a sweep of one lamport past the surplus, asserts
 it refuses `Balance` and moved nothing, and only then sweeps the surplus,
-asserting the credit is left holding exactly the rent minimum and that the
-refund wallet's delta is the surplus less the transaction fee.
+asserting the credit is left holding exactly the rent minimum, that the refund
+wallet named in the credit's own bytes gains exactly the surplus, and that the
+fee payer — a different key — moved by exactly the fee and nothing else.
+
+**Which credit** is discovered, not named. The founding leaves several: one per
+projected-Custody prestate lane plus Found31's, and only the lane that actually
+closed accounts into its credit carries a surplus. The first execution of this
+stage named `lifecycle_rent_credit`, read Found31's credit sitting at exactly
+its rent floor, and reported `blocked` — while the abort lane's credit held
+13,488,480 recoverable lamports two keys away. Two census bindings then matched
+no transaction and the census refused the run, which is the gate working. The
+stage now re-reads every rent-program-owned, credit-width account the founding
+recorded and sweeps the one above the floor, the same way the collateral
+partition is discovered rather than hand-listed.
 
 ## The build gate, and what it caught on its first run
 

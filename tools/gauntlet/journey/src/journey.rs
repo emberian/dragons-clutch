@@ -139,7 +139,7 @@ pub(crate) fn execute(
     stages.push(stages::recover_rent(
         &mut session.rpc,
         &session.plan,
-        &addresses,
+        &session.accounts,
         &session.authority,
         &mut session.transactions,
     )?);

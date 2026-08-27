@@ -471,22 +471,89 @@ pub(crate) fn holder_to_holder(
 
 /// Recover the rent the founding accumulated, and prove the floor holds.
 ///
-/// The lifecycle credit collects the rent of every account the founding closed
-/// into it. `Sweep` is the only route that moves that surplus back out while
-/// the Market is alive, it takes three accounts, and it needs no signature at
-/// all — so the adversarial half is the one that matters: a sweep of one
-/// lamport more than the surplus must refuse, or the credit could be drained
-/// below its own rent minimum and the Market's rent beneficiary would cease to
-/// exist mid-life.
+/// A lifecycle credit collects the rent of every account closed into it.
+/// `Sweep` is the only route that moves that surplus back out while the Market
+/// is alive, it takes three accounts, and it needs no signature at all — so the
+/// adversarial half is the one that matters: a sweep of one lamport more than
+/// the surplus must refuse, or the credit could be drained below its own rent
+/// minimum and the Market's rent beneficiary would cease to exist mid-life.
+///
+/// The founding leaves several credits and only one of them has been closed
+/// into, so the stage discovers which rather than naming one; see the comment
+/// on the discovery loop for what naming one cost.
 pub(crate) fn recover_rent(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
-    addresses: &MarketAddressesV1,
+    evidence: &BTreeMap<String, AccountEvidence>,
     payer: &Keypair,
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<StageReportV1> {
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
-    let credit = rpc.required_account(addresses.rent_credit, "lifecycle RentCreditV2")?;
+    let minimum = rpc.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2)?;
+
+    // The founding leaves MORE THAN ONE lifecycle credit on the ledger — one
+    // per projected-Custody prestate lane, plus Found31's — and only the lane
+    // that actually closed accounts into its credit carries a surplus. Which
+    // one that is is a property of the founding's shape, not of this tier, so
+    // the credit is DISCOVERED exactly the way the collateral partition is:
+    // every account the founding recorded that is owned by the rent program and
+    // carries a credit-width payload is re-read live, and the one holding more
+    // than the rent floor is the one `Sweep` exists for.
+    //
+    // Naming a single evidence key here is what made the first execution of
+    // this stage read a credit nothing had ever closed into, report `blocked`,
+    // and leave two census bindings matching no transaction — on a ledger whose
+    // abort lane was holding 13,488,480 recoverable lamports the whole time.
+    let mut credits: Vec<(String, Pubkey, u64)> = Vec::new();
+    for (label, recorded) in evidence {
+        if recorded.data_len != LIFECYCLE_RENT_CREDIT_BYTES_V2
+            || recorded.owner != rent_program.to_string()
+        {
+            continue;
+        }
+        let address = pubkey(&recorded.address)?;
+        let Some(account) = rpc.account(address)? else {
+            continue;
+        };
+        if account.owner != rent_program || account.data.len() != LIFECYCLE_RENT_CREDIT_BYTES_V2 {
+            continue;
+        }
+        credits.push((label.clone(), address, account.lamports));
+    }
+    if credits.is_empty() {
+        return Err(Error::new(
+            "the founding's evidence names no live lifecycle RentCreditV2; the journey cannot \
+             continue a founding whose rent shape it does not recognise",
+        ));
+    }
+    let census = credits
+        .iter()
+        .map(|(label, _, lamports)| format!("{label} {lamports}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let Some((credit_label, credit_address, credit_lamports)) = credits
+        .iter()
+        .filter(|(_, _, lamports)| *lamports > minimum)
+        .max_by_key(|(_, _, lamports)| *lamports)
+        .cloned()
+    else {
+        return Ok(StageReportV1 {
+            stage: "rent recovery".into(),
+            outcome: "blocked".into(),
+            transactions: 0,
+            compute_units: 0,
+            note: format!(
+                "none of the {} lifecycle credits the founding left holds more than the \
+                 {minimum}-lamport rent minimum ({census}), so there is no surplus to sweep and \
+                 rent/process_sweep_v2#Sweep stays unexecuted.",
+                credits.len()
+            ),
+        });
+    };
+    let surplus = credit_lamports.saturating_sub(minimum);
+
+    let credit = rpc.required_account(credit_address, "lifecycle RentCreditV2")?;
     let state = LifecycleRentCreditV2::decode(&credit.data)
         .map_err(|error| Error::new(format!("lifecycle RentCreditV2: {error:?}")))?;
     // The refund wallet is immutable, pinned when the credit was created. The
@@ -494,27 +561,12 @@ pub(crate) fn recover_rent(
     // the founder, because "the payer is the beneficiary" is a property of this
     // campaign's spec and not of the route.
     let wallet = Pubkey::new_from_array(state.refund_wallet().to_bytes());
-    let minimum = rpc.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2)?;
-    let surplus = credit.lamports.saturating_sub(minimum);
-    if surplus == 0 {
-        return Ok(StageReportV1 {
-            stage: "rent recovery".into(),
-            outcome: "blocked".into(),
-            transactions: 0,
-            compute_units: 0,
-            note: format!(
-                "the lifecycle credit holds {} lamports against a {minimum}-lamport rent minimum, \
-                 so there is no surplus to sweep. rent/process_sweep_v2#Sweep stays unexecuted.",
-                credit.lamports
-            ),
-        });
-    }
 
     let sweep = |amount: u64| -> Result<Instruction> {
         Ok(Instruction {
             program_id: rent_program,
             accounts: vec![
-                AccountMeta::new(addresses.rent_credit, false),
+                AccountMeta::new(credit_address, false),
                 AccountMeta::new(wallet, false),
                 AccountMeta::new_readonly(sysvar::rent::ID, false),
             ],
@@ -534,7 +586,7 @@ pub(crate) fn recover_rent(
     )?;
     compute_units = compute_units.saturating_add(refused.compute_units_consumed.unwrap_or(0));
     transactions.push(refused);
-    let after_refusal = rpc.required_account(addresses.rent_credit, "lifecycle RentCreditV2")?;
+    let after_refusal = rpc.required_account(credit_address, "lifecycle RentCreditV2")?;
     if after_refusal.lamports != credit.lamports {
         return Err(Error::new(
             "the refused over-sweep still moved lamports out of the lifecycle credit",
@@ -542,6 +594,10 @@ pub(crate) fn recover_rent(
     }
 
     let wallet_before = rpc.account(wallet)?.map(|value| value.lamports).unwrap_or(0);
+    let payer_before = rpc
+        .account(payer.pubkey())?
+        .map(|value| value.lamports)
+        .unwrap_or(0);
     let executed = rpc.send(
         "journey: sweep lifecycle rent surplus to the refund wallet",
         &[sweep(surplus)?],
@@ -553,7 +609,7 @@ pub(crate) fn recover_rent(
         .ok_or_else(|| Error::new("the sweep transaction omitted its exact fee"))?;
     transactions.push(executed);
 
-    let after = rpc.required_account(addresses.rent_credit, "lifecycle RentCreditV2")?;
+    let after = rpc.required_account(credit_address, "lifecycle RentCreditV2")?;
     let wallet_after = rpc.required_account(wallet, "lifecycle refund wallet")?;
     if after.lamports != minimum {
         return Err(Error::new(format!(
@@ -561,15 +617,45 @@ pub(crate) fn recover_rent(
             after.lamports
         )));
     }
-    // The refund wallet is also the fee payer here, so the exact expectation is
-    // surplus in, one fee out. Stating it that precisely is what makes this a
-    // check rather than a direction-of-travel observation.
-    if wallet_after.lamports.checked_add(fee) != wallet_before.checked_add(surplus) {
+    // The refund wallet is whoever the credit's bytes name, which need NOT be
+    // the fee payer — the credit that actually accumulates rent here names the
+    // founding beneficiary, and the journey pays. Both cases are stated
+    // exactly rather than one being assumed: the wallet's expected delta is
+    // `surplus`, less the fee only when the wallet is itself paying it. The
+    // draft of this stage assumed the wallet always pays, which would have
+    // turned a correct sweep red the first time it reached a real surplus.
+    let expected_wallet_after = if wallet == payer.pubkey() {
+        wallet_before
+            .checked_add(surplus)
+            .and_then(|value| value.checked_sub(fee))
+    } else {
+        wallet_before.checked_add(surplus)
+    };
+    if Some(wallet_after.lamports) != expected_wallet_after {
         return Err(Error::new(format!(
             "the refund wallet moved from {wallet_before} to {} lamports; a {surplus}-lamport \
-             sweep less a {fee}-lamport fee does not account for that",
-            wallet_after.lamports
+             sweep{} does not account for that",
+            wallet_after.lamports,
+            if wallet == payer.pubkey() {
+                format!(" less a {fee}-lamport fee")
+            } else {
+                String::new()
+            }
         )));
+    }
+    // Sweep is the transaction's only instruction, so when the payer is not the
+    // beneficiary its balance must move by exactly the fee and nothing else.
+    // Without this the wallet check above would pass on a route that also
+    // quietly debited whoever submitted it.
+    if wallet != payer.pubkey() {
+        let payer_after = rpc.required_account(payer.pubkey(), "journey fee payer")?;
+        if Some(payer_after.lamports) != payer_before.checked_sub(fee) {
+            return Err(Error::new(format!(
+                "the fee payer moved from {payer_before} to {} lamports across a sweep whose only \
+                 declared debit is its {fee}-lamport fee",
+                payer_after.lamports
+            )));
+        }
     }
 
     Ok(StageReportV1 {
@@ -578,9 +664,11 @@ pub(crate) fn recover_rent(
         transactions: 2,
         compute_units,
         note: format!(
-            "swept {surplus} lamports of accumulated lifecycle rent to the immutable refund \
-             wallet, leaving exactly the {minimum}-lamport rent minimum, after proving a sweep of \
-             one lamport more refuses and moves nothing."
+            "swept {surplus} lamports of accumulated lifecycle rent out of `{credit_label}` to \
+             the immutable refund wallet that credit itself names, leaving exactly the \
+             {minimum}-lamport rent minimum, after proving a sweep of one lamport more refuses \
+             and moves nothing. The credit was found by surplus, not by name, across every \
+             lifecycle credit the founding left ({census})."
         ),
     })
 }
