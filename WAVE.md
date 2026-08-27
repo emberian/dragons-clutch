@@ -665,3 +665,12 @@ QUEUED with owners:
   the journey's trades ride v0/ALT from day one).
 - CU-BUDGET rows owed: CreateFund (86% of ceiling) and VerifyFundReady (84%)
   are unbudgeted; CreateFund's frame is 2,016 B on ALTs. Add at next tier run.
+
+- The /create wizard charter (cycle-3, with TWIN's §12.3 window-width table)
+  now has its recovered founding document: docs/recovered/
+  TRADING_UI_FLOW_BRIEF_2026-08-25.md (M-8, recovered from session JSONL —
+  the brief's /markets and /portfolio halves shipped independently; the
+  /create wizard and /activity halves never did). Reconcile, then build.
+- For the next Sonnet reviewer: the rent Error enum carries 7 MORE
+  unconstructed variants beyond the 5 deleted (SN6's flag, named in its
+  yield) — verdict each (dead vs awaiting-constructor) and act.
