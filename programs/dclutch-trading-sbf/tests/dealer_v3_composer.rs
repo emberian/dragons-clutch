@@ -20,10 +20,26 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 fn obligation_bytes(revision: u64, values: &[u64]) -> Vec<u8> {
     let mut bytes = vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + values.len() * 8];
-    bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
-    bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-    bytes[12..16].copy_from_slice(&(values.len() as u32).to_le_bytes());
-    bytes[16..24].copy_from_slice(&revision.to_le_bytes());
+    bytes
+        .get_mut(..8)
+        .expect("obligation header offset in bounds")
+        .copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+    bytes
+        .get_mut(8..10)
+        .expect("obligation header offset in bounds")
+        .copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+    bytes
+        .get_mut(12..16)
+        .expect("obligation header offset in bounds")
+        .copy_from_slice(
+            &u32::try_from(values.len())
+                .expect("obligation value count fits in u32")
+                .to_le_bytes(),
+        );
+    bytes
+        .get_mut(16..24)
+        .expect("obligation header offset in bounds")
+        .copy_from_slice(&revision.to_le_bytes());
     for (offset, value) in [
         (24, [1; 32]),
         (56, [2; 32]),
@@ -31,11 +47,17 @@ fn obligation_bytes(revision: u64, values: &[u64]) -> Vec<u8> {
         (120, [4; 32]),
         (152, [5; 32]),
     ] {
-        bytes[offset..offset + 32].copy_from_slice(&value);
+        bytes
+            .get_mut(offset..offset + 32)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&value);
     }
     for (index, value) in values.iter().enumerate() {
         let offset = DEALER_OBLIGATION_HEADER_BYTES_V3 + index * 8;
-        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        bytes
+            .get_mut(offset..offset + 8)
+            .expect("obligation value offset in bounds")
+            .copy_from_slice(&value.to_le_bytes());
     }
     bytes
 }

@@ -1439,7 +1439,9 @@ mod tests {
                 2,
                 &valid,
                 &mut scratch,
-                &mut output[..width - 1],
+                output
+                    .get_mut(..width - 1)
+                    .expect("output holds at least width bytes"),
             ),
             Err(DealerEquityArtifactErrorV3::Geometry)
         );

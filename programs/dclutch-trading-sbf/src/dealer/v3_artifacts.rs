@@ -605,13 +605,22 @@ mod tests {
             encode_dealer_equity_request_profile_v3(
                 action,
                 positions,
-                &mut scratch[..bytes],
-                &mut output[..bytes],
+                scratch
+                    .get_mut(..bytes)
+                    .expect("profile width within the maximum"),
+                output
+                    .get_mut(..bytes)
+                    .expect("profile width within the maximum"),
             )
             .expect("profile");
-            let decoded =
-                decode_dealer_equity_request_profile_v3(action, positions, &output[..bytes])
-                    .expect("decode");
+            let decoded = decode_dealer_equity_request_profile_v3(
+                action,
+                positions,
+                output
+                    .get(..bytes)
+                    .expect("profile width within the maximum"),
+            )
+            .expect("decode");
             let profile = decoded.request_profile();
             assert_eq!(profile.fixed_request_bytes(), 480);
             assert_eq!(profile.item_request_bytes(), 0);
@@ -633,7 +642,10 @@ mod tests {
             } else {
                 assert_eq!(positions, 0);
             }
-            let mut hostile = output[..bytes].to_vec();
+            let mut hostile = output
+                .get(..bytes)
+                .expect("profile width within the maximum")
+                .to_vec();
             *hostile.last_mut().expect("hostile") ^= 1;
             assert_eq!(
                 decode_dealer_equity_request_profile_v3(action, positions, &hostile),
@@ -652,19 +664,37 @@ mod tests {
         encode_dealer_equity_transition_v3(
             action,
             positions,
-            &mut scratch_bytes[..bytes],
-            &mut output_bytes[..bytes],
+            scratch_bytes
+                .get_mut(..bytes)
+                .expect("transition width within the maximum"),
+            output_bytes
+                .get_mut(..bytes)
+                .expect("transition width within the maximum"),
         )
         .expect("transition");
-        let transition = TransitionProgramV3::decode(&output_bytes[..bytes]).expect("decode");
+        let transition = TransitionProgramV3::decode(
+            output_bytes
+                .get(..bytes)
+                .expect("transition width within the maximum"),
+        )
+        .expect("decode");
         let scalar_count = dealer_equity_scalar_count_v3(action).expect("scalars");
         let identity_count = dealer_equity_identity_count_v3(action).expect("identities");
         let mut input_scalars = vec![0_u64; scalar_count];
         let input_identities = vec![[0_u8; 32]; identity_count];
-        input_scalars
-            [usize::from(dealer_current_slot_scalar_register_v3(action).expect("current"))] = 42;
-        input_scalars[usize::from(dealer_expiry_scalar_register_v3(action).expect("expiry"))] = 42;
-        input_scalars[usize::from(DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3)] = 384;
+        *input_scalars
+            .get_mut(usize::from(
+                dealer_current_slot_scalar_register_v3(action).expect("current"),
+            ))
+            .expect("current-slot register inside the scalar frame") = 42;
+        *input_scalars
+            .get_mut(usize::from(
+                dealer_expiry_scalar_register_v3(action).expect("expiry"),
+            ))
+            .expect("expiry register inside the scalar frame") = 42;
+        *input_scalars
+            .get_mut(usize::from(DEALER_EQUITY_WITNESS_BYTES_SCALAR_V3))
+            .expect("witness-bytes register inside the scalar frame") = 384;
         let mut scalar_scratch = input_scalars.clone();
         let mut scalar_output = input_scalars.clone();
         let mut identity_scratch = input_identities.clone();
@@ -687,11 +717,16 @@ mod tests {
         )
         .expect("admitted");
         assert_eq!(
-            scalar_output[usize::from(DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3)],
+            *scalar_output
+                .get(usize::from(DEALER_EQUITY_WITNESS_OFFSET_SCALAR_V3))
+                .expect("witness-offset register inside the scalar frame"),
             480
         );
-        input_scalars
-            [usize::from(dealer_current_slot_scalar_register_v3(action).expect("current"))] = 43;
+        *input_scalars
+            .get_mut(usize::from(
+                dealer_current_slot_scalar_register_v3(action).expect("current"),
+            ))
+            .expect("current-slot register inside the scalar frame") = 43;
         scalar_output.fill(99);
         let before = scalar_output.clone();
         assert!(
@@ -726,11 +761,20 @@ mod tests {
         encode_dealer_equity_request_profile_v3(
             action,
             positions,
-            &mut profile_scratch[..bytes],
-            &mut profile_output[..bytes],
+            profile_scratch
+                .get_mut(..bytes)
+                .expect("profile width within the maximum"),
+            profile_output
+                .get_mut(..bytes)
+                .expect("profile width within the maximum"),
         )
         .expect("profile");
-        let profile = RequestProfileV1::decode(&profile_output[..bytes]).expect("decode");
+        let profile = RequestProfileV1::decode(
+            profile_output
+                .get(..bytes)
+                .expect("profile width within the maximum"),
+        )
+        .expect("decode");
         let mut request = [0_u8; DEALER_EQUITY_HEADER_BYTES_V3];
         request[..8].copy_from_slice(&DEALER_EQUITY_REQUEST_MAGIC_V3);
         request[8..10].copy_from_slice(&DEALER_EQUITY_REQUEST_VERSION_V3.to_le_bytes());
@@ -761,7 +805,11 @@ mod tests {
         )
         .expect("project");
         assert_eq!(
-            scalar_output[usize::from(dealer_expiry_scalar_register_v3(action).expect("expiry"))],
+            *scalar_output
+                .get(usize::from(
+                    dealer_expiry_scalar_register_v3(action).expect("expiry"),
+                ))
+                .expect("expiry register inside the scalar frame"),
             77
         );
         request[DEALER_EQUITY_CLAIMS_PACKET_BYTES_OFFSET_V3

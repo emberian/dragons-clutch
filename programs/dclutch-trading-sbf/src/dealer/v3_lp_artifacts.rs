@@ -833,13 +833,19 @@ mod tests {
 
     fn lengths(action: MultiLpRequestActionV3) -> Vec<u32> {
         let mut output = vec![0; usize::from(dealer_lp_account_count_v3(action))];
-        output[usize::from(DEALER_LP_OBLIGATION_ACCOUNT_V3)] = 208;
-        output[usize::from(DEALER_LP_STATE_ACCOUNT_V3)] = DEALER_LP_POSITION_BYTES_U32_V3;
+        *output
+            .get_mut(usize::from(DEALER_LP_OBLIGATION_ACCOUNT_V3))
+            .expect("obligation account slot exists") = 208;
+        *output
+            .get_mut(usize::from(DEALER_LP_STATE_ACCOUNT_V3))
+            .expect("state account slot exists") = DEALER_LP_POSITION_BYTES_U32_V3;
         let credit = match action {
             MultiLpRequestActionV3::Open => DEALER_LP_OPEN_RENT_CREDIT_ACCOUNT_V3,
             MultiLpRequestActionV3::Close => DEALER_LP_CLOSE_RENT_CREDIT_ACCOUNT_V3,
         };
-        output[usize::from(credit)] = 48;
+        *output
+            .get_mut(usize::from(credit))
+            .expect("rent credit account slot exists") = 48;
         output
     }
 

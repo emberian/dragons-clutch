@@ -1918,10 +1918,18 @@ mod tests {
                     + usize::try_from(tail_count).expect("bounded")
             ];
             let identities = vec![[1; 32]; usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)];
-            scalars[usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4)] = positions;
-            scalars[usize::from(DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4)] = witness;
-            scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4)] = 14;
-            scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4 + 4)] = 14;
+            *scalars
+                .get_mut(usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4))
+                .expect("position-count register inside the scalar frame") = positions;
+            *scalars
+                .get_mut(usize::from(DEALER_SCENARIO_WITNESS_BYTES_SCALAR_V4))
+                .expect("witness-bytes register inside the scalar frame") = witness;
+            *scalars
+                .get_mut(usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4))
+                .expect("route-span register inside the scalar frame") = 14;
+            *scalars
+                .get_mut(usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4 + 4))
+                .expect("route-span register inside the scalar frame") = 14;
             let expected = usize::from(DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4)
                 + usize::try_from(positions).expect("small")
                 + 28;
@@ -2137,9 +2145,15 @@ mod tests {
         let program = EffectProgramV4::decode(&effect).expect("decode v4");
         let mut scalars = vec![0; usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4) + 2];
         let identities = vec![[1; 32]; usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4)];
-        scalars[usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4)] = 2;
-        scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4)] = 14;
-        scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4 + 4)] = 14;
+        *scalars
+            .get_mut(usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4))
+            .expect("position-count register inside the scalar frame") = 2;
+        *scalars
+            .get_mut(usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4))
+            .expect("route-span register inside the scalar frame") = 14;
+        *scalars
+            .get_mut(usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4 + 4))
+            .expect("route-span register inside the scalar frame") = 14;
         // One more than before the Custody callee coordinate existed, and the
         // obligation write target below is UNMOVED at 55 -- which is the fact
         // that matters, because the callee was appended after it rather than
@@ -2187,19 +2201,51 @@ mod tests {
         let witness = usize::try_from(dealer_scenario_witness_bounds_v4().expect("bounds").0)
             .expect("bounded");
         let mut family_request = vec![0_u8; 384 + 2 * 8 + witness];
-        family_request[..8].copy_from_slice(&DEALER_SCENARIO_TRADE_MAGIC_V3);
-        family_request[8..10].copy_from_slice(&DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes());
-        family_request[10..12].copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
-        family_request[377] = 1;
-        family_request[378] = 1;
-        family_request[379] = 3;
-        family_request[380..384]
+        family_request
+            .get_mut(..8)
+            .expect("request offset in bounds")
+            .copy_from_slice(&DEALER_SCENARIO_TRADE_MAGIC_V3);
+        family_request
+            .get_mut(8..10)
+            .expect("request offset in bounds")
+            .copy_from_slice(&DEALER_SCENARIO_TRADE_VERSION_V3.to_le_bytes());
+        family_request
+            .get_mut(10..12)
+            .expect("request offset in bounds")
+            .copy_from_slice(&DEALER_SCENARIO_TRADE_ACTION_V3.to_le_bytes());
+        *family_request
+            .get_mut(377)
+            .expect("request offset in bounds") = 1;
+        *family_request
+            .get_mut(378)
+            .expect("request offset in bounds") = 1;
+        *family_request
+            .get_mut(379)
+            .expect("request offset in bounds") = 3;
+        family_request
+            .get_mut(380..384)
+            .expect("request offset in bounds")
             .copy_from_slice(&u32::try_from(witness).expect("bounded").to_le_bytes());
-        family_request[352..360].copy_from_slice(&99_u64.to_le_bytes());
-        family_request[112..144].copy_from_slice(&[7; 32]);
-        family_request[384..392].copy_from_slice(&11_u64.to_le_bytes());
-        family_request[392..400].copy_from_slice(&29_u64.to_le_bytes());
-        family_request[400..408].copy_from_slice(&SIGNED_DELTA_PLAN_MAGIC_V3);
+        family_request
+            .get_mut(352..360)
+            .expect("request offset in bounds")
+            .copy_from_slice(&99_u64.to_le_bytes());
+        family_request
+            .get_mut(112..144)
+            .expect("request offset in bounds")
+            .copy_from_slice(&[7; 32]);
+        family_request
+            .get_mut(384..392)
+            .expect("request offset in bounds")
+            .copy_from_slice(&11_u64.to_le_bytes());
+        family_request
+            .get_mut(392..400)
+            .expect("request offset in bounds")
+            .copy_from_slice(&29_u64.to_le_bytes());
+        family_request
+            .get_mut(400..408)
+            .expect("request offset in bounds")
+            .copy_from_slice(&SIGNED_DELTA_PLAN_MAGIC_V3);
         let scalar_count = usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4) + 2;
         let identity_count = usize::from(DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4);
         let input_scalars = vec![0_u64; scalar_count];
@@ -2223,7 +2269,9 @@ mod tests {
             )
             .expect("project candidate obligations");
         assert_eq!(
-            &output_scalars[usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)..],
+            output_scalars
+                .get(usize::from(DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4)..)
+                .expect("tail registers follow the common scalars"),
             &[11, 29]
         );
         assert_eq!(
@@ -2242,7 +2290,9 @@ mod tests {
         let mut executed_identities = vec![[0_u8; 32]; identity_count];
         let mut execution_scratch_scalars = vec![0_u64; scalar_count];
         let mut execution_scratch_identities = vec![[0_u8; 32]; identity_count];
-        output_scalars[usize::from(DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4)] = 98;
+        *output_scalars
+            .get_mut(usize::from(DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4))
+            .expect("current-slot register inside the scalar frame") = 98;
         execute_fold_atomic(
             transition_program,
             2,
@@ -2273,7 +2323,9 @@ mod tests {
             Some(3)
         );
         let mut hostile_scalars = output_scalars.clone();
-        hostile_scalars[usize::from(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4)] = 0;
+        *hostile_scalars
+            .get_mut(usize::from(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4))
+            .expect("evidence-count register inside the scalar frame") = 0;
         let untouched = executed_scalars.clone();
         assert!(
             execute_fold_atomic(

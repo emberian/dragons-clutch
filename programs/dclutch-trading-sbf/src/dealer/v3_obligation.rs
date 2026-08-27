@@ -569,14 +569,26 @@ mod tests {
 
     fn bytes(obligations: &[u64], lp: u64) -> std::vec::Vec<u8> {
         let mut bytes = std::vec![0; DEALER_OBLIGATION_HEADER_BYTES_V3 + obligations.len() * 8];
-        bytes[..8].copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
-        bytes[8..10].copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
-        bytes[12..16].copy_from_slice(
-            &u32::try_from(obligations.len())
-                .expect("bounded test width")
-                .to_le_bytes(),
-        );
-        bytes[16..24].copy_from_slice(&7_u64.to_le_bytes());
+        bytes
+            .get_mut(..8)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_MAGIC_V3);
+        bytes
+            .get_mut(8..10)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&DEALER_OBLIGATION_VERSION_V3.to_le_bytes());
+        bytes
+            .get_mut(12..16)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(
+                &u32::try_from(obligations.len())
+                    .expect("bounded test width")
+                    .to_le_bytes(),
+            );
+        bytes
+            .get_mut(16..24)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&7_u64.to_le_bytes());
         for (offset, value) in [
             (24, [1; 32]),
             (56, [2; 32]),
@@ -584,12 +596,21 @@ mod tests {
             (120, [4; 32]),
             (152, [5; 32]),
         ] {
-            bytes[offset..offset + 32].copy_from_slice(&value);
+            bytes
+                .get_mut(offset..offset + 32)
+                .expect("obligation header offset in bounds")
+                .copy_from_slice(&value);
         }
-        bytes[184..192].copy_from_slice(&lp.to_le_bytes());
+        bytes
+            .get_mut(184..192)
+            .expect("obligation header offset in bounds")
+            .copy_from_slice(&lp.to_le_bytes());
         for (index, obligation) in obligations.iter().enumerate() {
             let offset = DEALER_OBLIGATION_HEADER_BYTES_V3 + index * 8;
-            bytes[offset..offset + 8].copy_from_slice(&obligation.to_le_bytes());
+            bytes
+                .get_mut(offset..offset + 8)
+                .expect("obligation value offset in bounds")
+                .copy_from_slice(&obligation.to_le_bytes());
         }
         bytes
     }
@@ -675,7 +696,12 @@ mod tests {
             projected.obligations().collect::<std::vec::Vec<_>>(),
             [7, 19, 3]
         );
-        assert_eq!(&candidate[24..192], &data[24..192]);
+        assert_eq!(
+            candidate
+                .get(24..192)
+                .expect("obligation header span in bounds"),
+            data.get(24..192).expect("obligation header span in bounds")
+        );
 
         let mut untouched = std::vec![0xa5; data.len()];
         assert_eq!(
