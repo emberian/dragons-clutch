@@ -1,6 +1,35 @@
 import { PublicKey } from '@solana/web3.js';
 
 import { ascii, fromHex, hex, isZero, pubkey, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 as RENT_CREDIT_SEED } from './generated/coreFound';
+import {
+  MAX_OUTCOMES_V1,
+  MIN_OUTCOMES_V1,
+  POSITION_BASE_BYTES_V1,
+  POSITION_GENERATION_OFFSET_V1,
+  POSITION_MAGIC_V1,
+  POSITION_MARKET_OFFSET_V1,
+  POSITION_OUTCOME_BALANCE_BYTES_V1,
+  POSITION_OUTCOME_COUNT_OFFSET_V1,
+  POSITION_OWNER_OFFSET_V1,
+  POSITION_PDA_DOMAIN_V1,
+  POSITION_RESERVED_BYTES_V1,
+  POSITION_RESERVED_OFFSET_V1,
+  POSITION_SCHEMA_VERSION_OFFSET_V1,
+  POSITION_SCHEMA_VERSION_V1,
+  REALM_ADAPTER_RELEASE_ID_OFFSET_V1,
+  REALM_BYTES_V1,
+  REALM_COLLATERAL_MINT_OFFSET_V1,
+  REALM_FREEZE_AUTHORITY_POLICY_OFFSET_V1,
+  REALM_MAGIC_V1,
+  REALM_MINT_AUTHORITY_POLICY_OFFSET_V1,
+  REALM_PDA_DOMAIN_V1,
+  REALM_RESERVED_BYTES_V1,
+  REALM_RESERVED_OFFSET_V1,
+  REALM_SCHEMA_VERSION_V1,
+  REALM_TOKEN_PROGRAM_OFFSET_V1,
+  positionBytesV1,
+} from './generated/realmPositionV1';
 
 export type CoreKind = 'Market' | 'Realm' | 'Position' | 'RentCredit';
 
@@ -109,17 +138,14 @@ export type FullAccountObservation = Readonly<{
 
 const MAGIC = Object.freeze({
   DCLTCAT1: 'Market',
-  DCLTRLM1: 'Realm',
-  DCLTPOS1: 'Position',
+  [REALM_MAGIC_V1]: 'Realm',
+  [POSITION_MAGIC_V1]: 'Position',
   DCLRNTL2: 'RentCredit',
 } satisfies Record<string, CoreKind>);
 
 const PHASES = Object.freeze(['Founding', 'Open', 'Resolved', 'Retiring', 'Retired'] as const);
 const RESOLUTION_KINDS = Object.freeze(['Occurrence', 'Failure', 'Recovery']);
 const MARKET_SEED = new TextEncoder().encode('dclutch/market-root/v1');
-const REALM_SEED = new TextEncoder().encode('dclutch/realm/v1');
-const POSITION_SEED = new TextEncoder().encode('dclutch/position/v1');
-const RENT_CREDIT_SEED = new TextEncoder().encode('dclutch/rent-market/v2');
 
 function detail(label: string, value: string | number | bigint): Readonly<{ label: string; value: string }> {
   return Object.freeze({ label, value: String(value) });
@@ -150,7 +176,7 @@ export function classifyHeader(data: Uint8Array): CoreKind | null {
 export function deriveRealmAddress(programId: string, realmContentIdHex: string): string {
   const digest = fromHex(realmContentIdHex, 'Realm content ID');
   if (digest.length !== 32 || isZero(digest)) throw new Error('Realm content ID must be one nonzero 32-byte identity');
-  return PublicKey.findProgramAddressSync([REALM_SEED, digest], new PublicKey(programId))[0].toBase58();
+  return PublicKey.findProgramAddressSync([REALM_PDA_DOMAIN_V1, digest], new PublicKey(programId))[0].toBase58();
 }
 
 /**
@@ -158,7 +184,7 @@ export function deriveRealmAddress(programId: string, realmContentIdHex: string)
  *
  * dClutch publishes no position index and this browser will not invent one.
  * It does not need to: a Position is the program-derived address of
- * `POSITION_SEED` plus the exact Market and owner keys, in that order — the
+ * `POSITION_PDA_DOMAIN_V1` plus the exact Market and owner keys, in that order — the
  * same seed domain `dclutch-realm-contract::POSITION_PDA_DOMAIN` names and the
  * same order `verifyLocalBindings` checks a decoded Position against. An owner
  * plus a Market address is therefore enough to ask the chain directly, and an
@@ -167,7 +193,7 @@ export function deriveRealmAddress(programId: string, realmContentIdHex: string)
 export function derivePositionAddressV1(programId: string, market: string, owner: string): string {
   const program = new PublicKey(programId);
   const [derived] = PublicKey.findProgramAddressSync(
-    [POSITION_SEED, new PublicKey(market).toBytes(), new PublicKey(owner).toBytes()],
+    [POSITION_PDA_DOMAIN_V1, new PublicKey(market).toBytes(), new PublicKey(owner).toBytes()],
     program,
   );
   return derived.toBase58();
@@ -321,14 +347,16 @@ function decodeMarket(observation: FullAccountObservation): DecodedProjection {
 
 function decodeRealm(observation: FullAccountObservation): DecodedProjection {
   const bytes = observation.data;
-  commonHeader(bytes, 'DCLTRLM1', 112);
-  requireZero(bytes, 12, 4, 'Realm header');
-  const mintPolicy = bytes[10] === 0 ? 'Require absent' : bytes[10] === 1 ? 'Admit issuer control' : null;
-  const freezePolicy = bytes[11] === 0 ? 'Require absent' : bytes[11] === 1 ? 'Admit issuer control' : null;
+  commonHeader(bytes, REALM_MAGIC_V1, REALM_BYTES_V1, REALM_SCHEMA_VERSION_V1);
+  requireZero(bytes, REALM_RESERVED_OFFSET_V1, REALM_RESERVED_BYTES_V1, 'Realm header');
+  const mintByte = bytes[REALM_MINT_AUTHORITY_POLICY_OFFSET_V1];
+  const freezeByte = bytes[REALM_FREEZE_AUTHORITY_POLICY_OFFSET_V1];
+  const mintPolicy = mintByte === 0 ? 'Require absent' : mintByte === 1 ? 'Admit issuer control' : null;
+  const freezePolicy = freezeByte === 0 ? 'Require absent' : freezeByte === 1 ? 'Admit issuer control' : null;
   if (mintPolicy === null || freezePolicy === null) throw new Error('Realm authority policy byte is undefined');
-  const tokenProgram = pubkey(slice(bytes, 16, 32), 'Realm token program');
-  const collateralMint = pubkey(slice(bytes, 48, 32), 'Realm collateral mint');
-  const adapterRelease = slice(bytes, 80, 32);
+  const tokenProgram = pubkey(slice(bytes, REALM_TOKEN_PROGRAM_OFFSET_V1, 32), 'Realm token program');
+  const collateralMint = pubkey(slice(bytes, REALM_COLLATERAL_MINT_OFFSET_V1, 32), 'Realm collateral mint');
+  const adapterRelease = slice(bytes, REALM_ADAPTER_RELEASE_ID_OFFSET_V1, 32);
   requireNonzero(adapterRelease, 'collateral adapter release ID');
   return Object.freeze({
     status: 'decoded', kind: 'Realm', address: observation.address, lamports: observation.lamports,
@@ -348,15 +376,19 @@ function decodeRealm(observation: FullAccountObservation): DecodedProjection {
 function decodePosition(observation: FullAccountObservation): DecodedProjection {
   const bytes = observation.data;
   if (bytes.length < 16) throw new Error('Position header is truncated');
-  if (u16(bytes, 8) !== 1) throw new Error(`Position schema version ${u16(bytes, 8)} is unsupported`);
-  const outcomeCount = bytes[10];
-  if (outcomeCount < 2 || outcomeCount > 16) throw new Error(`Position outcome count ${outcomeCount} is outside 2..16`);
-  commonHeader(bytes, 'DCLTPOS1', 88 + outcomeCount * 8);
-  requireZero(bytes, 11, 5, 'Position header');
-  const market = pubkey(slice(bytes, 16, 32), 'Position Market');
-  const owner = pubkey(slice(bytes, 48, 32), 'Position owner');
-  const generation = u64(bytes, 80);
-  const balances = Array.from({ length: outcomeCount }, (_, index) => u64(bytes, 88 + index * 8));
+  const version = u16(bytes, POSITION_SCHEMA_VERSION_OFFSET_V1);
+  if (version !== POSITION_SCHEMA_VERSION_V1) throw new Error(`Position schema version ${version} is unsupported`);
+  const outcomeCount = bytes[POSITION_OUTCOME_COUNT_OFFSET_V1];
+  if (outcomeCount < MIN_OUTCOMES_V1 || outcomeCount > MAX_OUTCOMES_V1) {
+    throw new Error(`Position outcome count ${outcomeCount} is outside ${MIN_OUTCOMES_V1}..${MAX_OUTCOMES_V1}`);
+  }
+  commonHeader(bytes, POSITION_MAGIC_V1, positionBytesV1(outcomeCount), POSITION_SCHEMA_VERSION_V1);
+  requireZero(bytes, POSITION_RESERVED_OFFSET_V1, POSITION_RESERVED_BYTES_V1, 'Position header');
+  const market = pubkey(slice(bytes, POSITION_MARKET_OFFSET_V1, 32), 'Position Market');
+  const owner = pubkey(slice(bytes, POSITION_OWNER_OFFSET_V1, 32), 'Position owner');
+  const generation = u64(bytes, POSITION_GENERATION_OFFSET_V1);
+  const balances = Array.from({ length: outcomeCount },
+    (_, index) => u64(bytes, POSITION_BASE_BYTES_V1 + index * POSITION_OUTCOME_BALANCE_BYTES_V1));
   return Object.freeze({
     status: 'decoded', kind: 'Position', address: observation.address, lamports: observation.lamports,
     observedSlot: observation.observedSlot, schema: 'v1', bindings: Object.freeze([]),
@@ -406,11 +438,11 @@ export async function verifyLocalBindings(projection: DecodedProjection, program
     checks.push(Object.freeze({ label: 'Market PDA', ok: derived.toBase58() === projection.address, detail: `sha256(identity) → ${derived.toBase58()}` }));
   } else if (semantics.kind === 'Realm') {
     const digest = await sha256(semantics.canonicalBytes);
-    const [derived] = PublicKey.findProgramAddressSync([REALM_SEED, digest], program);
+    const [derived] = PublicKey.findProgramAddressSync([REALM_PDA_DOMAIN_V1, digest], program);
     checks.push(Object.freeze({ label: 'Realm content + PDA', ok: derived.toBase58() === projection.address, detail: `sha256(canonical bytes) ${hex(digest)} → ${derived.toBase58()}` }));
     semantics = Object.freeze({ ...semantics, contentDigest: hex(digest) });
   } else if (semantics.kind === 'Position') {
-    const [derived] = PublicKey.findProgramAddressSync([POSITION_SEED, new PublicKey(semantics.market).toBytes(), new PublicKey(semantics.owner).toBytes()], program);
+    const [derived] = PublicKey.findProgramAddressSync([POSITION_PDA_DOMAIN_V1, new PublicKey(semantics.market).toBytes(), new PublicKey(semantics.owner).toBytes()], program);
     checks.push(Object.freeze({ label: 'Position PDA', ok: derived.toBase58() === projection.address, detail: `Market + owner → ${derived.toBase58()}` }));
   } else {
     const generation = BigInt(semantics.generation);

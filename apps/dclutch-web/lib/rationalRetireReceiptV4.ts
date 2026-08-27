@@ -13,6 +13,8 @@ import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
   CORE_STATE_BYTES,
+  LIABILITY_BASIS_MARKET_SEED_V2 as CLAIMS_MARKET_SEED,
+  LIABILITY_BASIS_POSITION_SEED_V2 as POSITION_SEED,
   LIFECYCLE_RENT_CREDIT_BYTES_V2,
   LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
   PORTFOLIO_SCHEMA_ID_V2,
@@ -72,8 +74,6 @@ const RECEIPT_MINT_SEED = new TextEncoder().encode('dclutch:rational-receipt:v2'
 const SHARD_MINT_SEED = new TextEncoder().encode('dclutch:rational-shard-mint:v2');
 const STRUCTURED_CUSTODY_SEED = new TextEncoder().encode('dclutch:rational-structured:v2');
 const CLAIMS_CUSTODY_OWNER_SEED = new TextEncoder().encode('dclutch:rational-claims:v2');
-const CLAIMS_MARKET_SEED = new TextEncoder().encode('dclutch:lbv2:market');
-const POSITION_SEED = new TextEncoder().encode('dclutch:lbv2:position');
 const ADMISSION_SEED = new TextEncoder().encode('dclutch:protocol-position:v2');
 const ACTIVATION_SEED = new TextEncoder().encode('dclutch:release-activation:v1');
 const SEMANTIC_BASIS_CONTENT_DOMAIN_V3 = new TextEncoder().encode('dclutch/product-basis/semantic/v3');

@@ -14,10 +14,19 @@ import {
   encodeCompactIntentV1,
   encodeControllerInstructionV1,
 } from './directCodec';
+import { POSITION_PDA_DOMAIN_V1 } from './generated/realmPositionV1';
 
 export const CONTROLLER_SEED = new TextEncoder().encode('dclutch-controller-v1');
 export const REPLAY_SEED = new TextEncoder().encode('dclutch/direct-replay/v3');
-export const POSITION_SEED = new TextEncoder().encode('dclutch/position/v1');
+/**
+ * The Position seed domain, taken from its Lean owner rather than restated.
+ *
+ * The controller derives a per-outcome Position from the same domain plus
+ * Market, maker and outcome — a different seed tuple under a different program
+ * than the Core Position, but the same domain, and there is one place that
+ * domain is written down.
+ */
+export const POSITION_SEED = POSITION_PDA_DOMAIN_V1;
 export const CLAIM_PROGRAM_ID = new PublicKey(new Uint8Array(32).fill(81));
 export const CUSTODY_PROGRAM_ID = new PublicKey(new Uint8Array(32).fill(75));
 export const PACKET_DATA_SIZE = 1_232;
