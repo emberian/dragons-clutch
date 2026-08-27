@@ -939,3 +939,305 @@ rather than Blocker B. The cross-request join tests added in this lane, includin
 the capability-root substitution, are what they have always been: pure functions
 checked without a chain. They are not execution evidence and are not counted as
 any.
+
+## W1d supersession 2026-08-27
+
+Blocker C is **implemented**, and a fourth structural blocker was found beneath
+it and **also implemented**. This section adds **no on-chain evidence**: W1b's
+transcript and CU figures remain the newest measurements, and **no campaign was
+run this lane**. The Market is still **not Open**. Saying so plainly because the
+lane's gate was an Open Market and the honest answer is that the founding outer
+became *assemblable* here, not *executed*.
+
+| W1c said | W1d |
+|---|---|
+| Blocker C is a new Custody-side vertical, unowned | implemented, `d3ba6a1`: `OpenSourceCompartment` |
+| `DCLTPCB1` overflows its SBF verifier frame by 4,480 bytes | fixed, `d3ba6a1`; the whole seven-program build now emits **zero** frame diagnostics (`9258bce`) |
+| generic founding's `projected_resulting_revision` must be 4 | it is **5** |
+| (unrecorded) | **Blocker D**: no route in the protocol could create the FundingState prestate Core's Found stage consumes. Implemented, `2fffe79` |
+| the founding outer needs a runner | the runner still does not exist; the complete frame maps for both routes are recorded below so the next lane does not have to rediscover them |
+
+### Blocker C is implemented — `OpenSourceCompartment`
+
+`d3ba6a1` adds one projected-family Custody operation. It creates the normal
+`CustodyReplayV1` and the funded source Vault that `LockHoardAndCloseSource`
+consumes and closes, against a Market account that does not exist.
+
+**`authenticate_market` is byte-for-byte untouched, and is not on the new path.**
+That was the constraint W1c named and it held. Normal Custody's live-Market
+membrane still requires `data_len() == STATE_BYTES` and Core ownership for every
+ordinary operation. What admits the new transition instead is the projected
+family's own membrane, which already existed:
+
+```text
+custody-sbf/src/projected.rs  authenticate_common      single-use Trading caller PDA
+                                                       + persisted ProjectFound projection
+                                                       + release reauthentication CPI
+                                                       + the exact prior revision
+custody-sbf/src/projected.rs  require_vacant_market    owner == system_program, data_len() == 0
+```
+
+`require_vacant_market` is the **inverse** of `authenticate_market`, not a
+relaxation of it, and `OpenHoard` already asserted exactly it. The new operation
+asserts the same thing and adds nothing to the ordinary surface.
+
+**The ladder gains one ordered step.** `Initialize` `0→1` and `OpenHoard` `1→2`
+are unchanged. `OpenSourceCompartment` runs `2→3` and moves the phase to
+`SourceFunded`, a tag no previously reachable state can hold.
+`LockHoardAndCloseSource` now admits exactly two disjoint prestates:
+
+| prestate | who | `locked_amount` |
+|---|---|---|
+| `HoardOpen` | a family whose principal is already custodied elsewhere — Series escrow | must be `0` |
+| `SourceFunded` | a generic founding, whose own `OpenSourceCompartment` funded the source | must equal `request.amount` |
+
+Because `SourceFunded` is a new value, **no state that existed before is admitted
+by this that was refused before**. Series is untouched and still reaches Lock
+from `HoardOpen` at revision two.
+
+**The replay is the kernel's, not the adapter's.** Every field of the minted
+`CustodyReplayV1` is a function of the authenticated request, and its cursor is
+pinned by `SOURCE_COMPARTMENT_REPLAY_REVISION_V1 = 1` rather than chosen — the
+same value `normal_replay_from_realization_v1` mints for the family's other
+replay. A founder cannot choose what the Lock stage will later read back.
+
+**Funding provenance is closed by the request that already existed.** Rent for
+both created accounts comes from `request.payer`, the same prepaid creation payer
+that funds the projected replay and the Hoard vault, and both accounts' lamports
+return to `request.rent_credit` when Lock closes them. The principal comes from a
+token account owned by `request.refund_owner`, who must sign — the same party
+`RefundAndClose` pays the principal *back* to. Whoever may reclaim the principal
+is exactly who must supply it. No new identity coordinate enters, and
+`ProjectedCustodyRequestV1::validate` already forbids `HoardPrincipal`, `None`,
+and `External` as the source compartment.
+
+Adversarial coverage added at the kernel (`crates/dclutch-custody-contract`,
+23 tests green): a live Market (the inverse of the operation's whole admission),
+a funder debit that does not equal the principal credited, a pre-funded source
+vault, a vault that does not end holding exactly the request's principal, a zero
+replay address, a zero poststate commitment, every other operation attempted at
+the funded phase, a replayed creation at the same cursor, and the closed-out
+attempt (`AbortOpenAndClose` at `SourceFunded`). The persisted-state round trip
+is pinned, and the minted replay is shown to be exactly the one the terminal
+Lock accepts. **These are pure functions checked without a chain. They are not
+execution evidence.**
+
+### Blocker D — the capability-funding prestate had no creator at all
+
+Found underneath C, by reading what Core's *Found* stage requires rather than
+what its Lock stage requires.
+
+```text
+core-sbf/src/generic_founding_v1.rs:808-884   one FundingStateV1 per manifest entry
+                                              owner == trading_program
+                                              data_len() == FUNDING_STATE_BYTES (320)
+                                              status == FundingStatus::Pending
+                                              manifest_content_id == the authenticated manifest
+                                              entry_index == its position
+                                              lamports - rent == the manifest's quoted native total
+                                              address == CapabilityFundingDerivationV1 PDA under Trading
+                                              ordered list digest == request.funding_list_id()
+                                              manifest.entry_count() == funding_count, and it may not be zero
+```
+
+The only allocator of such an account anywhere in the repo is
+`programs/dclutch-trading-sbf/src/series/accounts.rs:223 stage_pending_funding`.
+It is Series-shaped — its lamport source is a Trading-owned Ticket — and
+**`grep -rn stage_pending_funding` returns only its own definition.** It has no
+caller. Every other site (`outer.rs:716`, `general/activation.rs`,
+`core-sbf/src/capability.rs`) only consumes or validates existing states.
+
+A host cannot supply them either, and this is the part that makes it structural
+rather than merely missing: a `FundingStateV1` is a **program-derived address
+owned by the Trading program**. No private key for it exists, so no wallet can
+sign its creation, and `system_program::assign` requires the account itself to
+sign. Only Trading can create one, from inside Trading, under
+`invoke_signed`. So a generic founding could not assemble its Found frame at
+all — this was upstream of every compute or wire concern.
+
+**Implemented at `2fffe79`** as a fourth `DCLTPCB1` stage in the same rollback
+domain as the other three. Nothing in it is a caller choice:
+
+- the manifest is the **exact record Core itself authenticated** during the
+  `ProjectFound` projection at stage one, reused from that sub-frame rather than
+  supplied a second time;
+- every address, every prepayment, and every persisted byte is derived from it;
+- the ordered list of created addresses must equal the founding artifact's own
+  `funding_list_id`, so a manifest that is not this Market's cannot leave a
+  single funded account behind — the refusal rolls the whole bootstrap back;
+- funding provenance is the founding's prepaid payer, the same account that
+  funds the projected replay, the Hoard vault, and the source compartment. These
+  are lamports, precommitted and prepaid exactly as the manifest quotes them. No
+  Hoard, fee, liveness, or reserve compartment is touched and no principal moves.
+
+The bootstrap frame is therefore no longer a constant. It is
+`PROJECTED_CUSTODY_BOOTSTRAP_FIXED_ACCOUNT_COUNT_V1 = 78` plus one account per
+manifest entry, and the tail's length is asserted against `funding_count` before
+anything is created. For the demo Market's three-entry manifest: **81 accounts**.
+
+### A named new hazard this lane introduced, and why it was chosen
+
+The `SourceFunded` resting state holds real principal, and **no terminal accepts
+it**. `AbortOpenAndClose` admits only `HoardOpen`.
+
+That is deliberate. It means the authority over funded principal cannot be
+destroyed: closing the projection out from under a funded source would strand
+the principal permanently, because the source replay names a Market that will
+never become live at that generation. Refusing the abort is the safe direction.
+
+It is still a real liveness hazard, and it is new: before this lane a founder
+could only strand rent. A founder who runs `DCLTPCB1` and never runs `DCLTGMF1`
+has principal that can move only forward, through Lock. The founding is
+retryable indefinitely — the Lock request is deterministic from the founding
+artifact and the state rests at `next_revision = 3` — so nothing is lost while
+the founding remains satisfiable.
+
+**The closure is a new `AbortSourceAndClose` terminal** at `SourceFunded`, after
+expiry, returning the source principal to a `refund_owner`-owned token account
+and closing the source vault, the source replay, the empty Hoard vault, and the
+projection to `RentCredit`. It is **not** implemented here and **not** an
+extension of `AbortOpenAndClose`: Series drives that terminal
+(`series/projected_custody_v3.rs:142`) and its frame width is fixed, so widening
+it would reshape a live family's route to serve a different one. Queued, named,
+and owned by whoever takes the next projected-Custody lane.
+
+### The gate, honestly
+
+**Not met.** No validator campaign was run. The Market is Found, not Open. The
+Claims aggregate, the founder Position, and the Hoard still do not exist anywhere
+on any chain. The on-chain founding-outer hostile case — a substituted Claims
+request account proving byte-exact rollback of the whole Lock→Found→Realize→
+Claims→Open chain — is still not claimed, and now waits only on a runner.
+
+What changed is that it no longer waits on a *protocol gap*. Every prestate the
+outer's five stages consume now has exactly one live route that creates it:
+
+| prestate | creator | status |
+|---|---|---|
+| capability root | derived, never created | ADR-0004, `728299a` |
+| projected replay | `DCLTPCB1` stage 1 | `28d2da6` |
+| Hoard vault | `DCLTPCB1` stage 2 | `28d2da6` |
+| source vault + source replay | `DCLTPCB1` stage 3 → Custody `OpenSourceCompartment` | `d3ba6a1` |
+| FundingState × manifest entries | `DCLTPCB1` stage 4 | `2fffe79` |
+| `LifecycleRentCreditV2` | the campaign's existing RentV2 stage | already live |
+| Claims aggregate / Position / admission | the Claims stage itself allocates them | already live — **but see below** |
+
+**One thing the runner must do that is easy to miss**: Claims `FoundingV5`
+allocates the aggregate, the founder Position, and the admission with
+`System::allocate` + `assign` only. It never transfers lamports. The runner must
+**pre-fund those three vacant program addresses** so that each holds at least
+`rent.minimum_balance(width)`, or the founding refuses inside Claims. A plain
+System transfer to a derived address does that; no protocol route is needed.
+
+### What the runner has to build, exactly
+
+Recorded here because it is the whole remaining distance and it was expensive to
+establish. Two transactions, both requiring an address lookup table.
+
+**`DCLTPCB1` — 81 accounts at three funding states.** Eight-byte instruction
+data, no payload. Layout: two readonly raw-request accounts (the 400-byte
+founding artifact and the 768-byte terminal Lock request), the Custody program,
+the 42-account Initialize sub-frame (whose indices 11..41 are Core's 31-account
+`ProjectFound` sub-frame, all forwarded readonly and all mutually distinct), the
+15-account OpenHoard sub-frame, the 18-account OpenSourceCompartment sub-frame,
+then one FundingState account per manifest entry. **49 distinct keys**, well
+inside the 64-account lock limit. Exactly four must be writable-and-or-signer at
+the transaction level: the projected state, the payer (signer), the two vaults,
+the source replay, the funding tail, and — as signer only — the principal
+`refund_owner`.
+
+**`DCLTGMF1` — 137 accounts at three funding states** (`134 + funding_count`).
+Eight-byte instruction data. Four readonly raw-request accounts (400-byte
+founding artifact, 768-byte Lock, 768-byte Realize, 832-byte Claims request),
+then Lock (14), Found (`34 + funding_count + 15`), Realize (12), Claims (32),
+Open (23). **Eleven distinct keys must be writable**: the projected replay, the
+rent credit, the Hoard vault, the source vault, the source replay, the Found
+caller PDA, the Market, the Core permit, and the Claims aggregate, Position, and
+admission. **No account in the frame may be a transaction-level signer** — every
+stage's signer is a PDA signed by `invoke_signed` — so the fee payer must be a
+138th key that appears nowhere in the frame.
+
+Three derivations the runner must get exactly right, because each is a caller-PDA
+seed input and a wrong one produces an address for which no signature exists:
+
+```text
+context_digest       = sha256(b"dclutch:projected-hoard-context:v1" || found.context())
+funding_source_context = found.context(), undigested
+projection_receipt_digest = sha256(ProjectFoundReceiptV1 bytes)
+```
+
+The third is derivable off-chain without a transaction: the receipt is a pure
+function of facts the runner already holds (market, generation, realm, mint,
+token program, collateral release, product record, product, source, release set,
+rent program, and the digest of the encoded `Found` request). It does **not**
+require simulating the CPI.
+
+Chain-derived rent facts, not choices: `state_rent_lamports =
+minimum_balance(808)`; `vault_rent_lamports = funding_source_vault_rent_lamports
+= minimum_balance(165)`; `funding_source_state_rent_lamports =
+minimum_balance(288)`; each FundingState holds `minimum_balance(320)` plus the
+manifest entry's quoted native total.
+
+And two request-shape pins that will otherwise fail late: the terminal Lock must
+carry `expected_revision = 3` and `funding_source_replay_revision = 1`, and the
+founding artifact must carry `projected_resulting_revision = 5`.
+
+### Artifacts
+
+Built from `2fffe79` in an isolated `git archive HEAD` tree with the same pinned
+toolchain (`cargo-build-sbf 4.0.0`, `platform-tools v1.53`, `rustc 1.89.0`),
+default release profile, no `--lto` and no `--optimize-size`. **These ELFs have
+not been deployed or executed** — no campaign was run for this section.
+
+The seven-program build emits **zero frame diagnostics**. It emitted twenty at
+`ae5c93b` (`process_projected_custody_bootstrap_v1`, 8,576 bytes estimated
+against a 4,096 maximum), and twenty again mid-lane for the new Custody
+operation before it was split across three verifier frames.
+
+Built from **`05656a3`**, not from this lane's last commit. `bd06c53` and every
+commit back to `ee1dc7d` cannot build four of the seven programs from a clean
+checkout: `ee1dc7d` committed a `use dclutch_capability_seal_contract::{…}` into
+`crates/dclutch-account-profile-contract/src/lifecycle_v3.rs` while the matching
+`Cargo.toml` dependency line was still only in the shared working tree. That is
+another lane's defect and it is repaired at `05656a3`, so these figures are from
+the first commit at or after this lane's work that builds. They therefore also
+contain other lanes' concurrent changes to Claims, Core, Trading, and
+Resolution; only `dclutch_custody_sbf.so` is attributable to this lane alone,
+and its digest is byte-identical to an isolated build of this lane's commits.
+
+| Program | Bytes | SHA-256 |
+|---|---:|---|
+| `dclutch_registry_sbf.so` | 220,728 | `954ebcf92cbbed25e3f22d817f894275a566cf2f4d1903b52bc2cb893e727f79` |
+| `dclutch_core_sbf.so` | 1,007,096 | `c6373ba564e9c7230409eb549143b83998d3b038fbead9dfc08732caf450edb3` |
+| `dclutch_claims_sbf.so` | 1,074,256 | `79869b5dec2d60e961c3ac9f9ff5d39780a69bf492cbff35cf393c79fd597f80` |
+| `dclutch_trading_sbf.so` | 1,333,064 | `44c15378aa892ad7aa3962302fa8ee28c376ef5e0e2d4e2a2f03e7a770a30bc1` |
+| `dclutch_resolution_proof_sbf.so` | 463,576 | `ae18567499be52880db335f06ba1e00596e7489f1297812e6796cb3e3df1c4d9` |
+| `dclutch_custody_sbf.so` | 347,536 | `83eb5121559f1d41f75a9e47a4cdfd7cb8927236d8079ba42c8eee032b0195f9` |
+| `dclutch_rent_sbf.so` | 152,312 | `3486a8197af492317a756e2fce659d399c5e32ff16323edac34fc1f1cafa7b8b` |
+
+Custody grew by 17,104 bytes over W1c's `6434093093bf…` for the new operation;
+Trading grew by 24,016 bytes over that section's figure for the fourth bootstrap
+stage and the funding staging, though that delta is not attributable to this
+lane alone.
+
+### Gates this lane ran
+
+Filtered, and stated with their controls rather than as a suite-wide green.
+
+| Gate | Result |
+|---|---|
+| `cargo test -p dclutch-custody-contract` | 24 passed — the kernel's whole adversarial surface for the new operation |
+| `cargo test -p dclutch-custody-sbf --lib` | 7 passed — frame widths are operation-exact, including the new eighteen |
+| `cargo test -p dclutch-trading-sbf --lib` | 236 passed |
+| `cargo clippy --lib -- -D warnings` on all three | clean |
+| `cargo fmt --check` on all three | clean |
+| `cargo build-sbf`, all seven programs | exit 0, **zero frame diagnostics** |
+| the successor runner (`cargo test`, its own workspace) | 16 passed |
+
+The `--all-targets` clippy on `dclutch-custody-sbf` and `dclutch-trading-sbf`
+fails on pre-existing test-target lints this lane did not touch
+(`programs/dclutch-custody-sbf/tests/program_test.rs:645` `needless_borrow`, and
+`indexing_slicing`/`assertions_on_constants` across `dclutch-trading-sbf`'s
+integration tests). Recorded rather than fixed: they are not this lane's and
+fixing them would put another lane's files in this lane's commits.
+
