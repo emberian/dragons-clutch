@@ -296,6 +296,45 @@ impl<'a> RequestProfileV1<'a> {
         self.bytes
     }
 
+    /// Whether any request projection writes any of `targets`.
+    ///
+    /// `writes_register` answers one target with a full linear scan of the
+    /// program, so a static ownership predicate over `n` register targets
+    /// decodes every operation `n` times. This decodes each operation once and
+    /// tests it against the whole target set; its answer is exactly
+    /// `targets.iter().any(|target| self.writes_register(*target))`.
+    pub fn writes_any_register(self, targets: &[ProjectionTargetV1]) -> Result<bool> {
+        let mut fixed = 0_u16;
+        while fixed < self.fixed_operations {
+            if self.projects_any(self.operation(false, fixed)?, targets) {
+                return Ok(true);
+            }
+            fixed = fixed.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        let mut item = 0_u16;
+        while item < self.item_operations {
+            if self.projects_any(self.operation(true, item)?, targets) {
+                return Ok(true);
+            }
+            item = item.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        Ok(false)
+    }
+
+    fn projects_any(self, operation: Operation, targets: &[ProjectionTargetV1]) -> bool {
+        let Some(projected) = operation.projection_target() else {
+            return false;
+        };
+        targets.iter().any(|target| {
+            projected
+                == (
+                    target.kind == ProjectionRegisterKindV1::Identity,
+                    target.space == ProjectionRegisterSpaceV1::Item,
+                    target.index,
+                )
+        })
+    }
+
     /// Whether any request projection writes `target`.
     pub fn writes_register(self, target: ProjectionTargetV1) -> Result<bool> {
         let expected = (
@@ -796,6 +835,61 @@ mod tests {
 
     fn request() -> [u8; 96] {
         AGREEMENT_REQUEST_TAIL2_V1
+    }
+
+    /// `writes_any_register` must accept exactly the target sets whose members
+    /// `writes_register` accepts, whichever position the matching member holds.
+    #[test]
+    fn batch_projection_query_agrees_with_the_single_target_query() {
+        let bytes = canonical();
+        let profile = RequestProfileV1::decode(&bytes).expect("profile");
+        let universe = [
+            ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Common,
+                index: 0,
+            },
+            ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Scalar,
+                space: ProjectionRegisterSpaceV1::Item,
+                index: 0,
+            },
+            ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Identity,
+                space: ProjectionRegisterSpaceV1::Common,
+                index: 0,
+            },
+            ProjectionTargetV1 {
+                kind: ProjectionRegisterKindV1::Identity,
+                space: ProjectionRegisterSpaceV1::Item,
+                index: 0,
+            },
+        ];
+        // Stated, not derived from the predicate under test: the agreement
+        // profile projects the two item registers and neither common one, so
+        // the windows below cover a hit in the middle, a hit at the tail, a hit
+        // at the head, and no hit at all.
+        assert_eq!(
+            universe
+                .iter()
+                .map(|target| profile.writes_register(*target).expect("single"))
+                .collect::<Vec<_>>(),
+            std::vec![false, true, false, true]
+        );
+        for length in 0..=universe.len() {
+            for start in 0..=universe.len() - length {
+                let window = universe.get(start..start + length).expect("window");
+                let expected = window
+                    .iter()
+                    .any(|target| profile.writes_register(*target).expect("single"));
+                assert_eq!(
+                    profile.writes_any_register(window).expect("batch"),
+                    expected,
+                    "window {start}..{}",
+                    start + length
+                );
+            }
+        }
     }
 
     #[test]
