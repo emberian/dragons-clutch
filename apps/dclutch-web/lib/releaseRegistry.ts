@@ -16,8 +16,16 @@ export const EXECUTION_RELEASE_SET_BYTES = 336;
 export const ARTIFACT_RELEASE_BYTES = 216;
 export const ACTIVATION_CACHE_BYTES = 1_288;
 export const REGISTRY_INSTRUCTION_BYTES = 16;
-export const REGISTRY_ACTIVATE_ACCOUNT_COUNT = 26;
+/// Exact account frame of one `ActivateRole` instruction, mirroring
+/// `REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1` in `dclutch-registry-svm`.
+/// Activation admits ONE role per transaction: whole-ELF hashing costs about one
+/// compute unit per two bytes, so a five-role instruction exceeds the chain
+/// maximum outright, and `process_activate_role` refuses any other width before
+/// it reads a byte.
+export const REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT = 10;
 export const REGISTRY_REAUTH_ACCOUNT_COUNT = 3;
+export const REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET = 48;
+export const REGISTRY_ACTIVATED_ROLE_BYTES = 32 + ARTIFACT_RELEASE_BYTES;
 export const REGISTRY_MAX_COMPUTE_UNITS = 1_400_000;
 export const LOADER_V3_PROGRAM_BYTES = 36;
 export const LOADER_V3_PROGRAMDATA_OFFSET = 45;
@@ -31,7 +39,7 @@ export const SYSVAR_OWNER_ID = 'Sysvar1111111111111111111111111111111';
 const RAW_RECORD_SEED = new TextEncoder().encode('dclutch-raw-record-v1');
 const STAGING_RECORD_SEED = new TextEncoder().encode('dclutch-record-stage-v1');
 const ACTIVATION_SEED = new TextEncoder().encode('dclutch:release-activation:v1');
-const EXECUTION_RELEASE_SET_SCHEMA = Uint8Array.from([
+export const EXECUTION_RELEASE_SET_SCHEMA_ID_V1 = Uint8Array.from([
   0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83,
   0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58,
 ]);
@@ -90,20 +98,43 @@ export type RegistryRoleAddressesV1 = Readonly<{
   programData: string;
 }>;
 
+/// One role's unsigned ten-account activation transaction.
+///
+/// `alreadyActivated` reports that the observed Registry-owned cache already
+/// holds this exact role. A repeat is idempotent on chain and still pays the
+/// full ELF hash, so a caller wanting the cheapest walk-up skips it.
+export type RegistryRoleActivationPacketV1 = Readonly<{
+  role: RegistryRole;
+  alreadyActivated: boolean;
+  elfBytesHashed: number;
+  addresses: RegistryRoleAddressesV1;
+  transaction: VersionedTransaction;
+  wireBytes: Uint8Array;
+  requiredSigners: ReadonlyArray<string>;
+}>;
+
+/// Observed activation state of one Registry-owned cache account.
+///
+/// `absent` and `partial` are both legitimate mid-walk states: activation admits
+/// one role per transaction, so between transactions the cache holds a strict
+/// subset of its five roles and cannot be decoded by any reader.
+export type RegistryActivationModeV1 = 'absent' | 'partial' | 'complete';
+
 export type RegistryActivationPlanV1 = Readonly<{
   observedSlot: string;
   registryProgram: string;
   payer: string;
   cache: string;
-  mode: 'create' | 'repeat';
+  mode: RegistryActivationModeV1;
+  activatedRoles: ReadonlyArray<RegistryRole>;
+  remainingRoles: ReadonlyArray<RegistryRole>;
   cacheRentDebitLamports: string;
   releaseSetRecord: string;
   releaseSetStaging: string;
   roles: Readonly<Record<RegistryRole, RegistryRoleAddressesV1>>;
   evidence: CheckedMultiprogramV1;
-  transaction: VersionedTransaction;
-  wireBytes: Uint8Array;
-  requiredSigners: ReadonlyArray<string>;
+  packets: ReadonlyArray<RegistryRoleActivationPacketV1>;
+  totalElfBytesHashed: number;
   computeUnitLimit: number;
 }>;
 
@@ -287,6 +318,29 @@ function expectedCacheBytes(evidence: CheckedMultiprogramV1): Uint8Array {
   return output;
 }
 
+/// Which roles one observed activation cache already holds.
+///
+/// Ports `activation_cache_progress_v1` from `dclutch-registry-contract`: the
+/// header and release-set selection must match the expected cache exactly, an
+/// unwritten role slot is exactly all zero, and any written slot that differs
+/// from the expected slot is a different release set masquerading as progress
+/// and refuses. This admits nothing; it reports what the account already holds.
+export function activationCacheProgressV1(observed: Uint8Array, expected: Uint8Array): ReadonlyArray<RegistryRole> {
+  if (observed.length !== ACTIVATION_CACHE_BYTES || expected.length !== ACTIVATION_CACHE_BYTES) throw new Error('activation cache progress requires two exact 1,288-byte states');
+  if (ascii(observed, 0, 8) !== 'DCLTACT1' || u16(observed, 8) !== 1 || u16(observed, 10) !== 1) throw new Error('activation cache has the wrong exact header');
+  requireZero(observed, 12, 4, 'activation cache header');
+  if (!same(slice(observed, 0, REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET), slice(expected, 0, REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET))) throw new Error('activation cache selects a different release set than the checked evidence');
+  const written: RegistryRole[] = [];
+  REGISTRY_ROLES.forEach((role, index) => {
+    const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES;
+    const slot = slice(observed, offset, REGISTRY_ACTIVATED_ROLE_BYTES);
+    if (isZero(slot)) return;
+    if (!same(slot, slice(expected, offset, REGISTRY_ACTIVATED_ROLE_BYTES))) throw new Error(`activation cache already holds a conflicting ${role} role`);
+    written.push(role);
+  });
+  return Object.freeze(written);
+}
+
 function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: string): Readonly<{ releaseSetId: string; artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>; artifactIds: Readonly<Record<RegistryRole, string>> }> {
   if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact header');
   requireZero(bytes, 12, 4, 'activation cache header'); const releaseSetId = hex(slice(bytes, 16, 32)); requireNonzero(slice(bytes, 16, 32), 'activation release-set identity');
@@ -294,7 +348,13 @@ function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: st
   if (derived !== cacheAddress) throw new Error('activation cache is not the release-derived Registry PDA');
   const artifacts: ArtifactReleaseV1[] = []; const artifactIds: string[] = [];
   for (let index = 0; index < REGISTRY_ROLES.length; index += 1) { const offset = 48 + index * 248; const id = slice(bytes, offset, 32); requireNonzero(id, 'cached artifact release identity'); const artifact = decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)); artifacts.push(artifact); artifactIds.push(hex(id)); }
-  if (artifacts[0].program !== registryProgram) throw new Error('activation cache Core role does not select this Registry program');
+  // The Core role's program is deliberately NOT compared to the Registry
+  // program. `initialize_activation_cache_v1` in `dclutch-registry-contract`
+  // states the boundary: "Registry identity is an account-ownership boundary,
+  // not a Core-selection input; the finalized release set binds Core when that
+  // role is activated." Registry ownership of this account is authenticated by
+  // the caller and by the release-derived PDA above; requiring Core to equal it
+  // refused every honest seven-program release set.
   for (let left = 0; left < artifacts.length; left += 1) for (let right = left + 1; right < artifacts.length; right += 1) {
     const programAlias = artifacts[left].program === artifacts[right].program; const artifactAlias = artifactIds[left] === artifactIds[right];
     if (programAlias !== artifactAlias) throw new Error('activation cache contains an inconsistent partially aliased role binding');
@@ -353,24 +413,27 @@ function compilePacket(payer: PublicKey, registry: PublicKey, accounts: Construc
   return Object.freeze({ transaction, wireBytes, signers: Object.freeze(transaction.message.staticAccountKeys.slice(0, transaction.message.header.numRequiredSignatures).map((value) => value.toBase58())) });
 }
 
-function registryInstruction(role?: RegistryRole): Uint8Array {
+/// Encode the one canonical 16-byte Registry instruction.
+///
+/// Action 0 is `ActivateRole`, action 1 is `Reauthenticate`, and BOTH name a
+/// role in byte 11. There is no roleless variant: a zero role byte decodes as
+/// Core, so leaving it implicit chooses Core by accident rather than by intent.
+function registryInstruction(action: 0 | 1, role: RegistryRole): Uint8Array {
   const bytes = new Uint8Array(REGISTRY_INSTRUCTION_BYTES); bytes.set(new TextEncoder().encode('DCLTRIX1')); new DataView(bytes.buffer).setUint16(8, 1, true);
-  if (role !== undefined) { bytes[10] = 1; bytes[11] = REGISTRY_ROLES.indexOf(role); }
+  bytes[10] = action; bytes[11] = REGISTRY_ROLES.indexOf(role);
   return bytes;
 }
 
-export function compileRegistryActivationTransaction(input: Readonly<{ payer: string; registryProgram: string; recentBlockhash: string; computeUnitLimit: number; cache: string; releaseSetRecord: string; releaseSetStaging: string; roles: Readonly<Record<RegistryRole, RegistryRoleAddressesV1>> }>): Readonly<{ transaction: VersionedTransaction; wireBytes: Uint8Array; requiredSigners: ReadonlyArray<string> }> {
+export function compileRegistryRoleActivationTransaction(input: Readonly<{ payer: string; registryProgram: string; recentBlockhash: string; computeUnitLimit: number; cache: string; releaseSetRecord: string; releaseSetStaging: string; role: RegistryRole; addresses: RegistryRoleAddressesV1 }>): Readonly<{ transaction: VersionedTransaction; wireBytes: Uint8Array; requiredSigners: ReadonlyArray<string> }> {
   const metas = [
     { pubkey: key(input.payer, 'payer'), isSigner: true, isWritable: true }, { pubkey: key(input.cache, 'activation cache'), isSigner: false, isWritable: true },
     { pubkey: key(input.releaseSetRecord, 'release-set record'), isSigner: false, isWritable: false }, { pubkey: key(input.releaseSetStaging, 'release-set staging cursor'), isSigner: false, isWritable: false },
-    ...REGISTRY_ROLES.flatMap((role) => { const value = input.roles[role]; return [
-      { pubkey: key(value.record, `${role} record`), isSigner: false, isWritable: false }, { pubkey: key(value.staging, `${role} staging cursor`), isSigner: false, isWritable: false },
-      { pubkey: key(value.program, `${role} Program`), isSigner: false, isWritable: false }, { pubkey: key(value.programData, `${role} ProgramData`), isSigner: false, isWritable: false },
-    ]; }),
+    { pubkey: key(input.addresses.record, `${input.role} record`), isSigner: false, isWritable: false }, { pubkey: key(input.addresses.staging, `${input.role} staging cursor`), isSigner: false, isWritable: false },
+    { pubkey: key(input.addresses.program, `${input.role} Program`), isSigner: false, isWritable: false }, { pubkey: key(input.addresses.programData, `${input.role} ProgramData`), isSigner: false, isWritable: false },
     { pubkey: key(SYSTEM_PROGRAM_ID, 'System Program'), isSigner: false, isWritable: false }, { pubkey: key(RENT_SYSVAR_ID, 'Rent sysvar'), isSigner: false, isWritable: false },
   ];
-  if (metas.length !== REGISTRY_ACTIVATE_ACCOUNT_COUNT) throw new Error('activation account frame is not exactly 26 accounts');
-  const packet = compilePacket(key(input.payer, 'payer'), key(input.registryProgram, 'Registry program'), metas, registryInstruction(), input.recentBlockhash, input.computeUnitLimit);
+  if (metas.length !== REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT) throw new Error('activation account frame is not exactly 10 accounts');
+  const packet = compilePacket(key(input.payer, 'payer'), key(input.registryProgram, 'Registry program'), metas, registryInstruction(0, input.role), input.recentBlockhash, input.computeUnitLimit);
   return Object.freeze({ transaction: packet.transaction, wireBytes: packet.wireBytes, requiredSigners: packet.signers });
 }
 
@@ -378,41 +441,75 @@ export function compileRegistryReauthenticationTransaction(input: Readonly<{ pay
   const metas = [
     { pubkey: key(input.cache, 'activation cache'), isSigner: false, isWritable: false }, { pubkey: key(input.program, 'role Program'), isSigner: false, isWritable: false }, { pubkey: key(input.programData, 'role ProgramData'), isSigner: false, isWritable: false },
   ];
-  const packet = compilePacket(key(input.payer, 'payer'), key(input.registryProgram, 'Registry program'), metas, registryInstruction(input.role), input.recentBlockhash, input.computeUnitLimit);
+  const packet = compilePacket(key(input.payer, 'payer'), key(input.registryProgram, 'Registry program'), metas, registryInstruction(1, input.role), input.recentBlockhash, input.computeUnitLimit);
   return Object.freeze({ transaction: packet.transaction, wireBytes: packet.wireBytes, requiredSigners: packet.signers });
 }
 
+/// Authenticate that one observed account is current Loader-v3 executable state.
+///
+/// Shape only: owner, executable flag, exact 36-byte width, and the variant-2
+/// discriminant. This is what can be said about a program for which no checked
+/// release manifest is in hand — the Registry program's own manifest lives in
+/// `CheckedInfrastructureV1`, not in the five-role execution set.
+function requireLoaderExecutable(account: RpcAccount, field: string): void {
+  if (account.owner !== UPGRADEABLE_LOADER_ID || !account.executable || account.data.length !== LOADER_V3_PROGRAM_BYTES || new DataView(account.data.buffer, account.data.byteOffset, 4).getUint32(0, true) !== 2) throw new Error(`${field} is not current Loader-v3 executable state`);
+}
+
+/// Plan the complete five-transaction Registry activation walk.
+///
+/// Activation admits ONE role per transaction. This returns five unsigned
+/// ten-account packets in canonical role order, each already authenticated
+/// against finalized records and current Loader state, together with which
+/// roles the observed cache already holds.
+///
+/// The Core role's program is deliberately NOT required to equal the Registry
+/// program. `initialize_activation_cache_v1` in `dclutch-registry-contract`
+/// states the boundary directly: "Registry identity is an account-ownership
+/// boundary, not a Core-selection input; the finalized release set binds Core
+/// when that role is activated." Registry identity is authenticated here as an
+/// ownership boundary — the finalized records and the activation cache must be
+/// owned by it, and it must itself be current Loader-v3 executable state.
 export async function prepareRegistryActivation(client: RegistryRpc, input: Readonly<{ registryProgram: string; payer: string; multiprogram: Uint8Array; checkedReleases: Readonly<Record<RegistryRole, Uint8Array>>; computeUnitLimit: number }>): Promise<RegistryActivationPlanV1> {
   const registry = key(input.registryProgram, 'Registry program'); const payer = key(input.payer, 'payer'); checkedComputeLimit(input.computeUnitLimit);
   const evidence = await decodeCheckedMultiprogramV1(input.multiprogram, input.checkedReleases);
-  if (evidence.releaseSet.roles.core.program !== input.registryProgram) throw new Error('release set Core program is not the selected Registry program');
-  const releaseDigest = await sha256(evidence.releaseSet.bytes); const releasePdas = recordPdas(registry, EXECUTION_RELEASE_SET_SCHEMA, releaseDigest);
+  const releaseDigest = await sha256(evidence.releaseSet.bytes); const releasePdas = recordPdas(registry, EXECUTION_RELEASE_SET_SCHEMA_ID_V1, releaseDigest);
   const roleAddresses = await Promise.all(REGISTRY_ROLES.map(async (role): Promise<RegistryRoleAddressesV1> => {
     const artifact = evidence.artifacts[role]; const digest = await sha256(artifact.bytes); const pdas = recordPdas(registry, ARTIFACT_RELEASE_SCHEMA_ID_V1, digest);
     return Object.freeze({ ...pdas, program: artifact.program, programData: artifact.programData });
   }));
   const roles = Object.freeze(roleRecord(roleAddresses)); const cache = PublicKey.findProgramAddressSync([ACTIVATION_SEED, releaseDigest], registry)[0].toBase58();
-  const addresses = [...new Set([input.payer, cache, releasePdas.record, releasePdas.staging, ...REGISTRY_ROLES.flatMap((role) => Object.values(roles[role])), SYSTEM_PROGRAM_ID, RENT_SYSVAR_ID])];
+  const addresses = [...new Set([input.payer, input.registryProgram, cache, releasePdas.record, releasePdas.staging, ...REGISTRY_ROLES.flatMap((role) => Object.values(roles[role])), SYSTEM_PROGRAM_ID, RENT_SYSVAR_ID])];
   const floor = await client.finalizedSlot(); const observation = await client.multipleAccounts(addresses, floor); const accounts = accountMap(observation);
   const payerAccount = required(accounts, payer.toBase58(), 'payer'); if (payerAccount.owner !== SYSTEM_PROGRAM_ID || payerAccount.executable || payerAccount.data.length !== 0) throw new Error('payer is not a System-owned data-free wallet');
+  requireLoaderExecutable(required(accounts, input.registryProgram, 'Registry Program'), 'Registry Program');
   const system = required(accounts, SYSTEM_PROGRAM_ID, 'System Program'); if (system.owner !== NATIVE_LOADER_ID || !system.executable || system.data.length !== 0) throw new Error('System Program runtime account is not canonical');
   const rent = required(accounts, RENT_SYSVAR_ID, 'Rent sysvar'); if (rent.owner !== SYSVAR_OWNER_ID || rent.executable || rent.data.length !== 17) throw new Error('Rent sysvar runtime account is not canonical');
   const releaseRent = BigInt((await client.minimumBalanceForRentExemption(EXECUTION_RELEASE_SET_BYTES)).lamports); const artifactRent = BigInt((await client.minimumBalanceForRentExemption(ARTIFACT_RELEASE_BYTES)).lamports);
   const releaseRecord = required(accounts, releasePdas.record, 'release-set record'); if (releaseRecord.owner !== input.registryProgram || releaseRecord.executable || !same(releaseRecord.data, evidence.releaseSet.bytes) || BigInt(releaseRecord.lamports) < releaseRent) throw new Error('finalized release-set record bytes, owner, or rent reserve differ from checked evidence'); vacancy(accounts, releasePdas.staging, 'release-set staging cursor');
-  let elfBytes = 0;
+  const elfBytesByRole: number[] = []; let elfBytes = 0;
   for (const role of REGISTRY_ROLES) {
     const addressesForRole = roles[role]; const artifact = evidence.artifacts[role]; const record = required(accounts, addressesForRole.record, `${role} artifact record`);
     if (record.owner !== input.registryProgram || record.executable || !same(record.data, artifact.bytes) || BigInt(record.lamports) < artifactRent) throw new Error(`${role} finalized artifact record bytes, owner, or rent reserve differ from checked evidence`);
     vacancy(accounts, addressesForRole.staging, `${role} staging cursor`);
-    elfBytes += await authenticateDeployment(required(accounts, addressesForRole.program, `${role} Program`), addressesForRole.program, required(accounts, addressesForRole.programData, `${role} ProgramData`), addressesForRole.programData, artifact, await decodeCheckedReleaseV1(input.checkedReleases[role]));
+    const hashed = await authenticateDeployment(required(accounts, addressesForRole.program, `${role} Program`), addressesForRole.program, required(accounts, addressesForRole.programData, `${role} ProgramData`), addressesForRole.programData, artifact, await decodeCheckedReleaseV1(input.checkedReleases[role]));
+    elfBytesByRole.push(hashed); elfBytes += hashed;
   }
   if (!Number.isSafeInteger(elfBytes)) throw new Error('aggregate ELF byte count exceeds browser integer precision');
   const cacheAccount = accounts.get(cache); const expected = expectedCacheBytes(evidence); const cacheRent = BigInt((await client.minimumBalanceForRentExemption(ACTIVATION_CACHE_BYTES)).lamports);
-  let mode: 'create' | 'repeat'; let debit: bigint;
-  if (cacheAccount === null || cacheAccount === undefined || (cacheAccount.owner === SYSTEM_PROGRAM_ID && !cacheAccount.executable && cacheAccount.lamports === '0' && cacheAccount.data.length === 0)) { mode = 'create'; debit = cacheRent; if (BigInt(payerAccount.lamports) < debit) throw new Error('payer cannot cover exact activation-cache rent'); }
-  else { if (cacheAccount.owner !== input.registryProgram || cacheAccount.executable || BigInt(cacheAccount.lamports) < cacheRent || !same(cacheAccount.data, expected)) throw new Error('existing activation cache is not the byte-identical release-derived state'); mode = 'repeat'; debit = 0n; }
-  const blockhash = await client.latestBlockhash(observation.slot); const compiled = compileRegistryActivationTransaction({ payer: input.payer, registryProgram: input.registryProgram, recentBlockhash: blockhash.blockhash, computeUnitLimit: input.computeUnitLimit, cache, releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, roles });
-  return Object.freeze({ observedSlot: observation.slot, registryProgram: input.registryProgram, payer: input.payer, cache, mode, cacheRentDebitLamports: debit.toString(), releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, roles, evidence, transaction: compiled.transaction, wireBytes: compiled.wireBytes, requiredSigners: compiled.requiredSigners, computeUnitLimit: input.computeUnitLimit });
+  let activated: ReadonlyArray<RegistryRole>; let mode: RegistryActivationModeV1; let debit: bigint;
+  if (cacheAccount === null || cacheAccount === undefined || (cacheAccount.owner === SYSTEM_PROGRAM_ID && !cacheAccount.executable && cacheAccount.lamports === '0' && cacheAccount.data.length === 0)) {
+    activated = Object.freeze([]); mode = 'absent'; debit = cacheRent; if (BigInt(payerAccount.lamports) < debit) throw new Error('payer cannot cover exact activation-cache rent');
+  } else {
+    if (cacheAccount.owner !== input.registryProgram || cacheAccount.executable || BigInt(cacheAccount.lamports) < cacheRent) throw new Error('existing activation cache is not a rent-reserved Registry-owned account');
+    activated = activationCacheProgressV1(cacheAccount.data, expected); mode = activated.length === REGISTRY_ROLES.length ? 'complete' : 'partial'; debit = 0n;
+  }
+  const remaining = Object.freeze(REGISTRY_ROLES.filter((role) => !activated.includes(role)));
+  const blockhash = await client.latestBlockhash(observation.slot);
+  const packets = REGISTRY_ROLES.map((role, index) => {
+    const compiled = compileRegistryRoleActivationTransaction({ payer: input.payer, registryProgram: input.registryProgram, recentBlockhash: blockhash.blockhash, computeUnitLimit: input.computeUnitLimit, cache, releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, role, addresses: roles[role] });
+    return Object.freeze({ role, alreadyActivated: activated.includes(role), elfBytesHashed: elfBytesByRole[index], addresses: roles[role], transaction: compiled.transaction, wireBytes: compiled.wireBytes, requiredSigners: compiled.requiredSigners });
+  });
+  return Object.freeze({ observedSlot: observation.slot, registryProgram: input.registryProgram, payer: input.payer, cache, mode, activatedRoles: activated, remainingRoles: remaining, cacheRentDebitLamports: debit.toString(), releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, roles, evidence, packets: Object.freeze(packets), totalElfBytesHashed: elfBytes, computeUnitLimit: input.computeUnitLimit });
 }
 
 export async function prepareRegistryReauthentication(client: RegistryRpc, input: Readonly<{ registryProgram: string; payer: string; cache: string; role: RegistryRole; computeUnitLimit: number }>): Promise<RegistryReauthenticationPlanV1> {
