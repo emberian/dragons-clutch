@@ -108,8 +108,8 @@ Regenerate with: npm run abi:capability-manifest
 
 ## Unrendered exports (verbatim)
 
-The renderer did not recognize these statement shapes; they are
-carried verbatim so the reference never silently narrows its source.
+The renderer did not recognize these statement shapes, so they are
+shown verbatim rather than dropped.
 
 ```ts
 export const FUNDING_COMPARTMENTS_V1 = Object.freeze([

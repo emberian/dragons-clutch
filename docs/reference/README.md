@@ -6,41 +6,29 @@
 -->
 # dClutch protocol reference
 
-This reference is generated from the same authorities that run the protocol:
-the route census enumerates programs, routes, and refusal enums from source;
-the gauntlet's bindings and blocked ledger state which routes have executed
-under which campaign and why the rest have not; the compute budgets are the
-checked-in ceilings the campaigns are asserted against; the refusal-band
-registry allocates the error-code space; the ADRs record the decisions; and
-the ABI tables are read from the emitted modules that the browser itself
-decodes with, each byte-gated against its emitting authority. Nothing in this
-directory is hand-maintained, so nothing in it can drift silently: regenerate
-with `tools/genref/generate.sh`, verify with
-`tools/genref/generate.sh --check`.
+The exact numbers behind dClutch, generated straight from the code -- so
+these pages always match the source they describe. Regenerate with
+`tools/genref/generate.sh`; `--check` verifies the match byte for byte.
+
+- [programs.md](programs.md) -- the on-chain programs and what each one
+  does.
+- [routes.md](routes.md) -- every instruction the programs accept, and
+  whether the test campaigns have run it yet.
+- [refusals.md](refusals.md) -- every error code the protocol can return,
+  with its meaning.
+- [budgets.md](budgets.md) -- what the key transactions cost in compute,
+  measured against Solana's per-transaction limit.
+- [decisions.md](decisions.md) -- why the architecture is the way it is,
+  one decision per record.
+- [abi/](abi/README.md) -- byte layouts: magics, PDA seed domains, record
+  widths and offsets, account tables.
 
 Current totals: **13 programs**, **100 routes**
-(70 with an in-tree execution binding), **201 protocol
-refusal codes**.
+(70 exercised by the test campaigns), **201 refusal
+codes**.
 
-- [programs.md](programs.md) -- the on-chain programs, their entrypoints, and
-  their counts.
-- [routes.md](routes.md) -- every instruction route, its selector magic, and
-  its execution status. The standing doctrine: a route ships with the campaign
-  row that executes it, or ships marked never-executed.
-- [refusals.md](refusals.md) -- the band allocation and every refusal code
-  with its meaning. A refusal is the protocol working: dClutch fails closed,
-  and the code names exactly which program refused and why.
-- [budgets.md](budgets.md) -- the golden transactions' compute budgets and
-  the tolerance rule that keeps them honest.
-- [decisions.md](decisions.md) -- the architecture decision records.
-- [abi/](abi/README.md) -- record layouts, magics, PDA seed domains, schema
-  identities, and account tables, per surface.
+If you'd rather start with prose, the [guides](../guides/README.md)
+explain the protocol in plain terms and link back into these tables.
 
-The hand-written [guides](../guides/README.md) -- trader, operator, reader,
-client developers, trenchers --
-are the narrative entry points; they link into these tables rather than
-restating them.
-
-Evidence level, stated once for the whole reference: everything here
-describes a locally executed protocol -- ProgramTest banks and local Agave
-validators. Nothing is deployed to any cluster and nothing is released.
+dClutch is not deployed yet: these tables describe the protocol as it runs
+on a local test chain.

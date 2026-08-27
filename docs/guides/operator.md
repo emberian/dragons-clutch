@@ -1,136 +1,121 @@
 # Operator guide
 
-Running a dClutch market means choosing its immutable identities, funding it,
-and then getting out of the way. You are not a resolver, you hold no upgrade
-lever over the market, and after founding, everything that happens is either
-permissionless or refused. This guide walks the decisions that are yours.
+Running a dClutch market means making all the decisions up front, funding
+them, and then getting out of the way. After your market opens you hold no
+admin keys, you cannot change its rules, and you are not the referee:
+everything that happens next is either open to everyone or refused for
+everyone. This guide walks through the decisions that are yours.
 
-Nothing here is deployed; founding today happens against a local validator
-(the tier-1 gauntlet campaign is the executable form of this whole guide).
-Exact costs, routes, and codes live in the
-[generated reference](../reference/README.md).
+Nothing is deployed yet; today you create markets against a local test
+chain. Exact costs, routes, and codes live in the
+[reference](../reference/README.md).
 
-## Founding
+## What you fix at creation, forever
 
-Founding is two golden transactions, and their costs are pinned in
-[the budgets reference](../reference/budgets.md):
+- **The collateral** — which token backs the market (its **Realm**: the
+  collateral and admission namespace).
+- **The question and its cells** — how the answer space is split into
+  buckets.
+- **The source** — the exact feed whose observation resolves the market,
+  pinned down to the program deployment it trusts.
+- **The window** — when the market can resolve, and how stale an
+  observation may be when it lands.
+- **The fallback outcome** — what happens if the source stays silent.
+- **The program releases** — the exact on-chain code your market runs,
+  named by content, selected from the Registry.
 
-1. **`DCLTPCB1` — the projected-Custody founding prestate.** Custody
-   initializes its replay compartment (including Core's `ProjectFound`
-   projection of the Market address), opens the Hoard vault through
-   Token-2022, and opens the Source funding compartment. After this the
-   collateral and source funding physically exist, segregated, before any
-   liability does.
-2. **`DCLTGMF1` — the atomic generic founding.** Five stages in one rollback
-   domain: Custody **Lock** (locking the Hoard and closing the Source
-   compartment), Core **Found** with its one-shot permit, Custody **Realize**,
-   Claims **founding**, and Core **Open — last**. Either the market opens
-   whole or nothing happened; the campaign's hostile case substitutes a
-   Claims request mid-founding and watches the entire founding roll back.
-   The transaction rides a finalized address lookup table as a v0 packet,
-   and its measured cost sits above 90% of Solana's 1.4M CU ceiling — which
-   is why the budgets file watches it by name.
+All of it is published on chain before the market opens, and none of it
+can change afterwards. There is nothing to govern, so there is no
+governance to capture — and no creator backdoor to worry about, because
+none exists to defend.
 
-What you fix at founding, forever: the Realm (collateral and admission
-namespace), the Product and its claim basis (the cell partition), the
-resolution policy and release-bound Source identity, the capability
-manifest, and the execution release set. All of them are content-addressed
-records published through the Registry before founding; the founding
-authenticates them and binds their identities into the Market. There is no
-post-founding governance surface to operate.
+## Opening the market
 
-## Capabilities
+Creating a market — the protocol calls it **founding** — is two
+transactions:
 
-Execution is split across fixed roles — Core, Claims, Trading, Resolution,
-Custody, plus the Registry and Rent infrastructure
-([decision 0003](../decisions/0003-fixed-role-capability-execution.md); the
-per-program reference is [programs.md](../reference/programs.md)). Your
-capability manifest selects exact releases for the roles the market uses;
-activation authenticates content identities, not authorities
-([decision 0005](../decisions/0005-per-market-authentication-cache.md)), and
-the founding capability root is derived at founding and created afterwards by
-the ordinary activation route
-([decision 0004](../decisions/0004-founding-capability-root.md)) — there is
-no special founding-time backdoor to operate or to defend.
+1. **The custody prestate.** Opens the market's vault (the Hoard) and its
+   funding accounts. After this the collateral physically exists, walled
+   off, before any claim does.
+2. **The founding.** Five steps — lock custody, create the market, make
+   it real, set up claims, open trading last — in a single all-or-nothing
+   transaction. Either your market opens whole or nothing happened at
+   all.
 
-## Funding compartments
+The founding transaction is big: it runs at over 90% of Solana's
+per-transaction compute limit, and its measured cost is tracked in
+[the budgets reference](../reference/budgets.md).
 
-Custody names every token-account role with an economic compartment tag, and
-the tags are deliberately not interchangeable: a receipt for Hoard principal
-can never be accepted as a fee, liveness, recovery, or rent effect. The
+## Funding named obligations
+
+The money you put in has names. Custody tags every token account with
+what it is for, and the tags never mix: collateral can never be spent as
+fees, the fallback bounty can never be spent as rent, and so on. The
 compartments (`CompartmentV1`, `crates/dclutch-custody-contract`):
 
 | compartment | holds |
 |---|---|
-| `HoardPrincipal` | market collateral — pays claimants, never anything else |
+| `HoardPrincipal` | the market's collateral — pays claim holders, never anything else |
 | `TradingPrincipal` | Direct/Dealer trading principal |
 | `Settlement` | general settlement inventory |
-| `FeeVault` | physically segregated realized fees |
-| `LivenessVault` | present funded-liveness capital (the failure walk's funding) |
-| `RecoveryReserve` | present recovery-reserve capital |
+| `FeeVault` | realized fees, kept physically separate |
+| `LivenessVault` | the funding for the fallback (the walk bounty) |
+| `RecoveryReserve` | recovery-reserve capital |
 | `SeriesEscrow` | Series ticket principal before its market exists |
-| `External` | externally owned depositor / recipient / beneficiary accounts |
+| `External` | accounts owned by depositors, recipients, beneficiaries |
 
-Funding is quoted immutably (`DCLTFQ01`) and tracked mutably (`DCLTCFS1`),
-per compartment; native lamports and Realm collateral are distinct
-dimensions and no operation sums or converts them. When you fund a market,
-you are funding *named obligations* — the walk bounty, the resolution work,
-the rent — not topping up a pooled balance. An escrow one lamport short of
-its named amount refuses.
+When you fund a market, you are funding specific named obligations — the
+fallback bounty, the resolution work, the rent — not topping up one
+pooled balance. Native SOL and the market's collateral token are counted
+separately and never converted into each other. An escrow one lamport
+short of its named amount is refused.
 
-## Resolution windows
+## Choosing a resolution window
 
-A terminal window is `[start, end]` and **must have width**: a market that
-can only be answered on one exact second is answered essentially never, and
-walks to its failure outcome instead of resolving. Choose the width against
-your source's real publication cadence. For devnet SOL/USD Pyth (measured
-p50 ≈ 313 s between publications), the probability the window contains at
-least one publication is approximately `1 − exp(−W/313)` (provisional
-model):
+Your window is a time range `[start, end]`, and it needs real width: a
+market that can only be answered in one exact second is answered
+essentially never, and takes its fallback instead. Match the width to how
+often your source actually publishes.
 
-| width `W` | shape | P(≥ 1 publication) |
+For Pyth's devnet SOL/USD feed (measured: a new price roughly every 313
+seconds), the chance the window contains at least one publication is
+about `1 − exp(−W/313)`:
+
+| width `W` | shape | chance of ≥ 1 publication |
 | --- | --- | ---: |
-| 1 s | the old forced shape | ~0.3% |
-| 300 s | one cadence | ~62% |
-| 600 s | two cadences | ~85% |
-| 1,250 s | four cadences | ~98% |
+| 1 s | a single instant | ~0.3% |
+| 300 s | one publication interval | ~62% |
+| 600 s | two intervals | ~85% |
+| 1,250 s | four intervals | ~98% |
 | 1,800 s | 30 minutes | ~99.7% |
 
-Operative guidance: **at least four cadences (~21 minutes), and 30 minutes
-for a market that should not fail for provider reasons.** Source and full
-derivation: [`docs/design/MAINNET_STATE_RELAY.md`](../design/MAINNET_STATE_RELAY.md)
+Practical rule: **make the window at least four publication intervals
+(about 21 minutes), and 30 minutes for a market that should not fall back
+just because the feed was slow.** The derivation is in
+[`docs/design/MAINNET_STATE_RELAY.md`](../design/MAINNET_STATE_RELAY.md)
 §12.3.
 
-`max_age_seconds` is a separate budget: it bounds submission latency — how
-old an observation may be when a keeper lands it — not publication cadence,
-and it also sets the market's deadline at `end + max_age`. A window wide
-enough to be published into is useless if no keeper can land inside
-`max_age` of the publication.
+`max_age_seconds` is a separate knob: it caps how old an observation may
+be when it lands on chain, and it sets the market's final deadline at
+`end + max_age`. A wide window doesn't help if nobody can land the
+observation within `max_age` of its publication.
 
-Two properties you get for free and should not try to buy again:
+Two guarantees you get for free: the first valid observation settles the
+market and every later one is rejected; and there is no dead gap — the
+last moment an observation can resolve the market and the first moment
+the fallback can take it are the same moment, `end + max_age`.
 
-- **Exactly one answer.** The first admissible observation terminalizes;
-  every later one refuses without being inspected. Machine-checked in
-  `formal/dclutch-semantics`
-  (`two_admissible_observations_cannot_both_terminalize`).
-- **No dead gap.** The last second an observation may resolve the market
-  and the first second the failure walk may take it are adjacent by
-  construction: both are `end + max_age`.
+## The fallback
 
-## The failure walk
+If the source stays silent through the window and its grace period, your
+market takes the fallback outcome you disclosed — the protocol calls this
+the **failure walk** — and anyone may trigger it and collect the bounty
+you funded. A walk before the deadline is refused, a second walk cannot
+collect twice, and an underfunded bounty is refused down to the lamport.
 
-The failure outcome is **pre-disclosed and pre-funded**: you name it and
-fund its liveness capital before the market opens, and if the source is
-silent through the window and its grace, anyone may walk the market there
-and collect the named bounty. The campaign witnesses the boundary cases: a
-walk before the deadline refuses, a second walk cannot collect twice, a
-live compartment that is not the escrow refuses, and an escrow one lamport
-short refuses (see the resolution rows in
-[the routes reference](../reference/routes.md)).
-
-The walk is not a defect at any window width — it is the honest outcome of
-true provider silence. Your job as operator is to make it *rare* (window
-width, `max_age`, a source that actually publishes) and *survivable* (a
-failure outcome you disclosed, funding that is really there). It should be
-reached because nothing published, never because the market asked an
-unanswerable question.
+The walk isn't a defect; it's the planned answer to a source that never
+showed up. Your job is to make it rare (a wide-enough window, a
+reasonable `max_age`, a source that really publishes) and survivable (a
+fallback outcome you'd be willing to live with, funded for real). It
+should happen because nothing published — never because your market asked
+a question nothing could answer.

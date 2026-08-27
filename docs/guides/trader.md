@@ -1,99 +1,74 @@
 # Trader guide
 
-What you are holding when you hold a dClutch claim, what it can and cannot
-do to you, and what the protocol's words mean when it talks to you.
+What you hold when you hold a dClutch claim, what it can and cannot do to
+you, and how to read what the protocol tells you.
 
-Nothing here is deployed or tradeable today; this describes the protocol as
-implemented and executed locally. See the [reference](../reference/README.md)
-for the exact numbers this guide links to.
+Nothing is tradeable yet — dClutch is not deployed. This is how trading
+works in the protocol as it runs today on a local test chain.
 
 ## What a claim is
 
-A market names a bounded objective question — say, where SOL/USD publishes at
-a stated time — and partitions the answer space into an **exhaustive,
-disjoint, ordered, canonical** set of cells. That partition is fixed at
-founding and is the market's whole ontology: every claim is a claim on one
-cell.
+A market asks one question with a bounded, checkable answer — say, where
+SOL/USD is at noon on Friday. The possible answers are split into buckets
+called **cells**, fixed when the market is created. Every claim is a claim
+on one cell.
 
-A claim on a cell pays exactly one collateral unit if the resolved answer
-lands in that cell, and zero otherwise. One claim on *every* cell — a
-**complete set** — therefore pays exactly one collateral unit no matter what
-happens, and the protocol treats it that way: complete sets are minted
-against collateral and redeemed for collateral at par, exactly.
+A claim pays **one collateral unit** if the answer lands in its cell, and
+**zero** if it doesn't. That is the whole product.
 
-**Fully collateralized** means the collateral is already there. Claims exist
-only because someone deposited a collateral unit into the market's **Hoard**
-and took the complete set for it. The Hoard's principal pays claimants and
-does nothing else — by standing invariant it is never fees, rent, bounty,
-insurance, work funding, reserve, or treasury capital. There is no leverage
-anywhere in the design, so there is no liquidation, no margin call, no
-funding rate, and no path where the market owes more than it holds. What you
-can lose is what you paid for the claims you hold, at most, ever.
+One claim on every cell — a **complete set** — pays exactly one unit no
+matter what happens. So the protocol treats a complete set and a
+collateral unit as the same thing: deposit a unit and you mint a complete
+set; return a complete set and you get the unit back. That deposit is
+where every claim comes from. The collateral sits in the market's vault
+(its **Hoard**) before any claim exists, and it does nothing but pay claim
+holders.
 
-Because a complete set is always worth exactly one unit, cell prices are
-prices on a simplex: they are exact scaled integers that sum to one unit,
-with one named rounding boundary. When this project says a clearing result is
-the "**best valid submitted candidate**," that is the whole claim — it is
-deliberately not called "optimal" without a checked optimality certificate.
+What this means for you:
 
-## How range protection works
+- The most you can lose is what you paid for your claims. Ever.
+- There is no leverage, so there is no liquidation, no margin call, and
+  no funding rate. Nothing can force-close your position.
+- Because a complete set is always worth exactly one unit, cell prices
+  always sum to exactly one unit. A cell priced at 0.07 units is the
+  market pricing that outcome at seven cents on the dollar.
 
-Range and tail products are not a separate machine. A digital ("below X"),
-a range ("between X and Y"), or a tail ("above Z") is a *set of cells*, and
-buying protection is buying one claim on each cell in that set. The payoff
-compiles exactly onto the categorical basis: the cells are disjoint, so if
-the resolved answer lands in your range, precisely one of your cells wins,
-and it pays one unit per claim on it. The price of a range is the sum of its
-cell prices, exactly, because the cell prices live on the simplex.
+## Buying protection
 
-So "protection against SOL falling below X" is: buy claims on every cell
-below X. If it does, the resolved cell is one of yours and pays par. If it
-does not, your claims expire worthless and the collateral you paid stays
-with whoever sold you the range. No oracle-triggered liquidation sits in the
-middle; the only event that matters is resolution.
+"Protection against SOL below $100" is not a special product. It is
+claims on every cell below $100. If SOL resolves below $100, exactly one
+of your cells wins and pays you one unit per claim. If not, your claims
+expire worthless and the seller keeps what you paid — like an insurance
+premium.
 
-## What resolution is
+The same shape covers a range ("between X and Y") or a tail ("above Z"):
+pick the cells, buy claims on each. The price of the bundle is the sum of
+the cell prices, exactly.
 
-Resolution consumes an authenticated observation from the market's
-**release-bound source** — a source identity pinned at founding, down to the
-program deployment it trusts — inside a terminal window that has real width.
-The **first admissible observation terminalizes the market**; every later
-one refuses without being inspected. That single-answer property is
-machine-checked, not implied (see the resolution material in
-[`docs/design/MAINNET_STATE_RELAY.md`](../design/MAINNET_STATE_RELAY.md) §12.3).
+No price feed watches your position along the way, because there is no
+position to liquidate. The only moment that matters is resolution.
 
-If the source stays silent through the window and its grace, the market
-walks to its **pre-disclosed failure outcome** — funded in advance, taken
-permissionlessly. You know before you trade exactly what silence produces.
-There is no discretionary resolver to appeal to, which also means there is
-no discretionary resolver to be surprised by.
+## How the market resolves
 
-## What a refusal means
+Every market pins its source when it is created — a specific price feed,
+down to the exact program deployment it trusts — and names a time window
+with real width. The first valid observation from that source inside the
+window settles the market; every later one is rejected. No committee, no
+vote, nobody to appeal to — and nobody to be surprised by.
 
-dClutch fails closed. A transaction that does not authenticate exactly —
-wrong account shape, wrong authority, stale state, a window that has not
-opened, a replay — is **refused**: the whole transaction rolls back, no
-partial effect survives, and your collateral is exactly where it was. A
-refusal costs you a transaction fee and nothing else.
+If the source publishes nothing through the whole window, the market
+takes a fallback outcome that was disclosed and funded before it opened.
+You know before you trade exactly what silence produces.
 
-Every refusal carries a code that names the program that refused and why.
-`band = code >> 12`: `0x5…` is Claims, `0x3…` is Core, and a code below
-`0x1000` is not dClutch's at all — it came from some other program in the
-transaction. The complete tables, with meanings, are in
-[the refusal reference](../reference/refusals.md).
+## When the protocol says no
 
-Read refusals as the protocol working. The alternative to a refused
-transaction is not a successful one; it is a market whose invariants bent.
+dClutch refuses any transaction that doesn't check out exactly: wrong
+account, wrong signer, stale state, a window that hasn't opened, a
+replay. A refused transaction rolls back completely — your collateral
+stays exactly where it was, and you're out a transaction fee and nothing
+else.
 
-## The vocabulary, kept honest
-
-- **Fixtures, ProgramTest, local validator, devnet, mainnet** are distinct
-  evidence levels, and none of them promotes to the next by analogy.
-  Everything in this guide is at the local levels today.
-- **"Formally verified"** is never said here without naming the theorem, the
-  digest, and the unverified boundary. Today's machine-checked results cover
-  named models and per-case corpora — the cases, and nothing else.
-- **Route coverage** is stated per route, in
-  [the routes reference](../reference/routes.md): executed under a named
-  campaign, blocked with a stated reason, or never-executed. The uncomfortable
-  rows are printed, not hidden.
+Every refusal carries a code naming the program that refused and why. The
+full list, with meanings, is in
+[the refusal reference](../reference/refusals.md). A refusal isn't a
+malfunction; it's the protocol keeping the market's rules.

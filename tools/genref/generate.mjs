@@ -432,10 +432,10 @@ on a local test chain.
     generatedHeader(["census inventory"]) +
       `# Programs
 
-The census enumerates every program crate under \`programs/\` that declares an
-SBF entrypoint. "Entry routes" are dispatch arms selected by instruction bytes
-(magics); "action routes" are the actions reachable inside an entry route's
-request grammar.
+Every on-chain program in this repository, enumerated from the source under
+\`programs/\`. "Entry routes" are the instructions a program dispatches on
+directly (selected by magic bytes); "action routes" are the actions
+reachable inside an entry route's request.
 
 ` +
       table(
@@ -499,9 +499,9 @@ request grammar.
       .map((u) => [`\`${u.ref}\``, `\`${u.file}\``, u.label]);
     unknown =
       `\n\n## Bindings naming routes the census does not\n\n` +
-      `These route references appear in a bindings file but match no route id
-in the current inventory. Each is either a stale binding or a census gap;
-neither is silently droppable.\n\n` +
+      `These route names appear in a campaign's records but match no route in
+the current code. Each one is stale or a gap; it is listed here so it gets
+fixed rather than dropped.\n\n` +
       table(["reference", "bindings file", "binding label"], rows);
   }
 
@@ -514,21 +514,20 @@ neither is silently droppable.\n\n` +
     ]) +
       `# Routes
 
-Every instruction route the census enumerates, with its selector and its
-execution status. Status comes from two in-tree ledgers: the gauntlet
-campaigns' bindings (authored by the gauntlet, never by a campaign) name the
-routes each witnessed transaction executes or refuses, and
-\`tools/gauntlet/blocked.json\` names every route deliberately not driven yet,
-with the reason. A route with neither is listed as **NEVER-EXECUTED, no
-stated reason** -- the row that should make someone uncomfortable.
+Every instruction the programs accept, with its selector and where it
+stands:
 
-A "witnessed" status here means an in-tree campaign binds the route; it is
-campaign coverage, not a proof about all inputs. Blocked reasons are
-truncated to their first sentence -- the full entries live in
-\`blocked.json\`.
+- **witnessed** -- an in-tree test campaign has actually run this route
+  (that is test coverage, not a proof about every input). The campaign is
+  named in the row.
+- **blocked** -- the route cannot be driven yet, and the reason is written
+  down in \`tools/gauntlet/blocked.json\` (rows show the first sentence;
+  the file has the rest).
+- **NEVER-EXECUTED** -- no campaign has run it and no reason is recorded
+  yet.
 
-Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}** routes
-have neither an execution binding nor a blocked entry.
+Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}**
+routes are in that last group.
 
 ` +
       sections.join("\n\n") +
@@ -572,20 +571,20 @@ have neither an execution binding nor a blocked entry.
     ]) +
       `# Refusal codes
 
-Every custom program error code is namespaced by program (decision 0007;
-\`crates/dclutch-refusal-registry\` is the authority). \`band = code >> 12\`,
-each band is 0x1000 codes wide, and band 0 is never allocated -- so a custom
-code below \`0x1000\` is, by construction, not a dClutch refusal. Read a band
-off a log line by dropping the last three hex digits: \`custom program error:
-0x5180\` is band 5 (Claims). Bands at \`0x100000\` and above belong to
-test-only caller programs that exist to drive hostile CPI cases and are never
-deployed.
+Every error code the protocol can return, with its meaning. When dClutch
+refuses a transaction, the whole transaction rolls back -- no partial
+effect survives -- and the code says exactly which program refused and why.
+A refusal isn't a malfunction; it's the protocol keeping the rules.
 
-A refusal is the protocol working. dClutch fails closed: an input, account
-shape, authority, or state that does not authenticate exactly is refused with
-a code that names the program and the reason, and no partial effect survives
-the transaction. The tables below carry all **${totalRefusals}** protocol
-codes with their meanings, straight from the refusal enums' own doc comments.
+Reading a code: each program owns its own block ("band") of codes, and
+\`band = code >> 12\` -- drop the last three hex digits to get the band. So
+\`custom program error: 0x5180\` is band 5, which is Claims. Band 0 is
+never used, meaning a code below \`0x1000\` came from some other program in
+your transaction, not from dClutch. Bands at \`0x100000\` and above belong
+to test-only programs that are never deployed.
+
+The tables below carry all **${totalRefusals}** codes, with meanings taken
+from the source code's own documentation.
 
 ## Band allocation
 
@@ -635,20 +634,17 @@ ${bandTable}
     generatedHeader(["tools/gauntlet/CU_BUDGETS.json"]) +
       `# Compute budgets for the golden transactions
 
-\`tools/gauntlet/CU_BUDGETS.json\` is the one owner of these numbers; the
-gauntlet's witness evaluator asserts them against each campaign's own
-finalized evidence, and a red row names the transaction and the delta. The
-chain's per-transaction ceiling is **${num(budgetsFile.ceiling.compute_units)}
-CU**; a budget above it is refused by the evaluator, which is how the file
-says out loud that a transaction has stopped fitting.
+What the protocol's key transactions cost, in compute units, measured from
+real runs. Solana allows at most
+**${num(budgetsFile.ceiling.compute_units)} CU** per transaction; a budget
+above that ceiling fails this file's own checks, so a transaction that
+stops fitting gets caught here, loudly.
 
-The tolerance rule, verbatim from the file:
-\`${budgetsFile.tolerance_rule.formula}\`. The measured value of every entry
-is the highest draw observed, never a single run. Read
-\`tools/gauntlet/CU_BUDGETS.md\` before changing a number -- in particular
-what it says about noise: PDA bump search costs 1,500 CU per iteration and
-moves with the keys in play, which is why the campaigns run seeded and why
-the tolerances are what they are.
+Each budget is measured cost plus a tolerance
+(\`${budgetsFile.tolerance_rule.formula}\`), where the measured value is
+the highest cost seen across runs, never a single run. Changing a number?
+Read \`tools/gauntlet/CU_BUDGETS.md\` first -- costs move with the accounts
+in play, and it explains how much of that is noise.
 
 ## Enforced budgets
 
@@ -705,9 +701,9 @@ ${provenance}
     generatedHeader(["docs/decisions/*.md"]) +
       `# Architecture decision records
 
-The decisions that bind the implementation. Each record carries its own
-context, alternatives, and consequences; this index carries the first
-sentence of each record's status line.
+Why the protocol is built the way it is, one decision per record. Each
+record carries its context, the alternatives, and the consequences; this
+index shows each record's current status.
 
 ` +
       table(["decision", "status"], rows) +
@@ -828,7 +824,7 @@ sentence of each record's status line.
     if (mod.unrendered.length > 0) {
       parts.push(`## Unrendered exports (verbatim)\n`);
       parts.push(
-        "The renderer did not recognize these statement shapes; they are\ncarried verbatim so the reference never silently narrows its source.\n",
+        "The renderer did not recognize these statement shapes, so they are\nshown verbatim rather than dropped.\n",
       );
       for (const stmt of mod.unrendered) {
         parts.push("```ts");
@@ -846,14 +842,14 @@ sentence of each record's status line.
     generatedHeader(["apps/dclutch-web/lib/generated/*.ts"]) +
       `# ABI surfaces
 
-One page per emitted ABI module. These are the byte layouts the protocol
-actually enforces: magics, PDA seed domains, schema release identities,
-record widths and field offsets, and account tables. The source modules live
-in \`apps/dclutch-web/lib/generated/\` -- they are what the browser decodes
-with, each carries an \`abi:*:verify\` byte-compare gate against its emitting
-authority (the Lean emitters in \`formal/dclutch-semantics\` or the canonical
-Rust contracts), and \`npm test\` runs every gate. This directory renders
-them; it never restates them by hand.
+The exact bytes the protocol speaks: instruction magics, PDA seed domains,
+record widths and field offsets, and account tables -- one page per
+surface.
+
+These pages are rendered from the same generated modules the web app uses
+to decode chain data (\`apps/dclutch-web/lib/generated/\`). Each module is
+byte-checked against the Rust or Lean source that defines its layout, and
+\`npm test\` runs every check.
 
 ` +
       table(["surface", "module authority", "regenerate"], indexRows) +

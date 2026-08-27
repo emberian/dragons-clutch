@@ -58,6 +58,12 @@ Regenerate with: npm run abi:direct-v3
 | `DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5` | 32 | -- | `19 3b e6 e3 b1 1e 70 88 31 c4 e0 a8 41 df e9 8c 0b d7 09 a9 07 23 d1 f1 93 5d f2 b3 3d c5 85 bc` |
 | `DIRECT_INLINE_ORDINARY_EFFECT_ID_V4` | 32 | -- | `ea b2 81 96 91 c7 d7 a5 17 ab 95 8a d3 94 ce 6a 38 ad 9b 0d 8f 76 d5 03 44 6c ec f0 8b ba f7 7a` |
 
+## String constants
+
+| name | value |
+| --- | --- |
+| `CAPABILITY_ROOT_PDA_DOMAIN_V1` | `dclutch:capability-root:v1` |
+
 ## Numeric constants (widths, offsets, counts, tags)
 
 | name | value |
@@ -316,8 +322,8 @@ Regenerate with: npm run abi:direct-v3
 
 ## Unrendered exports (verbatim)
 
-The renderer did not recognize these statement shapes; they are
-carried verbatim so the reference never silently narrows its source.
+The renderer did not recognize these statement shapes, so they are
+shown verbatim rather than dropped.
 
 ```ts
 export const HOT_FAMILY_REQUEST_OFFSET_V3 = HOT_EXECUTION_ENVELOPE_BYTES_V3;
