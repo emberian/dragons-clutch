@@ -192,9 +192,9 @@ against the record's, which is `None`. Meanwhile
 to *still hold* an authority that signs. Both conditions are live in one
 instruction.
 
-(That first admission hashes 373,040 bytes of Registry + Rent ELF, ≈206,000 CU
-at the measured 0.552 CU/byte. Comfortable, but it is the reason the profile
-initialization is not free.)
+(That first admission hashes 373,040 bytes of Registry + Rent ELF, which is why
+profile initialization is not free: **231,335 CU measured** in the §6 dry run.
+Comfortable, and it scales with those two ELFs rather than with anything else.)
 
 The minimal constraint is therefore only: *Registry and Rent immutable before
 Core init; Core mutable during it and immutable before activation; Claims,
