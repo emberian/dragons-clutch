@@ -135,10 +135,17 @@ lane is always *additional* evidence — a route whose only observation came fro
 one is recorded with that campaign name, and the report shows it. The Hot path
 is downstream of the Trading heap wall, which is not this family's to move.
 
-## Standing gap
+## Standing gap — CLOSED for construction, 2026-08-27
 
-The N=258 account sets need the ALT-backed v0 plan **measured**, not asserted.
-Until some campaign submits those six actions as v0 transactions and records
-their real wire size, the sentence "the production operator separately proves
-the same account set packet-safe" — which the suite's own comment carries — is
-a claim without a witness. It is the first thing a General tier should measure.
+The N=258 account sets needed the ALT-backed v0 plan **measured**, not
+asserted. `docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md` measures it:
+all seven actions compile packet-safe through `compile_general_hot_v0`, widest
+918 of 1,232 bytes, and the same account set with no lookup table refuses
+`PacketTooLarge`. The derivation there reproduces every instruction-account
+count in the tables above, which is this campaign acting as its control.
+
+What that closes is the *construction* clause — the wire the operator would
+submit. It is not execution, and it does not make this campaign a fast lane:
+this campaign still submits legacy messages, so the tier clause it fails is
+still failed here. The N = 1 fast lane described above remains admissible and
+unbuilt.

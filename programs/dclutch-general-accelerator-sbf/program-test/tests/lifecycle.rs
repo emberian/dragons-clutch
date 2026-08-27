@@ -1020,7 +1020,13 @@ fn assert_execution_evidence(evidence: ExecutionEvidence, action: Action, outcom
     // accelerator can see every scratch page directly. Some N=258 actions
     // exceed the network packet ceiling in this diagnostic transport; the
     // production operator separately proves the same account set packet-safe
-    // through its exact ALT-backed v0 plan.
+    // through its exact ALT-backed v0 plan. That sentence stood without a
+    // witness until 2026-08-27 and now has one:
+    // `dclutch-operator::general_hot_v3::
+    //  every_action_is_alt_packet_safe_at_the_canonical_runtime_width`
+    // compiles all seven N=258 account sets through `compile_general_hot_v0`,
+    // widest 918 of 1,232 bytes, and reproduces every account count measured
+    // here. See `docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`.
     assert!(evidence.packet_bytes > 0 && evidence.packet_bytes <= 2_000);
     assert!(evidence.scratch_pages > 0);
     eprintln!(

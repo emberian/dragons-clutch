@@ -174,12 +174,50 @@ root, and the V1/V2 generation needs an executor change nobody should make.
   side — has zero callers and zero tests. That, not a missing dispatch point,
   is the next thing standing between General and an executed hot action.
 
-## 7. What a General end-to-end hot action still needs
+## 7. The zombie refusal is on the wrong generation
+
+TA-GEN closed the zombie case on the slice: a `Retiring` or `Retired`
+`GeneralRootV2` refuses, decoded from a composite root whose immutable header
+is byte-identical to the accepted one. That refusal is correct and it is on the
+sixteen-outcome generation.
+
+**The runtime-width generation has no such refusal, because it never reads the
+root tail at all.** Traced end to end:
+
+```text
+hot_v3.rs:2787  authenticate_root_boxed_v3 decodes root_data[..232] only
+dispatch.rs:258 TradingFamilyContextV1::authenticate — the header and the length
+hot_v3.rs:1698  authenticate_descriptor_root_selection — widths and identities
+account_rules_v3.rs:216  root coordinate 0: exact 360 bytes, no_effects()
+joined_artifacts.rs      zero references to the root coordinate: no operation
+                         projects the lifecycle byte into any register
+root_v3.rs:25   GeneralRootV2::require_hot_context_v3 — requires Active,
+                         and has no caller outside its own tests
+```
+
+The header proves identity and says nothing about whether the capability still
+accepts work; `hash(root bytes) == envelope.root_prestate_digest()` in
+`process_hot_execution_v3` is a caller-declared replay binding, not a
+constraint on the lifecycle value. So a retired General capability would still
+execute hot actions on the reachable path.
+
+It is latent rather than live — no V3 activation adapter exists, so no such
+root can be created yet — and it must not be allowed to stop being latent
+quietly. The fix is data-defined and it is not cheap: a root-lifecycle scalar
+changes `GENERAL_HOT_COMMON_SCALARS_V3`, which moves the bank width, the page
+count, and every artifact digest in the family. Recorded as `U-003`(a) in
+`docs/OMISSION_INDEX.md`. Substrate, said out loud: these artifacts are
+TransitionVM programs and AccountProfiles — interpreted data authored in Rust
+contract crates — not AIR, and there is no constraint system in the Trading hot
+path.
+
+## 8. What a General end-to-end hot action still needs
 
 1. A V3 activation adapter, so a General capability root can exist.
-2. A capability seal for the selected `(descriptor, action)` pair — its own
+2. The root-lifecycle refusal of §7.
+3. A capability seal for the selected `(descriptor, action)` pair — its own
    outer, already implemented (`hot_v3::process_capability_seal_v1`).
-3. `build_general_hot_instruction_v3` exercised against a real `GeneralHotStateV3`.
-4. The packet witness for the N=258 account sets (see
-   `docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`).
-5. The Trading hot tail past phase 7 (W2i), which is not General's to move.
+4. `build_general_hot_instruction_v3` exercised against a real `GeneralHotStateV3`.
+5. ~~The packet witness for the N=258 account sets~~ — landed
+   (`docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`).
+6. The Trading hot tail past phase 7 (W2i), which is not General's to move.
