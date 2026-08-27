@@ -333,7 +333,7 @@ fn fixture() -> (ProgramTest, Fixture) {
     let cache_account = fixture_account(REGISTRY_PROGRAM_ID, cache_bytes);
     let core_account = fixture_account(CORE_PROGRAM_ID, shared.core_state.clone());
     let market_account = fixture_account(CLAIMS_PROGRAM_ID, shared.claims_market_bytes.clone());
-    let linked_account = fixture_account(CORE_PROGRAM_ID, shared.linked_basis.bytes.clone());
+    let linked_account = fixture_account(REGISTRY_PROGRAM_ID, shared.linked_basis.bytes.clone());
     let vacant = fixture_account(system_program::ID, Vec::new());
     let product_account = fixture_account(REGISTRY_PROGRAM_ID, shared.product.bytes.clone());
     let domain_account = fixture_account(REGISTRY_PROGRAM_ID, shared.result_domain.bytes.clone());

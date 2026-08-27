@@ -1,16 +1,25 @@
-//! Shared 258-outcome Product Runtime V2/LBV2 fixture construction.
+//! Shared 258-outcome Product Runtime V3/LBV2 fixture construction.
 //!
 //! This module is the sole fixture compiler used by affine and record-keyed
 //! Position lifecycle ProgramTests. It returns canonical bytes and derived
 //! account coordinates; each test still loads and observes real accounts.
+//!
+//! The liability basis is the canonical Registry-owned `ProductBasisV3`
+//! record under `GRADED_BASIS_RECORD_SCHEMA_ID_V3` — the same record Core
+//! authenticates when it commits a founding permit. There is no legacy
+//! Core-owned `LinkedBasisRecordV2` fixture; that expectation was deleted
+//! when Claims converged onto `authenticate_product_basis_v3`.
 
 use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
-use dclutch_liability_basis_v2_kernel::product_claims::{
-    CATEGORICAL_BASIS_BYTES_V2, CategoricalBasisInputV2, ContentIdV2,
-    LINKED_CATEGORICAL_BASIS_BYTES_V2, encode_categorical_basis_v2, encode_linked_basis_record_v2,
-};
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, STATE_BYTES,
+};
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+        compile_basis_v3, semantic_basis_preimage_v3,
+    },
 };
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_admission::{
@@ -30,14 +39,15 @@ const CLAIMS_ABI_VERSION_V2: u16 = 2;
 const CLAIMS_MARKET_HEADER_BYTES_V2: usize = 256;
 const CLAIMS_POSITION_HEADER_BYTES_V2: usize = 128;
 const CLAIMS_MARKET_SEED_V2: &[u8] = b"dclutch:lbv2:market";
-const LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2: [u8; 32] = [
-    0x5c, 0x84, 0x2a, 0xe9, 0xe9, 0x15, 0x51, 0xd1, 0xaf, 0x99, 0xcf, 0x99, 0xfd, 0x53, 0x7f, 0x64,
-    0xfb, 0x8d, 0xbf, 0x6a, 0x4e, 0x88, 0x3f, 0x22, 0xd9, 0x0b, 0xd5, 0xf3, 0x24, 0x5f, 0x6e, 0x2e,
-];
-const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
-const BASIS_PRODUCT_LINK_OFFSET_V2: usize = 32;
-const BASIS_PRODUCT_LINK_END_V2: usize = 64;
 const OUTCOME_COUNT_V2: usize = 258;
+const COORDINATE_DOMAIN_ID: [u8; 32] = [0x43; 32];
+const RESULT_UNIT_ID: [u8; 32] = [0x44; 32];
+const EVALUATOR_RELEASE_ID: [u8; 32] = [0x48; 32];
+/// Placeholder result-domain identity used only for the provisional basis the
+/// semantic preimage is read from. `semantic_basis_preimage_v3` omits both the
+/// Product link and the result-domain link, so the semantic identity is
+/// unchanged when the real domain digest is substituted below.
+const PROVISIONAL_RESULT_DOMAIN_ID: [u8; 32] = [0x49; 32];
 
 /// Shared fixture compilation refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,7 +56,7 @@ pub enum FixtureError {
     Identity,
     /// Runtime Product compilation or exact width refused.
     Product,
-    /// Categorical or linked LBV2 encoding refused.
+    /// Canonical ProductBasisV3 encoding refused.
     Basis,
     /// Core or Claims fixed-layout encoding refused.
     State,
@@ -154,26 +164,28 @@ pub fn compile_product_lbv2_fixture_v2(
         return Err(FixtureError::Identity);
     }
     let product_id = content([0x41; 32])?;
-    let other_product_id = content_id([0x42; 32])?;
-    let mut embedded = [0_u8; CATEGORICAL_BASIS_BYTES_V2];
-    encode_categorical_basis_v2(
-        CategoricalBasisInputV2 {
-            product_instance_id: content_id(product_id.to_bytes())?,
-            claim_count: u32::try_from(OUTCOME_COUNT_V2).map_err(|_| FixtureError::Basis)?,
-        },
-        &mut embedded,
-    )
-    .map_err(|_| FixtureError::Basis)?;
-    let semantic_basis_id = hashv(&[
-        BASIS_SEMANTIC_ID_DOMAIN_V2,
-        embedded
-            .get(..BASIS_PRODUCT_LINK_OFFSET_V2)
-            .ok_or(FixtureError::Basis)?,
-        embedded
-            .get(BASIS_PRODUCT_LINK_END_V2..)
-            .ok_or(FixtureError::Basis)?,
-    ])
-    .to_bytes();
+    let other_product_id: [u8; 32] = [0x42; 32];
+    let basis_width = u32::try_from(OUTCOME_COUNT_V2).map_err(|_| FixtureError::Basis)?;
+    let provisional_basis_input = BasisInputV3 {
+        kind: BasisKindV3::CategoricalQ1,
+        product_id: product_id.to_bytes(),
+        result_domain_id: PROVISIONAL_RESULT_DOMAIN_ID,
+        coordinate_domain_id: COORDINATE_DOMAIN_ID,
+        result_unit_id: RESULT_UNIT_ID,
+        evaluator_release_id: EVALUATOR_RELEASE_ID,
+        basis_width,
+        payout_scale: 1,
+        knot_denominator: 1,
+        knots: &[],
+        terms: &[],
+        failure_payouts: &[],
+    };
+    let basis_bytes = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT_V2, 0, 0)
+        .map_err(|_| FixtureError::Basis)?;
+    let mut provisional_basis = vec![0_u8; basis_bytes];
+    compile_basis_v3(provisional_basis_input, &mut provisional_basis)
+        .map_err(|_| FixtureError::Basis)?;
+    let semantic_basis_id = semantic_basis_id_v3(&provisional_basis)?;
 
     let cuts: Vec<i128> = (0_i128..256_i128).collect();
     let coefficients = vec![1_u64; OUTCOME_COUNT_V2];
@@ -226,47 +238,38 @@ pub fn compile_product_lbv2_fixture_v2(
         substituted_portfolio_bytes,
     );
 
-    let linked_basis_bytes = linked_basis(
-        content_id(product_id.to_bytes())?,
-        content_id(semantic_basis_id)?,
-        &embedded,
-    )?;
-    let mut substituted_embedded = [0_u8; CATEGORICAL_BASIS_BYTES_V2];
-    encode_categorical_basis_v2(
-        CategoricalBasisInputV2 {
-            product_instance_id: other_product_id,
-            claim_count: u32::try_from(OUTCOME_COUNT_V2).map_err(|_| FixtureError::Basis)?,
+    let linked_basis_bytes = basis_record_v3(
+        BasisInputV3 {
+            result_domain_id: result_domain.digest,
+            ..provisional_basis_input
         },
-        &mut substituted_embedded,
-    )
-    .map_err(|_| FixtureError::Basis)?;
-    let substituted_semantic = hashv(&[
-        BASIS_SEMANTIC_ID_DOMAIN_V2,
-        substituted_embedded
-            .get(..BASIS_PRODUCT_LINK_OFFSET_V2)
-            .ok_or(FixtureError::Basis)?,
-        substituted_embedded
-            .get(BASIS_PRODUCT_LINK_END_V2..)
-            .ok_or(FixtureError::Basis)?,
-    ])
-    .to_bytes();
-    if substituted_semantic != semantic_basis_id {
+        basis_bytes,
+    )?;
+    // The same semantic basis bound to a different Product identity. The V3
+    // semantic preimage omits the Product link, so this record is semantically
+    // identical and is refused only by the authenticated Product join.
+    let substituted_basis_bytes = basis_record_v3(
+        BasisInputV3 {
+            product_id: other_product_id,
+            result_domain_id: result_domain.digest,
+            ..provisional_basis_input
+        },
+        basis_bytes,
+    )?;
+    if semantic_basis_id_v3(&substituted_basis_bytes)? != semantic_basis_id
+        || substituted_basis_bytes == linked_basis_bytes
+    {
         return Err(FixtureError::Basis);
     }
-    let substituted_linked_bytes = linked_basis(
-        other_product_id,
-        content_id(semantic_basis_id)?,
-        &substituted_embedded,
-    )?;
     let linked_basis = finalized(
-        input.core_program,
-        LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
+        input.registry_program,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
         linked_basis_bytes,
     );
     let substituted_linked_basis = finalized(
-        input.core_program,
-        LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2,
-        substituted_linked_bytes,
+        input.registry_program,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        substituted_basis_bytes,
     );
 
     let mut core_identity = MarketIdentity {
@@ -403,15 +406,20 @@ fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> FinalizedRecord
     }
 }
 
-fn linked_basis(
-    product_id: ContentIdV2,
-    semantic_basis_id: ContentIdV2,
-    embedded: &[u8],
-) -> Result<Vec<u8>> {
-    let mut output = vec![0_u8; LINKED_CATEGORICAL_BASIS_BYTES_V2];
-    encode_linked_basis_record_v2(product_id, semantic_basis_id, embedded, &mut output)
-        .map_err(|_| FixtureError::Basis)?;
+fn basis_record_v3(input: BasisInputV3<'_>, width: usize) -> Result<Vec<u8>> {
+    let mut output = vec![0_u8; width];
+    compile_basis_v3(input, &mut output).map_err(|_| FixtureError::Basis)?;
     Ok(output)
+}
+
+fn semantic_basis_id_v3(bytes: &[u8]) -> Result<[u8; 32]> {
+    let semantic = semantic_basis_preimage_v3(bytes).map_err(|_| FixtureError::Basis)?;
+    Ok(hashv(&[
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic.prefix(),
+        semantic.suffix(),
+    ])
+    .to_bytes())
 }
 
 fn encode_market(
@@ -498,10 +506,6 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) -> Result<()> {
 
 fn content(bytes: [u8; 32]) -> Result<ContentId> {
     ContentId::new(bytes).map_err(|_| FixtureError::Identity)
-}
-
-fn content_id(bytes: [u8; 32]) -> Result<ContentIdV2> {
-    ContentIdV2::new(bytes).map_err(|_| FixtureError::Identity)
 }
 
 fn identity(bytes: [u8; 32]) -> Result<Identity> {
