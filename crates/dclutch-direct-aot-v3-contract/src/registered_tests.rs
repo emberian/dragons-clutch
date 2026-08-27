@@ -475,8 +475,15 @@ const HOSTILE_CORPUS: &[Case] = &[
     ("custody_revision_saturated", |s, _i| {
         s[FILL_SCALAR_CUSTODY_REVISION_V4] = u64::MAX;
     }),
+    // The second leg's increment saturates only when a second leg is actually
+    // enabled. A rate of twenty per cent clears the floor on both sides, so the
+    // seller-intermediate route fires and the ladder advances twice.
     ("custody_revision_second_increment_saturated", |s, _i| {
         s[FILL_SCALAR_CUSTODY_REVISION_V4] = u64::MAX - 1;
+        s[FILL_SCALAR_POLICY_FEE_BPS_V4] = 2_000;
+        s[FILL_SCALAR_SELLER_FEE_BPS_V4] = 2_000;
+        s[FILL_SCALAR_BUYER_FEE_BPS_V4] = 2_000;
+        s[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 14;
     }),
     // One basis point above the denominator. Nothing else in the program
     // bounds the rate: the conservation clause is an identity in the fee
@@ -588,9 +595,41 @@ const BOUNDARY_CORPUS: &[Case] = &[
     ("custody_revision_one_below_saturation", |s, _i| {
         s[FILL_SCALAR_CUSTODY_REVISION_V4] = u64::MAX - 2;
     }),
+    // The just-inside twin of `custody_revision_second_increment_saturated`:
+    // the same replay revision with a zero fee enables ONE route, so the ladder
+    // advances once and lands exactly on the ceiling.
+    (
+        "custody_revision_at_ceiling_with_one_enabled_route",
+        |s, _i| {
+            s[FILL_SCALAR_CUSTODY_REVISION_V4] = u64::MAX - 1;
+        },
+    ),
     ("claim_revisions_one_below_saturation", |s, _i| {
         s[FILL_SCALAR_CLAIM_SOURCE_REVISION_V4] = u64::MAX - 1;
         s[FILL_SCALAR_CLAIM_DESTINATION_REVISION_V4] = u64::MAX - 1;
+    }),
+    // One admissible bank per corner of `(sellerNet != 0, totalFee != 0)`, so
+    // every Custody route enable the two executors derive is exercised on both
+    // sides of its own condition. The baseline above is the (nonzero, zero)
+    // corner.
+    ("both_custody_legs_move", |s, _i| {
+        s[FILL_SCALAR_POLICY_FEE_BPS_V4] = 2_000;
+        s[FILL_SCALAR_SELLER_FEE_BPS_V4] = 2_000;
+        s[FILL_SCALAR_BUYER_FEE_BPS_V4] = 2_000;
+        s[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 14;
+    }),
+    (
+        "fee_takes_the_whole_quote_so_only_the_fee_leg_moves",
+        |s, _i| {
+            s[FILL_SCALAR_POLICY_FEE_BPS_V4] = 10_000;
+            s[FILL_SCALAR_SELLER_FEE_BPS_V4] = 10_000;
+            s[FILL_SCALAR_BUYER_FEE_BPS_V4] = 10_000;
+            s[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 24;
+        },
+    ),
+    ("zero_execution_price_moves_no_collateral", |s, _i| {
+        s[FILL_SCALAR_SELLER_LIMIT_V4] = 0;
+        s[FILL_SCALAR_EXECUTION_PRICE_V4] = 0;
     }),
 ];
 

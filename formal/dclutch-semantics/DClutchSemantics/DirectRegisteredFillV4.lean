@@ -24,6 +24,11 @@ Register schema notes that are semantic, not incidental:
   thirty-two. Registers 32..39 are carried, unwritten and unread: no operation
   in the program addresses them, which `named_identities_are_the_addressed_ones`
   decides. The width is a physical bank size, not a semantic one.
+* neither Custody leg is unconditional, so the program derives the enable bits
+  that select among the settlement's Custody route declarations, and advances
+  the Custody replay revision by exactly as many transfers as it enabled. This
+  mirrors `DirectOrdinaryV3.lean`'s block instruction for instruction; see
+  "The route enables" below for the fee semantics it inherits.
 -/
 
 namespace DClutch.DirectRegisteredFillV4
@@ -63,6 +68,8 @@ inductive ScalarSlot where
   | terminal
   | sellerMakerRentPrincipal | sellerRecordRentPrincipal
   | buyerMakerRentPrincipal | buyerRecordRentPrincipal
+  | feeNonzero | sellerTerminalRouteEnabled
+  | sellerIntermediateRouteEnabled | feeSoleRouteEnabled
   deriving DecidableEq, Repr
 
 namespace ScalarSlot
@@ -96,7 +103,9 @@ def all : List ScalarSlot := [
   .custodyRevision, .custodyRevisionAfterSeller, .custodyRevisionAfterFee,
   .terminal,
   .sellerMakerRentPrincipal, .sellerRecordRentPrincipal,
-  .buyerMakerRentPrincipal, .buyerRecordRentPrincipal
+  .buyerMakerRentPrincipal, .buyerRecordRentPrincipal,
+  .feeNonzero, .sellerTerminalRouteEnabled,
+  .sellerIntermediateRouteEnabled, .feeSoleRouteEnabled
 ]
 
 @[simp] def index : ScalarSlot → Nat
@@ -192,6 +201,10 @@ def all : List ScalarSlot := [
   | .sellerRecordRentPrincipal => 89
   | .buyerMakerRentPrincipal => 90
   | .buyerRecordRentPrincipal => 91
+  | .feeNonzero => 92
+  | .sellerTerminalRouteEnabled => 93
+  | .sellerIntermediateRouteEnabled => 94
+  | .feeSoleRouteEnabled => 95
 
 def rustName : ScalarSlot → String
   | .rootPhase => "FILL_SCALAR_ROOT_PHASE_V4"
@@ -286,6 +299,10 @@ def rustName : ScalarSlot → String
   | .sellerRecordRentPrincipal => "FILL_SCALAR_SELLER_RECORD_RENT_PRINCIPAL_V4"
   | .buyerMakerRentPrincipal => "FILL_SCALAR_BUYER_MAKER_RENT_PRINCIPAL_V4"
   | .buyerRecordRentPrincipal => "FILL_SCALAR_BUYER_RECORD_RENT_PRINCIPAL_V4"
+  | .feeNonzero => "FILL_SCALAR_FEE_NONZERO_V4"
+  | .sellerTerminalRouteEnabled => "FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4"
+  | .sellerIntermediateRouteEnabled => "FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4"
+  | .feeSoleRouteEnabled => "FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4"
 
 /-- Emitted Rust documentation for this coordinate. -/
 def doc : ScalarSlot → String
@@ -374,13 +391,20 @@ def doc : ScalarSlot → String
   | .claimSourceRevisionAfter => "Seller record Position resulting revision."
   | .claimDestinationRevisionAfter => "Buyer Position resulting revision."
   | .custodyRevision => "Buyer Custody replay revision before the first transfer."
-  | .custodyRevisionAfterSeller => "Buyer Custody revision after the seller transfer."
-  | .custodyRevisionAfterFee => "Buyer Custody revision after the fee transfer."
+  | .custodyRevisionAfterSeller =>
+      "Buyer Custody revision after the seller transfer, advanced only when one is enabled."
+  | .custodyRevisionAfterFee =>
+      "Buyer Custody revision after the fee transfer, advanced only when one is enabled."
   | .terminal => "Final terminal constant for child delegated transfer envelopes."
   | .sellerMakerRentPrincipal => "Seller maker replay historical rent principal."
   | .sellerRecordRentPrincipal => "Seller registered-record historical rent principal."
   | .buyerMakerRentPrincipal => "Buyer maker replay historical rent principal."
   | .buyerRecordRentPrincipal => "Buyer registered-record historical rent principal."
+  | .feeNonzero => "Derived nonzero combined-fee bit."
+  | .sellerTerminalRouteEnabled => "Derived terminal seller-only Custody route enable bit."
+  | .sellerIntermediateRouteEnabled =>
+      "Derived seller-intermediate plus fee-continuation route enable bit."
+  | .feeSoleRouteEnabled => "Derived terminal fee-only Custody route enable bit."
 
 end ScalarSlot
 
@@ -533,6 +557,14 @@ def d (register : IdentitySlot) : Reg := common register.index
 /-- Exact common scalar-bank width. -/
 def commonScalars : Nat := ScalarSlot.all.length
 
+/-- The common scalar-bank width the TRANSCRIPTION carries, which is the width
+the hand-written Rust `InstructionV3` array shipped: the four route-enable
+coordinates are appended schema and the transcription predates them. Pinning it
+as a literal is what keeps the transcription's emitted bytes byte-identical to
+the object it replaced; the bank width is a header field, so deriving it from
+`ScalarSlot.all` would have moved those bytes the moment the schema grew. -/
+def transcribedCommonScalars : Nat := 92
+
 /-- Named common identity coordinates. -/
 def namedIdentities : Nat := IdentitySlot.all.length
 
@@ -673,7 +705,10 @@ def derivationOps : List Op := [
   .subInto (s .buyerReservedCollateral) (s .buyerDebit) (s .buyerReservedCollateralAfter)
 ]
 
-/-- Terminal candidacy and the child revisions the effect chain consumes. -/
+/-- Terminal candidacy and the two Claims revisions the effect chain consumes.
+Both Claims legs are unconditional because `quantity` is required nonzero, so
+the Claims route always moves something. Neither Custody leg is: those revisions
+are derived in `routeOps`. -/
 def successorOps : List Op := [
   .loadConst (s .sellerTerminal) 0,
   .selectZero (s .sellerRemainingAfter) (s .one) (s .sellerTerminal),
@@ -682,22 +717,29 @@ def successorOps : List Op := [
   .subInto (s .sellerLiveCount) (s .sellerTerminal) (s .sellerLiveCountAfter),
   .subInto (s .buyerLiveCount) (s .buyerTerminal) (s .buyerLiveCountAfter),
   .incrementInto (s .claimSourceRevision) (s .claimSourceRevisionAfter),
-  .incrementInto (s .claimDestinationRevision) (s .claimDestinationRevisionAfter),
+  .incrementInto (s .claimDestinationRevision) (s .claimDestinationRevisionAfter)
+]
+
+/-- The Custody replay ladder the TRANSCRIPTION carried: two transfers claimed
+unconditionally. `the_transcription_claimed_two_transfers_on_a_one_transfer_bank`
+decides what that costs on the canonical admitted fill. -/
+def transcribedRevisionOps : List Op := [
   .incrementInto (s .custodyRevision) (s .custodyRevisionAfterSeller),
   .incrementInto (s .custodyRevisionAfterSeller) (s .custodyRevisionAfterFee)
 ]
 
 /-- The transcribed program: exactly the ninety-nine instructions the
-hand-written Rust `InstructionV3` array produced, in their original order.
+hand-written Rust `InstructionV3` array produced, in their original order, over
+the ninety-two-register bank it declared.
 `transcription_instruction_count` and the byte-identity gate recorded with this
 module's landing commit pin it to the object that was already executing. -/
 def transcribedProgram : Program := {
-  commonScalars := commonScalars
+  commonScalars := transcribedCommonScalars
   itemScalarStride := itemScalarStride
   commonIdentities := commonIdentities
   itemIdentityStride := itemIdentityStride
   «prelude» := constantOps ++ admissionOps ++ replayOps ++ reservationOps ++
-    derivationOps ++ successorOps
+    derivationOps ++ successorOps ++ transcribedRevisionOps
   itemBody := []
   epilogue := []
 }
@@ -707,6 +749,14 @@ theorem transcription_instruction_count :
 
 theorem transcription_encoded_width :
     (Codec.encodeProgram transcribedProgram).length = 2408 := by native_decide
+
+/-- The transcription's declared bank width, which is a header field and
+therefore part of its bytes. Growing `ScalarSlot` must not move it. -/
+theorem transcription_common_scalar_count :
+    transcribedProgram.commonScalars = 92 := by native_decide
+
+theorem transcription_is_well_formed :
+    transcribedProgram.wellFormed = true := by native_decide
 
 /-! ## The strengthening
 
@@ -731,31 +781,111 @@ of them applies here.
   whole of what the tail could constrain here. Carrying the clause would require
   inventing a tail this transition does not have. Recorded rather than faked. -/
 
+/-- The one admission clause `73f0793` landed on ordinary and this program never
+had. -/
+def feeRateOps : List Op := [
+  .scalarLe (s .policyFeeBps) (s .feeDenominator)
+]
+
+/-! ## The route enables
+
+The settlement this transition drives moves collateral over at most two Custody
+transfers out of the buyer record's Vault: the seller's net, and the combined
+fee. Neither is unconditional, and a Custody `Transfer` carrying `amount = 0` is
+refused by `CustodyRequestV1::validate` on its own terms. So the program derives
+the enable bits an `EffectProgramV4` route declaration reads, exactly as
+`DirectOrdinaryV3.lean` does for the inline-ordinary family:
+
+* `sellerTerminalRouteEnabled` — the seller leg alone, and it closes the chain.
+  Set exactly when the seller nets something and the combined fee is zero.
+* `sellerIntermediateRouteEnabled` — the seller leg with a fee continuation
+  behind it. Set exactly when both legs move.
+* `feeSoleRouteEnabled` — the fee leg alone, closing the chain. Set exactly when
+  the seller nets nothing and the fee moves.
+* all three zero — nothing moves. Reachable, and witnessed: a fill at an
+  execution price of zero quotes nothing, charges nothing, and still transfers
+  Claims.
+
+THE ZERO-FEE DECISION, and it is inherited rather than invented: a zero combined
+fee is a NO-TRANSFER PATH, not a refusal. That is what the ordinary family's fee
+semantics already say — `feeNonzero` exists in `DirectOrdinaryV3.lean` precisely
+so a zero fee routes nothing — and it is the only reading that keeps the
+ordinary case working. The fee legs here are DIFFERENCES OF FLOORS of the
+cumulative gross: on the canonical admitted fill a hundred-basis-point venue on
+a quote of five floors to nothing on both sides, which is why
+`canonical_partial_fill_admits` reads `sellerNet = buyerDebit = gross = 5`. A
+refusal would refuse the ordinary small fill at a realistic venue rate. It would
+also refuse every mid-order fill whose cumulative-difference delta happens to be
+zero while the order as a whole pays a fee, which is the entire reason the fee
+is charged on the cumulative floor rather than per fill.
+
+The ladder then advances the buyer's Custody replay revision by exactly the
+number of transfers the enables turned on — one per enabled route, never more.
+The transcription advanced it by two, unconditionally. -/
+def routeOps : List Op := [
+  .loadConst (s .sellerIntermediateRouteEnabled) 1,
+  .selectZero (s .sellerNet) (s .zero) (s .sellerIntermediateRouteEnabled),
+  .loadConst (s .feeNonzero) 1,
+  .selectZero (s .totalFee) (s .zero) (s .feeNonzero),
+  .loadConst (s .sellerTerminalRouteEnabled) 0,
+  .selectZero (s .totalFee) (s .sellerIntermediateRouteEnabled) (s .sellerTerminalRouteEnabled),
+  .checkedAddInto (s .feeNonzero) (s .zero) (s .sellerIntermediateRouteEnabled),
+  .selectZero (s .sellerNet) (s .zero) (s .sellerIntermediateRouteEnabled),
+  .loadConst (s .feeSoleRouteEnabled) 0,
+  .selectZero (s .sellerNet) (s .feeNonzero) (s .feeSoleRouteEnabled),
+  .checkedAddInto (s .sellerTerminalRouteEnabled) (s .sellerIntermediateRouteEnabled)
+    (s .custodyRevisionAfterSeller),
+  .checkedAddInto (s .custodyRevision) (s .custodyRevisionAfterSeller)
+    (s .custodyRevisionAfterSeller),
+  .checkedAddInto (s .custodyRevisionAfterSeller) (s .sellerIntermediateRouteEnabled)
+    (s .custodyRevisionAfterFee),
+  .checkedAddInto (s .custodyRevisionAfterFee) (s .feeSoleRouteEnabled)
+    (s .custodyRevisionAfterFee)
+]
+
 /-- The authored registered ordinary fill program. -/
 def program : Program :=
   { transcribedProgram with
-    «prelude» := constantOps ++ admissionOps ++
-      [.scalarLe (s .policyFeeBps) (s .feeDenominator)] ++
-      replayOps ++ reservationOps ++ derivationOps ++ successorOps }
+    commonScalars := commonScalars
+    «prelude» := constantOps ++ admissionOps ++ feeRateOps ++
+      replayOps ++ reservationOps ++ derivationOps ++ successorOps ++ routeOps }
 
 theorem well_formed : program.wellFormed = true := by native_decide
 
-theorem prelude_count : program.prelude.length = 100 := by native_decide
+theorem prelude_count : program.prelude.length = 112 := by native_decide
 
 theorem item_count : program.itemBody.length = 0 := by native_decide
 
 theorem epilogue_count : program.epilogue.length = 0 := by native_decide
 
-theorem common_scalar_count : program.commonScalars = 92 := by native_decide
+theorem common_scalar_count : program.commonScalars = 96 := by native_decide
 
 theorem common_identity_count : program.commonIdentities = 40 := by native_decide
 
-theorem encoded_width : (Codec.encodeProgram program).length = 2432 := by native_decide
+theorem encoded_width : (Codec.encodeProgram program).length = 2720 := by native_decide
 
-/-- The strengthening is exactly one instruction: the transcription and the
-authored program agree everywhere else. -/
-theorem strengthening_is_one_clause :
-    program.operations.length = transcribedProgram.operations.length + 1 := by native_decide
+/-- The whole difference between the shipped object and the authored one, stated
+as the two operation lists rather than as a count. Everything the transcription
+decided survives verbatim and in order except its unconditional Custody revision
+ladder; the authored program inserts one admission clause and replaces that
+ladder with the route derivation. -/
+theorem transcription_sections :
+    transcribedProgram.operations =
+      constantOps ++ admissionOps ++ replayOps ++ reservationOps ++ derivationOps ++
+        successorOps ++ transcribedRevisionOps := by native_decide
+
+theorem authored_sections :
+    program.operations =
+      constantOps ++ admissionOps ++ feeRateOps ++ replayOps ++ reservationOps ++
+        derivationOps ++ successorOps ++ routeOps := by native_decide
+
+/-- The ADMISSION strengthening is still exactly one clause. The other twelve
+net instructions are the settlement's route derivation, which admits and refuses
+nothing: every one of them writes. -/
+theorem the_admission_strengthening_is_one_clause :
+    feeRateOps.length = 1 ∧
+      transcribedProgram.operations.length + feeRateOps.length + routeOps.length =
+        program.operations.length + transcribedRevisionOps.length := by native_decide
 
 /-- Every identity coordinate any operation addresses is a named one. The bank's
 eight further registers are carried width, not silent schema. -/
@@ -810,6 +940,14 @@ def scalars (overrides : List (ScalarSlot × Nat) := []) : Array Nat :=
       bank.setIfInBounds assignment.1.index assignment.2)
     (Array.replicate commonScalars 0)
 
+/-- The same frame over the narrower bank the transcription declares. The four
+route-enable coordinates do not exist on it. -/
+def transcribedScalars (overrides : List (ScalarSlot × Nat) := []) : Array Nat :=
+  (canonicalScalars ++ overrides).foldl
+    (fun bank (assignment : ScalarSlot × Nat) =>
+      bank.setIfInBounds assignment.1.index assignment.2)
+    (Array.replicate transcribedCommonScalars 0)
+
 /-- The canonical identity bank: one Market carrying both intents and both
 replay roots, and two distinct makers each equal to the identity its own replay
 account stores. -/
@@ -835,6 +973,17 @@ def settlement (result : Option TransitionVMV3.State) :
       state.scalars[ScalarSlot.index .buyerDebit]!,
       state.scalars[ScalarSlot.index .sellerReservedClaimsAfter]!,
       state.scalars[ScalarSlot.index .buyerReservedCollateralAfter]!)
+
+/-- Read the settlement's route selection out of an admitted result: the three
+Custody route enables, then the replay revision after each leg. -/
+def routes (result : Option TransitionVMV3.State) :
+    Option (Nat × Nat × Nat × Nat × Nat) :=
+  result.map fun state =>
+    (state.scalars[ScalarSlot.index .sellerTerminalRouteEnabled]!,
+      state.scalars[ScalarSlot.index .sellerIntermediateRouteEnabled]!,
+      state.scalars[ScalarSlot.index .feeSoleRouteEnabled]!,
+      state.scalars[ScalarSlot.index .custodyRevisionAfterSeller]!,
+      state.scalars[ScalarSlot.index .custodyRevisionAfterFee]!)
 
 end Witness
 
@@ -878,8 +1027,8 @@ open Witness in
 transcription that was executing on chain admits the out-of-bound rate. -/
 theorem the_transcription_admitted_the_out_of_bound_rate :
     (transcribedProgram.execute 3
-        ⟨scalars [(.policyFeeBps, 10001), (.sellerFeeBps, 10001), (.buyerFeeBps, 10001),
-            (.buyerReservedCollateral, 24)],
+        ⟨transcribedScalars [(.policyFeeBps, 10001), (.sellerFeeBps, 10001),
+            (.buyerFeeBps, 10001), (.buyerReservedCollateral, 24)],
           identities⟩).isSome = true := by
   native_decide
 
@@ -944,6 +1093,102 @@ theorem an_exact_close_derives_one_terminal_side :
         state.scalars[ScalarSlot.index .buyerTerminal]!,
         state.scalars[ScalarSlot.index .sellerLiveCountAfter]!,
         state.scalars[ScalarSlot.index .buyerLiveCountAfter]!)) = some (1, 0, 0, 1) := by
+  native_decide
+
+/-! ### The route enables, decided
+
+Four reachable settlements, one per corner of `(sellerNet ≠ 0, totalFee ≠ 0)`.
+Each reads `(sellerTerminal, sellerIntermediate, feeSole, revisionAfterSeller,
+revisionAfterFee)` off the canonical Custody replay revision of three. -/
+
+open Witness in
+/-- The canonical admitted fill charges NOTHING, and enables the seller leg
+alone. This is the bank that the transcription's unconditional ladder could not
+settle: the fee is zero, so there is no second Custody transfer to claim, and
+the replay revision advances by exactly one. -/
+theorem the_canonical_zero_fee_fill_enables_only_the_seller_route :
+    routes (program.execute 3 ⟨scalars, identities⟩) = some (1, 0, 0, 4, 4) := by
+  native_decide
+
+open Witness in
+/-- The transcription claimed both transfers on that same bank. This is the
+defect the ladder replaces, decided against the object that shipped rather than
+described. -/
+theorem the_transcription_claimed_two_transfers_on_a_one_transfer_bank :
+    ((transcribedProgram.execute 3 ⟨transcribedScalars, identities⟩).map fun state =>
+      (state.scalars[ScalarSlot.index .totalFee]!,
+        state.scalars[ScalarSlot.index .custodyRevisionAfterSeller]!,
+        state.scalars[ScalarSlot.index .custodyRevisionAfterFee]!)) = some (0, 4, 5) := by
+  native_decide
+
+open Witness in
+/-- A venue rate that clears the floor on both legs enables the seller leg with
+a fee continuation behind it: two transfers, two revisions. Twenty per cent of a
+quote of five is one on each side, so the seller nets four and the buyer is
+debited six. -/
+theorem a_fee_that_clears_the_floor_enables_the_seller_and_fee_continuation :
+    routes (program.execute 3
+        ⟨scalars [(.policyFeeBps, 2000), (.sellerFeeBps, 2000), (.buyerFeeBps, 2000),
+            (.buyerReservedCollateral, 14)],
+          identities⟩) = some (0, 1, 0, 4, 5) := by
+  native_decide
+
+open Witness in
+/-- The settlement figures behind that selection. -/
+theorem a_fee_that_clears_the_floor_settles_four_and_six :
+    settlement (program.execute 3
+        ⟨scalars [(.policyFeeBps, 2000), (.sellerFeeBps, 2000), (.buyerFeeBps, 2000),
+            (.buyerReservedCollateral, 14)],
+          identities⟩) = some (5, 4, 6, 10, 8) := by
+  native_decide
+
+open Witness in
+/-- A venue rate at the denominator takes the whole quote: the seller nets
+nothing, so the fee leg alone is enabled and the replay revision again advances
+by exactly one. The seller-net Custody envelope that the transcription's ladder
+implied here would have carried a zero amount. -/
+theorem a_venue_rate_at_the_denominator_enables_only_the_fee_route :
+    routes (program.execute 3
+        ⟨scalars [(.policyFeeBps, 10000), (.sellerFeeBps, 10000), (.buyerFeeBps, 10000),
+            (.buyerReservedCollateral, 24)],
+          identities⟩) = some (0, 0, 1, 3, 4) := by
+  native_decide
+
+open Witness in
+/-- A fill at an execution price of zero moves Claims and no collateral: the
+quote, the fee and the seller net are all nothing, so no Custody route is
+enabled and the replay revision does not move at all. The ordinary family admits
+the same frame for the same reason — `sellerLimit ≤ executionPrice` is the whole
+bound on the price, and a maker may sign a limit of zero. -/
+theorem a_zero_price_fill_enables_no_custody_route :
+    routes (program.execute 3
+        ⟨scalars [(.sellerLimit, 0), (.executionPrice, 0)], identities⟩)
+      = some (0, 0, 0, 3, 3) := by
+  native_decide
+
+open Witness in
+/-- And it still transfers the full Claims quantity, which is why the Claims
+route stays unconditional. -/
+theorem a_zero_price_fill_still_moves_claims :
+    ((program.execute 3
+        ⟨scalars [(.sellerLimit, 0), (.executionPrice, 0)], identities⟩).map fun state =>
+      (state.scalars[ScalarSlot.index .gross]!,
+        state.scalars[ScalarSlot.index .quantity]!,
+        state.scalars[ScalarSlot.index .sellerReservedClaimsAfter]!,
+        state.scalars[ScalarSlot.index .claimSourceRevisionAfter]!)) = some (0, 10, 10, 5) := by
+  native_decide
+
+open Witness in
+/-- The ladder is checked, not saturating. A replay revision one below the u64
+ceiling admits when one transfer is enabled and refuses when two are, which is
+the only difference the enables make to admission. -/
+theorem a_saturating_replay_revision_refuses_exactly_when_both_legs_move :
+    (program.execute 3
+        ⟨scalars [(.custodyRevision, 18446744073709551614)], identities⟩).isSome = true ∧
+      program.execute 3
+        ⟨scalars [(.custodyRevision, 18446744073709551614), (.policyFeeBps, 2000),
+            (.sellerFeeBps, 2000), (.buyerFeeBps, 2000), (.buyerReservedCollateral, 14)],
+          identities⟩ = none := by
   native_decide
 
 end DClutch.DirectRegisteredFillV4

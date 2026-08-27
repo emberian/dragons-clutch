@@ -363,7 +363,10 @@ mod host {
             assert_eq!(output[FILL_SCALAR_BUYER_TERMINAL_V4], 0);
             assert_eq!(output[FILL_SCALAR_CLAIM_SOURCE_REVISION_AFTER_V4], 5);
             assert_eq!(output[FILL_SCALAR_CLAIM_DESTINATION_REVISION_AFTER_V4], 10);
-            assert_eq!(output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4], 5);
+            // One Custody transfer, so one Custody revision: the canonical fill
+            // takes a zero fee and enables the seller leg alone.
+            assert_eq!(output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4], 4);
+            assert_eq!(output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4], 4);
         }
 
         fn refuses_without_output_commit(
@@ -428,48 +431,154 @@ mod host {
             refuses_without_output_commit(input, valid_identities());
         }
 
-        /// WHY THIS PROGRAM CANNOT YET DRIVE AN `EffectProgramV4`.
+        /// THE ZERO-FEE ROUTE SELECTION, executed rather than described.
         ///
-        /// The registered fill's missing EffectV4 has to route one Claims
-        /// transfer and two Custody transfers -- the seller's net and the
-        /// combined fee -- out of the buyer record's Vault. Neither Custody leg
-        /// is unconditional: `CustodyRequestV1::validate` refuses
-        /// `amount == 0` for `OperationV1::Transfer`, and on the CANONICAL
-        /// admitted fill the combined fee is exactly zero, because both
-        /// cumulative-difference legs floor to nothing at a hundred basis
-        /// points. An effect that routes the fee leg unconditionally therefore
-        /// refuses the ordinary case.
+        /// The fill's `EffectProgramV4` routes one Claims transfer and up to two
+        /// Custody transfers -- the seller's net and the combined fee -- out of
+        /// the buyer record's Vault. Neither Custody leg is unconditional:
+        /// `CustodyRequestV1::validate` refuses `amount == 0` for
+        /// `OperationV1::Transfer`, and on the CANONICAL admitted fill the
+        /// combined fee is exactly zero, because both cumulative-difference legs
+        /// floor to nothing at a hundred basis points. An Effect that routed the
+        /// fee leg unconditionally would refuse the ordinary case.
         ///
-        /// A route is disabled by an `enable_common_scalar` the TRANSITION
-        /// derives -- that is how the inline-ordinary family selects among its
-        /// four Custody route declarations, with
-        /// `SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3`,
-        /// `SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3` and
-        /// `SCALAR_FEE_SOLE_ROUTE_ENABLED_V3` authored in
-        /// `DirectOrdinaryV3.lean`. This program derives no such register: its
-        /// schema has none, and `named_identities_are_the_addressed_ones` and
-        /// the emitted constants are the whole of what it exposes.
+        /// So the TRANSITION derives the enable bits, exactly as the
+        /// inline-ordinary family does with
+        /// `SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3` and its two siblings, and
+        /// advances the Custody replay revision by one per enabled route. Both
+        /// are authored in `DirectRegisteredFillV4.lean`'s `routeOps`; this test
+        /// is the Rust-side execution of the case that forced them.
         ///
-        /// It also advances the Custody replay revision by exactly two,
-        /// unconditionally (`incrementInto custodyRevision
-        /// custodyRevisionAfterSeller` then again into
-        /// `custodyRevisionAfterFee`), which on this same canonical bank claims
-        /// two transfers where at most one can occur.
-        ///
-        /// So authoring the fill's Effect starts in
-        /// `formal/dclutch-semantics/DClutchSemantics/DirectRegisteredFillV4.lean`,
-        /// not in Rust: the enables and the conditional revision ladder are
-        /// program semantics, and `DirectOrdinaryV3.lean`'s block is the exact
-        /// shape to mirror. Doing it moves the emitted bytes, so the
-        /// hand-written AOT twin in
-        /// `crates/dclutch-direct-aot-v3-contract/src/registered.rs` moves with
-        /// it. Recorded here rather than discovered again.
+        /// Ruling, taken from the ordinary family's fee semantics: a zero
+        /// combined fee is a NO-TRANSFER PATH, not a refusal. Refusing it would
+        /// refuse the ordinary small fill at a realistic venue rate, and every
+        /// mid-order fill whose cumulative-difference delta is zero while the
+        /// order as a whole pays.
         #[test]
-        fn the_canonical_fill_takes_a_zero_fee_that_no_unconditional_custody_route_can_carry() {
+        fn the_canonical_zero_fee_fill_enables_the_seller_route_alone() {
             let mut input = valid_scalars();
             input[FILL_SCALAR_QUANTITY_V4] = 10;
             input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
             let identities = valid_identities();
+            let output = execute(input, identities);
+
+            // The canonical admitted fill quotes five and charges nothing.
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 5);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 0);
+
+            // A Custody Transfer carrying that fee refuses on its own terms --
+            // which is why the fee route must be disabled, not routed empty.
+            let fee_leg = fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4]);
+            assert_eq!(
+                fee_leg.to_bytes().map(|_| ()),
+                Err(dclutch_custody_contract::Error::InvalidOperationShape)
+            );
+            // The seller leg, which is nonzero here, is well formed.
+            assert!(
+                fee_transfer_template(output[FILL_SCALAR_SELLER_NET_V4])
+                    .to_bytes()
+                    .is_ok()
+            );
+
+            // Exactly one route is enabled, and it is the terminal seller leg.
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 1);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_NONZERO_V4], 0);
+
+            // And the ladder claims exactly that one transfer.
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+        }
+
+        /// The other three corners of `(sellerNet != 0, totalFee != 0)`, and the
+        /// Custody envelope each one implies. Every enabled route carries a
+        /// nonzero amount; every disabled route is one whose amount would have
+        /// been zero.
+        #[test]
+        fn every_enabled_custody_route_carries_a_nonzero_amount() {
+            let identities = valid_identities();
+
+            // Both legs move: a rate that clears the floor on each side.
+            let mut both = matched_scalars();
+            both[FILL_SCALAR_POLICY_FEE_BPS_V4] = 2_000;
+            both[FILL_SCALAR_SELLER_FEE_BPS_V4] = 2_000;
+            both[FILL_SCALAR_BUYER_FEE_BPS_V4] = 2_000;
+            both[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 14;
+            let output = execute(both, identities);
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 4);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 2);
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 1);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 2
+            );
+            assert!(
+                fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4])
+                    .to_bytes()
+                    .is_ok()
+            );
+
+            // The seller nets nothing: the fee leg alone, and it is terminal.
+            let mut fee_only = matched_scalars();
+            fee_only[FILL_SCALAR_POLICY_FEE_BPS_V4] = 10_000;
+            fee_only[FILL_SCALAR_SELLER_FEE_BPS_V4] = 10_000;
+            fee_only[FILL_SCALAR_BUYER_FEE_BPS_V4] = 10_000;
+            fee_only[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 24;
+            let output = execute(fee_only, identities);
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 0);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 10);
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 1);
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+
+            // Nothing moves: a fill at an execution price of zero quotes
+            // nothing and charges nothing, and still transfers Claims.
+            let mut free = matched_scalars();
+            free[FILL_SCALAR_SELLER_LIMIT_V4] = 0;
+            free[FILL_SCALAR_EXECUTION_PRICE_V4] = 0;
+            let output = execute(free, identities);
+            assert_eq!(output[FILL_SCALAR_GROSS_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4]
+            );
+            assert_eq!(
+                output[FILL_SCALAR_CLAIM_SOURCE_REVISION_AFTER_V4],
+                output[FILL_SCALAR_CLAIM_SOURCE_REVISION_V4] + 1
+            );
+            assert_eq!(output[FILL_SCALAR_SELLER_RESERVED_CLAIMS_AFTER_V4], 10);
+        }
+
+        /// `valid_scalars` with the matcher-selected pair the RequestProfile
+        /// projects, which is otherwise supplied by the request.
+        fn matched_scalars() -> [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4] {
+            let mut scalars = valid_scalars();
+            scalars[FILL_SCALAR_QUANTITY_V4] = 10;
+            scalars[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
+            scalars
+        }
+
+        /// Run the emitted program over one bank and return the output.
+        fn execute(
+            input: [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4],
+            identities: [[u8; 32]; DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4],
+        ) -> [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4] {
             let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
@@ -496,34 +605,7 @@ mod host {
                 },
             )
             .expect("execute");
-
-            // The canonical admitted fill quotes five and charges nothing.
-            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 5);
-            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 0);
-
-            // A Custody Transfer carrying that fee refuses on its own terms.
-            let fee_leg = fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4]);
-            assert_eq!(
-                fee_leg.to_bytes().map(|_| ()),
-                Err(dclutch_custody_contract::Error::InvalidOperationShape)
-            );
-            // The seller leg, which is nonzero here, is well formed -- so it is
-            // the ENABLE that is missing, not the envelope.
-            assert!(
-                fee_transfer_template(output[FILL_SCALAR_SELLER_NET_V4])
-                    .to_bytes()
-                    .is_ok()
-            );
-
-            // And the revision ladder claims both transfers regardless.
-            assert_eq!(
-                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4],
-                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
-            );
-            assert_eq!(
-                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
-                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 2
-            );
+            output
         }
 
         /// One Custody `Transfer` envelope of the shape the fill's fee leg
