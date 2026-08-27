@@ -97,17 +97,23 @@ leftovers are closed and two of them were worse than recorded.
   - `slot-pinned` vs `immutable`: **c = +73 CU**, on all twenty seeds (67…77).
 
   So this record's headline holds, in the direction that matters: **the market
-  life fits on a mutable substrate, 20/20, and the slot pin costs 73 CU — 0.005%
-  of the ceiling — rather than a megabyte hash.** The pin is free.
+  life fits on a mutable substrate, 20/20, and the `ExactAuthority` arm runs it
+  73 CU — 0.005% of the ceiling — behind the immutable one.** Mutable went from
+  *refused* to *admitted at parity*, and parity is now a measured quantity.
 
   **What is still argued, stated plainly.** The *~700,000 CU saving* is not
-  measured and cannot be by this instrument: no in-tree fixture constructs the
-  re-hash the saving is against, because the readers *refuse* a non-pinned
-  release rather than falling back to hashing (the one silent hash fallback,
-  in `dclutch-shadow-accelerator-auth-v4`, was converted by PIN-0012). The ~700k
-  remains an argument from ELF size. And the arms measure the **Hot tail on the
-  Direct profile**, which is the route SMOKE-0's W1 wall was about, not every
-  route in the market life. Two on-chain refusals accompany the number
+  measured and cannot be by this instrument. Post-0012 **neither** arm hashes on
+  the Direct Hot route: both reach
+  `authenticate_activated_current_deployment`, which reuses the
+  activation-bound digest. The megabyte hash lives in the *uncached*
+  `authenticate_deployment` (`shadow-accelerator-auth-v4/src/deployment.rs`,
+  the `hash(programdata_view.elf())` branch), and the silent fallback that would
+  have taken a mutable role there was converted by PIN-0012 — so the
+  counterfactual is not constructible in-tree, and ~700k remains an argument
+  from ELF size rather than a figure this sweep produced. The arms also measure
+  the **Hot tail on the Direct profile**, which is the route SMOKE-0's W1 wall
+  was about, not every route in the market life. Two on-chain refusals
+  accompany the number
   (`tests/slot_pin_supersession.rs`): the pin holding executes the whole
   canonical Direct Hot action, and the pin broken refuses with
   `RegistryError::ReleaseSuperseded` (`0x100D`) after 51,574 CU, moving no

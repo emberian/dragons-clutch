@@ -221,12 +221,13 @@ redraw, measured rather than assumed:
     immutable-pinned − immutable  =  REDRAW ALONE
     slot-pinned      − immutable  =  REDRAW + whatever 0012 costs or saves
     ────────────────────────────────────────────────────────────────────
-    the difference of those two   =  the signal, and the only real number
+    the difference of those two   =  an UPPER BOUND on the effect
 ```
 
-A signal smaller than the redraw is a legitimate result and must be reported as
-one. It says the sweep bounds 0012's effect below the lottery's width on this
-path — which, given the claim under test is ~700,000 CU, is itself an answer.
+A bound smaller than the redraw is a legitimate result and must be reported as
+one: it says the sweep puts 0012's effect below the lottery's width on this path,
+which against a ~700,000 CU claim is already an answer. But do not stop there —
+these arms share their randomness, and shared randomness cancels.
 
 ### Do not stop at the difference of means — pair the seeds
 
@@ -251,39 +252,6 @@ The paired residual works here **only because both arms share one ELF and one
 seed set**. Across two revisions it does not apply: different ELFs are different
 lotteries, the pairing is meaningless, and `PASS` and `MEAN` are what you have.
 
-### Measured, at `57138ba8`
-
-All three arms against `dclutch_trading_sbf.so`
-`7facb8e58e45843f46b9d3d572ced5e45507bfcbfb2250e865b5427baa1b9d3c`, built from a
-clean archive of `57138ba8`, seeds 0..19, ceiling 1,400,000:
-
-| arm | PASS | MEAN | spread | paired constant vs `immutable` |
-|---|---|---|---|---|
-| `immutable` | 20/20 | 1,345,302 CU | 49,499 | — |
-| `immutable-pinned` | 20/20 | 1,353,477 CU | 51,002 | **0** (mean −0.4; exactly 0 on 18/20) |
-| `slot-pinned` | 20/20 | 1,355,575 CU | 46,496 | **+73 CU** (67…77 on every seed) |
-
-Read it in that order, because the means alone are misleading:
-
-- `slot-pinned − immutable` = **+10,273 CU** of *mean*. Almost none of that is
-  0012.
-- `immutable-pinned − immutable` = **+8,175 CU** of mean for a substrate that
-  executes the **identical** code — pure redraw, and the exact number the
-  control exists to supply.
-- The control's **paired constant is 0** on eighteen of twenty seeds and never
-  exceeds 6 CU. That is the method validating itself: same code path, same
-  constant, all of an 8,175 CU mean gap accounted for as `n × 1,500`.
-- `slot-pinned`'s paired constant is **+73 CU on all twenty seeds**. That, and
-  not 10,273 and not 2,098, is what decision 0012's `ExactAuthority` arm costs a
-  Hot continuation: **0.005% of the ceiling**.
-
-So the fast path is free in the direction that matters — a mutable substrate's
-Hot tail is the immutable one plus 73 CU — and the ~700,000 CU *saving* remains
-argued rather than measured, because no in-tree fixture constructs the re-hash
-it is a saving against: the readers refuse a non-pinned release, they do not
-fall back to hashing. What is now measured is that the pin costs nothing, and
-that the market life fits: 20/20 on the mutable substrate.
-
 ## What the three arms measured (lane POST-0012-EXACTAUTH)
 
 Harness `d20837fd`, one clean `git archive` build, trading ELF
@@ -301,15 +269,42 @@ these are reproducible to the compute unit, not draws that happened once.
     immutable-pinned − immutable  =  + 8,175 CU   REDRAW ALONE
     slot-pinned      − immutable  =  +10,273 CU   REDRAW + the 0012 arm
     ────────────────────────────────────────────────────────────────────
-    the signal                    =  + 2,098 CU
+    difference of the differences =  + 2,098 CU   ← an UPPER BOUND, not the cost
 ```
 
-**+2,098 CU on a 1,345,302 baseline — 0.16%, and one bump-search iteration is
-1,500.** Under M-61's decomposition (`n × 1,500 + ~50`) that reads as a single
-extra draw plus residual, against a cross-seed spread of ~46,000–51,000 in every
-arm. The `ExactAuthority` arm is not distinguishable from the `Immutable` arm at
-this instrument's resolution, and the instrument's resolution is roughly two
-orders of magnitude finer than the ~700,000 CU under discussion.
+**+2,098 is an upper bound and stopping there would have been a false null** —
+0.16% of the baseline, less than two bump-search iterations, sitting on a
+cross-seed spread of 46,000–51,000 in every arm. Reported as the answer it says
+"no signal above the lottery", which is not what these arms measured.
+
+**Pair the seeds and the constant comes out exactly.** All three arms ran the
+same twenty seeds against the same ELF, so seed *k* used the same fixture keys in
+each and `delta = n × 1,500 + c` solves per seed rather than being averaged over:
+
+| paired against `immutable` | constant `c` |
+|---|---|
+| `immutable-pinned` (same digest arm) | **0** — exactly zero on 18 of 20 seeds, never past 6 CU |
+| `slot-pinned` (0012's arm) | **+73 CU** — 67…77 on every one of the twenty |
+
+The control's zero is the method certifying itself: identical code path,
+identical constant, and the whole 8,175 CU mean gap accounted for as `n × 1,500`.
+Taken against `immutable-pinned` instead — the two arms that share a bank slot —
+`slot-pinned`'s constant is **+73.0** again.
+
+**So decision 0012's `ExactAuthority` arm costs a Hot continuation 73 CU more
+than the `Immutable` arm — 0.005% of the ceiling.** A mutable substrate runs the
+market action at parity with an immutable one.
+
+Say what that is and is not. Post-0012 **neither** arm hashes on this route:
+both reach `authenticate_activated_current_deployment`, which reuses the
+activation-bound digest, and the ~700,000 CU hash lives in the *uncached*
+`authenticate_deployment` (`shadow-accelerator-auth-v4/src/deployment.rs`, the
+`hash(programdata_view.elf())` branch). So what these arms measure is the thing
+the decision actually needed — *mutable: refused → admitted, at parity* — and
+the ~700,000 saving itself is **not** measured and cannot be by this instrument,
+because no in-tree fixture constructs the fallback it is a saving against: the
+readers refuse a non-pinned release rather than hashing. That figure stays an
+argument from ELF size.
 
 The arm is genuinely executing: `slot_pinned_release_elf_digest_v1`'s
 `ExactAuthority` branch runs **four times per Hot transaction** — Core and
@@ -318,8 +313,8 @@ Trading in `batch_v2::authenticate_request`, then Core and Trading again in
 `tests/slot_pin_supersession.rs` reads the staged ProgramData back off the chain
 to require a live authority and the pinned slot before it believes any of it.
 
-**How much of the +2,098 is still lottery.** Some, and one part of it is now
-measured rather than bounded.
+**Where the rest of the +2,098 went, since the constant is only 73.** Into the
+lottery, and one part of it is measured rather than bounded.
 `every_substrate_draws_a_different_release_identity_and_activation_bump` (same
 test file) prints the bump depth of the activation-cache PDA — the one on-chain
 `find_program_address` seeded by the release-set identity and *nothing else*, so
@@ -328,14 +323,18 @@ a 20-seed mean cannot average away. All three swept arms draw **bump 255, depth
 0**: that site contributes **0 CU** of difference between them. (The superseded
 arm draws 254, one iteration deeper; it is not in the CU comparison.) What
 remains is the per-seed admission PDA and the market/root derivations, which the
-mean does average, plus the bank-slot difference below — so +2,098 is an upper
-bound on 0012's cost here, not an estimate of it.
+mean averages only imperfectly over twenty draws — `2,098 − 73 = 2,025 CU`, about
+1.35 bump iterations spread across twenty seeds, is residual lottery. That is why
+the mean difference is an upper bound and the paired constant is the estimate.
 
 `immutable` runs at bank slot 1 and both pinned arms at 168, because a nonzero
 pin is not loadable at slot 1 (see below). That is a second difference inside the
-`immutable-pinned − immutable` figure, which is exactly why the signal is taken
-against `immutable-pinned` and not against `immutable`: the two pinned arms share
-the bank slot, the clock, and the fixture state derived from them.
+`immutable-pinned − immutable` figure, which is why the comparison is also taken
+against `immutable-pinned`: the two pinned arms share the bank slot, the clock,
+and the fixture state derived from them. Both pairings return the same paired
+constant — `+72.6` against `immutable`, `+73.0` against `immutable-pinned` — so
+the bank slot contributes no constant of its own, which is worth knowing rather
+than assuming.
 
 ### The negative: a pin that no longer holds
 
