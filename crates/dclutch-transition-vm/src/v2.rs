@@ -12,6 +12,9 @@ use core::convert::TryInto;
 #[allow(missing_docs)]
 mod generated;
 
+/// Typed, allocation-free encoder for this generation's artifacts.
+pub mod encode;
+
 use generated::{
     A_OFFSET, B_OFFSET, C_OFFSET, D_OFFSET, FLAGS_OFFSET, HEADER_RESERVED_OFFSET,
     IDENTITY_COUNT_OFFSET, IMMEDIATE_OFFSET, INSTRUCTION_COUNT_OFFSET,
@@ -534,53 +537,43 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
+    use super::encode::{
+        RegisterGeometryV2, TransitionInstructionV2, encode_transition_program_v2_atomic,
+        transition_program_v2_bytes,
+    };
     use super::*;
 
-    fn put(output: &mut [u8], offset: usize, value: &[u8]) {
-        let end = offset.checked_add(value.len()).expect("fixture offset");
-        output
-            .get_mut(offset..end)
-            .expect("fixture destination")
-            .copy_from_slice(value);
-    }
-
-    fn set(output: &mut [u8], offset: usize, value: u8) {
-        *output.get_mut(offset).expect("fixture byte") = value;
-    }
-
-    fn instruction(opcode: u8, a: u16, b: u16, c: u16, d: u16, immediate: u64) -> [u8; 24] {
-        let mut output = [0_u8; INSTRUCTION_BYTES];
-        set(&mut output, OPCODE_OFFSET, opcode);
-        put(&mut output, A_OFFSET, &a.to_le_bytes());
-        put(&mut output, B_OFFSET, &b.to_le_bytes());
-        put(&mut output, C_OFFSET, &c.to_le_bytes());
-        put(&mut output, D_OFFSET, &d.to_le_bytes());
-        put(&mut output, IMMEDIATE_OFFSET, &immediate.to_le_bytes());
-        output
-    }
-
-    fn program(scalars: u16, identities: u16, instructions: &[[u8; 24]]) -> Vec<u8> {
-        let mut output = vec![0_u8; HEADER_BYTES + instructions.len() * INSTRUCTION_BYTES];
-        put(&mut output, 0, &MAGIC);
-        set(&mut output, 4, VERSION);
-        put(
+    /// One canonical program, built only by the crate's public encoder.
+    ///
+    /// This is the single fixture authority in the module. Nothing here pokes
+    /// header or instruction bytes any more, so a fixture cannot disagree with
+    /// the artifact a real author would emit.
+    fn program(scalars: u16, identities: u16, instructions: &[TransitionInstructionV2]) -> Vec<u8> {
+        let width = transition_program_v2_bytes(instructions.len()).expect("fixture width");
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_transition_program_v2_atomic(
+            RegisterGeometryV2 {
+                scalars,
+                identities,
+            },
+            instructions,
+            &mut scratch,
             &mut output,
-            INSTRUCTION_COUNT_OFFSET,
-            &u16::try_from(instructions.len())
-                .expect("fixture instruction count")
-                .to_le_bytes(),
-        );
-        put(&mut output, SCALAR_COUNT_OFFSET, &scalars.to_le_bytes());
-        put(
-            &mut output,
-            IDENTITY_COUNT_OFFSET,
-            &identities.to_le_bytes(),
-        );
-        for (index, encoded) in instructions.iter().enumerate() {
-            let start = HEADER_BYTES + index * INSTRUCTION_BYTES;
-            put(&mut output, start, encoded);
-        }
+        )
+        .expect("fixture program");
         output
+    }
+
+    /// Overwrite one byte of a canonical artifact.
+    ///
+    /// Every hostile case below is exactly one byte away from something the
+    /// encoder accepted, which is a stronger statement than a hand-built
+    /// fixture that was never canonical to begin with.
+    fn patched(canonical: &[u8], offset: usize, value: u8) -> Vec<u8> {
+        let mut hostile = canonical.to_vec();
+        *hostile.get_mut(offset).expect("patch offset") = value;
+        hostile
     }
 
     #[test]
@@ -589,9 +582,9 @@ mod tests {
             300,
             257,
             &[
-                instruction(0, 299, 0, 0, 0, 41),
-                instruction(8, 299, 298, 0, 0, 0),
-                instruction(21, 256, 255, 0, 0, 0),
+                TransitionInstructionV2::load_const(299, 41),
+                TransitionInstructionV2::increment_into(299, 298),
+                TransitionInstructionV2::copy_identity(256, 255),
             ],
         );
         assert_eq!(bytes.as_slice(), WIDE_AGREEMENT_PROGRAM_V2.as_slice());
@@ -633,8 +626,8 @@ mod tests {
             3,
             0,
             &[
-                instruction(0, 2, 0, 0, 0, 99),
-                instruction(1, 0, 1, 0, 0, 0),
+                TransitionInstructionV2::load_const(2, 99),
+                TransitionInstructionV2::scalar_eq(0, 1),
             ],
         );
         let decoded = ProgramV2::decode(&bytes).expect("program");
@@ -667,7 +660,7 @@ mod tests {
 
     #[test]
     fn hostile_headers_instructions_and_widths_refuse() {
-        let canonical = program(2, 1, &[instruction(1, 0, 1, 0, 0, 0)]);
+        let canonical = program(2, 1, &[TransitionInstructionV2::scalar_eq(0, 1)]);
         assert!(ProgramV2::decode(&canonical).is_ok());
 
         for length in 0..canonical.len() {
@@ -693,22 +686,40 @@ mod tests {
             assert_eq!(ProgramV2::decode(&hostile), Err(expected));
         }
 
-        let bad_register = program(2, 0, &[instruction(6, 2, 0, 0, 0, 0)]);
+        // A register coordinate that is in bank only because the header says
+        // three scalars, retold as two.
+        let bad_register = patched(
+            &program(3, 0, &[TransitionInstructionV2::nonzero(2)]),
+            SCALAR_COUNT_OFFSET,
+            2,
+        );
         assert_eq!(
             ProgramV2::decode(&bad_register),
             Err(Error::InvalidRegister)
         );
-        let bad_unused = program(2, 0, &[instruction(6, 0, 1, 0, 0, 0)]);
+        let bad_unused = patched(
+            &program(2, 0, &[TransitionInstructionV2::nonzero(0)]),
+            HEADER_BYTES + B_OFFSET,
+            1,
+        );
         assert_eq!(
             ProgramV2::decode(&bad_unused),
             Err(Error::NonCanonicalInstruction)
         );
-        let bad_immediate = program(2, 0, &[instruction(1, 0, 1, 0, 0, 1)]);
+        let bad_immediate = patched(
+            &program(2, 0, &[TransitionInstructionV2::scalar_eq(0, 1)]),
+            HEADER_BYTES + IMMEDIATE_OFFSET,
+            1,
+        );
         assert_eq!(
             ProgramV2::decode(&bad_immediate),
             Err(Error::NonCanonicalInstruction)
         );
-        let unknown = program(1, 0, &[instruction(255, 0, 0, 0, 0, 0)]);
+        let unknown = patched(
+            &program(1, 0, &[TransitionInstructionV2::nonzero(0)]),
+            HEADER_BYTES + OPCODE_OFFSET,
+            255,
+        );
         assert_eq!(ProgramV2::decode(&unknown), Err(Error::UnknownOpcode));
 
         let decoded = ProgramV2::decode(&canonical).expect("canonical");
@@ -743,12 +754,12 @@ mod tests {
             9,
             2,
             &[
-                instruction(16, 0, 1, 3, 0, 0),
-                instruction(17, 0, 1, 4, 0, 0),
-                instruction(18, 0, 1, 5, 0, 0),
-                instruction(19, 0, 1, 6, 0, 0),
-                instruction(20, 3, 7, 0, 0, 0),
-                instruction(21, 0, 1, 0, 0, 0),
+                TransitionInstructionV2::checked_add_into(0, 1, 3),
+                TransitionInstructionV2::checked_mul_into(0, 1, 4),
+                TransitionInstructionV2::min_into(0, 1, 5),
+                TransitionInstructionV2::max_into(0, 1, 6),
+                TransitionInstructionV2::copy_scalar(3, 7),
+                TransitionInstructionV2::copy_identity(0, 1),
             ],
         );
         let decoded = ProgramV2::decode(&bytes).expect("program");
@@ -781,7 +792,7 @@ mod tests {
         assert_eq!(output_scalars.get(7), Some(&13));
         assert_eq!(output_identities.get(1), Some(&[3; 32]));
 
-        let overflow = program(3, 0, &[instruction(16, 0, 1, 2, 0, 0)]);
+        let overflow = program(3, 0, &[TransitionInstructionV2::checked_add_into(0, 1, 2)]);
         let decoded = ProgramV2::decode(&overflow).expect("overflow program");
         let input = [u64::MAX, 1, 0];
         let mut scratch = [0; 3];
@@ -806,5 +817,100 @@ mod tests {
             Err(Error::ArithmeticOverflow)
         );
         assert_eq!(output, before);
+    }
+
+    /// The public encoder reproduces the Lean-emitted artifact byte for byte.
+    ///
+    /// `WIDE_AGREEMENT_PROGRAM_V2` is emitted by
+    /// `formal/dclutch-semantics/EmitTransitionVMV2Rust.lean` and is therefore
+    /// an authority this module does not own. An encoder that agrees with it
+    /// on every one of the eighty-eight bytes is a projection of the wire
+    /// format rather than a second statement of it.
+    #[test]
+    fn the_public_encoder_reproduces_the_emitted_artifact() {
+        let width = transition_program_v2_bytes(3).expect("width");
+        assert_eq!(width, WIDE_AGREEMENT_PROGRAM_V2.len());
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_transition_program_v2_atomic(
+            RegisterGeometryV2 {
+                scalars: 300,
+                identities: 257,
+            },
+            &[
+                TransitionInstructionV2::load_const(299, 41),
+                TransitionInstructionV2::increment_into(299, 298),
+                TransitionInstructionV2::copy_identity(256, 255),
+            ],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("emitted artifact");
+        assert_eq!(output.as_slice(), WIDE_AGREEMENT_PROGRAM_V2.as_slice());
+    }
+
+    /// The encoder is total: it refuses whatever the decoder refuses, and a
+    /// refusal never leaves partial bytes in `output`.
+    #[test]
+    fn the_public_encoder_refuses_what_the_decoder_refuses() {
+        let attempt = |scalars: u16,
+                       identities: u16,
+                       instructions: &[TransitionInstructionV2],
+                       width: usize| {
+            let mut scratch = vec![0_u8; width];
+            let mut output = vec![0xcd_u8; width];
+            let result = encode_transition_program_v2_atomic(
+                RegisterGeometryV2 {
+                    scalars,
+                    identities,
+                },
+                instructions,
+                &mut scratch,
+                &mut output,
+            );
+            assert!(
+                output.iter().all(|byte| *byte == 0xcd),
+                "a refused encode left bytes in output"
+            );
+            result
+        };
+        let one = transition_program_v2_bytes(1).expect("width");
+
+        // Out-of-bank register coordinate.
+        assert_eq!(
+            attempt(2, 0, &[TransitionInstructionV2::nonzero(2)], one),
+            Err(Error::InvalidRegister)
+        );
+        // Neither bank declared.
+        assert_eq!(
+            attempt(0, 0, &[TransitionInstructionV2::nonzero(0)], one),
+            Err(Error::EmptyProgramOrRegisters)
+        );
+        // No instruction at all.
+        assert_eq!(
+            attempt(1, 0, &[], transition_program_v2_bytes(0).expect("width")),
+            Err(Error::EmptyProgramOrRegisters)
+        );
+        // Buffers that are not the exact encoded width.
+        assert_eq!(
+            attempt(1, 0, &[TransitionInstructionV2::nonzero(0)], one + 1),
+            Err(Error::InvalidLength)
+        );
+
+        let mut scratch = vec![0_u8; one];
+        let mut short = vec![0xcd_u8; one - 1];
+        assert_eq!(
+            encode_transition_program_v2_atomic(
+                RegisterGeometryV2 {
+                    scalars: 1,
+                    identities: 0,
+                },
+                &[TransitionInstructionV2::nonzero(0)],
+                &mut scratch,
+                &mut short,
+            ),
+            Err(Error::InvalidLength)
+        );
+        assert!(short.iter().all(|byte| *byte == 0xcd));
     }
 }
