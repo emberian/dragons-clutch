@@ -287,7 +287,9 @@ mod tests {
     fn stable_errors() {
         assert_eq!(
             ProgramError::from(RationalLifecycleCallerErrorV2::DeliberateLateFailure),
-            ProgramError::Custom(4)
+            ProgramError::Custom(
+                dclutch_refusal_registry::TEST_CLAIMS_RATIONAL_LIFECYCLE_CALLER_BASE + 4
+            )
         );
     }
 }

@@ -36,6 +36,14 @@ pub const SERIES_ROOT_ACCOUNT_BYTES_V3: usize =
     CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3;
 
 /// Refusal from the Series account and persistence boundary.
+///
+/// Trading's sub-band `0x4100` (decision 0007). The discriminants are written
+/// out rather than left implicit and shifted inside the `From` impl: the
+/// shifted form reported `80 + n` on chain while reporting `0 + n` to anything
+/// reading the source, and because the enum carried no `#[repr]` the gauntlet
+/// census -- which admits a refusal taxonomy only from `#[repr]`-annotated
+/// enums -- could not see this boundary at all.
+#[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SeriesAccountErrorV3 {
     /// Owner, width, key, phase, or canonical bytes refused.
@@ -57,7 +65,7 @@ const _: () = assert!(
 
 impl From<SeriesAccountErrorV3> for ProgramError {
     fn from(value: SeriesAccountErrorV3) -> Self {
-        ProgramError::Custom(80_u32.saturating_add(value as u32))
+        ProgramError::Custom(value as u32)
     }
 }
 

@@ -1398,13 +1398,16 @@ mod tests {
 
     #[test]
     fn error_codes_are_stable_and_disjoint() {
+        // Derived from the registry, never transcribed. A bare literal here
+        // would be a second, unchecked opinion about where this family sits.
+        const BASE: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x210;
         assert_eq!(
             ProgramError::from(RationalLifecycleSbfErrorV2::Instruction),
-            ProgramError::Custom(210)
+            ProgramError::Custom(BASE)
         );
         assert_eq!(
             ProgramError::from(RationalLifecycleSbfErrorV2::Receipt),
-            ProgramError::Custom(218)
+            ProgramError::Custom(BASE + 8)
         );
     }
 
