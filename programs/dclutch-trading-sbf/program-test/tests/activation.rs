@@ -222,6 +222,8 @@ enum Campaign {
     ProgramSetMissingSelector,
     /// General's own three activation artifacts, creating a real `GeneralRootV2`.
     General,
+    /// General's artifacts with the two constant words never projected.
+    GeneralUnwrittenMagic,
 }
 
 impl Campaign {
@@ -233,13 +235,14 @@ impl Campaign {
                 | Self::ProgramSetWrongSchema
                 | Self::ProgramSetMissingSelector
                 | Self::General
+                | Self::GeneralUnwrittenMagic
         )
     }
 
     /// Which family's artifacts this campaign publishes.
     const fn family(self) -> Family {
         match self {
-            Self::General => Family::General,
+            Self::General | Self::GeneralUnwrittenMagic => Family::General,
             _ => Family::Fixture,
         }
     }
@@ -454,8 +457,12 @@ fn transition_program(family: Family) -> Vec<u8> {
 /// `dclutch-general-config-contract`'s published creation coordinates, and the
 /// Market, config and generation come from `activation_registers_v2`. Nothing
 /// about `GeneralRootV2`'s layout is restated here.
-fn tail_writes(family: Family) -> Vec<EffectInstructionV2> {
-    match family {
+fn tail_writes(campaign: Campaign) -> Vec<EffectInstructionV2> {
+    // `GeneralUnwrittenMagic` projects everything a General tail needs EXCEPT the
+    // two words that make it decodable. The tail is not all zero, so the seam's
+    // one tail check cannot see it: the seam owns no family decoder by design.
+    let constant_words = !matches!(campaign, Campaign::GeneralUnwrittenMagic);
+    match campaign.family() {
         Family::Fixture => vec![
             EffectInstructionV2::write_request_u64(
                 TAIL_GENERATION_OFFSET,
@@ -466,32 +473,39 @@ fn tail_writes(family: Family) -> Vec<EffectInstructionV2> {
                 ACTIVATION_MARKET_IDENTITY_V2,
             ),
         ],
-        Family::General => vec![
-            EffectInstructionV2::write_request_u64(
-                tail_offset(GENERAL_ROOT_MAGIC_OFFSET_V2),
-                GENERAL_MAGIC_SCALAR,
-            ),
-            EffectInstructionV2::write_request_u64(
-                tail_offset(GENERAL_ROOT_HEADER_WORD_OFFSET_V2),
-                GENERAL_HEADER_WORD_SCALAR,
-            ),
-            EffectInstructionV2::write_request_identity(
+        Family::General => [
+            constant_words.then(|| {
+                EffectInstructionV2::write_request_u64(
+                    tail_offset(GENERAL_ROOT_MAGIC_OFFSET_V2),
+                    GENERAL_MAGIC_SCALAR,
+                )
+            }),
+            constant_words.then(|| {
+                EffectInstructionV2::write_request_u64(
+                    tail_offset(GENERAL_ROOT_HEADER_WORD_OFFSET_V2),
+                    GENERAL_HEADER_WORD_SCALAR,
+                )
+            }),
+            Some(EffectInstructionV2::write_request_identity(
                 tail_offset(GENERAL_ROOT_MARKET_OFFSET_V2),
                 ACTIVATION_MARKET_IDENTITY_V2,
-            ),
-            EffectInstructionV2::write_request_identity(
+            )),
+            Some(EffectInstructionV2::write_request_identity(
                 tail_offset(GENERAL_ROOT_CONFIG_ID_OFFSET_V2),
                 ACTIVATION_CONFIG_IDENTITY_V2,
-            ),
-            EffectInstructionV2::write_request_u64(
+            )),
+            Some(EffectInstructionV2::write_request_u64(
                 tail_offset(GENERAL_ROOT_GENERATION_OFFSET_V2),
                 ACTIVATION_GENERATION_SCALAR_V2,
-            ),
-            EffectInstructionV2::write_request_u64(
+            )),
+            Some(EffectInstructionV2::write_request_u64(
                 tail_offset(GENERAL_ROOT_REVISION_OFFSET_V2),
                 GENERAL_REVISION_SCALAR,
-            ),
-        ],
+            )),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
     }
 }
 
@@ -513,7 +527,7 @@ fn effect_program(campaign: Campaign) -> Vec<u8> {
         },
     )];
     if !matches!(campaign, Campaign::UnwrittenTail) {
-        instructions.extend(tail_writes(family));
+        instructions.extend(tail_writes(campaign));
     }
     if matches!(campaign, Campaign::LateEffectRefusal) {
         // After the transfer, root lamports cannot still equal prestate scalar[7].
@@ -1229,6 +1243,55 @@ async fn a_program_set_release_activates_through_its_selected_descriptor() {
     assert_ne!(fixture.descriptor_raw, fixture.activation_descriptor_raw);
     assert_eq!(fixture.instruction.accounts.len(), 23);
     assert_activation_succeeds(&mut context, &fixture).await;
+}
+
+/// Where the family-neutral boundary actually is, executed.
+///
+/// The seam owns no family decoder and must not acquire one, so its ONLY check
+/// on the projected tail is that it is not entirely zero. An artifact that
+/// projects the Market, the config identity, the generation and the revision but
+/// never the two constant words therefore ACTIVATES: the tail is nonzero, every
+/// lamport conserves, and the seam has no way to know that what it just wrote is
+/// not a `GeneralRootV2`.
+///
+/// That is not a hole in the seam, and this test is what makes the reason
+/// checkable rather than argued. The tail is a projection of one finalized
+/// content-addressed artifact that the manifest entry and the descriptor both
+/// bind; a family that publishes an effect program with the wrong writes has
+/// published a wrong RELEASE, which is caught where releases are admitted, not
+/// at runtime by a seam that would need a decoder per family to catch it.
+///
+/// What the seam DOES guarantee is stated by its sibling
+/// `a_tail_that_is_unwritten_or_the_wrong_width_refuses`: nothing at all, and
+/// the wrong width, both refuse. Between them the boundary is exact.
+#[tokio::test]
+async fn a_general_tail_missing_its_constant_words_activates_and_is_not_a_general_root() {
+    let (test, fixture) = build_fixture(Campaign::GeneralUnwrittenMagic);
+    let mut context = test.start_with_context().await;
+    submit(&mut context, fixture.instruction.clone())
+        .await
+        .expect("the seam cannot see a partially projected family tail");
+
+    let root = account(&mut context, fixture.root).await;
+    assert_eq!(root.owner, TRADING_PROGRAM_ID);
+    let descriptor_account = account(&mut context, fixture.activation_descriptor_raw).await;
+    let descriptor = CapabilityProgramV1::decode(&descriptor_account.data).expect("descriptor");
+    let decoded = CapabilityRootAccountV1::decode(&root.data, descriptor).expect("root account");
+    let tail = decoded.state();
+    assert_eq!(tail.len(), GENERAL_ROOT_BYTES_V2);
+    assert!(tail.iter().any(|byte| *byte != 0), "the seam's one check");
+
+    let canonical = general_root_creation_tail_v2(
+        fixture.market.to_bytes(),
+        fixture.config_id.to_bytes(),
+        GENERATION,
+    )
+    .expect("General creation tail");
+    assert_ne!(tail, canonical.as_slice());
+    assert!(
+        GeneralRootV2::decode(tail).is_err(),
+        "a capability no General action can authenticate was still created"
+    );
 }
 
 /// Reversion control for the set path, at both of its own joins.
