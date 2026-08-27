@@ -1927,6 +1927,33 @@ and Open stages, Custody's projected dispatch with `Initialize`, `OpenHoard`,
 `OpenSourceCompartment`, `LockHoardAndCloseSource` and `RealizeAndClose`, and
 Registry reauthentication.
 
+### Reproduced at a different revision, on different bytes
+
+The campaign was run again at `67e441d`, and this is a reproduction rather than
+a re-run: other lanes' work landed in between, so **the Trading and Resolution
+ELFs are different bytes** (`6343ddf5247c37ec88387d8e54358b7b96bd2addea563901b347e6f5a56609b1`
+and `18dcc4a2a3375fe49c0aee3d332d7c7fa8b1cd69bb96606ca77c466facf89969`; the
+other five are byte-identical). Eighty-four transactions again, and the whole
+gauntlet green: `observe` admits every binding, and **20 witnesses checked, 0
+failed**.
+
+| | run 5 (`cd05331`) | run 6 (`67e441d`) |
+|---|---:|---:|
+| `DCLTPCB1`, honest | 754,119 | **774,639** |
+| `DCLTPCB1` refuses a reordered FundingState tail | 685,198 | **708,934** |
+| — margin below the honest transaction | 68,921 | **65,705** |
+| `DCLTPCB1` refuses a non-terminal request | 22,860 | **22,161** |
+| `DCLTGMF1`, honest | 1,184,132 | **1,189,823** |
+| `DCLTGMF1` refuses a substituted Claims request | 33,594 | **32,680** |
+| Found31 | 223,540 | 253,537 |
+
+The census corroborates it rather than taking the campaign's word: **38 of 100
+enumerated routes executed**, up from 25 before this lane, and the two blocking
+entries still flagged stale are `trading/hot_v3::process_hot_execution_v3` and
+`trading/outer::process_activation#else` — other lanes' entries, flagged for the
+census-enumeration limit named below and **not** because their routes ran. They
+were deliberately left alone.
+
 ### Owner-decisions this lane surfaced and did not take
 
 - **The census cannot see through an `unsafe` block in a dispatch position.**
