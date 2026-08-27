@@ -135,12 +135,12 @@ function decodeDirectConfig(bytes: Uint8Array): Readonly<{ priceScale: bigint; f
  */
 export const DIRECT_PACKET_WALL_V1: DirectTradeWallV1 = Object.freeze({
   name: 'packet',
-  detail: 'The canonical two-instruction Direct fill measures 1,228 of 1,232 legacy-packet bytes, and a real submission must also carry SetComputeUnitLimit (+40 bytes, a program id no lookup table can absorb) because the continuation spends ~1.35M CU against the 200k default. 1,268 > 1,232: the wire decision is owned by the Direct/Registry seam, not by this browser.',
+  detail: 'A real trade does not fit the network’s message size yet. The trade itself is 4 bytes under the 1,232-byte limit, but it must also carry a compute-budget instruction, and with that it is 36 bytes over (1,268 > 1,232). Fixing this is protocol work on the Direct/Registry seam — nothing your browser or wallet can do differently.',
 });
 
 export const DIRECT_PRESTATE_WALL_V1: DirectTradeWallV1 = Object.freeze({
   name: 'prestate',
-  detail: 'A first trade needs a Claims Position, a maker replay root and the Market’s Custody replay, and admitting a Position is itself a Claims mutation behind the same gate the trade is behind. No wallet-constructible admission route exists yet; the Claims-role replay creation (ADR-0008 §7) is the landed pattern the wallet-side admission route will follow.',
+  detail: 'Your wallet does not have a position on this market yet, and the instruction that would open one from a wallet does not exist yet — opening a position is itself a protected change, and today only the protocol’s own programs can make it. The pattern for the wallet version is already landed (ADR-0008 §7); shipping it is protocol work, not yours.',
 });
 
 /** Inspect everything the chain can say about Direct trading this Market. */
@@ -191,7 +191,7 @@ export async function inspectDirectTradeSpineV1(
 
     const walls: DirectTradeWallV1[] = [];
     if (market.phase !== 'Open') {
-      walls.push(Object.freeze({ name: 'phase', detail: `the Market is ${market.phase}; only an Open Market admits Direct liability transitions` }));
+      walls.push(Object.freeze({ name: 'phase', detail: `this Market is ${market.phase} — trading is only open while a Market is Open` }));
     }
 
     let rootAddress: string | null = null;
@@ -227,7 +227,7 @@ export async function inspectDirectTradeSpineV1(
       const root = probeAccounts.get(rootAddress) ?? null;
       rootExists = root !== null && root.owner === tradingProgramId && root.data.length > 0;
       if (!rootExists) {
-        walls.push(Object.freeze({ name: 'activation', detail: `no Direct capability root exists at the derived address ${rootAddress} under the selected Trading program: the manifest entry has never been activated for this generation` }));
+        walls.push(Object.freeze({ name: 'activation', detail: `this Market founded a Direct trading capability but never switched it on — no activation root exists at ${rootAddress}. Activation is the operator’s move, not yours.` }));
       }
     }
     if (aggregateAddress !== null && claimsProgramId !== null) {

@@ -238,7 +238,7 @@ export default function MarketTradePanel({
   const supplies = liability !== null && liability.status === 'bound' ? liability.supplyAtoms : null;
 
   return <section className="trade-v3-card">
-    <header><span>05</span><div><h2>Trade this Market</h2><p>Pick an outcome, size it, and cross one counterparty ticket at the maker&apos;s signed price. Every number below is chain-read (the immutable price scale and fee) or computed by the same builders the byte-level tests pin. What cannot execute yet says exactly why, in the chain&apos;s own vocabulary — a named refusal is this protocol&apos;s honest interface.</p></div></header>
+    <header><span>05</span><div><h2>Trade this Market</h2><p>Pick an outcome, size it, and cross one signed offer at the price its maker signed. Every number you see is read off the chain or computed by the exact code the chain runs. When something cannot happen yet, this panel tells you exactly why in one sentence — never a greyed-out button with no reason.</p></div></header>
 
     <div className="direct-actions">
       <button type="button" onClick={() => void inspect()}>Ask the chain about trading here</button>
@@ -268,8 +268,8 @@ export default function MarketTradePanel({
         </ol>
       </>}
 
-      <h3 className="detail-subhead">Counterparty ticket · the other signed half</h3>
-      <p className="direct-status">A Direct fill settles two signed intents from two distinct makers; there is no order book to take from, by design. Paste the counterparty&apos;s portable ticket (dclutch/direct-intent-ticket/v1). It is not trusted: the builder re-derives the signing message, and the chain verifies the signature natively.</p>
+      <h3 className="detail-subhead">The other side&apos;s ticket</h3>
+      <p className="direct-status">A trade here is two signed halves: yours and someone else&apos;s. There is no order book to take from — the other half arrives as a small ticket (dclutch/direct-intent-ticket/v1) you can be handed any way you like. Pasting it is safe: nothing in it is believed until the chain itself checks the signature.</p>
       <label><span>Ticket JSON</span><textarea rows={5} spellCheck={false} value={ticketText} onChange={(event) => { setTicketText(event.target.value); setSignature(null); }} /></label>
       <div className="direct-form-grid">
         <label><span>My size · claim atoms (blank = take the ticket in full)</span><input inputMode="numeric" value={desired} onChange={(event) => { setDesired(event.target.value.trim()); setSignature(null); }} /></label>
@@ -291,9 +291,9 @@ export default function MarketTradePanel({
         </div>
       </>}
 
-      <h3 className="detail-subhead">Walls between preview and execution · named, not hedged</h3>
+      <h3 className="detail-subhead">What stands between this preview and a real trade</h3>
       {inspected.walls.length === 0
-        ? <p className="direct-status">No walls: the route below can execute this crossing.</p>
+        ? <p className="direct-status">Nothing — the route below can execute this trade.</p>
         : <ul className="market-bindings">{inspected.walls.map((wall) => (
           <li key={wall.name} className="check-fail"><span aria-hidden="true">×</span><div><strong>{wall.name}</strong><small>{wall.detail}</small></div></li>
         ))}</ul>}

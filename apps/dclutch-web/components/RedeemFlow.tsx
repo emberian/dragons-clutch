@@ -86,30 +86,33 @@ export default function RedeemFlow({
       if (!signed.complete) throw new Error('the wallet did not complete the single required signature');
       const client = new SolanaRpcClient(endpoint);
       const signature = await submitSignedTransactionV1(client, signed.transaction);
-      setFlow({ kind: 'submitted', state: flow.state, signature, confirmation: 'submitted; awaiting finalized status' });
+      setFlow({ kind: 'submitted', state: flow.state, signature, confirmation: 'submitted; awaiting the created replay at finalized commitment' });
+      // Confirmation is the POSTCONDITION, not a status row: the replay account
+      // decoding at its derived address at finalized commitment is what a
+      // payout needs. The signature status is polled beside it because it can
+      // answer sooner and can carry a chain refusal — but a node configured
+      // without transaction history answers status `null` forever (measured on
+      // a resumed local ledger), and the created account must still confirm.
       for (let attempt = 0; attempt < 30; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 1_000));
         const [status] = await client.signatureStatuses([signature]);
-        if (status !== undefined && status.known) {
-          if (status.succeeded === false) {
-            setFlow({ kind: 'refused', reason: `the chain refused the submitted transaction: ${status.errorText ?? 'unnamed chain error'}` });
-            return;
-          }
-          if (status.confirmationStatus === 'finalized' || status.confirmationStatus === 'confirmed') {
-            const confirmed = await inspectClaimsCustodyReplayV1(client, {
-              marketAddress, claimsProgramId, custodyProgramId, registryProgramId, payer: wallet,
-            });
-            if (confirmed.status === 'exists') {
-              setFlow({ kind: 'confirmed', signature, confirmation: status.confirmationStatus, replayAddress: confirmed.replayAddress, nextRevision: confirmed.nextRevision });
-            } else {
-              setFlow({ kind: 'refused', reason: `the transaction ${status.confirmationStatus} but the replay did not decode afterwards: ${confirmed.status === 'refused' ? confirmed.reason : 'the derived address is still vacant'}` });
-            }
-            return;
-          }
-          setFlow({ kind: 'submitted', state: flow.state, signature, confirmation: status.confirmationStatus ?? 'processed' });
+        if (status !== undefined && status.known && status.succeeded === false) {
+          setFlow({ kind: 'refused', reason: `the chain refused the submitted transaction: ${status.errorText ?? 'unnamed chain error'}` });
+          return;
         }
+        const confirmed = await inspectClaimsCustodyReplayV1(client, {
+          marketAddress, claimsProgramId, custodyProgramId, registryProgramId, payer: wallet,
+        });
+        if (confirmed.status === 'exists') {
+          const confirmation = status !== undefined && status.known && status.confirmationStatus !== null
+            ? status.confirmationStatus
+            : 'finalized (postcondition read; this node serves no signature history)';
+          setFlow({ kind: 'confirmed', signature, confirmation, replayAddress: confirmed.replayAddress, nextRevision: confirmed.nextRevision });
+          return;
+        }
+        setFlow({ kind: 'submitted', state: flow.state, signature, confirmation: status !== undefined && status.known ? status.confirmationStatus ?? 'processed' : 'submitted; the derived replay address is still vacant at the finalized floor' });
       }
-      setFlow({ kind: 'refused', reason: 'the transaction was submitted but no confirmation arrived within 30 seconds; check the signature on the activity surface' });
+      setFlow({ kind: 'refused', reason: 'the transaction was submitted but the replay did not appear at finalized commitment within 30 seconds; check the signature on the activity surface' });
     } catch (error) {
       setFlow({ kind: 'refused', reason: errorMessage(error) });
     }
@@ -117,7 +120,7 @@ export default function RedeemFlow({
 
   return <div className="redeem-flow">
     <h4 className="detail-subhead">Redeem</h4>
-    <p className="direct-status">Every payout plan opens with this Market&apos;s Claims-role Custody replay — the cursor a redemption replays against. Creating it is permissionless, prepaid by the connected wallet, refunded to the same wallet when the cursor closes, and fits one legacy packet by design.</p>
+    <p className="direct-status">Redeeming is two steps. Step one — creating this market&apos;s redemption cursor — works from your wallet today: it costs a storage deposit that comes back to you plus one network fee, and anyone may do it. Step two, the payout itself, is not wallet-ready yet, and this panel says exactly why below instead of hiding the button.</p>
     {flow.kind === 'idle' && <div className="direct-actions">
       <button type="button" onClick={() => void inspect()}>Prepare redemption</button>
     </div>}
