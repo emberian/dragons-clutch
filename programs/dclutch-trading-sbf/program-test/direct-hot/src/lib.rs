@@ -9,6 +9,7 @@
 
 pub mod chain;
 pub mod fixture;
+pub mod waist;
 
 use dclutch_capability_program_contract::{
     set_v2::{
