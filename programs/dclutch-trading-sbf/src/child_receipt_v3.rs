@@ -339,6 +339,27 @@ mod tests {
             b"RECEIPT1".to_vec(),
         )
         .expect("record");
+        // Return data whose leading kind is not the kind it was recorded under
+        // never enters the bank, so no later route can resolve it.
+        let mut tampered = ChildReceiptBankV3::new();
+        assert_eq!(
+            tampered.record_exact(
+                FixedRole::Custody,
+                2,
+                3,
+                program,
+                [1; 32],
+                *b"REQUEST1",
+                [2; 32],
+                *b"RECEIPT1",
+                b"RECEIPT2".to_vec(),
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
+        assert_eq!(
+            tampered.resolve(Some(dependency()), Some(&program), Some(provenance)),
+            Err(TradingSbfError::Transition.into())
+        );
         // The producer executed, but at another route or another invocation
         // than the one this consumer declares.
         for reordered in [
