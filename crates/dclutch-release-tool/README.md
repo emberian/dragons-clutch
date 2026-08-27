@@ -56,14 +56,36 @@ boundary, and its ProgramData address derivation.
 dclutch-release-tool loader-accounts \
   --program-id <hex32> --loader-program-id <hex32> \
   --elf <program.so> --deployment-slot <u64> \
-  [--upgrade-authority <hex32>] \
+  [--upgrade-authority <hex32> | --revoked-authority <hex32>] \
   --program-out <program-account.bin> \
   --programdata-out <programdata-account.bin> \
   [--text-out <loader-accounts.txt>]
 ```
 
+The authority is **three** states, not two, because Loader V3's is. The tag at
+byte 12 and the key at `[13..45]` sit in a fixed 45-byte metadata region, so
+`SetAuthority(Some -> None)` writes the shorter `None` over the longer `Some`
+**without clearing the key**: a revoked program keeps its former authority
+sitting inert behind a zero tag for the rest of its life (measured on Agave
+4.0.2, `docs/design/DEVNET_DEMO_DEPLOY.md` section 2.5). So:
+
+| flags | tag | `[13..45]` | what it is |
+|---|---:|---|---|
+| neither | `0` | zero | never authorized — a genesis install |
+| `--upgrade-authority K` | `1` | `K` | mutable, upgradeable by `K` |
+| `--revoked-authority K` | `0` | `K` | **immutable, formerly `K`** |
+
+The third row is the only shape a real deployed-then-revoked devnet program is
+ever in, and until it existed every checked manifest built offline carried a
+`programdata_account_sha256` no deployed account could match — which the
+frontend's byte-exact `authenticateDeployment` would refuse for every role.
+A zero key is refused in both key-carrying states; the loader cannot produce one.
+
 The text projection reports `evidence_class=predicted-loader-state-not-observed`
-and names the derived ProgramData address. **These bytes are a prediction of the
+and names the derived ProgramData address. A run carrying `--revoked-authority`
+reports `evidence_class=loader-state-carrying-an-observed-retained-authority`
+instead, because nothing offline knows which key a program used to have: that
+value can only come from reading the account. **These bytes are a prediction of the
 account state a Loader V3 deployment—or a `solana-test-validator
 --upgradeable-program ADDRESS ELF none` genesis install—would hold. They are not
 an observation of any chain.** A release built from constructed accounts must

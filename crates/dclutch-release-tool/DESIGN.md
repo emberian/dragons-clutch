@@ -67,6 +67,13 @@ construction lives here so exactly one implementation of the layout exists, and
 its text projection is labeled `predicted-loader-state-not-observed`. A release
 that uses it owns saying so in its assumptions.
 
+The one part of that construction that CANNOT be predicted is the authority a
+revoked program retains at `[13..45]`: nothing offline knows which key a program
+used to have. `--revoked-authority` therefore takes an observation and says so,
+relabelling the projection `loader-state-carrying-an-observed-retained-authority`.
+It exists because `Option<Pubkey>` cannot express "immutable, formerly A", and
+that is the only state a real deployed-then-revoked program is in.
+
 `SemanticPreimageKindV1::Unowned` exists because no first-party contract decodes
 a role-program semantic release preimage, while `ArtifactReleaseV1` still
 persists one per role. The alternatives were to mislabel those preimages

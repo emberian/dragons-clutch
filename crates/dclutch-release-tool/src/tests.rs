@@ -455,7 +455,8 @@ fn offline_loader_construction_feeds_the_checked_release_path_exactly() -> Resul
     assert_ne!(programdata_id, loader_program_id);
 
     let program = loader_v3_program_account_data_v1(&programdata_id)?;
-    let programdata = loader_v3_programdata_account_data_v1(&elf, 0, None)?;
+    let programdata =
+        loader_v3_programdata_account_data_v1(&elf, 0, LoaderV3AuthorityStateV1::NeverAuthorized)?;
     assert_eq!(program.len(), LOADER_V3_PROGRAM_BYTES);
     assert_eq!(
         programdata.len(),
@@ -484,11 +485,23 @@ fn offline_loader_construction_feeds_the_checked_release_path_exactly() -> Resul
     // Constructed bytes must not become a way to smuggle a nonzero authority
     // tag, a non-SBF payload, or a linkage to some other ProgramData.
     assert_eq!(
-        loader_v3_programdata_account_data_v1(&elf, 0, Some([0; 32])),
+        loader_v3_programdata_account_data_v1(
+            &elf,
+            0,
+            LoaderV3AuthorityStateV1::Upgradeable([0; 32])
+        ),
+        Err(Error::NonCanonicalUpgradeAuthority)
+    );
+    // The same refusal on the revoked side. A revoked program that retained a
+    // ZERO key is not a thing the loader can produce -- an authority is a real
+    // signer -- so admitting it would let a caller mint a shape no account has.
+    // `NeverAuthorized` is how "no key" is spelled.
+    assert_eq!(
+        loader_v3_programdata_account_data_v1(&elf, 0, LoaderV3AuthorityStateV1::Revoked([0; 32])),
         Err(Error::NonCanonicalUpgradeAuthority)
     );
     assert_eq!(
-        loader_v3_programdata_account_data_v1(&[], 0, None),
+        loader_v3_programdata_account_data_v1(&[], 0, LoaderV3AuthorityStateV1::NeverAuthorized),
         Err(Error::InvalidSbfElf)
     );
     let foreign = loader_v3_program_account_data_v1(&[9; 32])?;
@@ -500,7 +513,8 @@ fn offline_loader_construction_feeds_the_checked_release_path_exactly() -> Resul
         build_checked_release(hostile),
         Err(Error::ProgramDataLinkMismatch)
     );
-    let upgradeable = loader_v3_programdata_account_data_v1(&elf, 5, Some([2; 32]))?;
+    let upgradeable =
+        loader_v3_programdata_account_data_v1(&elf, 5, LoaderV3AuthorityStateV1::Upgradeable([2; 32]))?;
     let mutable = ReleaseEvidenceV1 {
         programdata_account_data: &upgradeable,
         ..evidence
@@ -508,6 +522,82 @@ fn offline_loader_construction_feeds_the_checked_release_path_exactly() -> Resul
     assert_eq!(
         build_checked_release(mutable)?.upgrade_authority(),
         Some([2; 32])
+    );
+    Ok(())
+}
+
+/// The shape a real deployed-then-revoked program is in, which no offline
+/// construction could express before. `DEVNET_DEMO_DEPLOY.md` section 7
+/// blocker B.
+#[test]
+fn a_revoked_program_keeps_its_former_authority_and_the_release_path_takes_it() -> Result<()> {
+    let elf = sbf_elf()?;
+    let former = [7_u8; 32];
+
+    let revoked = loader_v3_programdata_account_data_v1(
+        &elf,
+        531,
+        LoaderV3AuthorityStateV1::Revoked(former),
+    )?;
+    let never =
+        loader_v3_programdata_account_data_v1(&elf, 531, LoaderV3AuthorityStateV1::NeverAuthorized)?;
+    let upgradeable =
+        loader_v3_programdata_account_data_v1(&elf, 531, LoaderV3AuthorityStateV1::Upgradeable(former))?;
+
+    // The bytes, exactly. Byte 12 is the Option tag; [13..45] is the key;
+    // the ELF starts at 45 in all three states, which is why the loader can
+    // write `None` over `Some` without moving anything.
+    assert_eq!(revoked.len(), never.len());
+    assert_eq!(revoked.len(), upgradeable.len());
+    assert_eq!(revoked.get(12), Some(&0));
+    assert_eq!(never.get(12), Some(&0));
+    assert_eq!(upgradeable.get(12), Some(&1));
+    assert_eq!(revoked.get(13..45), Some(former.as_slice()));
+    assert_eq!(never.get(13..45), Some([0_u8; 32].as_slice()));
+    assert_eq!(upgradeable.get(13..45), Some(former.as_slice()));
+    assert_eq!(
+        revoked.get(LOADER_V3_PROGRAMDATA_METADATA_BYTES..),
+        Some(elf.as_slice())
+    );
+    // The whole point: revoked and never-authorized are the same authority
+    // STATE and different ACCOUNTS. A manifest built over one cannot match the
+    // other, which is exactly why the third state had to exist.
+    assert_ne!(revoked, never);
+
+    // And the release path takes it. `upgrade_authority` reports None -- the
+    // program is immutable and the retained bytes are inert -- while the
+    // account digest commits to them, so a manifest over a revoked account
+    // matches that account and not its offline prediction.
+    let program_id = [3_u8; 32];
+    let loader_program_id = [4_u8; 32];
+    let programdata_id = loader_v3_programdata_address_v1(&program_id, &loader_program_id);
+    let program = loader_v3_program_account_data_v1(&programdata_id)?;
+    let metadata = BuildMetadataV1::parse(&metadata_text_with_ids(
+        "unowned",
+        &program_id,
+        &programdata_id,
+        &loader_program_id,
+    ))?;
+    let evidence = ReleaseEvidenceV1 {
+        elf: &elf,
+        semantic_preimage: b"dclutch/test/unowned-role/v1",
+        program_account_data: &program,
+        programdata_account_data: &revoked,
+        metadata: &metadata,
+    };
+    let release = build_checked_release(evidence)?;
+    assert_eq!(release.upgrade_authority(), None);
+    assert_eq!(release.deployment_slot(), 531);
+    let predicted = build_checked_release(ReleaseEvidenceV1 {
+        programdata_account_data: &never,
+        ..evidence
+    })?;
+    assert_eq!(predicted.upgrade_authority(), None);
+    // Same artifact, same slot, same authority state -- DIFFERENT account.
+    assert_eq!(predicted.artifact_digest(), release.artifact_digest());
+    assert_ne!(
+        predicted.programdata_account_digest,
+        release.programdata_account_digest
     );
     Ok(())
 }
