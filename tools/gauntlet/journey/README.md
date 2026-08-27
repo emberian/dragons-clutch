@@ -110,6 +110,19 @@ The exemption is that the journey does not execute the function. It is **not**
 that the function is fine; the shipped Resolution ELF still has it. The known
 fix is the frame split W2h used on `hot_v3::process_hot_execution_v3`.
 
+## No CU budget of its own, on purpose
+
+`TIERS.md` asks a tier to opt into a CU budget *if its transactions are worth
+budgeting*. This tier's own transactions are a handful of SPL Token operations
+and a three-account sweep; a budget on those would be a number nobody would ever
+act on. The transactions in this campaign that ARE worth budgeting — `DCLTGMF1`
+and its five stages, `DCLTPCB1`, `Found31` — are tier 1's, they carry tier 1's
+entries in `CU_BUDGETS.json`, and this run evaluates them because tier 1's
+witness set runs against this campaign's evidence. The coverage is inherited,
+not absent. When a post-Open stage grows into something with a real compute
+profile — the first Hot execution, terminal settlement — that is when this tier
+should add its own entry, and it should measure before it writes one.
+
 ## What does not, and exactly why
 
 The transcript carries a gap register; `src/journey.rs::gap_register` is its
