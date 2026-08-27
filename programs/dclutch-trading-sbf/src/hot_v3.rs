@@ -299,6 +299,26 @@ fn hot_checkpoint(phase: &str) {
     );
 }
 
+/// Diagnostic-only allocation mark: label and bump position, no compute read.
+///
+/// A phase checkpoint answers "how much heap had this phase spent"; it cannot
+/// say which bank inside a phase spent it. Attributing the wall needs marks
+/// between individual allocations, and at that density the two extra syscalls
+/// `hot_checkpoint` makes are themselves the measurement's biggest cost. This
+/// logs one line: the label and the bump offset from the heap floor.
+///
+/// The subtraction between two consecutive marks is the exact charge of what
+/// lies between them, because the SBF bump allocator never frees.
+#[cfg(feature = "hot-cu-profile")]
+#[inline(never)]
+fn hot_heap_mark(label: &str) {
+    let probe = Vec::<u8>::with_capacity(1);
+    let position = probe.as_ptr() as usize;
+    let floor = solana_program::entrypoint::HEAP_START_ADDRESS as usize;
+    solana_program::log::sol_log(label);
+    solana_program::log::sol_log_64(position.saturating_sub(floor) as u64, 0, 0, 0, 0);
+}
+
 #[cfg(feature = "hot-cu-profile")]
 macro_rules! hot_cu_checkpoint {
     ($phase:literal) => {
@@ -309,6 +329,18 @@ macro_rules! hot_cu_checkpoint {
 #[cfg(not(feature = "hot-cu-profile"))]
 macro_rules! hot_cu_checkpoint {
     ($phase:literal) => {};
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_heap_mark {
+    ($label:literal) => {
+        crate::hot_v3::hot_heap_mark(concat!("dclutch-hot-heap:", $label))
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_heap_mark {
+    ($label:literal) => {};
 }
 
 /// Shadow caller-authority PDA after six authenticated strategy extras.
@@ -2092,6 +2124,7 @@ fn execute_authenticated_hot_v3(
     // reports a zero lower bound, so the SBF bump allocator - which never frees
     // - is walked through the whole doubling ladder and charges several times
     // the live width for every fallible bank on this path.
+    hot_heap_mark!("runtime-accounts");
     let mut runtime_data = Vec::with_capacity(runtime_accounts.len());
     for account in &runtime_accounts {
         runtime_data.push(
@@ -2100,6 +2133,7 @@ fn execute_authenticated_hot_v3(
                 .map_err(|_| TradingSbfError::Content)?,
         );
     }
+    hot_heap_mark!("runtime-data");
     let tail_count = project_tail_count(account_profile, product_outcome_count)?;
     require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
     // Representatives are resolved before the observation bank because the
@@ -2111,6 +2145,7 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         runtime_accounts.len(),
     )?;
+    hot_heap_mark!("aliases");
     let projected_keys = Box::new(LogicalProjectionKeysV3 {
         selected_config: context.selection().config().to_bytes(),
         product_root: product_runtime.product_record.content_digest.to_bytes(),
@@ -2196,6 +2231,7 @@ fn execute_authenticated_hot_v3(
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent)?;
+    hot_heap_mark!("rent-quotes");
 
     let projected_request = project_account_and_request_registers_v3(
         invocation.current_instruction,
@@ -2217,6 +2253,7 @@ fn execute_authenticated_hot_v3(
         scalar_count,
         identity_count,
     )?;
+    hot_heap_mark!("request-registers");
     let request_output_scalars = projected_request.scalars;
     let request_output_identities = projected_request.identities;
     sealed_ownership
@@ -2247,8 +2284,10 @@ fn execute_authenticated_hot_v3(
     // the request output and the arena holds the other two, so nothing dead is
     // available to rent yet. It is handed to the replan later rather than
     // dropped.
+    hot_heap_mark!("preplan-arena");
     let preplan_output_scalars = vec![0_u64; scalar_count];
     let preplan_output_identities = vec![[0_u8; 32]; identity_count];
+    hot_heap_mark!("preplan-output");
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2300,16 +2339,20 @@ fn execute_authenticated_hot_v3(
     } else {
         // The request-profile banks have been copied into the independently
         // prepared lifecycle batch, so they are dead here and are moved in as
-        // the fold's scratch. Moving them, rather than dropping them and
+        // the fold's output. Moving them, rather than dropping them and
         // cloning the input again, is what keeps the SBF caller frame from
         // retaining two register-bank owners across this noinline semantic
         // boundary and keeps the allocator from being asked for a pair it
-        // already handed out.
+        // already handed out. The fold's scratch is rented from the preplan
+        // arena, which is idle here between its two passes, so this phase
+        // allocates no register bank at all.
         execute_interpreted_transition_v3(
             transition,
             tail_count,
             &preplanned_lifecycle.scalars,
             &preplanned_lifecycle.identities,
+            &mut preplan_scratch.next_scalars,
+            &mut preplan_scratch.next_identities,
             request_output_scalars,
             request_output_identities,
         )?
@@ -2931,26 +2974,53 @@ struct CandidateExecutionV3 {
     transcript_digest: [u8; 32],
 }
 
+/// Fold the interpreted transition without allocating a register bank.
+///
+/// The fold needs three pairs: the input it reads, a scratch pair, and the
+/// output pair it returns. All three already exist and none of them had to be
+/// allocated here.
+///
+/// - the input is the preplan's output, borrowed;
+/// - the *output* is the request-projection pair moved in. It was dead the
+///   moment the preplan copied it, it is exactly the right width, and the
+///   candidate's registers outlive this call -- so the pair that leaves as
+///   `CandidateExecutionV3` is the pair that arrived, not a fresh `to_vec` of
+///   the input;
+/// - the *scratch* is rented from the preplan arena, which is idle between the
+///   two `prepare_lifecycle_v4` passes this call sits between.
+///
+/// Renting the arena's working pair is sound rather than merely convenient:
+/// `prepare_lifecycle_v4` copies `output_scalars`/`output_identities` over all
+/// four arena working banks immediately before every use, so nothing it does
+/// can observe what this fold left in them. Previously this function rented one
+/// pair for scratch and then allocated a whole second pair for the output --
+/// which, on an allocator whose `dealloc` is a no-op, charged the heap a full
+/// pair while the rented one died here unrecoverably.
 #[inline(never)]
 fn execute_interpreted_transition_v3(
     transition: TransitionProgramV3<'_>,
     tail_count: u32,
     input_scalars: &[u64],
     input_identities: &[[u8; 32]],
+    // The preplan arena's working pair, idle between the preplan and the replan.
+    scratch_scalars: &mut [u64],
+    scratch_identities: &mut [[u8; 32]],
     // The request-projection output pair, dead since the preplan copied it.
-    // Rented as the fold's scratch rather than cloned from the input again.
-    mut scratch_scalars: Vec<u64>,
-    mut scratch_identities: Vec<[u8; 32]>,
+    // Returned as the candidate's registers rather than cloned from the input.
+    mut output_scalars: Vec<u64>,
+    mut output_identities: Vec<[u8; 32]>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
-    if scratch_scalars.len() != input_scalars.len()
+    if output_scalars.len() != input_scalars.len()
+        || output_identities.len() != input_identities.len()
+        || scratch_scalars.len() != input_scalars.len()
         || scratch_identities.len() != input_identities.len()
     {
         return Err(TradingSbfError::Content.into());
     }
     scratch_scalars.copy_from_slice(input_scalars);
     scratch_identities.copy_from_slice(input_identities);
-    let mut output_scalars = input_scalars.to_vec();
-    let mut output_identities = input_identities.to_vec();
+    output_scalars.copy_from_slice(input_scalars);
+    output_identities.copy_from_slice(input_identities);
     execute_fold_atomic(
         transition,
         tail_count,
@@ -2959,8 +3029,8 @@ fn execute_interpreted_transition_v3(
             identities: input_identities,
         },
         RegisterOutput {
-            scalars: &mut scratch_scalars,
-            identities: &mut scratch_identities,
+            scalars: scratch_scalars,
+            identities: scratch_identities,
         },
         RegisterOutput {
             scalars: &mut output_scalars,
@@ -3023,9 +3093,11 @@ fn project_hot_effects_v3(
         lamports: observation.lamports(),
         data_len: observation.data().len(),
     }));
+    hot_heap_mark!("effects-account-inputs");
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
     let mut permissions =
         try_projection_bank_v3(&AccountPermission::read_only(), runtime_account_count)?;
+    hot_heap_mark!("effects-permissions");
     if account_profile.uses_dynamic_fixed_spans() {
         derive_effect_permissions_with_dynamic_spans(
             account_profile,
@@ -3052,13 +3124,35 @@ fn project_hot_effects_v3(
     {
         return Err(TradingSbfError::Content.into());
     }
+    hot_heap_mark!("effects-count-checked");
     let mut scratch_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
-    let mut effect_output_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
+    // One lamport output bank, not two. The projection's own output bank was a
+    // separate `effect_account_count`-wide allocation whose entire contents were
+    // then copied into the prefix of the wider bank this function returns -- so
+    // on an allocator that never frees, the heap carried a whole second copy of
+    // the projected balances for the rest of the instruction to serve one
+    // `copy_from_slice`.
+    //
+    // The returned bank is built first and the projection writes straight into
+    // its prefix. Its incoming contents are not load-bearing in either
+    // direction: on success the kernel overwrites every entry of the output
+    // bank from the alias-resolved scratch bank, and on refusal it leaves the
+    // bank untouched and this function returns `Err`, so nothing downstream can
+    // observe the seed. Seeding it from `account_inputs` before the projection
+    // rather than after is the same value -- the projection takes `accounts` as
+    // a shared slice and cannot alter it.
+    let mut output_lamports: Vec<u64> = Vec::new();
+    output_lamports
+        .try_reserve_exact(account_inputs.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    output_lamports.extend(account_inputs.iter().map(|account| account.lamports));
+    hot_heap_mark!("effects-lamport-banks");
     // One bank, not two. The projection's second request bank was written once,
     // at the end, as a verbatim copy of the first; on an allocator that never
     // frees that copy cost the full declared request width for the whole
     // instruction. The single bank carries the same bytes into preflight/CPI.
     let mut requests = try_projection_bank_v3(&0_u8, request_bytes)?;
+    hot_heap_mark!("effects-request-bank");
     project_effects_v4_atomic(
         effect.successor,
         tail_count,
@@ -3075,20 +3169,14 @@ fn project_hot_effects_v3(
                 .get(..effect_account_count)
                 .ok_or(TradingSbfError::Content)?,
             scratch_lamports: &mut scratch_lamports,
-            output_lamports: &mut effect_output_lamports,
+            output_lamports: output_lamports
+                .get_mut(..effect_account_count)
+                .ok_or(TradingSbfError::Content)?,
             requests: &mut requests,
         },
     )
     .map_err(|_| TradingSbfError::Transition)?;
-    let mut output_lamports: Vec<u64> = Vec::new();
-    output_lamports
-        .try_reserve_exact(account_inputs.len())
-        .map_err(|_| TradingSbfError::Content)?;
-    output_lamports.extend(account_inputs.iter().map(|account| account.lamports));
-    output_lamports
-        .get_mut(..effect_account_count)
-        .ok_or(TradingSbfError::Content)?
-        .copy_from_slice(&effect_output_lamports);
+    hot_heap_mark!("effects-projected");
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
         requests,
@@ -7003,6 +7091,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     let mut scratch_identities = vec![[0_u8; 32]; identity_count];
     let mut next_scalars = vec![0_u64; scalar_count];
     let mut next_identities = vec![[0_u8; 32]; identity_count];
+    hot_heap_mark!("projection-three-pairs");
 
     let account_registers = ProjectionRegistersV2 {
         input_scalars: &current_scalars,
