@@ -5845,58 +5845,48 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             None
         };
     hot_heap_mark!("pf-claims-composition");
+    hot_cu_checkpoint!("pf-composition");
+    // One decode of the activation cache for this whole walk, in ONE
+    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
+    // cost and why the decode does not live in this function's frame.
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = if claims_composition.is_some() {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            aliases,
-            ExecutionRoleV1::Claims,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let selected_role_programs = selected_role_programs_v3(
+        frame,
+        effect_accounts,
+        aliases,
+        envelope.release_set(),
+        RequiredRolesV3 {
+            claims: claims_composition.is_some(),
+            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
+            resolution: has_active_role(
+                effect,
+                tail_count,
+                scalars,
+                identities,
+                FixedRole::Resolution,
+            )?,
+        },
+    )?;
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let custody_program =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)? {
-            Some(selected_role_program_v3(
-                frame,
-                effect_accounts,
-                aliases,
-                ExecutionRoleV1::Custody,
-                envelope.release_set(),
-            )?)
-        } else {
-            None
-        };
+    let claims_program = selected_role_programs.claims;
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let custody_program = selected_role_programs.custody;
     #[cfg(feature = "families")]
-    let resolution_program = if has_active_role(
-        effect,
-        tail_count,
-        scalars,
-        identities,
-        FixedRole::Resolution,
-    )? {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            aliases,
-            ExecutionRoleV1::Resolution,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let resolution_program = selected_role_programs.resolution;
 
+    hot_cu_checkpoint!("pf-role-programs");
     let mut route = 0_u16;
     while route < effect.route_count() {
         let count = effect
@@ -5908,6 +5898,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                 .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
             hot_heap_mark!("pf-invocation");
+            hot_cu_checkpoint!("pf-invocation-resolved");
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
@@ -6025,6 +6016,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             }
+            hot_cu_checkpoint!("pf-invocation-preflighted");
             invocation_index = invocation_index
                 .checked_add(1)
                 .ok_or(TradingSbfError::Content)?;
@@ -6104,57 +6096,45 @@ fn execute_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
+    // One decode of the activation cache for this whole walk, in ONE
+    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
+    // cost and why the decode does not live in this function's frame.
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = if claims_composition.is_some() {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            aliases,
-            ExecutionRoleV1::Claims,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let selected_role_programs = selected_role_programs_v3(
+        frame,
+        effect_accounts,
+        aliases,
+        envelope.release_set(),
+        RequiredRolesV3 {
+            claims: claims_composition.is_some(),
+            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
+            resolution: has_active_role(
+                effect,
+                tail_count,
+                scalars,
+                identities,
+                FixedRole::Resolution,
+            )?,
+        },
+    )?;
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let custody_program =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)? {
-            Some(selected_role_program_v3(
-                frame,
-                effect_accounts,
-                aliases,
-                ExecutionRoleV1::Custody,
-                envelope.release_set(),
-            )?)
-        } else {
-            None
-        };
+    let claims_program = selected_role_programs.claims;
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let custody_program = selected_role_programs.custody;
     #[cfg(feature = "families")]
-    let resolution_program = if has_active_role(
-        effect,
-        tail_count,
-        scalars,
-        identities,
-        FixedRole::Resolution,
-    )? {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            aliases,
-            ExecutionRoleV1::Resolution,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let resolution_program = selected_role_programs.resolution;
 
     while execution.route < effect.route_count() {
         let route = execution.route;
@@ -6699,40 +6679,119 @@ fn invocation_accounts_contain_program(
     Ok(count)
 }
 
+/// Which child roles a walk will actually invoke.
 #[cfg(any(
     feature = "families",
     feature = "series-family",
     feature = "dealer-family"
 ))]
-fn selected_role_program_v3<'info>(
+#[derive(Clone, Copy)]
+struct RequiredRolesV3 {
+    claims: bool,
+    custody: bool,
+    resolution: bool,
+}
+
+/// The physical accounts carrying each child role this walk will invoke.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+struct SelectedRoleProgramsV3<'info> {
+    claims: Option<AccountInfo<'info>>,
+    custody: Option<AccountInfo<'info>>,
+    #[cfg(feature = "families")]
+    resolution: Option<AccountInfo<'info>>,
+}
+
+/// Resolve every child role's carrier from ONE decode of the activation cache.
+///
+/// `ActivatedExecutionReleaseSetViewV1::decode` is not cheap: it validates the
+/// whole projection, which decodes all five roles once and then decodes two
+/// more per pair for the ten aliasing comparisons. Asking it per role cost
+/// **58,035 CU for the three roles a Direct walk resolves** -- measured at the
+/// `pf-role-programs` checkpoint against a diagnostically lifted heap -- and
+/// the walk is made twice, in preflight and again in execution, so one
+/// account whose bytes cannot change between them was decoded six times.
+/// One decode per walk measures **37,317**: 20,718 CU per walk, 41,436 across
+/// the pair. The remainder is the carrier scan, which is per role by nature.
+///
+/// This is deliberately ONE out-of-line function rather than a value the walks
+/// hold. `execute_child_routes_v3` is against the SBPF v0 4,096-byte static
+/// frame bound: holding the three decoded addresses as a walk-local made
+/// `cargo build-sbf` report four frame-overwrite diagnostics on it. Here the
+/// addresses live in this function's frame and only the three `AccountInfo`
+/// handles the walk already held cross back.
+///
+/// The release-set identity is checked once, where it was checked per role
+/// before: every address returned is consumed for the release set the caller
+/// states, so one check covers all of them.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+#[inline(never)]
+fn selected_role_programs_v3<'info>(
     frame: HotFrameV3<'_, 'info>,
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
-    role: ExecutionRoleV1,
     release_set: [u8; 32],
-) -> Result<AccountInfo<'info>, ProgramError> {
-    let cache = frame
-        .activation_cache
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Release)?;
-    let activated =
-        ActivatedExecutionReleaseSetViewV1::decode(&cache).map_err(|_| TradingSbfError::Release)?;
-    if activated
-        .execution_release_set_id()
-        .map_err(|_| TradingSbfError::Release)?
-        .to_bytes()
-        != release_set
-    {
-        return Err(TradingSbfError::Release.into());
-    }
-    let expected = activated
-        .role(role)
-        .map_err(|_| TradingSbfError::Release)?
-        .release()
-        .program()
-        .to_bytes();
-    drop(cache);
-    resolve_role_carrier_v3(accounts, aliases, expected)
+    required: RequiredRolesV3,
+) -> Result<SelectedRoleProgramsV3<'info>, ProgramError> {
+    let (claims, custody, resolution) = {
+        let cache = frame
+            .activation_cache
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Release)?;
+        let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache)
+            .map_err(|_| TradingSbfError::Release)?;
+        if activated
+            .execution_release_set_id()
+            .map_err(|_| TradingSbfError::Release)?
+            .to_bytes()
+            != release_set
+        {
+            return Err(TradingSbfError::Release.into());
+        }
+        let program = |role| -> Result<[u8; 32], ProgramError> {
+            Ok(activated
+                .role(role)
+                .map_err(|_| TradingSbfError::Release)?
+                .release()
+                .program()
+                .to_bytes())
+        };
+        (
+            required
+                .claims
+                .then(|| program(ExecutionRoleV1::Claims))
+                .transpose()?,
+            required
+                .custody
+                .then(|| program(ExecutionRoleV1::Custody))
+                .transpose()?,
+            required
+                .resolution
+                .then(|| program(ExecutionRoleV1::Resolution))
+                .transpose()?,
+        )
+    };
+    #[cfg(not(feature = "families"))]
+    let _ = resolution;
+    Ok(SelectedRoleProgramsV3 {
+        claims: claims
+            .map(|expected| resolve_role_carrier_v3(accounts, aliases, expected))
+            .transpose()?,
+        custody: custody
+            .map(|expected| resolve_role_carrier_v3(accounts, aliases, expected))
+            .transpose()?,
+        #[cfg(feature = "families")]
+        resolution: resolution
+            .map(|expected| resolve_role_carrier_v3(accounts, aliases, expected))
+            .transpose()?,
+    })
 }
 
 /// The one physical account in the downgraded logical vector carrying a role's
