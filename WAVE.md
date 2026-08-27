@@ -753,3 +753,11 @@ ember's explicit go.
   floats, fee-record mutation. Smoke demo: per-market signed rate
   diversity + conservation ledger fee take — zero new code. Trigger:
   cycle 3 / post-DEVNET-SMOKE.
+
+- CORRECTION (STRUCT-CAMP-2, derived not asserted): Structured's binding K
+  ceiling is 2, not 3 — the PACKET, not the 1312 profile bound: full-width
+  Issue at K=3 = 1,357 B on a live ALT vs 1,232 (168 B/coordinate). A K=3
+  product can be denominated/reconstituted/redeemed but never issued on a
+  cluster. The cliff doctrine's second exhibit (first: the copied-1312).
+  The K-lift is a SESSION-SPLIT question (paged Issue) — belongs to the
+  cliff-doctrine design pass, which still awaits ember's go.
