@@ -496,6 +496,44 @@ and exposes `open_batch` / `close_batch` — **whose only callers in the tree ar
 tests**. A live General market can activate and settle a candidate nobody could
 have submitted, against orders nobody could have placed.
 
+**PARTLY ANSWERED, 2026-08-27 — and the entry understated it.** GEN-COLLECT
+found three holes rather than one, and closed two of them. Beyond the missing
+route: `batch_id` was a free 32-byte parameter carried by the Candidate, the
+verifier cursor, the selection cursor and the verified candidate, and passed as
+a literal by every test in the family; and `AuthenticatedOrderTermsV2` — the
+`max_lots` and `max_quote_debit_per_lot` the streamed verifier enforces
+`ExcessLots` and `QuoteLimit` against — **was constructed only in tests**, so
+that discipline was applied faithfully to limits the caller simply asserted.
+The Lean semantic owner does not model the collection half either: it has an
+`Order` and a nonzero `batchId`, no `Batch`, and names the gap as the boundary
+obligation `AdapterBoundary.orderSignaturesAuthenticated`.
+
+`crates/dclutch-general-adapter-contract/src/collection_v1.rs` (`751d702`) adds
+`GeneralBatchV1` and `GeneralOrderV1` — content-addressed records whose digests
+*are* `batch_id` and `order_id` — with `open`/`admit`/`close`, giving
+`GeneralRootV2::open_batch` and `close_batch` their first non-test callers and
+`AuthenticatedOrderTermsV2` its first non-test producer. 31 hostile tests.
+`e898d56` runs the existing seven-action real-ELF graph against a real batch and
+three really-placed orders at N=1 and N=258, with accounts, packet bytes and
+scratch pages identical to every row of the recorded campaign.
+
+`docs/decisions/0009-general-batch-collection.md` is the flow design and the
+ownership ruling: the collection routes are three more General **capability
+actions** in the `CapabilityProgramSetV2`, reached through the existing
+`DCLTHOT3` route with zero hot-executor change — the maker's signature is an
+AccountProfile-declared signer bit the family-neutral executor enforces, so
+ADR-0006 needs no exception. Opens and closes are permissionless inside a slot
+window, because `root.retire()` refuses while `open_batches != 0` and an
+unbounded open batch would deny retirement forever.
+
+**Still open, and the third hole is the sharpest of the three:** nothing
+submits or verifies a candidate. `evaluate_runtime_consider_row_with_manifest_v2`
+— the whole streamed verifier — **has no caller outside tests**, and `Consider`
+reads a `SubmittedVerifiedCandidate` out of a readonly account that no action
+writes. Also open: the three routes themselves (a batched artifact regeneration,
+shareable with ADR-0006 §8 item 7), escrow at placement rather than the current
+collect-time debit, cancellation, and rent ownership. See §6 of the decision.
+
 `U-001`'s first clause is *"General batch collection"*. Its long status text in
 the index is entirely about the activation seam, the release content, and the
 zombie refusal; the word "collection" appears in its title and nowhere in its
