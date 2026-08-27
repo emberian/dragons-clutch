@@ -1009,6 +1009,13 @@ statistic refuses. Either `WindowSpecV1`'s `max_age_seconds` /
 tolerance is a prerequisite lift for this family. This is a **provisional**
 judgement — no measurement exists.
 
+> **Amended 2026-08-27 (§11.3).** The cadence tolerance was built. This row is
+> now **designed** rather than provisional: `WindowSpecV1` carries
+> `cadence_tolerance_seconds`, the bound `2 · τ < cadence` is enforced against
+> the derived cadence, and the median's disjointness, ordering, separation and
+> minority-manipulation properties are theorems. It is still not *measured*;
+> choosing τ from observed congestion is the remaining plan.
+
 **Confidence.** Pyth's analogue is `PythAdapterConfigV1.max_confidence_bps`,
 enforced as `confidence · 10_000 ≤ |price| · max_confidence_bps`. The
 chain-state analogue is **depth**, and §5.2 gives it a closed form: a pool's
@@ -1046,6 +1053,13 @@ with κ a `Provisional` bound requiring a lifting plan. The Mango lesson (§5.5)
 is precisely that the *ratio* of position size to venue depth is the invariant
 that was violated, so this is the correct shape of predicate even before κ has a
 defensible value.
+
+> **Amended 2026-08-27 (§11.1–11.2).** Built. κ rides two `u32` coordinates in
+> `SourceCapacityProfileV1`'s existing reserved tail, so its lifting plan is
+> that record's own `envelope_basis_id` and no parallel mechanism exists. The
+> floor is `ManipulationFloorV1`, bound to the Source, the venue configuration
+> the Source names, and the collateral unit. **No on-chain route calls the
+> predicate yet** — see §11.2 for what that costs and who owns it.
 
 The predicate is not sufficient by itself: **depth can fall after founding**
 when LPs withdraw, and a market that was well-collateralized at founding can be
@@ -1286,3 +1300,147 @@ Execution semantics and incidents:
 - https://www.theblock.co/post/159975/solana-stablecoin-nirvana-sinks-90-amid-3-5-million-flash-loan-exploit (secondhand)
 - https://www.coindesk.com/business/2024/05/16/solana-meme-coin-factory-pumpfun-compromised-by-bonding-curve-exploit (secondhand)
 - https://www.theblock.co/post/347360/pump-fun-launches-dex-called-pumpswap-to-instantly-migrate-graduated-tokens (secondhand)
+
+---
+
+## 11. Implementation amendments (KAPPA lane, 2026-08-27)
+
+Two of this dossier's proposals were the demo's principal guard and both were
+carrying debt `AGENTS.md:125` does not allow: §6.5's κ was a `Provisional` bound
+with no lifting plan and no owner, and §6.4's cadence hazard was, in its own
+words, "a **provisional** judgement — no measurement exists." Both now have a
+semantic owner, a Lean statement with kernel agreement, and a stated plan.
+
+Commits `24c3c1d7` (Lean) and `ea43b855` (kernel).
+
+### 11.1 §6.5's κ lives on `SourceCapacityProfileV1`, and nothing parallel was minted
+
+κ takes two `u32` coordinates out of `SourceCapacityProfileV1`'s existing
+reserved tail — offsets 88 and 92 of an unchanged 112 bytes. That record was
+already the right owner and adopting it closes the lifting-plan gap for free:
+
+- it is already the Source's capacity envelope, and §6.5's predicate is a
+  capacity question;
+- it already distinguishes `Measured` from `Provisional`;
+- it already carries `envelope_basis_id`, which for a `Provisional` envelope
+  **is** the required lifting plan. A provisional κ therefore names its plan
+  through the mechanism the crate already had. The canonical plan identity is
+  `PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1`
+  (`dclutch/lifting-plan/source-principal-capacity-kappa/v1`);
+- it is already selected by `SourceSpecV1.capacity_profile_id`, so a Market's
+  Source graph reaches κ without a new edge.
+
+A profile written before κ existed carries the all-zero tail and reads
+`PrincipalCapacityV1::Unstated`. That is refused at **admission**, not at
+decode: an old record stays decodable and founds nothing, which is the
+fail-closed reading without invalidating any existing bytes. A numerator without
+a denominator is not a rational and refuses on the wire.
+
+**κ's conservative default is 1/4, and the reason is stateable.** An attacker
+who forces the observed outcome captures at most the whole Hoard, so κ = 1 is
+break-even against a perfectly extracting attacker; 1/4 keeps a fourfold margin
+against one. **The lifting plan is**: measure the fraction an attacker can
+actually realise on a given venue — an attacker must hold positions, pay to
+enter and exit, and compete with honest flow, so the realisable fraction is
+below one — then state a per-venue κ with a `Measured` envelope and that
+measurement as `envelope_basis_id`. κ = 1/4 is provisional until then and is
+labelled so on the wire.
+
+### 11.2 The floor is its own record, because substitution is the attack
+
+`ManipulationFloorV1` (160 bytes, `DCLTMFL1`) carries the venue number and the
+three identities that make substituting it fail: the `source_spec_id` it was
+derived for, the `adapter_config_id` **the Source itself names** (so a floor
+cannot select its own venue), and the collateral `unit_id` the atoms are
+denominated in — without which the predicate would compare atoms of one asset
+against atoms of another. It also names the `derivation_release_id` that
+produced the number, so §5.4's exact-decimal arithmetic is a claim the record
+makes rather than an assumption the reader supplies. `FloorBasis` distinguishes
+`CurveDerived` from `ObservedDepth` because only the second falls when liquidity
+thins, which is precisely why §6.5's observation-time refusal remains necessary
+and is **not** superseded by this founding bound.
+
+The predicate is cross-multiplied — `principal · denominator ≤ numerator ·
+floor` — so no division and no float appears. The `u128` overflow refusal is
+exact rather than conservative: with a `u32` κ and a `u64` floor the right-hand
+side stays below `2^96`, so a left-hand side that will not fit `u128` is
+genuinely larger. `overflow_is_exact` in `SourcePrincipalCapacityV1.lean` is
+that argument.
+
+**The demo graduation Market's number.** At κ = 1/4 against §5.4's exact
+18.618074 SOL floor, the largest admitted total Hoard principal is
+**4,654,518,500 lamports (4.6545185 SOL)**; 4,654,518,501 refuses. Decided in
+Lean and in the kernel. §5.4's first correction is also made to bite: a
+principal sized against the 85 SOL nominal curve cost is admitted against that
+figure and refused against the real floor.
+
+**Reachability, named as debt.** The predicate is a kernel function and **no
+on-chain route calls it yet**. Core's `Found` decodes `SourceMaterialV2` but
+never sees principal; Claims `FoundingV5` mints `quantity · scale` but never
+sees the Source. Closing that means carrying a principal cap on the Market root
+at `Found` and checking it at `FoundingV5` *and at every later complete-set
+split* — principal grows after founding, so a founding-only check is not a cap.
+That is a Core+Claims change that collides with W1b's founding-root ADR and is
+queued, not smuggled. Until it lands the guard is enforced host-side by the
+campaign that founds the market.
+
+### 11.3 §6.4's cadence hazard: the provisional judgement is now a designed bound
+
+The row is upgraded from **provisional (no measurement)** to **designed, with
+proofs and a stated residual cost**. It is not upgraded to *measured*: no
+congestion measurement was taken, and the number a market should choose for τ
+still wants one. What changed is that the statistic no longer breaks when a slot
+is missed, and that the properties it was chosen for are now theorems rather
+than assertions.
+
+`WindowSpecV1` gained `cadence_tolerance_seconds` in its own reserved tail
+(offset 104 of an unchanged 112 bytes). Each nominal slot `start + cadence · i`
+widens to `[slot − τ, slot + τ]`. The cadence is still derived from the
+**window**: if the samples determined it, an attacker choosing when to submit
+would be choosing the schedule they are supposed to be answering.
+
+Everything follows from one bound, `2 · τ < cadence`, and each is a theorem in
+`SourceScheduledMedianV1.lean`:
+
+| Property | Theorem |
+| --- | --- |
+| No instant answers two slots, so the tolerance cannot shorten the window | `admission_windows_are_disjoint` |
+| Admitted times strictly increase — the evaluator's ordering check is *implied* | `admitted_times_strictly_increase` |
+| Consecutive samples stay ≥ `cadence − 2τ` apart, so §5.1's atomicity bound survives | `admitted_samples_stay_separated` |
+| The strict inequality is not decoration: at `2τ = cadence` two slots admit one instant | `tolerance_bound_is_tight` |
+| `τ = 0` admits exactly the strict cadence, so no existing window changes meaning | `admits_of_zero_tolerance` |
+
+The residual cost is visible rather than hidden: the separation an attacker must
+hold a manipulated price across is `cadence − 2τ`, not `cadence`. A market
+choosing τ is trading liveness under congestion against that margin, and the
+kernel exposes `minimum_separation_seconds()` so the trade is readable.
+
+The median itself is proved to survive, because "the tolerance only moves times"
+is a claim and not an axiom: `selects_unique` (one answer, whichever equal
+candidate the scan reaches first), `median_permutation_invariant` (no dependence
+on submission order), and `median_within_honest_range` — with an odd window and
+any minority of manipulated samples the median is **bracketed** by the honest
+samples. That last one is the precise form of §6.4's claim; a median does not
+*ignore* a minority, it is bounded by the majority, and the bound needs the odd
+window.
+
+Two scoping rules keep the widening from leaking. A `Terminal` window refuses a
+nonzero tolerance outright — it has no cadence to tolerate. And a nonzero
+tolerance is admitted only with `StatisticKind::OddScheduledMedian`, so it
+cannot silently widen the window a minimum, maximum or average is taken over.
+The bound itself cannot be checked by the window alone, because the cadence
+depends on the committed sample count; it is enforced in
+`ScheduledMedianScheduleV1::derive`, which every median path goes through.
+
+The lifting plan for τ, named as `CADENCE_TOLERANCE_LIFTING_PLAN_ID_V1`
+(`dclutch/lifting-plan/source-scheduled-median-cadence-tolerance/v1`): measure
+observed submission lateness under real congestion for the target cluster, and
+choose τ as a stated quantile of it rather than as a designer's guess.
+
+### 11.4 One deletion the refactor earned
+
+The crate carried **two** copies of the median schedule validator and **two**
+copies of the median scan — one for borrowed observations, one for normalized
+provider evidence — which could have drifted at any time and would have made the
+tolerance addable to one path and forgettable on the other. Both are gone;
+`ScheduledMedianScheduleV1` and `exact_median_by` are the single owners.
