@@ -237,30 +237,35 @@ and witness file.
 
 A campaign that proves rollback does it by refusing AFTER the child committed,
 and the program that refuses is a test-only caller the census does not
-enumerate. The chain reports THAT program's code, which can collide numerically
-with a first-party refusal it has nothing to do with -- `DeliberateLateFailure
-= 3` is also `claims/ClaimsSbfError::Release` and
-`custody/CustodySbfError::CallerAuthority`.
+enumerate. The chain reports THAT program's code.
 
-Naming the first-party refusal in that binding is a lie the census cannot
-detect, because the numbers match. Such a binding instead carries:
+That code used to collide with a first-party refusal it had nothing to do with
+-- `DeliberateLateFailure = 3` was also `claims/ClaimsSbfError::Release` and
+`custody/CustodySbfError::CallerAuthority` -- and naming one of those in the
+binding was a lie the census could not detect, because the numbers matched.
+`docs/decisions/0007-namespaced-refusal-codes.md` ended the collision: every
+test caller owns a band at `0x100000` or above, which no deployed program can
+reach, so a caller's code now identifies the caller. It did not end the reason
+for this field. A test caller is still not an enumerated program, so there is
+still no taxonomy entry to credit its refusal to. Such a binding carries:
 
 ```json
 {
   "outcome": "refused",
   "unnamed_refusal": {
-    "code": 3,
-    "reason": "the test-only caller's DeliberateLateFailure, raised after the child committed"
+    "code": 1077251,
+    "reason": "test/custody-caller's DeliberateLateFailure (0x107003), raised after the child committed"
   }
 }
 ```
 
-The code is still checked against what the chain reported, so a campaign whose
-claim and chain disagree is still refused; the observation simply credits no
-enumerated taxonomy. Exactly one of `refusal` and `unnamed_refusal` is
-admissible per binding, and an empty reason is refused: an uncredited refusal
-with no account of where it came from is how a real refusal launders itself out
-of the taxonomy.
+`code` is decimal because JSON has no hexadecimal literal; write the hex form in
+`reason`, which is the form a validator log shows. The code is still checked
+against what the chain reported, so a campaign whose claim and chain disagree is
+still refused; the observation simply credits no enumerated taxonomy. Exactly
+one of `refusal` and `unnamed_refusal` is admissible per binding, and an empty
+reason is refused: an uncredited refusal with no account of where it came from
+is how a real refusal launders itself out of the taxonomy.
 
 ## Adding a family tier
 

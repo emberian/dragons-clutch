@@ -53,7 +53,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/ClaimsSbfError::Identity",
-      "note": "HOSTILE. IssueStructured names a structured-custody token account that is not the canonical associated token account. Refuses Identity (2); the campaign asserts the whole resource snapshot is byte-identical to its prestate."
+      "note": "HOSTILE. IssueStructured names a structured-custody token account that is not the canonical associated token account. Refuses Identity (0x5002); the campaign asserts the whole resource snapshot is byte-identical to its prestate."
     },
     {
       "label": "claims rational-representation-v2: IssueStructured commits",
@@ -104,7 +104,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/ClaimsSbfError::Identity",
-      "note": "HOSTILE. The finalized descriptor raw/staging pair is substituted for another, same-width descriptor. Refuses Identity (2)."
+      "note": "HOSTILE. The finalized descriptor raw/staging pair is substituted for another, same-width descriptor. Refuses Identity (0x5002)."
     },
     {
       "label": "claims rational-representation-v2: terminal against a same-width graph",
@@ -115,7 +115,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/ClaimsSbfError::Identity",
-      "note": "HOSTILE. The finalized Product graph raw/staging pair is substituted for another, same-width graph. Refuses Identity (2)."
+      "note": "HOSTILE. The finalized Product graph raw/staging pair is substituted for another, same-width graph. Refuses Identity (0x5002)."
     },
     {
       "label": "claims rational-representation-v2: caller refuses after a complete terminal redemption",
@@ -126,8 +126,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 3,
-        "reason": "The test-only wrapper's DeliberateLateFailure, raised AFTER Claims, Custody and Token-2022 all logged success, to prove the terminal redemption rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+        "code": 1064963,
+        "reason": "RationalV2CallerError::DeliberateLateFailure (0x104003), raised by the test-only wrapper at programs/dclutch-claims-sbf/test-programs/rational-v2-caller AFTER Claims, Custody and Token-2022 all logged success, to prove the terminal redemption rolls back whole. Band 0x104 is that wrapper's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The chain's own logs show `Program <claims> success`, real Custody and real Token-2022 invocations, all inside a transaction that did not commit."
     },

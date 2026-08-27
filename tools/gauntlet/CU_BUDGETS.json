@@ -392,7 +392,7 @@
       "enforced": false,
       "unenforced_reason": "There is no green number to pin. The canonical Hot bundle does not pass at HEAD: the tail is over the 32,768-byte heap at phase 7 (WAVE.md, W2i lane), so `real_registry_executes_profile14_direct_hot_under_protocol_limit` in programs/dclutch-trading-sbf/program-test/tests/registry_hot_continuation.rs is not a green transaction whose CU could be budgeted. Its phase subtotals additionally require `--features hot-cu-profile`, which switches the ten `hot_cu_checkpoint!` sites from no-ops to log lines, so an ordinary run emits no phase data at all. Both files are W2i's live surface and this lane is read-only toward them.",
       "recorded_measurements": {
-        "source": "docs/decisions/0005-per-market-authentication-cache.md, converged at ca5e5f1, canonical Direct Profile14 bundle, COMPUTE_LIMIT 1,400,000, real 32,768-byte heap, at the same Custom(3) lifecycle-preplan refusal before and after",
+        "source": "docs/decisions/0005-per-market-authentication-cache.md, converged at ca5e5f1, canonical Direct Profile14 bundle, COMPUTE_LIMIT 1,400,000, real 32,768-byte heap, at the same `TradingSbfError::Content` lifecycle-preplan refusal before and after -- ADR 0005 was written before the 0007 band renumber and records it as `Custom(3)`; the same refusal is 0x4003 now",
         "artifacts_phase_before": 645836,
         "artifacts_phase_after": 56693,
         "cumulative_to_runtime_observations_before": 850425,

@@ -25,7 +25,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/RationalLifecycleSbfErrorV2::Accounts",
-      "note": "HOSTILE. ActivateReceipt names a superseded ATA coordinate instead of the canonical one. Refuses Accounts (211); the campaign asserts the prepaid receipt Mint account is byte-identical to its prestate."
+      "note": "HOSTILE. ActivateReceipt names a superseded ATA coordinate instead of the canonical one. Refuses Accounts (0x5211); the campaign asserts the prepaid receipt Mint account is byte-identical to its prestate."
     },
     {
       "label": "claims rational-lifecycle: caller refuses after activating the receipt",
@@ -36,8 +36,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 4,
-        "reason": "The test-only wrapper's DeliberateLateFailure, raised AFTER Claims logged success, to prove ActivateReceipt rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Authority, which is exactly why it is not credited to one."
+        "code": 1060868,
+        "reason": "RationalLifecycleCallerErrorV2::DeliberateLateFailure (0x103004), raised by the test-only wrapper at programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller AFTER Claims logged success, to prove ActivateReceipt rolls back whole. Band 0x103 is that wrapper's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit. The campaign asserts the receipt Mint and the lifecycle RentCredit are byte-identical to their prestate."
     },
@@ -60,7 +60,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/RationalLifecycleSbfErrorV2::Rent",
-      "note": "HOSTILE replay. The identical ActivateReceipt request is resubmitted after the receipt is already live, so the prepaid lifecycle RentCredit accounting no longer matches. Refuses Rent (215)."
+      "note": "HOSTILE replay. The identical ActivateReceipt request is resubmitted after the receipt is already live, so the prepaid lifecycle RentCredit accounting no longer matches. Refuses Rent (0x5215)."
     },
     {
       "label": "claims rational-lifecycle: caller refuses after activating the coordinate",
@@ -71,8 +71,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 4,
-        "reason": "The test-only wrapper's DeliberateLateFailure, raised AFTER Claims logged success, to prove ActivateCoordinate rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Authority, which is exactly why it is not credited to one."
+        "code": 1060868,
+        "reason": "RationalLifecycleCallerErrorV2::DeliberateLateFailure (0x103004), raised by the test-only wrapper at programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller AFTER Claims logged success, to prove ActivateCoordinate rolls back whole. Band 0x103 is that wrapper's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit. The campaign asserts the shard Mint, structured custody, Position and admission accounts are byte-identical to their prestate."
     },
@@ -95,8 +95,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 4,
-        "reason": "The test-only wrapper's DeliberateLateFailure, raised AFTER Claims logged success, to prove RetireCoordinate rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Authority, which is exactly why it is not credited to one."
+        "code": 1060868,
+        "reason": "RationalLifecycleCallerErrorV2::DeliberateLateFailure (0x103004), raised by the test-only wrapper at programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller AFTER Claims logged success, to prove RetireCoordinate rolls back whole. Band 0x103 is that wrapper's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "Submitted after the Core Market is forced into Retiring so the terminal-gated retirement path is reachable. The chain's own logs show `Program <claims> success` inside a transaction that did not commit; the campaign asserts every coordinate resource and the RentCredit are byte-identical to their prestate."
     },
@@ -119,8 +119,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 4,
-        "reason": "The test-only wrapper's DeliberateLateFailure, raised AFTER Claims logged success, to prove RetireReceipt rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Authority, which is exactly why it is not credited to one."
+        "code": 1060868,
+        "reason": "RationalLifecycleCallerErrorV2::DeliberateLateFailure (0x103004), raised by the test-only wrapper at programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller AFTER Claims logged success, to prove RetireReceipt rolls back whole. Band 0x103 is that wrapper's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit. The campaign asserts the receipt Mint and the lifecycle RentCredit are byte-identical to their prestate."
     },

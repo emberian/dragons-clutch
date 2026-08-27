@@ -54,16 +54,16 @@
     {
       "id": "the-chain-raised-the-non-stateless-frame-refusal",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.logs[]? | contains(\"custom program error: 0x0\"))] | length",
+      "query": "[.transactions[] | select(.logs[]? | contains(\"custom program error: 0xa000\"))] | length",
       "expect": "1",
-      "provenance": "Read from the chain's own finalized log messages, not from the campaign's belief about what it submitted. DirectAotSbfError::NonStatelessFrame is discriminant 0, enumerated by the census from programs/dclutch-direct-aot-sbf/src/lib.rs:53. Exactly one campaign transaction presents an account."
+      "provenance": "Read from the chain's own finalized log messages, not from the campaign's belief about what it submitted. DirectAotSbfError::NonStatelessFrame is 0xA000, the base of Direct-AOT's registered refusal band, enumerated by the census from programs/dclutch-direct-aot-sbf/src/lib.rs:53; the runtime prints it lowercase, which is the form this query matches. Exactly one campaign transaction presents an account."
     },
     {
       "id": "the-chain-raised-the-invalid-request-refusal-seven-times",
       "kind": "evidence-jq",
-      "query": "[.transactions[] | select(.logs[]? | contains(\"custom program error: 0x1\"))] | length",
+      "query": "[.transactions[] | select(.logs[]? | contains(\"custom program error: 0xa001\"))] | length",
       "expect": "7",
-      "provenance": "Read from the chain's own finalized log messages. DirectAotSbfError::InvalidRequest is discriminant 1, enumerated by the census from programs/dclutch-direct-aot-sbf/src/lib.rs:55. Seven distinct hostile wires reach it: empty, short by one, long by one, foreign magic, dirty reserved span, and two foreign declared bank widths."
+      "provenance": "Read from the chain's own finalized log messages. DirectAotSbfError::InvalidRequest is 0xA001, enumerated by the census from programs/dclutch-direct-aot-sbf/src/lib.rs:55. Seven distinct hostile wires reach it: empty, short by one, long by one, foreign magic, dirty reserved span, and two foreign declared bank widths."
     },
     {
       "id": "no-hostile-wire-was-bounced-before-the-programs-taxonomy",

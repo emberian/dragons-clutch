@@ -88,7 +88,7 @@
     },
     {
       "route": "trading/hot_v3::process_hot_execution_v3",
-      "reason": "Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses Custom(3) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). Compute and heap are no longer the blocker; the emitter is.",
+      "reason": "Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses `TradingSbfError::Content` (0x4003) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). Compute and heap are no longer the blocker; the emitter is.",
       "owner": "DP2 (Direct emitter repairs); W2d (per-Market authentication cache) for the remaining ~640,861 CU of repeated artifact decode-and-validate"
     },
     {

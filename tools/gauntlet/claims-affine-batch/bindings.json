@@ -25,7 +25,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/AffineBatchSbfErrorV2::Accounts",
-      "note": "HOSTILE. Position outcome 21's account is substituted for an unrelated Position, aliasing a coordinate. Refuses Accounts (161); the campaign asserts the Claims aggregate and both Positions are byte-identical to their prestate."
+      "note": "HOSTILE. Position outcome 21's account is substituted for an unrelated Position, aliasing a coordinate. Refuses Accounts (0x5161); the campaign asserts the Claims aggregate and both Positions are byte-identical to their prestate."
     },
     {
       "label": "claims affine-batch: admit against a substituted Product record",
@@ -36,7 +36,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/AffineBatchSbfErrorV2::ProductBasis",
-      "note": "HOSTILE. The finalized Product raw/staging pair is substituted for a differently-shaped Product. Refuses ProductBasis (163)."
+      "note": "HOSTILE. The finalized Product raw/staging pair is substituted for a differently-shaped Product. Refuses ProductBasis (0x5163)."
     },
     {
       "label": "claims affine-batch: admit against a substituted linked basis",
@@ -47,7 +47,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/AffineBatchSbfErrorV2::ProductBasis",
-      "note": "HOSTILE. The finalized linked-basis raw/staging pair is substituted for another Product's basis at the same semantic identity. Refuses ProductBasis (163)."
+      "note": "HOSTILE. The finalized linked-basis raw/staging pair is substituted for another Product's basis at the same semantic identity. Refuses ProductBasis (0x5163)."
     },
     {
       "label": "claims affine-batch: caller refuses after a complete batch",
@@ -58,8 +58,8 @@
       "program": "claims",
       "outcome": "refused",
       "unnamed_refusal": {
-        "code": 3,
-        "reason": "The test-only caller's DeliberateLateFailure, raised AFTER Claims logged success, to prove the affine batch's allocation and mutation roll back together. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+        "code": 1048579,
+        "reason": "AffineBatchTestCallerError::DeliberateLateFailure (0x100003), raised by the test-only caller at programs/dclutch-claims-sbf/test-programs/affine-batch-caller AFTER Claims logged success, to prove the affine batch's allocation and mutation roll back together. Band 0x100 is that caller's alone and can never appear on a real cluster, so the code no longer collides with any first-party refusal; it is still uncredited because a test caller has no census taxonomy to credit."
       },
       "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit. The campaign asserts the Claims aggregate and both Positions are byte-identical to their prestate."
     },
@@ -82,7 +82,7 @@
       "program": "claims",
       "outcome": "refused",
       "refusal": "claims/AffineBatchSbfErrorV2::ClaimsState",
-      "note": "HOSTILE replay. The same request is resubmitted after the canonical batch already advanced the aggregate and Position revisions. Refuses ClaimsState (164)."
+      "note": "HOSTILE replay. The same request is resubmitted after the canonical batch already advanced the aggregate and Position revisions. Refuses ClaimsState (0x5164)."
     }
   ]
 }

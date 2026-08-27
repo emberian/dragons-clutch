@@ -78,7 +78,7 @@
       "program": "resolution",
       "outcome": "refused",
       "refusal": "resolution/ResolutionError::Transition",
-      "note": "HOSTILE. Bounded in the direction that matters: the walk is a liveness path, not a way to end a market early. exhaust_after_primary_deadline refuses strictly before window.end + window.max_age, both of them the market's own founding-time content. Refuses Transition (12); the campaign asserts the Source phase, both escrows, the walker's balance and both certificate addresses are unchanged."
+      "note": "HOSTILE. Bounded in the direction that matters: the walk is a liveness path, not a way to end a market early. exhaust_after_primary_deadline refuses strictly before window.end + window.max_age, both of them the market's own founding-time content. Refuses Transition (0x800C); the campaign asserts the Source phase, both escrows, the walker's balance and both certificate addresses are unchanged."
     },
     {
       "label": "relayed liveness: a second walk cannot collect the bounty twice",
@@ -102,7 +102,7 @@
       "program": "resolution",
       "outcome": "refused",
       "refusal": "resolution/ResolutionError::Funding",
-      "note": "HOSTILE, substituted compensation. The exhaustion compartment is a REAL FundingStateV1 of this same market, Active, owned by the Resolution program, at its own correctly derived address -- every check about shape passes on it. What refuses is the check about identity: the explicit-failure compartment is the one whose manifest entry configures this market's own Source material, exactly the binding core_effect's authenticate_funding_entries established when the three compartments were created. Refuses Funding (14) by that comparison rather than by an account-position convention, which is what makes the refusal survive a frame reordering."
+      "note": "HOSTILE, substituted compensation. The exhaustion compartment is a REAL FundingStateV1 of this same market, Active, owned by the Resolution program, at its own correctly derived address -- every check about shape passes on it. What refuses is the check about identity: the explicit-failure compartment is the one whose manifest entry configures this market's own Source material, exactly the binding core_effect's authenticate_funding_entries established when the three compartments were created. Refuses Funding (0x800E) by that comparison rather than by an account-position convention, which is what makes the refusal survive a frame reordering."
     },
     {
       "label": "relayed liveness: an escrow one lamport short refuses",
@@ -114,7 +114,7 @@
       "program": "resolution",
       "outcome": "refused",
       "refusal": "resolution/ResolutionError::Funding",
-      "note": "HOSTILE, unfunded shape. The FundingStateV1 bytes stay exactly canonical -- same entry index, same manifest, same Active status, same derived address -- and one lamport goes missing from the account. That is the only way to reach validate_against's custody comparison at all, because the address folds in the state's own bytes. Refuses Funding (14). Without the check a route could pay a bounty out of an account it was about to leave below its own Rent reserve, and the shortfall would surface an instruction later as an unrelated rent failure."
+      "note": "HOSTILE, unfunded shape. The FundingStateV1 bytes stay exactly canonical -- same entry index, same manifest, same Active status, same derived address -- and one lamport goes missing from the account. That is the only way to reach validate_against's custody comparison at all, because the address folds in the state's own bytes. Refuses Funding (0x800E). Without the check a route could pay a bounty out of an account it was about to leave below its own Rent reserve, and the shortfall would surface an instruction later as an unrelated rent failure."
     }
   ]
 }
