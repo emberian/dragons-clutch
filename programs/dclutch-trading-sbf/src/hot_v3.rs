@@ -2686,7 +2686,8 @@ fn commit_prepared_post_children_v3(
         prepared.runtime_accounts,
         prepared.rent,
     )?;
-    commit_local_effects(
+    hot_cu_checkpoint!("commit-lifecycle-closes");
+    let plan = commit_non_root_effects_v3(
         prepared.effect,
         prepared.tail_count,
         prepared.scalars,
@@ -2695,9 +2696,9 @@ fn commit_prepared_post_children_v3(
         prepared.aliases,
         prepared.output_lamports,
         prepared.rent,
-        false,
     )?;
-    commit_local_effects(
+    hot_cu_checkpoint!("commit-non-root");
+    commit_root_effects_v3(
         prepared.effect,
         prepared.tail_count,
         prepared.scalars,
@@ -2706,8 +2707,9 @@ fn commit_prepared_post_children_v3(
         prepared.aliases,
         prepared.output_lamports,
         prepared.rent,
-        true,
+        &plan,
     )?;
+    hot_cu_checkpoint!("commit-root");
     Ok(())
 }
 
@@ -7908,8 +7910,68 @@ fn require_root_write_is_state_only(
     }
 }
 
+/// The local-effect ordinals the commit-last pass owns, recorded by the pass
+/// that has already resolved every one of them.
+///
+/// The two passes of [`commit_prepared_post_children_v3`] walk the SAME ordinal
+/// space — `fixed_operation_count` fixed effects, then `tail_count *
+/// item_operation_count` item effects — and differ only in which resolved
+/// writes they act on. Resolving that space twice is what this plan removes:
+/// one resolution is about 900-1,060 CU, the canonical Direct bundle has 131 of
+/// them, and the second pass acted on exactly one.
+///
+/// Recording is sound because resolution is a pure function of the effect
+/// artifact, `tail_count`, the transition's output scalars and its output
+/// identities. The non-root pass mutates none of those — it writes account
+/// lamports and account data — so an ordinal that resolved to the root
+/// coordinate during the first pass resolves to it during the second, and one
+/// that did not, does not. Nor can a refusal be skipped: the first pass
+/// resolves every ordinal unconditionally and fails the whole commit if any
+/// resolution or alias lookup fails, so the second pass never reaches an
+/// ordinal the first one did not already accept.
+struct RootCommitPlanV3 {
+    ordinals: u32,
+    bits: Vec<u8>,
+}
+
+impl RootCommitPlanV3 {
+    fn for_geometry(
+        effect: SelectedEffectProgramV4<'_>,
+        tail_count: u32,
+    ) -> Result<Self, ProgramError> {
+        let ordinals = root_commit_ordinal_count_v3(effect, tail_count)?;
+        let bytes = usize::try_from(ordinals.div_ceil(8)).map_err(|_| TradingSbfError::Commit)?;
+        let mut bits = Vec::new();
+        bits.try_reserve_exact(bytes)
+            .map_err(|_| TradingSbfError::Commit)?;
+        bits.resize(bytes, 0);
+        Ok(Self { ordinals, bits })
+    }
+
+    fn record(&mut self, ordinal: u32) -> Result<(), ProgramError> {
+        let index = usize::try_from(ordinal).map_err(|_| TradingSbfError::Commit)?;
+        *self
+            .bits
+            .get_mut(index / 8)
+            .ok_or(TradingSbfError::Commit)? |= 1_u8 << (index % 8);
+        Ok(())
+    }
+}
+
+/// Total local-effect ordinals for one execution's geometry.
+fn root_commit_ordinal_count_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+) -> Result<u32, ProgramError> {
+    u32::from(effect.item_operation_count())
+        .checked_mul(tail_count)
+        .and_then(|items| items.checked_add(u32::from(effect.fixed_operation_count())))
+        .ok_or_else(|| TradingSbfError::Commit.into())
+}
+
+/// Commit every non-root coordinate and record what the commit-last pass owns.
 #[allow(clippy::too_many_arguments)]
-fn commit_local_effects(
+fn commit_non_root_effects_v3(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
@@ -7918,6 +7980,103 @@ fn commit_local_effects(
     aliases: &[usize],
     output_lamports: &[u64],
     rent: &Rent,
+) -> Result<RootCommitPlanV3, ProgramError> {
+    let mut plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
+    commit_output_lamports_v3(accounts, aliases, output_lamports, false)?;
+    let mut ordinal = 0_u32;
+    let mut fixed = 0_u16;
+    while fixed < effect.fixed_operation_count() {
+        let resolved = effect
+            .resolved_fixed_effect(fixed, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Commit)?;
+        if commit_data_effect(resolved, accounts, aliases, false)? {
+            plan.record(ordinal)?;
+        }
+        ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Commit)?;
+        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Commit)?;
+    }
+    let mut item = 0_u32;
+    while item < tail_count {
+        let mut operation = 0_u16;
+        while operation < effect.item_operation_count() {
+            let resolved = effect
+                .resolved_item_effect(item, operation, tail_count, scalars, identities)
+                .map_err(|_| TradingSbfError::Commit)?;
+            if commit_data_effect(resolved, accounts, aliases, false)? {
+                plan.record(ordinal)?;
+            }
+            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Commit)?;
+            operation = operation.checked_add(1).ok_or(TradingSbfError::Commit)?;
+        }
+        item = item.checked_add(1).ok_or(TradingSbfError::Commit)?;
+    }
+    require_committed_rent_exemption_v3(accounts, aliases, rent, false)?;
+    Ok(plan)
+}
+
+/// Commit the root coordinate last, resolving only the recorded ordinals.
+#[allow(clippy::too_many_arguments)]
+fn commit_root_effects_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    output_lamports: &[u64],
+    rent: &Rent,
+    plan: &RootCommitPlanV3,
+) -> Result<(), ProgramError> {
+    if plan.ordinals != root_commit_ordinal_count_v3(effect, tail_count)? {
+        return Err(TradingSbfError::Commit.into());
+    }
+    commit_output_lamports_v3(accounts, aliases, output_lamports, true)?;
+    let item_operations = u32::from(effect.item_operation_count());
+    for (byte_index, byte) in plan.bits.iter().enumerate() {
+        let mut remaining = *byte;
+        while remaining != 0 {
+            let bit = remaining.trailing_zeros();
+            remaining &= remaining.wrapping_sub(1);
+            let ordinal = u32::try_from(byte_index)
+                .ok()
+                .and_then(|index| index.checked_mul(8))
+                .and_then(|base| base.checked_add(bit))
+                .ok_or(TradingSbfError::Commit)?;
+            let resolved = match ordinal.checked_sub(u32::from(effect.fixed_operation_count())) {
+                None => effect
+                    .resolved_fixed_effect(
+                        u16::try_from(ordinal).map_err(|_| TradingSbfError::Commit)?,
+                        tail_count,
+                        scalars,
+                        identities,
+                    )
+                    .map_err(|_| TradingSbfError::Commit)?,
+                Some(offset) => {
+                    if item_operations == 0 {
+                        return Err(TradingSbfError::Commit.into());
+                    }
+                    effect
+                        .resolved_item_effect(
+                            offset / item_operations,
+                            u16::try_from(offset % item_operations)
+                                .map_err(|_| TradingSbfError::Commit)?,
+                            tail_count,
+                            scalars,
+                            identities,
+                        )
+                        .map_err(|_| TradingSbfError::Commit)?
+                }
+            };
+            commit_data_effect(resolved, accounts, aliases, true)?;
+        }
+    }
+    require_committed_rent_exemption_v3(accounts, aliases, rent, true)
+}
+
+fn commit_output_lamports_v3(
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    output_lamports: &[u64],
     root_only: bool,
 ) -> Result<(), ProgramError> {
     for (coordinate, account) in accounts.iter().enumerate() {
@@ -7934,34 +8093,15 @@ fn commit_local_effects(
                 .map_err(|_| TradingSbfError::Commit)? = output;
         }
     }
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        commit_data_effect(
-            effect
-                .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Commit)?,
-            accounts,
-            aliases,
-            root_only,
-        )?;
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Commit)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            commit_data_effect(
-                effect
-                    .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                    .map_err(|_| TradingSbfError::Commit)?,
-                accounts,
-                aliases,
-                root_only,
-            )?;
-            operation = operation.checked_add(1).ok_or(TradingSbfError::Commit)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Commit)?;
-    }
+    Ok(())
+}
+
+fn require_committed_rent_exemption_v3(
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    rent: &Rent,
+    root_only: bool,
+) -> Result<(), ProgramError> {
     for (coordinate, account) in accounts.iter().enumerate() {
         if *aliases.get(coordinate).ok_or(TradingSbfError::Commit)? == coordinate
             && (coordinate == 0) == root_only
@@ -7974,12 +8114,18 @@ fn commit_local_effects(
     Ok(())
 }
 
+/// Apply one resolved local effect if it belongs to this pass, and report
+/// whether it belongs to the commit-last pass at all.
+///
+/// The answer is what [`RootCommitPlanV3`] records: an effect that writes
+/// nothing, or writes a coordinate whose representative is not the root, is
+/// `false` and the second pass never has to resolve it again.
 fn commit_data_effect(
     resolved: ResolvedEffectV3,
     accounts: &[&AccountInfo<'_>],
     aliases: &[usize],
     root_only: bool,
-) -> Result<(), ProgramError> {
+) -> Result<bool, ProgramError> {
     let (coordinate, offset, bytes): (usize, usize, Vec<u8>) = match resolved {
         ResolvedEffectV3::WriteScalar {
             account,
@@ -8026,11 +8172,12 @@ fn commit_data_effect(
             usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
             Vec::from(value.to_le_bytes()),
         ),
-        _ => return Ok(()),
+        _ => return Ok(false),
     };
     let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Commit)?;
-    if (representative == 0) != root_only {
-        return Ok(());
+    let commits_last = representative == 0;
+    if commits_last != root_only {
+        return Ok(commits_last);
     }
     let account = accounts
         .get(representative)
@@ -8044,7 +8191,7 @@ fn commit_data_effect(
     data.get_mut(offset..end)
         .ok_or(TradingSbfError::Commit)?
         .copy_from_slice(&bytes);
-    Ok(())
+    Ok(commits_last)
 }
 
 fn authenticate_descriptor_root_selection(
@@ -10000,7 +10147,7 @@ mod tests {
                 value: 0xd4e5_f607,
             },
         ] {
-            commit_data_effect(effect, &accounts, &aliases, false).expect("typed write");
+            assert!(!commit_data_effect(effect, &accounts, &aliases, false).expect("typed write"));
         }
         let data = state.try_borrow_data().expect("state data");
         assert_eq!(data.first(), Some(&0xa1));
@@ -10017,9 +10164,9 @@ mod tests {
     /// write whose first item aliases onto the root coordinate.
     ///
     /// The whole point of building a real artifact rather than hand-made
-    /// [`ResolvedEffectV3`] values is that `commit_local_effects` RESOLVES —
-    /// its ordinal walk, not just `commit_data_effect`, is what the two passes
-    /// share and what the commit-last ordering depends on.
+    /// [`ResolvedEffectV3`] values is that the commit passes RESOLVE — their
+    /// ordinal walk, not just `commit_data_effect`, is what the two share and
+    /// what the commit-last ordering depends on.
     struct CommitLastFixtureV1 {
         artifact: Vec<u8>,
         scalars: [u64; 5],
@@ -10117,13 +10264,13 @@ mod tests {
     /// The commit-last split is a REAL ordering, and the second pass really
     /// writes.
     ///
-    /// `commit_prepared_post_children_v3` calls `commit_local_effects` twice,
-    /// non-root first and root second, so a Market's own state lands only after
-    /// every other account has been committed. Until this test nothing in the
-    /// tree executed the second call at all: the only path that reaches it is a
-    /// complete Hot execution past three child CPIs. Anything that changes how
-    /// the second pass selects its work — a recorded plan, a narrower sweep —
-    /// is now refutable here instead of landing silently green.
+    /// `commit_prepared_post_children_v3` commits every non-root coordinate and
+    /// then the root, so a Market's own state lands only after every other
+    /// account has been committed. Until this test nothing in the tree executed
+    /// the second pass at all: the only path that reaches it is a complete Hot
+    /// execution past three child CPIs. Anything that changes how the second
+    /// pass selects its work — a recorded plan, a narrower sweep — is refutable
+    /// here instead of landing silently green.
     #[test]
     fn commit_last_writes_the_root_only_after_every_other_coordinate() {
         let fixture = commit_last_fixture_v1();
@@ -10144,21 +10291,22 @@ mod tests {
         let aliases = [0_usize, 1, 0, 3, 4];
         let output_lamports = [exempt + 1_000, exempt + 500, exempt, exempt, exempt];
 
-        let commit = |root_only| {
-            commit_local_effects(
-                effect,
-                fixture.tail_count,
-                &fixture.scalars,
-                &[],
-                &accounts,
-                &aliases,
-                &output_lamports,
-                &rent,
-                root_only,
-            )
-        };
+        let plan = commit_non_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+        )
+        .expect("non-root commit pass");
+        // Two of the five ordinals belong to the commit-last pass: the root's
+        // own fixed write, and item 0's write through the aliased coordinate.
+        assert_eq!(plan.ordinals, 5);
+        assert_eq!(plan.bits, [0b0000_0110]);
 
-        commit(false).expect("non-root commit pass");
         let root_offset = usize::try_from(fixture.root_data_offset).expect("root offset");
         let item_offset = usize::try_from(fixture.item_data_offset).expect("item offset");
         assert!(
@@ -10187,7 +10335,18 @@ mod tests {
             );
         }
 
-        commit(true).expect("root commit pass");
+        commit_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+            &plan,
+        )
+        .expect("root commit pass");
         {
             let data = root.try_borrow_data().expect("root data");
             assert_eq!(
@@ -10227,8 +10386,19 @@ mod tests {
         let accounts = [&root, &state, &aliased, &item_one, &item_two];
         let aliases = [0_usize, 1, 0, 3, 4];
         let output_lamports = [exempt - 1, exempt, exempt, exempt, exempt];
-        let commit = |root_only| {
-            commit_local_effects(
+        let plan = commit_non_root_effects_v3(
+            effect,
+            fixture.tail_count,
+            &fixture.scalars,
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+        )
+        .expect("non-root commit pass");
+        assert_eq!(
+            commit_root_effects_v3(
                 effect,
                 fixture.tail_count,
                 &fixture.scalars,
@@ -10237,11 +10407,56 @@ mod tests {
                 &aliases,
                 &output_lamports,
                 &rent,
-                root_only,
-            )
-        };
-        assert_eq!(commit(false), Ok(()));
-        assert_eq!(commit(true), Err(TradingSbfError::Commit.into()));
+                &plan,
+            ),
+            Err(TradingSbfError::Commit.into())
+        );
+    }
+
+    /// A plan recorded against a different geometry is refused, not replayed.
+    ///
+    /// The ordinal space is a function of `tail_count`, so a plan is only
+    /// meaningful for the execution that recorded it. Without this the second
+    /// pass would silently decode ordinals into the wrong item indices.
+    #[test]
+    fn commit_last_refuses_a_plan_recorded_for_another_geometry() {
+        let fixture = commit_last_fixture_v1();
+        let effect = decode_selected_effect_v4(EFFECT_SCHEMA_ID_V4, &fixture.artifact)
+            .expect("selected commit-last effect");
+        let rent = Rent::default();
+        let exempt = rent.minimum_balance(64);
+        let root = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let state = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let aliased = commit_last_account_v1(Box::leak(Box::new(Pubkey::new_unique())), exempt);
+        let accounts = [&root, &state, &aliased];
+        let aliases = [0_usize, 1, 0];
+        let output_lamports = [exempt, exempt, exempt];
+        let plan = commit_non_root_effects_v3(
+            effect,
+            1,
+            &fixture.scalars[..3],
+            &[],
+            &accounts,
+            &aliases,
+            &output_lamports,
+            &rent,
+        )
+        .expect("non-root commit pass at tail one");
+        assert_eq!(plan.ordinals, 3);
+        assert_eq!(
+            commit_root_effects_v3(
+                effect,
+                fixture.tail_count,
+                &fixture.scalars,
+                &[],
+                &accounts,
+                &aliases,
+                &output_lamports,
+                &rent,
+                &plan,
+            ),
+            Err(TradingSbfError::Commit.into())
+        );
     }
 
     #[test]
