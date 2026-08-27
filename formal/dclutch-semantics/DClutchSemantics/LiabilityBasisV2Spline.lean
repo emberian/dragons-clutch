@@ -25,23 +25,35 @@ rather than each weight, and each claim receives the difference between two
 consecutive floors.  The partition sum is then exact by telescoping — the last
 floor is `Q` and the first is `0` — with no remainder step, no second rounding
 decision and no unclassified residue.  It is the exact generalization of the
-ramp's single boundary: `apportion_width_two_eq_cappedRamp` proves the
-width-two instance *is* `cappedRampComplementFloorBoundaryV2` plus its exact
-complement.
+ramp's single boundary, and that is proved rather than asserted:
+`cumulativeFloorBoundaryV2_eq_cappedRamp` shows the boundary itself is
+`cappedRampComplementFloorBoundaryV2`, and `apportion_width_two` shows the
+width-two apportionment is that one floor plus its exact integer complement.
+
+Exactness of the total is not on its own a per-claim guarantee — an
+apportionment handing claim zero everything would also sum to `Q`.
+`apportion_within_one_atom` supplies the other half: no claim is ever more than
+one collateral atom from its exact rational share.  The rule is *not*
+reflection symmetric, unlike a largest-remainder rule; that is a real
+difference and it is recorded rather than hidden.
 
 **The evaluation layer** is Cox-de-Boor run on integers.  Basis values at one
 level are carried as numerators over a common positive denominator, and one
 degree-raising step is exactly a convex redistribution: each value `v` under a
-weight `p/q` sends `(q-p)*v` left and `p*v` right.  That step is *structurally*
-sum-preserving, so the rational partition of unity is a list induction rather
-than a reindexing argument, and no floating point or rational division occurs
-anywhere.  The local triangle covers exactly the `degree+1` basis functions
-supported on the located span; every other claim's weight is a real zero, not a
-rounded one.
+weight `p/q` sends `(q-p)*v` left and `p*v` right.  Sum preservation is then a
+list induction under `p ≤ q` rather than the usual index-shifting argument, and
+no floating point and no rational division occurs anywhere.  The local triangle
+covers exactly the `degree+1` basis functions supported on the located span;
+every other claim's weight is a real zero, not a rounded one.
 
-Knot multiplicity is handled by construction: the span locator selects a
-*non-degenerate* span, which forces every de Boor weight denominator positive
-without a special case.
+Knot multiplicity is admitted rather than refused.  `spanCandidates` keeps only
+*non-degenerate* spans, so a repeated knot simply collapses a span and the
+locator skips it — and a non-degenerate span is exactly what makes every de
+Boor denominator positive, with no special case for multiplicity anywhere.
+`locateSpan` is total, so it still has a fallback when a profile has no
+non-degenerate span at all; `SplineProfile.admits` is the decidable check that
+rules that fallback out, and it is a premise of every theorem below rather than
+an assumption buried in a constructor.
 
 The physical Rust profile uses bounded integers and refuses outside them.
 Those bounds are not premises of any theorem below.
