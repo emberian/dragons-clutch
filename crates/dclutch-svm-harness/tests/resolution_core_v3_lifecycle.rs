@@ -86,7 +86,8 @@ use dclutch_source_contract::{
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
     SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV2, SourceResolutionPhaseV1,
     SourceResolutionStateV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowKind, WindowSpecV1,
@@ -513,7 +514,43 @@ fn custody_request(
     request
 }
 
-fn fixture(preload_terminal: bool) -> Fixture {
+/// Which founding route left the Market this fixture starts from.
+///
+/// The three variants are three distinct real prestates, not three degrees of
+/// convenience.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MarketPrestateV1 {
+    /// `Founding + Prepaid`: what Core's canonical Found31 leaves. The Market
+    /// still owes its whole readiness ladder — `CreateFund`,
+    /// `VerifyFundReady`, then a separate `OpenMarket`.
+    ReadinessLadder,
+    /// `Open + Consumed` with no Resolution Fund of any kind: exactly what
+    /// `DCLTGMF1`'s commit-last `open_series_market` leaves. This Market is
+    /// open and tradeable and has never had a `SourceResolutionStateV2`, and
+    /// before the Fund admission existed it could never acquire one.
+    AtomicallyFounded,
+    /// `Open + Consumed` with an already-resolved Source, three active Funds
+    /// and a minted certificate — the prestate of terminal admission and
+    /// retirement.
+    Terminal,
+}
+
+impl MarketPrestateV1 {
+    /// Whether the Market account starts `Open + Consumed` rather than
+    /// `Founding + Prepaid`.
+    const fn open(self) -> bool {
+        matches!(self, Self::AtomicallyFounded | Self::Terminal)
+    }
+
+    /// Whether the Source state, its three Funds and the terminal certificate
+    /// are seeded as already-terminal rather than left to be created.
+    const fn preload_terminal(self) -> bool {
+        matches!(self, Self::Terminal)
+    }
+}
+
+fn fixture(prestate: MarketPrestateV1) -> Fixture {
+    let preload_terminal = prestate.preload_terminal();
     let elves = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -874,12 +911,12 @@ fn fixture(preload_terminal: bool) -> Fixture {
     .0;
     identity.market_id = CoreIdentity::new(market.to_bytes()).expect("Market");
     let state = CoreState {
-        phase: if preload_terminal {
+        phase: if prestate.open() {
             Phase::Open
         } else {
             Phase::Founding
         },
-        readiness: if preload_terminal {
+        readiness: if prestate.open() {
             Readiness::Consumed
         } else {
             Readiness::Prepaid
@@ -1523,7 +1560,7 @@ async fn open_rollback_snapshot(
 
 #[tokio::test]
 async fn current_resolution_creates_and_activates_exact_funding() {
-    let mut fixture = fixture(false);
+    let mut fixture = fixture(MarketPrestateV1::ReadinessLadder);
     let mut context = fixture
         .test
         .take()
@@ -2071,7 +2108,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
 
 #[tokio::test]
 async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() {
-    let mut fixture = fixture(true);
+    let mut fixture = fixture(MarketPrestateV1::Terminal);
     let mut context = fixture
         .test
         .take()
@@ -2185,5 +2222,351 @@ async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() 
         .phase,
         Phase::Retiring,
         "CloseFund is a receipt-producing retirement component, not the full Claims/Custody retirement join"
+    );
+}
+
+/// The whole point of this campaign: **a Market founded atomically can be
+/// resolved.**
+///
+/// `DCLTGMF1` runs Lock, Found, Realize, Claims and a commit-last Open in one
+/// rollback domain, and that Open is `open_series_market`, which moves the
+/// Market from `Founding + Prepaid` straight to `Open + Consumed`. It never
+/// passes the readiness ladder, so it never runs `CreateFund` — and
+/// `CreateFund` is the only thing in the tree that creates a
+/// `SourceResolutionStateV2`, which every terminal-certificate route consumes.
+/// Before the Fund admission landed, this exact prestate was a permanently
+/// unresolvable Market: open, tradeable, and with no reachable outcome.
+///
+/// `MarketPrestateV1::AtomicallyFounded` is that poststate and nothing else —
+/// `Open + Consumed`, no terminal receipt, and no Source state, Fund or
+/// certificate anywhere. The test walks it to a real terminal certificate
+/// through the real Pyth transport, and refuses four hostile inputs on the way.
+#[tokio::test]
+async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
+    let mut fixture = fixture(MarketPrestateV1::AtomicallyFounded);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let encoded_vaa =
+        pyth_provider::initialize_real_providers(&mut context, fixture.provider).await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+    let payer = context.payer.pubkey();
+
+    // The prestate, asserted rather than assumed. This is what the atomic
+    // founding leaves behind and it is the whole of what JRNY-1 found.
+    let founded = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("atomically founded Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(founded.phase, Phase::Open);
+    assert_eq!(founded.readiness, Readiness::Consumed);
+    assert!(founded.terminal_receipt.is_none());
+    assert_eq!(
+        observed(&mut context, fixture.source)
+            .await
+            .expect("prepaid Source destination")
+            .owner,
+        system_program::ID,
+        "an atomically founded Market has no Source resolution state at all"
+    );
+    for funding in fixture.funding {
+        assert!(
+            observed(&mut context, funding).await.is_none(),
+            "an atomically founded Market has no Resolution Fund at all"
+        );
+    }
+
+    let create = build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived CreateFund against an Open Market");
+    validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
+    let prepay = |top_ups: [u64; 3], source: u64| {
+        let mut instructions = Vec::with_capacity(4);
+        instructions.push(transfer(&payer, &fixture.source, source));
+        for (funding, top_up) in fixture.funding.into_iter().zip(top_ups) {
+            instructions.push(transfer(&payer, &funding, top_up));
+        }
+        instructions
+    };
+    let exact_top_ups = create.funding_top_up_lamports;
+
+    // Hostile 1 — Source resolution-state substitution. The one account whose
+    // address is not pinned by a manifest entry is the Source state, so its
+    // derivation is the only thing standing between this Market and a state
+    // bound to some other Market's material. Point the output slot at another
+    // Resolution-program PDA of this same Market and it must refuse.
+    let before_substitution = retirement_snapshot(&mut context, &fixture).await;
+    let mut substituted_source = create.instruction.clone();
+    substituted_source
+        .accounts
+        .get_mut(12)
+        .expect("Source output account")
+        .pubkey = fixture.closure;
+    let mut substitution = prepay(exact_top_ups, create.source_top_up_lamports);
+    substitution.push(transfer(
+        &payer,
+        &fixture.closure,
+        Rent::default().minimum_balance(SOURCE_RESOLUTION_STATE_BYTES_V2),
+    ));
+    substitution.push(substituted_source);
+    assert!(
+        submit(&mut context, &substitution).await.is_err(),
+        "a substituted Source resolution state must refuse"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_substitution,
+        "the substitution rolls back every prepayment with it"
+    );
+
+    // Hostile 2 — wrong-capability funding, under and over. Each Fund's
+    // lamports must equal rent plus exactly the native principal its manifest
+    // entry quotes; a Fund that is not the manifest's Fund is not this
+    // Market's Fund. Both directions refuse, which is deliberate: over-funding
+    // is not a donation the Fund may keep.
+    for (label, delta) in [("under-funded", -1_i64), ("over-funded", 1_i64)] {
+        let mut skewed = exact_top_ups;
+        let first = skewed.first_mut().expect("recovery Fund top-up");
+        *first = first
+            .checked_add_signed(delta)
+            .expect("bounded hostile top-up");
+        let before = retirement_snapshot(&mut context, &fixture).await;
+        let mut hostile = prepay(skewed, create.source_top_up_lamports);
+        hostile.push(create.instruction.clone());
+        assert!(
+            submit(&mut context, &hostile).await.is_err(),
+            "a {label} recovery compartment must refuse"
+        );
+        assert_eq!(
+            retirement_snapshot(&mut context, &fixture).await,
+            before,
+            "the {label} refusal rolls back Source, all three Funds, Market and RentCredit"
+        );
+    }
+
+    // The honest creation.
+    let mut creation = prepay(exact_top_ups, create.source_top_up_lamports);
+    creation.push(create.instruction.clone());
+    submit(&mut context, &creation)
+        .await
+        .expect("an Open Market prepays and creates its own Resolution Fund");
+    let source = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("created Source")
+            .data,
+    )
+    .expect("Source state");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
+    assert_eq!(source.market(), fixture.market.to_bytes());
+    assert_eq!(source.generation(), GENERATION);
+    for funding in fixture.funding {
+        assert_eq!(
+            FundingStateV1::decode(
+                &observed(&mut context, funding)
+                    .await
+                    .expect("created Funding")
+                    .data,
+            )
+            .expect("Funding state")
+            .status(),
+            FundingStatus::Pending
+        );
+    }
+
+    // Hostile 3 — double create. The Source PDA is one per Market generation
+    // and `require_prepaid_output` refuses anything that is not
+    // System-owned and empty, so the second creation cannot overwrite the
+    // first.
+    let before_double = retirement_snapshot(&mut context, &fixture).await;
+    let mut double = prepay(exact_top_ups, create.source_top_up_lamports);
+    double.push(create.instruction.clone());
+    assert!(
+        submit(&mut context, &double).await.is_err(),
+        "a second CreateFund on the same Market generation must refuse"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_double,
+        "the double-create refusal leaves the first Fund byte-identical"
+    );
+
+    // Activation. Core stays `Open + Consumed`: `Readiness::Ready` is the
+    // Founding lane's record of this same fact, and this Market consumed its
+    // readiness at the commit-last Open. The activation itself lives in the
+    // three FundingState accounts, which is what `AdmitTerminal` rechecks.
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived VerifyFundReady against an Open Market");
+    validate_resolution_verify_fund_ready_report_v3(&verify).expect("exact VerifyFundReady report");
+    let beneficiary_before = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    submit(&mut context, &[verify.instruction])
+        .await
+        .expect("activate the three-ledger Resolution funding of an Open Market");
+    let activated = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(activated.phase, Phase::Open);
+    assert_eq!(
+        activated.readiness,
+        Readiness::Consumed,
+        "an Open Market has already consumed its readiness and must not be rewritten to Ready"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        beneficiary_before + verify.expected_beneficiary_credit_lamports
+    );
+    for funding in fixture.funding {
+        assert_eq!(
+            FundingStateV1::decode(
+                &observed(&mut context, funding)
+                    .await
+                    .expect("active Funding")
+                    .data,
+            )
+            .expect("Funding state")
+            .status(),
+            FundingStatus::Active
+        );
+    }
+
+    // The real provider transport, unchanged from the ladder campaign: one
+    // Pyth update posted through the real Receiver ELF, then one Core-driven
+    // execution that mints the terminal certificate.
+    let post_update_body = pyth_provider::RECEIVER_POST_UPDATE
+        .get(8..)
+        .expect("Receiver PostUpdate body")
+        .to_vec();
+    let submit_intent = ProviderSubmitIntentV3 {
+        submitter: payer,
+        refund_recipient: fixture.rent_credit,
+        update_account: fixture.update.pubkey(),
+        reclaim_after_unix_seconds: TERMINAL_TIME + 20,
+        post_update_body: post_update_body.clone(),
+    };
+    let provider_submit = build_provider_submit_v3(
+        &provider_submit_snapshot(&mut context, &fixture, encoded_vaa).await,
+        provider_submit_deployment(&fixture),
+        &submit_intent,
+    )
+    .expect("chain-derived real-provider submission");
+    let provider_lifecycle_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3);
+    pyth_provider::submit(
+        &mut context,
+        &[
+            transfer(&payer, &provider_submit.lifecycle, provider_lifecycle_rent),
+            provider_submit.instruction,
+        ],
+        &[&fixture.update],
+    )
+    .await
+    .expect("Resolution submits one update through the real Receiver ELF");
+
+    let resolver = Keypair::new();
+    let resolver_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(0);
+    submit(
+        &mut context,
+        &[
+            transfer(
+                &payer,
+                &fixture.certificate,
+                Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            ),
+            transfer(&payer, &resolver.pubkey(), resolver_rent),
+        ],
+    )
+    .await
+    .expect("prepay the terminal certificate and establish the distinct resolver");
+    let provider_execute = build_provider_execute_v3(
+        &provider_execute_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        provider_execute_deployment(&fixture),
+        &ProviderExecuteIntentV3 {
+            resolver: resolver.pubkey(),
+            terminal_sequence: TERMINAL_SEQUENCE,
+            post_update_body,
+        },
+    )
+    .expect("chain-derived Core provider execution");
+    pyth_provider::submit(&mut context, &[provider_execute.instruction], &[&resolver])
+        .await
+        .expect("Core admits the terminal state of an atomically founded Market");
+
+    let terminal = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("terminal Market")
+            .data,
+    )
+    .expect("terminal Core state");
+    assert_eq!(terminal.phase, Phase::Terminal);
+    assert_eq!(
+        terminal.terminal_receipt,
+        Some(CoreIdentity::new(fixture.certificate.to_bytes()).expect("certificate identity")),
+    );
+    assert_eq!(
+        SourceResolutionStateV2::decode(
+            &observed(&mut context, fixture.source)
+                .await
+                .expect("resolved Source")
+                .data,
+        )
+        .expect("resolved Source state")
+        .phase(),
+        SourceResolutionPhaseV1::Resolved
+    );
+    let certificate = ResolutionCertificateV2::decode(
+        &observed(&mut context, fixture.certificate)
+            .await
+            .expect("terminal certificate")
+            .data,
+    )
+    .expect("terminal Resolution certificate");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV2::ResolutionSuccess
+    );
+    assert_eq!(certificate.market, fixture.market.to_bytes());
+    assert_eq!(certificate.generation, GENERATION);
+    assert_eq!(certificate.selector, terminal.terminal_winner);
+
+    // Hostile 4 — the admission stops at the terminal receipt. A Market that
+    // has resolved may not create a second Fund, which is the conjunct that
+    // keeps `Terminal`, `Retiring` and `Retired` out of the admission even
+    // though this test's Market is still the same account it always was.
+    assert!(
+        build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await).is_err(),
+        "a Market carrying a terminal receipt must not create a Resolution Fund"
     );
 }

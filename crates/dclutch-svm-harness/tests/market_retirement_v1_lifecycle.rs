@@ -91,7 +91,7 @@ fn set_account(context: &mut ProgramTestContext, key: Pubkey, account: Account) 
 }
 
 async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
-    let mut base = fixture(true);
+    let mut base = fixture(MarketPrestateV1::Terminal);
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
     let claims_elf = fs::read(directory.join("dclutch_claims_sbf.so")).expect("Claims ELF");
     let trading_elf = fs::read(directory.join("dclutch_trading_sbf.so")).expect("Trading ELF");
