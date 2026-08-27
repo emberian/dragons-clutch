@@ -422,6 +422,17 @@ question with a recommended answer, not an inventory row.
   walk deliberately stays legacy-fitting (991 B) — it must never depend on an
   ALT a silent operator never published.
 
+## DECOMP charter expansion (dispatches at W2q's yield)
+
+DECOMP now carries, beyond the palimpsest split: M-27 the effect-kernel
+visitor seam IN FULL (the O(R^2*I) resolved_invocation + route_request_start
+re-scans — "the single highest-value item in the tree"); M-28 the
+sysvar-parser convergence (one owner, the adversarial corpus on the
+heap-admission path); M-29 the AccountInfo migration per W2g's spec (the
+4,776-byte floor); M-31 the allocator-cfg ruling for no-entrypoint library
+builds; M-34 converging the four ProgramTest-evidence emitters. One lane, the
+hot-path's whole residual debt, on the decomposed shape.
+
 ## Next-dispatch queue (at W2k's yield)
 
 - GEN-ART: public encode modules for the three artifact generations
