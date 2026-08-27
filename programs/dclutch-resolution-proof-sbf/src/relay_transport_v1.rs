@@ -62,7 +62,8 @@ use dclutch_market_core_codec::{
 };
 use dclutch_product_runtime_v2::{ContentId as ProductContentId, ResultDomainV2};
 use dclutch_product_runtime_v2_svm_reader::{
-    FinalizedRecordFrameV2, ProductRuntimeFrameV2, authenticate_product_runtime_v2,
+    AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
+    authenticate_product_runtime_v2,
 };
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
@@ -835,6 +836,7 @@ fn process_retire(
 ///
 /// Only then does [`crate::relay_v1::plan_relayed_resolution_v1`] read a byte of
 /// what the relayer signed.
+#[inline(never)]
 fn process_consume(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -865,14 +867,14 @@ fn process_consume(
         request.generation(),
         request.source_material_id(),
     )?;
-    let records = consume_source_records(
+    let records = boxed_consume_source_records(
         &market,
         accounts,
         &rent,
         request.source_material_id(),
         request.source_spec_id(),
     )?;
-    let product_runtime = authenticate_product_runtime_v2(
+    let product_runtime = boxed_product_runtime(
         &market.registry_program,
         &rent,
         ProductContentId::new(market.product_record).map_err(|_| ResolutionError::ProductDomain)?,
@@ -890,8 +892,7 @@ fn process_consume(
                 staging: account(accounts, 24)?,
             },
         },
-    )
-    .map_err(|_| ResolutionError::ProductDomain)?;
+    )?;
 
     authenticate_consumable_record(
         program_id,
@@ -903,16 +904,15 @@ fn process_consume(
     )?;
     authenticate_source_state_account(program_id, source_state_account, market_account)?;
 
-    let recomputed_account_set_id = recompute_account_set_id(entry_bytes, request.entry_count())?;
-    let mut entries = [AccountSetEntryV1 {
-        key: [0; 32],
-        expected_owner: [0; 32],
-        inline_len: 0,
-    }; MAX_RELAYED_ACCOUNTS_V1];
-    decode_entries(entry_bytes, request.entry_count(), &mut entries)?;
+    // Decoded once and kept on the heap. The set is up to eight sixty-six-byte
+    // entries and the SBF stack frame is four kilobytes; decoding it twice, once
+    // for the digest and once for the positions, is what made the dispatcher's
+    // frame overflow the first time this route was compiled.
+    let entries = boxed_entries(entry_bytes, request.entry_count())?;
     let entries = entries
         .get(..usize::from(request.entry_count()))
         .ok_or(ResolutionError::Instruction)?;
+    let recomputed_account_set_id = recompute_account_set_id(entries)?;
 
     let domain_data = account(accounts, 21)?
         .try_borrow_data()
@@ -978,9 +978,9 @@ const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
         RelayJoinErrorV1::Request => ResolutionError::Instruction,
         RelayJoinErrorV1::Source => ResolutionError::SourceMaterial,
         RelayJoinErrorV1::Product => ResolutionError::ProductDomain,
-        RelayJoinErrorV1::Record => ResolutionError::OutputState,
+        RelayJoinErrorV1::Record => ResolutionError::RelayedRecord,
         RelayJoinErrorV1::Observation => ResolutionError::ProviderObservation,
-        RelayJoinErrorV1::Window => ResolutionError::Transition,
+        RelayJoinErrorV1::Window => ResolutionError::RelayedWindow,
         RelayJoinErrorV1::Transition => ResolutionError::Transition,
     }
 }
@@ -991,6 +991,37 @@ const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
 /// this walks it again rather than trusting them, because a consumption maps a
 /// result through a *Product*, and the records that decide how are not fields of
 /// the record being consumed.
+#[inline(never)]
+fn boxed_product_runtime(
+    registry: &Pubkey,
+    rent: &Rent,
+    product_record: ProductContentId,
+    frame: ProductRuntimeFrameV2<'_, '_>,
+) -> Result<Box<AuthenticatedProductRuntimeV2>, ProgramError> {
+    Ok(Box::new(
+        authenticate_product_runtime_v2(registry, rent, product_record, frame)
+            .map_err(|_| ResolutionError::ProductDomain)?,
+    ))
+}
+
+#[inline(never)]
+fn boxed_consume_source_records(
+    market: &MarketFacts,
+    accounts: &[AccountInfo<'_>],
+    rent: &Rent,
+    material_id: [u8; 32],
+    source_spec_id: [u8; 32],
+) -> Result<Box<AuthenticatedRelaySourceRecordsV1>, ProgramError> {
+    Ok(Box::new(consume_source_records(
+        market,
+        accounts,
+        rent,
+        material_id,
+        source_spec_id,
+    )?))
+}
+
+#[inline(never)]
 fn consume_source_records(
     market: &MarketFacts,
     accounts: &[AccountInfo<'_>],
@@ -1138,6 +1169,7 @@ fn consume_source_records(
 /// The address is the equivocation bound and it is re-derived here from facts
 /// the *configuration* supplies, not from the record's own header: a record that
 /// merely claims an account set has to live at the address that set implies.
+#[inline(never)]
 fn authenticate_consumable_record(
     program_id: &Pubkey,
     record: &AccountInfo<'_>,
@@ -1169,6 +1201,7 @@ fn authenticate_consumable_record(
 }
 
 /// Authenticate the Source state account this consumption makes terminal.
+#[inline(never)]
 fn authenticate_source_state_account(
     program_id: &Pubkey,
     state: &AccountInfo<'_>,
@@ -1204,18 +1237,16 @@ fn authenticate_source_state_account(
 }
 
 /// Re-derive the pinned account-set identity from caller-supplied entries.
-fn recompute_account_set_id(entry_bytes: &[u8], count: u16) -> Result<[u8; 32], ProgramError> {
-    let mut entries = [AccountSetEntryV1 {
-        key: [0; 32],
-        expected_owner: [0; 32],
-        inline_len: 0,
-    }; MAX_RELAYED_ACCOUNTS_V1];
-    decode_entries(entry_bytes, count, &mut entries)?;
-    let used = entries
-        .get(..usize::from(count))
-        .ok_or(ResolutionError::Instruction)?;
+///
+/// This is where untrusted entries become authoritative, and the mechanism is
+/// the only one available: re-encode the one canonical preimage the contract
+/// writes, and hash it with the runtime's own SHA-256. The contract hashes
+/// nothing, so the daemon's software implementation and this syscall agree by
+/// construction rather than by two transcriptions of a rule.
+#[inline(never)]
+fn recompute_account_set_id(entries: &[AccountSetEntryV1]) -> Result<[u8; 32], ProgramError> {
     let width =
-        account_set_id_preimage_len_v1(used.len()).map_err(|_| ResolutionError::Instruction)?;
+        account_set_id_preimage_len_v1(entries.len()).map_err(|_| ResolutionError::Instruction)?;
     let mut preimage = Vec::new();
     preimage
         .try_reserve_exact(width)
@@ -1225,26 +1256,39 @@ fn recompute_account_set_id(entry_bytes: &[u8], count: u16) -> Result<[u8; 32], 
         &mut preimage,
         SOLANA_MAINNET_GENESIS_HASH_V1,
         RELAYED_FAMILY_RELEASE_ID_V1,
-        used,
+        entries,
     )
     .map_err(|_| ResolutionError::Instruction)?;
     Ok(hash(&preimage).to_bytes())
 }
 
-fn decode_entries(
+/// Decode the wire entries once, onto the heap.
+///
+/// Eight sixty-six-byte entries against a four-kilobyte SBF stack frame is not
+/// a comfortable margin, and decoding them twice — once for the digest, once for
+/// the positions — is what overflowed the dispatcher's frame the first time this
+/// route was compiled.
+#[inline(never)]
+fn boxed_entries(
     entry_bytes: &[u8],
     count: u16,
-    output: &mut [AccountSetEntryV1; MAX_RELAYED_ACCOUNTS_V1],
-) -> ProgramResult {
+) -> Result<Box<[AccountSetEntryV1; MAX_RELAYED_ACCOUNTS_V1]>, ProgramError> {
     if usize::from(count) > MAX_RELAYED_ACCOUNTS_V1 {
         return Err(ResolutionError::Instruction.into());
     }
+    let mut output = Box::new(
+        [AccountSetEntryV1 {
+            key: [0; 32],
+            expected_owner: [0; 32],
+            inline_len: 0,
+        }; MAX_RELAYED_ACCOUNTS_V1],
+    );
     for index in 0..usize::from(count) {
         let entry = decode_account_set_entry_v1(entry_bytes, index)
             .map_err(|_| ResolutionError::Instruction)?;
         *output.get_mut(index).ok_or(ResolutionError::Instruction)? = entry;
     }
-    Ok(())
+    Ok(output)
 }
 
 /// Write the three outputs, or none of them.
@@ -1254,6 +1298,7 @@ fn decode_entries(
 /// same signed observation cannot resolve a second market state, which is the
 /// replay bound the whole family rests on.
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn commit_consumption<'info>(
     program_id: &Pubkey,
     terminal_sequence: u64,
@@ -1303,6 +1348,7 @@ fn commit_consumption<'info>(
 /// address space, deliberately: two provider families resolving one Market must
 /// not have two certificate namespaces, or "the certificate for this Source
 /// state" stops being a well-defined phrase.
+#[inline(never)]
 fn initialize_terminal_certificate<'info>(
     program_id: &Pubkey,
     terminal_sequence: u64,

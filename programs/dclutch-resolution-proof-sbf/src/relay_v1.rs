@@ -29,6 +29,7 @@ use dclutch_product_runtime_v2::ResultDomainV2;
 use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
 use dclutch_registry_contract::ArtifactReleaseV1;
 use dclutch_relay_contract::{
+    Error as RelayContractError,
     decode::{RelayedObservationOutcomeV1, interpret_sealed_record_v1},
     record::RelayedObservationRecordViewV1,
     release::{AccountSetEntryV1, RelayedAdapterConfigV1},
@@ -56,7 +57,8 @@ pub enum RelayJoinErrorV1 {
     Record,
     /// The certified bytes did not satisfy the release-pinned decoding rules.
     Observation,
-    /// The observation fell outside the Product's own window.
+    /// The observation was well formed but did not satisfy the window's own
+    /// proposition, or fell outside the window's time bounds.
     Window,
     /// Source terminal transition or certificate construction refused.
     Transition,
@@ -206,6 +208,14 @@ pub fn plan_relayed_resolution_v1(
         || product_runtime.coordinate_domain_id.to_bytes()
             != result_domain.coordinate_domain_id().to_bytes()
         || product_runtime.result_unit_id.to_bytes() != result_domain.result_unit_id().to_bytes()
+        // The Source and the Product must be about the same thing. Without this
+        // a market on one coordinate could be resolved by a well-formed
+        // observation of another, and every other check in this function would
+        // pass while doing it. There is no statistic record to interpose because
+        // a terminal sample is the identity map, so the Source's own unit must
+        // equal the Product's result unit rather than map onto it.
+        || records.source.domain_id().to_bytes() != result_domain.coordinate_domain_id().to_bytes()
+        || records.source.unit_id().to_bytes() != result_domain.result_unit_id().to_bytes()
     {
         return Err(RelayJoinErrorV1::Product);
     }
@@ -244,7 +254,15 @@ pub fn plan_relayed_resolution_v1(
         request.pinned_cluster_id,
         request.current_unix_seconds,
     )
-    .map_err(|_| RelayJoinErrorV1::Observation)?;
+    .map_err(|error| match error {
+        // A pre-terminal venue state is the one refusal here that is not a
+        // complaint about the evidence. The bytes were fine, the quorum was
+        // real, the venue was the pinned one -- the market's own question just
+        // does not have an answer yet, and flattening that into "bad
+        // observation" would tell every caller the wrong thing.
+        RelayContractError::WindowNotSatisfied => RelayJoinErrorV1::Window,
+        _ => RelayJoinErrorV1::Observation,
+    })?;
     require_window_admits(records.window, observation.observed_unix_seconds())?;
 
     // The evidence identity binds every input that could have moved the result:

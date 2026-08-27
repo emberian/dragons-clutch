@@ -62,6 +62,15 @@ pub enum ResolutionError {
     Arithmetic = 13,
     /// Canonical capability funding, typed custody, or exact bounty debit failed.
     Funding = 14,
+    /// The sealed relayed observation record was not consumable against this
+    /// Market's authenticated Source graph.
+    RelayedRecord = 15,
+    /// The relayed observation was admissible but did not satisfy the Product's
+    /// own window: it is no answer rather than a wrong one, and the market is
+    /// still live. Distinct from every "the bytes were wrong" refusal on
+    /// purpose, because "come back later" and "something is broken" are not the
+    /// same message to whoever is holding the position.
+    RelayedWindow = 16,
 }
 
 impl From<ResolutionError> for ProgramError {
