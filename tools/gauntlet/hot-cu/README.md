@@ -198,7 +198,7 @@ seed by more than any substrate effect could.
 | `immutable` | `Immutable` | none | 0 | `immutable_release_elf_digest_v1` |
 | `immutable-pinned` | `Immutable` | none | 167 | `immutable_release_elf_digest_v1` |
 | `slot-pinned` | `ExactAuthority` | `[0x9a; 32]` | 167 | the 0012 slot-pin arm |
-| `slot-pinned-superseded` | `ExactAuthority` | `[0x9a; 32]` | 167, observed 531 | refuses |
+| `slot-pinned-superseded` | `ExactAuthority` | `[0x9a; 32]` | 531, except Trading's release at 167 | refuses, by name |
 
 **`slot-pinned` minus `immutable` is not 0012's cost.** The policy byte, the
 bound authority and the bound slot all live inside `ArtifactReleaseV1::to_bytes`,
@@ -224,10 +224,83 @@ A signal smaller than the redraw is a legitimate result and must be reported as
 one. It says the sweep bounds 0012's effect below the lottery's width on this
 path — which, given the claim under test is ~700,000 CU, is itself an answer.
 
-The fourth arm does not sweep. `slot-pinned-superseded` moves the Trading
-ProgramData to a later slot and is exercised by
-`tests/slot_pin_supersession.rs`, which requires the refusal by its declared
-discriminant rather than a CU figure.
+## What the three arms measured (lane POST-0012-EXACTAUTH)
+
+Harness `d20837fd`, one clean `git archive` build, trading ELF
+`7facb8e58e45843f46b9d3d572ced5e45507bfcbfb2250e865b5427baa1b9d3c` for all three
+arms. Re-run at `57138ba8` against the same ELF: **every figure identical**, so
+these are reproducible to the compute unit, not draws that happened once.
+
+| arm | PASS | MEAN | MIN | MAX | spread |
+|---|---|---|---|---|---|
+| `immutable` | 20/20 | **1,345,302** | 1,324,377 | 1,373,876 | 49,499 |
+| `immutable-pinned` | 20/20 | **1,353,477** | 1,333,375 | 1,384,377 | 51,002 |
+| `slot-pinned` | 20/20 | **1,355,575** | 1,336,454 | 1,382,950 | 46,496 |
+
+```
+    immutable-pinned − immutable  =  + 8,175 CU   REDRAW ALONE
+    slot-pinned      − immutable  =  +10,273 CU   REDRAW + the 0012 arm
+    ────────────────────────────────────────────────────────────────────
+    the signal                    =  + 2,098 CU
+```
+
+**+2,098 CU on a 1,345,302 baseline — 0.16%, and one bump-search iteration is
+1,500.** Under M-61's decomposition (`n × 1,500 + ~50`) that reads as a single
+extra draw plus residual, against a cross-seed spread of ~46,000–51,000 in every
+arm. The `ExactAuthority` arm is not distinguishable from the `Immutable` arm at
+this instrument's resolution, and the instrument's resolution is roughly two
+orders of magnitude finer than the ~700,000 CU under discussion.
+
+The arm is genuinely executing: `slot_pinned_release_elf_digest_v1`'s
+`ExactAuthority` branch runs **four times per Hot transaction** — Core and
+Trading in `batch_v2::authenticate_request`, then Core and Trading again in
+`hot_v3`'s two `authenticate_activated_current_deployment` calls — and
+`tests/slot_pin_supersession.rs` reads the staged ProgramData back off the chain
+to require a live authority and the pinned slot before it believes any of it.
+
+**How much of the +2,098 is still lottery.** Some, and one part of it is now
+measured rather than bounded.
+`every_substrate_draws_a_different_release_identity_and_activation_bump` (same
+test file) prints the bump depth of the activation-cache PDA — the one on-chain
+`find_program_address` seeded by the release-set identity and *nothing else*, so
+its depth is constant across all twenty seeds and is a fixed per-substrate offset
+a 20-seed mean cannot average away. All three swept arms draw **bump 255, depth
+0**: that site contributes **0 CU** of difference between them. (The superseded
+arm draws 254, one iteration deeper; it is not in the CU comparison.) What
+remains is the per-seed admission PDA and the market/root derivations, which the
+mean does average, plus the bank-slot difference below — so +2,098 is an upper
+bound on 0012's cost here, not an estimate of it.
+
+`immutable` runs at bank slot 1 and both pinned arms at 168, because a nonzero
+pin is not loadable at slot 1 (see below). That is a second difference inside the
+`immutable-pinned − immutable` figure, which is exactly why the signal is taken
+against `immutable-pinned` and not against `immutable`: the two pinned arms share
+the bank slot, the clock, and the fixture state derived from them.
+
+### The negative: a pin that no longer holds
+
+`slot-pinned-superseded` does not sweep — a CU mean for a refusal is not the
+measurement. `tests/slot_pin_supersession.rs` requires it by name:
+
+| what | observed |
+|---|---|
+| refusal | `Custom(0x100D)` = `RegistryError::ReleaseSuperseded`, from the program's own enum |
+| compute before refusing | 51,574 CU of 1,400,000 |
+| Trading invoked | **no** — checked in the program log |
+| material state moved | none — every rollback-snapshot account byte-identical |
+
+`0x4007` (`TradingSbfError::ReleaseSuperseded`) is **unreachable on this route**,
+and that is a property of the protocol rather than of the fixture: the Registry
+authenticates the Core and Trading role deployments before it forwards anything,
+and Trading reads the same two ProgramData accounts one CPI later, so any slot
+move visible to Trading is visible to the Registry first. The "Trading invoked:
+no" row is what makes that an observation instead of an argument.
+
+The substrate stages this as the whole release set redeployed at slot 531 with
+every release re-issued and re-pinned **except Trading's**, so four pins hold and
+one does not in the same transaction against the same accounts. A substrate where
+every pin was stale would also refuse, and would not separate "the pin refuses
+the release that moved" from "this fixture refuses".
 
 ### What a pinned arm needs from the runtime
 

@@ -44,7 +44,7 @@
 //! sweep that reports `PASS n/20` and a MEAN against a named ELF digest is
 //! `tools/gauntlet/hot-cu/run-hot-cu.sh --substrate slot-pinned`.
 
-use dclutch_registry_contract::ArtifactUpgradePolicyV1;
+use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ArtifactUpgradePolicyV1};
 use dclutch_registry_sbf::RegistryError;
 use dclutch_registry_svm::ProgramDataV3View;
 use dclutch_token_svm::TokenAccount;
@@ -54,10 +54,11 @@ use solana_program_test::{BanksClientError, ProgramTestContext};
 use solana_sdk::transaction::TransactionError;
 
 use dclutch_direct_hot_program_test_support::waist::{
-    COMPUTE_LIMIT, DirectCase, Elves, FixtureSubstrateV1, PINNED_DEPLOYMENT_SLOT, RefusedExecution,
-    Releases, TRADING_PROGRAM_ID, UPGRADE_AUTHORITY, UPGRADED_DEPLOYMENT_SLOT, add_lookup_table,
-    add_release_waist_v2, canonical_lookup_addresses, direct_case_v3, direct_registry_instructions,
-    elves, program_test_v2, release_v2, start_with_substrate, submit_v0,
+    COMPUTE_LIMIT, DirectCase, Elves, FixtureSubstrateV1, PINNED_DEPLOYMENT_SLOT,
+    REGISTRY_PROGRAM_ID, RefusedExecution, Releases, TRADING_PROGRAM_ID, UPGRADE_AUTHORITY,
+    UPGRADED_DEPLOYMENT_SLOT, add_lookup_table, add_release_waist_v2, canonical_lookup_addresses,
+    direct_case_v3, direct_registry_instructions, elves, program_test_v2, release_v2,
+    start_with_substrate, submit_v0,
 };
 
 /// `RegistryError::ReleaseSuperseded`: the release's pinned deployment slot
@@ -167,6 +168,76 @@ async fn assert_slot_pinned_substrate(
          Immutable arm would have taken it",
     );
     assert_eq!(view.deployment_slot(), expected_observed_slot);
+}
+
+/// Every substrate has a DIFFERENT release identity, and the Hot path searches
+/// for a PDA seeded by it. This is the confound, named and measured.
+///
+/// The upgrade policy byte, the bound authority and the bound slot all live
+/// inside `ArtifactReleaseV1::to_bytes`, so `artifact_id = hash(release)` moves,
+/// so the release-set identity moves. That identity is a SEED at two on-chain
+/// `find_program_address` sites the Direct Hot route reaches:
+///
+/// - `registry-sbf/src/lib.rs`, `authenticate_cache_identity` — the activation
+///   cache PDA, `[ACTIVATION_PDA_DOMAIN_V1, release_set_id]`. Reached from
+///   `batch_v2::authenticate_request`, and seeded by NOTHING ELSE: its bump
+///   depth is identical across all twenty fixture seeds and different between
+///   substrates. A 20-seed mean does not average this away -- it is a fixed
+///   per-substrate offset of `bump_delta * 1,500 CU`, which is what this test
+///   exists to quantify.
+/// - `registry-sbf/src/hot_continuation_v2.rs` — the Hot admission PDA, seeded
+///   by the release set AND the Hot instruction digest, so it redraws per seed
+///   and the mean does average it.
+///
+/// Under ledger M-61 that makes a raw difference between two substrates' means
+/// uninterpretable on its own. `FixtureSubstrateV1::ImmutablePinned` is the
+/// control: same digest arm, different identity.
+#[test]
+fn every_substrate_draws_a_different_release_identity_and_activation_bump() {
+    let artifacts = elves();
+    let mut identities = Vec::new();
+    for substrate in [
+        FixtureSubstrateV1::Immutable,
+        FixtureSubstrateV1::ImmutablePinned,
+        FixtureSubstrateV1::SlotPinned,
+        FixtureSubstrateV1::SlotPinnedSuperseded,
+    ] {
+        let mut test = program_test_v2(&artifacts, substrate);
+        let releases = add_release_waist_v2(&mut test, &artifacts, substrate);
+        let (activation, bump) = Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, &releases.release_set],
+            &REGISTRY_PROGRAM_ID,
+        );
+        assert_eq!(
+            activation, releases.activation,
+            "the waist and this test derive the activation PDA differently",
+        );
+        // 255 is the first bump tried, so the SEARCH DEPTH -- what the on-chain
+        // `find_program_address` actually pays 1,500 CU per iteration for -- is
+        // the distance down from 255.
+        let depth = u32::from(255 - bump);
+        println!(
+            "substrate {:<24} release_set {}  activation bump {bump} (depth {depth}, \
+             {} CU of on-chain search)",
+            substrate.name(),
+            hex(&releases.release_set),
+            depth * 1_500,
+        );
+        identities.push((substrate.name(), releases.release_set));
+    }
+    for (index, (name, identity)) in identities.iter().enumerate() {
+        for (other_name, other) in identities.iter().skip(index + 1) {
+            assert_ne!(
+                identity, other,
+                "substrates {name} and {other_name} share a release identity, so \
+                 neither is a control for the other",
+            );
+        }
+    }
+}
+
+fn hex(value: &[u8; 32]) -> String {
+    value.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[tokio::test]
