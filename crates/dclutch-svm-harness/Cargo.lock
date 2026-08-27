@@ -1619,18 +1619,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-economic-adapter-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-economic-kernel",
- "dclutch-release-set-contract",
-]
-
-[[package]]
-name = "dclutch-economic-kernel"
-version = "0.1.0"
-
-[[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1890,16 +1878,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-series-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-product-contract",
- "dclutch-source-contract",
- "sha2 0.10.9",
-]
-
-[[package]]
 name = "dclutch-source-contract"
 version = "0.1.0"
 dependencies = [
@@ -1919,8 +1897,6 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-direct-codec",
  "dclutch-direct-contract",
- "dclutch-economic-adapter-contract",
- "dclutch-economic-kernel",
  "dclutch-kernel",
  "dclutch-market-contract",
  "dclutch-market-core-codec",
@@ -1945,7 +1921,6 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-resolution-codec",
  "dclutch-resolution-core-v3-operator",
- "dclutch-series-contract",
  "dclutch-source-contract",
  "dclutch-terminal-contract",
  "dclutch-token-svm",

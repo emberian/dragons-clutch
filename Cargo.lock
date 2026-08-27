@@ -1784,16 +1784,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dclutch-dealer-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-core-contract",
- "dclutch-realm-contract",
- "dclutch-record-contract",
-]
-
-[[package]]
 name = "dclutch-dealer-sbf"
 version = "0.1.0"
 dependencies = [
@@ -1877,14 +1867,6 @@ dependencies = [
  "dclutch-effect-kernel",
  "dclutch-realm-contract",
  "dclutch-rent-contract",
-]
-
-[[package]]
-name = "dclutch-economic-adapter-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-economic-kernel",
- "dclutch-release-set-contract",
 ]
 
 [[package]]
@@ -2025,16 +2007,6 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-core-contract",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "dclutch-general-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-core-contract",
- "dclutch-general-config-contract",
  "sha2 0.10.9",
 ]
 
@@ -2581,20 +2553,6 @@ dependencies = [
  "solana-program",
  "solana-sdk-ids",
  "solana-system-interface 2.0.0",
-]
-
-[[package]]
-name = "dclutch-series-codec"
-version = "0.1.0"
-
-[[package]]
-name = "dclutch-series-contract"
-version = "0.1.0"
-dependencies = [
- "dclutch-capability-contract",
- "dclutch-product-contract",
- "dclutch-source-contract",
- "sha2 0.10.9",
 ]
 
 [[package]]

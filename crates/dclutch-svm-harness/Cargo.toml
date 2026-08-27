@@ -16,8 +16,6 @@ dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
 dclutch-direct-contract = { path = "../dclutch-direct-contract" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
-dclutch-economic-adapter-contract = { path = "../dclutch-economic-adapter-contract" }
-dclutch-economic-kernel = { path = "../dclutch-economic-kernel" }
 dclutch-kernel = { path = "../dclutch-kernel" }
 dclutch-market-contract = { path = "../dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
@@ -43,7 +41,6 @@ dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator", default-features = false }
 dclutch-rent-contract = { path = "../dclutch-rent-contract" }
-dclutch-series-contract = { path = "../dclutch-series-contract" }
 dclutch-source-contract = { path = "../dclutch-source-contract" }
 dclutch-terminal-contract = { path = "../dclutch-terminal-contract" }
 base64 = "0.22"
