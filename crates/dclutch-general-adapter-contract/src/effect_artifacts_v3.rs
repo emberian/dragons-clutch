@@ -300,6 +300,45 @@ const fn receipt_dependency_count(action: Action) -> usize {
     }
 }
 
+/// Coordinates carrying the release-selected Custody program, zero or one.
+///
+/// The family-neutral Hot executor resolves a child route's callee by scanning
+/// the downgraded effect accounts for the key the Registry activation cache
+/// names for that role, and a CPI's callee is never a member of its own account
+/// list. `CustodyFrameRoleV1` has no `CustodyProgram` variant at all -- a
+/// Custody frame names `CallerProgram`, which is Trading's -- so no Custody
+/// frame can carry it and the topology must declare a coordinate of its own or
+/// every Custody route refuses `Custom(1)` before any CPI. The Claims routes
+/// need nothing: the Claims FrameSpecs declare `ClaimsProgram` inside their own
+/// frames, which is why only Custody was missing.
+///
+/// `Consider` and `Freeze` route to no child at all, so they carry no callee
+/// and pay no packet slot for one.
+#[must_use]
+pub const fn general_custody_callee_account_count_v3(action: Action) -> u16 {
+    match action {
+        Action::Consider | Action::Freeze => 0,
+        Action::InitializeSettlement
+        | Action::Collect
+        | Action::Materialize
+        | Action::Distribute
+        | Action::Close => 1,
+    }
+}
+
+/// The callee coordinate itself, absent for the two child-free actions.
+///
+/// It is appended past every route range, so adding it renumbered no frame.
+pub fn general_custody_callee_coordinate_v3(action: Action) -> Result<Option<u16>> {
+    if general_custody_callee_account_count_v3(action) == 0 {
+        return Ok(None);
+    }
+    general_effect_account_count_v3(action)?
+        .checked_sub(1)
+        .ok_or(GeneralEffectArtifactErrorV3::Geometry)
+        .map(Some)
+}
+
 /// Return the exact logical account width selected by one action AccountProfile.
 pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
     let suffix = match action {
@@ -320,6 +359,7 @@ pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
     };
     general_child_account_start_v3(action)
         .checked_add(suffix)
+        .and_then(|value| value.checked_add(general_custody_callee_account_count_v3(action)))
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)
 }
 

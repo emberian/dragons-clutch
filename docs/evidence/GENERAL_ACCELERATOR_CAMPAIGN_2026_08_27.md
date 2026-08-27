@@ -65,30 +65,48 @@ and the exact canonical message bytes.
 
 | action | CU | accounts | legacy packet | scratch pages |
 |---|---:|---:|---:|---:|
-| `Consider` | 56,162 | 33 | 811 | 3 |
-| `Freeze` | 32,590 | 31 | 745 | 3 |
-| `InitializeSettlement` | 80,944 | 88 | 866 | 3 |
-| `Collect` | 56,473 / 57,655 / 57,678 | 69 | 847 | 3 |
-| `Materialize` | 52,674 | 67 | 813 | 3 |
-| `Distribute` | 56,425 / 57,630 / 57,661 | 69 | 847 | 3 |
-| `Close` | 60,840 | 86 | 832 | 3 |
+| `Consider` | 56,164 | 33 | 811 | 3 |
+| `Freeze` | 32,592 | 31 | 745 | 3 |
+| `InitializeSettlement` | 81,376 | 89 | 867 | 3 |
+| `Collect` | 56,908 / 58,090 / 58,113 | 70 | 848 | 3 |
+| `Materialize` | 53,109 | 68 | 814 | 3 |
+| `Distribute` | 56,860 / 58,065 / 58,096 | 70 | 848 | 3 |
+| `Close` | 61,274 | 87 | 833 | 3 |
 
 ### N = 258
 
 | action | CU | accounts | legacy packet | scratch pages |
 |---|---:|---:|---:|---:|
-| `Consider` | 528,630 | 47 | 1,273 | 17 |
-| `Freeze` | 65,001 | 45 | 1,207 | 17 |
-| `InitializeSettlement` | 617,698 | 102 | **1,328** | 17 |
-| `Collect` | 146,345 / 146,772 / 147,566 | 83 | 1,309 | 17 |
-| `Materialize` | 140,819 | 81 | 1,275 | 17 |
-| `Distribute` | 143,984 / 145,205 / 146,007 | 83 | 1,309 | 17 |
-| `Close` | 155,245 | 100 | 1,294 | 17 |
+| `Consider` | 528,632 | 47 | 1,273 | 17 |
+| `Freeze` | 65,003 | 45 | 1,207 | 17 |
+| `InitializeSettlement` | 618,213 | 103 | **1,329** | 17 |
+| `Collect` | 146,864 / 147,291 / 148,085 | 84 | 1,310 | 17 |
+| `Materialize` | 141,338 | 82 | 1,276 | 17 |
+| `Distribute` | 144,503 / 145,724 / 146,526 | 84 | 1,310 | 17 |
+| `Close` | 155,764 | 101 | 1,295 | 17 |
 
 Repeated rows are the three settlement orders the campaign drives, in order.
 
+**Read the CU column with a caveat, and the other two without one.** This
+re-run was taken on a tree that also carried GEN-V3ACT's *uncommitted*
+`GENERAL_HOT_COMMON_SCALARS_V3` 88 -> 90 (the root-lifecycle observation pair).
+A register count moves compute and moves no accounts and no message bytes, so
+the `accounts` and `legacy packet` columns are attributable to the callee
+coordinate alone, and the `CU` column is JOINT and should be re-taken once that
+lane lands. The +2 CU on `Consider` and `Freeze`, whose account counts did not
+move at all, is the visible size of the non-account part.
+
+**Re-measured after the Custody callee coordinate landed.** The five actions
+that route to Custody carry one more account than the tables above did when
+TA-GEN first wrote them, because the topology now declares the release-selected
+Custody program the Hot executor resolves those routes through; before that they
+could not be invoked at all. `Consider` and `Freeze` route to no child, carry no
+callee, and their account counts are unchanged -- their CU moved by exactly +2,
+the cost of the extra checked add in `general_effect_account_count_v3`. Every
+other delta is +1 account, +1 legacy byte, and a few hundred CU.
+
 **Compute is not this family's blocker.** The worst action at the canonical
-width is `InitializeSettlement` at 617,698 CU — 44% of the 1,400,000 ceiling,
+width is `InitializeSettlement` at 618,213 CU — 44% of the 1,400,000 ceiling,
 and that is the accelerator's own consumption inside a caller CPI, not the
 whole Trading transaction. The N=1 → N=258 growth is sublinear in every action
 except the two that fold the whole candidate (`Consider`, `Initialize`).
@@ -103,8 +121,8 @@ lane only when the tier states that **every** clause holds. One does not.
 > limit. Found31 is exactly this defect; it survived every fixture test.
 
 Solana's legacy packet maximum is **1,232 bytes**. **Six of the seven N=258
-actions exceed it** in this transport — 1,273, 1,275, 1,294, 1,309, 1,309 and
-1,328 bytes. Only `Freeze`, at 1,207, fits. The campaign submits a legacy
+actions exceed it** in this transport — 1,273, 1,276, 1,295, 1,310, 1,310 and
+1,329 bytes. Only `Freeze`, at 1,207, fits. The campaign submits a legacy
 message deliberately, so the accelerator can see every scratch page directly;
 the production operator's plan is ALT-backed v0, where the account keys do not
 ride inline. **That plan is not exercised here**, so this campaign cannot

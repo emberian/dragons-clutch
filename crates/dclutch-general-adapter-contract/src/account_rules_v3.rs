@@ -27,8 +27,9 @@ use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 
 use crate::{
     effect_artifacts_v3::{
-        GeneralChildFrameV3, general_effect_account_count_v3, general_effect_route_count_v3,
-        general_effect_route_frame_v3,
+        GeneralChildFrameV3, general_custody_callee_account_count_v3,
+        general_custody_callee_coordinate_v3, general_effect_account_count_v3,
+        general_effect_route_count_v3, general_effect_route_frame_v3,
     },
     hot_candidate_v3::scalar,
     local_state_v3::GENERAL_LOCAL_STATE_HEADER_BYTES_V3,
@@ -120,6 +121,16 @@ pub enum GeneralAccountRuleErrorV3 {
 /// Result alias for General Profile13 rule generation.
 pub type Result<T> = core::result::Result<T, GeneralAccountRuleErrorV3>;
 
+/// First coordinate past the action's last child-route range.
+///
+/// This is the fixed count minus the trailing Custody callee, and it is what
+/// every child-frame walk must bound itself by: the callee belongs to no frame.
+fn general_child_frame_end_v3(action: Action) -> Result<u16> {
+    general_account_profile_fixed_count_v3(action)?
+        .checked_sub(general_custody_callee_account_count_v3(action))
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)
+}
+
 /// Exact base logical account count before authenticated scratch pages.
 pub fn general_account_profile_fixed_count_v3(action: Action) -> Result<u16> {
     general_effect_account_count_v3(action).map_err(|_| GeneralAccountRuleErrorV3::Geometry)
@@ -205,6 +216,19 @@ pub fn general_account_profile_rule_v3(
         evidence = evidence
             .checked_add(1)
             .ok_or(GeneralAccountRuleErrorV3::Geometry)?;
+    }
+    // The release-selected Custody program the action's Custody routes are
+    // invoked through, appended past every route range. Readonly executable, no
+    // effect permission, no asserted width: the loader that deployed it owns
+    // the record and the Registry activation cache, not this profile, is the
+    // sole authority on which program the Custody role selects. It belongs to
+    // no child frame, so it is answered before `child_rule` -- which would
+    // refuse a coordinate `child_coordinate` cannot place.
+    if general_custody_callee_coordinate_v3(action)
+        .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?
+        == Some(coordinate)
+    {
+        return Ok(opaque_rule(AccountPrivilegesV2::new(false, false, true)));
     }
     child_rule(action, coordinate, widths)
 }
@@ -575,7 +599,12 @@ fn custody_privilege_facts(value: CustodyFramePrivilegesV1) -> ChildPrivilegeFac
 fn physical_role_privileges(action: Action, role: ChildRoleV3) -> Result<AccountPrivilegesV2> {
     let mut union = ChildPrivilegeFactsV3::default();
     let mut coordinate = crate::state_artifacts_v3::general_child_account_start_v3(action);
-    let count = general_account_profile_fixed_count_v3(action)?;
+    // Every coordinate in this range belongs to a child frame EXCEPT the
+    // trailing Custody callee, which belongs to none -- it is the account the
+    // CPI is made THROUGH, not one the CPI is made WITH. `child_coordinate`
+    // cannot place it and returns `Geometry`, which would take every privilege
+    // union in the action down with it, so the walk stops before it.
+    let count = general_child_frame_end_v3(action)?;
     while coordinate < count {
         let (frame, relative) = child_coordinate(action, coordinate)?;
         if child_role(frame, relative)? == role {
@@ -810,7 +839,36 @@ const fn opaque_rule(privileges: AccountPrivilegesV2) -> AccountRuleWithPrestate
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
+    use dclutch_effect_kernel::v2::FixedRole;
+    use std::vec;
+
     use super::*;
+    use crate::effect_artifacts_v3::{
+        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+        general_effect_instruction_count_v3, general_effect_program_bytes_v3,
+        general_effect_template_bytes_v3,
+    };
+
+    /// The exact emitted Effect bytes for one action.
+    fn effect(action: Action) -> vec::Vec<u8> {
+        let (fixed, item) = general_effect_instruction_count_v3(action);
+        let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; fixed + item];
+        let mut templates = vec![0; general_effect_template_bytes_v3(action)];
+        let len = general_effect_program_bytes_v3(action).expect("program width");
+        let mut scratch = vec![0; len];
+        let mut output = vec![0; len];
+        encode_general_effect_program_v3_atomic(
+            action,
+            &mut instructions,
+            &mut templates,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("action artifact");
+        output
+    }
 
     const WIDTHS: GeneralExternalAccountWidthsV3 = GeneralExternalAccountWidthsV3 {
         linked_basis_prefix: 64,
@@ -860,11 +918,121 @@ mod tests {
         }
     }
 
+    /// Every child role the General Effect routes to has a program coordinate
+    /// the Hot executor can resolve it through.
+    ///
+    /// `selected_role_program_v3` resolves a child route's callee by scanning
+    /// the downgraded effect accounts for the key the Registry activation cache
+    /// names for that role, and accepts only a UNIQUE readonly executable
+    /// account. `CustodyFrameRoleV1` has no `CustodyProgram` variant, so none of
+    /// the Custody frames can carry their own callee and this topology carried
+    /// none anywhere: two Custody routes on `InitializeSettlement`, one each on
+    /// `Collect`/`Materialize`/`Distribute`, three on `Close`, and no coordinate
+    /// any of them could be invoked through. The Claims frames declare
+    /// `ClaimsProgram` themselves, which is why that half always resolved.
+    ///
+    /// The roles come from the REAL emitted Effect bytes; the privileges come
+    /// from `general_account_profile_rule_v3`, which is the sole rule source
+    /// both profile encoders in this tree call.
+    #[test]
+    fn every_child_role_the_effect_routes_to_has_an_invocable_program_coordinate() {
+        for action in [
+            Action::Consider,
+            Action::Freeze,
+            Action::InitializeSettlement,
+            Action::Collect,
+            Action::Materialize,
+            Action::Distribute,
+            Action::Close,
+        ] {
+            let bytes = effect(action);
+            let effect = dclutch_effect_kernel::v3::ProgramV3::decode(&bytes).expect("effect");
+            let count = general_account_profile_fixed_count_v3(action).expect("count");
+            assert_eq!(effect.fixed_account_count(), count);
+
+            // A role's callee: the Custody one is the appended coordinate, and
+            // the Claims one is found by asking the frames themselves which
+            // coordinate carries `ClaimsProgram`.
+            let claims_callee = (crate::state_artifacts_v3::general_child_account_start_v3(action)
+                ..general_child_frame_end_v3(action).expect("child end"))
+                .find(|coordinate| {
+                    child_coordinate(action, *coordinate)
+                        .and_then(|(frame, relative)| child_role(frame, relative))
+                        .is_ok_and(|role| {
+                            role == ChildRoleV3::Claims(ClaimsFrameRoleV1::ClaimsProgram)
+                        })
+                });
+            let custody_callee =
+                general_custody_callee_coordinate_v3(action).expect("callee coordinate");
+
+            let mut route = 0_u16;
+            while route < effect.route_count() {
+                let role = effect.route(route).expect("route").role();
+                let coordinate = match role {
+                    FixedRole::Claims => claims_callee,
+                    FixedRole::Custody => custody_callee,
+                    // No General route declares any other role; a new one would
+                    // arrive here with no callee and fail, which is the point.
+                    _ => None,
+                }
+                .expect("every routed role must name a callee coordinate");
+                let rule = general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                    .expect("callee rule");
+                assert_eq!(
+                    rule.rule.privileges,
+                    AccountPrivilegesV2::new(false, false, true),
+                    "{action:?} {role:?} callee at {coordinate} is not a readonly executable"
+                );
+                assert_eq!(
+                    rule.rule.effect_permissions,
+                    AccountEffectPermissionsV2::new(false, false, false),
+                    "{action:?} {role:?} callee at {coordinate} carries an effect permission"
+                );
+                assert_eq!(
+                    rule.rule.alias,
+                    AccountAliasInputV2::SelfCoordinate,
+                    "{action:?} {role:?} callee at {coordinate} is an alias"
+                );
+                route += 1;
+            }
+
+            // An alias onto a callee is the SECOND way to refuse the same
+            // lookup: `downgraded_effect_accounts_v3` pushes one entry per
+            // logical coordinate, aliases included, so an aliased callee matches
+            // twice and the executor refuses on the second.
+            for coordinate in 0..count {
+                let rule = general_account_profile_rule_v3(action, coordinate, WIDTHS)
+                    .expect("fixed rule");
+                if let AccountAliasInputV2::Fixed(representative) = rule.rule.alias {
+                    for callee in [claims_callee, custody_callee].into_iter().flatten() {
+                        assert_ne!(
+                            representative, callee,
+                            "{action:?} callee at {callee} is aliased from {coordinate}"
+                        );
+                    }
+                }
+            }
+
+            // The callee sits past every route range, so adding it renumbered
+            // no frame, and it is absent exactly when no route needs it.
+            match custody_callee {
+                Some(coordinate) => {
+                    assert_eq!(coordinate + 1, count);
+                    assert!(coordinate >= general_child_frame_end_v3(action).expect("child end"));
+                    assert!(effect.route_count() > 0);
+                }
+                None => assert_eq!(effect.route_count(), 0),
+            }
+        }
+    }
+
     #[test]
     fn child_frames_reuse_semantic_roles_through_authenticated_aliases() {
         for action in [Action::InitializeSettlement, Action::Close] {
             let child = crate::state_artifacts_v3::general_child_account_start_v3(action);
-            let count = general_account_profile_fixed_count_v3(action).expect("count");
+            // The trailing Custody callee belongs to no child frame, so the
+            // child-frame walk stops before it.
+            let count = general_child_frame_end_v3(action).expect("child frame end");
             let mut aliases = 0_usize;
             let mut repeated_signer = false;
             for coordinate in child..count {
