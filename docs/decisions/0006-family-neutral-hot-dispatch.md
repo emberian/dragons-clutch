@@ -169,6 +169,11 @@ root, and the V1/V2 generation needs an executor change nobody should make.
   `general/activation.rs` is the only in-tree General activation planner. Delete
   the V1/V2 hot path once a V3 activation adapter exists; do not delete
   `general/activation.rs` before then.
+  **DONE 2026-08-27 (`f884e95`)**, on this record's own condition: both files
+  are gone, along with the two `dispatch_*_authenticated` wrappers whose only
+  non-test caller was `general/activation.rs`, and the three General crates the
+  `families` feature no longer needs. The tests those wrappers carried were
+  retargeted at the surviving digest join rather than deleted.
 - `crates/dclutch-operator/src/general_hot_v3.rs::build_general_hot_instruction_v3`
   — the function that *is* the General account-suffix contract on the operator
   side — has zero callers and zero tests. That, not a missing dispatch point,
@@ -213,11 +218,34 @@ path.
 
 ## 8. What a General end-to-end hot action still needs
 
-1. A V3 activation adapter, so a General capability root can exist.
-2. The root-lifecycle refusal of §7.
+1. ~~A V3 activation adapter, so a General capability root can exist.~~ — landed
+   in two halves. The planner is `dclutch-operator::general_activation_v3`
+   (`78fd4cc`), and the seam it named two blockers in is open: the activation
+   outer's family tail is now the effect program's projected request buffer
+   rather than `vec![0; root_state_bytes]` (`ec3731d`), and it admits a
+   `CapabilityProgramSetV2` at `selection.capability_release()`, selecting the
+   activation descriptor from the set (`bc5da76`). Both with real-ELF control in
+   `programs/dclutch-trading-sbf/program-test/tests/activation.rs`.
+2. ~~The root-lifecycle refusal of §7.~~ — landed (`37d873f` + `2e890d4`),
+   measured at 16 CU per action with no account, packet or scratch-page moved.
 3. A capability seal for the selected `(descriptor, action)` pair — its own
    outer, already implemented (`hot_v3::process_capability_seal_v1`).
 4. `build_general_hot_instruction_v3` exercised against a real `GeneralHotStateV3`.
+   Still true as written: the twelve `general_hot_v3` operator tests synthesize
+   `GeneralHotInstructionV3` values directly and never enter the builder.
 5. ~~The packet witness for the N=258 account sets~~ — landed
    (`docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md`).
 6. The Trading hot tail past phase 7 (W2i), which is not General's to move.
+7. **New, and it is what item 1 uncovered: General has no activation artifacts.**
+   The seam will create a root out of whatever a family's `AccountProfileV1`,
+   transition `ProgramV2` and `EffectProgramV2` project. General has none of the
+   three for activation, needs an eighth `CapabilityProgramSetV2` entry naming
+   them, and needs `authenticate_general_program_set_v3` to stop requiring
+   exactly seven V4 entries. The coordinates that work needs are published --
+   `GeneralRootV2`'s creation words and offsets (`72e0a96`),
+   `activation_registers_v2` (`402bf2e`), and
+   `FUNDING_STATE_REMAINING_RENT_AMOUNT_OFFSET_V1` (`601fc2a`) -- but the
+   artifact ENCODERS are not: the field offsets and opcodes of all three artifact
+   generations are private to their crates, and every author in the tree
+   hand-encodes them from a test fixture. `dclutch-account-profile-contract::v2::encode`
+   is what the V1/activation generation should have and does not.
