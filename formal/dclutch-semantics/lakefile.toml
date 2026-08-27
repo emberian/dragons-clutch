@@ -158,6 +158,10 @@ name = "emit-liability-basis-v2-rust"
 root = "EmitLiabilityBasisV2Rust"
 
 [[lean_exe]]
+name = "emit-liability-basis-v2-spline-rust"
+root = "EmitLiabilityBasisV2SplineRust"
+
+[[lean_exe]]
 name = "emit-market-core-physical-rust"
 root = "EmitMarketCorePhysicalRust"
 
