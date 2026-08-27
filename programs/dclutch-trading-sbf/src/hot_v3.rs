@@ -2030,6 +2030,12 @@ pub fn process_hot_execution_v3(
         request: request_profile,
         transition,
     })?;
+    let mut preplan_scratch = LifecyclePreplanScratchV4::new(
+        &observations,
+        &runtime_accounts,
+        scalar_count,
+        identity_count,
+    )?;
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2046,6 +2052,7 @@ pub fn process_hot_execution_v3(
         &rent,
         &aliases,
         profile_join,
+        &mut preplan_scratch,
     )?;
     hot_cu_checkpoint!("request-lifecycle-preplan");
 
@@ -2160,6 +2167,7 @@ pub fn process_hot_execution_v3(
         &rent,
         &aliases,
         profile_join,
+        &mut preplan_scratch,
     )?;
     require_lifecycle_replan_agreement_v4(
         &preplanned_lifecycle,
@@ -3971,7 +3979,65 @@ fn candidate_observation_v3<'data>(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Every working bank one lifecycle preplan needs, allocated once.
+///
+/// `prepare_lifecycle_v4` runs twice for one execution: once from the
+/// request-projected registers to give the transition its plan, and once from
+/// the transition's outputs to prove the plan it saw is the plan its outputs
+/// produce. The SBF allocator never frees, so a second pass otherwise charged a
+/// fresh 90-coordinate candidate bank, four register banks and a state
+/// reservation bank against total-ever-allocated for a pass whose only purpose
+/// is to agree with the first.
+struct LifecyclePreplanScratchV4<'a> {
+    candidate_lamports: Vec<u64>,
+    candidate_observations: Vec<AccountObservationV1<'a>>,
+    scalar_scratch: Vec<u64>,
+    identity_scratch: Vec<[u8; 32]>,
+    next_scalars: Vec<u64>,
+    next_identities: Vec<[u8; 32]>,
+    used_states: Vec<bool>,
+}
+
+impl<'a> LifecyclePreplanScratchV4<'a> {
+    fn new(
+        observations: &[AccountObservationV1<'a>],
+        accounts: &[&AccountInfo<'_>],
+        scalar_count: usize,
+        identity_count: usize,
+    ) -> Result<Self, ProgramError> {
+        if observations.len() != accounts.len() {
+            return Err(TradingSbfError::Content.into());
+        }
+        let mut candidate_lamports = Vec::new();
+        candidate_lamports
+            .try_reserve_exact(observations.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        let mut candidate_observations = Vec::new();
+        candidate_observations
+            .try_reserve_exact(observations.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        for (observation, account) in observations.iter().zip(accounts) {
+            candidate_lamports.push(observation.lamports());
+            candidate_observations.push(candidate_observation_v3(
+                *observation,
+                account,
+                observation.lamports(),
+            ));
+        }
+        Ok(Self {
+            candidate_lamports,
+            candidate_observations,
+            scalar_scratch: vec![0_u64; scalar_count],
+            identity_scratch: vec![[0_u8; 32]; identity_count],
+            next_scalars: vec![0_u64; scalar_count],
+            next_identities: vec![[0_u8; 32]; identity_count],
+            used_states: vec![false; observations.len()],
+        })
+    }
+}
+
 #[inline(never)]
+#[allow(clippy::too_many_arguments)]
 fn prepare_lifecycle_v4<'a>(
     program_id: &Pubkey,
     expected_market: [u8; 32],
@@ -3988,36 +4054,77 @@ fn prepare_lifecycle_v4<'a>(
     rent: &Rent,
     aliases: &[usize],
     profile_join: ValidatedProfileJoinV3<'_>,
+    scratch: &mut LifecyclePreplanScratchV4<'a>,
 ) -> Result<PreparedLifecycleBatchV4, ProgramError> {
-    if observations.len() != accounts.len() || aliases.len() != accounts.len() {
+    if observations.len() != accounts.len()
+        || aliases.len() != accounts.len()
+        || scratch.candidate_lamports.len() != accounts.len()
+        || scratch.candidate_observations.len() != accounts.len()
+        || scratch.used_states.len() != accounts.len()
+        || scratch.scalar_scratch.len() != scalars.len()
+        || scratch.next_scalars.len() != scalars.len()
+        || scratch.identity_scratch.len() != identities.len()
+        || scratch.next_identities.len() != identities.len()
+    {
         return Err(TradingSbfError::Content.into());
     }
     let mut output_scalars = scalars.to_vec();
     let mut output_identities = identities.to_vec();
-    let mut candidate_lamports = observations
-        .iter()
-        .map(|observation| observation.lamports())
-        .collect::<Vec<_>>();
-    // The candidate bank and the three lifecycle register banks are allocated
-    // once for the whole batch. The SBF allocator never frees, so materialising
-    // them per invocation charged a fresh 90-coordinate observation bank and
-    // four register pairs against total-ever-allocated for every planned state.
-    let mut candidate_observations = Vec::with_capacity(observations.len());
-    for (observation, account) in observations.iter().zip(accounts) {
-        candidate_observations.push(candidate_observation_v3(
-            *observation,
-            account,
-            observation.lamports(),
-        ));
+    // Every working bank is rented from one arena that outlives both passes.
+    // The SBF allocator never frees, so a second preplan otherwise charged a
+    // fresh 90-coordinate candidate bank, four register banks and a state
+    // reservation bank against total-ever-allocated purely to agree with the
+    // first. They are reset here rather than reallocated.
+    let LifecyclePreplanScratchV4 {
+        candidate_lamports,
+        candidate_observations,
+        scalar_scratch,
+        identity_scratch,
+        next_scalars,
+        next_identities,
+        used_states,
+    } = scratch;
+    used_states.fill(false);
+    for ((slot, observation), account) in candidate_lamports
+        .iter_mut()
+        .zip(observations)
+        .zip(accounts.iter())
+    {
+        *slot = observation.lamports();
+        let _ = account;
     }
-    let mut scalar_scratch = vec![0_u64; scalars.len()];
-    let mut identity_scratch = vec![[0_u8; 32]; identities.len()];
-    let mut next_scalars = vec![0_u64; scalars.len()];
-    let mut next_identities = vec![[0_u8; 32]; identities.len()];
-    let mut used_states = vec![false; accounts.len()];
-    let mut output = Vec::new();
+    for ((slot, observation), account) in candidate_observations
+        .iter_mut()
+        .zip(observations)
+        .zip(accounts.iter())
+    {
+        *slot = candidate_observation_v3(*observation, account, observation.lamports());
+    }
     let plan_count = policy
         .action_plan_count(action)
+        .map_err(|_| TradingSbfError::Content)?;
+    // Exact capacity: the plan table declares how many invocations the batch
+    // has, so the output bank does not walk the allocator's doubling ladder.
+    let mut planned = 0_usize;
+    let mut counted = 0_u16;
+    while counted < plan_count {
+        planned = planned
+            .checked_add(
+                usize::try_from(
+                    policy
+                        .action_plan(action, counted)
+                        .map_err(|_| TradingSbfError::Content)?
+                        .invocation_count(tail_count)
+                        .map_err(|_| TradingSbfError::Content)?,
+                )
+                .map_err(|_| TradingSbfError::Content)?,
+            )
+            .ok_or(TradingSbfError::Content)?;
+        counted = counted.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(planned)
         .map_err(|_| TradingSbfError::Content)?;
     let mut ordinal = 0_u16;
     while ordinal < plan_count {
@@ -4047,7 +4154,7 @@ fn prepare_lifecycle_v4<'a>(
                 .project_account_indices(account_profile, tail_count, item)
                 .map_err(|_| TradingSbfError::Content)?;
             let state = representative_v3(indices.state(), aliases)?;
-            reserve_lifecycle_state_v3(state, &mut used_states)?;
+            reserve_lifecycle_state_v3(state, used_states)?;
             let payer = indices
                 .payer()
                 .map(|index| representative_v3(index, aliases))
@@ -4139,7 +4246,7 @@ fn prepare_lifecycle_v4<'a>(
                     account_profile,
                     tail_count,
                     item_index: item,
-                    accounts: &candidate_observations,
+                    accounts: candidate_observations,
                     registers: LifecycleRegistersV3 {
                         scalars: &output_scalars,
                         identities: &output_identities,
@@ -4152,10 +4259,10 @@ fn prepare_lifecycle_v4<'a>(
                 },
                 canonical_bump,
                 LifecycleProtectedRegisterBuffersV3 {
-                    scalar_scratch: &mut scalar_scratch,
-                    identity_scratch: &mut identity_scratch,
-                    output_scalars: &mut next_scalars,
-                    output_identities: &mut next_identities,
+                    scalar_scratch,
+                    identity_scratch,
+                    output_scalars: next_scalars,
+                    output_identities: next_identities,
                 },
             )
             .map_err(|_| TradingSbfError::Content)?;
@@ -4163,7 +4270,7 @@ fn prepare_lifecycle_v4<'a>(
                 selected,
                 account_profile,
                 item,
-                &next_identities,
+                next_identities,
             )?;
             match plan {
                 StateLifecyclePlanV3::Authenticate(_) => {}
@@ -4177,8 +4284,8 @@ fn prepare_lifecycle_v4<'a>(
                             balance,
                             observations,
                             accounts,
-                            &mut candidate_lamports,
-                            &mut candidate_observations,
+                            candidate_lamports,
+                            candidate_observations,
                         )?;
                     }
                 }
@@ -4195,8 +4302,8 @@ fn prepare_lifecycle_v4<'a>(
                             balance,
                             observations,
                             accounts,
-                            &mut candidate_lamports,
-                            &mut candidate_observations,
+                            candidate_lamports,
+                            candidate_observations,
                         )?;
                     }
                 }
@@ -4209,8 +4316,8 @@ fn prepare_lifecycle_v4<'a>(
                 seeds,
                 immutable_identity_bindings,
             });
-            core::mem::swap(&mut output_scalars, &mut next_scalars);
-            core::mem::swap(&mut output_identities, &mut next_identities);
+            output_scalars.copy_from_slice(next_scalars);
+            output_identities.copy_from_slice(next_identities);
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
