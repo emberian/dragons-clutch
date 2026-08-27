@@ -34,7 +34,17 @@ export const UPGRADEABLE_LOADER_ID = 'BPFLoaderUpgradeab1e1111111111111111111111
 export const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 export const NATIVE_LOADER_ID = 'NativeLoader1111111111111111111111111111111';
 export const RENT_SYSVAR_ID = 'SysvarRent111111111111111111111111111111111';
-export const SYSVAR_OWNER_ID = 'Sysvar1111111111111111111111111111111';
+/**
+ * The sysvar owner program.
+ *
+ * This constant was six characters short — `Sysvar` plus thirty-one ones, which
+ * is not a 32-byte address at all and which `new PublicKey()` refuses outright.
+ * Nothing caught it because it was only ever compared as a string, against a
+ * fixture that repeated the same typo, so the Rent sysvar check refused every
+ * read of a real cluster. The case below round-trips every pinned runtime
+ * address through `PublicKey`, so a truncated one can no longer pass.
+ */
+export const SYSVAR_OWNER_ID = 'Sysvar1111111111111111111111111111111111111';
 
 const RAW_RECORD_SEED = new TextEncoder().encode('dclutch-raw-record-v1');
 const STAGING_RECORD_SEED = new TextEncoder().encode('dclutch-record-stage-v1');
@@ -62,9 +72,25 @@ export type ArtifactReleaseV1 = Readonly<{
   upgradeAuthority: string | null;
 }>;
 
+/**
+ * Which contract, if any, decodes this release's semantic preimage.
+ *
+ * `unowned` is not a gap in the evidence, it is the evidence: the five
+ * execution roles, Registry and Rent each persist a `semantic_release_id` and
+ * NO first-party contract in this tree decodes a role-program release preimage.
+ * `SemanticPreimageKindV1` in `dclutch-release-tool` says so in as many words,
+ * and calling such a preimage `capability` would assert an owner that does not
+ * exist. A surface that renders one of these must say `unowned` rather than
+ * imply an owner.
+ */
+export type CheckedSemanticKindV1 = 'capability' | 'pyth-v1' | 'unowned';
+
+const SEMANTIC_KIND_BY_TAG: ReadonlyArray<CheckedSemanticKindV1> = Object.freeze(['capability', 'pyth-v1', 'unowned']);
+
 export type CheckedReleaseV1 = Readonly<{
   bytes: Uint8Array;
   checkedReleaseId: string;
+  semanticKind: CheckedSemanticKindV1;
   artifact: ArtifactReleaseV1;
   programDigest: string;
   programDataDigest: string;
@@ -240,7 +266,14 @@ export function decodeArtifactReleaseV1(bytes: Uint8Array): ArtifactReleaseV1 {
 
 export async function decodeCheckedReleaseV1(bytes: Uint8Array): Promise<CheckedReleaseV1> {
   if (bytes.length < CHECKED_RELEASE_FIXED_BYTES || ascii(bytes, 0, 8) !== 'DCLTREL1' || u16(bytes, 8) !== 1) throw new Error('checked release has the wrong fixed header');
-  if (bytes[10] > 1 || bytes[11] !== 1 || bytes[12] > 1) throw new Error('checked release names an unsupported semantic, Loader, or authority kind');
+  // Semantic kind 2 is `unowned`, which is what EVERY checked release the
+  // pipeline produces for the seven role programs carries — no first-party
+  // contract decodes a role-program release preimage, so no other kind is
+  // honest for them. Bounding this at 1 refused every real manifest; measured
+  // against `tools/release/checked-release-candidate.sh` output on 2026-08-27,
+  // which writes `semantic_kind=unowned` for all ten artifacts.
+  const semanticTag = bytes[10];
+  if (semanticTag >= SEMANTIC_KIND_BY_TAG.length || bytes[11] !== 1 || bytes[12] > 1) throw new Error('checked release names an unsupported semantic, Loader, or authority kind');
   requireZero(bytes, 14, 2, 'checked release header');
   if (new DataView(bytes.buffer, bytes.byteOffset + 16, 4).getUint32(0, true) !== bytes.length) throw new Error('checked release declared length does not equal its exact bytes');
   const elfBytes = u64(bytes, 28); const programBytes = u64(bytes, 36); const programDataBytes = u64(bytes, 44);
@@ -258,7 +291,7 @@ export async function decodeCheckedReleaseV1(bytes: Uint8Array): Promise<Checked
   if (offset !== bytes.length || assumptions.length === 0 || assumptions.some((value, index) => index > 0 && value <= assumptions[index - 1])) throw new Error('checked release assumptions or trailing bytes are noncanonical');
   const artifact = decodeArtifactReleaseV1(artifactBytesFromChecked(bytes));
   return Object.freeze({
-    bytes: new Uint8Array(bytes), checkedReleaseId: hex(await sha256(bytes)), artifact,
+    bytes: new Uint8Array(bytes), checkedReleaseId: hex(await sha256(bytes)), semanticKind: SEMANTIC_KIND_BY_TAG[semanticTag], artifact,
     programDigest: hex(identities[2]), programDataDigest: hex(identities[3]), programBytes, programDataBytes, elfBytes,
     sourceRevision: texts[0], buildCommand: texts[5], assumptions: Object.freeze(assumptions),
   });
@@ -368,7 +401,16 @@ function programDataView(program: RpcAccount, programAddress: string, programDat
   const link = new PublicKey(slice(program.data, 4, 32)).toBase58(); const derived = PublicKey.findProgramAddressSync([key(programAddress, 'role Program').toBytes()], key(UPGRADEABLE_LOADER_ID, 'Upgradeable Loader'))[0].toBase58();
   if (link !== programDataAddress || derived !== programDataAddress || artifact.program !== programAddress || artifact.programData !== programDataAddress || artifact.loader !== UPGRADEABLE_LOADER_ID) throw new Error('ProgramData link, PDA, or artifact Loader identity does not join');
   if (programData.owner !== UPGRADEABLE_LOADER_ID || programData.executable || programData.data.length <= LOADER_V3_PROGRAMDATA_OFFSET || new DataView(programData.data.buffer, programData.data.byteOffset, 4).getUint32(0, true) !== 3) throw new Error(`${programDataAddress} is not an exact Loader-v3 ProgramData account`);
-  const tag = programData.data[12]; if (tag > 1 || (tag === 0 && !isZero(slice(programData.data, 13, 32)))) throw new Error('ProgramData upgrade-authority encoding is noncanonical');
+  // Loader V3 serializes `ProgramData { slot, upgrade_authority: None }` as
+  // THIRTEEN bytes and writes them over a forty-five byte header, so a program
+  // whose authority was revoked keeps the old key sitting inert at 13..45 with
+  // the tag at 0. Measured on a live validator on 2026-08-27: the successor
+  // Core, after its mandatory revocation, is exactly that. Requiring those
+  // bytes to be zero called the Loader's own SetAuthority(None) output
+  // malformed and refused every revoked program on every cluster. The TAG is
+  // the authority; the trailing bytes are retained litter and are reported
+  // rather than judged.
+  const tag = programData.data[12]; if (tag > 1) throw new Error('ProgramData upgrade-authority tag is undefined');
   const authority = tag === 0 ? null : new PublicKey(slice(programData.data, 13, 32)).toBase58();
   if (u64(programData.data, 4) !== artifact.deploymentSlot || authority !== artifact.upgradeAuthority) throw new Error('ProgramData slot or authority differs from the artifact release');
   return slice(programData.data, LOADER_V3_PROGRAMDATA_OFFSET, programData.data.length - LOADER_V3_PROGRAMDATA_OFFSET);
@@ -478,11 +520,31 @@ export async function prepareRegistryActivation(client: RegistryRpc, input: Read
     return Object.freeze({ ...pdas, program: artifact.program, programData: artifact.programData });
   }));
   const roles = Object.freeze(roleRecord(roleAddresses)); const cache = PublicKey.findProgramAddressSync([ACTIVATION_SEED, releaseDigest], registry)[0].toBase58();
-  const addresses = [...new Set([input.payer, input.registryProgram, cache, releasePdas.record, releasePdas.staging, ...REGISTRY_ROLES.flatMap((role) => Object.values(roles[role])), SYSTEM_PROGRAM_ID, RENT_SYSVAR_ID])];
+  // The five roles' Loader accounts are NOT read in the same batch as
+  // everything else. Their ProgramData bodies are the whole ELF: measured on a
+  // real seven-artifact release set, the five together are about 4.3 MB raw and
+  // roughly 5.8 MB once base64-framed, which is over `lib/rpc.ts`'s explicit
+  // 4 MiB browser response bound. Asking for them in one call refused every
+  // honest release set with `RPC response exceeds the browser byte bound` —
+  // the read-side twin of the compute wall that made activation one role per
+  // transaction. So: one small batch for the records and runtime accounts, then
+  // one Program/ProgramData pair per role, all pinned to the same finalized
+  // floor so the observation epoch does not move underneath the plan.
+  const addresses = [...new Set([input.payer, input.registryProgram, cache, releasePdas.record, releasePdas.staging, ...REGISTRY_ROLES.flatMap((role) => [roles[role].record, roles[role].staging]), SYSTEM_PROGRAM_ID, RENT_SYSVAR_ID])];
   const floor = await client.finalizedSlot(); const observation = await client.multipleAccounts(addresses, floor); const accounts = accountMap(observation);
+  const loaderAccounts = new Map<string, RpcAccount | null>();
+  for (const role of REGISTRY_ROLES) {
+    const pair = [...new Set([roles[role].program, roles[role].programData])];
+    for (const [address, account] of accountMap(await client.multipleAccounts(pair, floor))) loaderAccounts.set(address, account);
+  }
   const payerAccount = required(accounts, payer.toBase58(), 'payer'); if (payerAccount.owner !== SYSTEM_PROGRAM_ID || payerAccount.executable || payerAccount.data.length !== 0) throw new Error('payer is not a System-owned data-free wallet');
   requireLoaderExecutable(required(accounts, input.registryProgram, 'Registry Program'), 'Registry Program');
-  const system = required(accounts, SYSTEM_PROGRAM_ID, 'System Program'); if (system.owner !== NATIVE_LOADER_ID || !system.executable || system.data.length !== 0) throw new Error('System Program runtime account is not canonical');
+  // A real Agave finalized observation of the System Program carries the
+  // 14-byte NativeLoader metadata body `system_program`, not an empty one.
+  // Requiring emptiness refused every read of a live cluster; the Rust
+  // operators hit exactly this and dropped the same requirement in `770610c`
+  // and `c25de27`. Key, owner and the executable bit remain load-bearing.
+  const system = required(accounts, SYSTEM_PROGRAM_ID, 'System Program'); if (system.owner !== NATIVE_LOADER_ID || !system.executable) throw new Error('System Program runtime account is not canonical');
   const rent = required(accounts, RENT_SYSVAR_ID, 'Rent sysvar'); if (rent.owner !== SYSVAR_OWNER_ID || rent.executable || rent.data.length !== 17) throw new Error('Rent sysvar runtime account is not canonical');
   const releaseRent = BigInt((await client.minimumBalanceForRentExemption(EXECUTION_RELEASE_SET_BYTES)).lamports); const artifactRent = BigInt((await client.minimumBalanceForRentExemption(ARTIFACT_RELEASE_BYTES)).lamports);
   const releaseRecord = required(accounts, releasePdas.record, 'release-set record'); if (releaseRecord.owner !== input.registryProgram || releaseRecord.executable || !same(releaseRecord.data, evidence.releaseSet.bytes) || BigInt(releaseRecord.lamports) < releaseRent) throw new Error('finalized release-set record bytes, owner, or rent reserve differ from checked evidence'); vacancy(accounts, releasePdas.staging, 'release-set staging cursor');
@@ -491,7 +553,7 @@ export async function prepareRegistryActivation(client: RegistryRpc, input: Read
     const addressesForRole = roles[role]; const artifact = evidence.artifacts[role]; const record = required(accounts, addressesForRole.record, `${role} artifact record`);
     if (record.owner !== input.registryProgram || record.executable || !same(record.data, artifact.bytes) || BigInt(record.lamports) < artifactRent) throw new Error(`${role} finalized artifact record bytes, owner, or rent reserve differ from checked evidence`);
     vacancy(accounts, addressesForRole.staging, `${role} staging cursor`);
-    const hashed = await authenticateDeployment(required(accounts, addressesForRole.program, `${role} Program`), addressesForRole.program, required(accounts, addressesForRole.programData, `${role} ProgramData`), addressesForRole.programData, artifact, await decodeCheckedReleaseV1(input.checkedReleases[role]));
+    const hashed = await authenticateDeployment(required(loaderAccounts, addressesForRole.program, `${role} Program`), addressesForRole.program, required(loaderAccounts, addressesForRole.programData, `${role} ProgramData`), addressesForRole.programData, artifact, await decodeCheckedReleaseV1(input.checkedReleases[role]));
     elfBytesByRole.push(hashed); elfBytes += hashed;
   }
   if (!Number.isSafeInteger(elfBytes)) throw new Error('aggregate ELF byte count exceeds browser integer precision');
