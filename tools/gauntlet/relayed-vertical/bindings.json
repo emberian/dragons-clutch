@@ -1,0 +1,124 @@
+{
+  "campaign": "relayed-vertical",
+  "note": "The vertical's OWN transactions only. The campaign submits every tier-1 founding transaction before these (found_through_open is called, not copied), and the runner merges tier 1's bindings in front of this file at run time exactly as the journey does. Everything here happens after the Market is Open. The routing-table transactions are bound by their own rows here because this campaign labels them under its own prefix. LOCAL-VALIDATOR EVIDENCE with a REHEARSAL-TWIN provider: the daemon's attestations are cryptographically real signatures over bytes read from a loopback twin, claiming the cluster the adapter release pins; every artifact carries the rehearsal label, and nothing here observes any public cluster.",
+  "bindings": [
+    {
+      "label": "relayed vertical: top up the campaign payer",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "An airdrop on a local validator; fee-side lamports, not collateral."
+    },
+    {
+      "label": "relayed vertical: fund the daemon's fee payer",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "An airdrop on a local validator; the daemon's hot fee payer, a distinct key from its attestation identity."
+    },
+    {
+      "label": "relayed vertical: fund the walker",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "An airdrop on a local validator; the walker pays its own fee and is credited the disclosed bounty by the walk."
+    },
+    {
+      "label": "publish record: *",
+      "routes": [
+        "registry/process_instruction",
+        "registry/record_publication::process#Begin",
+        "registry/record_publication::process#Append",
+        "registry/record_publication::process#Finalize"
+      ],
+      "program": "registry",
+      "outcome": "executed",
+      "note": "The campaign-owned relayed records — RelayerKeySetV1 and RelayedAdapterConfigV1 — published through the same Registry Begin/Append/Finalize machinery the producer uses for the rest of the section-12.8 set. The producer's own publications are bound by tier 1."
+    },
+    {
+      "label": "relayed vertical: prepay the Source state and the three Resolution Funds",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "System transfers to precommitted, prepaid destinations; the exact top-ups are the operator's arithmetic."
+    },
+    {
+      "label": "relayed vertical: a no-recovery Market creates its own Resolution funding",
+      "routes": [
+        "core/resolution::process#CreateFund",
+        "core/process_instruction",
+        "resolution/process_create#CreateFund",
+        "resolution/core_effect::process_core_effect"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "The first live execution of the e5b6923 no-recovery admission: the SHORT CreateFund frame (18 accounts, the two RecoveryPolicyV2 tail positions absent), coherence-checked against the authenticated material that names no recovery policy."
+    },
+    {
+      "label": "relayed vertical: activate the no-recovery Resolution funding",
+      "routes": [
+        "core/resolution::process#VerifyFundReady",
+        "core/process_instruction",
+        "resolution/process_verify#VerifyFundReady",
+        "resolution/core_effect::process_core_effect"
+      ],
+      "program": "core",
+      "outcome": "executed",
+      "note": "VerifyFundReady over the same short frame; the three compartments go Active and the Market stays Open + Consumed."
+    },
+    {
+      "label": "relayed vertical: prepay a terminal certificate destination",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "System transfers of exact rent to the success- and failure-kind certificate PDAs; the terminal routes allocate and assign but never fund."
+    },
+    {
+      "label": "relayed vertical: create the observation record for the observed slot",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/relay_transport_v1::process_relay_transport_v1",
+        "resolution/process_create_record#CreateRecord"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The keeper's act: the record PDA is seeded by the daemon's observed slot, so creation can only follow observation. First execution of this route on a live validator rather than a ProgramTest bank."
+    },
+    {
+      "label": "relayed vertical: create the relay routing table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address-lookup-table program: create, covering the append/seal and consumption frames' non-signer coordinates. Routing is table data, never protocol authority."
+    },
+    {
+      "label": "relayed vertical: extend the relay routing table page *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address-lookup-table program: extend pages."
+    },
+    {
+      "label": "relayed vertical: a sealed graduation resolves the market",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/relay_transport_v1::process_relay_transport_v1",
+        "resolution/process_consume#ConsumeRecord"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The 28-account consumption as a packet-safe v0 transaction over the Market table — one of the family's two known over-packet wires. The sealed record's attested VirtualPool body reads CreatedPool, the venue deployment authenticates against the pinned synthetic-of-real release, and the Source state single-writes to Resolved."
+    },
+    {
+      "label": "relayed vertical: a silent relayer cannot make the market unresolvable",
+      "routes": [
+        "resolution/process_instruction",
+        "resolution/relay_transport_v1::process_relay_transport_v1",
+        "resolution/process_commit_deadline_failure#CommitDeadlineFailure"
+      ],
+      "program": "resolution",
+      "outcome": "executed",
+      "note": "The funded deadline walk on a bare legacy transaction, past window.end + max_age by the devnet clock, paying a fresh walker exactly the manifest's disclosed bounty out of the market's own escrow. First execution on a live validator; the frame carries nothing of the relayer's."
+    }
+  ]
+}

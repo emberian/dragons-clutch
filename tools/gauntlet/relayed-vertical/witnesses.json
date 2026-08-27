@@ -1,0 +1,54 @@
+{
+  "campaign": "relayed-vertical",
+  "witnesses": [
+    {
+      "id": "the-vertical-conserved",
+      "kind": "plan-jq",
+      "query": ".conservation_verdict",
+      "expect": "conserved",
+      "provenance": "The journey's six-law conservation ledger, threaded through every stage boundary of the vertical. A relay stage moves rent, fees and one disclosed bounty; it must never move a collateral atom, and the ledger is what says so from the chain rather than from the stage's own claim."
+    },
+    {
+      "id": "the-conflation-is-disclosed",
+      "kind": "plan-jq",
+      "query": ".disclosed_failure_conflation | contains(\"relayer went silent\") and contains(\"never graduated\") | tostring",
+      "expect": "true",
+      "provenance": "MAINNET_STATE_RELAY.md section 12.6: for a v1 graduation market, 'the relayer went silent', 'the venue was upgraded' and 'it never graduated' all land on one pre-disclosed failure outcome. The conflation must be stated in the market's own founding input, not discovered at resolution."
+    },
+    {
+      "id": "synthetic-of-real-is-labelled",
+      "kind": "plan-jq",
+      "query": "(.synthetic_of_real.synthetic | length >= 4) and (.synthetic_of_real.real | length >= 3) | tostring",
+      "expect": "true",
+      "provenance": "The twin's world is real in layout and address and synthetic in every value the CS dossier never captured. The transcript must enumerate both halves; a rehearsal that stops saying which is which has become a fabrication."
+    },
+    {
+      "id": "success-terminalizes-on-the-ordinary-cell",
+      "kind": "plan-jq",
+      "query": "if .walk == \"success\" then (.walk_detail.certificate_selector != .walk_detail.failure_selector) | tostring else \"true\" end",
+      "expect": "true",
+      "provenance": "The sealed graduation must resolve onto the zero-cut domain's single ordinary region, never onto the failure cell: the failure cell is reachable only through the funded deadline walk, and a success that landed there would mean the domain mapping collapsed."
+    },
+    {
+      "id": "the-failure-walk-fits-a-legacy-packet",
+      "kind": "plan-jq",
+      "query": "if .walk == \"failure\" then (.walk_detail.walk_wire_bytes <= 1232) | tostring else \"true\" end",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes. The deadline walk is the one route in this family that must work when nobody cooperated, so it must never depend on an address lookup table a silent operator never published. Measured from the built transaction, not asserted."
+    },
+    {
+      "id": "the-walk-pays-exactly-the-disclosed-bounty",
+      "kind": "plan-jq",
+      "query": "if .walk == \"failure\" then (.walk_detail.bounty_paid_lamports == .walk_bounty_lamports) | tostring else \"true\" end",
+      "expect": "true",
+      "provenance": "The bounty is the capability manifest's own founding-time quote, debited from the market's escrowed explicit-failure compartment. Nobody chooses what the walk pays at walk time; the campaign asserts the walker's balance moved by exactly this amount less the fee."
+    },
+    {
+      "id": "every-stage-executed",
+      "kind": "plan-jq",
+      "query": "[.stages[] | select(.outcome != \"executed\" and .outcome != \"running\")] | length | tostring",
+      "expect": "0",
+      "provenance": "The vertical is one journey-shaped chain; a stage that reports anything but executed (or, for the twin, running) means the chain broke and the transcript must not read as a completed walk."
+    }
+  ]
+}
