@@ -121,24 +121,64 @@ const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe4; 32]);
 const TEST_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe5; 32]);
 const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 const GENERATION: u64 = 29;
-const OUTCOME_COUNT: u32 = 2;
+/// The campaign basis width `K`, which is also the Product outcome width `N`.
+///
+/// Decision 0011 §3b: on this wire `K` IS the full Product outcome width, not
+/// the count of backed coordinates — `RepresentationRequestV2::validate`
+/// refuses `IssueStructured`/`UnwrapStructured` unless
+/// `asset_count == outcome_count`, so every outcome needs an asset row and its
+/// materialized account quadruple even at coefficient zero.
+const OUTCOME_COUNT: u32 = 3;
+/// [`OUTCOME_COUNT`] as an array width.
+const K: usize = OUTCOME_COUNT as usize;
 const WINNER: u32 = 1;
-const DENOMINATOR: u64 = 10;
+/// [`WINNER`] as a coordinate index.
+const WINNERS: usize = WINNER as usize;
+/// Shard atoms backing one whole native claim.
+///
+/// Coprime to every coefficient, which is what the campaign basis is FOR: a
+/// one-atom backing skew at any single coordinate cannot be presented as a
+/// legitimate quantity at another, so `K_i = S * c_i` either holds everywhere
+/// or fails visibly at exactly one coordinate.
+const DENOMINATOR: u64 = 7;
 const RECEIPT_SUPPLY: u64 = 7;
-const COEFFICIENTS: [u64; 2] = [3, 7];
+/// Pairwise coprime, and coprime to the denominator.
+///
+/// This is `dclutch-structured-v2-operator`'s campaign basis
+/// (`tests/fixture/mod.rs`), so the host-side derivation and the executing
+/// route now measure the same instrument.
+const COEFFICIENTS: [u64; K] = [2, 3, 5];
 /// The canonical coefficients at the WRONG coordinates.
 ///
 /// A permutation is the sharpest same-width recipe hostile available: it is a
 /// canonical composition (the graph encoder refuses a root sharing a factor
-/// with its denominator, so `[4, 6]` over `10` would be rejected as malformed
-/// rather than as wrong), it has the same width, and it disagrees at every
-/// coordinate.
-const PERMUTED_COEFFICIENTS: [u64; 2] = [7, 3];
-const SHARD_SUPPLIES: [u64; 2] = [40, 70];
-const SHARD_DECIMALS: [u8; 2] = [6, u8::MAX];
+/// with its denominator, so a vector like `[4, 6]` over `10` would be rejected
+/// as malformed rather than as wrong), it has the same width, and it disagrees
+/// at every coordinate.
+const PERMUTED_COEFFICIENTS: [u64; K] = [5, 2, 3];
+/// One Claims-owned custody Position's claim quantity, per coordinate.
+///
+/// This and [`ACTOR_CLAIMS`] are the campaign's only free balance parameters.
+/// Everything else -- shard supplies, Structured custody balances, the actor's
+/// shard balances -- is DERIVED, because `StructuredProjectionV2::validate`
+/// (`rational-representation-v2-kernel/src/lib.rs:419-452`) binds all three by
+/// identities the chain recomputes on every action:
+///
+/// | identity | helper |
+/// |---|---|
+/// | `shard_supply == denominator * native_locked` | [`shard_supply`] |
+/// | `structured_custody == receipt_supply * coefficient` | [`structured_shards`] |
+/// | `shard_supply == structured_custody + explicit_free` | [`actor_shards`] |
+///
+/// Writing any of them as a literal is how a basis change silently makes the
+/// whole campaign refuse: at the previous `K = 2` basis the literals happened
+/// to satisfy all three, and moving the width broke the second one four
+/// transactions deep with a bare `0x5008`.
+const CUSTODY_CLAIMS: [u64; K] = [4, 7, 8];
+/// The actor's own claim quantities, held at the winning coordinate only.
+const ACTOR_CLAIMS: [u64; K] = [0, 2, 0];
+const SHARD_DECIMALS: [u8; K] = [6, u8::MAX, 9];
 const RECEIPT_DECIMALS: u8 = 19;
-const ACTOR_SHARDS: [u64; 2] = [19, 21];
-const STRUCTURED_SHARDS: [u64; 2] = [21, 49];
 /// The cursor a freshly created Claims-role replay carries.
 ///
 /// This used to be an arbitrary warm value (8) against a replay the fixture
@@ -205,6 +245,111 @@ fn founding_custody_context() -> [u8; 32] {
         &FOUNDING_ACTION_CONTEXT_V1,
     ])
     .to_bytes()
+}
+
+/// The shard Mint supply of one coordinate.
+///
+/// Not a constant. It is `CUSTODY_CLAIMS[i] * DENOMINATOR` by definition —
+/// shards ARE claims divided by the denominator — and restating it as a literal
+/// is how a basis change quietly makes every conservation assertion vacuous.
+fn shard_supply(index: usize) -> u64 {
+    CUSTODY_CLAIMS
+        .get(index)
+        .copied()
+        .expect("custody claims")
+        .checked_mul(DENOMINATOR)
+        .expect("shard supply")
+}
+
+/// Structured custody's shard balance for one coordinate.
+///
+/// `structured_custody == receipt_supply * coefficient` is a projection
+/// invariant, not a fixture choice: every outstanding receipt atom is backed by
+/// exactly `c_i` shard atoms held in custody.
+fn structured_shards() -> [u64; K] {
+    std::array::from_fn(|index| {
+        RECEIPT_SUPPLY
+            .checked_mul(COEFFICIENTS.get(index).copied().expect("coefficient"))
+            .expect("structured custody backing")
+    })
+}
+
+/// The actor's shard balance for one coordinate: the explicit free remainder.
+fn actor_shards() -> [u64; K] {
+    std::array::from_fn(|index| {
+        shard_supply(index)
+            .checked_sub(
+                structured_shards()
+                    .get(index)
+                    .copied()
+                    .expect("structured custody"),
+            )
+            .expect("the shard supply must cover its own custody backing")
+    })
+}
+
+/// Per-outcome claim totals the `LiabilityBasisV2` aggregate carries.
+fn aggregate_claims() -> [u64; K] {
+    std::array::from_fn(|index| {
+        CUSTODY_CLAIMS
+            .get(index)
+            .copied()
+            .expect("custody claims")
+            .checked_add(ACTOR_CLAIMS.get(index).copied().expect("actor claims"))
+            .expect("aggregate claims")
+    })
+}
+
+/// The actor's shard balances after one `IssueStructured` of quantity one.
+///
+/// `K_i = S * c_i` (`plan.rs:263`): issuing one receipt atom moves exactly
+/// `c_i` shard atoms of coordinate `i` from the actor to Structured custody.
+fn actor_shards_after_issue() -> [u64; K] {
+    std::array::from_fn(|index| {
+        actor_shards()
+            .get(index)
+            .copied()
+            .expect("actor shards")
+            .checked_sub(COEFFICIENTS.get(index).copied().expect("coefficient"))
+            .expect("issue leaves the actor solvent")
+    })
+}
+
+/// Structured custody's shard balances after that same issue.
+fn structured_shards_after_issue() -> [u64; K] {
+    std::array::from_fn(|index| {
+        structured_shards()
+            .get(index)
+            .copied()
+            .expect("structured shards")
+            .checked_add(COEFFICIENTS.get(index).copied().expect("coefficient"))
+            .expect("structured shards")
+    })
+}
+
+/// The actor's shard balances after one `Denominate` of one whole claim.
+fn actor_shards_after_denominate() -> [u64; K] {
+    std::array::from_fn(|index| {
+        let balance = actor_shards().get(index).copied().expect("actor shards");
+        if index == usize::try_from(WINNER).expect("winner index") {
+            balance
+                .checked_add(DENOMINATOR)
+                .expect("denominated shards")
+        } else {
+            balance
+        }
+    })
+}
+
+/// One Claims custody owner's Position: claims at its own coordinate only.
+fn custody_claims(index: usize) -> [u64; K] {
+    std::array::from_fn(|slot| {
+        if slot == index {
+            CUSTODY_CLAIMS.get(index).copied().expect("custody claims")
+        } else {
+            0
+        }
+    })
 }
 
 struct Artifacts {
@@ -282,7 +427,7 @@ struct Fixture {
     representation_replay: Pubkey,
     receipt_mint: Pubkey,
     actor_receipt: Pubkey,
-    assets: [AssetFixture; 2],
+    assets: [AssetFixture; K],
     terminal_accounts: Option<TerminalFixture>,
 }
 
@@ -291,13 +436,13 @@ struct Snapshot {
     replay: Account,
     aggregate: Account,
     actor_position: Account,
-    positions: [Account; 2],
+    positions: [Account; K],
     receipt_mint: Account,
     actor_receipt: Account,
-    shard_mints: [Account; 2],
-    actor_shards: [Account; 2],
-    structured_shards: [Account; 2],
-    obsolete_structured_shards: [Account; 2],
+    shard_mints: [Account; K],
+    actor_shards: [Account; K],
+    structured_shards: [Account; K],
+    obsolete_structured_shards: [Account; K],
     custody_replay: Option<Account>,
     hoard: Option<Account>,
     recipient: Option<Account>,
@@ -750,8 +895,15 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
     ])
     .to_bytes();
 
-    let cuts: [i128; 0] = [];
-    let mut domain = vec![0_u8; result_domain_record_bytes(0).expect("domain width")];
+    // `ResultDomainV2::outcome_count()` is `cuts + 2`, and `join_product_v2`
+    // requires it to equal the portfolio's coefficient count. So the domain's
+    // cut count is `K - 2`, not zero: at the K = 2 basis this campaign used to
+    // run, an EMPTY cut list happened to be right, and the identity was
+    // invisible until the width moved.
+    let cuts: Vec<i128> = (0..K.checked_sub(2).expect("K >= 2"))
+        .map(|index| i128::try_from(index).expect("cut numerator"))
+        .collect();
+    let mut domain = vec![0_u8; result_domain_record_bytes(cuts.len()).expect("domain width")];
     compile_result_domain_v2(
         ResultDomainInputV2 {
             product_id,
@@ -768,7 +920,7 @@ fn add_product_claims(test: &mut ProgramTest) -> ProductClaimsFixture {
     .expect("domain");
     let (result_domain_record, result_domain_staging, domain_digest) =
         add_finalized_record(test, RESULT_DOMAIN_SCHEMA_ID_V2, &domain);
-    let mut portfolio = vec![0_u8; portfolio_record_bytes(2).expect("portfolio width")];
+    let mut portfolio = vec![0_u8; portfolio_record_bytes(K).expect("portfolio width")];
     compile_portfolio_v2(
         PortfolioInputV2 {
             product_id,
@@ -914,9 +1066,9 @@ fn request_bytes_from(
     recipient: Option<Pubkey>,
     representation_revision: u64,
     receipt_supply: u64,
-    actor_balances: [u64; 2],
-    structured_balances: [u64; 2],
-    assets: [AssetFixture; 2],
+    actor_balances: [u64; K],
+    structured_balances: [u64; K],
+    assets: [AssetFixture; K],
     selected_outcome: u32,
 ) -> Vec<u8> {
     let structured = matches!(
@@ -940,10 +1092,11 @@ fn request_bytes_from(
                 .expect("selected outcome asset"),
         )]
     } else {
-        vec![
-            (0, *assets.first().expect("first asset")),
-            (1, *assets.get(1).expect("second asset")),
-        ]
+        assets
+            .iter()
+            .enumerate()
+            .map(|(index, asset)| (u32::try_from(index).expect("outcome"), *asset))
+            .collect()
     };
     for (row, (outcome, asset)) in requested.into_iter().enumerate() {
         let index = usize::try_from(outcome).expect("outcome index");
@@ -953,10 +1106,7 @@ fn request_bytes_from(
             structured_custody_account: asset.structured_token.to_bytes(),
             claims_custody_owner: asset.custody_owner.to_bytes(),
             coefficient: *COEFFICIENTS.get(index).expect("coefficient"),
-            expected_shard_supply: SHARD_SUPPLIES
-                .get(index)
-                .copied()
-                .expect("shard supply")
+            expected_shard_supply: shard_supply(index)
                 .checked_add(
                     if action == RepresentationActionV2::Reconstitute && outcome == WINNER {
                         DENOMINATOR
@@ -1077,22 +1227,16 @@ fn request_bytes_for_selected(
             RECEIPT_SUPPLY
         },
         if issued {
-            [
-                ACTOR_SHARDS[0] - COEFFICIENTS[0],
-                ACTOR_SHARDS[1] - COEFFICIENTS[1],
-            ]
+            actor_shards_after_issue()
         } else if denominated {
-            [ACTOR_SHARDS[0], ACTOR_SHARDS[1] + DENOMINATOR]
+            actor_shards_after_denominate()
         } else {
-            ACTOR_SHARDS
+            actor_shards()
         },
         if issued {
-            [
-                STRUCTURED_SHARDS[0] + COEFFICIENTS[0],
-                STRUCTURED_SHARDS[1] + COEFFICIENTS[1],
-            ]
+            structured_shards_after_issue()
         } else {
-            STRUCTURED_SHARDS
+            structured_shards()
         },
         fixture.assets,
         selected_outcome,
@@ -1266,7 +1410,7 @@ fn terminal_candidate_digest(
             custody_context: founding_custody_context(),
             generation: GENERATION,
         },
-        &[3, 9],
+        &aggregate_claims(),
     )
     .expect("terminal aggregate prestate");
     let position_bytes = encode_liability_basis_position_v2(
@@ -1276,7 +1420,7 @@ fn terminal_candidate_digest(
             owner: selected.custody_owner.to_bytes(),
             basis_id: product.basis_id,
         },
-        &[0, 7],
+        &custody_claims(usize::try_from(WINNER).expect("winner index")),
     )
     .expect("terminal Position prestate");
     let neutral = SignedDeltaV3::new(DeltaDirectionV3::Neutral, 0).expect("neutral delta");
@@ -1493,7 +1637,10 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
     // The same-width exposure hostile: coordinate 0 weighs its Product
     // coordinate twice. Still a canonical record, still `K` rows, different
     // bytes.
-    let alternate_graph = structured_lowering::exposure_bytes(&basis, &[2, 1]);
+    let alternate_graph = structured_lowering::exposure_bytes(
+        &basis,
+        &std::array::from_fn::<u64, K, _>(|index| if index == 0 { 2 } else { 1 }),
+    );
     let (alternate_graph_raw, alternate_graph_staging, alternate_graph_digest) =
         add_finalized_record(
             &mut test,
@@ -1563,7 +1710,11 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
                 .expect("custody Position seeds");
         let position =
             Pubkey::find_program_address(&position_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
-        let actor_token = Pubkey::new_from_array(if index == 0 { [0x81; 32] } else { [0x82; 32] });
+        let actor_token = Pubkey::new_from_array(
+            [0x81_u8
+                .checked_add(u8::try_from(index).expect("outcome index"))
+                .expect("actor shard account tag"); 32],
+        );
         let structured_token = Pubkey::find_program_address(
             &[
                 RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
@@ -1608,8 +1759,8 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
         custody_context: founding_custody_context(),
         generation: GENERATION,
     };
-    let aggregate_data =
-        encode_liability_basis_market_v2(market_input, &[4, 9]).expect("LBV2 Claims aggregate");
+    let aggregate_data = encode_liability_basis_market_v2(market_input, &aggregate_claims())
+        .expect("LBV2 Claims aggregate");
     add_account(&mut test, aggregate, CLAIMS_PROGRAM_ID, aggregate_data);
     add_account(
         &mut test,
@@ -1622,12 +1773,12 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
                 owner: actor.pubkey().to_bytes(),
                 basis_id: product_claims.basis_id,
             },
-            &[0, 2],
+            &ACTOR_CLAIMS,
         )
         .expect("actor Position"),
     );
     for (index, asset) in assets.iter().enumerate() {
-        let claims = if index == 0 { [4, 0] } else { [0, 7] };
+        let claims = custody_claims(index);
         add_account(
             &mut test,
             asset.position,
@@ -1649,7 +1800,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             TOKEN_PROGRAM_ID,
             claim_mint_data(
                 representation_authority,
-                *SHARD_SUPPLIES.get(index).expect("shard supply"),
+                shard_supply(index),
                 *SHARD_DECIMALS.get(index).expect("shard decimals"),
             ),
         );
@@ -1660,7 +1811,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             token_account_data(
                 asset.mint,
                 actor.pubkey(),
-                *ACTOR_SHARDS.get(index).expect("actor shards"),
+                *actor_shards().get(index).expect("actor shards"),
             ),
         );
         add_account(
@@ -1670,7 +1821,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             token_account_data(
                 asset.mint,
                 representation_authority,
-                *STRUCTURED_SHARDS.get(index).expect("structured shards"),
+                *structured_shards().get(index).expect("structured shards"),
             ),
         );
         add_account(
@@ -1680,7 +1831,7 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             token_account_data(
                 asset.mint,
                 representation_authority,
-                *STRUCTURED_SHARDS
+                *structured_shards()
                     .get(index)
                     .expect("obsolete structured shards"),
             ),
@@ -1778,8 +1929,8 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture) {
             Some(recipient),
             0,
             RECEIPT_SUPPLY,
-            ACTOR_SHARDS,
-            STRUCTURED_SHARDS,
+            actor_shards(),
+            structured_shards(),
             fixture.assets,
             WINNER,
         );
@@ -2520,81 +2671,43 @@ async fn observed(context: &mut ProgramTestContext, key: Pubkey) -> Account {
         .expect("existing account")
 }
 
+/// Observe one coordinate-indexed account across every asset.
+///
+/// Written as a walk rather than an array literal so the width of the campaign
+/// basis is a constant, not a copy-paste count.
+async fn observed_per_asset(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    select: impl Fn(&AssetFixture) -> Pubkey,
+) -> [Account; K] {
+    let mut observations = Vec::with_capacity(K);
+    for asset in &fixture.assets {
+        observations.push(observed(context, select(asset)).await);
+    }
+    observations
+        .try_into()
+        .expect("one observation per representation coordinate")
+}
+
 async fn snapshot(context: &mut ProgramTestContext, fixture: &Fixture) -> Snapshot {
+    let positions = observed_per_asset(context, fixture, |asset| asset.position).await;
+    let shard_mints = observed_per_asset(context, fixture, |asset| asset.mint).await;
+    let actor_shards = observed_per_asset(context, fixture, |asset| asset.actor_token).await;
+    let structured_shards =
+        observed_per_asset(context, fixture, |asset| asset.structured_token).await;
+    let obsolete_structured_shards =
+        observed_per_asset(context, fixture, |asset| asset.obsolete_structured_ata).await;
     Snapshot {
         replay: observed(context, fixture.representation_replay).await,
         aggregate: observed(context, fixture.aggregate).await,
         actor_position: observed(context, fixture.actor_position).await,
-        positions: [
-            observed(
-                context,
-                fixture.assets.first().expect("first asset").position,
-            )
-            .await,
-            observed(
-                context,
-                fixture.assets.get(1).expect("second asset").position,
-            )
-            .await,
-        ],
+        positions,
         receipt_mint: observed(context, fixture.receipt_mint).await,
         actor_receipt: observed(context, fixture.actor_receipt).await,
-        shard_mints: [
-            observed(context, fixture.assets.first().expect("first asset").mint).await,
-            observed(context, fixture.assets.get(1).expect("second asset").mint).await,
-        ],
-        actor_shards: [
-            observed(
-                context,
-                fixture.assets.first().expect("first asset").actor_token,
-            )
-            .await,
-            observed(
-                context,
-                fixture.assets.get(1).expect("second asset").actor_token,
-            )
-            .await,
-        ],
-        structured_shards: [
-            observed(
-                context,
-                fixture
-                    .assets
-                    .first()
-                    .expect("first asset")
-                    .structured_token,
-            )
-            .await,
-            observed(
-                context,
-                fixture
-                    .assets
-                    .get(1)
-                    .expect("second asset")
-                    .structured_token,
-            )
-            .await,
-        ],
-        obsolete_structured_shards: [
-            observed(
-                context,
-                fixture
-                    .assets
-                    .first()
-                    .expect("first asset")
-                    .obsolete_structured_ata,
-            )
-            .await,
-            observed(
-                context,
-                fixture
-                    .assets
-                    .get(1)
-                    .expect("second asset")
-                    .obsolete_structured_ata,
-            )
-            .await,
-        ],
+        shard_mints,
+        actor_shards,
+        structured_shards,
+        obsolete_structured_shards,
         custody_replay: match fixture.terminal_accounts {
             Some(value) => Some(observed(context, value.custody_replay).await),
             None => None,
@@ -2692,7 +2805,10 @@ fn packet_measurements(
         no_alt > PACKET_LIMIT,
         "v0 without ALT must honestly overflow"
     );
-    assert!(live_alt <= PACKET_LIMIT, "live ALT packet overflow");
+    // The live-ALT form is NOT asserted here. At the campaign basis one of the
+    // two route shapes fits and the other does not, and which is which is a
+    // measurement this campaign exists to take -- see
+    // `the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`.
     (legacy, no_alt, live_alt)
 }
 
@@ -2748,7 +2864,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     );
     assert_eq!(
         issue.data.len(),
-        1 + REQUEST_HEADER_BYTES_V2 + 2 * ASSET_BYTES_V2
+        1 + REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2
     );
     let payer = context.payer.pubkey();
     let addresses = lookup_addresses(
@@ -2777,7 +2893,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         packet_measurements(payer, &issue, blockhash, table, &addresses);
     eprintln!(
         "Rational V2 structured packet preflight: request={}, claims-frame={}, outer-metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, ALT-CU={lookup_cu:?}",
-        REQUEST_HEADER_BYTES_V2 + 2 * ASSET_BYTES_V2,
+        REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2,
         RATIONAL_BASE_ACCOUNT_COUNT_V2
             + usize::try_from(OUTCOME_COUNT).expect("outcome width")
                 * RATIONAL_ASSET_ACCOUNT_COUNT_V2,
@@ -2820,10 +2936,17 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     )
     .await
     .expect("IssueStructured transaction");
+    if !issued.accepted {
+        eprintln!("IssueStructured refusal logs:\n{}", issued.logs.join("\n"));
+    }
     assert!(issued.accepted, "IssueStructured must commit");
+    // NOT `<= PACKET_LIMIT`. At the K = 3 campaign basis the full-width frame
+    // is over the cluster's packet limit and this campaign says so out loud;
+    // ProgramTest has no MTU, so the SEMANTICS below still execute against real
+    // ELFs while the wire measurement records what a cluster would refuse.
     assert!(
-        issued.wire_bytes <= PACKET_LIMIT,
-        "IssueStructured packet overflow"
+        issued.wire_bytes > PACKET_LIMIT,
+        "the K = 3 full-width frame is measured over the limit, not under it"
     );
     assert!(
         issued
@@ -2839,12 +2962,13 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     assert_eq!(replay_revision(&after_issue.replay), 1);
     assert_eq!(mint_supply(&after_issue.receipt_mint), RECEIPT_SUPPLY + 1);
     assert_eq!(token_amount(&after_issue.actor_receipt), 1);
-    for (index, (actor, structured)) in [(16_u64, 24_u64), (14, 56)].into_iter().enumerate() {
+    for (index, (actor, structured)) in actor_shards_after_issue()
+        .into_iter()
+        .zip(structured_shards_after_issue())
+        .enumerate()
+    {
         let supply = mint_supply(after_issue.shard_mints.get(index).expect("shard Mint"));
-        assert_eq!(
-            supply,
-            *SHARD_SUPPLIES.get(index).expect("expected shard supply")
-        );
+        assert_eq!(supply, shard_supply(index));
         assert_eq!(
             token_amount(after_issue.actor_shards.get(index).expect("actor shards")),
             actor
@@ -2878,9 +3002,9 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         );
     }
     assert!(unwrapped.accepted, "UnwrapStructured must commit");
-    assert!(
-        unwrapped.wire_bytes <= PACKET_LIMIT,
-        "UnwrapStructured packet overflow"
+    assert_eq!(
+        unwrapped.wire_bytes, issued.wire_bytes,
+        "Issue and Unwrap ride the identical frame"
     );
     let after_unwrap = snapshot(&mut context, &fixture).await;
     assert_eq!(replay_revision(&after_unwrap.replay), 2);
@@ -2925,13 +3049,22 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         lbv2_position_quantity(&after_denominate.actor_position.data, WINNER),
         1
     );
-    assert_eq!(lbv2_revision(&after_denominate.positions[1].data), 1);
+    assert_eq!(lbv2_revision(&after_denominate.positions[WINNERS].data), 1);
+    // Denominate moves one whole claim from the actor's Position to the winning
+    // coordinate's custody Position, and mints exactly `DENOMINATOR` shard atoms
+    // for it. All three numbers are that one claim, stated in three units.
     assert_eq!(
-        lbv2_position_quantity(&after_denominate.positions[1].data, WINNER),
-        8
+        lbv2_position_quantity(&after_denominate.positions[WINNERS].data, WINNER),
+        CUSTODY_CLAIMS[WINNERS] + 1
     );
-    assert_eq!(mint_supply(&after_denominate.shard_mints[1]), 80);
-    assert_eq!(token_amount(&after_denominate.actor_shards[1]), 31);
+    assert_eq!(
+        mint_supply(&after_denominate.shard_mints[WINNERS]),
+        shard_supply(WINNERS) + DENOMINATOR
+    );
+    assert_eq!(
+        token_amount(&after_denominate.actor_shards[WINNERS]),
+        actor_shards()[WINNERS] + DENOMINATOR
+    );
 
     let reconstituted = submit_v0(
         &mut context,
@@ -2958,10 +3091,13 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         lbv2_position_quantity(&after_reconstitute.actor_position.data, WINNER),
         2
     );
-    assert_eq!(lbv2_revision(&after_reconstitute.positions[1].data), 2);
     assert_eq!(
-        lbv2_position_quantity(&after_reconstitute.positions[1].data, WINNER),
-        7
+        lbv2_revision(&after_reconstitute.positions[WINNERS].data),
+        2
+    );
+    assert_eq!(
+        lbv2_position_quantity(&after_reconstitute.positions[WINNERS].data, WINNER),
+        CUSTODY_CLAIMS[WINNERS]
     );
     for (actual, expected) in after_reconstitute
         .shard_mints
@@ -2979,7 +3115,7 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
     }
     eprintln!(
         "Rational V2 open: request={}, claims-frame={}, outer-metas={}, unique={}, legacy={}, v0-no-ALT={}, v0-live-ALT={}, issue-v0={}, issue-CU={}, unwrap-v0={}, unwrap-CU={}, denominate-v0={}, denominate-CU={}, reconstitute-v0={}, reconstitute-CU={}, ALT-CU={lookup_cu:?}",
-        REQUEST_HEADER_BYTES_V2 + 2 * ASSET_BYTES_V2,
+        REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2,
         RATIONAL_BASE_ACCOUNT_COUNT_V2
             + usize::try_from(OUTCOME_COUNT).expect("outcome width")
                 * RATIONAL_ASSET_ACCOUNT_COUNT_V2,
@@ -2996,6 +3132,107 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         denominated.compute_units,
         reconstituted.wire_bytes,
         reconstituted.compute_units,
+    );
+}
+
+/// One representation coordinate's cost on the wire.
+///
+/// `ASSET_BYTES_V2` of request tail, plus two bytes per materialized account:
+/// one index in the instruction's account-index array and one index in the v0
+/// message's lookup list. Nothing compresses either.
+const PER_COORDINATE_WIRE_BYTES: usize = ASSET_BYTES_V2 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2;
+
+/// THE PACKET WALL, measured on the executing route, and it is not §3b's wall.
+///
+/// Decision 0011 §3b measured the executable ceiling at `K = 3` and called it
+/// hard. That bound is the **RequestProfile artifact**: `29 + 8K` operations at
+/// 24 bytes against `REQUEST_PROFILE_MAX_BYTES_V1 = 1312`, so `K = 3` fits with
+/// 8 bytes to spare and `K = 4` is refused at 1,496. It is real, it is not the
+/// binding one, and nothing in the tree had measured the other one, because
+/// this route had never been submitted at `K = 3`.
+///
+/// A transaction carrying `IssueStructured` or `UnwrapStructured` at `K = 3` is
+/// **1,357 bytes** as a v0 message against a live Address Lookup Table, against
+/// a 1,232-byte cluster packet limit. The ALT is already applied — it is what
+/// takes the same frame from 2,594 down to 1,357 — so there is no second
+/// compression left to reach for.
+///
+/// The selected-outcome actions are untouched: `Denominate`, `Reconstitute` and
+/// `RedeemTerminal` carry `asset_count == 1` at every `K`
+/// (`request.rs:470-481`), so their request is `488 + 160` at any width and
+/// their frame fits. **So a `K = 3` Product can be denominated, reconstituted
+/// and redeemed on a cluster, and can never be issued or unwrapped there.**
+///
+/// The ceiling is DERIVED here rather than asserted, from two measurements of
+/// the same fixture and one constant, so the number moves when the frame does.
+#[test]
+fn the_full_width_structured_frame_does_not_fit_a_packet_at_k_three() {
+    let (_test, fixture) = fixture(false);
+    let payer = Pubkey::new_from_array([0x90; 32]);
+    let table = Pubkey::new_from_array([0x91; 32]);
+    let full_width = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        None,
+        None,
+    );
+    let selected = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::Denominate,
+        2,
+        false,
+        None,
+        None,
+    );
+    let addresses = lookup_addresses(
+        payer,
+        fixture.actor.pubkey(),
+        &[full_width.clone(), selected.clone()],
+    );
+    let blockhash = Hash::default();
+    let full_bytes =
+        live_lookup_v0_wire_bytes(payer, full_width.clone(), blockhash, table, &addresses);
+    let selected_bytes =
+        live_lookup_v0_wire_bytes(payer, selected.clone(), blockhash, table, &addresses);
+
+    // The published width, restated by the encoder rather than by §3b's prose.
+    assert_eq!(
+        full_width.data.len(),
+        1 + REQUEST_HEADER_BYTES_V2 + K * ASSET_BYTES_V2
+    );
+    assert_eq!(
+        selected.data.len(),
+        1 + REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2
+    );
+    // One coordinate costs exactly what the constant says it costs.
+    assert_eq!(
+        full_bytes - selected_bytes,
+        (K - 1) * PER_COORDINATE_WIRE_BYTES,
+        "a coordinate's wire cost must be its asset row plus its four account indexes"
+    );
+    assert!(
+        selected_bytes <= PACKET_LIMIT,
+        "the selected-outcome frame fits at every K: {selected_bytes} bytes"
+    );
+    assert!(
+        full_bytes > PACKET_LIMIT,
+        "the K = {K} full-width frame is measured over the packet limit"
+    );
+    // The largest full-width K a cluster could actually carry.
+    let executable_full_width_k = 1 + (PACKET_LIMIT - selected_bytes) / PER_COORDINATE_WIRE_BYTES;
+    assert_eq!(
+        executable_full_width_k, 2,
+        "the packet caps IssueStructured/UnwrapStructured one coordinate BELOW \
+         the RequestProfile ceiling decision 0011 §3b called hard"
+    );
+    eprintln!(
+        "Rational V2 K={K} packet wall: full-width-v0-live-ALT={full_bytes}, \
+selected-v0-live-ALT={selected_bytes}, limit={PACKET_LIMIT}, over-by={}, \
+per-coordinate={PER_COORDINATE_WIRE_BYTES}, executable-full-width-K={executable_full_width_k}, \
+request-profile-ceiling-K=3",
+        full_bytes - PACKET_LIMIT,
     );
 }
 
@@ -3185,36 +3422,54 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         0
     );
     assert_eq!(
-        lbv2_revision(&after.positions.get(1).expect("second Position").data),
+        lbv2_revision(&after.positions.get(WINNERS).expect("winner Position").data),
         1
     );
+    // The redemption burns one whole claim's worth of raw shards from the actor
+    // and pays one collateral atom. Structured custody is untouched: the receipts
+    // it backs are still outstanding.
     assert_eq!(
         lbv2_position_quantity(
-            &after.positions.get(1).expect("second Position").data,
+            &after.positions.get(WINNERS).expect("winner Position").data,
             WINNER,
         ),
-        6
+        CUSTODY_CLAIMS[WINNERS] - 1
     );
     assert_eq!(
-        mint_supply(after.shard_mints.get(1).expect("winner Mint")),
-        60
+        mint_supply(after.shard_mints.get(WINNERS).expect("winner Mint")),
+        shard_supply(WINNERS) - DENOMINATOR
     );
     assert_eq!(
-        token_amount(after.actor_shards.get(1).expect("winner actor shards")),
-        11
+        token_amount(
+            after
+                .actor_shards
+                .get(WINNERS)
+                .expect("winner actor shards")
+        ),
+        actor_shards()[WINNERS] - DENOMINATOR
     );
     assert_eq!(
         token_amount(
             after
                 .structured_shards
-                .get(1)
+                .get(WINNERS)
                 .expect("winner structured shards"),
         ),
-        49
+        structured_shards()[WINNERS]
     );
     assert_eq!(
-        11 + 49,
-        mint_supply(after.shard_mints.get(1).expect("winner Mint"))
+        token_amount(
+            after
+                .actor_shards
+                .get(WINNERS)
+                .expect("winner actor shards")
+        ) + token_amount(
+            after
+                .structured_shards
+                .get(WINNERS)
+                .expect("winner structured shards")
+        ),
+        mint_supply(after.shard_mints.get(WINNERS).expect("winner Mint"))
     );
     assert_eq!(mint_supply(&after.receipt_mint), RECEIPT_SUPPLY);
     let custody_replay = after.custody_replay.as_ref().expect("Custody replay");
@@ -3329,19 +3584,36 @@ async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
     assert_eq!(replay_revision(&after.replay), 1);
     assert_eq!(lbv2_revision(&after.aggregate.data), 1);
     assert_eq!(lbv2_revision(&after.positions[0].data), 1);
-    assert_eq!(lbv2_position_quantity(&after.positions[0].data, 0), 3);
-    assert_account_content_eq(&after.positions[1], &before.positions[1]);
+    assert_eq!(
+        lbv2_position_quantity(&after.positions[0].data, 0),
+        CUSTODY_CLAIMS[0] - 1
+    );
+    for index in 1..K {
+        for (actual, expected) in [
+            (after.positions.get(index), before.positions.get(index)),
+            (after.shard_mints.get(index), before.shard_mints.get(index)),
+            (
+                after.actor_shards.get(index),
+                before.actor_shards.get(index),
+            ),
+        ] {
+            assert_account_content_eq(
+                actual.expect("observed coordinate"),
+                expected.expect("prestate coordinate"),
+            );
+        }
+    }
     assert_eq!(
         mint_supply(&after.shard_mints[0]),
-        SHARD_SUPPLIES[0] - DENOMINATOR
+        shard_supply(0) - DENOMINATOR
     );
     assert_eq!(
         token_amount(&after.actor_shards[0]),
-        ACTOR_SHARDS[0] - DENOMINATOR
+        actor_shards()[0] - DENOMINATOR
     );
     assert_eq!(
         token_amount(&after.structured_shards[0]),
-        STRUCTURED_SHARDS[0]
+        structured_shards()[0]
     );
     assert_eq!(
         token_amount(&after.actor_shards[0]) + token_amount(&after.structured_shards[0]),
