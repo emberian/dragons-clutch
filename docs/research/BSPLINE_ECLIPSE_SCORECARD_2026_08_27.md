@@ -151,6 +151,42 @@ this slice. What a layout change would then have to carry:
   ten `u128` multiply/divide pairs, plus `K` divisions for the apportionment.
   Unmeasured.
 
+## Provenance of the generation-one column
+
+Two integrity events are already on this project's record, both about tables
+that were asserted rather than checked. Every generation-one claim in the table
+above was therefore re-read from the actual blob in `dragons-clutch` history,
+not recalled and not taken from a summary:
+
+| Claim | Source, verified |
+| --- | --- |
+| `RationalBasis` is `Nat` numerators over one positive common denominator, unreduced | `lean/DragonsClutch/BSpline.lean`, blob `1bd69c4` — *"No reduction or coprimality is required"* |
+| Degrees 0–3; `refineOne/Two/Three` are Piegl–Tiller `BasisFuns` column steps | same blob, module header |
+| Rounding is deterministic largest remainder, ties to the lower index | same blob, `WEIGHT-ROUND-01`, `quantizeLargest`, `remainderOrder` |
+| The knot-linkage theorem covers uniform grids only | same blob: *"closes that obligation for every positive uniform grid and degree one through three"* |
+| 16 claims, degree ≤ 3, `EdgePolicy::{Clamp, Refuse}`, `UniformSpacingRequired` at degree ≥ 2 | `crates/clutch-bspline/src/lib.rs`, blob `3e37a37` |
+| Interior multiplicity structurally forbidden | same blob: `if knot <= previous { return Err(Error::InvalidKnot) }` |
+| Degree-2 interior ceiling `3/4`, degree-3 interior ceiling `2/3`, gate off at degree ≤ 1 | `lean/DragonsClutch/MomentCone.lean`, blob `f9a4540`, all `decide`-checked |
+| The multi-span false acceptance | `docs/research/DUAL_IS_THE_MEASURE.md`, blob `ce9a991`, §7.6.7 — quoted verbatim above |
+| *"the biggest capability regression the design accepts, and the reason deg ≤ 1 is the recommended first wave"* | `docs/implementation/DISTRIBUTIONAL_CLAIMS_DESIGN.md`, commit `eacf95fa` |
+
+One further fact from that reading belongs here, because it is the closest
+thing to a tie in this comparison. Generation one's own `BSpline.lean` header
+says:
+
+> The connection from a stored knot vector to those positive distance records
+> is an integration theorem **still owed** by the executable evaluator. This
+> file does not pretend that a caller-supplied valid `Split` proves the knot
+> indexing.
+
+This lane has the same obligation and discharges it differently: rather than
+owing a theorem that the located span yields positive de Boor denominators,
+`SplineProfile.admits` **decides** it, and it is a premise of every theorem
+rather than an assumption. That is not strictly stronger — a proof would cover
+every profile at once where a check covers one evaluation — but it is the
+difference between an owed theorem and a refusal, and a refusal cannot be
+forgotten.
+
 ## The verdict, stated plainly
 
 On the **claim plane** — the basis itself — the successor is now ahead of
