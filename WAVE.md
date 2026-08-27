@@ -713,3 +713,12 @@ Stretch (gated on lanes landing first): General batch auction with real
 order flow; continuation trading at chosen-green seeds.
 Triggers: DECOMP-r compiling HEAD + DEMO-VERT-r yield. Authorization:
 ember's explicit go.
+
+- DOCTRINE (STRUCT-PHYS-r's generalized correction): NO effect operation
+  moves a token — effects write lamports/scalars/identities/child-requests
+  only; token work happens exclusively through FixedRole children (closed at
+  four; only Claims touches Mints). Any design assuming effect-program token
+  work is wrong — Fractional's twin inherits this.
+- RULED: Structured adopts the Rational child ABI (0011 §3a Option A — the
+  ABI already names the Structured operations; zero new program code; the
+  binding requirement rides it). STRUCT-CHILD dispatched.
