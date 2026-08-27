@@ -258,6 +258,58 @@ them, on the same rule: measure first, across enough runs to know the band, and
 then pin. The transcript records the per-stage totals so that measurement exists
 before anybody writes a number down.
 
+## What the whole life costs, measured
+
+Run `20260827T172103Z-606c042e8416-h4`, N=4, one real validator, real ELFs: 161
+transactions, 17,293,041 CU, zero unexpected refusals, and the Market ends
+`Retiring` carrying a terminal receipt.
+
+| stage | tx | CU |
+|---|---|---|
+| founding through Open | 116 | 8,608,838 |
+| distribution + ring | 8 | 14,632 |
+| resolution funding | 10 | 4,514,578 |
+| resolution: Pyth transport to Terminal | 19 | 2,719,033 |
+| retirement: begin retiring + close the Source subtree | 6 | 1,273,097 |
+| rent recovery | 2 | 7,134 |
+
+The routes nobody had executed on a chain before:
+
+| route | CU |
+|---|---|
+| an Open Market creates its own Resolution Fund | 1,193,660 |
+| VerifyFundReady activates three ledgers | 1,181,368 |
+| the real router verifies the 13-of-19 signed VAA | 335,276 |
+| Resolution submits one update through the real receiver ELF | 1,054,022 |
+| Core admits the terminal state | 1,281,705 |
+| a resolved Market begins retiring | 62,425 |
+| Resolution closes the Source subtree | 1,210,372 |
+
+Reproducibility across the two runs that reached these: CreateFund 1,202,639 →
+1,193,660, VerifyFundReady 1,181,347 → 1,181,368 (21 apart), the submit leg
+1,054,017 → 1,054,022 (5 apart) — inside the ~1% bump-search band this tier
+documents above. Four of them sit at 84–92% of the 1,400,000 ceiling on routes
+that have no CU budget row.
+
+### The ledger's own bug, and how it was verified without a re-run
+
+That run reported three L7 violations, and all three were L7's fault. It summed
+watched accounts per LABEL, and four addresses carry more than one of the
+founding's evidence keys: the Market's rent beneficiary IS the founding's
+lifecycle credit, the fee payer is also a credit's refund wallet, `found31_market`
+IS `market`, and the normal and projected Custody replays are one account because
+the projection is realized in place. Every change to those four counted twice.
+
+It stayed invisible until a stage CLOSED accounts and REFUNDED rent through them
+— the first time this campaign ever did either — and then the residuals were the
+doubled amounts exactly.
+
+The fix sums by address. It was verified by recomputing both the old and the new
+arithmetic from the transcript's own recorded per-account addresses and lamports:
+**the new residual is zero at every boundary.** That is the argument for a
+transcript that records what it SAW and not only what it concluded — it can
+answer a question asked after the chain is gone.
+
 ## Three findings the chain made that a fixture could not
 
 All three cost a full campaign each to discover, and all three are the same
