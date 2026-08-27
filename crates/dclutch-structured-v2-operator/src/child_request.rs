@@ -230,8 +230,32 @@ pub struct StructuredChildDescriptorV2 {
     /// custody accounts, the Claims custody owners and the replay record are
     /// all keyed by it.  Structured's own `terms_id` names no account.
     pub descriptor_id: [u8; 32],
-    /// Finalized composition exposure bundle the descriptor selects.
-    pub graph_id: [u8; 32],
+    /// Finalized composition EXPOSURE bundle the descriptor selects.
+    ///
+    /// **The Rational wire calls this field `graph_id`, and it is not the
+    /// source graph.**  `RepresentationDescriptorV2::graph_id()` is the value
+    /// the Claims adapter hands to `CompositionExposureBundleV3::decode` as
+    /// `RecordAdmissionV3::selected_id` under
+    /// `COMPOSITION_EXPOSURE_SCHEMA_ID_V3`
+    /// (`rational-representation-v2-operator/src/lib.rs:558-576`), and
+    /// `RepresentationDescriptorV2::authenticate_exposure` then requires it to
+    /// equal `exposure.bundle_id()`
+    /// (`rational-representation-v2-kernel/src/lib.rs:902`).  The descriptor's
+    /// own ENCODER already names it correctly:
+    /// `RepresentationDescriptorInputV3::exposure_id`.
+    ///
+    /// So it joins `StructuredTermsV2::shard_exposure`, never
+    /// `StructuredTermsV2::graph_id` -- the terms carry BOTH, and their decoder
+    /// proves they differ (`require_distinct_identities` lists both in the
+    /// pairwise-distinct set), exactly as the shard layer carries both
+    /// `FractionalExposureTermsV2::exposure_id` and `::graph_id`.  It is named
+    /// `exposure_id` here because the shared name is what made the first
+    /// version of this join compare the wrong record.
+    ///
+    /// The source graph identity reaches the descriptor transitively -- the
+    /// exposure bundle names it, and the chain re-checks it -- so it is joined
+    /// where the exposure record is read, not here.
+    pub exposure_id: [u8; 32],
     /// Claims-owned authority: `(RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
     /// descriptor_id)`.
     ///
@@ -267,13 +291,19 @@ pub struct StructuredChildDescriptorV2 {
 /// Both directions are covered by the same equality, and both are tested: a
 /// Rational-context descriptor driving Structured terms refuses, and Structured
 /// terms driving another representation's descriptor refuses.
+///
+/// The record-identity join is
+/// [`StructuredChildDescriptorV2::exposure_id`] against
+/// [`StructuredTermsV2::shard_exposure`]; see that field's documentation for
+/// why the Rational wire's own name for it is misleading and what the chain
+/// actually does with the value.
 pub fn bind_structured_child_descriptor_v2(
     terms: StructuredTermsV2<'_>,
     descriptor: StructuredChildDescriptorV2,
 ) -> Result<()> {
     for identity in [
         descriptor.descriptor_id,
-        descriptor.graph_id,
+        descriptor.exposure_id,
         descriptor.representation_authority,
         descriptor.receipt_mint,
         descriptor.market,
@@ -288,10 +318,17 @@ pub fn bind_structured_child_descriptor_v2(
         || descriptor.release_set != terms.release_set()
         || descriptor.token_program != terms.token_program()
         || descriptor.receipt_mint != terms.receipt_mint()
-        || descriptor.graph_id != terms.graph_id()
+        || descriptor.exposure_id != terms.shard_exposure()
         || descriptor.outcome_count != terms.representation_width()
         || descriptor.denominator != terms.denominator()
     {
+        return Err(Error::ChildIdentity);
+    }
+    // The two identities are different records and the terms decoder proves it,
+    // so a descriptor whose exposure slot carries the SOURCE GRAPH identity is
+    // the exact mistake this join exists to catch rather than an equal value
+    // reached another way.
+    if descriptor.exposure_id == terms.graph_id() {
         return Err(Error::ChildIdentity);
     }
     // The Structured root is not the receipt Mint authority any more, so the
@@ -448,7 +485,11 @@ pub fn encode_structured_child_representation_v2(
         caller_role: CallerRoleV2::Trading,
         release_set: descriptor.release_set,
         market: descriptor.market,
-        graph_id: descriptor.graph_id,
+        // The wire's `graph_id` field carries the composition EXPOSURE bundle
+        // identity; the callee compares it to `descriptor.graph_id()`, which is
+        // the same record. The translation is stated here because it is the one
+        // place the two names meet.
+        graph_id: descriptor.exposure_id,
         descriptor_id: descriptor.descriptor_id,
         parent_context: actor.parent_context,
         actor: actor.actor,

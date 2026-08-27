@@ -55,7 +55,7 @@ const RECEIPT_MINT: u8 = 0x1c;
 /// `RepresentationRequestV2::validate`). Anything crossing this wire has to
 /// name a Token program that actually exists, and `bind_shard_terms` requires
 /// the two layers to agree on it, so both builders are paired here.
-fn shard_terms_bytes(market: [u8; 32], graph_id: [u8; 32]) -> Vec<u8> {
+fn shard_terms_bytes(market: [u8; 32], graph_id: [u8; 32], exposure_id: [u8; 32]) -> Vec<u8> {
     let mints = shard_mints(WIDTH);
     let size = fractional_exposure_terms_bytes_v2(WIDTH).expect("shard terms width");
     let mut scratch = vec![0_u8; size];
@@ -68,7 +68,7 @@ fn shard_terms_bytes(market: [u8; 32], graph_id: [u8; 32]) -> Vec<u8> {
             release_set: identity(RELEASE_SET),
             token_program: TOKEN_2022_PROGRAM_ID,
             token_behavior: identity(0x16),
-            exposure_id: identity(SHARD_EXPOSURE),
+            exposure_id,
             product_basis: identity(0x19),
             representation_basis: identity(0x1a),
             graph_id,
@@ -84,7 +84,16 @@ fn shard_terms_bytes(market: [u8; 32], graph_id: [u8; 32]) -> Vec<u8> {
 }
 
 /// Structured terms over the paired shard layer.
-fn terms_bytes(market: [u8; 32], graph_id: [u8; 32], receipt_mint: [u8; 32]) -> Vec<u8> {
+///
+/// `graph_id` and `shard_exposure` are BOTH parameters because they are two
+/// different records, and the descriptor join reads the second one.  A fixture
+/// that varied only `graph_id` could not exercise the join at all.
+fn terms_bytes(
+    market: [u8; 32],
+    graph_id: [u8; 32],
+    exposure_id: [u8; 32],
+    receipt_mint: [u8; 32],
+) -> Vec<u8> {
     let size = structured_terms_bytes_v2(WIDTH).expect("terms width");
     let mut scratch = vec![0_u8; size];
     let mut output = vec![0_u8; size];
@@ -96,8 +105,8 @@ fn terms_bytes(market: [u8; 32], graph_id: [u8; 32], receipt_mint: [u8; 32]) -> 
             release_set: identity(RELEASE_SET),
             token_program: TOKEN_2022_PROGRAM_ID,
             token_behavior: identity(0x17),
-            shard_terms: digest(&shard_terms_bytes(market, graph_id)),
-            shard_exposure: identity(SHARD_EXPOSURE),
+            shard_terms: digest(&shard_terms_bytes(market, graph_id, exposure_id)),
+            shard_exposure: exposure_id,
             receipt_mint,
             graph_id,
             denominator: DENOMINATOR,
@@ -111,11 +120,20 @@ fn terms_bytes(market: [u8; 32], graph_id: [u8; 32], receipt_mint: [u8; 32]) -> 
 }
 
 fn canonical_terms_bytes() -> Vec<u8> {
-    terms_bytes(identity(MARKET), identity(GRAPH_ID), identity(RECEIPT_MINT))
+    terms_bytes(
+        identity(MARKET),
+        identity(GRAPH_ID),
+        identity(SHARD_EXPOSURE),
+        identity(RECEIPT_MINT),
+    )
 }
 
 fn canonical_shard_bytes() -> Vec<u8> {
-    shard_terms_bytes(identity(MARKET), identity(GRAPH_ID))
+    shard_terms_bytes(
+        identity(MARKET),
+        identity(GRAPH_ID),
+        identity(SHARD_EXPOSURE),
+    )
 }
 
 fn decode_terms<'a>(bytes: &'a [u8], shard_bytes: &'a [u8]) -> StructuredTermsV2<'a> {
@@ -126,7 +144,9 @@ fn decode_terms<'a>(bytes: &'a [u8], shard_bytes: &'a [u8]) -> StructuredTermsV2
 fn descriptor() -> StructuredChildDescriptorV2 {
     StructuredChildDescriptorV2 {
         descriptor_id: identity(0x50),
-        graph_id: identity(GRAPH_ID),
+        // The composition EXPOSURE bundle, which is what the Rational wire's
+        // `graph_id` field holds -- NOT `identity(GRAPH_ID)`, the source graph.
+        exposure_id: identity(SHARD_EXPOSURE),
         representation_authority: identity(0x51),
         receipt_mint: identity(RECEIPT_MINT),
         market: identity(MARKET),
@@ -527,7 +547,16 @@ fn a_rational_context_descriptor_refuses_to_drive_structured_terms() {
             ..descriptor()
         },
         StructuredChildDescriptorV2 {
-            graph_id: identity(0x99),
+            exposure_id: identity(0x99),
+            ..descriptor()
+        },
+        // THE NEAR MISS, and the one this join was originally written the wrong
+        // way round for: the SOURCE GRAPH identity in the exposure slot. Both
+        // values are carried by these very terms, and the terms decoder proves
+        // they differ, so this is a coherent-looking descriptor that names the
+        // wrong record.
+        StructuredChildDescriptorV2 {
+            exposure_id: identity(GRAPH_ID),
             ..descriptor()
         },
         StructuredChildDescriptorV2 {
@@ -575,13 +604,25 @@ fn structured_terms_refuse_to_drive_another_representations_descriptor() {
     // Each hostile root is internally COHERENT -- its own shard layer agrees
     // with it -- so the refusal below is the descriptor join failing, not a
     // fixture that never decoded.
-    for (market, graph_id, receipt_mint) in [
-        (identity(0x98), identity(GRAPH_ID), identity(RECEIPT_MINT)),
+    //
+    // The SOURCE GRAPH is deliberately absent from this list and that is not an
+    // omission: the Rational descriptor has no source-graph field. It names the
+    // exposure bundle, and the exposure bundle names the graph, so a Structured
+    // root over a different graph is refused where the exposure RECORD is read
+    // -- `derive_structured_representation_descriptor_v2` in `descriptor.rs`,
+    // which has its own witness for it. This join sees only what the descriptor
+    // carries, and claiming otherwise is how it came to compare the wrong field.
+    for (market, exposure_id, receipt_mint) in [
+        (
+            identity(0x98),
+            identity(SHARD_EXPOSURE),
+            identity(RECEIPT_MINT),
+        ),
         (identity(MARKET), identity(0x97), identity(RECEIPT_MINT)),
-        (identity(MARKET), identity(GRAPH_ID), identity(0x96)),
+        (identity(MARKET), identity(SHARD_EXPOSURE), identity(0x96)),
     ] {
-        let hostile_bytes = terms_bytes(market, graph_id, receipt_mint);
-        let hostile_shard = shard_terms_bytes(market, graph_id);
+        let hostile_bytes = terms_bytes(market, identity(GRAPH_ID), exposure_id, receipt_mint);
+        let hostile_shard = shard_terms_bytes(market, identity(GRAPH_ID), exposure_id);
         let terms = decode_terms(&hostile_bytes, &hostile_shard);
         assert_eq!(
             bind_structured_child_descriptor_v2(terms, canonical),
