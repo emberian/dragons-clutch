@@ -183,29 +183,6 @@ impl<'a> ProgramV3<'a> {
         self.bytes
     }
 
-    /// Whether any transition instruction writes any of `targets`.
-    ///
-    /// `writes_register` answers one target with a full linear scan of the
-    /// program, so a static ownership predicate over `n` register targets
-    /// decodes every instruction `n` times. This decodes each instruction once
-    /// and tests it against the whole target set, and its answer is exactly
-    /// `targets.iter().any(|target| self.writes_register(*target))` — including
-    /// the refusal an unknown opcode raises, which is still reached on the
-    /// first instruction that carries it.
-    pub fn writes_any_register(self, targets: &[RegisterWriteTargetV3]) -> Result<bool> {
-        let mut index = 0_usize;
-        let count = self.operation_count()?;
-        while index < count {
-            if let Some(written) = self.instruction(index)?.write_target()?
-                && targets.contains(&written)
-            {
-                return Ok(true);
-            }
-            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
-        }
-        Ok(false)
-    }
-
     /// Whether any transition instruction writes `target`.
     pub fn writes_register(self, target: RegisterWriteTargetV3) -> Result<bool> {
         let mut index = 0_usize;
@@ -1190,62 +1167,6 @@ mod tests {
             );
         }
         output
-    }
-
-    /// `writes_any_register` must accept exactly the target sets whose members
-    /// `writes_register` accepts, whichever position the matching member holds.
-    #[test]
-    fn batch_write_query_agrees_with_the_single_target_query() {
-        let bytes = program();
-        let decoded = ProgramV3::decode(&bytes).expect("V3 program");
-        let universe = [
-            RegisterWriteTargetV3 {
-                kind: RegisterKindV3::Scalar,
-                space: RegisterSpaceV3::Item,
-                index: 0,
-            },
-            RegisterWriteTargetV3 {
-                kind: RegisterKindV3::Scalar,
-                space: RegisterSpaceV3::Common,
-                index: 1,
-            },
-            RegisterWriteTargetV3 {
-                kind: RegisterKindV3::Scalar,
-                space: RegisterSpaceV3::Common,
-                index: 0,
-            },
-            RegisterWriteTargetV3 {
-                kind: RegisterKindV3::Identity,
-                space: RegisterSpaceV3::Common,
-                index: 0,
-            },
-        ];
-        // The program writes exactly one register - the common scalar 0, from
-        // both `load_const` and `checked_add_into` - and it sits third, so the
-        // windows below cover a hit at the head, in the middle, at the tail,
-        // and no hit at all. The truth vector is stated, not derived from the
-        // predicate under test.
-        assert_eq!(
-            universe
-                .iter()
-                .map(|target| decoded.writes_register(*target).expect("single"))
-                .collect::<Vec<_>>(),
-            vec![false, false, true, false]
-        );
-        for length in 0..=universe.len() {
-            for start in 0..=universe.len() - length {
-                let window = universe.get(start..start + length).expect("window");
-                let expected = window
-                    .iter()
-                    .any(|target| decoded.writes_register(*target).expect("single"));
-                assert_eq!(
-                    decoded.writes_any_register(window).expect("batch"),
-                    expected,
-                    "window {start}..{}",
-                    start + length
-                );
-            }
-        }
     }
 
     #[test]

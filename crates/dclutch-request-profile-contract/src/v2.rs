@@ -297,14 +297,6 @@ impl<'a> RequestProfileV2<'a> {
     }
 
     /// Whether the embedded V1 projector writes `target`.
-    /// Whether the embedded V1 projector writes any of `targets`.
-    pub fn writes_any_register(self, targets: &[ProjectionTargetV1]) -> Result<bool> {
-        self.request
-            .writes_any_register(targets)
-            .map_err(|_| Error::InvalidEmbeddedProfile)
-    }
-
-    /// Whether the embedded V1 projector writes `target`.
     pub fn writes_register(self, target: ProjectionTargetV1) -> Result<bool> {
         self.request
             .writes_register(target)

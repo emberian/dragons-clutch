@@ -348,29 +348,6 @@ impl<'a> RequestProfileV4<'a> {
         self.bytes
     }
 
-    /// Whether the embedded prefix or repeated row program writes any of
-    /// `targets`.
-    ///
-    /// The embedded prefix is walked once for the whole target set; the row
-    /// program's answer is arithmetic in the target index, so it stays
-    /// per-target. Equal to
-    /// `targets.iter().any(|target| self.writes_register(*target))`.
-    pub fn writes_any_register(self, targets: &[ProjectionTargetV1]) -> Result<bool> {
-        if self
-            .embedded
-            .writes_any_register(targets)
-            .map_err(|_| Error::InvalidEmbeddedProfile)?
-        {
-            return Ok(true);
-        }
-        for target in targets {
-            if self.writes_row_register(*target)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     /// Whether the embedded prefix or repeated row program writes `target`.
     ///
     /// V4 row-local registers are flattened into the common bank after the
@@ -383,11 +360,6 @@ impl<'a> RequestProfileV4<'a> {
         {
             return Ok(true);
         }
-        self.writes_row_register(target)
-    }
-
-    /// Whether the repeated row program writes `target`.
-    fn writes_row_register(self, target: ProjectionTargetV1) -> Result<bool> {
         if target.space != ProjectionRegisterSpaceV1::Common {
             return Ok(false);
         }
