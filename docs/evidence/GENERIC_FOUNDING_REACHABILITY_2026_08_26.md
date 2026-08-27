@@ -1411,3 +1411,131 @@ diagnostics**, both from an isolated `git archive HEAD` tree with a dedicated
 target directory and in the gauntlet's own shared-target build log. The two
 diagnostics FT saw in `authenticate_and_project` do not reproduce at this
 revision.
+
+### Blocker F — `DCLTPCB1` does not execute, and no runner can make it
+
+**This is the new on-chain result of this lane, and it is a refusal to execute,
+not an execution.** Three campaigns were run on a real
+`solana-test-validator 4.0.2`. The third reached `DCLTPCB1` with every
+prerequisite satisfied and the route failed:
+
+```text
+Program log: Error: memory allocation failed, out of memory
+Program <trading> consumed 561,101 of 1,399,700 compute units
+Program <trading> failed: SBF program panicked
+```
+
+The inner logs place it exactly. Two of the four stages complete first:
+
+| stage | CU | outcome |
+|---|---:|---|
+| Custody `Initialize`, including the Core `ProjectFound` CPI | 340,799 | **executed** |
+| Custody `OpenHoard`, including Token-2022 `InitializeAccount3` | 109,545 | **executed** |
+| Custody `OpenSourceCompartment` | — | **never started — heap exhausted** |
+| Trading total at death | 561,101 of 1,399,700 | 838,599 CU unspent |
+
+So the four-stage ladder is **heap-bound, not compute-bound**, with sixty
+percent of the compute budget untouched. That is a fact no static reading found:
+W1d's frame-diagnostic gate was clean, the SBF verifier is satisfied, and
+`cargo build-sbf` emits zero diagnostics. The bound only appears at run time.
+
+**The obvious workaround does not work, and this was measured rather than
+assumed.** Requesting a 256 KiB heap frame changed nothing: the transaction
+carried the instruction, the runtime accepted it — the failing instruction index
+moved from 1 to 2, so both compute-budget instructions were processed — and the
+route died at the same place. The two halves of "the heap" are not connected:
+
+```text
+solana-program-entrypoint-3.1.1/src/lib.rs:39   pub const HEAP_LENGTH: usize = 32 * 1024;
+solana-program-entrypoint-3.1.1/src/lib.rs:226  BumpAllocator { ... len: $crate::HEAP_LENGTH }
+```
+
+`RequestHeapFrame` enlarges the region the runtime grants; the stock
+`BumpAllocator` is constructed with the **compile-time constant** and never asks
+how much it was actually given. Every dClutch program uses that entrypoint, so
+**no transaction-level declaration can move this bound for any route in this
+repository.** The request was withdrawn rather than left in place — it cost
+compute on every transaction, shifted every measured figure, and looked like a
+fix.
+
+**Owner and remedy.** This belongs to
+`programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs`. The route
+holds three stages' worth of allocations live against an allocator that never
+frees — each stage's encoded 768-byte request, its CPI meta vector, and a
+forwarded `AccountInfo` vector for a 42-account sub-frame — so its peak is the
+sum, not the maximum. It is the same shape as the verifier-frame pressure W1d
+split across three functions, one level up in the heap. Either the route
+allocates less, or the program supplies its own global allocator over the
+granted heap. **`DCLTGMF1` drives five stages through the same allocator over a
+wider frame, so it should be assumed to have the same bound until measured.**
+
+### Campaign transcript
+
+Three runs, all on one `solana-test-validator 4.0.2` bound to 127.0.0.1 from a
+fresh genesis, driven by `tools/gauntlet/run.sh --mode full`. Wall-clock timings
+are not reported: a concurrent workspace test held the machine at load ~48
+throughout, which distorts duration and not compute.
+
+| run | commit | transactions | outcome |
+|---|---|---:|---|
+| 1 | `a99ffbb` | 60 | died in this lane's own hostile path: both adversarial cases reused the honest frame, which needs the principal supplier's signature, but went through an expected-failure path with no signer list, so they failed to sign locally and never reached the chain. Fixed at `792496e`. |
+| 2 | `792496e` | 62 | both hostile cases reached the chain and refused; honest `DCLTPCB1` died out-of-memory at 527,665 CU |
+| 3 | `51e40aa` | 62 | identical failure with a 256 KiB heap frame requested — the measurement that withdrew the workaround |
+
+Measured compute, run 3 (the Claims ELF differs from runs 1-2, which carry the
+pre-`dba22b5` basis path):
+
+| transaction | CU | % of maximum |
+|---|---:|---:|
+| Core infrastructure profile initialization | 232,831 | 16.6% |
+| release activation — Trading | 717,496 | 51.3% |
+| release activation — Claims | 573,649 | 41.0% |
+| release activation — Core | 551,626 | 39.4% |
+| release activation — Resolution | 264,956 | 18.9% |
+| release activation — Custody | 229,491 | 16.4% |
+| canonical Found31 Market creation | 232,537 | 16.6% |
+| founding generation's `LifecycleRentCreditV2` | 7,327 | 0.5% |
+| `DCLTPCB1` refuses a non-terminal request | 16,396 | 1.2% |
+| `DCLTPCB1` refuses a reordered FundingState tail | 561,607 | 40.1% |
+| `DCLTPCB1`, honest | — | **failed, out of memory at 561,101** |
+
+**Found31 is no longer the obstacle it was.** It creates the Market at 232,537
+CU, 16.6% of the maximum; earlier prose in the bootstrap README and
+`REMAINING_OPEN_SEAM` said "about 247,000" and, before that, that it exhausted
+the maximum outright. Corrected to the measurement.
+
+### One adversarial case was passing for the wrong reason
+
+The reordered-FundingState-tail case refuses, and its refusal is **not yet
+attributable to the manifest binding it claims to test.** In run 2 it consumed
+527,965 CU against an out-of-memory death at 527,665; in run 3, 561,607 against
+561,101. It is refusing on the allocator, in the same place the honest
+transaction dies, and it would have read as evidence for the funding-tail check.
+
+Recorded rather than quietly repaired, because the failure mode generalises:
+**a refusal whose compute profile matches an unrelated crash is not evidence
+about the coordinate under test.** The discriminator this case needs is the
+honest transaction succeeding with an identical frame shape, which cannot happen
+until Blocker F is fixed.
+
+The other case is sound and is genuine on-chain evidence:
+**`DCLTPCB1` refuses a well-formed but non-terminal projected-Custody request**
+at 16,396 CU, refusing in `decode_projected_request` before any CPI and nowhere
+near the allocator.
+
+### What tranche-A family campaigns may now assume on chain
+
+**Nothing new.** The Claims aggregate, the founder Position, the Hoard, the
+projected replay, and the funded source compartment still do not exist on any
+chain. What is now known, rather than assumed:
+
+- the demo Market's Product declares a liability basis that **exists** and is
+  published (`4b12ee1`) — it never did before, and Found31 does not read it, so
+  nothing had noticed;
+- Core's `ProjectFound` CPI and Custody's `Initialize` and `OpenHoard` execute
+  against a vacant Market, at 340,799 and 109,545 CU;
+- the 81-account `DCLTPCB1` frame is real: it assembles, routes through a
+  three-page address lookup table at ~52 distinct keys, and is accepted by the
+  runtime;
+- `DCLTPCB1` cannot complete, for a reason that is neither compute nor frame
+  width nor a missing prestate.

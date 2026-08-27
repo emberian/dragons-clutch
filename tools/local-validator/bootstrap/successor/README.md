@@ -82,33 +82,46 @@ PDA, instruction frame, and next publication action.
 
 ## The current stopping point
 
-Measured on a real localhost validator, with **all seven real artifacts bound
-into the release set**, the campaign creates the Market through canonical Core
-Found31 and then **executes `DCLTPCB1`, the four-stage projected-Custody
-founding prestate**, at its own generation. Found31 costs **232,537**
-compute units, 16.6% of Solana's 1,400,000 per-transaction maximum.
+Measured on a real localhost validator with all seven real artifacts bound into
+the release set: the campaign publishes the record graph, creates the Market
+through canonical Core Found31 at **232,537** compute units (16.6% of Solana's
+1,400,000 maximum), and then **attempts `DCLTPCB1` at its own generation and
+fails**.
+
+That failure is this runner's most useful current output, so it is stated first:
+
+```text
+Program log: Error: memory allocation failed, out of memory
+Program <trading> consumed 561,101 of 1,399,700 compute units
+```
+
+Custody's `Initialize` (340,799 CU, including the Core `ProjectFound` CPI) and
+`OpenHoard` (109,545 CU, including the Token-2022 vault initialization) both
+succeed. The route then exhausts the program heap entering
+`OpenSourceCompartment`, with **838,599 compute units unspent**. The four-stage
+ladder is heap-bound, not compute-bound.
+
+**No runner can fix this.** Requesting a 256 KiB heap frame was tried and
+measured to change nothing: `RequestHeapFrame` enlarges the region the runtime
+grants, while `solana-program-entrypoint` builds its `BumpAllocator` with the
+compile-time constant `HEAP_LENGTH = 32 * 1024` and never asks how much it was
+actually given (`solana-program-entrypoint-3.1.1/src/lib.rs:39,226`). The bound
+is program-side and belongs to `projected_custody_bootstrap_v1`, which holds
+three stages' worth of allocations live against an allocator that never frees.
+
 Release-set activation is one role per transaction; the worst of the five is
-Trading at **682,276** CU, 48.7% of the maximum.
+Trading at **717,496** CU, 51.3% of the maximum.
 
-Both of those numbers are a change from the first campaign, and this paragraph
-used to say the opposite. Found31 then exhausted the maximum outright, and
-five-role activation with the real artifacts could not execute at all, so the
-run had to bind Claims, Trading, Resolution, and Custody to distinct immutable
-deployments of the much smaller Registry ELF. Both causes were the same:
-on-chain hashing of whole ProgramData ELFs, about one compute unit per two
-bytes, with the ~1.0 MB Core ELF hashed twice inside one transaction. `c61376d`
-fixed it in two different ways, because the two sites needed opposite
-treatments. Recurring readers stopped re-deriving a digest that activation had
-already authenticated and that an immutable Loader v3 deployment cannot change.
-First admission — the one site that checks an artifact record's *claimed* digest
-against the bytes actually deployed — kept hashing, and activation was split so
-that a transaction hashes one artifact rather than five. Nothing was weakened;
-the fast path additionally requires the immutable policy and an absent live
-upgrade authority, which the hashing path never demanded on its own.
+Found31's figure is also a correction. This file previously said it exhausted
+the compute maximum outright, and then that it cost "about 247,000". Both are
+superseded by measurement. The original cause was on-chain hashing of whole
+ProgramData ELFs at about one compute unit per two bytes, with the ~1.0 MB Core
+ELF hashed twice in one transaction; `c61376d` fixed it at two sites needing
+opposite treatments, and nothing was weakened - the fast path additionally
+requires the immutable policy and an absent live upgrade authority, which the
+hashing path never demanded on its own.
 
-**The Market is Found, not Open — and at this revision no runner can open it.**
-That is a different sentence from the one this file carried before, which said
-the distance was a missing runner. It is not.
+**The Market is Found, not Open.**
 
 ## Why `DCLTGMF1` is not built here
 
@@ -150,8 +163,8 @@ cost:
 
 ## What the campaign does reach
 
-Every protocol gap W1b, W1c, and W1d found on the *prestate* path is closed and
-now **executed**, not merely assemblable:
+Every protocol gap W1b, W1c, and W1d found on the *prestate* path is closed, and
+the first two stages are now **executed** rather than merely assemblable:
 
 - the founding capability root — derived, never created (`728299a`,
   `docs/decisions/0004-founding-capability-root.md`). Core derives the root
@@ -160,17 +173,24 @@ now **executed**, not merely assemblable:
 - the projected replay and the Hoard vault (`28d2da6`), the funded source
   compartment (`d3ba6a1`), and the capability `FundingState`s (`2fffe79`) — all
   four staged by `DCLTPCB1` in one rollback domain, against a Market that does
-  not exist yet, without weakening normal Custody's live-Market membrane.
+  not exist yet, without weakening normal Custody's live-Market membrane. The
+  first two of the four execute on chain; the third is where the heap runs out.
 - the liability basis the Product declares — published for the first time
   (`4b12ee1`). It had never existed; Found31 does not read it and nothing
   noticed.
 
 The bootstrap stage runs two adversarial cases against the real chain, both
-asserting the whole four-stage domain leaves nothing behind: a well-formed but
-**non-terminal** projected-Custody request in the terminal slot, and a
-**reordered FundingState tail**, which additionally must roll a preceding
-transfer back to a fee-only debit. The tail is the manifest binding — reordering
-it derives an address the manifest entry at that position does not name.
+asserting the whole four-stage domain leaves nothing behind. One is sound:
+a well-formed but **non-terminal** projected-Custody request in the terminal
+slot refuses at 16,396 CU, inside `decode_projected_request` and before any CPI.
+
+The other is **not yet evidence, and is recorded as such**. The **reordered
+FundingState tail** case refuses, but at 561,607 CU against an out-of-memory
+death at 561,101 — it is refusing on the allocator, in the same place the honest
+transaction dies, not on the manifest binding it claims to test. A refusal whose
+compute profile matches an unrelated crash is not attributable to the coordinate
+under test. Its discriminator is the honest transaction succeeding with an
+identical frame shape, which waits on the heap bound above.
 
 Four things the frame forced, recorded because each fails late and opaquely:
 
