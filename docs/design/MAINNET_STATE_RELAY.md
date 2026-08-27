@@ -1710,3 +1710,198 @@ keeps the §4 message budget where it was.
 
 Executable evidence: `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`
 against the compiled Core and Resolution ELFs.
+
+## 12. The consumer (RELAY-CONSUME lane, 2026-08-27)
+
+§11 rehomed the transport. This section records the route that *reads* what the
+transport carries, the four amendments building it forced, and the one thing it
+could not finish and why. It amends §4, §6 and §10; the wire, the corpus and the
+transport refusals are unchanged.
+
+Executable evidence: `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`,
+fourteen tests against the compiled Core and Resolution ELFs. The honest
+consumption costs **154,766 CU** (*measured*, `ProgramTest`), about eleven
+percent of the ceiling.
+
+### 12.1 Where the decoding rules actually live
+
+§4.10 says `decoding_rules_id` carries "every layout fact, offset, sentinel,
+scale, and rounding boundary". The implementation splits that in two, and the
+split is forced rather than convenient.
+
+`RelayedAdapterConfigV1.observable_selector` — a field §4.3 already specified and
+nothing had ever selected with — names one row of a **decoding-rules table**
+authored in
+`formal/dclutch-semantics/DClutchSemantics/RelayedVenueDecodingRulesV1.lean` and
+emitted to `crates/dclutch-relay-contract/src/generated_venue_rules.rs`. The
+table is code, pinned by `ProviderReleaseV1.adapter_release_id`. The row is data,
+pinned by `decoding_rules_id`. This is exactly how `PythAdapterConfigV1`'s
+`feed_id` and `exponent` select a row of a codec the adapter carries.
+
+The alternative was widening the 80-byte configuration to inline a venue grammar,
+which would change `decoding_rules_id` for **every** existing row and defeat the
+§4.10 tripwire the identity exists to arm. §4.10's assertion is unaffected and
+still executed by
+`two_disjoint_relayer_key_sets_share_one_decoding_rules_identity`.
+
+### 12.2 The pinned account set had to become an instruction input
+
+The adapter holds an `account_set_id` and has never held the set. Until this
+lane, nothing on chain could check that position two really is the venue account
+owned by the venue program — the relayer asserted a position index in a signed
+message and that was the end of it. `AccountObservationV1::require_pinned_position`
+existed with no caller.
+
+`ConsumeRecord` therefore carries the entries inline, in a wire form byte-identical
+to their contribution to the `account_set_id` preimage. They are untrusted caller
+input that becomes authoritative exactly when the re-derived digest equals the
+identity the record and the configuration both already committed to. The tail
+width is exact in both directions, so no shadow entry rides outside the digest
+and none is elided.
+
+### 12.3 A terminal window is one instant, and the lower bound had to go
+
+`WindowSpecV1::new` refuses `start != end` for `WindowKind::Terminal`
+(*verified-from-source*, `dclutch-source-contract`). A terminal window is
+therefore a single second, not a range. Bounding the attested foreign clock by
+`[start, end]` would require a read of another cluster to land on one exact
+second — not a bound, a route nothing can pass.
+
+The consumer bounds by `observed <= window.end_unix_seconds` only. The lower
+bound is supplied by `require_observation_freshness`, so the admitted span is
+`[now - max_age, min(end, now + skew)]`. **The same constraint applies to the
+Pyth family** — `normalize_authenticated_update` compares `publication_time`
+against `[window.start, window.end]` — and the current fixture hides it by
+choosing the window to match the observation. A Pyth terminal market on a real
+cluster will hit this.
+
+Two deadlines coincide by construction and the campaign records it: the walk's
+`primary_deadline` is `window.end + window.max_age`, and the configuration's own
+`max_observation_age_seconds` is the same grace, so the last second an
+observation may resolve a market and the first second the failure walk may take
+it are adjacent, with no gap where neither route can act.
+
+### 12.4 `SourceSpecV1.adapter_config_id` names the venue's pinned deployment
+
+§10.2 left the V1 material's inline adapter-config slot as "a canonical
+placeholder". For the relayed family the Source spec's `adapter_config_id` now
+names the venue's `ArtifactReleaseV1`, which makes "which third-party deployment
+is this market about" a founding-time content identity inside the authenticated
+chain rather than an argument the caller supplies. P-B (§6.2 of the chain-state
+dossier) is executed from there: `authenticate_deployment` compares `elf_digest`,
+`deployment_slot` and upgrade authority by exact equality against a deployment
+reconstructed from the attested Loader V3 bodies.
+
+### 12.5 The refusal table
+
+| What went wrong | Named refusal | Where it is decided |
+| --- | --- | --- |
+| Frame count, privilege, or an alias | `AccountFrame` (0) | `validate_relay_frame_v1` |
+| Instruction bytes, entry tail width, entry key/owner/width | `Instruction` (1) | `RelayInstructionV1::decode`, `decode_account_set_entry_v1` |
+| Record custody, slot-seeded address, Source-state address | `OutputState` (2) | `authenticate_consumable_record`, `authenticate_source_state_account` |
+| Market owner, derived address, phase, generation, policy | `MarketAuthority` (3) | `authenticate_market` |
+| A raw record's PDA, owner, digest, rent, or staging vacancy | `FinalizedRecord` (4) | `authenticate_record` |
+| Activation cache does not name this Resolution release | `ResolutionRelease` (5) | `authenticate_market` |
+| Source graph links, access profile, window kind, coordinate/unit vs Product | `SourceMaterial` (7) / `ProductDomain` (8) | `authenticate_graph`, `plan_relayed_resolution_v1` |
+| Product record, result domain, portfolio, outcome count | `ProductDomain` (8) | `authenticate_product_runtime_v2` |
+| Provider family or transport profile is not this family | `ProviderRelease` (9) | `consume_source_records` |
+| Account-set digest, pinned position, venue deployment, venue length, venue discriminator, incoherent body, unenumerated state, foreign clock, staleness, skew | `ProviderObservation` (10) | `interpret_sealed_record_v1` |
+| Certificate construction or a Source transition | `Transition` (12) | `plan_relayed_resolution_v1` |
+| **Record not sealed, not quorate, not bound to this Market, or already consumed** | **`RelayedRecord` (15)** | `require_consumable` |
+| **Observed state is pre-terminal, or past the Product's window** | **`RelayedWindow` (16)** | `read_dbc_graduation`, `require_window_admits` |
+
+The last row is the load-bearing one and it is why the code is new. A
+pre-terminal pool is *no answer*, not a wrong one: the bytes were fine, the
+quorum was real, the venue was the pinned one, and the market's own question does
+not have an answer yet. Telling a position holder "come back later" and
+"something is broken" through one code is the flattening the route census already
+caught once elsewhere.
+
+### 12.6 The graduation proposition, and why the demo Product has one ordinary cell
+
+Only `MigrationProgress::CreatedPool` resolves. A terminal-window graduation
+proposition can only ever be *proved* by graduation; "it did not graduate" is
+proved by the deadline passing, which is the funded walk of §4.8 landing on the
+Product's own failure selector.
+
+So the demo Product's `ResultDomainV2` has **zero cuts**: one ordinary region
+("graduated by the deadline") plus the explicit failure region ("no graduation
+proved by the deadline"). A domain with a cut at `CreatedPool` would carry an
+ordinary cell nothing could ever select, and a partition with a dead cell mints
+liabilities against an outcome that cannot happen. The mapping machinery is real
+and unchanged — the adapter hands the Product the `MigrationProgress`
+discriminant itself at exponent zero, so a Product carving the same observable
+differently needs no adapter change — this particular Product just has one thing
+it can prove.
+
+**The user-visible consequence must be in the Product, not discovered at
+resolution:** for a v1 graduation market, "the relayer went silent", "the venue
+was upgraded" and "it never graduated" all land on the same pre-disclosed
+failure outcome.
+
+### 12.7 The liveness walk: what landed, and the one thing that blocks it
+
+`SourceResolutionStateV2::exhaust_after_primary_deadline` landed and is
+unit-tested: `Primary → Exhausted`, strictly after `window.end + window.max_age`,
+refusing any material carrying a recovery policy. From `Exhausted`,
+`commit_failure_from_authenticated_domain` already reaches the Product's failure
+selector. Before this, **nothing in V2 could reach `Exhausted` at all**, so §4.8's
+headline property had no executable form: `commit_failure_from_authenticated_domain`
+had zero callers and the V1 `exhaust_view` lives in a module that is not compiled.
+
+The route is one instruction away and it is blocked, structurally, on funding:
+
+> `ResolutionCertificateV2::validate_shape` refuses a `ResolutionFailure` whose
+> `funding_allocation` is zero or whose `work_paid` is zero.
+
+The Lean-owned terminal schema encodes §4.8's "bounded, prepaid, permissionless
+path that pays whoever walks it" as a **decode-time invariant**. There is no such
+thing as an unfunded failure certificate, and no honest half-measure: a route
+emitting one would record a bounty nobody paid, and the alternative is weakening
+the prepayment rule the architecture rests on. `CommitDeadlineFailure` therefore
+has a wire, a frame, and a dispatch arm that refuses with `Funding` (14) naming
+the reason; `an_unfunded_failure_certificate_cannot_exist` executes the refusal.
+
+**What it needs**, exactly: the V1→V2 port of
+`programs/dclutch-resolution-proof-sbf/src/funded.rs`, which is orphaned dead code
+today — there is no `mod funded;` anywhere in the crate and its only call site
+sits under `#[cfg(any())]`. The port debits an authenticated `FundingState`
+allocation and emits a `FundedTransitionReceiptV1` crediting the worker.
+`core_effect.rs` already creates and escrows the three compartments, including
+`failure_funding`, so the money is there and nothing reads it.
+`crates/dclutch-svm-harness/tests/resolution_successor.rs` panics
+"Runtime V2 funded direct ABI and return receipt have not been frozen" and is the
+test that unblocks with it.
+
+### 12.8 What the demo Product still needs, as a record set
+
+For one real DBC graduation market, in dependency order:
+
+1. `ArtifactReleaseV1` for `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`, with the
+   **mainnet** `deployment_slot`, the SHA-256 of the deployed ELF tail, and
+   `ExactAuthority` with the observed upgrade authority. All four are one
+   `getAccountInfo` on `HUfnSSiJxgspQm6C1rkqv6L3XgVtn7AESApgCQpCXCYh` away and none
+   has been read.
+2. `RelayerKeySetV1`, n = 1, m = 1, over the daemon's disclosed attestation key.
+3. `RelayedAdapterConfigV1` with `observable_selector = 0`, `raw_exponent = 0`,
+   `max_observation_age_seconds` from a **measured** devnet/mainnet clock-skew
+   profile (§4.7 is unmeasured), `max_cluster_skew_seconds` strictly below it, and
+   `account_set_id` over the four pinned positions with the chosen pool's pubkey.
+4. `ProviderReleaseV1` binding family, extension, key set, `decoding_rules_id`,
+   and the record transport profile.
+5. `SourceSpecV1` with `access_profile = RelayedObservationRecord`, `domain_id`
+   and `unit_id` **equal to the Product domain's** coordinate and result unit, and
+   `adapter_config_id` = the venue release digest (§12.4).
+6. `WindowSpecV1`, `Terminal`, `start = end =` the market deadline, `max_age`
+   equal to the configuration's staleness bound (§12.3).
+7. `StatisticSpecV1`, `TerminalSample`, one sample, `ExactRational`.
+8. `SourceMaterialV2` naming the Product record, the spec, the window, the
+   statistic, **no recovery policy**, and the V2 failure-policy release.
+9. Product Runtime V2: a `ResultDomainV2` with **zero cuts**, a two-coefficient
+   `PortfolioV2`, and the `ProductRecordV2` root (§12.6).
+
+Still missing beyond the record set, in order of what would stop a demo first:
+the funded walk (§12.7); a measured two-clock skew profile; the daemon actually
+running and publishing (§4.11 is specification only); and a `RecoveryMaterialSlotV1`
+that admits a relayed source, without which §4.8's "degrades to a named
+alternative source" remains false (§10.5).
