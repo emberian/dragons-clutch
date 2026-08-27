@@ -55,6 +55,7 @@ RPC_PORT="auto"
 WORK="/private/tmp/dclutch-relayed-vertical"
 KEYPAIR_SEED="none"
 CENSUS=0
+REUSE_ELF=0
 GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
 
 while [ $# -gt 0 ]; do
@@ -67,6 +68,7 @@ while [ $# -gt 0 ]; do
         --work) WORK="${2:?}"; shift 2 ;;
         --keypair-seed) KEYPAIR_SEED="${2:?}"; shift 2 ;;
         --census) CENSUS=1; shift ;;
+        --reuse-elf) REUSE_ELF=1; shift ;;
         --gauntlet-work) GAUNTLET_WORK="${2:?}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
@@ -157,7 +159,18 @@ elf_inputs_digest() {
     fi
 }
 ELF_INPUT_DIGEST="$(elf_inputs_digest)"
-if [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$ELF_INPUT_DIGEST" ]; then
+ALL_ELVES_PRESENT=1
+for entry in $ROLES; do
+    role="${entry%%:*}"
+    [ -f "$ELF_DIR/$role.so" ] || ALL_ELVES_PRESENT=0
+done
+if [ "$REUSE_ELF" = 1 ] && [ "$ALL_ELVES_PRESENT" = 1 ]; then
+    # DEVELOPMENT ONLY: a shared working tree is a moving target, and a
+    # sibling lane's mid-edit crate should not stop a campaign whose own
+    # protocol inputs are already inside these artifacts. The transcript's
+    # worktree caveat covers this too: not release evidence.
+    say "stage elf: REUSED WITHOUT A DIGEST CHECK (--reuse-elf, development only)"
+elif [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$ELF_INPUT_DIGEST" ]; then
     say "stage elf"
     for entry in $ROLES; do
         role="${entry%%:*}"; rest="${entry#*:}"; package="${rest%%:*}"; stem="${rest#*:}"
