@@ -9,10 +9,13 @@ publish = false
 
 [dependencies]
 dclutch-fractional-claim-kernel = { path = "../dclutch-fractional-claim-kernel" }
+dclutch-rational-representation-v2-contract = { path = "../dclutch-rational-representation-v2-contract" }
+dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
 dclutch-structured-v2-contract = { path = "../dclutch-structured-v2-contract" }
 dclutch-structured-v2-kernel = { path = "../dclutch-structured-v2-kernel" }
 
 [dev-dependencies]
+dclutch-token-svm = { path = "../dclutch-token-svm" }
 sha2 = "=0.10.9"
 
 [lints.rust]
