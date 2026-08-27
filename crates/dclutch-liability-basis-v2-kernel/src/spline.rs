@@ -113,6 +113,31 @@ impl SplineRequestV2 {
         usize::from(self.knot_count).saturating_sub(usize::from(self.degree).saturating_add(1))
     }
 
+    /// Return the same authenticated basis relocated to another coordinate.
+    ///
+    /// Every structural fact about the *basis* — scale, degree, knot count,
+    /// knot order, canonical padding — is carried over from a request that was
+    /// already decoded, and only the coordinate changes. That is what lets the
+    /// price gate recompute a payout vector at each atom without a second
+    /// authenticated record per atom, and it is why an atom's payouts can never
+    /// come off the wire.
+    ///
+    /// The coordinate is still the one thing a relocated request has not had
+    /// checked, so this refuses a zero denominator with the same
+    /// [`Error::ZeroDenominator`] the decoder uses. The gate's own decoder
+    /// already refuses that earlier; this is the guard that keeps the method
+    /// total for any other caller.
+    pub fn with_coordinate(self, numerator: i64, denominator: u32) -> Result<Self> {
+        if denominator == 0 {
+            return Err(Error::ZeroDenominator);
+        }
+        Ok(Self {
+            coordinate_numerator: numerator,
+            coordinate_denominator: denominator,
+            ..self
+        })
+    }
+
     /// Return exactly the knots the basis uses, without the canonical padding.
     ///
     /// Lean: `PhysicalAbi.Request.activeKnots`.
