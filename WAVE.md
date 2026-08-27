@@ -722,3 +722,7 @@ ember's explicit go.
 - RULED: Structured adopts the Rational child ABI (0011 §3a Option A — the
   ABI already names the Structured operations; zero new program code; the
   binding requirement rides it). STRUCT-CHILD dispatched.
+
+- M-46 hunt (small batch): main sat at 18/20 somewhere in
+  211079f6..a4be9a83 (~+23,000 CU unboarded); 7ead0716 MASKS it. Bisect with
+  the per-phase tables and attribute — margin honesty demands the name.
