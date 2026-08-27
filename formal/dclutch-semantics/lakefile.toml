@@ -18,6 +18,14 @@ name = "emit-capability-execution-abi-rust"
 root = "EmitCapabilityExecutionAbiRust"
 
 [[lean_exe]]
+name = "emit-capability-manifest-v1-abi-rust"
+root = "EmitCapabilityManifestV1AbiRust"
+
+[[lean_exe]]
+name = "emit-capability-manifest-v1-abi-ts"
+root = "EmitCapabilityManifestV1AbiTs"
+
+[[lean_exe]]
 name = "emit-capability-program-abi-rust"
 root = "EmitCapabilityProgramAbiRust"
 
@@ -200,6 +208,14 @@ root = "EmitRationalRepresentationV2TranslationCorpus"
 [[lean_exe]]
 name = "emit-rational-terminal-hot-v3-rust"
 root = "EmitRationalTerminalHotV3Rust"
+
+[[lean_exe]]
+name = "emit-realm-position-abi-rust"
+root = "EmitRealmPositionAbiRust"
+
+[[lean_exe]]
+name = "emit-realm-position-abi-ts"
+root = "EmitRealmPositionAbiTs"
 
 [[lean_exe]]
 name = "emit-registered-controller-abi-rust"
