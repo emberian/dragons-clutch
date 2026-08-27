@@ -574,12 +574,14 @@ mod tests {
         };
 
         let mut unwritten = Vec::new();
+        let mut read = 0_usize;
         for index in 0..DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4 {
             let mut probe = baseline_scalars.clone();
             *probe.get_mut(index).expect("scalar") = PROBE_SCALAR;
             if !differs(&probe, &baseline_identities) {
                 continue;
             }
+            read += 1;
             let index = u16::try_from(index).expect("scalar register");
             let written = account
                 .writes_register(ProjectionTargetV2 {
@@ -613,6 +615,7 @@ mod tests {
             if !differs(&baseline_scalars, &probe) {
                 continue;
             }
+            read += 1;
             let index = u16::try_from(index).expect("identity register");
             let written = account
                 .writes_register(ProjectionTargetV2 {
@@ -648,6 +651,9 @@ mod tests {
             unwritten.is_empty(),
             "the RegisterBuy Effect reads registers no artifact writes: {unwritten:?}"
         );
+        // Not vacuous: a resolver that errored on every bank would report no
+        // reads at all and pass. This Effect reads most of its own banks.
+        assert!(read >= 40, "only {read} registers measured as read");
     }
 
     #[test]
