@@ -711,6 +711,44 @@ impl<'a> ProgramV3<'a> {
         self.item_operations
     }
 
+    /// How many local-effect ordinals write ACCOUNT DATA at `tail_count`.
+    ///
+    /// The opcode alone decides. `Operation::resolve` maps each opcode to
+    /// exactly one `ResolvedEffectV3` variant, and `resolved_data_range`
+    /// answers `Some` for exactly the `Write*` variants -- so this counts
+    /// precisely the ordinals the runtime-write overlap refusal will record,
+    /// and it costs `fixed_operations + item_operations` template decodes
+    /// rather than one per ordinal.
+    ///
+    /// A caller sizing that refusal's scratch bank wants this and not
+    /// `item_operations * tail_count + fixed_operations`: a program whose
+    /// hundred-odd ordinals are transfers and request writes needs a bank of
+    /// two entries, and on an SBF allocator that never frees, the difference
+    /// is bytes the rest of the instruction never gets back.
+    pub fn data_write_operation_count(self, tail_count: u32) -> Result<usize> {
+        let mut fixed_writers = 0_u64;
+        let mut index = 0_u16;
+        while index < self.fixed_operations {
+            if self.operation(false, index)?.writes_account_data() {
+                fixed_writers = fixed_writers.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        let mut item_writers = 0_u64;
+        let mut index = 0_u16;
+        while index < self.item_operations {
+            if self.operation(true, index)?.writes_account_data() {
+                item_writers = item_writers.checked_add(1).ok_or(Error::InvalidLength)?;
+            }
+            index = index.checked_add(1).ok_or(Error::InvalidLength)?;
+        }
+        let total = item_writers
+            .checked_mul(u64::from(tail_count))
+            .and_then(|value| value.checked_add(fixed_writers))
+            .ok_or(Error::ArithmeticOverflow)?;
+        usize::try_from(total).map_err(|_| Error::ArithmeticOverflow)
+    }
+
     /// Borrow complete canonical bytes.
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
@@ -1586,6 +1624,31 @@ impl Operation {
     fn static_request_range(self) -> Option<(u16, u32, u32)> {
         self.is_request_write()
             .then_some((self.route, self.data_offset, self.write_width()))
+    }
+
+    /// Whether [`Self::resolve`] yields a variant that writes account data.
+    ///
+    /// The list is the `Write*` arms of `resolve`'s opcode match, and nothing
+    /// else: a lamport transfer, a lamport assertion and a request write all
+    /// answer `false`. It sits beside `resolve` so the two cannot drift out of
+    /// sight of each other, and
+    /// `every_opcode_agrees_on_whether_it_writes_account_data` holds them to it
+    /// over the whole opcode space rather than over the ones someone thought
+    /// of.
+    const fn writes_account_data(self) -> bool {
+        matches!(
+            self.opcode,
+            OP_WRITE_SCALAR
+                | OP_WRITE_IDENTITY
+                | OP_WRITE_SCALAR_AFFINE
+                | OP_WRITE_IDENTITY_AFFINE
+                | OP_WRITE_DATA_U8
+                | OP_WRITE_DATA_U16
+                | OP_WRITE_DATA_U32
+                | OP_WRITE_DATA_U8_AFFINE
+                | OP_WRITE_DATA_U16_AFFINE
+                | OP_WRITE_DATA_U32_AFFINE
+        )
     }
 
     fn resolve(
@@ -2514,6 +2577,59 @@ mod tests {
             cursor += value.len();
         }
         output
+    }
+
+    /// The opcode predicate that sizes the runtime-write scratch bank has to
+    /// agree with what `resolve` ACTUALLY produces, over the whole opcode
+    /// space -- not over the opcodes someone remembered when they wrote it. A
+    /// disagreement is silent in both directions: too small a bank refuses a
+    /// valid program, too large a bank spends heap that an allocator which
+    /// never frees does not give back.
+    ///
+    /// So this asks `resolve` and `resolved_data_range`, which are the two
+    /// functions whose behaviour the predicate is a claim about, rather than
+    /// restating the predicate.
+    #[test]
+    fn every_opcode_agrees_on_whether_it_writes_account_data() {
+        let bytes = canonical();
+        let program = ProgramV3::decode(&bytes).expect("canonical program");
+        let scalars = [0_u64; 5];
+        let identities = [[0_u8; 32]; 3];
+        let aliases = core::array::from_fn::<_, 8, _>(|index| index);
+        let mut resolvable = 0_usize;
+        for opcode in 0..=u8::MAX {
+            let operation = Operation {
+                opcode,
+                mode: 0,
+                account_a: 0,
+                account_b: 0,
+                register: 0,
+                route: 0,
+                data_offset: 0,
+                extra: 0,
+            };
+            let Ok(resolved) = operation.resolve(program, Some(0), 1, &scalars, &identities) else {
+                // An opcode this program cannot resolve records no range, so
+                // the predicate must not reserve an entry for it.
+                assert!(
+                    !operation.writes_account_data(),
+                    "opcode {opcode} is claimed to write data but does not resolve"
+                );
+                continue;
+            };
+            resolvable = resolvable.checked_add(1).expect("small");
+            assert_eq!(
+                operation.writes_account_data(),
+                resolved_data_range(resolved, &aliases)
+                    .expect("range")
+                    .is_some(),
+                "opcode {opcode} disagrees with what it resolves to"
+            );
+        }
+        // Every declared opcode resolves under this fixture, so the agreement
+        // above is over the whole opcode set and not over an accidental
+        // handful.
+        assert_eq!(resolvable, 17);
     }
 
     #[test]

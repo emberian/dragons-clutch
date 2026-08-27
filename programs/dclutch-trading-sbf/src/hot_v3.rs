@@ -3215,13 +3215,14 @@ fn project_hot_effects_v3(
     hot_heap_mark!("effects-request-bank");
     // The kernel allocates nothing, so the runtime-write overlap refusal's
     // scratch is one of this function's banks. It is what lets that refusal
-    // resolve each local-effect ordinal once instead of once per PAIR of them;
-    // twelve bytes per ordinal is the whole price.
+    // resolve each local-effect ordinal once instead of once per PAIR of them,
+    // and it is twelve bytes per ordinal that RECORDS a range -- not per
+    // ordinal. A Direct walk resolves 131 and records two of them.
     let mut write_ranges = try_projection_bank_v3(
         &ResolvedWriteRangeV4::vacant(),
         effect
             .successor
-            .resolved_operation_count(tail_count)
+            .data_write_operation_count(tail_count)
             .map_err(|_| TradingSbfError::Content)?,
     )?;
     hot_heap_mark!("effects-write-ranges");

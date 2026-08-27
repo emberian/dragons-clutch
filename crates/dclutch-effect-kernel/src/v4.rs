@@ -684,13 +684,21 @@ impl<'a> ProgramV4<'a> {
         Ok(())
     }
 
+    /// How many local-effect ordinals write account DATA at `tail_count`.
+    ///
+    /// The exact width of the runtime-write scratch bank [`project_atomic`]
+    /// requires, and the one owner of it: [`project_atomic`] checks the bank it
+    /// is handed against this, so the width is a checked precondition rather
+    /// than a formula repeated on both sides of the call. See
+    /// [`v3::ProgramV3::data_write_operation_count`] for why it is this and not
+    /// the ordinal count.
+    pub fn data_write_operation_count(self, tail_count: u32) -> ResultV4<usize> {
+        Ok(self.base.data_write_operation_count(tail_count)?)
+    }
+
     /// How many local-effect ordinals this program resolves at `tail_count`.
     ///
     /// The one owner of `item_operation_count * tail_count + fixed_operation_count`.
-    /// A caller sizes the runtime-write scratch bank
-    /// [`project_atomic`] requires from it, and [`project_atomic`] checks the
-    /// bank it is handed against it, so the width is a checked precondition
-    /// rather than a formula repeated on both sides of the call.
     pub fn resolved_operation_count(self, tail_count: u32) -> ResultV4<usize> {
         let total = u64::from(self.base.item_operation_count())
             .checked_mul(u64::from(tail_count))
@@ -926,7 +934,7 @@ impl<'a> ProgramV4<'a> {
 /// become caller-authored bytes in this local request bank.
 ///
 /// `write_ranges` is a caller-owned scratch bank exactly
-/// [`ProgramV4::resolved_operation_count`] entries wide, used only by the
+/// [`ProgramV4::data_write_operation_count`] entries wide, used only by the
 /// runtime-write overlap refusal. Its incoming contents are not read and its
 /// outgoing contents are not a result.
 pub fn project_atomic(
@@ -1101,8 +1109,9 @@ impl ResolvedWriteRangeV4 {
 /// failure: `total` resolutions and integer comparisons for the rest.
 ///
 /// `ranges` is a caller-owned scratch bank exactly
-/// [`ProgramV4::resolved_operation_count`] entries wide. Its incoming contents
-/// are not read.
+/// [`ProgramV4::data_write_operation_count`] entries wide -- the number of
+/// ordinals that will actually record a range, not the number that will be
+/// resolved. Its incoming contents are not read.
 fn validate_runtime_write_nonoverlap_v4(
     program: ProgramV4<'_>,
     tail_count: u32,
@@ -1112,7 +1121,7 @@ fn validate_runtime_write_nonoverlap_v4(
     ranges: &mut [ResolvedWriteRangeV4],
 ) -> ResultV4<()> {
     let total = program.resolved_operation_count(tail_count)?;
-    if ranges.len() != total {
+    if ranges.len() != program.data_write_operation_count(tail_count)? {
         return Err(ErrorV4::BaseProgram);
     }
     // How many entries of `ranges` carry a resolved write. Operations that
@@ -1621,12 +1630,13 @@ mod tests {
         permissions[27] = AccountPermission::new(false, false, true);
         let mut scratch_lamports = [0; 28];
         let mut output_lamports = [9; 28];
-        // `series_successor` declares exactly one fixed operation and no item
-        // operations, so one entry is the exact width the validator requires.
+        // `series_successor` declares exactly one fixed operation, a scalar
+        // write, and no item operations -- so one entry is the exact width the
+        // validator requires.
         assert_eq!(
             program
-                .resolved_operation_count(0)
-                .expect("resolved operation count"),
+                .data_write_operation_count(0)
+                .expect("data write operation count"),
             1
         );
         let mut write_ranges = [ResolvedWriteRangeV4::vacant(); 1];
