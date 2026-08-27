@@ -39,6 +39,7 @@ import DClutchSemantics.GeneralV5Assurance
 import DClutchSemantics.GeneralControllerAbi
 import DClutchSemantics.GeneralConfigAbi
 import DClutchSemantics.GeneralConfigV3Abi
+import DClutchSemantics.GeneralTransitionV3
 import DClutchSemantics.ProductPayoff
 import DClutchSemantics.ProductPayoffExamples
 import DClutchSemantics.ProductPayoffAbi

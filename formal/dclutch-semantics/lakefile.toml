@@ -154,6 +154,10 @@ name = "emit-general-request-profiles-v1-rust"
 root = "EmitGeneralRequestProfilesV1Rust"
 
 [[lean_exe]]
+name = "emit-general-transition-v3-rust"
+root = "EmitGeneralTransitionV3Rust"
+
+[[lean_exe]]
 name = "emit-liability-basis-v2-rust"
 root = "EmitLiabilityBasisV2Rust"
 
