@@ -7025,26 +7025,25 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         feature = "dealer-family"
                     ))]
                     {
-                        let receipt = execute_claims_route_v3(
-                            program_id,
-                            effect.base(),
-                            claims_composition
-                                .copied()
-                                .ok_or(TradingSbfError::Content)?,
-                            route,
-                            tail_count,
-                            scalars,
-                            identities,
-                            effect_accounts,
-                            request_bank,
-                            family_request,
-                            prior_receipt,
-                            buffers,
-                            claims_program.ok_or(TradingSbfError::Release)?,
-                        )?;
                         (
                             FixedRole::Claims,
-                            claims_receipt_digest_v3(receipt)?,
+                            execute_claims_route_digest_v3(
+                                program_id,
+                                effect.base(),
+                                claims_composition
+                                    .copied()
+                                    .ok_or(TradingSbfError::Content)?,
+                                route,
+                                tail_count,
+                                scalars,
+                                identities,
+                                effect_accounts,
+                                request_bank,
+                                family_request,
+                                prior_receipt,
+                                buffers,
+                                claims_program.ok_or(TradingSbfError::Release)?,
+                            )?,
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )
                     }
@@ -7699,6 +7698,71 @@ fn resolve_carrier_by_representative_v3<'info>(
         .ok_or_else(|| TradingSbfError::Release.into())
 }
 
+/// Execute one Claims route and return ONLY the digest of what it produced.
+///
+/// `ClaimsRouteReceiptV3` is 520 bytes -- it is the union of eight receipt
+/// bodies -- and `claims_receipt_digest_v3` re-materialises the selected one as
+/// a byte buffer to hash it. Both of those belong to a frame that is not
+/// `execute_child_routes_v3`'s: that walk is against the SBPF v0 4,096-byte
+/// static frame bound, and holding the receipt across the two calls put the 520
+/// bytes, the second 520-byte copy the call needed, and the eight `to_bytes`
+/// temporaries the digest inlines on the walk at once. Measured on the dealer
+/// accelerator link, where the walk is not the caller of any Resolution route
+/// and the inliner therefore has room to take all of it: 5,184 bytes of frame
+/// and 82 backend frame-overwrite diagnostics before, 2,752 and zero after.
+/// Trading at default features was never over the bound and was never told: it
+/// was at 3,712 of 4,096 on the same function, and is at 2,880 here.
+///
+/// This is the callee-owned-frame discipline the walk already applies to the
+/// child-walk resolution and to the CPI buffer set, applied to the one arm that
+/// returns a receipt where the others return a digest. Nothing is computed
+/// anywhere else, in any other order, or on any other value: the walk asked for
+/// a digest and now says so.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn execute_claims_route_digest_v3<'info>(
+    program_id: &Pubkey,
+    effect: EffectProgramV3<'_>,
+    composition: ClaimsCompositionV3<'_>,
+    route_index: u16,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
+    request_bank: &[u8],
+    family_request: &[u8],
+    prior_receipt: Option<&[u8]>,
+    buffers: &mut ChildInvocationBuffersV3<'info>,
+    claims_program: &AccountInfo<'info>,
+) -> Result<[u8; 32], ProgramError> {
+    claims_receipt_digest_v3(execute_claims_route_v3(
+        program_id,
+        effect,
+        composition,
+        route_index,
+        tail_count,
+        scalars,
+        identities,
+        effect_accounts,
+        request_bank,
+        family_request,
+        prior_receipt,
+        buffers,
+        claims_program,
+    )?)
+}
+
+/// Hash the receipt body one Claims route produced.
+///
+/// Out of line for the same reason its caller is: the match materialises the
+/// selected body as bytes, and the eight arms' temporaries land on whichever
+/// frame inlines it.
+#[inline(never)]
 #[cfg(any(
     feature = "families",
     feature = "series-family",
