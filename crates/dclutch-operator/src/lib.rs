@@ -98,7 +98,6 @@ pub mod versioned {
     pub use dclutch_versioned_message_operator::*;
 }
 /// Chain-derived unsigned Series and Dealer workflows.
-pub mod verticals;
 
 pub(crate) const MARKET_SEED: &[u8] = b"dclutch/market-root/v1";
 const RECEIVER_TREASURY_SEED: &[u8] = b"treasury";
