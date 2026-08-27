@@ -434,6 +434,41 @@ And the project diagnosed this exact pathology in a commit body one day ago:
 An implementation queued behind an event that will never arrive is the same
 thing with the sign flipped.
 
+**THE STRUCTURED ROW IS AMENDED, 2026-08-27 (STRUCT-PHYS-r, decision 0011).**
+The island is still closed, and this row still stands. What is wrong with it is
+the implied diagnosis: it reads as though the route were simply unwritten. It
+was written, against a seam that does not exist.
+
+`dclutch-structured-v2-contract/src/hot_v2.rs` is 547 lines describing itself as
+the "onchain-safe execution candidate for common Trading Hot", with a
+`prepare` / `validate_token_poststate` / `validate_root_poststate` protocol for
+the executor to drive. Nothing drives it. Every caller in the tree is a test,
+and `programs/dclutch-trading-sbf/Cargo.toml` does not depend on the crate under
+any feature. `dclutch-fractional-claim-contract` carries the identical shape
+with the identical zero non-test callers, so **this is a superseded generation
+spanning two families, not a Structured oversight** — and it is why "consumed by
+nothing" understates the cost. The work exists; it points nowhere.
+
+It also cannot be pointed anywhere by wiring: driving it would require Trading
+to link a family crate and branch on a family between Token CPIs, which is what
+decision 0006 §3 forbids. Decision 0011 records the route that does exist (a
+sealed artifact closure: `EffectProgramV4` first, because its digest feeds the
+descriptor, the seal and the ProgramSet identity), retargets the candidate as
+the operator's host-side adversary rather than deleting it, and measures the
+second trap: `frame.rs`'s 23-account base is a standalone instruction frame, and
+thirteen of its coordinates name accounts the Trading hot frame already fixes or
+injects, so transcribing it into an `AccountProfileV2` would reproduce decision
+0006 §2's objection inside a family crate.
+
+Landed against this row: `dee3311e` (the frame becomes the sole author of the
+effect account coordinates, replacing a hand-written table in `tests/actions.rs`
+that disagreed with `frame.rs` in every coordinate and in the indexing rule),
+`68f7a5fd` (decision 0011), `a8e269f2` (`K_i = S · c_i` derived rather than
+written as literals, plus the self-backing refusal in both directions). The
+census row is still not flippable and `"structured"` still appears in neither
+`blocked.json` nor the census — that is downstream of the artifacts, in the
+order decision 0011 §6 fixes.
+
 ### M-10. Every expansion frontier, verdicted
 
 Verified against the tree, not taken from the doc (which has no status column and
@@ -1497,6 +1532,29 @@ and the gate is a *price-admission* rule. Two generations built the gate and no
 decision in any generation retired it. The scorecard's trigger — write it down
 now rather than rediscover it — is the right closure, and `O-013` is not where
 it goes.
+
+**Closed 2026-08-27 (PRICE-GATE), and here is the part this entry said it could
+not judge.** Item 1 above ends *"whether the quantized checker is sound,
+complete, or cheap is not something this sweep can say"*. It can now be said, in
+the successor's own terms rather than by reading gen-2's tree: the hull-membership
+rule **is sound**, and `DClutchSemantics.LiabilityBasisV2PriceGate.Certificate.no_arbitrage`
+is the proof — zero `sorry`, zero `native_decide`, three standard axioms. It is
+**not complete** in the sense that matters, and the incompleteness is inherited
+rather than introduced: a `u64` mixture mass refuses a hull price whose every
+representation needs a larger denominator, exactly the residual gen-2 named at
+`docs/design/PRICE_MEASURE_WITNESS_V2.md:188`, and it fails closed. Both
+directions of gen-2's refutation are reproduced against this tree's evaluator as
+`decide` witnesses and as corpus cases. The gate is in the kernel today as one
+admission conjunct; item 2's layout half is still unbuilt and still out of scope
+by Frontier 2's gate, which is the right order — the price plane is ready
+*before* the layout that would make it reachable. See
+`docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` ("the row that flipped")
+and `docs/compost/PRICE_GATE_HULL_2026_08_27.md`.
+
+**Item 3 is not retired by this.** The pattern happened three times; it was
+*corrected* the third time, one lane later, before a Market could select the
+basis. That is a better outcome than gen-1's two days with the hole open, and it
+is not evidence the pattern will not recur.
 
 ## G-2. The compute ceiling is gen-1's *scaling* verdict, and its named answer is in no queue
 
