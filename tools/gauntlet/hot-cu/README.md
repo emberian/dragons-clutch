@@ -173,6 +173,10 @@ inside the ±46,000 draw, and in the *cheaper* direction only by luck of the
 redraw. That is lottery scale, not fast-path scale. If the Hot tail had been
 paying a megabyte hash before `0e34c036`, this table could not look like this.
 
+(That reasoning was right, and the arms below now measure the same conclusion
+directly rather than bounding it: the `Immutable` arm and the `ExactAuthority`
+arm are 73 CU apart.)
+
 **To measure 0012 end to end, the fixture needs an `ExactAuthority` variant** —
 a release with a bound authority and a ProgramData observation carrying the
 pinned slot — swept the same way, against the same ELF. That variant now exists:
@@ -223,6 +227,62 @@ redraw, measured rather than assumed:
 A signal smaller than the redraw is a legitimate result and must be reported as
 one. It says the sweep bounds 0012's effect below the lottery's width on this
 path — which, given the claim under test is ~700,000 CU, is itself an answer.
+
+### Do not stop at the difference of means — pair the seeds
+
+The three arms run the **same twenty seeds against the same ELF**, so seed *k*'s
+figure in two arms was drawn with the *same fixture keys* and differs only by
+(a) how deep each arm's release identity made the on-chain bump searches walk
+and (b) whatever the code paths actually cost. M-61's own decomposition then
+applies **per seed**:
+
+```
+    delta(seed k)  =  n_k × 1,500  +  c
+```
+
+`n_k` is the lottery and varies wildly; `c` is the constant, and it is the
+answer. Reporting only the difference of means throws `c` away into the noise it
+is not part of. Take each paired delta, round `delta / 1,500` to the nearest
+integer, and read the residual — the twenty residuals should agree to within a
+few CU, and if they do not, the two arms differ by something that is not a
+constant and the comparison needs a harder look.
+
+The paired residual works here **only because both arms share one ELF and one
+seed set**. Across two revisions it does not apply: different ELFs are different
+lotteries, the pairing is meaningless, and `PASS` and `MEAN` are what you have.
+
+### Measured, at `57138ba8`
+
+All three arms against `dclutch_trading_sbf.so`
+`7facb8e58e45843f46b9d3d572ced5e45507bfcbfb2250e865b5427baa1b9d3c`, built from a
+clean archive of `57138ba8`, seeds 0..19, ceiling 1,400,000:
+
+| arm | PASS | MEAN | spread | paired constant vs `immutable` |
+|---|---|---|---|---|
+| `immutable` | 20/20 | 1,345,302 CU | 49,499 | — |
+| `immutable-pinned` | 20/20 | 1,353,477 CU | 51,002 | **0** (mean −0.4; exactly 0 on 18/20) |
+| `slot-pinned` | 20/20 | 1,355,575 CU | 46,496 | **+73 CU** (67…77 on every seed) |
+
+Read it in that order, because the means alone are misleading:
+
+- `slot-pinned − immutable` = **+10,273 CU** of *mean*. Almost none of that is
+  0012.
+- `immutable-pinned − immutable` = **+8,175 CU** of mean for a substrate that
+  executes the **identical** code — pure redraw, and the exact number the
+  control exists to supply.
+- The control's **paired constant is 0** on eighteen of twenty seeds and never
+  exceeds 6 CU. That is the method validating itself: same code path, same
+  constant, all of an 8,175 CU mean gap accounted for as `n × 1,500`.
+- `slot-pinned`'s paired constant is **+73 CU on all twenty seeds**. That, and
+  not 10,273 and not 2,098, is what decision 0012's `ExactAuthority` arm costs a
+  Hot continuation: **0.005% of the ceiling**.
+
+So the fast path is free in the direction that matters — a mutable substrate's
+Hot tail is the immutable one plus 73 CU — and the ~700,000 CU *saving* remains
+argued rather than measured, because no in-tree fixture constructs the re-hash
+it is a saving against: the readers refuse a non-pinned release, they do not
+fall back to hashing. What is now measured is that the pin costs nothing, and
+that the market life fits: 20/20 on the mutable substrate.
 
 ## What the three arms measured (lane POST-0012-EXACTAUTH)
 
