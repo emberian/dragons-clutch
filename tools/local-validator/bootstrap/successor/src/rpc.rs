@@ -298,6 +298,32 @@ impl Rpc {
         self.send_v0_inner(label, instructions, payer, &[], observation, tables, true)
     }
 
+    /// Submit one routed v0 transaction expected to refuse, carrying the exact
+    /// signatures its frame requires.
+    ///
+    /// A hostile case must differ from the honest one in exactly the coordinate
+    /// under test. If it also drops a signature the frame needs, the transaction
+    /// never reaches the chain and the refusal proves nothing.
+    pub(crate) fn send_v0_expected_failure_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            additional_signers,
+            observation,
+            tables,
+            true,
+        )
+    }
+
     /// Submit one routed v0 transaction carrying additional exact signers.
     ///
     /// A routed frame can still require a signature that is not the fee

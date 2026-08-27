@@ -1856,10 +1856,11 @@ fn execute_projected_custody_bootstrap(
         .get_mut(1)
         .ok_or_else(|| Error::new("bootstrap omitted its terminal Lock coordinate"))?
         .pubkey = open_hoard_record.raw;
-    transactions.push(rpc.send_v0_expected_failure(
+    transactions.push(rpc.send_v0_expected_failure_with_signers(
         "DCLTPCB1 refuses a non-terminal projected-Custody request",
         &[non_terminal],
         payer,
+        &[&beneficiary],
         routing,
         &tables,
     )?);
@@ -1877,10 +1878,11 @@ fn execute_projected_custody_bootstrap(
         reordered.accounts.swap(first, second);
         let rollback_recipient = Pubkey::new_unique();
         let before = rpc.required_account(payer.pubkey(), "bootstrap rollback prestate")?;
-        let rolled_back = rpc.send_v0_expected_failure(
+        let rolled_back = rpc.send_v0_expected_failure_with_signers(
             "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
             &[transfer(&payer.pubkey(), &rollback_recipient, 1), reordered],
             payer,
+            &[&beneficiary],
             routing,
             &tables,
         )?;
