@@ -1439,8 +1439,18 @@ fn logical_accounts(
             true,
         ),
     )?;
+    // Each child route's `CallerAuthority` is a distinct Trading PDA: its seeds
+    // carry that route's own child-request digest, so two routes never share
+    // one. Coordinate 48 is the seller-intermediate Custody route's authority
+    // and is stated the same way 62 and 76 already are. Copying coordinate 34's
+    // authority here made two declared self-representatives one physical
+    // account, which `validate_accounts` refuses as `CrossItemAlias`.
+    set(
+        &mut logical,
+        48,
+        external_empty(key(0xb0), system_program::ID, false, false),
+    )?;
     for (alias, representative) in [
-        (48, 34),
         (49, 23),
         (50, 24),
         (51, 25),
