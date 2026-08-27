@@ -2382,6 +2382,17 @@ name = "dclutch-record-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-registry-activation-auth-v1"
+version = "0.1.0"
+dependencies = [
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-registry-contract"
 version = "0.1.0"
 dependencies = [
@@ -2396,6 +2407,7 @@ dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
  "dclutch-record-contract",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
@@ -2672,9 +2684,6 @@ dependencies = [
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
- "dclutch-general-adapter-contract",
- "dclutch-general-codec",
- "dclutch-general-config-contract",
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-svm-reader",
