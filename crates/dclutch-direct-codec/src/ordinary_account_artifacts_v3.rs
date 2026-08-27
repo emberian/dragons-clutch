@@ -23,7 +23,8 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_claims_svm::{
     frame_spec_v1::{
-        ClaimsFrameDataV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
+        ClaimsFrameDataV1, ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1,
+        SparseNativeTransferFrameSpecV1,
     },
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
@@ -31,7 +32,7 @@ use dclutch_claims_svm::{
     },
 };
 use dclutch_custody_contract::{
-    CustodyFrameDataV1, CustodyFrameSpecV1, CustodyReplayLayoutV1, OperationV1,
+    CustodyFrameDataV1, CustodyFrameRoleV1, CustodyFrameSpecV1, CustodyReplayLayoutV1, OperationV1,
     TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_market_core_codec::STATE_BYTES as CORE_STATE_BYTES;
@@ -78,7 +79,7 @@ use crate::{
 };
 
 const FIXED_ACCOUNTS: usize = DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3 as usize;
-const FIXED_OPERATIONS: usize = 37;
+const FIXED_OPERATIONS: usize = 34;
 const FIXED_DATA_PREDICATES: usize = 9;
 const CLAIMS_MARKET_ACCOUNT: u16 = DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + 1;
 const CLAIMS_SOURCE_POSITION_ACCOUNT: u16 = DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + 20;
@@ -86,11 +87,9 @@ const CLAIMS_DESTINATION_POSITION_ACCOUNT: u16 = DIRECT_INLINE_CLAIMS_ACCOUNT_ST
 const SYSTEM_PROGRAM_ACCOUNT: u16 = 11;
 const REALM_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3 + 6;
 const CUSTODY_REPLAY_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3 + 8;
-const COLLATERAL_MINT_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3 + 9;
 const BUYER_TOKEN_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3 + 10;
 const SELLER_TOKEN_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3 + 11;
 const CUSTODY_AUTHORITY_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3 + 12;
-const TOKEN_PROGRAM_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3 + 13;
 const FEE_TOKEN_ACCOUNT: u16 = DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3 + 11;
 const ROOT_BYTES: usize = CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1;
 const BASIS_PREFIX_BYTES: usize = BASIS_WIDTH_OFFSET_V3 + 4;
@@ -287,6 +286,11 @@ fn rules(
             prestate: AccountPrestateV2::LifecycleBound,
         };
     }
+    // Both replay-root creation payers are one rent payer: the 1,224-byte
+    // continuation packet has no room for a second signer, so coordinate 9 is
+    // an authenticated route alias of coordinate 6 (see `ROUTE_ALIASES`). Both
+    // coordinates are still stated here so the alias loop's privilege-equality
+    // refusal has the pre-alias privileges to compare.
     for account in [6_usize, 9] {
         *rule_mut(&mut output, account)? = exact(
             signer_writable,
@@ -300,9 +304,12 @@ fn rules(
         rule.rule.privileges = writable;
         rule.rule.effect_permissions = AccountEffectPermissionsV2::new(false, true, false);
     }
-    rule_mut(&mut output, usize::from(SYSTEM_PROGRAM_ACCOUNT))?
-        .rule
-        .privileges = executable;
+    // The System Program is a chain-supplied builtin, not a protocol record: a
+    // live validator backs it with a NativeLoader account whose width is the
+    // validator's business (21 bytes under solana-program-test, 14 on Agave).
+    // The profile authenticates its identity through the trusted-builtin
+    // `require_key` below and asserts nothing about its bytes.
+    *rule_mut(&mut output, usize::from(SYSTEM_PROGRAM_ACCOUNT))? = opaque(executable);
 
     let claims = SparseNativeTransferFrameSpecV1;
     let mut local = 0_u16;
@@ -314,7 +321,11 @@ fn rules(
             &mut output,
             usize::from(DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3 + local),
         )?;
-        let privileges = claims_privileges(account.privileges());
+        let privileges = if account.role() == ClaimsFrameRoleV1::CallerAuthority {
+            outer_child_authority_privileges()
+        } else {
+            claims_privileges(account.privileges())
+        };
         rule.rule.privileges = privileges;
         if matches!(
             claims
@@ -354,7 +365,11 @@ fn rules(
                 .account(local)
                 .map_err(|_| DirectOrdinaryAccountArtifactErrorV3::Frame)?;
             let rule = rule_mut(&mut output, usize::from(start + local))?;
-            let privileges = custody_privileges(account.privileges());
+            let privileges = if account.role() == CustodyFrameRoleV1::CallerAuthority {
+                outer_child_authority_privileges()
+            } else {
+                custody_privileges(account.privileges())
+            };
             rule.rule.privileges = privileges;
             if matches!(
                 custody
@@ -492,8 +507,11 @@ fn operations()
             IDENTITY_BUYER_RENT_BENEFICIARY_OBSERVATION_V3,
         )?,
         require_key(SYSTEM_PROGRAM_ACCOUNT, IDENTITY_SYSTEM_PROGRAM_V3)?,
+        // Coordinate 9 is an authenticated route alias of coordinate 6, and an
+        // operation may never target an alias coordinate: the representative is
+        // the single logical authority, so this one owner anchor covers both
+        // payer coordinates and the alias derives its debit permission from it.
         require_owner(6, IDENTITY_SYSTEM_PROGRAM_V3)?,
-        require_owner(9, IDENTITY_SYSTEM_PROGRAM_V3)?,
         project_u64(
             CLAIMS_MARKET_ACCOUNT,
             LiabilityBasisMarketLayoutV2::REVISION,
@@ -510,6 +528,34 @@ fn operations()
             SCALAR_BUYER_POSITION_REVISION_V3,
         )?,
         project_key(REALM_ACCOUNT, IDENTITY_REALM_V3)?,
+        // The collateral mint and the token program are authenticated immutable
+        // facts of the Realm, so the profile PROJECTS them out of the Realm
+        // record and never re-requires them against a coordinate.
+        //
+        // It cannot: `OP_REQUIRE_KEY` compares an observed key against
+        // `input_identities`, and the only identities a family may place in the
+        // input bank are the closed trusted-environment set (current slot,
+        // current executing program, System Program) that the runtime supplies
+        // directly. Record-derived facts land in the OUTPUT bank, which
+        // `OP_REQUIRE_KEY` cannot read, so a
+        // `require_key(mint_coordinate, IDENTITY_MINT_V3)` here compares the
+        // mint against a zero register and is unsatisfiable by construction.
+        // Seeding the input bank from the Realm instead would make the
+        // family-neutral Hot executor a second semantic owner of RealmLayoutV1,
+        // and seeding it from the caller is exactly the caller choice the
+        // operation was meant to forbid.
+        //
+        // Neither is needed. These two projected registers are what the Effect
+        // writes into `CustodyRequestLayoutV1::{MINT, TOKEN_PROGRAM}`, and
+        // Custody — the semantic owner of the vault — independently
+        // authenticates the Realm record and then requires
+        // `request.mint == realm.collateral_mint()`,
+        // `request.token_program == realm.token_program()`, the token program to
+        // equal the Realm's selected collateral adapter release, and the live
+        // frame accounts to equal both (plus `mint.owner == token_program`).
+        // The outer restatement was strictly weaker than the child's own check,
+        // which is the standing ruling for child privileges applied to child
+        // identities.
         project_identity(
             REALM_ACCOUNT,
             RealmLayoutV1::COLLATERAL_MINT,
@@ -525,16 +571,19 @@ fn operations()
             CustodyReplayLayoutV1::NEXT_REVISION_OFFSET,
             SCALAR_CUSTODY_REVISION_V3,
         )?,
-        require_key(COLLATERAL_MINT_ACCOUNT, IDENTITY_MINT_V3)?,
         project_key(BUYER_TOKEN_ACCOUNT, IDENTITY_BUYER_TOKEN_ACCOUNT_V3)?,
         project_key(SELLER_TOKEN_ACCOUNT, IDENTITY_SELLER_TOKEN_ACCOUNT_V3)?,
         project_key(CUSTODY_AUTHORITY_ACCOUNT, IDENTITY_CUSTODY_AUTHORITY_V3)?,
-        require_key(TOKEN_PROGRAM_ACCOUNT, IDENTITY_TOKEN_PROGRAM_V3)?,
         project_key(FEE_TOKEN_ACCOUNT, IDENTITY_FEE_TOKEN_ACCOUNT_V3)?,
     ])
 }
 
 const ROUTE_ALIASES: &[(u16, u16)] = &[
+    // One rent payer funds both replay-root creations. Declaring coordinates 6
+    // and 9 as distinct self-representatives asserted two signers, which the
+    // 1,224-byte continuation packet cannot carry and which the runtime refuses
+    // as a `CrossItemAlias` the moment both coordinates observe the same key.
+    (9, 6),
     (14, 4),
     (16, 2),
     (20, 3),
@@ -598,7 +647,8 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectOrdinaryAccountArtifact
         || length_at(lengths, 8)? != width(DIRECT_MAKER_REPLAY_BYTES_V1)?
         || length_at(lengths, 9)? != 0
         || length_at(lengths, 10)? != width(RENT_CREDIT_BYTES_V1)?
-        || length_at(lengths, 11)? != 0
+        // Coordinate 11 is the chain's System Program: its NativeLoader record
+        // width belongs to the validator, so nothing here may pin it.
         || length_at(lengths, 23)? != width(CORE_STATE_BYTES)?
         || length_at(lengths, 24)? != width(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?
         || [25_usize, 26, 28, 30]
@@ -719,6 +769,18 @@ const fn opaque(privileges: AccountPrivilegesV2) -> AccountRuleWithPrestateInput
         },
         prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
     }
+}
+
+/// Outer privileges declared for a child frame's `CallerAuthority` coordinate.
+///
+/// A child frame's caller authority is a Trading PDA that signs only inside the
+/// child CPI, where the FrameSpec is the sole owner of that privilege. The
+/// outer AccountProfile observes the same physical account before any CPI, when
+/// it is not a signer, so copying the child's SIGNER declaration outward states
+/// something the runtime can never satisfy. The outer rule therefore declares
+/// no privilege at all and leaves child privilege truth in the FrameSpec.
+const fn outer_child_authority_privileges() -> AccountPrivilegesV2 {
+    AccountPrivilegesV2::new(false, false, false)
 }
 
 fn claims_privileges(
@@ -848,13 +910,18 @@ fn width(value: usize) -> Result<u32, DirectOrdinaryAccountArtifactErrorV3> {
 mod tests {
     extern crate std;
 
-    use std::vec;
+    use std::{vec, vec::Vec};
 
     use super::*;
     use dclutch_account_profile_contract::{
-        EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
-        EFFECT_PERMISSION_WRITE_DATA, v2::FixedDataPredicateKindV2,
+        AccountObservationV1, EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
+        EFFECT_PERMISSION_WRITE_DATA,
+        v2::{
+            Error as ProfileError, FixedDataPredicateKindV2, ProjectionRegistersV2,
+            derive_effect_permissions, project_atomic,
+        },
     };
+    use dclutch_effect_kernel::v2::AccountPermission;
 
     fn lengths(basis_bytes: u32) -> [u32; FIXED_ACCOUNTS] {
         let mut output = [0_u32; FIXED_ACCOUNTS];
@@ -983,6 +1050,7 @@ mod tests {
             Some(14)
         );
         assert_eq!(profile.trusted_system_program_identity(), Some(23));
+        assert_eq!(profile.representative(3, 9), Ok(6));
         assert_eq!(profile.representative(3, 14), Ok(4));
         assert_eq!(profile.representative(3, 87), Ok(73));
         assert_eq!(
@@ -1001,7 +1069,7 @@ mod tests {
             EFFECT_PERMISSION_CREDIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA
         );
         assert_eq!(maker.prestate(), AccountPrestateV2::LifecycleBound);
-        for coordinate in [12_u16, 27, 29, 31, 34, 46, 48, 62, 76] {
+        for coordinate in [11_u16, 12, 27, 29, 31, 34, 46, 48, 62, 76] {
             assert_eq!(
                 profile
                     .rule(false, coordinate)
@@ -1032,6 +1100,7 @@ mod tests {
     fn checked_release_programdata_and_authority_widths_do_not_change_profile_identity() {
         let baseline = lengths(256);
         let mut real_deployment = baseline;
+        real_deployment[11] = 21;
         real_deployment[12] = 91;
         real_deployment[27] = 1_141_117;
         for coordinate in [39_usize, 53, 67, 81] {
@@ -1131,5 +1200,337 @@ mod tests {
             Err(DirectOrdinaryAccountArtifactErrorV3::Geometry)
         );
         assert!(output.iter().all(|byte| *byte == 0x33));
+    }
+
+    const ADMISSION_TAIL_V3: u32 = 3;
+    const TRUSTED_TRADING_PROGRAM: [u8; 32] = [0xf2; 32];
+    const TRUSTED_SYSTEM_PROGRAM: [u8; 32] = [0xf1; 32];
+    /// A live validator backs the System Program with a NativeLoader record:
+    /// 21 bytes under `solana-program-test`, 14 on Agave. Neither is zero.
+    const NATIVE_LOADER_RECORD_BYTES: usize = 21;
+    /// Claims and Custody `CallerAuthority` coordinates in the Direct topology.
+    const CHILD_CALLER_AUTHORITY_COORDINATES_V3: &[usize] = &[12, 34, 48, 62, 76];
+
+    /// One complete runtime observation set for the canonical Direct topology.
+    ///
+    /// Coordinates are materialised per representative and then copied onto
+    /// their route aliases, exactly as the Hot adapter expands one physical
+    /// account vector into ninety logical coordinates.
+    struct DirectObservationsV3 {
+        keys: Vec<[u8; 32]>,
+        owners: Vec<[u8; 32]>,
+        lamports: Vec<u64>,
+        data: Vec<Vec<u8>>,
+        signer: Vec<bool>,
+        writable: Vec<bool>,
+        executable: Vec<bool>,
+        variable: Vec<bool>,
+    }
+
+    impl DirectObservationsV3 {
+        fn observations(&self) -> Vec<AccountObservationV1<'_>> {
+            (0..FIXED_ACCOUNTS)
+                .map(|coordinate| {
+                    let key = self.keys.get(coordinate).expect("key");
+                    let owner = self.owners.get(coordinate).expect("owner");
+                    let lamports = *self.lamports.get(coordinate).expect("lamports");
+                    let data = self.data.get(coordinate).expect("data").as_slice();
+                    let signer = *self.signer.get(coordinate).expect("signer");
+                    let writable = *self.writable.get(coordinate).expect("writable");
+                    let executable = *self.executable.get(coordinate).expect("executable");
+                    if *self.variable.get(coordinate).expect("variable") {
+                        AccountObservationV1::new_adapter_authenticated_variable_data(
+                            key, owner, lamports, data, signer, writable, executable,
+                        )
+                    } else {
+                        AccountObservationV1::new(
+                            key, owner, lamports, data, signer, writable, executable,
+                        )
+                    }
+                })
+                .collect()
+        }
+
+        fn project(&self) -> Result<(), ProfileError> {
+            let bytes = emit(&lengths(256));
+            let profile = AccountProfileV2::decode(&bytes).expect("decode");
+            let observations = self.observations();
+            let scalars = usize::from(profile.common_scalar_count())
+                + usize::from(profile.item_scalar_stride()) * ADMISSION_TAIL_V3 as usize;
+            let identities = usize::from(profile.common_identity_count())
+                + usize::from(profile.item_identity_stride()) * ADMISSION_TAIL_V3 as usize;
+            let mut input_scalars = vec![0_u64; scalars];
+            *input_scalars.get_mut(SCALAR_SLOT_V3).expect("slot") = 500;
+            let mut input_identities = vec![[0_u8; 32]; identities];
+            *input_identities
+                .get_mut(IDENTITY_TRADING_PROGRAM_V3)
+                .expect("Trading") = TRUSTED_TRADING_PROGRAM;
+            *input_identities
+                .get_mut(IDENTITY_SYSTEM_PROGRAM_V3)
+                .expect("System") = TRUSTED_SYSTEM_PROGRAM;
+            let mut scratch_scalars = input_scalars.clone();
+            let mut scratch_identities = input_identities.clone();
+            let mut output_scalars = input_scalars.clone();
+            let mut output_identities = input_identities.clone();
+            project_atomic(
+                profile,
+                ADMISSION_TAIL_V3,
+                &observations,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+            )
+        }
+    }
+
+    /// Materialise the canonical live topology the Hot executor actually meets.
+    ///
+    /// This is deliberately the *hostile* shape for the four repaired defects:
+    /// one rent payer at both payer coordinates, a nonempty NativeLoader System
+    /// Program record, and child `CallerAuthority` coordinates that do not sign
+    /// outside their child CPI.
+    fn direct_observations() -> DirectObservationsV3 {
+        let bytes = emit(&lengths(256));
+        let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        let tail = ADMISSION_TAIL_V3;
+        let mut value = DirectObservationsV3 {
+            keys: vec![[0_u8; 32]; FIXED_ACCOUNTS],
+            owners: vec![[0_u8; 32]; FIXED_ACCOUNTS],
+            lamports: vec![0_u64; FIXED_ACCOUNTS],
+            data: vec![Vec::new(); FIXED_ACCOUNTS],
+            signer: vec![false; FIXED_ACCOUNTS],
+            writable: vec![false; FIXED_ACCOUNTS],
+            executable: vec![false; FIXED_ACCOUNTS],
+            variable: vec![false; FIXED_ACCOUNTS],
+        };
+        for coordinate in 0..FIXED_ACCOUNTS {
+            let index = u16::try_from(coordinate).expect("coordinate");
+            let representative = profile
+                .representative(tail, coordinate)
+                .expect("representative");
+            if representative != coordinate {
+                continue;
+            }
+            let rule = profile.rule(false, index).expect("rule");
+            let privileges = rule.route_privileges();
+            *value.keys.get_mut(coordinate).expect("key") =
+                [u8::try_from(coordinate).expect("key byte") + 1; 32];
+            *value.owners.get_mut(coordinate).expect("owner") = [0x0a; 32];
+            *value.lamports.get_mut(coordinate).expect("lamports") = 1_000 + coordinate as u64;
+            *value.signer.get_mut(coordinate).expect("signer") = privileges.signer();
+            *value.writable.get_mut(coordinate).expect("writable") = privileges.writable();
+            *value.executable.get_mut(coordinate).expect("executable") = privileges.executable();
+            let width = match rule.prestate() {
+                // A first-use replay root is vacant; its predicates are skipped
+                // and its projections read zero.
+                AccountPrestateV2::LifecycleBound => 0,
+                AccountPrestateV2::AdapterAuthenticatedVariableData => {
+                    usize::try_from(rule.data_length()).expect("basis prefix") + 64
+                }
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData => NATIVE_LOADER_RECORD_BYTES,
+                _ => usize::try_from(rule.data_length() + rule.data_item_stride() * tail)
+                    .expect("exact width"),
+            };
+            *value.data.get_mut(coordinate).expect("data") = vec![0_u8; width];
+            *value.variable.get_mut(coordinate).expect("variable") =
+                rule.prestate() == AccountPrestateV2::AdapterAuthenticatedVariableData;
+        }
+        // Trusted-environment and builtin relations the profile requires.
+        *value.owners.get_mut(0).expect("root owner") = TRUSTED_TRADING_PROGRAM;
+        // Live facts asserted here, NOT read back out of the profile, so this
+        // topology stays a witness rather than a mirror of whatever the emitter
+        // happens to declare.
+        //
+        // One rent payer signs for both replay-root creations.
+        for coordinate in [6_usize, 9] {
+            *value.keys.get_mut(coordinate).expect("payer key") = [0x6a; 32];
+            *value.owners.get_mut(coordinate).expect("payer owner") = TRUSTED_SYSTEM_PROGRAM;
+            *value.lamports.get_mut(coordinate).expect("payer lamports") = 5_000_000;
+            *value.data.get_mut(coordinate).expect("payer data") = Vec::new();
+            *value.signer.get_mut(coordinate).expect("payer signer") = true;
+            *value.writable.get_mut(coordinate).expect("payer writable") = true;
+        }
+        // The chain backs the System Program with a nonempty NativeLoader record.
+        let system = usize::from(SYSTEM_PROGRAM_ACCOUNT);
+        *value.keys.get_mut(system).expect("System Program key") = TRUSTED_SYSTEM_PROGRAM;
+        *value.data.get_mut(system).expect("System Program data") =
+            vec![0x7f; NATIVE_LOADER_RECORD_BYTES];
+        // A child frame's caller authority signs only inside its own CPI, so the
+        // outer observation of the same account never carries the signer bit.
+        for coordinate in CHILD_CALLER_AUTHORITY_COORDINATES_V3 {
+            *value.signer.get_mut(*coordinate).expect("child authority") = false;
+        }
+        // Fixed-data predicates on the live capability root.
+        value.write_data(
+            0,
+            CAPABILITY_ROOT_HEADER_BYTES_V1 + DirectRootStateLayoutV1::MAGIC,
+            &DirectRootStateLayoutV1::MAGIC_WORD.to_le_bytes(),
+        );
+        value.write_data(
+            0,
+            CAPABILITY_ROOT_HEADER_BYTES_V1 + DirectRootStateLayoutV1::VERSION,
+            &DirectRootStateLayoutV1::ABI_VERSION.to_le_bytes(),
+        );
+        // The authenticated ProductBasis record carries the real outcome tail.
+        value.write_data(4, BASIS_WIDTH_OFFSET_V3, &tail.to_le_bytes());
+        for (account, representative) in ROUTE_ALIASES {
+            value.copy_alias(usize::from(*account), usize::from(*representative));
+        }
+        value
+    }
+
+    impl DirectObservationsV3 {
+        fn copy_alias(&mut self, account: usize, representative: usize) {
+            let key = *self.keys.get(representative).expect("key");
+            let owner = *self.owners.get(representative).expect("owner");
+            let lamports = *self.lamports.get(representative).expect("lamports");
+            let data = self.data.get(representative).expect("data").clone();
+            let signer = *self.signer.get(representative).expect("signer");
+            let writable = *self.writable.get(representative).expect("writable");
+            let executable = *self.executable.get(representative).expect("executable");
+            *self.keys.get_mut(account).expect("alias key") = key;
+            *self.owners.get_mut(account).expect("alias owner") = owner;
+            *self.lamports.get_mut(account).expect("alias lamports") = lamports;
+            *self.data.get_mut(account).expect("alias data") = data;
+            *self.signer.get_mut(account).expect("alias signer") = signer;
+            *self.writable.get_mut(account).expect("alias writable") = writable;
+            *self.executable.get_mut(account).expect("alias executable") = executable;
+            *self.variable.get_mut(account).expect("alias variable") = false;
+        }
+
+        fn write_data(&mut self, coordinate: usize, offset: usize, value: &[u8]) {
+            self.data
+                .get_mut(coordinate)
+                .expect("data")
+                .get_mut(offset..offset + value.len())
+                .expect("field")
+                .copy_from_slice(value);
+        }
+
+        fn set_key(&mut self, coordinate: usize, value: [u8; 32]) {
+            *self.keys.get_mut(coordinate).expect("key") = value;
+        }
+
+        fn set_signer(&mut self, coordinate: usize, value: bool) {
+            *self.signer.get_mut(coordinate).expect("signer") = value;
+        }
+
+        fn set_data(&mut self, coordinate: usize, value: Vec<u8>) {
+            *self.data.get_mut(coordinate).expect("data") = value;
+        }
+    }
+
+    #[test]
+    fn the_canonical_live_direct_topology_projects_at_the_real_tail() {
+        assert_eq!(direct_observations().project(), Ok(()));
+    }
+
+    #[test]
+    fn one_rent_payer_is_admitted_and_two_distinct_payers_are_refused() {
+        let mut hostile = direct_observations();
+        // Coordinate 9 is a route alias, so a second distinct payer key is now
+        // an alias violation instead of the CrossItemAlias that two declared
+        // self-representatives produced.
+        hostile.set_key(9, [0xcc; 32]);
+        assert_eq!(hostile.project(), Err(ProfileError::AliasMismatch));
+
+        // Two distinct representatives may still never share one key.
+        let mut hostile = direct_observations();
+        hostile.copy_alias(10, 7);
+        assert_eq!(hostile.project(), Err(ProfileError::CrossItemAlias));
+    }
+
+    #[test]
+    fn a_nonempty_system_program_record_is_admitted_at_every_validator_width() {
+        for width in [0_usize, 14, 21] {
+            let mut value = direct_observations();
+            value.set_data(usize::from(SYSTEM_PROGRAM_ACCOUNT), vec![0x7f; width]);
+            assert_eq!(value.project(), Ok(()), "System Program width {width}");
+        }
+    }
+
+    #[test]
+    fn a_child_caller_authority_that_signs_outside_its_cpi_is_refused() {
+        let bytes = emit(&lengths(256));
+        let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        for coordinate in CHILD_CALLER_AUTHORITY_COORDINATES_V3.iter().copied() {
+            let index = u16::try_from(coordinate).expect("coordinate");
+            assert_eq!(
+                profile.rule(false, index).expect("authority").privileges(),
+                0,
+                "coordinate {coordinate} must declare no outer privilege"
+            );
+            let mut hostile = direct_observations();
+            hostile.set_signer(coordinate, true);
+            assert_eq!(
+                hostile.project(),
+                Err(ProfileError::PrivilegeMismatch),
+                "coordinate {coordinate}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_aliased_payer_still_derives_its_representative_debit_authority() {
+        let bytes = emit(&lengths(256));
+        let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        let mut permissions = vec![
+            AccountPermission::read_only();
+            profile
+                .logical_account_count(ADMISSION_TAIL_V3)
+                .expect("logical count")
+        ];
+        derive_effect_permissions(profile, ADMISSION_TAIL_V3, &mut permissions)
+            .expect("effect permissions");
+        let debit = AccountPermission::new(true, false, false);
+        assert_eq!(permissions.get(6), Some(&debit));
+        assert_eq!(permissions.get(9), Some(&debit));
+        // Ninety logical coordinates pack into forty-three physical accounts
+        // carrying exactly one signer, which is what the 1,224-byte
+        // continuation packet can actually carry.
+        assert_eq!(
+            profile
+                .logical_account_count(ADMISSION_TAIL_V3)
+                .expect("logical count"),
+            FIXED_ACCOUNTS
+        );
+        assert_eq!(
+            profile
+                .physical_account_count_with_dynamic_spans(ADMISSION_TAIL_V3, &[])
+                .expect("physical count"),
+            43
+        );
+        let signers = (0..FIXED_ACCOUNTS)
+            .filter(|coordinate| {
+                let index = u16::try_from(*coordinate).expect("coordinate");
+                profile
+                    .representative(ADMISSION_TAIL_V3, *coordinate)
+                    .expect("representative")
+                    == *coordinate
+                    && profile
+                        .rule(false, index)
+                        .expect("rule")
+                        .route_privileges()
+                        .signer()
+            })
+            .count();
+        assert_eq!(signers, 1);
+        assert_eq!(
+            profile.rule(false, 9).expect("payer alias").prestate(),
+            AccountPrestateV2::AuthenticatedRouteAlias
+        );
+        assert_eq!(profile.rule(false, 9).expect("payer alias").privileges(), 0);
+        assert_eq!(
+            profile
+                .rule(false, 9)
+                .expect("payer alias")
+                .effect_permissions(),
+            0
+        );
     }
 }
