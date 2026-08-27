@@ -872,7 +872,7 @@ mod tests {
 
     use super::*;
     use crate::registered_state_artifacts_v4::{
-        DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5,
+        DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5, DirectRegisteredCreationChildRentWidthsV4,
         encode_direct_registered_creation_lifecycle_v5_atomic,
     };
     use dclutch_account_profile_contract::{
@@ -1028,10 +1028,11 @@ mod tests {
             FixedDataPredicateKindV2::RequireZeroRange(5)
         );
 
-        let mut lifecycle_scratch = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
-        let mut lifecycle = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+        let mut lifecycle_scratch = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
+        let mut lifecycle = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
         encode_direct_registered_creation_lifecycle_v5_atomic(
             crate::execution_v3::DirectExecutionActionV3::RegisterBuy,
+            Some(DirectRegisteredCreationChildRentWidthsV4 { custody_vault: 165 }),
             &mut lifecycle_scratch,
             &mut lifecycle,
         )

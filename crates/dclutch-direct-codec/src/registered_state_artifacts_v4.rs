@@ -5,6 +5,12 @@
 //! requires the registered record to be vacant.  Generic Trading owns PDA
 //! derivation, current-Rent authentication, protected outputs, and creation;
 //! this module contributes only the canonical Direct recipes and bindings.
+//!
+//! The V5 current-Rent quote table is ACTION-SELECTED, because the two sides
+//! create different children. A registered Buy opens a Custody replay and a
+//! Custody token Vault and must quote both; a registered Sell opens neither.
+//! The quote table is the sole writer of those scalars: nothing else in the
+//! family may target a lifecycle-protected destination.
 
 use dclutch_account_profile_contract::lifecycle_v3::{
     ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
@@ -16,6 +22,7 @@ use dclutch_account_profile_contract::lifecycle_v3::{
         LifecycleSeedInputV3, encode_lifecycle_policy_v5_atomic,
     },
 };
+use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
 
 use crate::{
     execution_v3::DirectExecutionActionV3,
@@ -34,6 +41,7 @@ use crate::{
         REGISTERED_SCALAR_RECORD_BUMP_OBSERVATION_V4, REGISTERED_SCALAR_RECORD_BUMP_V4,
         REGISTERED_SCALAR_RECORD_CREATED_V4, REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4,
         REGISTERED_SCALAR_RECORD_PRINCIPAL_OBSERVATION_V4, REGISTERED_SCALAR_RECORD_PRINCIPAL_V4,
+        REGISTERED_SCALAR_REPLAY_RENT_V4, REGISTERED_SCALAR_VAULT_RENT_V4,
     },
     successor::{
         DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1,
@@ -69,7 +77,13 @@ const RECORD_SEED_COUNT: usize = 6;
 const SEED_COUNT: usize = MAKER_SEED_COUNT + RECORD_SEED_COUNT;
 const PLAN_COUNT: usize = 2;
 const BINDING_COUNT: usize = 4;
-const RENT_QUOTE_COUNT: usize = 2;
+/// Maker replay and registered record: the two accounts BOTH sides create.
+const COMMON_RENT_QUOTE_COUNT: usize = 2;
+/// Plus the Custody replay and the Custody token Vault a Buy also opens.
+const BUY_RENT_QUOTE_COUNT: usize = COMMON_RENT_QUOTE_COUNT + 2;
+/// A Sell opens no Custody child, so its table is the common one exactly.
+const SELL_RENT_QUOTE_COUNT: usize = COMMON_RENT_QUOTE_COUNT;
+const MAX_RENT_QUOTE_COUNT: usize = BUY_RENT_QUOTE_COUNT;
 const MAKER_SEED_COUNT_U8: u8 = 5;
 const RECORD_SEED_COUNT_U8: u8 = 6;
 const RECORD_SEED_START: u16 = 5;
@@ -78,34 +92,76 @@ const RECORD_BYTES_U32: u32 = 268;
 const _: () = assert!(DIRECT_MAKER_REPLAY_BYTES_V1 == MAKER_BYTES_U32 as usize);
 const _: () = assert!(DIRECT_REGISTERED_RECORD_BYTES_V2 == RECORD_BYTES_U32 as usize);
 
+const fn lifecycle_bytes(rent_quotes: usize) -> usize {
+    HEADER_BYTES
+        + RECIPE_COUNT * RECIPE_BYTES
+        + SEED_COUNT * SEED_BYTES
+        + PLAN_COUNT * ACTION_PLAN_BYTES
+        + PLAN_COUNT * PROTECTED_OUTPUT_BYTES
+        + BINDING_COUNT * IMMUTABLE_IDENTITY_BINDING_BYTES
+        + rent_quotes * CURRENT_RENT_QUOTE_BYTES_V5
+}
+
+/// Exact LifecycleV5 bytes for registered Buy creation.
+pub const DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5: usize = lifecycle_bytes(BUY_RENT_QUOTE_COUNT);
+/// Exact LifecycleV5 bytes for registered Sell creation.
+pub const DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5: usize = lifecycle_bytes(SELL_RENT_QUOTE_COUNT);
+
 /// Exact LifecycleV5 bytes for one side-selected registered creation action.
-pub const DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5: usize = HEADER_BYTES
-    + RECIPE_COUNT * RECIPE_BYTES
-    + SEED_COUNT * SEED_BYTES
-    + PLAN_COUNT * ACTION_PLAN_BYTES
-    + PLAN_COUNT * PROTECTED_OUTPUT_BYTES
-    + BINDING_COUNT * IMMUTABLE_IDENTITY_BINDING_BYTES
-    + RENT_QUOTE_COUNT * CURRENT_RENT_QUOTE_BYTES_V5;
+#[must_use]
+pub const fn direct_registered_creation_lifecycle_bytes_v5(
+    action: DirectExecutionActionV3,
+) -> Option<usize> {
+    match action {
+        DirectExecutionActionV3::RegisterBuy => Some(DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5),
+        DirectExecutionActionV3::RegisterSell => Some(DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5),
+        _ => None,
+    }
+}
+
+/// Exact chain-observed widths of the children a registered creation opens.
+///
+/// A `LifecycleCurrentRentQuoteInputV5` quotes an EXACT width, and a Custody
+/// token Vault does not have one this crate may state: a Token-2022 account
+/// carrying extensions is not 165 bytes. The width is therefore an input,
+/// exactly as the AccountProfile's logical data lengths are.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectRegisteredCreationChildRentWidthsV4 {
+    /// Exact selected Token or Token-2022 vault-account bytes.
+    pub custody_vault: u32,
+}
 
 /// Stable registered lifecycle artifact refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DirectRegisteredStateArtifactErrorV4 {
     /// An action, account, register, or byte coordinate was invalid.
     Coordinate,
+    /// The declared child widths did not match the selected action.
+    ChildWidths,
     /// The semantic-owner lifecycle encoder or hostile decoder refused.
     Lifecycle(dclutch_account_profile_contract::lifecycle_v3::Error),
 }
 
 /// Emit the exact maker/record lifecycle for RegisterSell or RegisterBuy.
+///
+/// `child_widths` is required exactly when the action opens a Custody child --
+/// RegisterBuy -- and must be absent otherwise. Passing `None` for a Buy used
+/// to be the only possibility, and it left `REGISTERED_SCALAR_REPLAY_RENT_V4`
+/// and `REGISTERED_SCALAR_VAULT_RENT_V4` -- the two registers the Buy Effect
+/// writes into the Custody `InitializeReplay` and `OpenVault` requests'
+/// `rent_lamports` field -- with no writer at all. `CustodyRequestV1::validate`
+/// refuses `rent_lamports == 0` for both operations, so the first Custody route
+/// of every registered Buy would have refused before touching an account.
 pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
     action: DirectExecutionActionV3,
+    child_widths: Option<DirectRegisteredCreationChildRentWidthsV4>,
     scratch: &mut [u8],
     output: &mut [u8],
 ) -> Result<(), DirectRegisteredStateArtifactErrorV4> {
     require_creation_action(action)?;
-    if scratch.len() != DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5
-        || output.len() != DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5
-    {
+    let expected = direct_registered_creation_lifecycle_bytes_v5(action)
+        .ok_or(DirectRegisteredStateArtifactErrorV4::Coordinate)?;
+    if scratch.len() != expected || output.len() != expected {
         return Err(DirectRegisteredStateArtifactErrorV4::Coordinate);
     }
     let recipes = [
@@ -206,23 +262,16 @@ pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
             REGISTERED_IDENTITY_MARKET_V4,
         )?,
     ];
-    let rent_quotes = [
-        LifecycleCurrentRentQuoteInputV5 {
-            exact_data_len: MAKER_BYTES_U32,
-            scalar_destination: scalar(REGISTERED_SCALAR_MAKER_CURRENT_RENT_V4)?,
-        },
-        LifecycleCurrentRentQuoteInputV5 {
-            exact_data_len: RECORD_BYTES_U32,
-            scalar_destination: scalar(REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4)?,
-        },
-    ];
+    let quotes = rent_quotes(action, child_widths)?;
     encode_lifecycle_policy_v5_atomic(
         &recipes,
         &seeds,
         &plans,
         &protected,
         &bindings,
-        &rent_quotes,
+        quotes
+            .get(..rent_quote_count(action)?)
+            .ok_or(DirectRegisteredStateArtifactErrorV4::Coordinate)?,
         scratch,
         output,
     )
@@ -230,6 +279,65 @@ pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
     StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
         .map_err(DirectRegisteredStateArtifactErrorV4::Lifecycle)?;
     Ok(())
+}
+
+const fn rent_quote_count(
+    action: DirectExecutionActionV3,
+) -> Result<usize, DirectRegisteredStateArtifactErrorV4> {
+    match action {
+        DirectExecutionActionV3::RegisterBuy => Ok(BUY_RENT_QUOTE_COUNT),
+        DirectExecutionActionV3::RegisterSell => Ok(SELL_RENT_QUOTE_COUNT),
+        _ => Err(DirectRegisteredStateArtifactErrorV4::Coordinate),
+    }
+}
+
+/// The action-selected current-Rent quote table.
+///
+/// The decoder requires STRICTLY ASCENDING scalar destinations, so the table is
+/// ordered by register index and not by the order the accounts are created:
+/// the two Custody children a Buy opens hold registers 50 and 51, and the maker
+/// replay and registered record hold 52 and 53. A Sell opens no Custody child,
+/// so its table is registers 52 and 53 alone and the Buy's is all four.
+///
+/// The Custody replay width this crate does know exactly; the token Vault's
+/// belongs to the selected token program and arrives as an observation.
+///
+/// Every destination here is a lifecycle-PROTECTED scalar -- no AccountProfile
+/// operation, RequestProfile projection, or Transition instruction in this
+/// family targets 50, 51, 52 or 53 -- so this table is the sole writer of all
+/// four.
+fn rent_quotes(
+    action: DirectExecutionActionV3,
+    child_widths: Option<DirectRegisteredCreationChildRentWidthsV4>,
+) -> Result<
+    [LifecycleCurrentRentQuoteInputV5; MAX_RENT_QUOTE_COUNT],
+    DirectRegisteredStateArtifactErrorV4,
+> {
+    let maker = LifecycleCurrentRentQuoteInputV5 {
+        exact_data_len: MAKER_BYTES_U32,
+        scalar_destination: scalar(REGISTERED_SCALAR_MAKER_CURRENT_RENT_V4)?,
+    };
+    let record = LifecycleCurrentRentQuoteInputV5 {
+        exact_data_len: RECORD_BYTES_U32,
+        scalar_destination: scalar(REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4)?,
+    };
+    match (action, child_widths) {
+        (DirectExecutionActionV3::RegisterBuy, Some(widths)) if widths.custody_vault != 0 => Ok([
+            LifecycleCurrentRentQuoteInputV5 {
+                exact_data_len: u32::try_from(CUSTODY_REPLAY_BYTES_V1)
+                    .map_err(|_| DirectRegisteredStateArtifactErrorV4::Coordinate)?,
+                scalar_destination: scalar(REGISTERED_SCALAR_REPLAY_RENT_V4)?,
+            },
+            LifecycleCurrentRentQuoteInputV5 {
+                exact_data_len: widths.custody_vault,
+                scalar_destination: scalar(REGISTERED_SCALAR_VAULT_RENT_V4)?,
+            },
+            maker,
+            record,
+        ]),
+        (DirectExecutionActionV3::RegisterSell, None) => Ok([maker, record, maker, record]),
+        _ => Err(DirectRegisteredStateArtifactErrorV4::ChildWidths),
+    }
 }
 
 const fn recipe(
@@ -311,26 +419,53 @@ mod tests {
     use dclutch_account_profile_contract::lifecycle_v3::LifecycleOperationV3;
     use sha2::{Digest, Sha256};
 
-    fn artifact(
-        action: DirectExecutionActionV3,
-    ) -> [u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5] {
-        let mut scratch = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
-        let mut output = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
-        encode_direct_registered_creation_lifecycle_v5_atomic(action, &mut scratch, &mut output)
-            .expect("registered lifecycle");
+    /// The observed Token-2022 vault width the Buy quotes against in tests.
+    const OBSERVED_VAULT_BYTES: u32 = 165;
+
+    fn buy() -> [u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5] {
+        let mut scratch = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
+        let mut output = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
+        encode_direct_registered_creation_lifecycle_v5_atomic(
+            DirectExecutionActionV3::RegisterBuy,
+            Some(DirectRegisteredCreationChildRentWidthsV4 {
+                custody_vault: OBSERVED_VAULT_BYTES,
+            }),
+            &mut scratch,
+            &mut output,
+        )
+        .expect("registered Buy lifecycle");
         output
+    }
+
+    fn sell() -> [u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5] {
+        let mut scratch = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
+        let mut output = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
+        encode_direct_registered_creation_lifecycle_v5_atomic(
+            DirectExecutionActionV3::RegisterSell,
+            None,
+            &mut scratch,
+            &mut output,
+        )
+        .expect("registered Sell lifecycle");
+        output
+    }
+
+    fn policy(bytes: &[u8]) -> StateLifecyclePolicyV5<'_> {
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        StateLifecyclePolicyV5::decode_selected(digest, digest, bytes).expect("lifecycle decode")
     }
 
     #[test]
     fn both_sides_select_two_protected_first_use_plans_and_exact_rent_quotes() {
-        for action in [
-            DirectExecutionActionV3::RegisterSell,
-            DirectExecutionActionV3::RegisterBuy,
+        for (action, bytes, first_lifecycle_quote) in [
+            (
+                DirectExecutionActionV3::RegisterSell,
+                sell().to_vec(),
+                0_u16,
+            ),
+            (DirectExecutionActionV3::RegisterBuy, buy().to_vec(), 2),
         ] {
-            let bytes = artifact(action);
-            let digest: [u8; 32] = Sha256::digest(bytes).into();
-            let policy = StateLifecyclePolicyV5::decode_selected(digest, digest, &bytes)
-                .expect("lifecycle decode");
+            let policy = policy(&bytes);
             assert_eq!(policy.action_plan_count(action as u32).expect("count"), 2);
             for ordinal in 0..2 {
                 let selected = policy.action_plan(action as u32, ordinal).expect("plan");
@@ -340,24 +475,99 @@ mod tests {
                 );
                 assert!(selected.protected_outputs().expect("protected").is_some());
             }
-            assert_eq!(policy.current_rent_quote_count(), 2);
-            let maker = policy.current_rent_quote(0).expect("maker rent");
-            let record = policy.current_rent_quote(1).expect("record rent");
+            let maker = policy
+                .current_rent_quote(first_lifecycle_quote)
+                .expect("maker rent");
+            let record = policy
+                .current_rent_quote(first_lifecycle_quote + 1)
+                .expect("record rent");
             assert_eq!(maker.exact_data_len(), MAKER_BYTES_U32);
             assert_eq!(record.exact_data_len(), RECORD_BYTES_U32);
-            assert_eq!(maker.scalar_destination().index(), 52);
-            assert_eq!(record.scalar_destination().index(), 53);
+            assert_eq!(
+                maker.scalar_destination().index(),
+                u16::try_from(REGISTERED_SCALAR_MAKER_CURRENT_RENT_V4).expect("maker register")
+            );
+            assert_eq!(
+                record.scalar_destination().index(),
+                u16::try_from(REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4).expect("record register")
+            );
         }
     }
 
+    /// The registered Buy Effect writes registers 50 and 51 into the Custody
+    /// `InitializeReplay` and `OpenVault` requests' `rent_lamports`, and
+    /// `CustodyRequestV1::validate` refuses `rent_lamports == 0` for both. The
+    /// quote table is the only artifact in the family entitled to write a
+    /// lifecycle-protected scalar, so if it does not carry these two entries
+    /// nothing does and every registered Buy refuses at its first CPI.
     #[test]
-    fn unsupported_action_or_wrong_width_preserves_output() {
-        let mut scratch = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
-        let mut output = [0x55_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+    fn the_buy_quotes_both_custody_children_and_the_sell_quotes_neither() {
+        let buy_bytes = buy();
+        let buy_policy = policy(&buy_bytes);
+        assert_eq!(
+            buy_policy.current_rent_quote_count(),
+            u16::try_from(BUY_RENT_QUOTE_COUNT).expect("Buy quote count")
+        );
+        let replay = buy_policy
+            .current_rent_quote(0)
+            .expect("Custody replay rent");
+        let vault = buy_policy
+            .current_rent_quote(1)
+            .expect("Custody Vault rent");
+        assert_eq!(
+            replay.exact_data_len(),
+            u32::try_from(CUSTODY_REPLAY_BYTES_V1).expect("replay width")
+        );
+        assert_eq!(vault.exact_data_len(), OBSERVED_VAULT_BYTES);
+        assert_eq!(
+            replay.scalar_destination().index(),
+            u16::try_from(REGISTERED_SCALAR_REPLAY_RENT_V4).expect("replay register")
+        );
+        assert_eq!(
+            vault.scalar_destination().index(),
+            u16::try_from(REGISTERED_SCALAR_VAULT_RENT_V4).expect("Vault register")
+        );
+
+        let sell_bytes = sell();
+        assert_eq!(
+            policy(&sell_bytes).current_rent_quote_count(),
+            u16::try_from(SELL_RENT_QUOTE_COUNT).expect("Sell quote count")
+        );
+    }
+
+    /// A Token-2022 vault carrying extensions is not 165 bytes, so the quote
+    /// has to move with the observation rather than restate a constant.
+    #[test]
+    fn the_observed_vault_width_moves_the_emitted_quote() {
+        let baseline = buy();
+        let mut scratch = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
+        let mut extended = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
+        encode_direct_registered_creation_lifecycle_v5_atomic(
+            DirectExecutionActionV3::RegisterBuy,
+            Some(DirectRegisteredCreationChildRentWidthsV4 { custody_vault: 182 }),
+            &mut scratch,
+            &mut extended,
+        )
+        .expect("Token-2022 vault");
+        assert_ne!(baseline, extended);
+        assert_eq!(
+            policy(&extended)
+                .current_rent_quote(1)
+                .expect("Vault rent")
+                .exact_data_len(),
+            182
+        );
+    }
+
+    #[test]
+    fn unsupported_action_child_widths_or_wrong_width_preserves_output() {
+        let mut scratch = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
+        let mut output = [0x55_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
         let before = output;
         assert_eq!(
             encode_direct_registered_creation_lifecycle_v5_atomic(
                 DirectExecutionActionV3::FillRegisteredOrdinary,
+                None,
                 &mut scratch,
                 &mut output,
             ),
@@ -365,11 +575,56 @@ mod tests {
         );
         assert_eq!(output, before);
 
-        let mut short = [0x55_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5 - 1];
+        // A Buy with no observed Custody widths is the exact shape that shipped
+        // an unwritten `rent_lamports`; it is now a refusal, not a default.
+        assert_eq!(
+            encode_direct_registered_creation_lifecycle_v5_atomic(
+                DirectExecutionActionV3::RegisterBuy,
+                None,
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectRegisteredStateArtifactErrorV4::ChildWidths)
+        );
+        assert_eq!(output, before);
+
+        // A zero vault width is the same defect wearing an observation.
+        assert_eq!(
+            encode_direct_registered_creation_lifecycle_v5_atomic(
+                DirectExecutionActionV3::RegisterBuy,
+                Some(DirectRegisteredCreationChildRentWidthsV4 { custody_vault: 0 }),
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectRegisteredStateArtifactErrorV4::ChildWidths)
+        );
+        assert_eq!(output, before);
+
+        // A Sell carries no Custody child, so declaring one is a refusal too.
+        let mut sell_scratch = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
+        let mut sell_output = [0x55_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
+        let sell_before = sell_output;
+        assert_eq!(
+            encode_direct_registered_creation_lifecycle_v5_atomic(
+                DirectExecutionActionV3::RegisterSell,
+                Some(DirectRegisteredCreationChildRentWidthsV4 {
+                    custody_vault: OBSERVED_VAULT_BYTES,
+                }),
+                &mut sell_scratch,
+                &mut sell_output,
+            ),
+            Err(DirectRegisteredStateArtifactErrorV4::ChildWidths)
+        );
+        assert_eq!(sell_output, sell_before);
+
+        let mut short = [0x55_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5 - 1];
         let short_before = short;
         assert_eq!(
             encode_direct_registered_creation_lifecycle_v5_atomic(
                 DirectExecutionActionV3::RegisterBuy,
+                Some(DirectRegisteredCreationChildRentWidthsV4 {
+                    custody_vault: OBSERVED_VAULT_BYTES,
+                }),
                 &mut scratch,
                 &mut short,
             ),
