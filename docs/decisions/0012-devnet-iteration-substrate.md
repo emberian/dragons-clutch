@@ -1,9 +1,22 @@
 # Decision 0012: the devnet substrate is mutable and iterated, and the slot pin replaces the revocation
 
-Status: **direction ruled by ember, 2026-08-27, live during SMOKE-0** — the
-design below is the recommended execution of that ruling and awaits its
-implementing lane. Nothing in this record has been implemented; the site map
-in §4 is verified against HEAD (`11f249ff`).
+Status: **direction ruled by ember, 2026-08-27, live during SMOKE-0** — and
+implementation began the same hour: the contract core
+(`slot_pinned_release_elf_digest_v1` + the pinned-Registry rewrite in
+`crates/dclutch-registry-contract`) and the activation-auth arm are in flight
+as this is written, the producer shape is boarded (DEVNET-DRIVER), and the
+external driver is DRIVER's. The site map in §4 was verified against
+`11f249ff`; consult the wave board for current per-site ownership.
+
+A sharpening found in the tree itself while implementing: the contract
+already anticipated this design. `ArtifactReleaseV1::slot_mismatch_refusal`
+(`crates/dclutch-registry-contract/src/artifact.rs`) names a strictly-later
+observed slot on an `ExactAuthority` release `ReleaseSupersededByUpgrade`,
+and its doc records a fact **sharper** than the monotonicity argument below:
+the Loader V3 refuses an `Upgrade` in the ProgramData's own recorded slot
+("Program was deployed in this block already"), and refuses the `Close` a
+redeploy would need in the same way — so even the same-slot corner is closed
+by the loader itself, not merely by slot ordering.
 
 ## Context: the ruling
 
