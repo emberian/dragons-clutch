@@ -52,7 +52,14 @@ use crate::{
 
 /// Maker replay state coordinate in the registered creation AccountProfile.
 pub const DIRECT_REGISTERED_MAKER_ACCOUNT_V4: u16 = 5;
-/// Shared creation payer coordinate.
+/// Sole registered-creation payer coordinate.
+///
+/// One rent payer funds both creations -- the maker signs one registration
+/// request and prepays both accounts it opens -- and coordinate 9 is its
+/// authenticated route alias. A plan names the REPRESENTATIVE, never the alias:
+/// `require_permissions` reads the named rule directly, and the adapter records
+/// a planned balance only at the representative, so naming 9 would both observe
+/// a permission-free alias rule and re-read the payer's pre-debit balance.
 pub const DIRECT_REGISTERED_PAYER_ACCOUNT_V4: u16 = 6;
 /// Sole lifecycle-scoped RentCredit coordinate.
 ///
@@ -61,7 +68,7 @@ pub const DIRECT_REGISTERED_PAYER_ACCOUNT_V4: u16 = 6;
 pub const DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4: u16 = 7;
 /// Registered record state coordinate.
 pub const DIRECT_REGISTERED_RECORD_ACCOUNT_V4: u16 = 8;
-/// Registered-record creation payer alias coordinate.
+/// Route alias of [`DIRECT_REGISTERED_PAYER_ACCOUNT_V4`], named by no plan.
 pub const DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4: u16 = 9;
 /// Executable Rent program that owns the lifecycle RentCredit.
 ///
@@ -215,7 +222,7 @@ pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
         plan(
             action,
             1,
-            DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
+            DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
             REGISTERED_SCALAR_RECORD_PRINCIPAL_OBSERVATION_V4,
             REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4,
         )?,

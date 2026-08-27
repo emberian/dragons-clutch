@@ -23,7 +23,8 @@ use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_MARKET_OFFSET, CAPABILITY_ROOT_RELEASE_SET_OFFSET,
 };
 use dclutch_custody_contract::{
-    CustodyFrameDataV1, CustodyFrameSpecV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
+    CustodyFrameDataV1, CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1,
+    TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_market_core_codec::STATE_BYTES as CORE_STATE_BYTES;
 use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
@@ -103,7 +104,7 @@ const _: () = assert!(
 );
 
 const FIXED_ACCOUNTS: usize = DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4 as usize;
-const FIXED_OPERATIONS: usize = 35;
+const FIXED_OPERATIONS: usize = 34;
 const FIXED_DATA_PREDICATES: usize = 9;
 const SYSTEM_PROGRAM_ACCOUNT: u16 = 11;
 const REALM_ACCOUNT: u16 = 18;
@@ -298,6 +299,10 @@ fn rules(
             prestate: AccountPrestateV2::LifecycleBound,
         };
     }
+    // A registered creation has ONE payer. Coordinate 9 is an authenticated
+    // route alias of coordinate 6 (see `ROUTE_ALIASES`); both are still stated
+    // here so the alias loop's privilege-equality refusal has the pre-alias
+    // privileges to compare, exactly as the ordinary topology states its own.
     for account in [
         DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
         DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
@@ -369,7 +374,11 @@ fn rules(
             let account = frame
                 .account(local)
                 .map_err(|_| DirectRegisteredAccountArtifactErrorV4::Frame)?;
-            let privileges = custody_privileges(account.privileges());
+            let privileges = if account.role() == CustodyFrameRoleV1::CallerAuthority {
+                outer_child_authority_privileges()
+            } else {
+                custody_privileges(account.privileges())
+            };
             let rule = rule_mut(&mut output, usize::from(start + local))?;
             rule.rule.privileges = privileges;
             // A Token-2022 mint carrying extensions is not 82 bytes, an
@@ -520,12 +529,12 @@ fn operations()
             SYSTEM_PROGRAM_ACCOUNT,
             REGISTERED_IDENTITY_SYSTEM_PROGRAM_V4,
         )?,
+        // Coordinate 9 is an authenticated route alias of coordinate 6, and an
+        // operation may never target an alias coordinate: the representative is
+        // the single logical authority, so this one owner anchor covers both
+        // payer coordinates and the alias derives its debit permission from it.
         require_owner(
             DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
-            REGISTERED_IDENTITY_SYSTEM_PROGRAM_V4,
-        )?,
-        require_owner(
-            DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
             REGISTERED_IDENTITY_SYSTEM_PROGRAM_V4,
         )?,
         project_key(
@@ -568,7 +577,55 @@ fn operations()
     ])
 }
 
+/// Logical coordinates that are views of another coordinate's physical account.
+///
+/// `(9, 6)` is the RULING on the registered family's second self-representative
+/// signer, which `52f14fa` settled for ordinary and left open here. Coordinates
+/// 6 and 9 are the maker-replay payer and the record payer, and a registered
+/// creation has ONE payer: the maker signs one registration request and prepays
+/// both accounts it creates. Two distinct representatives observing one key is
+/// exactly `CrossItemAlias`, so the ONLY case anyone can construct refused.
+///
+/// The ordinary ruling's stated reason does NOT carry over, and the registered
+/// packet is measured here rather than assumed. `waist.rs` measures the live
+/// ordinary continuation at 1,228 bytes of the 1,232-byte v0 packet -- four
+/// bytes of margin -- at 44 physical accounts and one signer, and records that
+/// each further physical account costs exactly two bytes because the
+/// continuation carries the nested Hot account list twice. Registered differs
+/// from that baseline by three exactly known terms: fifteen fewer physical
+/// accounts (29 against 44, -30 bytes), a registration request 140 bytes
+/// narrower than the inline-ordinary one (316 against 456), and one signed
+/// intent instead of two in the ed25519 precompile (-14 bytes). That is a
+/// derived 1,044 bytes, or 188 bytes of margin -- and a second signer would
+/// cost 64 for its signature, 32 for a static key a signer may never ALT-route,
+/// and 2 for one more twice-carried account, reaching 1,142 and still fitting.
+///
+/// So the registered packet would have carried two signers. It is the
+/// `CrossItemAlias` refusal, not the byte budget, that forces the alias here,
+/// and the next lane to reach for a second signer should re-read that and not
+/// the ordinary packet number. The derived figures are an ESTIMATE from a
+/// measured baseline; no registered continuation has ever been compiled.
 const ROUTE_ALIASES: &[(u16, u16)] = &[
+    (
+        DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
+        DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
+    ),
+    // Measuring coordinate 9 found four more signers, and two of them are the
+    // SAME defect: the Custody `InitializeReplay` and `OpenVault` frames each
+    // carry a `Payer` coordinate, and the Effect writes
+    // `REGISTERED_IDENTITY_PAYER_V4` -- projected from coordinate 6 -- into both
+    // children's `payer` field. Three self-representatives held one key. The
+    // other two are the frames' `CallerAuthority` coordinates, which are a
+    // Trading PDA that signs only inside its CPI; those are handled by
+    // `outer_child_authority_privileges`, not by an alias.
+    (
+        DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4 + 9,
+        DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
+    ),
+    (
+        DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4 + 13,
+        DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
+    ),
     (22, 11),
     (25, 13),
     (26, 14),
@@ -706,6 +763,18 @@ const fn opaque(privileges: AccountPrivilegesV2) -> AccountRuleWithPrestateInput
         },
         prestate: AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
     }
+}
+
+/// Outer privileges declared for a child frame's `CallerAuthority` coordinate.
+///
+/// A child frame's caller authority is a Trading PDA that signs only inside the
+/// child CPI, where the FrameSpec is the sole owner of that privilege. The
+/// outer AccountProfile observes the same physical account before any CPI, when
+/// it is not a signer, so copying the child's SIGNER declaration outward states
+/// something the runtime can never satisfy. The outer rule therefore declares
+/// no privilege at all and leaves child privilege truth in the FrameSpec.
+const fn outer_child_authority_privileges() -> AccountPrivilegesV2 {
+    AccountPrivilegesV2::new(false, false, false)
 }
 
 fn custody_privileges(
@@ -876,12 +945,14 @@ mod tests {
         encode_direct_registered_creation_lifecycle_v5_atomic,
     };
     use dclutch_account_profile_contract::{
-        EFFECT_PERMISSION_CREDIT_LAMPORTS, lifecycle_v3::StateLifecyclePolicyV5,
-        v2::FixedDataPredicateKindV2,
+        EFFECT_PERMISSION_CREDIT_LAMPORTS,
+        lifecycle_v3::StateLifecyclePolicyV5,
+        v2::{FixedDataPredicateKindV2, derive_effect_permissions},
     };
     use dclutch_custody_contract::{
         INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1, TRANSFER_ACCOUNT_COUNT_V1,
     };
+    use dclutch_effect_kernel::v2::AccountPermission;
     use dclutch_effect_kernel::{v2::FixedRole, v4::ProgramV4 as EffectProgramV4};
 
     use crate::registered_effect_artifacts_v4::{
@@ -1159,6 +1230,125 @@ mod tests {
                 "System Program record of {system_width} bytes moved the profile"
             );
         }
+    }
+
+    /// The registered family's second self-representative signer, ruled.
+    ///
+    /// `52f14fa` settled this for the ordinary topology and left the registered
+    /// one explicitly unmeasured. The measurement is recorded on `ROUTE_ALIASES`
+    /// and the numbers it derives from are asserted here, so the next lane
+    /// reaching for a second signer argues with figures rather than a memory of
+    /// the ordinary packet -- which does NOT bind here, because registered has
+    /// 184 bytes of derived margin where ordinary has four measured bytes.
+    ///
+    /// What binds is `CrossItemAlias`: coordinates 6 and 9 were two distinct
+    /// self-representatives, a registered creation has exactly one payer, and
+    /// two representatives observing one key is a hard refusal. The only case
+    /// anyone can construct refused.
+    #[test]
+    fn one_payer_signs_a_registered_creation_and_the_record_payer_aliases_it() {
+        let bytes = emit();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile decode");
+
+        let alias = profile
+            .rule(false, DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4)
+            .expect("record payer");
+        assert_eq!(alias.prestate(), AccountPrestateV2::AuthenticatedRouteAlias);
+        assert_eq!(alias.privileges(), 0);
+        assert_eq!(
+            profile.representative(3, usize::from(DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4)),
+            Ok(usize::from(DIRECT_REGISTERED_PAYER_ACCOUNT_V4))
+        );
+
+        // The alias keeps its representative's debit authority: it is a logical
+        // view of one physical account, not a permission-free hole.
+        let mut permissions = std::vec![AccountPermission::read_only(); profile.logical_account_count(3).expect("logical")];
+        derive_effect_permissions(profile, 3, &mut permissions).expect("effect permissions");
+        let debit = AccountPermission::new(true, false, false);
+        assert_eq!(
+            permissions.get(usize::from(DIRECT_REGISTERED_PAYER_ACCOUNT_V4)),
+            Some(&debit)
+        );
+        assert_eq!(
+            permissions.get(usize::from(DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4)),
+            Some(&debit)
+        );
+
+        // The two other payer coordinates the measurement found: each Custody
+        // frame's own `Payer`, holding the same key the Effect writes into the
+        // child request's `payer` field.
+        for start in [
+            DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4 + 9,
+            DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4 + 13,
+        ] {
+            assert_eq!(
+                profile.representative(3, usize::from(start)),
+                Ok(usize::from(DIRECT_REGISTERED_PAYER_ACCOUNT_V4)),
+                "Custody frame payer at {start} is a second physical payer"
+            );
+        }
+
+        // A child frame's caller authority is a Trading PDA that signs inside
+        // its CPI and is not a signer when the outer profile observes it.
+        for start in [
+            DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4,
+            DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4,
+            DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4,
+        ] {
+            assert_eq!(
+                CustodyFrameSpecV1::new(match start {
+                    DIRECT_REGISTER_BUY_INITIALIZE_ACCOUNT_START_V4 =>
+                        OperationV1::InitializeReplay,
+                    DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4 => OperationV1::OpenVault,
+                    _ => OperationV1::Transfer,
+                })
+                .account(0)
+                .expect("caller authority")
+                .role(),
+                CustodyFrameRoleV1::CallerAuthority
+            );
+            assert_eq!(
+                profile
+                    .rule(false, start)
+                    .expect("caller authority rule")
+                    .privileges(),
+                0,
+                "the Custody caller authority at {start} signs outside its CPI"
+            );
+        }
+
+        // The measured inputs to the packet derivation on `ROUTE_ALIASES`.
+        assert_eq!(
+            profile.logical_account_count(3),
+            Ok(usize::from(DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4))
+        );
+        assert_eq!(profile.physical_account_count(3), Ok(29));
+        let signers = (0..DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4)
+            .filter(|coordinate| {
+                profile
+                    .rule(false, *coordinate)
+                    .expect("rule")
+                    .route_privileges()
+                    .signer()
+            })
+            .count();
+        let named: std::vec::Vec<u16> = (0..DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4)
+            .filter(|coordinate| {
+                profile
+                    .rule(false, *coordinate)
+                    .expect("rule")
+                    .route_privileges()
+                    .signer()
+            })
+            .collect();
+        assert_eq!(
+            signers, 1,
+            "a registered creation carries one signer: {named:?}"
+        );
+        assert_eq!(
+            crate::execution_v3::DIRECT_REGISTRATION_REQUEST_BYTES_V3,
+            316
+        );
     }
 
     #[test]
