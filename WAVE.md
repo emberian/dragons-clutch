@@ -59,7 +59,7 @@ gates. It is not release evidence.
 
 | Lane | Scope | State |
 |---|---|---|
-| W2b hot-heap | `hot_v3.rs` heap wall + AccountObservationV1 shape | active |
+| W2b hot-heap | `hot_v3.rs` heap wall + AccountObservationV1 shape | **landed 2026-08-27 (W2p): 42,784 → 29,895 bytes, gate 15/15** |
 | W1b foundability | founding-root ADR + projected-Custody wiring + ELF fast-path adoption + campaign rerun | active |
 | ST structured-v2 | Lean/kernel/operator, new files | active |
 | LB liability-basis-v2 | ramp/complement theorem + kernel + corpus | active |
@@ -105,6 +105,19 @@ Cross-lane board: /private/tmp/dclutch-wave-board.md (append-only, not authority
   uninspected, unowned.
 
 ## Cycle-2 sequencing (revised at LINGER₂)
+
+**THE HEAP GATE LANDED (W2p, 2026-08-27, commits f6e41b0…4a711e5), so Tranche A
+is unblocked.** The canonical Direct continuation executes to completion at the
+real 32,768-byte heap: peak 42,784 → 29,895, `registry_hot_continuation` 15/15
+across three runs (from 12/3), `late_custody_refusal` reaching its named depth.
+The bump allocator grew a second, downward end and the short-lived banks live
+there. **The wall that replaces it is COMPUTE**: the shipped path spends
+1,336,865–1,386,359 CU depending on the PDA bump-search depth for the keys in
+play, and one draw in twenty (fixture seed 10) exceeds 1,400,000 outright. That
+is a protocol cost, not measurement noise, and the recommended fix — store each
+canonical bump in the record it belongs to, as the capability seal already does
+for the sealed roles — is an authority decision on record layout. See the board
+for the phase-level attribution.
 
 Tranche A (Direct, Claims→Custody→Token-2022 terminal, Series chains) launches
 when W2b lands the heap gate — family ProgramTest campaigns do NOT wait for the
