@@ -57,24 +57,26 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
     </div>
     <h3><Link href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Link></h3>
     <dl className="market-card-facts">
-      <div><dt>Hoard atoms · raw u64</dt><dd>{card.hoardAtoms}</dd></div>
       <div><dt>Generation</dt><dd>{card.generation}</dd></div>
-      <div><dt>Outcome count</dt><dd>{card.outcomeCount}</dd></div>
-      <div><dt>Outstanding children</dt><dd>{card.outstandingChildren}</dd></div>
-      <div><dt>Per-outcome supply · raw u64</dt><dd>{card.supplyAtoms.join(' · ')}</dd></div>
-      <div><dt>Exact required backing · raw u64</dt><dd>{card.requiredBackingAtoms}</dd></div>
-      <div><dt>Settlement</dt><dd>{card.settlement.status === 'resolved'
-        ? `${card.settlement.label} · state ${card.settlement.winner} · sequence ${card.settlement.terminalSequence}`
+      <div><dt>Founding readiness</dt><dd>{card.readiness}</dd></div>
+      <div><dt>Outstanding capabilities</dt><dd>{card.outstandingCapabilities}</dd></div>
+      <div><dt>Claim count · Claims aggregate</dt><dd>{card.liability.status === 'bound' ? card.liability.claimCount : card.liability.status}</dd></div>
+      <div><dt>Per-claim supply · raw u64</dt><dd>{card.liability.status === 'bound' ? card.liability.supplyAtoms.join(' · ') : card.liability.status}</dd></div>
+      <div><dt>Exact required backing · raw u64</dt><dd>{card.liability.status === 'bound' ? card.liability.requiredBackingAtoms : card.liability.status}</dd></div>
+      <div><dt>Terminal receipt</dt><dd>{card.settlement.status === 'terminal'
+        ? `${card.settlement.label} · winning claim ${card.settlement.winner}`
         : card.settlement.label}</dd></div>
       <div><dt>Collateral mint</dt><dd>{card.collateral.status === 'bound'
         ? <span title={card.collateral.collateralMint}>{card.collateral.collateralMintShort}</span>
-        : 'unbound'}</dd></div>
-      <div><dt>Realm content ID</dt><dd title={card.collateral.realmContentId}>{card.collateral.realmContentId.slice(0, 16)}…</dd></div>
+        : card.collateral.status}</dd></div>
+      <div><dt>Realm content ID</dt><dd title={card.identity.realmId}>{card.identity.realmId.slice(0, 16)}…</dd></div>
       <div><dt>Finalized observed slot</dt><dd>{card.observedSlot}</dd></div>
     </dl>
-    <p className="market-hoard-note">Hoard atoms are the Market&apos;s exact collateral principal. They are not liquidity, TVL, or a balance available to any participant.</p>
+    <p className="market-hoard-note">Supplies are the exact claim liabilities the Market&apos;s Claims aggregate records. They are not liquidity, TVL, or a balance available to any participant.</p>
+    <p className="market-capability-refusal"><span>Hoard not derivable</span>{card.hoard.reason}</p>
     <p className="market-observation"><Link href={`/markets/${card.address}`}>Open this Market field by field →</Link></p>
-    {card.collateral.status === 'refused' && <p className="market-refusal">{card.collateral.reason}</p>}
+    {card.collateral.status !== 'bound' && <p className="market-refusal">{card.collateral.reason}</p>}
+    {card.liability.status !== 'bound' && <p className="market-refusal">{card.liability.reason}</p>}
     <CapabilityBadges capabilities={card.capabilities} />
     <ul className="market-bindings">
       {card.bindings.map((check) => (
@@ -91,6 +93,7 @@ export default function MarketDiscoveryWorkspace() {
   const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
   const [coreProgram, setCoreProgram] = useState('');
   const [registryProgram, setRegistryProgram] = useState('');
+  const [claimsProgram, setClaimsProgram] = useState('');
   const [addressList, setAddressList] = useState('');
   const [enumeration, setEnumeration] = useState<MarketEnumerationV1 | null>(null);
   const [enumerationStatus, setEnumerationStatus] = useState('No Core program enumeration has been attempted.');
@@ -112,7 +115,7 @@ export default function MarketDiscoveryWorkspace() {
 
   async function read(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setState({ kind: 'loading', message: 'Probing the endpoint, then reading every Market, its content-addressed Realm, and its capability manifest behind one finalized floor…' });
+    setState({ kind: 'loading', message: 'Probing the endpoint, then reading every Market, its finalized Realm record, its Claims liability aggregate, and its capability manifest behind one finalized floor…' });
     try {
       const client = new SolanaRpcClient(endpoint);
       const facts = await client.probe();
@@ -120,6 +123,7 @@ export default function MarketDiscoveryWorkspace() {
       const next = await inspectMarketDiscoveryV1(client, {
         coreProgramId: coreProgram,
         registryProgramId: registryProgram === '' ? null : registryProgram,
+        claimsProgramId: claimsProgram === '' ? null : claimsProgram,
         addresses,
         enumeration: enumeration !== null && enumeration.mode === 'program-scan' && enumeration.addresses.join('\n') === addresses.join('\n') ? enumeration : undefined,
       });
@@ -148,7 +152,7 @@ export default function MarketDiscoveryWorkspace() {
       <div>
         <p className="eyebrow">Market discovery · finalized reads only</p>
         <h1>Every card is a read.<br /><em>Or it says REFUSED.</em></h1>
-        <p>Discovery lists exactly what finalized Core state justifies: phase, generation, outcome width, exact Hoard atoms, settlement truth, the content-addressed Realm behind the collateral mint, and the capability manifest a Market actually authenticated. There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.</p>
+        <p>Discovery lists exactly what finalized state justifies: the Core Market&apos;s phase, generation and immutable identities; the per-claim supply vector from the Claims aggregate that actually holds it; the finalized Realm record behind the collateral mint; and the capability manifest a Market authenticated. There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.</p>
       </div>
       <aside>
         <span>Provenance</span>
@@ -158,9 +162,9 @@ export default function MarketDiscoveryWorkspace() {
     </section>
 
     <section className="trade-v3-card">
-      <header><span>00</span><div><h2>What a discovery card is allowed to claim</h2><p>The browser is an untrusted projection. It decodes Core accounts hostilely, derives the Realm the Market itself commits to, and authenticates the capability manifest against its content identity before any badge appears.</p></div></header>
+      <header><span>00</span><div><h2>What a discovery card is allowed to claim</h2><p>The browser is an untrusted projection. It decodes Core accounts hostilely, requires the account to derive the address it was found at, reacquires the Realm and capability manifest records the Market commits to and re-hashes them, and reads liabilities only from the Claims program that owns them.</p></div></header>
       <div className="trade-v3-evidence">
-        <article><span>Economics</span><strong>raw u64 atoms</strong><small>Hoard principal is never liquidity or TVL</small></article>
+        <article><span>Economics</span><strong>raw u64 atoms</strong><small>supplies come from the Claims aggregate, never from the root</small></article>
         <article><span>Discovery</span><strong>bounded</strong><small>known addresses or one finalized program scan</small></article>
         <article><span>Capabilities</span><strong>manifest-only</strong><small>no capability is asserted from the root alone</small></article>
         <article><span>Refusal</span><strong>explicit</strong><small>every undecoded surface names its reason</small></article>
@@ -173,6 +177,7 @@ export default function MarketDiscoveryWorkspace() {
         <label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
         <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
         <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
+        <label><span>Claims program · optional</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
       </div>
       <label><span>Known Market addresses · one canonical base58 address per line</span><textarea rows={6} value={addressList} onChange={(event) => setAddressList(event.target.value)} /></label>
       <div className="direct-actions">
@@ -192,6 +197,7 @@ export default function MarketDiscoveryWorkspace() {
           <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>one observation epoch for every card</small></article>
           <article><span>Enumeration</span><strong>{discovery.enumeration.mode}</strong><small>{discovery.enumeration.addresses.length} address{discovery.enumeration.addresses.length === 1 ? '' : 'es'}</small></article>
           <article><span>Capability source</span><strong>{discovery.registryProgramId === null ? 'not selected' : shortAddressV1(discovery.registryProgramId, 6)}</strong><small>{discovery.registryProgramId === null ? 'manifests unread' : 'manifests authenticated by content'}</small></article>
+          <article><span>Liability source</span><strong>{discovery.claimsProgramId === null ? 'not selected' : shortAddressV1(discovery.claimsProgramId, 6)}</strong><small>{discovery.claimsProgramId === null ? 'supplies unread' : 'supplies read from the Claims aggregate'}</small></article>
         </div>
         <p className="direct-status">{discovery.enumeration.note}</p>
         {discovery.cards.length === 0

@@ -75,9 +75,10 @@ async function harvest(page) {
         ok: item.classList.contains('check-pass'),
         text: text(item),
       })),
-      // Economics tiles, the per-outcome vector and the portfolio claim panel
-      // are not definition lists, so they need their own harvest or they would
-      // be silently unverified.
+      facts,
+      // Economics tiles, the per-claim vector and the portfolio claim panel are
+      // not definition lists, so they need their own harvest or they would be
+      // silently unverified.
       tiles: [...document.querySelectorAll('.trade-v3-preview > div, .trade-v3-evidence article, .portfolio-claim')].map((tile) => ({
         label: text(tile.querySelector('span')),
         value: text(tile.querySelector('strong')),
@@ -135,6 +136,7 @@ const captured = {};
   await fill(page, /Finalized RPC endpoint/, endpoint);
   await fill(page, /Core program/, core);
   await fill(page, /Registry program/, registry);
+  if (claims !== '') await fill(page, /Claims program/, claims);
   await page.getByRole('button', { name: 'Enumerate Markets from the Core program' }).click();
   await settle(page, join(outDir, 'markets-enumerated.png'));
   captured.enumeration = await harvest(page);
@@ -151,6 +153,7 @@ const captured = {};
   await fill(page, /Finalized RPC endpoint/, endpoint);
   await fill(page, /Core program/, core);
   await fill(page, /Registry program/, registry);
+  if (claims !== '') await fill(page, /Claims program/, claims);
   await page.getByRole('button', { name: 'Read this Market' }).click();
   await settle(page, join(outDir, 'market-detail.png'));
   // Capability drawers are <details>; open them so their facts are in the DOM.
@@ -169,10 +172,8 @@ const captured = {};
   await open(page, '/portfolio');
   await fill(page, /Finalized RPC endpoint/, endpoint);
   await fill(page, /Core program/, core);
-  if (claims !== '') {
-    const claimsField = page.locator('label', { hasText: /Claims program/ }).locator('input').first();
-    if (await claimsField.count() > 0) await claimsField.fill(claims);
-  }
+  if (claims !== '') await fill(page, /Claims program/, claims);
+  await fill(page, /Registry program/, registry);
   await fill(page, /Owner address/, owner);
   await fill(page, /Known Market addresses/, market);
   await page.getByRole('button', { name: 'Derive and read Positions' }).click();

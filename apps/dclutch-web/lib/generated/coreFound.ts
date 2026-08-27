@@ -73,3 +73,12 @@ export const LIABILITY_BASIS_POSITION_BASIS_OFFSET = 88 as const;
 export const LIABILITY_BASIS_POSITION_RESERVED_OFFSET = 120 as const;
 export const LIABILITY_BASIS_MARKET_SEED_V2 = new TextEncoder().encode('dclutch:lbv2:market');
 export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().encode('dclutch:lbv2:position');
+
+export const REALM_MAGIC = Uint8Array.from([0x44, 0x43, 0x4c, 0x54, 0x52, 0x4c, 0x4d, 0x31]);
+export const REALM_BYTES = 112 as const;
+export const REALM_SCHEMA_VERSION = 1 as const;
+export const REALM_MINT_AUTHORITY_POLICY_OFFSET = 10 as const;
+export const REALM_FREEZE_AUTHORITY_POLICY_OFFSET = 11 as const;
+export const REALM_TOKEN_PROGRAM_OFFSET = 16 as const;
+export const REALM_COLLATERAL_MINT_OFFSET = 48 as const;
+export const REALM_ADAPTER_RELEASE_ID_OFFSET = 80 as const;
