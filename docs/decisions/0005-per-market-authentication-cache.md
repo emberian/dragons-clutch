@@ -389,23 +389,26 @@ emitter failures before and after):
 
 | checkpoint | before | after |
 | --- | ---: | ---: |
-| artifacts phase | 645,836 CU | 62,693 CU |
+| artifacts phase | 645,836 CU | 56,693 CU |
 | artifacts phase heap | 2,850 B | 2,840 B |
-| cumulative to `runtime-observations` | 850,425 CU | 254,891 CU |
-| cumulative to the mid-preplan refusal | 1,220,769 CU | 572,986 CU |
+| cumulative to `runtime-observations` | 850,425 CU | 253,391 CU |
+| cumulative to the mid-preplan refusal | 1,220,769 CU | 568,486 CU |
 
-**647,783 CU removed at the same refusal point**, against the ~650,000 estimated
+**652,283 CU removed at the same refusal point**, against the ~650,000 estimated
 below. The heap moved by 10 bytes, as predicted.
 
-Projected against the W2c full-path table, replacing the artifacts phase and
-`require_static_register_ownership_v5` and leaving every per-execution phase
-unchanged, the path to the child-route preflight becomes about **1,292,500 CU**
-of the **1,300,630** a Trading invocation actually receives under the 1,400,000
-protocol limit. That leaves roughly **8,000 CU** before the three child CPIs, the
-commit and the acknowledgment run, and the accumulated heap is still **61,879
-bytes against 32,768**. The gate is not met and this decision does not meet it.
-Phases 8 through 10 remain unmeasured because the Direct emitter defect refuses
-before them.
+Projected against the W2c full-path table, replacing the artifacts phase
+(−589,143) and `require_static_register_ownership_v5` (−66,479) and leaving
+every per-execution phase unchanged, the path to the child-route preflight
+becomes about **1,286,500 CU** of the **1,305,130** a Trading invocation
+actually receives under the 1,400,000 protocol limit. That leaves roughly
+**18,600 CU** before the three child CPIs, the commit and the acknowledgment
+run, and the accumulated heap is still about **61,900 bytes against 32,768**.
+The gate is not met and this decision does not meet it. Phases 8 through 10
+remain unmeasured because the Direct emitter defect refuses before them.
+
+Writing the seal costs **133,008 CU**, once, per `(descriptor, action, Trading
+release, Registry)`.
 
 Estimated saving, itemised:
 
