@@ -284,3 +284,16 @@ question with a recommended answer, not an inventory row.
   instructions NO program implements. Delete-or-succeed decisions for the
   Fable wave (what else in apps/dclutch-web speaks to programs that no longer
   exist?).
+
+- GEN-HOT (a lane, not a follow-up, per GEN-ART): the General Hot bundle in
+  trading's program-test (~4,000-line analog of direct-hot) — two-thirds of
+  its inputs now exist; it carries the zombie refusal THROUGH the ELF and,
+  with W2's walls down, General's first hot execution.
+- The eighth CapabilityProgramSetV2 entry + relaxing the exactly-seven rule:
+  what stands between "General's artifacts exist" and "a live General release
+  activates".
+- CapabilityProgramV1 (DCLTCPR1) has NO public encoder — hand-written in five
+  places, two in trading-sbf (same defect class GEN-ART just cured for three
+  generations; fourth generation, trading-sbf owner).
+- Small batch: GENERAL_ACTIVATION_ACCOUNT_PROFILE_ID_V1 is a test-demo digest
+  with zero consumers whose name now collides with the real thing.
