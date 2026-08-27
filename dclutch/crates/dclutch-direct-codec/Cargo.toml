@@ -24,6 +24,11 @@ dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+
+# Test-only, and deliberately the OTHER implementation: the unit tests
+# recompute these digests against a library the crate no longer links.
+[dev-dependencies]
 sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]

@@ -237,6 +237,14 @@ sort happens.
 
 ## 6. What General still lacks
 
+> **Superseded 2026-08-27 by
+> [decision 0010](0010-general-candidate-escrow-and-the-set-relaxation.md).**
+> Items 2, 3, 4 and the first griefing question below are CLOSED there —
+> candidate submission and verification, escrow at admission, cancellation, and
+> the maker who spends their collateral before `Collect`. Item 1's set-count
+> relaxation is closed; its three artifact triples are not. Item 5 (rent) and
+> item 6's `Quiesce` question remain open and are carried in 0010 §6.
+
 1. **The three routes themselves** — the Lean action tags, the artifact triples
    (TransitionVM program, EffectProgram, AccountProfile) and the set-count
    relaxation. This record is their design; batch the regeneration with

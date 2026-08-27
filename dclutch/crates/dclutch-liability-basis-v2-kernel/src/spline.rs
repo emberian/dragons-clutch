@@ -44,16 +44,16 @@ use super::{
 ///
 /// Degree zero is the categorical one-hot basis, which `LiabilityBasisV2`
 /// already instantiates separately, so this record does not re-express it.
-pub const SPLINE_MIN_DEGREE_V2: u8 = 1;
+pub use crate::generated_spline::SPLINE_MIN_DEGREE_V2;
 
 /// Highest B-spline degree this physical profile admits.
 ///
 /// A physical capacity of the record, not a mathematical bound: `SplineProfile`
 /// itself is stated for every degree.
-pub const SPLINE_MAX_DEGREE_V2: u8 = 3;
+pub use crate::generated_spline::SPLINE_MAX_DEGREE_V2;
 
 /// Claims one coordinate can be locally supported on: `degree + 1`.
-pub const SPLINE_MAX_SUPPORT_V2: usize = 4;
+pub use crate::generated_spline::SPLINE_MAX_SUPPORT_V2;
 
 /// Weights one Cox-de-Boor level carries at most: `degree` of them.
 const LEVEL_CAPACITY: usize = SPLINE_MAX_SUPPORT_V2 - 1;
@@ -111,6 +111,31 @@ impl SplineRequestV2 {
     /// this at least `degree + 1` and at most [`SPLINE_MAX_WIDTH_V2`].
     pub fn width(self) -> usize {
         usize::from(self.knot_count).saturating_sub(usize::from(self.degree).saturating_add(1))
+    }
+
+    /// Return the same authenticated basis relocated to another coordinate.
+    ///
+    /// Every structural fact about the *basis* — scale, degree, knot count,
+    /// knot order, canonical padding — is carried over from a request that was
+    /// already decoded, and only the coordinate changes. That is what lets the
+    /// price gate recompute a payout vector at each atom without a second
+    /// authenticated record per atom, and it is why an atom's payouts can never
+    /// come off the wire.
+    ///
+    /// The coordinate is still the one thing a relocated request has not had
+    /// checked, so this refuses a zero denominator with the same
+    /// [`Error::ZeroDenominator`] the decoder uses. The gate's own decoder
+    /// already refuses that earlier; this is the guard that keeps the method
+    /// total for any other caller.
+    pub fn with_coordinate(self, numerator: i64, denominator: u32) -> Result<Self> {
+        if denominator == 0 {
+            return Err(Error::ZeroDenominator);
+        }
+        Ok(Self {
+            coordinate_numerator: numerator,
+            coordinate_denominator: denominator,
+            ..self
+        })
     }
 
     /// Return exactly the knots the basis uses, without the canonical padding.

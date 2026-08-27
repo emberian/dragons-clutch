@@ -188,7 +188,10 @@ mod host {
         use dclutch_request_profile_contract::{
             ProjectionRegistersV1, RequestProfileV1, project_atomic,
         };
-        use dclutch_transition_vm::v3::{RegisterInput, RegisterOutput, execute_fold_atomic};
+        use dclutch_transition_vm::v3::{
+            RegisterInput, RegisterKindV3, RegisterOutput, RegisterSpaceV3, RegisterWriteTargetV3,
+            execute_fold_atomic,
+        };
 
         use super::*;
         use crate::{
@@ -363,7 +366,10 @@ mod host {
             assert_eq!(output[FILL_SCALAR_BUYER_TERMINAL_V4], 0);
             assert_eq!(output[FILL_SCALAR_CLAIM_SOURCE_REVISION_AFTER_V4], 5);
             assert_eq!(output[FILL_SCALAR_CLAIM_DESTINATION_REVISION_AFTER_V4], 10);
-            assert_eq!(output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4], 5);
+            // One Custody transfer, so one Custody revision: the canonical fill
+            // takes a zero fee and enables the seller leg alone.
+            assert_eq!(output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4], 4);
+            assert_eq!(output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4], 4);
         }
 
         fn refuses_without_output_commit(
@@ -428,48 +434,154 @@ mod host {
             refuses_without_output_commit(input, valid_identities());
         }
 
-        /// WHY THIS PROGRAM CANNOT YET DRIVE AN `EffectProgramV4`.
+        /// THE ZERO-FEE ROUTE SELECTION, executed rather than described.
         ///
-        /// The registered fill's missing EffectV4 has to route one Claims
-        /// transfer and two Custody transfers -- the seller's net and the
-        /// combined fee -- out of the buyer record's Vault. Neither Custody leg
-        /// is unconditional: `CustodyRequestV1::validate` refuses
-        /// `amount == 0` for `OperationV1::Transfer`, and on the CANONICAL
-        /// admitted fill the combined fee is exactly zero, because both
-        /// cumulative-difference legs floor to nothing at a hundred basis
-        /// points. An effect that routes the fee leg unconditionally therefore
-        /// refuses the ordinary case.
+        /// The fill's `EffectProgramV4` routes one Claims transfer and up to two
+        /// Custody transfers -- the seller's net and the combined fee -- out of
+        /// the buyer record's Vault. Neither Custody leg is unconditional:
+        /// `CustodyRequestV1::validate` refuses `amount == 0` for
+        /// `OperationV1::Transfer`, and on the CANONICAL admitted fill the
+        /// combined fee is exactly zero, because both cumulative-difference legs
+        /// floor to nothing at a hundred basis points. An Effect that routed the
+        /// fee leg unconditionally would refuse the ordinary case.
         ///
-        /// A route is disabled by an `enable_common_scalar` the TRANSITION
-        /// derives -- that is how the inline-ordinary family selects among its
-        /// four Custody route declarations, with
-        /// `SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3`,
-        /// `SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3` and
-        /// `SCALAR_FEE_SOLE_ROUTE_ENABLED_V3` authored in
-        /// `DirectOrdinaryV3.lean`. This program derives no such register: its
-        /// schema has none, and `named_identities_are_the_addressed_ones` and
-        /// the emitted constants are the whole of what it exposes.
+        /// So the TRANSITION derives the enable bits, exactly as the
+        /// inline-ordinary family does with
+        /// `SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3` and its two siblings, and
+        /// advances the Custody replay revision by one per enabled route. Both
+        /// are authored in `DirectRegisteredFillV4.lean`'s `routeOps`; this test
+        /// is the Rust-side execution of the case that forced them.
         ///
-        /// It also advances the Custody replay revision by exactly two,
-        /// unconditionally (`incrementInto custodyRevision
-        /// custodyRevisionAfterSeller` then again into
-        /// `custodyRevisionAfterFee`), which on this same canonical bank claims
-        /// two transfers where at most one can occur.
-        ///
-        /// So authoring the fill's Effect starts in
-        /// `formal/dclutch-semantics/DClutchSemantics/DirectRegisteredFillV4.lean`,
-        /// not in Rust: the enables and the conditional revision ladder are
-        /// program semantics, and `DirectOrdinaryV3.lean`'s block is the exact
-        /// shape to mirror. Doing it moves the emitted bytes, so the
-        /// hand-written AOT twin in
-        /// `crates/dclutch-direct-aot-v3-contract/src/registered.rs` moves with
-        /// it. Recorded here rather than discovered again.
+        /// Ruling, taken from the ordinary family's fee semantics: a zero
+        /// combined fee is a NO-TRANSFER PATH, not a refusal. Refusing it would
+        /// refuse the ordinary small fill at a realistic venue rate, and every
+        /// mid-order fill whose cumulative-difference delta is zero while the
+        /// order as a whole pays.
         #[test]
-        fn the_canonical_fill_takes_a_zero_fee_that_no_unconditional_custody_route_can_carry() {
+        fn the_canonical_zero_fee_fill_enables_the_seller_route_alone() {
             let mut input = valid_scalars();
             input[FILL_SCALAR_QUANTITY_V4] = 10;
             input[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
             let identities = valid_identities();
+            let output = execute(input, identities);
+
+            // The canonical admitted fill quotes five and charges nothing.
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 5);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 0);
+
+            // A Custody Transfer carrying that fee refuses on its own terms --
+            // which is why the fee route must be disabled, not routed empty.
+            let fee_leg = fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4]);
+            assert_eq!(
+                fee_leg.to_bytes().map(|_| ()),
+                Err(dclutch_custody_contract::Error::InvalidOperationShape)
+            );
+            // The seller leg, which is nonzero here, is well formed.
+            assert!(
+                fee_transfer_template(output[FILL_SCALAR_SELLER_NET_V4])
+                    .to_bytes()
+                    .is_ok()
+            );
+
+            // Exactly one route is enabled, and it is the terminal seller leg.
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 1);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_NONZERO_V4], 0);
+
+            // And the ladder claims exactly that one transfer.
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+        }
+
+        /// The other three corners of `(sellerNet != 0, totalFee != 0)`, and the
+        /// Custody envelope each one implies. Every enabled route carries a
+        /// nonzero amount; every disabled route is one whose amount would have
+        /// been zero.
+        #[test]
+        fn every_enabled_custody_route_carries_a_nonzero_amount() {
+            let identities = valid_identities();
+
+            // Both legs move: a rate that clears the floor on each side.
+            let mut both = matched_scalars();
+            both[FILL_SCALAR_POLICY_FEE_BPS_V4] = 2_000;
+            both[FILL_SCALAR_SELLER_FEE_BPS_V4] = 2_000;
+            both[FILL_SCALAR_BUYER_FEE_BPS_V4] = 2_000;
+            both[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 14;
+            let output = execute(both, identities);
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 4);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 2);
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 1);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 2
+            );
+            assert!(
+                fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4])
+                    .to_bytes()
+                    .is_ok()
+            );
+
+            // The seller nets nothing: the fee leg alone, and it is terminal.
+            let mut fee_only = matched_scalars();
+            fee_only[FILL_SCALAR_POLICY_FEE_BPS_V4] = 10_000;
+            fee_only[FILL_SCALAR_SELLER_FEE_BPS_V4] = 10_000;
+            fee_only[FILL_SCALAR_BUYER_FEE_BPS_V4] = 10_000;
+            fee_only[FILL_SCALAR_BUYER_RESERVED_COLLATERAL_V4] = 24;
+            let output = execute(fee_only, identities);
+            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 0);
+            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 10);
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 1);
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
+            );
+
+            // Nothing moves: a fill at an execution price of zero quotes
+            // nothing and charges nothing, and still transfers Claims.
+            let mut free = matched_scalars();
+            free[FILL_SCALAR_SELLER_LIMIT_V4] = 0;
+            free[FILL_SCALAR_EXECUTION_PRICE_V4] = 0;
+            let output = execute(free, identities);
+            assert_eq!(output[FILL_SCALAR_GROSS_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(output[FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4], 0);
+            assert_eq!(
+                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
+                output[FILL_SCALAR_CUSTODY_REVISION_V4]
+            );
+            assert_eq!(
+                output[FILL_SCALAR_CLAIM_SOURCE_REVISION_AFTER_V4],
+                output[FILL_SCALAR_CLAIM_SOURCE_REVISION_V4] + 1
+            );
+            assert_eq!(output[FILL_SCALAR_SELLER_RESERVED_CLAIMS_AFTER_V4], 10);
+        }
+
+        /// `valid_scalars` with the matcher-selected pair the RequestProfile
+        /// projects, which is otherwise supplied by the request.
+        fn matched_scalars() -> [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4] {
+            let mut scalars = valid_scalars();
+            scalars[FILL_SCALAR_QUANTITY_V4] = 10;
+            scalars[FILL_SCALAR_EXECUTION_PRICE_V4] = 50;
+            scalars
+        }
+
+        /// Run the emitted program over one bank and return the output.
+        fn execute(
+            input: [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4],
+            identities: [[u8; 32]; DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4],
+        ) -> [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4] {
             let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
             encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
@@ -496,34 +608,7 @@ mod host {
                 },
             )
             .expect("execute");
-
-            // The canonical admitted fill quotes five and charges nothing.
-            assert_eq!(output[FILL_SCALAR_SELLER_NET_V4], 5);
-            assert_eq!(output[FILL_SCALAR_TOTAL_FEE_V4], 0);
-
-            // A Custody Transfer carrying that fee refuses on its own terms.
-            let fee_leg = fee_transfer_template(output[FILL_SCALAR_TOTAL_FEE_V4]);
-            assert_eq!(
-                fee_leg.to_bytes().map(|_| ()),
-                Err(dclutch_custody_contract::Error::InvalidOperationShape)
-            );
-            // The seller leg, which is nonzero here, is well formed -- so it is
-            // the ENABLE that is missing, not the envelope.
-            assert!(
-                fee_transfer_template(output[FILL_SCALAR_SELLER_NET_V4])
-                    .to_bytes()
-                    .is_ok()
-            );
-
-            // And the revision ladder claims both transfers regardless.
-            assert_eq!(
-                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4],
-                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 1
-            );
-            assert_eq!(
-                output[FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4],
-                output[FILL_SCALAR_CUSTODY_REVISION_V4] + 2
-            );
+            output
         }
 
         /// One Custody `Transfer` envelope of the shape the fill's fee leg
@@ -568,6 +653,370 @@ mod host {
                 amount,
                 rent_lamports: 0,
             }
+        }
+
+        /// A REGISTERED SELL RECORD, AS THIS FAMILY WOULD WRITE ONE, IS UNFILLABLE.
+        ///
+        /// The fill re-proves both reservations rather than trusting them:
+        /// `sellerMaximum - sellerFilled` must equal `sellerReservedClaims`
+        /// exactly. A freshly registered record has `filled == 0`, so its claim
+        /// reserve has to be its signed maximum.
+        ///
+        /// The family's ONLY EffectProgramV4 --
+        /// `encode_direct_register_buy_effect_v4_atomic` -- writes
+        /// `DirectRegisteredRecordLayoutV2::RESERVED_CLAIMS` from
+        /// `REGISTERED_SCALAR_ZERO_V4`, which is right for the Buy it was written
+        /// for and wrong for every Sell. A Sell Effect copied from it produces a
+        /// record no fill can ever admit, at any maximum. That is what this test
+        /// decides, over the whole family of records such an Effect can write.
+        ///
+        /// The fix costs no schema, which is worth recording because the
+        /// neighbouring gaps do: the value a Sell Effect must write is the signed
+        /// maximum, and the shared creation bank already carries it at
+        /// `REGISTERED_SCALAR_MAXIMUM_V4`. It is one instruction operand, and it
+        /// is exactly the kind of one-operand difference that copying RegisterBuy
+        /// hides -- the record decodes, the creation admits, and nothing refuses
+        /// until a fill that no test in the family runs.
+        #[test]
+        fn a_seller_record_carrying_the_reserve_this_family_writes_can_never_be_filled() {
+            let identities = valid_identities();
+            for maximum in [2_u64, 20, 1_000] {
+                // One bank, one difference: the seller record's claim reserve.
+                let mut bank = matched_scalars();
+                bank[FILL_SCALAR_QUANTITY_V4] = 2;
+                bank[FILL_SCALAR_SELLER_MAXIMUM_V4] = maximum;
+                bank[FILL_SCALAR_SELLER_FILLED_V4] = 0;
+
+                // What `REGISTERED_SCALAR_ZERO_V4` puts in the record.
+                let mut written_by_the_buy_effect = bank;
+                written_by_the_buy_effect[FILL_SCALAR_SELLER_RESERVED_CLAIMS_V4] = 0;
+                refuses_without_output_commit(written_by_the_buy_effect, identities);
+
+                // What a Sell Effect must write instead: the signed maximum.
+                let mut corrected = bank;
+                corrected[FILL_SCALAR_SELLER_RESERVED_CLAIMS_V4] = maximum;
+                let output = execute(corrected, identities);
+                assert_eq!(
+                    output[FILL_SCALAR_SELLER_RESERVED_CLAIMS_AFTER_V4],
+                    maximum - 2,
+                    "a record reserving its own maximum fills at maximum {maximum}"
+                );
+            }
+        }
+
+        /// THE FILL'S READ SET, MEASURED -- and the writers it is still owed.
+        ///
+        /// `registered_bundle_v4`'s
+        /// `every_register_the_effect_reads_has_a_declared_writer` measures an
+        /// EFFECT's reads by perturbation and joins them to the artifacts' own
+        /// static write declarations. The fill has no Effect, no AccountProfile
+        /// and no LifecycleV5, so the same method runs one artifact earlier: each
+        /// common register is perturbed in isolation and counted as READ exactly
+        /// when it moves the shipped transition's decision or one of the
+        /// registers the transition DECLARES it writes. The observation is
+        /// restricted to those writes deliberately -- `execute_fold_atomic`
+        /// copies the whole scratch bank to the output bank, so a whole-bank
+        /// comparison reports every carried register as read.
+        ///
+        /// Two writers exist in this family today, and this test names them: the
+        /// RequestProfile above projects the matcher's quantity and execution
+        /// price, and the program owns the five constants it loads. Everything
+        /// else the measurement finds is read by an object that ships and written
+        /// by nothing -- an AccountProfile projection or a LifecycleV5 protected
+        /// output has to supply it, and neither artifact exists.
+        ///
+        /// MEASURED: fifty-four scalars and nine identities are read; two of the
+        /// scalars have a writer. The other fifty-two group cleanly, and the
+        /// grouping is the specification for whoever authors the missing
+        /// artifacts:
+        ///
+        /// * seven (0..5, 12) are the authenticated root phase, the Clock slot,
+        ///   the Product outcome count, the Core Market generation, the immutable
+        ///   config price scale and fee rate, and the root's live-maker count --
+        ///   AccountProfile projections, exactly as the inline-ordinary profile
+        ///   already projects its own.
+        /// * thirty-eight (13..50) are the two persisted record-plus-replay
+        ///   spans, whole and symmetric: nineteen coordinates per side, read out
+        ///   of `DirectRegisteredRecordLayoutV2` and `DirectMakerReplayLayoutV1`.
+        /// * three (80, 81, 84) are the child pre-revisions the settlement's
+        ///   `expected_revision` fields commit to: two Claims Positions and the
+        ///   buyer record's Custody replay.
+        /// * four (88..91) are the rent principals the transition requires
+        ///   NONZERO, and they are a DECISION rather than a lookup. Either the
+        ///   AccountProfile projects them from each account's persisted
+        ///   `RENT_PRINCIPAL` field, or a LifecycleV5 declares them as protected
+        ///   outputs. The second costs schema: a
+        ///   `LifecycleProtectedOutputsInputV3` names seven coordinates per plan
+        ///   and this schema has only `historical_rent_principal` and `state` for
+        ///   all four accounts, so four authenticate plans would want twelve more
+        ///   scalars (created, bump observation, bump) and six more identities
+        ///   (two maker beneficiaries, four owners) -- and the identity bank
+        ///   carries eight unaddressed registers, which is enough for six. The
+        ///   two guarded `Close` plans a terminal record needs cost nothing:
+        ///   `LifecycleGuardInputV3::ScalarEq` reads `sellerTerminal` /
+        ///   `buyerTerminal`, and `sellerRentOwner` / `buyerRentOwner` are
+        ///   already the record RentCredit beneficiaries a Close requires.
+        ///
+        /// The nine identities are the Market, both makers, both intent Markets,
+        /// both maker-replay Markets, and both replay-stored owners. The other
+        /// twenty-three named coordinates are read by no instruction in the
+        /// program: they exist for the Effect and the AccountProfile.
+        #[test]
+        fn the_transition_reads_registers_no_artifact_in_the_family_writes() {
+            let (read_scalars, read_identities) = measured_read_set();
+
+            // The measurement discriminates: a register the program writes
+            // before it reads does not move the result when it is perturbed.
+            for derived in [
+                FILL_SCALAR_GROSS_V4,
+                FILL_SCALAR_SELLER_NET_V4,
+                FILL_SCALAR_TOTAL_FEE_V4,
+                FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4,
+                FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4,
+            ] {
+                assert!(
+                    !read_scalars.contains(&derived),
+                    "scalar {derived} is derived, not read"
+                );
+            }
+            // Same for the five constants: each is loaded before any use.
+            for constant in [
+                FILL_SCALAR_ZERO_V4,
+                FILL_SCALAR_ONE_V4,
+                FILL_SCALAR_GTC_V4,
+                FILL_SCALAR_FEE_DENOMINATOR_V4,
+                FILL_SCALAR_TERMINAL_V4,
+            ] {
+                assert!(
+                    !read_scalars.contains(&constant),
+                    "scalar {constant} is program-owned"
+                );
+            }
+
+            // The whole of what this family writes into the fill's bank today.
+            let projected = [FILL_SCALAR_QUANTITY_V4, FILL_SCALAR_EXECUTION_PRICE_V4];
+            for index in projected {
+                assert!(read_scalars.contains(&index));
+            }
+            let unwritten: std::vec::Vec<usize> = read_scalars
+                .iter()
+                .copied()
+                .filter(|index| !projected.contains(index))
+                .collect();
+
+            assert_eq!(read_scalars.len(), 54);
+            assert_eq!(unwritten.len(), 52);
+            assert_eq!(read_identities.len(), 9);
+
+            // Seven come from the authenticated root, config, Product and Clock.
+            for index in [
+                FILL_SCALAR_ROOT_PHASE_V4,
+                FILL_SCALAR_SLOT_V4,
+                FILL_SCALAR_OUTCOME_COUNT_V4,
+                FILL_SCALAR_MARKET_GENERATION_V4,
+                FILL_SCALAR_PRICE_SCALE_V4,
+                FILL_SCALAR_POLICY_FEE_BPS_V4,
+                FILL_SCALAR_ROOT_OPEN_COUNT_V4,
+            ] {
+                assert!(unwritten.contains(&index));
+            }
+            // Thirty-eight are the two persisted record-plus-replay spans, whole.
+            for index in FILL_SCALAR_SELLER_SIDE_V4..=FILL_SCALAR_BUYER_MAKER_GENERATION_V4 {
+                assert!(unwritten.contains(&index), "persisted scalar {index}");
+            }
+            // Three are the child pre-revisions each settlement leg commits to.
+            for index in [
+                FILL_SCALAR_CLAIM_SOURCE_REVISION_V4,
+                FILL_SCALAR_CLAIM_DESTINATION_REVISION_V4,
+                FILL_SCALAR_CUSTODY_REVISION_V4,
+            ] {
+                assert!(unwritten.contains(&index));
+            }
+            // And four are the rent principals, the decision named above.
+            for index in [
+                FILL_SCALAR_SELLER_MAKER_RENT_PRINCIPAL_V4,
+                FILL_SCALAR_SELLER_RECORD_RENT_PRINCIPAL_V4,
+                FILL_SCALAR_BUYER_MAKER_RENT_PRINCIPAL_V4,
+                FILL_SCALAR_BUYER_RECORD_RENT_PRINCIPAL_V4,
+            ] {
+                assert!(unwritten.contains(&index));
+            }
+
+            // The nine identities are exactly the ones the transition
+            // authenticates against; the other twenty-three named coordinates
+            // are the Effect's and the AccountProfile's, not this program's.
+            assert_eq!(
+                read_identities,
+                std::vec![
+                    FILL_IDENTITY_MARKET_V4,
+                    FILL_IDENTITY_SELLER_MAKER_V4,
+                    FILL_IDENTITY_BUYER_MAKER_V4,
+                    FILL_IDENTITY_SELLER_INTENT_MARKET_V4,
+                    FILL_IDENTITY_BUYER_INTENT_MARKET_V4,
+                    FILL_IDENTITY_SELLER_MAKER_MARKET_V4,
+                    FILL_IDENTITY_BUYER_MAKER_MARKET_V4,
+                    FILL_IDENTITY_SELLER_MAKER_REPLAY_OWNER_V4,
+                    FILL_IDENTITY_BUYER_MAKER_REPLAY_OWNER_V4,
+                ]
+            );
+
+            // THE SCHEMA HAS NO SLACK, and now that is a measurement rather
+            // than a coincidence. The read set is the EXACT complement of the
+            // transition's declared write set: every one of the ninety-six
+            // scalars is either derived by this program or read by it, and none
+            // is merely carried. That was invisible while the measurement
+            // compared whole output banks, because `execute_fold_atomic` copies
+            // scratch to output and a carried register is indistinguishable
+            // from a read one there.
+            let (written_scalars, written_identities) = transition_write_set();
+            assert!(written_identities.is_empty(), "the fill writes no identity");
+            let mut union = read_scalars.clone();
+            union.extend(written_scalars.iter().copied());
+            union.sort_unstable();
+            union.dedup();
+            assert_eq!(union.len(), DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4);
+            assert_eq!(written_scalars.len(), 42);
+            assert!(
+                read_scalars
+                    .iter()
+                    .all(|index| !written_scalars.contains(index))
+            );
+        }
+
+        /// Perturb every common register in isolation against the canonical
+        /// admitted bank and keep the ones that move the result.
+        fn measured_read_set() -> (std::vec::Vec<usize>, std::vec::Vec<usize>) {
+            let base_scalars = matched_scalars();
+            let base_identities = valid_identities();
+            let writes = transition_write_set();
+            let base = resolve(&writes, base_scalars, base_identities);
+            assert!(base.is_some(), "the baseline fill must be admitted");
+
+            let mut scalars = std::vec::Vec::new();
+            for index in 0..DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4 {
+                let original = *base_scalars.get(index).expect("scalar coordinate");
+                let moved = [0, 1, 2, u64::MAX, original.wrapping_add(1)]
+                    .into_iter()
+                    .filter(|candidate| *candidate != original)
+                    .any(|candidate| {
+                        let mut perturbed = base_scalars;
+                        *perturbed.get_mut(index).expect("scalar coordinate") = candidate;
+                        resolve(&writes, perturbed, base_identities) != base
+                    });
+                if moved {
+                    scalars.push(index);
+                }
+            }
+
+            let mut identities = std::vec::Vec::new();
+            for index in 0..DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4 {
+                let original = *base_identities.get(index).expect("identity coordinate");
+                let moved = [[9_u8; 32], [0_u8; 32], [7_u8; 32]]
+                    .into_iter()
+                    .filter(|candidate| *candidate != original)
+                    .any(|candidate| {
+                        let mut perturbed = base_identities;
+                        *perturbed.get_mut(index).expect("identity coordinate") = candidate;
+                        resolve(&writes, base_scalars, perturbed) != base
+                    });
+                if moved {
+                    identities.push(index);
+                }
+            }
+            (scalars, identities)
+        }
+
+        /// The registers the shipped transition declares it writes -- the only
+        /// output coordinates a read measurement may observe.
+        ///
+        /// Both item strides are zero, so the common bank is the whole bank.
+        #[allow(clippy::type_complexity)]
+        fn transition_write_set() -> (std::vec::Vec<usize>, std::vec::Vec<usize>) {
+            let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
+                .expect("transition");
+            let transition = ProgramV3::decode(&bytes).expect("decode");
+            assert_eq!(DIRECT_REGISTERED_FILL_ITEM_SCALAR_STRIDE_V4, 0);
+            assert_eq!(DIRECT_REGISTERED_FILL_ITEM_IDENTITY_STRIDE_V4, 0);
+            let scalars = (0..DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4)
+                .filter(|index| {
+                    transition
+                        .writes_register(RegisterWriteTargetV3 {
+                            kind: RegisterKindV3::Scalar,
+                            space: RegisterSpaceV3::Common,
+                            index: u16::try_from(*index).expect("scalar register"),
+                        })
+                        .expect("writes")
+                })
+                .collect();
+            let identities = (0..DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4)
+                .filter(|index| {
+                    transition
+                        .writes_register(RegisterWriteTargetV3 {
+                            kind: RegisterKindV3::Identity,
+                            space: RegisterSpaceV3::Common,
+                            index: u16::try_from(*index).expect("identity register"),
+                        })
+                        .expect("writes")
+                })
+                .collect();
+            (scalars, identities)
+        }
+
+        /// Execute the emitted program and return what a read is OBSERVABLE IN:
+        /// its admission, and the registers it writes.
+        ///
+        /// `execute_fold_atomic` copies the whole scratch bank to the output
+        /// bank, so every register the program never touches appears in the
+        /// output VERBATIM. Comparing whole output banks therefore reports
+        /// "read" for pass-through, which is not a read; restricting the
+        /// observation to the program's own declared writes is what makes the
+        /// measurement a measurement rather than an enumeration of the bank.
+        #[allow(clippy::type_complexity)]
+        fn resolve(
+            writes: &(std::vec::Vec<usize>, std::vec::Vec<usize>),
+            input: [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4],
+            identities: [[u8; 32]; DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4],
+        ) -> Option<(std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>)> {
+            let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
+                .expect("transition");
+            let transition = ProgramV3::decode(&bytes).expect("decode");
+            let mut scalar_scratch = input;
+            let mut output = input;
+            let mut identity_scratch = identities;
+            let mut identity_output = identities;
+            execute_fold_atomic(
+                transition,
+                3,
+                RegisterInput {
+                    scalars: &input,
+                    identities: &identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scalar_scratch,
+                    identities: &mut identity_scratch,
+                },
+                RegisterOutput {
+                    scalars: &mut output,
+                    identities: &mut identity_output,
+                },
+            )
+            .ok()?;
+            Some((
+                writes
+                    .0
+                    .iter()
+                    .map(|index| *output.get(*index).expect("scalar"))
+                    .collect(),
+                writes
+                    .1
+                    .iter()
+                    .map(|index| *identity_output.get(*index).expect("identity"))
+                    .collect(),
+            ))
         }
 
         /// The boundary itself stays admissible: a venue rate exactly at the

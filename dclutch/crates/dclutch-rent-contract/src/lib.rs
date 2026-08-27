@@ -47,33 +47,29 @@ pub const RENT_SYSVAR_ID: [u8; PUBKEY_BYTES] = [
     253, 68, 227, 219, 217, 138, 0, 0, 0, 0,
 ];
 
-/// Refusal from a hostile decoder, frame checker, or exact accounting plan.
+/// Refusal from an exact accounting plan or an authority-bytes decode.
+///
+/// This enum is scoped to what this root module still does. It is NOT a wire
+/// grammar: record decoding, instruction dispatch, account-frame checking and
+/// close semantics all belong to [`lifecycle_v2`] and refuse under
+/// [`lifecycle_v2::LifecycleRentErrorV2`]. Every variant here has a live
+/// construction site in this file; keep it that way, because Rust does not
+/// warn on an unused public variant and seven of them survived the 2026-08-27
+/// V1 deletion invisibly (`InvalidMagic`, `UnsupportedSchema`,
+/// `NonCanonicalReservedBytes`, `InvalidRentSysvar`, `ZeroWithdrawal`,
+/// `WithdrawalExceedsClaimable`, `CloseNotSupported` — all deleted on review).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     /// Input did not have its one exact canonical width.
     InvalidLength,
-    /// Magic bytes did not identify this contract.
-    InvalidMagic,
-    /// The encoded schema version is not implemented.
-    UnsupportedSchema,
-    /// Reserved bytes or reserved trailing bytes were not zero.
-    NonCanonicalReservedBytes,
     /// A required authority or ordinary account key was the all-zero sentinel.
     ZeroAuthorityOrAccount,
-    /// A supplied Rent account was not the canonical nonexecutable Rent sysvar.
-    InvalidRentSysvar,
     /// Creation was not funded by exactly the current Rent minimum.
     CreationFundingMismatch,
-    /// A required nonzero requested withdrawal amount was zero.
-    ZeroWithdrawal,
-    /// The requested withdrawal exceeded the current claimable balance.
-    WithdrawalExceedsClaimable,
     /// A source close did not prove its complete observed balance was credited.
     SourceCreditMismatch,
     /// Checked native-lamport arithmetic overflowed or underflowed.
     ArithmeticOverflow,
-    /// V1 has no close path for a rent-credit account.
-    CloseNotSupported,
 }
 
 /// Result alias for rent-credit operations.

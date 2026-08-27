@@ -24,6 +24,14 @@ capable as generation one on shaped dynamics?**
 **The answer is no — not yet.** Two named things stand in the way, and one of
 them is a repeat of a mistake generation one already made and recorded.
 
+**Amended 2026-08-27 (PRICE-GATE): the first of the two is closed, and the
+answer is still no.** The degree-≥2 price gate exists, is proved sound, and is
+ahead of *both* predecessors — see "the row that flipped" at the end. What
+still stands in the way is the second thing: the shape compiler does not exist
+here, physical width is ten against sixteen, and nothing is wired to a live
+consumer. The original text below is kept as written rather than tidied,
+because the reasoning that produced the fix is worth more than a clean result.
+
 ## What landed
 
 Pure theory, `formal/dclutch-semantics/DClutchSemantics/LiabilityBasisV2Spline.lean`
@@ -71,10 +79,14 @@ clamped cubic returns `[1/48, 23/48, 23/48, 1/48]` at a span midpoint.
 | Supply algebra preservation | proved per-property for the spline path | inherited from one `Basis` instance | **gen-3 ahead**, structurally |
 | Maximum claims, physically | 16 | 10 (twelve knot slots in the first record) | **gen-1 ahead** |
 | Edge policy | clamp **or** refuse, caller-selected | clamp only | **gen-1 ahead**, minor |
-| Degree ≥ 2 arbitrage gate | built (moment cone V1b), `decide`-checked both directions, table proved *tight* — and provably incomplete on multi-span grids, with a named false acceptance. **Gen-2 built a second, integer one that refutes it** | **absent** | **behind — the largest gap. But see the correction below: the fix exists and is a transplant, not research** |
+| Degree ≥ 2 arbitrage gate | built (moment cone V1b), `decide`-checked both directions, table proved *tight* — and provably incomplete on multi-span grids, with a named false acceptance. **Gen-2 built a second, integer one that refutes it** | **built** (`LiabilityBasisV2PriceGate`, 2026-08-27): integer hull membership over an arbitrary `Basis`, with `Certificate.no_arbitrage` proved, a 320-byte record, and a `no_std` kernel corpus-checked against it | **gen-3 ahead of both** — see "the row that flipped" below |
+| Degree ≥ 2 gate, machine-checked soundness | none (V1b's *table* is `decide`-checked; the gate admitting no arbitrage is not a theorem anywhere in gen-1) | none — 48 Rust tests, zero theorems, its own promotion gate 9 never run | `Certificate.no_arbitrage`, zero `sorry`, zero `native_decide`, three standard axioms | **gen-3 ahead of both** |
+| Degree ≤ 1 exemption | asserted | asserted | proved: `no_cap_of_attained_scale` leaves the capped-claim refusal with no instance wherever a claim attains a whole complete set, which LB-SPLINE pinned at degree one | **gen-3 ahead of both** |
+| Gate admission wired to evaluation | separate call | separate call | one conjunct: `admit_and_evaluate_spline_v2` refuses degree ≥ 2 with no certificate (tag 31) before it evaluates | **gen-3 ahead** |
+| Gate certificate capacity | 16 claims | 16 atoms, 544-byte certificate | 10 atoms, 320-byte certificate — the affine Carathéodory bound at this record's width, not an arbitrary cap | **gen-2 ahead**, and only because its width is |
 | Shape compiler (analytic target → coefficients + error certificate) | built, host-only | absent | **gen-1 ahead** |
 | Occupation / path accumulator | built, never integrated | absent | gen-1 ahead on paper only |
-| Lean↔Rust agreement corpus | 3,360 rows, **uniform grids only** | 28 agreement + 32 refusal, covering multiplicity, non-uniform grids, both clamps, both scale extremes | gen-1 ahead on volume, gen-3 ahead on coverage classes |
+| Lean↔Rust agreement corpus | 3,360 rows, **uniform grids only** | basis: 28 agreement + 32 refusal, covering multiplicity, non-uniform grids, both clamps, both scale extremes. Gate: 22 agreement + 45 refusal, reaching all 20 record-carried guarded tags | gen-1 ahead on volume, gen-3 ahead on coverage classes |
 | Wired to a live consumer | no | no | equal, both no |
 
 ## The two things standing in the way
@@ -93,12 +105,16 @@ consequence in its own words: *"The claim plane landed; the admission story
 for prices did not move with it."* Degree-2 and degree-3 markets were
 creatable with the hole open for about two days.
 
-**This lane has done the same thing.** Nothing here gates prices. The
-mitigating facts are that nothing is wired to a consumer, no Market can
-select this basis, and no layout has changed — so the hole is not reachable.
-The load-bearing point is that it must be closed **before** a Market can
-select degree ≥ 2, not after, and the trigger has to be written down now
-rather than rediscovered.
+**This lane had done the same thing** when this document was first written.
+Nothing gated prices; the mitigating facts were that nothing was wired to a
+consumer, no Market could select this basis, and no layout had changed — so the
+hole was not reachable. The load-bearing point was that it had to be closed
+**before** a Market could select degree ≥ 2, not after.
+
+**It is closed as of 2026-08-27 (PRICE-GATE).** The rest of this section is kept
+as written because the reasoning that produced the fix is worth more than a
+tidied result; "the row that flipped" at the end of the document says exactly
+what changed and what did not.
 
 Generation one's own gate was **provably incomplete** on multi-span grids, with
 a pinned false acceptance (degree two, five claims, breakpoints `[0,1,2,3]`:
@@ -271,21 +287,103 @@ every profile at once where a check covers one evaluation — but it is the
 difference between an owed theorem and a refusal, and a refusal cannot be
 forgotten.
 
+## The row that flipped — 2026-08-27, PRICE-GATE
+
+The gate exists. `DClutchSemantics.LiabilityBasisV2PriceGate` (753 lines),
+`…PriceGateAbi` (452), `…PriceGateExamples` (343), the emitter (331), and
+`crates/dclutch-liability-basis-v2-kernel/src/price_gate.rs` (454) under 556
+lines of differential test, with a Lean-emitted corpus of 22 agreement and 45
+refusal cases reaching all 20 guarded tags. Zero `sorry`, zero `native_decide`,
+zero non-standard axioms.
+
+**What is actually proved**, so the row can be audited rather than believed:
+
+- `Certificate.no_arbitrage` — a price with a valid certificate admits no
+  portfolio whose payoff is nonnegative at every terminal result and whose price
+  is strictly negative. This is the statement generation one's moment cone was
+  *wrong* about and generation two never wrote down.
+- `Certificate.check_eq_true_iff` — the decidable checker decides validity
+  **exactly**, so a weakened conjunct fails here rather than silently admitting.
+- `Certificate.price_sum` — a certified price sums to the collateral scale. The
+  simplex condition is a *consequence* of hull membership, not a second premise,
+  so this gate can only ever refuse more than `p ≥ 0, sum p = Q`, never less.
+- `no_certificate_of_capped_claim` — the gate has teeth: if a claim can never
+  pay more than `cap/multiplier` of a complete set with `cap < multiplier`, the
+  simplex-admissible price paying it the whole scale has **no valid certificate
+  at all**. `3/4` at degree two is exactly that instance.
+- `no_cap_of_attained_scale` — and why degree ≤ 1 is exempt, rather than
+  asserted to be: a claim that attains a whole complete set somewhere cannot be
+  capped, so the refusal above has no instance against it. LB-SPLINE's
+  `hats.evaluate (at' 1 1) = [100, 0]` is the pinned attainment this cites.
+- `admitEvaluation_refuses_graded_without_certificate` — degree ≥ 2 is refused
+  with tag 31 before it is evaluated, at the boundary, in the kernel today.
+
+**Both directions of generation two's refutation are reproduced against this
+tree's own evaluator**, which shares no line with either predecessor:
+
+- Direction one (`adversarial.rs:262`). Generation one's V1b is transcribed into
+  `PriceGateExamples` *only* so its acceptance can be decided rather than
+  recalled; nothing calls it. It accepts `(4,8,0,0,0)/12`, the price is
+  simplex-admissible, and `(1,-2,10,40,64)` — the B-spline coefficients of
+  `(3x-1)²` — costs exactly `-12 = -S` there. The portfolio's payoff is decided
+  nonnegative at all 90 coordinates of a named grid, and
+  `gen1_price_has_no_certificate_on_grid` turns that into a refusal.
+- Direction two (`adversarial.rs:281`). The live point generation one *refuses*
+  is admitted here by a single atom, through the checker. Its payout vector is
+  the cross-generational agreement worth naming on its own: generation two
+  rounds by largest remainder and this tree floors a running cumulative sum, and
+  both return `[1128, 6667, 2205, 0, 0]` out of `10000` at coordinate `85`.
+
+**What this does *not* establish, stated as plainly as the rest.** Direction
+one's refutation is over a *finite grid* (denominators `{1,2,3,4,6,12}` on
+`[0,3]`, 90 coordinates). It does not establish that no certificate exists at
+any rational coordinate: that needs the arbitrage portfolio to pay nonnegatively
+at **every** admitted coordinate, a statement about an infinite domain.
+Generation one asserted the continuous form analytically and never
+machine-checked it; generation two checked one supplied moment witness against
+its per-span cone, which refuses that witness rather than every witness. Neither
+predecessor closed it and neither does this lane. Likewise
+`quadratic_peak_price_has_no_certificate` takes the `3/4` ceiling as a
+**premise**, not a theorem — what is proved is the implication, and that
+implication is the whole reason the gate is not vacuous at degree two.
+
+The `u64` mass is inherited unchanged: a price inside the hull whose every
+representation needs a larger common denominator is refused. That is a
+sufficient inner certificate and it fails closed. Generation two carried the
+same residual and named it; naming it again is not closing it.
+
 ## The verdict, stated plainly
 
-On the **claim plane** — the basis itself — the successor is now ahead of
+On the **claim plane** — the basis itself — the successor is ahead of
 generation one on knot multiplicity, non-uniform grids, the generality of the
 machine-checked partition of unity, and the auditability of the rounding rule;
 behind on physical width, edge policy, and rounding symmetry; and equal on
-degree range, exactness and accuracy.
+degree range, exactness and accuracy. **None of those three deficits moved
+today**, and the price gate does not touch any of them:
 
-On the **whole instrument**, it is behind, because no price-plane gate and no
-shape compiler exist here and nothing is wired to a consumer. That verdict is
-unchanged by the correction above — but its *cost* is much lower than it first
-appeared. The largest gap in this table is not open research: generation two
-already wrote a sound integer gate that fits `LiabilityBasisV2` better than
-generation one's, and the remaining work is a reviewed transplant plus the Lean
-correspondence neither predecessor ever ran.
+- **Width, 10 against 16.** A property of the first 144-byte record, not of
+  anything proved; the Lean carries no width bound. The gate inherits it rather
+  than causing it — ten atoms is the affine Carathéodory bound *at* that width,
+  so a wider record widens the support capacity for free.
+- **Edge policy.** Generation one offered clamp *or* refuse, caller-selected;
+  this tree clamps only. Untouched.
+- **Rounding symmetry.** Generation one's largest-remainder rule is symmetric
+  under reflection when remainders are distinct; the cumulative floor is
+  order-dependent and is not. Untouched, and worth restating that the gate is
+  *indifferent* to it: hull membership asks only that the evaluator be
+  deterministic, so an asymmetric rounding is certified exactly as an asymmetric
+  rounding.
+
+On the **whole instrument** the verdict changes but does not reverse. The
+largest gap in this table is closed, and closed *ahead of both predecessors*
+rather than level with one: generation one's gate is machine-checked and wrong,
+generation two's is right and has no theorems, and this one is right and proved.
+What remains behind is the **shape compiler**, which does not exist here, and
+the fact that **nothing is wired to a live consumer** — no Market can select a
+spline basis at all, because the layout slice does not exist and is out of scope
+by Frontier 2's own gate. The gate is therefore in the right order for the first
+time in three generations: the price plane is ready *before* the layout that
+would make it reachable, rather than two days after.
 
 `O-013` remains open. What has changed is that its second slice is no longer
 a ramp, and the row's own closure condition can now be written against

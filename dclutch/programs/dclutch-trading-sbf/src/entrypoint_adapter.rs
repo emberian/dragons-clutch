@@ -20,13 +20,13 @@
 //! the entrypoint's stack frame, but it is hard-capped at 64 accounts because
 //! SBPF v0 gives every function a *static* 4,096-byte frame and 64 x 48 =
 //! 3,072 is the largest round count that fits. Trading declares
-//! [`crate::TRADING_MAX_INSTRUCTION_ACCOUNTS_V3`] = 308, so the macro cannot be
+//! [`crate::TRADING_MAX_INSTRUCTION_ACCOUNTS_V3`] (309), so the macro cannot be
 //! adopted without regressing the bound.
 //!
 //! This adapter takes the SDK's stack-slot technique and adds the fallback the
 //! macro lacks: up to [`ADAPTER_STACK_SLOTS_V1`] accounts are deserialized into
 //! a stack-resident array and cost zero heap; beyond that the adapter falls
-//! back to an exactly-sized heap buffer, so the 308 bound is preserved and
+//! back to an exactly-sized heap buffer, so the declared bound is preserved and
 //! never silently narrowed. The split point is a **measured-profile** bound
 //! (see [`ADAPTER_STACK_SLOTS_V1`]), not a protocol fact.
 //!
@@ -2052,7 +2052,7 @@ mod tests {
     }
 
     #[test]
-    fn differential_declared_maximum_three_hundred_eight_accounts() {
+    fn differential_declared_maximum_account_frame() {
         let slots: Vec<SlotSpec> = (0..crate::TRADING_MAX_INSTRUCTION_ACCOUNTS_V3)
             .map(|index| SlotSpec::Fresh(account(u8::try_from(index % 251).expect("seed"))))
             .collect();

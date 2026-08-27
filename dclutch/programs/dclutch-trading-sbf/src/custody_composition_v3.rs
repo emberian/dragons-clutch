@@ -21,6 +21,7 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4};
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ReceiptDeliveryV3, deliver_receipt_dependency_v3},
@@ -60,7 +61,7 @@ pub fn preflight_custody_route_v3<'info>(
     frame: &mut Vec<AccountInfo<'info>>,
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
-) -> Result<(), ProgramError> {
+) -> Result<u8, ProgramError> {
     let prepared = prepare(
         program_id,
         effect,
@@ -74,9 +75,9 @@ pub fn preflight_custody_route_v3<'info>(
         frame,
         custody_program,
         parent,
+        None,
     )?;
-    let _ = prepared;
-    Ok(())
+    Ok(prepared.bump)
 }
 
 /// Execute one preflighted Custody invocation and verify its immediate receipt.
@@ -95,6 +96,9 @@ pub fn execute_custody_route_v3<'info>(
     buffers: &mut ChildInvocationBuffersV3<'info>,
     custody_program: &AccountInfo<'info>,
     parent: CustodyCompositionParentV3,
+    // The bump `preflight_custody_route_v3` already derived over byte-identical
+    // seeds; see `crate::child_authority_v4`.
+    preflighted_bump: PreflightedCallerBumpV4,
 ) -> Result<[u8; 32], ProgramError> {
     // `prepare` leaves the authenticated frame IN the walk's buffer. It used to
     // build a frame of its own for the shape check and then be handed a second,
@@ -113,6 +117,7 @@ pub fn execute_custody_route_v3<'info>(
         &mut buffers.accounts,
         custody_program,
         parent,
+        preflighted_bump,
     )?;
     buffers.fill_metas()?;
     buffers.set_wire(prepared.request_bytes)?;
@@ -204,6 +209,7 @@ fn prepare<'a, 'info>(
     frame: &mut Vec<AccountInfo<'info>>,
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
+    preflighted_bump: PreflightedCallerBumpV4,
 ) -> Result<PreparedCustodyInvocationV3<'a>, ProgramError> {
     validate_parent(program_id, parent)?;
     if !custody_program.executable
@@ -250,7 +256,7 @@ fn prepare<'a, 'info>(
     )
     .map_err(|_| TradingSbfError::Content)?;
     let (expected_authority, bump) =
-        Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+        child_caller_authority_v4(&authority_seeds, program_id, preflighted_bump)?;
     gather_invocation_accounts(frame, invocation, effect_accounts)?;
     require_custody_frame_shape_v3(frame, custody_program.key, &expected_authority)?;
     Ok(PreparedCustodyInvocationV3 {

@@ -1561,6 +1561,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-direct-aot-contract",
  "dclutch-execution-strategy-contract",
+ "dclutch-refusal-registry",
  "solana-program",
 ]
 
@@ -1578,6 +1579,7 @@ dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
  "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
  "sha2 0.10.9",
 ]
 
@@ -1599,10 +1601,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-refusal-registry"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+]
+
+[[package]]
+name = "dclutch-sha256-adapter"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "solana-sha256-hasher",
 ]
 
 [[package]]

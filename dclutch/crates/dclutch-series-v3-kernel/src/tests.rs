@@ -501,22 +501,46 @@ fn product_record_join_refuses_substituted_runtime_projection() {
 }
 
 #[test]
-fn funding_list_is_unbounded_by_old_width_profile_but_exact() {
+fn funding_list_is_unbounded_by_the_physical_width_profile_but_bounded_by_the_chain() {
     let mut wide = [key(1); 17];
     for (index, entry) in wide.iter_mut().enumerate() {
         let byte = u8::try_from(index + 1).expect("small index");
         *entry = key(byte);
     }
+    // Seventeen: the point of this case. Every physical profile that reaches
+    // this kernel caps its funding span at sixteen, and the kernel does not
+    // inherit that cap.
     assert!(funding_list_id(&wide).is_ok());
     assert_ne!(
         funding_list_id(&wide).expect("wide exact list"),
         funding_list_id(&wide[..16]).expect("shorter exact list")
     );
+    // What it IS bounded by is the number of accounts a transaction can lock,
+    // because the only thing that ever checks a funding list presents the whole
+    // list in one instruction.
+    let mut widest = [key(1); SERIES_MAX_FUNDING_STATES_V3];
+    for (index, entry) in widest.iter_mut().enumerate() {
+        *entry = distinct_key(index);
+    }
+    assert!(funding_list_id(&widest).is_ok());
+    let mut over = [key(1); SERIES_MAX_FUNDING_STATES_V3 + 1];
+    for (index, entry) in over.iter_mut().enumerate() {
+        *entry = distinct_key(index);
+    }
+    assert_eq!(funding_list_id(&over), Err(SeriesV3Error::Funding));
     assert_eq!(funding_list_id(&[]), Err(SeriesV3Error::Funding));
     assert_eq!(
         funding_list_id(&[key(1), key(1)]),
         Err(SeriesV3Error::Funding)
     );
+}
+
+fn distinct_key(index: usize) -> AccountKeyV3 {
+    let mut bytes = [0_u8; 32];
+    bytes[0] = 1;
+    bytes[1] = u8::try_from(index / 256).expect("high byte");
+    bytes[2] = u8::try_from(index % 256).expect("low byte");
+    AccountKeyV3::new(bytes).expect("nonzero key")
 }
 
 #[test]

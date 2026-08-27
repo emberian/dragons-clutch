@@ -121,6 +121,13 @@ and that is the accelerator's own consumption inside a caller CPI, not the
 whole Trading transaction. The N=1 → N=258 growth is sublinear in every action
 except the two that fold the whole candidate (`Consider`, `Initialize`).
 
+> **Superseded on 2026-08-27 by *The hash was 74% of the worst action* below.**
+> The sentence was true, and it was true for a reason nobody had checked: 86%
+> of `Consider` and 74% of `InitializeSettlement` were a software SHA-256 that
+> did not need to be in the program at all. The worst action is now 164,400 CU,
+> **11.7%** of the ceiling. The numbers in this section are the pre-conversion
+> ones and are kept because the addendum is a comparison against them.
+
 ## Why this is not a fast lane
 
 `tools/gauntlet/TIERS.md` admits `solana-program-test` behind a tier's fast
@@ -229,3 +236,102 @@ same tier clause for the same measured reason — six of seven N=258 actions
 exceed the 1,232-byte limit. `general-accelerator/process_instruction` remains
 NEVER-EXECUTED. What changed is what the accelerator was fed, not the transport
 it was fed through.
+
+## The hash was 74% of the worst action (SHASEAM, 2026-08-27)
+
+The accelerator computed SHA-256 **in software**. Not by decision: the General
+contract crates are deliberately SDK-free, and a `no_std` library that cannot
+name the Solana SDK cannot name the `sol_sha256` syscall either, so they linked
+`sha2`. A software compression loop costs roughly **104.75 CU per byte**; the
+runtime's syscall costs **85 CU plus about half a CU per byte**. One digest of
+the 4,288-byte verified candidate is the difference between 456,008 CU and
+2,234.
+
+`crates/dclutch-sha256-adapter` is now the one named place that knows a runtime
+exists, and every General digest goes through it. **SHA-256 is SHA-256**, so
+every digest VALUE is unchanged, nothing was regenerated, and no identity,
+artifact or fixture moved.
+
+Reproduced with the same command at `6d1ee60c`, accelerator ELF
+`ead59b2264647649456bbd787f59e777b319887803fee3d189298e72b324dcf9`, caller
+`3e9621e99612fca5fca98d98c15d1bf2a46b0c8d6637a1427cf6511ce01b7038`, both with
+**zero SBF stack-frame diagnostics**. Suites 4/4 + 2/2 + 3/3, unchanged.
+
+### N = 1 (re-taken)
+
+| action | CU | Δ | accounts | legacy packet | scratch pages |
+|---|---:|---:|---:|---:|---:|
+| `Consider` | 36,071 | **−20,109** | 33 | 811 | 3 |
+| `Freeze` | 32,643 | +35 | 31 | 745 | 3 |
+| `InitializeSettlement` | 61,267 | **−20,125** | 89 | 867 | 3 |
+| `Collect` | 56,953 / 58,135 / 58,158 | +29 | 70 | 848 | 3 |
+| `Materialize` | 53,151 | +26 | 68 | 814 | 3 |
+| `Distribute` | 56,903 / 58,108 / 58,139 | +27 | 70 | 848 | 3 |
+| `Close` | 61,314 | +24 | 87 | 833 | 3 |
+
+### N = 258 (re-taken)
+
+| action | CU | Δ | accounts | legacy packet | scratch pages |
+|---|---:|---:|---:|---:|---:|
+| `Consider` | 74,835 | **−453,813 (−85.8%)** | 47 | 1,273 | 17 |
+| `Freeze` | 65,054 | +35 | 45 | 1,207 | 17 |
+| `InitializeSettlement` | 164,400 | **−453,829 (−73.4%)** | 103 | **1,329** | 17 |
+| `Collect` | 146,909 / 147,336 / 148,130 | +29 | 84 | 1,310 | 17 |
+| `Materialize` | 141,382 | +26 | 82 | 1,276 | 17 |
+| `Distribute` | 144,546 / 145,767 / 146,569 | — | 84 | 1,310 | 17 |
+| `Close` | 155,768 | +24 | 101 | 1,295 | 17 |
+
+`accounts`, `legacy packet` and `scratch pages` are **identical in all fourteen
+rows**, as they have been through every re-take of this table. Removing a hash
+implementation moves compute and nothing else, and the three unmoved columns
+are what says so.
+
+### The control is the slope, not the constant
+
+Sixteen commits touched this program's surface between the baseline tables and
+this run, so a raw CU difference is not attributable to any one of them. The
+per-outcome slope is:
+
+| action | CU/outcome before | after | |
+|---|---:|---:|---|
+| `Consider` | 1,838.4 | 150.8 | **12.2× cheaper** |
+| `InitializeSettlement` | 2,088.9 | 401.3 | **5.2× cheaper** |
+| `Freeze` | 126.1 | 126.1 | unchanged |
+| `Materialize` | 343.3 | 343.3 | unchanged |
+| `Close` | 367.5 | 367.5 | unchanged |
+
+**Five of the seven actions have a bit-identical slope and moved by a uniform
++24 to +35 constant** — that constant is the other sixteen commits, and it is
+not this change. The two that moved are exactly the two that fold the whole
+candidate, which are exactly the two that digest it. That is the attribution.
+
+The independent prediction was 456,008 CU of software hash against 2,234 by
+syscall, i.e. **453,774 CU removable**. Measured: 453,813 and 453,829. The two
+agree to within 55 CU on a 450,000 CU quantity, from opposite directions —
+instruction-count arithmetic over the compression loop, and a real ELF in a
+real runtime.
+
+### Headroom, and what actually binds
+
+`InitializeSettlement` is the binding action at both ends:
+
+| | before | after |
+|---|---:|---:|
+| N = 258 share of the 1,400,000 ceiling | 44.2% | **11.7%** |
+| outcomes before the ceiling (linear in N) | ~632 | **~3,337** |
+
+**This headroom is not the operative limit and this document should not be read
+as if it were.** Six of the seven N=258 actions still exceed Solana's
+1,232-byte legacy packet maximum, unchanged by this work, and that is still why
+the census row does not flip. Compute stopped being close to a wall; the packet
+never stopped being one.
+
+### Binary size
+
+The accelerator ELF is **193,968 → 139,136 bytes, −54,832 (−28.3%)**. The
+SHA-256 round-constant table is gone from `.rodata` and `sol_sha256` appears in
+the dynamic imports. `dclutch_core_sbf.so` fell by the same order in the same
+change, 989,104 → 933,328. Trading still carries the implementation: three
+`shadow_digest_v3` functions take unbounded slices whose preimages cannot be
+restated inside a 4,096-byte SBF frame, and they need a caller-supplied scratch
+rather than a bound. See the commit message at `6d1ee60c` for the arithmetic.

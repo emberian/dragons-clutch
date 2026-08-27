@@ -35,10 +35,43 @@ pub enum ProviderJoinErrorV3 {
     Product,
     /// Provider release, adapter release, update, or role identity differed.
     Provider,
+    /// The observation is not about the period the Market sold.
+    ProviderWindow,
+    /// The observation is about the right period and this cluster will not act
+    /// on it.
+    ProviderFreshness,
+    /// The observation's feed, exponent, or confidence is not the one the
+    /// Market's adapter configuration admits.
+    ProviderConfiguration,
     /// Source terminal transition or certificate construction refused.
     Transition,
     /// A checked integer conversion overflowed.
     Arithmetic,
+}
+
+/// Split `normalize_authenticated_update`'s refusal into the three questions
+/// `docs/design/MAINNET_STATE_RELAY.md` §12.3 says an operator must be able to
+/// tell apart.
+///
+/// They used to arrive as one number. `normalize_authenticated_update`'s own
+/// doc comment already said an operator must distinguish a fresh publication
+/// about the wrong period from a stale one about the right period, and they
+/// could not: the journey campaign paid a whole off-chain pre-evaluation to
+/// that collapse, re-deciding all three predicates itself before spending
+/// 1,070,265 CU finding out which one refused. That workaround retires here.
+const fn map_normalization_error(error: dclutch_source_contract::Error) -> ProviderJoinErrorV3 {
+    match error {
+        dclutch_source_contract::Error::InvalidObservationSchedule => {
+            ProviderJoinErrorV3::ProviderWindow
+        }
+        dclutch_source_contract::Error::InvalidPublicationTime => {
+            ProviderJoinErrorV3::ProviderFreshness
+        }
+        dclutch_source_contract::Error::InvalidPythObservation => {
+            ProviderJoinErrorV3::ProviderConfiguration
+        }
+        _ => ProviderJoinErrorV3::Provider,
+    }
 }
 
 /// Independently authenticated current Source record values and identities.
@@ -202,7 +235,7 @@ pub fn plan_provider_resolution_v3(
             update.publish_time(),
             observation.current_unix_seconds,
         )
-        .map_err(|_| ProviderJoinErrorV3::Provider)?;
+        .map_err(map_normalization_error)?;
 
     let mut next_source = *source_state;
     let decision = next_source
@@ -388,6 +421,13 @@ mod tests {
         /// The window closed before this publication: the *late* observation a
         /// real provider cadence produces when nobody submitted in time.
         ObservationAfterWindowCloses,
+        /// The publication is about the right period and this cluster's clock
+        /// has moved past `max_age` since: the market is answerable, this
+        /// submission is not.
+        PublicationTooStaleForThisCluster,
+        /// The publication is timely and about the right period, and its
+        /// exponent is not the one the Market's adapter configuration names.
+        AdapterConfigurationDisagrees,
     }
 
     fn source_id(tag: u8) -> SourceContentId {
@@ -505,8 +545,14 @@ mod tests {
         } else {
             actual_provider_release_id
         };
-        let adapter_config = PythAdapterConfigV1::new(update.feed_id(), update.exponent(), 10_000)
-            .expect("Pyth adapter configuration");
+        let configured_exponent = if matches!(case, Case::AdapterConfigurationDisagrees) {
+            update.exponent() - 1
+        } else {
+            update.exponent()
+        };
+        let adapter_config =
+            PythAdapterConfigV1::new(update.feed_id(), configured_exponent, 10_000)
+                .expect("Pyth adapter configuration");
         let adapter_config_id = SourceContentId::new(hash(&adapter_config.to_bytes()).to_bytes())
             .expect("adapter digest");
         let source = SourceSpecV1::new(
@@ -647,7 +693,14 @@ mod tests {
             update_bytes: UPDATE,
             post_params_body: post_body,
             current_slot: update.posted_slot(),
-            current_unix_seconds: update.publish_time(),
+            current_unix_seconds: if matches!(case, Case::PublicationTooStaleForThisCluster) {
+                // `max_age_seconds` is 10 on this window; one second past it is
+                // the whole difference between "come back later" and "the
+                // fixture has outlived its shelf life".
+                update.publish_time() + 11
+            } else {
+                update.publish_time()
+            },
         };
         plan_provider_resolution_v3(&request_bytes, &state, &records, &observation)
     }
@@ -679,12 +732,12 @@ mod tests {
     fn the_window_refuses_early_late_and_second_observations() {
         assert_eq!(
             plan(Case::ObservationBeforeWindowOpens),
-            Err(ProviderJoinErrorV3::Provider),
+            Err(ProviderJoinErrorV3::ProviderWindow),
             "a publication from before the market opened is about the wrong period"
         );
         assert_eq!(
             plan(Case::ObservationAfterWindowCloses),
-            Err(ProviderJoinErrorV3::Provider),
+            Err(ProviderJoinErrorV3::ProviderWindow),
             "a late publication must not answer a question that already closed"
         );
 
@@ -718,5 +771,47 @@ mod tests {
             plan(Case::ParallelAdapter),
             Err(ProviderJoinErrorV3::Provider)
         );
+    }
+
+    /// The three questions `docs/design/MAINNET_STATE_RELAY.md` §12.3 says an
+    /// operator must be able to tell apart, told apart.
+    ///
+    /// They used to arrive as one code. `normalize_authenticated_update`'s own
+    /// doc comment already required the distinction — "an operator must be able
+    /// to tell a fresh publication about the wrong period from a stale one
+    /// about the right period" — and the wire could not make it, so the journey
+    /// campaign re-decided all three predicates off-chain before spending
+    /// 1,070,265 CU finding out which one refused.
+    ///
+    /// This is the assertion that keeps them apart. It is deliberately written
+    /// as pairwise distinctness rather than three separate equalities: a
+    /// regression that collapses any two of them back into one code fails here
+    /// even if the collapsed code is a plausible one.
+    #[test]
+    fn the_three_operator_questions_have_three_answers() {
+        let window = plan(Case::ObservationAfterWindowCloses).expect_err("window");
+        let freshness = plan(Case::PublicationTooStaleForThisCluster).expect_err("freshness");
+        let configuration = plan(Case::AdapterConfigurationDisagrees).expect_err("configuration");
+
+        assert_eq!(window, ProviderJoinErrorV3::ProviderWindow);
+        assert_eq!(freshness, ProviderJoinErrorV3::ProviderFreshness);
+        assert_eq!(configuration, ProviderJoinErrorV3::ProviderConfiguration);
+        assert_ne!(window, freshness);
+        assert_ne!(window, configuration);
+        assert_ne!(freshness, configuration);
+
+        // And the same three, distinct, as the numbers an operator actually
+        // reads off a validator log.
+        let codes = [
+            crate::ResolutionError::ProviderWindow as u32,
+            crate::ResolutionError::ProviderFreshness as u32,
+            crate::ResolutionError::ProviderConfiguration as u32,
+            crate::ResolutionError::ProviderObservation as u32,
+        ];
+        for (left, first) in codes.iter().enumerate() {
+            for (right, second) in codes.iter().enumerate() {
+                assert_eq!(left == right, first == second, "refusal codes collided");
+            }
+        }
     }
 }

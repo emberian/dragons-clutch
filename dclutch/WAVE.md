@@ -638,8 +638,11 @@ QUEUED with owners:
   `apps/dclutch-web/lib/generated/registeredDirect.ts` carries layout offsets and
   magics only. Nothing regenerated; no stale window existed to close.
 
-- DLR-HOT (charters at wave convergence), top-of-lane checks per GEN-HOT's
-  executed patterns: (i) does Dealer's descriptor name effect_kernel v4
+- DLR-HOT (charters at wave convergence) — NOW ALSO the admitted-AOT positive
+  round-trip campaign (the lane is un-dead after three fixes: the 38-literal,
+  F1's bare hash, F9's raw-index walk; dealer_chain.rs is 210 staged lines vs
+  the 3,134-line Direct fixture — size it as a campaign, use BUNDLE's
+  builder). Top-of-lane checks per GEN-HOT's executed patterns: (i) does Dealer's descriptor name effect_kernel v4
   SCHEMA_RELEASE_ID_V4? (ii) does its profile's span selector get written by
   the family RequestProfile — if not the family is forced to AdmittedAot and
   inherits the whole extras frame. Plus the known CoreState-decode defect
@@ -665,3 +668,61 @@ QUEUED with owners:
   the journey's trades ride v0/ALT from day one).
 - CU-BUDGET rows owed: CreateFund (86% of ceiling) and VerifyFundReady (84%)
   are unbudgeted; CreateFund's frame is 2,016 B on ALTs. Add at next tier run.
+
+- The /create wizard charter (cycle-3, with TWIN's §12.3 window-width table)
+  now has its recovered founding document: docs/recovered/
+  TRADING_UI_FLOW_BRIEF_2026-08-25.md (M-8, recovered from session JSONL —
+  the brief's /markets and /portfolio halves shipped independently; the
+  /create wizard and /activity halves never did). Reconcile, then build.
+- For the next Sonnet reviewer: the rent Error enum carries 7 MORE
+  unconstructed variants beyond the 5 deleted (SN6's flag, named in its
+  yield) — verdict each (dead vs awaiting-constructor) and act.
+
+- κ ENFORCEMENT (trigger: the LBV2 layout slice / RECORDS-MIGRATE cluster):
+  the predicate exists and is proven (KAPPA), but no on-chain route calls it —
+  Found sees the Source not the principal; FoundingV5 the reverse; and a
+  founding-only check is not a cap since principal grows per complete-set
+  split. Real shape: the cap on the Market root, checked at founding AND at
+  split. Interacts with the founding-root ADR; design queued at
+  MAINNET_STATE_RELAY §11.2.
+
+- Next small batch: series-shadow-sbf + the fractional crates still carry
+  production sha2 — convert to dclutch-sha256-adapter (the landed backend;
+  one-shot hashv only, never the incremental Hasher). GIT-SCAN item 8 row
+  CLOSED (69ea61fe, verified by SHASEAM).
+
+## DEVNET-SMOKE charter (expanded scope, awaiting ember's go)
+
+The smoke is a small public exchange, not a market. Deploy the seven roles
+once (checked-release, ~29 SOL, recycled at the end), then:
+1. The Pyth market: SOL/USD range protection under kappa, resolved by REAL
+   devnet Pyth in a widened window, redeemed, retired.
+2. The mainnet-observer market: a devnet market about a REAL mainnet
+   pumpfun/DBC graduation — the daemon reads live mainnet, relays signed
+   frames. The thesis, live.
+3. The abandoned market: relayer goes silent ON PURPOSE; the funded failure
+   walk runs in public with its bounty collectable by any devnet wallet;
+   walk instructions published on Pages.
+4. N=16 per market: distribution, ring, redemption of real atoms, refusals,
+   retirement.
+5. The conservation ledger runs against the PUBLIC chain; its verdict and
+   transcripts publish into the Pages reference as the evidence appendix.
+6. The browser live against devnet: list, detail, portfolio, redemption.
+7. Recycle: programs closed, rent recovered, transcripts kept.
+Stretch (gated on lanes landing first): General batch auction with real
+order flow; continuation trading at chosen-green seeds.
+Triggers: DECOMP-r compiling HEAD + DEMO-VERT-r yield. Authorization:
+ember's explicit go.
+
+- DOCTRINE (STRUCT-PHYS-r's generalized correction): NO effect operation
+  moves a token — effects write lamports/scalars/identities/child-requests
+  only; token work happens exclusively through FixedRole children (closed at
+  four; only Claims touches Mints). Any design assuming effect-program token
+  work is wrong — Fractional's twin inherits this.
+- RULED: Structured adopts the Rational child ABI (0011 §3a Option A — the
+  ABI already names the Structured operations; zero new program code; the
+  binding requirement rides it). STRUCT-CHILD dispatched.
+
+- M-46 hunt (small batch): main sat at 18/20 somewhere in
+  211079f6..a4be9a83 (~+23,000 CU unboarded); 7ead0716 MASKS it. Bisect with
+  the per-phase tables and attribute — margin honesty demands the name.

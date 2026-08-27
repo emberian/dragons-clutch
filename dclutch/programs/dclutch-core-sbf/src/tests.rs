@@ -29,13 +29,25 @@ const PACKET_DATA_BYTES: usize = 1_232;
 const MAX_FUNDING_ACCOUNTS: usize = 16;
 // GEN-V3ACT-r (2026-08-27, board): the child tail Core forwards verbatim
 // (`capability.rs::invoke_child`) becomes Trading's own `family_accounts`
-// slice, and `outer.rs`'s `AuthenticatedSuffixV2::parse` requires at least
-// `AUTHENTICATION_ACCOUNTS_V1` (16, the `FlatDescriptor` generation — the
-// current safe profile per `docs/OMISSION_INDEX.md` O-003) accounts to
-// exist there before it will even authenticate the frame. The prior value
-// of 3 measured a frame that AuthenticatedSuffixV2 itself refuses, which
-// understated this test's packet claim by thirteen accounts.
-const STANDARD_GENERAL_CHILD_TAIL_ACCOUNTS: usize = 16;
+// slice, and `outer.rs`'s `AuthenticatedSuffixV2::parse` refuses any frame
+// narrower than `AUTHENTICATION_ACCOUNTS_V1 + generation.extra_accounts()`.
+// There are TWO floors, not one: 16 for `FlatDescriptor`, 18 for
+// `ProgramSet` (the two extra accounts are the selected descriptor's raw
+// record and its staging cursor, `SET_DESCRIPTOR_RAW`/`_STAGING`). General
+// is a `ProgramSet` family — its own bundle emits a "one-entry ProgramSetV2
+// selecting General's descriptor"
+// (`trading-sbf/program-test/bundle-builder/src/general.rs`) — so 18, not
+// 16, is the floor that applies to this measurement. The prior value of 3
+// measured a frame `AuthenticatedSuffixV2` itself refuses.
+//
+// This is still a FLOOR, not General's maximum: a real General activation
+// carries the admitted-AOT strategy extras in the same tail (eight
+// authenticated records plus one Trading caller authority per register-bank
+// page plus the accelerator program and its ProgramData — `general.rs`
+// boundary item 2), none of which is modelled here. Read the claim below as
+// "the narrowest frame General's dispatch will accept still fits one lookup
+// v0 packet", not as a bound on the widest one.
+const STANDARD_GENERAL_CHILD_TAIL_ACCOUNTS: usize = 18;
 const GENERIC_FIXED_ACCOUNTS: usize = 14;
 // Exact current General V2 activation request width used by this physical
 // profile measurement. General remains the semantic owner of those bytes.
@@ -152,7 +164,7 @@ fn maximum_profile_general_activation_fits_one_lookup_v0_packet() {
     let program_id = Pubkey::new_from_array([2; 32]);
     let account_count =
         GENERIC_FIXED_ACCOUNTS + MAX_FUNDING_ACCOUNTS + STANDARD_GENERAL_CHILD_TAIL_ACCOUNTS;
-    assert_eq!(account_count, 46);
+    assert_eq!(account_count, 48);
     let addresses = (0..account_count)
         .map(|index| Pubkey::new_from_array([u8::try_from(index + 3).expect("key"); 32]))
         .collect::<Vec<_>>();
@@ -189,7 +201,7 @@ fn maximum_profile_general_activation_fits_one_lookup_v0_packet() {
     let compressed_bytes = 1
         + usize::from(compressed.header.num_required_signatures) * 64
         + VersionedMessage::V0(compressed).serialize().len();
-    assert_eq!(uncompressed_bytes, 2_458);
-    assert_eq!(compressed_bytes, 1_066);
+    assert_eq!(uncompressed_bytes, 2_524);
+    assert_eq!(compressed_bytes, 1_070);
     assert!(compressed_bytes <= PACKET_DATA_BYTES);
 }

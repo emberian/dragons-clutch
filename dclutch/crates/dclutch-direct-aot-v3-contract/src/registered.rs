@@ -412,16 +412,64 @@ fn execute_candidate(scalars: &mut [u64], identities: &mut [[u8; 32]]) -> Result
         FILL_SCALAR_CLAIM_DESTINATION_REVISION_AFTER_V4,
         checked_add(read(scalars, FILL_SCALAR_CLAIM_DESTINATION_REVISION_V4)?, 1)?,
     )?;
-    let custody_after_seller = checked_add(read(scalars, FILL_SCALAR_CUSTODY_REVISION_V4)?, 1)?;
+
+    // The Custody route enables, and a replay ladder that advances by exactly
+    // the number of transfers they turn on. Both legs are conditional: a
+    // Custody `Transfer` of zero is refused by `CustodyRequestV1::validate`,
+    // and on the canonical fill the combined fee floors to nothing. Authored in
+    // `DirectRegisteredFillV4.lean`; the four bits below are the final values
+    // of the ten instructions in its `routeOps`, which overwrite
+    // `sellerIntermediateRouteEnabled` twice.
+    let fee_nonzero = u64::from(total_fee != 0);
+    let seller_terminal_route = if total_fee == 0 {
+        u64::from(seller_net != 0)
+    } else {
+        0
+    };
+    let seller_intermediate_route = if seller_net == 0 { 0 } else { fee_nonzero };
+    let fee_sole_route = if seller_net == 0 { fee_nonzero } else { 0 };
+    write(scalars, FILL_SCALAR_FEE_NONZERO_V4, fee_nonzero)?;
+    write(
+        scalars,
+        FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4,
+        seller_terminal_route,
+    )?;
+    write(
+        scalars,
+        FILL_SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V4,
+        seller_intermediate_route,
+    )?;
+    write(
+        scalars,
+        FILL_SCALAR_FEE_SOLE_ROUTE_ENABLED_V4,
+        fee_sole_route,
+    )?;
+    let custody_after_seller = checked_add(seller_terminal_route, seller_intermediate_route)?;
     write(
         scalars,
         FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4,
         custody_after_seller,
     )?;
+    let custody_after_seller = checked_add(
+        read(scalars, FILL_SCALAR_CUSTODY_REVISION_V4)?,
+        custody_after_seller,
+    )?;
+    write(
+        scalars,
+        FILL_SCALAR_CUSTODY_REVISION_AFTER_SELLER_V4,
+        custody_after_seller,
+    )?;
+    let custody_after_fee = checked_add(custody_after_seller, seller_intermediate_route)?;
     write(
         scalars,
         FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4,
-        checked_add(custody_after_seller, 1)?,
+        custody_after_fee,
+    )?;
+    let custody_after_fee = checked_add(custody_after_fee, fee_sole_route)?;
+    write(
+        scalars,
+        FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4,
+        custody_after_fee,
     )?;
     Ok(())
 }

@@ -16,6 +16,9 @@ pub mod product_claims;
 /// Degree-one through degree-three B-spline liability bases.
 pub mod spline;
 
+/// The degree-`>= 2` arbitrage gate: integer hull membership over a basis.
+pub mod price_gate;
+
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated;
@@ -23,6 +26,10 @@ mod generated;
 #[rustfmt::skip]
 #[allow(missing_docs)]
 mod generated_spline;
+
+#[rustfmt::skip]
+#[allow(missing_docs)]
+mod generated_price_gate;
 
 pub use generated::{
     AGREEMENT_CASES_V2, RAMP_COORDINATE_DENOMINATOR_OFFSET_V2, RAMP_COORDINATE_NUMERATOR_OFFSET_V2,
@@ -47,6 +54,24 @@ pub use spline::{
     SPLINE_MAX_DEGREE_V2, SPLINE_MAX_SUPPORT_V2, SPLINE_MIN_DEGREE_V2, SplineBasisV2,
     SplineRequestV2, SplineWeightsV2, apportion_spline_v2, decode_and_evaluate_spline_v2,
     decode_spline_request_v2, evaluate_spline_basis_v2, evaluate_spline_v2,
+};
+
+pub use generated_price_gate::{
+    PRICE_GATE_AGREEMENT_CASES_V1, PRICE_GATE_ATOM_COUNT_OFFSET_V1, PRICE_GATE_DEGREE_OFFSET_V1,
+    PRICE_GATE_DENOMINATOR_BYTES_V1, PRICE_GATE_DENOMINATORS_OFFSET_V1, PRICE_GATE_MAGIC_OFFSET_V1,
+    PRICE_GATE_MAGIC_V1, PRICE_GATE_MASS_OFFSET_V1, PRICE_GATE_MAX_ATOMS_V1,
+    PRICE_GATE_MAX_WIDTH_V1, PRICE_GATE_NUMERATOR_BYTES_V1, PRICE_GATE_NUMERATORS_OFFSET_V1,
+    PRICE_GATE_PRICE_BYTES_V1, PRICE_GATE_PRICES_OFFSET_V1, PRICE_GATE_PROFILE_OFFSET_V1,
+    PRICE_GATE_PROFILE_V1, PRICE_GATE_REFUSAL_BUFFER_V1, PRICE_GATE_REFUSAL_CASES_V1,
+    PRICE_GATE_REQUEST_BYTES_V1, PRICE_GATE_REQUIRED_TAG_V1, PRICE_GATE_RESERVED_BYTES_V1,
+    PRICE_GATE_RESERVED_OFFSET_V1, PRICE_GATE_SCALE_OFFSET_V1, PRICE_GATE_SCHEMA_VERSION_V1,
+    PRICE_GATE_VERSION_OFFSET_V1, PRICE_GATE_WEIGHT_BYTES_V1, PRICE_GATE_WEIGHTS_OFFSET_V1,
+    PRICE_GATE_WIDTH_OFFSET_V1,
+};
+
+pub use price_gate::{
+    AdmittedSplineEvaluationV2, PRICE_GATE_EXEMPT_DEGREE_V1, PriceGateCertificateV1,
+    admit_and_evaluate_spline_v2, decode_price_gate_v1, verify_price_gate_v1,
 };
 
 /// One Lean-emitted accepted request and its exact two-claim payout.
@@ -128,6 +153,41 @@ pub struct SplineRefusalCaseV2 {
     pub error_tag: u8,
 }
 
+/// One Lean-emitted accepted price-gate certificate and the basis it is for.
+///
+/// The basis bytes are a canonical [`SplineRequestV2`] record: the certificate
+/// is always verified against an *already authenticated* basis, never against a
+/// digest of one, so the corpus carries both halves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PriceGateAgreementCaseV1 {
+    /// Exact canonical spline request bytes naming the basis.
+    pub basis: [u8; SPLINE_REQUEST_BYTES_V2],
+    /// Exact canonical certificate bytes.
+    pub certificate: [u8; PRICE_GATE_REQUEST_BYTES_V1],
+    /// Runtime claim width this case uses.
+    pub width: usize,
+    /// Sparse support size, always one through ten.
+    pub atom_count: usize,
+    /// The certified price vector, zero padded to the physical capacity.
+    pub prices: [u64; PRICE_GATE_MAX_WIDTH_V1],
+}
+
+/// One Lean-emitted hostile price-gate certificate and its stable refusal tag.
+///
+/// The buffer is one byte wider than the canonical record so an over-length
+/// input is expressible; `certificate_len` names the bytes actually offered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PriceGateRefusalCaseV1 {
+    /// Exact canonical spline request bytes naming the basis.
+    pub basis: [u8; SPLINE_REQUEST_BYTES_V2],
+    /// Hostile certificate bytes, zero padded to the refusal buffer.
+    pub certificate: [u8; PRICE_GATE_REFUSAL_BUFFER_V1],
+    /// Bytes of `certificate` the case actually offers to the decoder.
+    pub certificate_len: usize,
+    /// Stable [`Error::tag`] value.
+    pub error_tag: u8,
+}
+
 /// Stable refusal from hostile decoding or checked economic arithmetic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -171,10 +231,41 @@ pub enum Error {
     KnotsNotOrdered,
     /// The located knot span was degenerate or outside the basis domain.
     DegenerateSpan,
+    /// A price-gate mixture mass was zero, which makes the hull equation vacuous.
+    ZeroMass,
+    /// A certificate width was at or below its degree, or past the capacity.
+    WidthOutOfRange,
+    /// A certificate named no atoms, or more than the Caratheodory bound.
+    AtomCountOutOfRange,
+    /// Inactive certificate price, weight or coordinate slots were not zero.
+    NonCanonicalGatePadding,
+    /// An active mixture weight was zero, which a sparse support must omit.
+    ZeroAtomWeight,
+    /// Certificate atoms were not strictly increasing in coordinate.
+    NonCanonicalAtomOrder,
+    /// The mixture weights did not sum to the named mass.
+    WeightMassMismatch,
+    /// The weights and the mass shared a common factor above one.
+    NonPrimitiveWeightScale,
+    /// A certified price was not a partition of the named payout scale.
+    PriceNotPartition,
+    /// A certificate named a scale, degree or width its basis does not have.
+    PriceGateBasisMismatch,
+    /// The hull equation did not close componentwise against recomputed atoms.
+    PriceReconstructionMismatch,
+    /// A degree-`>= 2` basis was offered for evaluation with no certificate.
+    PriceGateRequired,
 }
 
 impl Error {
     /// Stable generated-corpus tag. Tags one through seven are ABI refusals.
+    ///
+    /// Tags zero through nineteen are shared by the ramp, spline and price-gate
+    /// records, where they mean the same thing. Twenty through thirty are the
+    /// price-gate record's own guards, in the order
+    /// `PhysicalAbi.decodeChecks` lists them; thirty-one is the admission
+    /// conjunct, which no record can carry because it fires when there is no
+    /// record at all.
     pub const fn tag(self) -> u8 {
         match self {
             Self::InvalidLength => 0,
@@ -197,6 +288,18 @@ impl Error {
             Self::NonCanonicalKnotPadding => 17,
             Self::KnotsNotOrdered => 18,
             Self::DegenerateSpan => 19,
+            Self::ZeroMass => 20,
+            Self::WidthOutOfRange => 21,
+            Self::AtomCountOutOfRange => 22,
+            Self::NonCanonicalGatePadding => 23,
+            Self::ZeroAtomWeight => 24,
+            Self::NonCanonicalAtomOrder => 25,
+            Self::WeightMassMismatch => 26,
+            Self::NonPrimitiveWeightScale => 27,
+            Self::PriceNotPartition => 28,
+            Self::PriceGateBasisMismatch => 29,
+            Self::PriceReconstructionMismatch => 30,
+            Self::PriceGateRequired => 31,
         }
     }
 }
@@ -777,6 +880,10 @@ pub(crate) fn read_u16(input: &[u8], offset: usize) -> Result<u16> {
 
 pub(crate) fn read_u32(input: &[u8], offset: usize) -> Result<u32> {
     Ok(u32::from_le_bytes(bytes(input, offset)?))
+}
+
+pub(crate) fn read_u64(input: &[u8], offset: usize) -> Result<u64> {
+    Ok(u64::from_le_bytes(bytes(input, offset)?))
 }
 
 pub(crate) fn read_i64(input: &[u8], offset: usize) -> Result<i64> {

@@ -60,11 +60,7 @@ use dclutch_capability_program_contract::{
         SCHEMA_RELEASE_ID as PROGRAM_SCHEMA_ID_V4, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
     },
 };
-use dclutch_capability_seal_contract::{
-    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
-    CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1, SealedRecordRowV1,
-    SealedRoleV1, SealedStaticOwnershipV1,
-};
+use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1, SealedStaticOwnershipV1};
 use dclutch_core_contract::ContentId;
 use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
@@ -147,6 +143,7 @@ use crate::{
         ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4, AdmittedCpiFrameV3,
         admitted_caller_authority_count_v3, execute_admitted_aot_v3,
     },
+    child_authority_v4::PreflightedCallerBumpV4,
     child_receipt_v3::{
         ChildReceiptBankV3, ExpectedReceiptProvenanceV4, require_chain_receipt_width_v3,
     },
@@ -1048,6 +1045,29 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
     Ok(context)
 }
 
+/// Bind the accelerator's read-only frame to the top-level Hot instruction.
+///
+/// Every one of the [`HOT_FIXED_ACCOUNT_COUNT_V3`] common fixed accounts, the
+/// eight admitted-AOT strategy evidence accounts and this chunk's caller
+/// authority must be the account the top-level instruction named, at the
+/// position it named it, with the privileges it named -- so an accelerator
+/// cannot be handed a frame that differs from the one the Trading invocation
+/// was authorized against.
+///
+/// # The capability seal is bound here by address, and not by content
+///
+/// `frame.capability_seal` is compared against its meta below, the same as the
+/// other thirty-eight. Its *body* is not decoded on this path, and that is a
+/// decision rather than an omission: [`authenticate_capability_seal_v3`] exists
+/// to let the ordinary Hot path locate finalized records without re-deriving
+/// them, and the accelerator path does not take that shortcut. Every artifact
+/// a seal would have named is instead bound live by `borrow_finalized_record`
+/// and `borrow_finalized_record_at` in
+/// [`authenticate_accelerator_invocation_v4`], each of which re-derives the
+/// Registry address and requires `hash(bytes) == digest` before the bytes are
+/// read. The seal therefore adds no authority this path is missing; it is
+/// present because the accelerator carries the common Hot fixed frame ENTIRE,
+/// and "entire" is exactly what the comparison below has to mean.
 fn authenticate_accelerator_top_level_v4(
     frame: HotFrameV3<'_, '_>,
     strategy_evidence: &[AccountInfo<'_>],
@@ -1087,6 +1107,14 @@ fn authenticate_accelerator_top_level_v4(
             u32::try_from(observed.data().len()).map_err(|_| TradingSbfError::NativeSignature)?,
         )
         .map_err(|_| TradingSbfError::NativeSignature)?;
+        // `metas_range` REQUIRES all six outer-prefix metas to exist; the
+        // explicit `.take(5)` below then compares the five this frame can name.
+        // The sixth is the Registry continuation admission, which the read-only
+        // accelerator frame does not carry, so there is nothing here to compare
+        // it against -- `authenticate_hot_invocation_v3` binds it, against the
+        // admission account it derived. Deliberate, and spelled `.take(...)`
+        // rather than left to `zip`'s truncation, which is the shape that hid
+        // the missing capability-seal comparison in this same function.
         let outer = observed.metas_range(0, REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
         let expected_outer = [
             frame.activation_cache.key,
@@ -1160,8 +1188,21 @@ fn authenticate_accelerator_top_level_v4(
     };
     let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
         .map_err(|_| TradingSbfError::NativeSignature)?;
+    if strategy_evidence.len() != ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4 {
+        return Err(TradingSbfError::Content.into());
+    }
     let fixed_metas = observed.metas_range(fixed_start, HOT_FIXED_ACCOUNT_COUNT_V3)?;
-    let fixed_accounts = [
+    // Typed at the contract's own width, and NOT a bare array literal, because
+    // the loop below is a `zip` and `zip` truncates to the shorter side without
+    // a diagnostic. This array held thirty-eight entries against thirty-nine
+    // metas: `frame.capability_seal` was absent, so the meta at
+    // `HOT_CAPABILITY_SEAL_ACCOUNT_V3` was silently never compared, and every
+    // future account appended to the common fixed frame would have been skipped
+    // the same silent way. `ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4`'s note
+    // records the 38 -> 39 drift that already closed this path from both ends
+    // once; the annotation is what makes the third occurrence a compile error
+    // instead of a fourth authentication hole.
+    let fixed_accounts: [&AccountInfo<'_>; HOT_FIXED_ACCOUNT_COUNT_V3] = [
         frame.market,
         frame.root,
         frame.manifest_raw,
@@ -1200,6 +1241,7 @@ fn authenticate_accelerator_top_level_v4(
         frame.portfolio_staging,
         frame.linked_basis_raw,
         frame.linked_basis_staging,
+        frame.capability_seal,
     ];
     for (index, (meta, info)) in fixed_metas.iter().zip(fixed_accounts).enumerate() {
         let expected_writable =
@@ -2667,7 +2709,7 @@ fn execute_authenticated_hot_v3(
         envelope,
     )?;
     hot_cu_checkpoint!("pf-composition");
-    preflight_child_routes_v3(
+    let caller_bumps = preflight_child_routes_v3(
         program_id,
         *frame,
         effect,
@@ -2713,36 +2755,39 @@ fn execute_authenticated_hot_v3(
     };
     hot_cu_checkpoint!("children-shadow");
     hot_cu_checkpoint!("before-commit");
-    let commit_status = commit_prepared_hot_v3(Box::new(PreparedHotCommitV3 {
-        program_id,
-        frame,
-        request_profile,
-        effect,
-        tail_count,
-        scalars: &transition_output_scalars,
-        identities: &transition_output_identities,
-        runtime_accounts: &runtime_accounts,
-        effect_accounts,
-        request_bank: &output_requests,
-        family_request,
-        request_digest,
-        envelope,
-        selected_program,
-        lifecycle_plans: &lifecycle_plans,
-        aliases: &aliases,
-        output_lamports: &output_lamports,
-        rent: &rent,
-        immutable_root_header,
-        root_prestate,
-        strategy_execution_digest,
-        descriptor,
-        strategy,
-        context,
-        market,
-        product_runtime_v3,
-        product_outcome_count,
-        child_walk: &child_walk,
-    }));
+    let commit_status = commit_prepared_hot_v3(
+        &caller_bumps,
+        Box::new(PreparedHotCommitV3 {
+            program_id,
+            frame,
+            request_profile,
+            effect,
+            tail_count,
+            scalars: &transition_output_scalars,
+            identities: &transition_output_identities,
+            runtime_accounts: &runtime_accounts,
+            effect_accounts,
+            request_bank: &output_requests,
+            family_request,
+            request_digest,
+            envelope,
+            selected_program,
+            lifecycle_plans: &lifecycle_plans,
+            aliases: &aliases,
+            output_lamports: &output_lamports,
+            rent: &rent,
+            immutable_root_header,
+            root_prestate,
+            strategy_execution_digest,
+            descriptor,
+            strategy,
+            context,
+            market,
+            product_runtime_v3,
+            product_outcome_count,
+            child_walk: &child_walk,
+        }),
+    );
     hot_cu_checkpoint!("after-commit");
     if commit_status == 0 {
         Ok(())
@@ -2785,8 +2830,15 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
 }
 
 #[inline(never)]
-fn commit_prepared_hot_v3(prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>) -> u64 {
-    match commit_prepared_hot_result_v3(&prepared) {
+fn commit_prepared_hot_v3(
+    // Beside the boxed plan, not inside it: `PreparedHotCommitV3` is allocated
+    // at `before-commit` and is live across the heap peak, so one more borrowed
+    // register bank in it is eight more bytes the run does not have. See
+    // `ChildCallerBumpsV4`.
+    caller_bumps: &ChildCallerBumpsV4,
+    prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>,
+) -> u64 {
+    match commit_prepared_hot_result_v3(caller_bumps, &prepared) {
         Ok(()) => 0,
         Err(error) => error.into(),
     }
@@ -2797,6 +2849,7 @@ fn commit_prepared_hot_v3(prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>) ->
 /// indirect result slot that aliases its last live stack region.
 #[inline(never)]
 fn commit_prepared_hot_result_v3(
+    caller_bumps: &ChildCallerBumpsV4,
     prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<(), ProgramError> {
     apply_lifecycle_creates_v3(
@@ -2805,7 +2858,7 @@ fn commit_prepared_hot_result_v3(
         prepared.runtime_accounts,
     )?;
     hot_heap_mark!("lifecycle-creates");
-    let child_execution_digest = execute_prepared_child_routes_v3(prepared)?;
+    let child_execution_digest = execute_prepared_child_routes_v3(caller_bumps, prepared)?;
     hot_heap_mark!("children-executed");
     commit_prepared_post_children_v3(prepared)?;
     hot_heap_mark!("post-children");
@@ -2827,6 +2880,7 @@ fn commit_prepared_hot_result_v3(
 
 #[inline(never)]
 fn execute_prepared_child_routes_v3(
+    caller_bumps: &ChildCallerBumpsV4,
     prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<[u8; 32], ProgramError> {
     execute_child_routes_v3(
@@ -2845,6 +2899,7 @@ fn execute_prepared_child_routes_v3(
         prepared.context.selection().capability_release().to_bytes(),
         prepared.selected_program.to_bytes(),
         prepared.child_walk,
+        caller_bumps,
     )
 }
 
@@ -6303,6 +6358,92 @@ struct ChildWalkResolutionV3<'request, 'info> {
     lifetimes: core::marker::PhantomData<(&'request [u8], &'info [u8])>,
 }
 
+/// The preflight walk's caller-authority derivations, in walk order.
+///
+/// THE CURSOR. Both child walks enumerate `route in 0..route_count` and
+/// `invocation in 0..invocation_count(route)` from the same Effect at the same
+/// registers, and both classify each invocation by the `role` of the same
+/// resolution -- so the subsequence of invocations that need a caller authority
+/// (every role but Claims, which derives once in its own walk and never twice)
+/// is the same sequence in the same order for both. One byte per entry is the
+/// whole carrier: the execution walk reads them back in order and
+/// [`Self::exhausted`] refuses unless it consumed exactly what the preflight
+/// produced, which makes "same order" a checked claim and not an assumption.
+///
+/// **Inline, and never heap.** This value is live from the preflight walk to
+/// the last child CPI, which spans the exact phases where the run has the least
+/// heap: the peak is 29,895 bytes of 32,768 at `commit-root`, 2,873 to spare.
+/// A `Vec` here cost 16 of those bytes measured -- one byte of payload and
+/// fifteen of alignment padding pushed onto the NEXT allocation -- because on
+/// the SBF bump allocator every live allocation has a 16-byte floor and nothing
+/// is ever given back. So the bumps live on
+/// `execute_authenticated_hot_v3`'s own frame, which has room, and the boxed
+/// commit plan holds a shared reference to them like every other borrowed
+/// register bank it carries.
+///
+/// [`INLINE_CHILD_CALLER_BUMPS_V4`] is a MEASURED-PROFILE bound, not a protocol
+/// one, and it is not a refusal: a walk with more child invocations than fit
+/// simply stops recording, and every invocation past the boundary derives its
+/// own authority exactly as it did before this existed. The saving degrades;
+/// nothing else changes. Today's widest executing bundle records one.
+const INLINE_CHILD_CALLER_BUMPS_V4: usize = 8;
+
+struct ChildCallerBumpsV4 {
+    bumps: [u8; INLINE_CHILD_CALLER_BUMPS_V4],
+    len: usize,
+    /// Set once the walk produced more entries than fit. Both walks then agree
+    /// to derive from the boundary on, so the cursor stays honest.
+    overflowed: bool,
+}
+
+impl Default for ChildCallerBumpsV4 {
+    fn default() -> Self {
+        Self {
+            bumps: [0; INLINE_CHILD_CALLER_BUMPS_V4],
+            len: 0,
+            overflowed: false,
+        }
+    }
+}
+
+impl ChildCallerBumpsV4 {
+    /// Record what the preflight walk derived for the next invocation in order.
+    fn record(&mut self, bump: u8) -> Result<(), ProgramError> {
+        match self.bumps.get_mut(self.len) {
+            Some(slot) => {
+                *slot = bump;
+                self.len = self.len.checked_add(1).ok_or(TradingSbfError::Content)?;
+            }
+            None => self.overflowed = true,
+        }
+        Ok(())
+    }
+
+    /// The bump the preflight walk derived for the invocation at `cursor`.
+    ///
+    /// `None` past the inline boundary, which tells the execution walk to
+    /// derive canonically for itself rather than refuse.
+    fn at(&self, cursor: usize) -> Option<u8> {
+        if cursor < self.len {
+            self.bumps.get(cursor).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Refuse unless the execution walk consumed exactly the preflight's set.
+    ///
+    /// Vacuous once the preflight overflowed, because past that boundary the
+    /// two walks are deriving independently and there is no set to consume.
+    fn exhausted(&self, cursor: usize) -> Result<(), ProgramError> {
+        if self.overflowed || cursor == self.len {
+            Ok(())
+        } else {
+            Err(TradingSbfError::Content.into())
+        }
+    }
+}
+
 /// Resolve, once, what both child walks would each have resolved for themselves.
 ///
 /// Deliberately ONE out-of-line function returning a `Box`: the decoded
@@ -6450,15 +6591,16 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     // `require_local_effect_discipline_v5` already makes, at these exact
     // registers. `None` only when that walk saw no route to answer for.
     locally_mutated: Option<&[bool]>,
-) -> Result<(), ProgramError> {
+) -> Result<ChildCallerBumpsV4, ProgramError> {
     #[cfg(not(feature = "families"))]
     let _ = (
         request_digest,
         capability_program_set,
         selected_capability_program,
     );
+    let mut caller_bumps = ChildCallerBumpsV4::default();
     if effect.route_count() == 0 {
-        return Ok(());
+        return Ok(caller_bumps);
     }
     let locally_mutated = locally_mutated.ok_or(TradingSbfError::Content)?;
     if locally_mutated.len() != aliases.len() {
@@ -6516,7 +6658,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
             match invocation.role {
-                FixedRole::Core => preflight_core_route_v3(
+                FixedRole::Core => caller_bumps.record(preflight_core_route_v3(
                     program_id,
                     effect.base(),
                     route,
@@ -6536,7 +6678,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         generation: envelope.generation(),
                         trading_program: program_id.to_bytes(),
                     },
-                )?,
+                )?)?,
                 FixedRole::Claims => {
                     #[cfg(any(
                         feature = "families",
@@ -6572,7 +6714,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    preflight_custody_route_v3(
+                    caller_bumps.record(preflight_custody_route_v3(
                         program_id,
                         effect.base(),
                         route,
@@ -6591,7 +6733,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             parent_request_digest: request_digest,
                             trading_program: program_id.to_bytes(),
                         },
-                    )?;
+                    )?)?;
                     #[cfg(not(any(
                         feature = "families",
                         feature = "series-family",
@@ -6601,7 +6743,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                 }
                 FixedRole::Resolution => {
                     #[cfg(feature = "families")]
-                    preflight_resolution_route_v3(
+                    caller_bumps.record(preflight_resolution_route_v3(
                         program_id,
                         effect.base(),
                         route,
@@ -6625,7 +6767,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             selected_capability_program,
                             activation_account: frame.activation_cache.key.to_bytes(),
                         },
-                    )?;
+                    )?)?;
                     #[cfg(not(feature = "families"))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
@@ -6637,7 +6779,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         }
         route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(())
+    Ok(caller_bumps)
 }
 
 struct ChildExecutionStateV3<'info> {
@@ -6658,6 +6800,21 @@ struct ChildExecutionStateV3<'info> {
 // account data into the heap. The child-CPI buffer set added 128 bytes of
 // header to save thousands of bytes of per-invocation duplication.
 const _: [(); 216] = [(); core::mem::size_of::<ChildExecutionStateV3<'_>>()];
+
+/// Read the next caller-authority bump the preflight walk derived.
+///
+/// Out of line and taking the cursor by reference so the execution walk's
+/// frame carries one `usize`, not a borrow-checked cell: that walk is against
+/// the SBPF v0 4,096-byte static frame bound.
+#[inline(never)]
+fn take_caller_bump_v4(
+    bumps: &ChildCallerBumpsV4,
+    cursor: &mut usize,
+) -> Result<PreflightedCallerBumpV4, ProgramError> {
+    let bump = bumps.at(*cursor);
+    *cursor = cursor.checked_add(1).ok_or(TradingSbfError::Content)?;
+    Ok(bump)
+}
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
@@ -6683,7 +6840,14 @@ fn execute_child_routes_v3<'accounts, 'info>(
     // per-logical-coordinate alias table off this signature: the only reader
     // was the role-carrier resolution, which now happens once, elsewhere.
     shared: &ChildWalkResolutionV3<'_, 'info>,
+    // What the preflight walk derived for each invocation's caller authority.
+    // See `crate::child_authority_v4`: this walk reproduces those addresses
+    // instead of searching for them a second time.
+    caller_bumps: &ChildCallerBumpsV4,
 ) -> Result<[u8; 32], ProgramError> {
+    // The preflight walk's derivations, read back in the order it produced
+    // them. See `ChildCallerBumpsV4`.
+    let mut caller_bump_cursor = 0_usize;
     #[cfg(not(feature = "families"))]
     let _ = (capability_program_set, selected_capability_program);
     #[cfg(not(any(
@@ -6796,9 +6960,15 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         Some(expected_provenance),
                     )?
                     .ok_or(TradingSbfError::Transition)?;
+                // EXACT, not amortised. `try_reserve` grows by doubling, and
+                // on an allocator that never gives a block back the doubling
+                // slack would be permanent heap. Measured on the canonical
+                // Direct bundle this changes nothing -- its two receipts are
+                // 144 and 740 bytes and the amortised path happened to land on
+                // both exactly -- so it removes a hazard, not a cost.
                 execution
                     .prior_receipt_bytes
-                    .try_reserve(receipt.len())
+                    .try_reserve_exact(receipt.len())
                     .map_err(|_| TradingSbfError::Content)?;
                 execution.prior_receipt_bytes.extend_from_slice(receipt);
                 dependency_index = dependency_index
@@ -6844,6 +7014,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             generation: envelope.generation(),
                             trading_program: program_id.to_bytes(),
                         },
+                        take_caller_bump_v4(caller_bumps, &mut caller_bump_cursor)?,
                     )?,
                     frame.core_program,
                 ),
@@ -6911,6 +7082,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 parent_request_digest: request_digest,
                                 trading_program: program_id.to_bytes(),
                             },
+                            take_caller_bump_v4(caller_bumps, &mut caller_bump_cursor)?,
                         )?;
                         (
                             FixedRole::Custody,
@@ -6952,6 +7124,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 selected_capability_program,
                                 activation_account: frame.activation_cache.key.to_bytes(),
                             },
+                            take_caller_bump_v4(caller_bumps, &mut caller_bump_cursor)?,
                         )?;
                         (
                             FixedRole::Resolution,
@@ -7023,6 +7196,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
         }
         execution.route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
+    caller_bumps.exhausted(caller_bump_cursor)?;
     Ok(execution.transcript)
 }
 
@@ -8841,425 +9015,13 @@ fn reauthenticate_role<'accounts, 'info>(
     Ok(receipt)
 }
 
-/// First account after the fixed hot prefix on the seal outer: the rent payer.
-pub const SEAL_PAYER_ACCOUNT_V1: usize = HOT_FIXED_ACCOUNT_COUNT_V3;
-/// System Program on the seal outer.
-pub const SEAL_SYSTEM_PROGRAM_ACCOUNT_V1: usize = SEAL_PAYER_ACCOUNT_V1 + 1;
-/// Exact account count of the seal outer.
-pub const SEAL_ACCOUNT_COUNT_V1: usize = SEAL_SYSTEM_PROGRAM_ACCOUNT_V1 + 1;
+mod seal;
 
-/// Write one validated-artifact seal for a descriptor closure and action.
-///
-/// Decision 0005. This is the hot path's own artifact prologue, run once and
-/// persisted. Every validator it calls is the very function the hot path calls
-/// without a seal -- `CapabilityProgramV4::decode`,
-/// `StateLifecyclePolicyV5::decode_selected`, `AccountProfileV2::decode`,
-/// `decode_request_profile`, `TransitionProgramV3::decode`,
-/// `decode_selected_effect_v4`, `validate_account_profile_join` and
-/// `require_static_register_ownership_v5` -- so the persisted verdict is a
-/// memoisation of this executable's own answer and not a second opinion.
-///
-/// The act is permissionless because its output is a pure function of immutable
-/// public bytes: the only freedom a caller has is whether a seal exists and
-/// when. It is write-once: an already-sealed address refuses rather than being
-/// rewritten, so nothing can replace a verdict once one is recorded.
-pub fn process_capability_seal_v1(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    instruction_data: &[u8],
-) -> Result<(), ProgramError> {
-    let request =
-        CapabilitySealRequestV1::decode(instruction_data).map_err(|_| TradingSbfError::Content)?;
-    if accounts.len() != SEAL_ACCOUNT_COUNT_V1 {
-        return Err(TradingSbfError::Content.into());
-    }
-    let payer = account(accounts, SEAL_PAYER_ACCOUNT_V1)?;
-    let system = account(accounts, SEAL_SYSTEM_PROGRAM_ACCOUNT_V1)?;
-    if !payer.is_signer
-        || !payer.is_writable
-        || payer.executable
-        || system.key != &system_program::ID
-        || !system.executable
-    {
-        return Err(TradingSbfError::Content.into());
-    }
-    let frame = HotFrameV3::parse_seal(program_id, accounts)?;
-    let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
-
-    // The Market and the capability root are authenticated exactly as a hot
-    // action authenticates them, because the only fact this act needs from them
-    // is the one a hot action will re-derive: the Registry the Market selected
-    // and the Trading interpreter release currently bound to it. The envelope
-    // is reconstructed from the root's own immutable header, whose seeds bind
-    // it to the root address under this Program.
-    let root_header = {
-        let bytes = frame
-            .root
-            .try_borrow_data()
-            .map_err(|_| TradingSbfError::Root)?;
-        CapabilityRootHeaderV1::decode(
-            bytes
-                .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
-                .ok_or(TradingSbfError::Root)?,
-        )
-        .map_err(|_| TradingSbfError::Root)?
-    };
-    let envelope = HotExecutionEnvelopeV3::new(
-        u32::try_from(instruction_data.len()).map_err(|_| TradingSbfError::Content)?,
-        root_header.release_set().to_bytes(),
-        root_header.market(),
-        root_header.generation(),
-        [0xff; 32],
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    let market = authenticate_market_boxed_v3(&frame, envelope)?;
-    let root = authenticate_root_boxed_v3(
-        program_id,
-        &frame,
-        envelope,
-        &market,
-        HotRoleAuthenticationV3::ReauthenticateRegistry,
-    )?;
-
-    let key = CapabilitySealKeyV1::new(
-        PROGRAM_SCHEMA_ID_V4,
-        request.descriptor_digest(),
-        request.action(),
-        root.trading_semantic_release,
-        frame.registry.key.to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    // Write-once: an existing seal is never replaced, so a recorded verdict
-    // cannot be swapped for another and a griefer cannot poison the address.
-    let seeds = key.seeds();
-    let base = seeds.as_slices();
-    let (expected, bump) = Pubkey::find_program_address(&base, program_id);
-    let seal = frame.capability_seal;
-    if seal.key != &expected
-        || seal.owner != &system_program::ID
-        || seal.data_len() != 0
-        || seal.executable
-        || !seal.is_writable
-        || seal.is_signer
-    {
-        return Err(TradingSbfError::Content.into());
-    }
-
-    let rows = validate_descriptor_closure_v1(&frame, &rent, key, request.action())?;
-
-    let space = u64::try_from(CAPABILITY_SEAL_BYTES_V1).map_err(|_| TradingSbfError::Commit)?;
-    let minimum = rent.minimum_balance(CAPABILITY_SEAL_BYTES_V1);
-    let deficit = minimum.saturating_sub(seal.lamports());
-    if deficit > 0 {
-        invoke(
-            &system_transfer(payer.key, seal.key, deficit),
-            &[payer.clone(), seal.clone(), system.clone()],
-        )
-        .map_err(|_| TradingSbfError::Commit)?;
-    }
-    let bump_seed = [bump];
-    let signer = [
-        base[0], base[1], base[2], base[3], base[4], base[5], &bump_seed,
-    ];
-    invoke_signed(
-        &allocate(seal.key, space),
-        &[seal.clone(), system.clone()],
-        &[&signer],
-    )
-    .map_err(|_| TradingSbfError::Commit)?;
-    invoke_signed(
-        &assign(seal.key, program_id),
-        &[seal.clone(), system.clone()],
-        &[&signer],
-    )
-    .map_err(|_| TradingSbfError::Commit)?;
-    let mut data = seal
-        .try_borrow_mut_data()
-        .map_err(|_| TradingSbfError::Commit)?;
-    if data.len() != CAPABILITY_SEAL_BYTES_V1 {
-        return Err(TradingSbfError::Commit.into());
-    }
-    SealedDescriptorClosureV1::encode(key, rows, &mut data).map_err(|_| TradingSbfError::Commit)?;
-    Ok(())
-}
-
-/// Run the complete artifact conjunction a hot action would run, once.
-///
-/// Returns the canonical rows the verdict is recorded as. Every record borrow
-/// ends with this call; nothing it decodes outlives it.
-#[inline(never)]
-fn validate_descriptor_closure_v1<'info>(
-    frame: &HotFrameV3<'_, 'info>,
-    rent: &Rent,
-    key: CapabilitySealKeyV1,
-    action: u32,
-) -> Result<[SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1], ProgramError> {
-    let descriptor_data = borrow_finalized_record(
-        *frame,
-        frame.descriptor_raw,
-        frame.descriptor_staging,
-        rent,
-        PROGRAM_SCHEMA_ID_V4,
-        key.descriptor_digest(),
-    )?;
-    if descriptor_data.len() != CAPABILITY_PROGRAM_V4_BYTES {
-        return Err(TradingSbfError::Content.into());
-    }
-    let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
-
-    let lifecycle_data = borrow_finalized_record(
-        *frame,
-        frame.lifecycle_raw,
-        frame.lifecycle_staging,
-        rent,
-        descriptor.lifecycle().schema().to_bytes(),
-        descriptor.lifecycle().program().to_bytes(),
-    )?;
-    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
-        || descriptor.derivation_policy() != descriptor.lifecycle().program()
-    {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let selected_lifecycle = descriptor.lifecycle().program().to_bytes();
-    let lifecycle = StateLifecyclePolicyV5::decode_selected(
-        selected_lifecycle,
-        selected_lifecycle,
-        &lifecycle_data,
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-
-    let account_profile_data = borrow_finalized_record(
-        *frame,
-        frame.account_profile_raw,
-        frame.account_profile_staging,
-        rent,
-        descriptor.account_profile().schema().to_bytes(),
-        descriptor.account_profile().program().to_bytes(),
-    )?;
-    if descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let account_profile =
-        AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
-    lifecycle
-        .validate_account_profile_join(account_profile)
-        .map_err(|_| TradingSbfError::Content)?;
-
-    let request_profile_data = borrow_finalized_record(
-        *frame,
-        frame.request_profile_raw,
-        frame.request_profile_staging,
-        rent,
-        descriptor.request_profile().schema().to_bytes(),
-        descriptor.request_profile().program().to_bytes(),
-    )?;
-    let request_profile = decode_request_profile(*descriptor, &request_profile_data)?;
-
-    let transition_data = borrow_finalized_record(
-        *frame,
-        frame.transition_raw,
-        frame.transition_staging,
-        rent,
-        descriptor.transition().schema().to_bytes(),
-        descriptor.transition().program().to_bytes(),
-    )?;
-    if descriptor.transition().schema().to_bytes() != TRANSITION_SCHEMA_ID_V3 {
-        return Err(TradingSbfError::UnsupportedContent.into());
-    }
-    let transition =
-        TransitionProgramV3::decode(&transition_data).map_err(|_| TradingSbfError::Content)?;
-
-    let effect_data = borrow_finalized_record(
-        *frame,
-        frame.effect_raw,
-        frame.effect_staging,
-        rent,
-        descriptor.effect().schema().to_bytes(),
-        descriptor.effect().program().to_bytes(),
-    )?;
-    // Decoded for its verdict only; the seal records that this executable
-    // accepted these bytes, not the view it built from them.
-    let _ = decode_selected_effect_v4(descriptor.effect().schema().to_bytes(), &effect_data)?;
-
-    require_static_register_ownership_v5(StaticRegisterOwnershipV5 {
-        account_profile,
-        policy: lifecycle,
-        action,
-        request: request_profile,
-        transition,
-    })?;
-
-    Ok([
-        seal_row_v1(
-            SealedRoleV1::Descriptor,
-            PROGRAM_SCHEMA_ID_V4,
-            key.descriptor_digest(),
-            descriptor_data.len(),
-            frame.descriptor_raw,
-            frame.descriptor_staging,
-        )?,
-        seal_row_v1(
-            SealedRoleV1::LifecyclePolicy,
-            descriptor.lifecycle().schema().to_bytes(),
-            descriptor.lifecycle().program().to_bytes(),
-            lifecycle_data.len(),
-            frame.lifecycle_raw,
-            frame.lifecycle_staging,
-        )?,
-        seal_row_v1(
-            SealedRoleV1::AccountProfile,
-            descriptor.account_profile().schema().to_bytes(),
-            descriptor.account_profile().program().to_bytes(),
-            account_profile_data.len(),
-            frame.account_profile_raw,
-            frame.account_profile_staging,
-        )?,
-        seal_row_v1(
-            SealedRoleV1::RequestProfile,
-            descriptor.request_profile().schema().to_bytes(),
-            descriptor.request_profile().program().to_bytes(),
-            request_profile_data.len(),
-            frame.request_profile_raw,
-            frame.request_profile_staging,
-        )?,
-        seal_row_v1(
-            SealedRoleV1::TransitionProgram,
-            descriptor.transition().schema().to_bytes(),
-            descriptor.transition().program().to_bytes(),
-            transition_data.len(),
-            frame.transition_raw,
-            frame.transition_staging,
-        )?,
-        seal_row_v1(
-            SealedRoleV1::EffectProgram,
-            descriptor.effect().schema().to_bytes(),
-            descriptor.effect().program().to_bytes(),
-            effect_data.len(),
-            frame.effect_raw,
-            frame.effect_staging,
-        )?,
-    ])
-}
-
-/// Record one row from the accounts `borrow_finalized_record` just authenticated.
-#[allow(clippy::too_many_arguments)]
-fn seal_row_v1(
-    role: SealedRoleV1,
-    schema: [u8; 32],
-    digest: [u8; 32],
-    width: usize,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-) -> Result<SealedRecordRowV1, ProgramError> {
-    SealedRecordRowV1::new(
-        role,
-        u32::try_from(width).map_err(|_| TradingSbfError::Content)?,
-        schema,
-        digest,
-        raw.key.to_bytes(),
-        staging.key.to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::Content.into())
-}
-
-/// Authenticate the Trading validated-artifact seal for one selected action.
-///
-/// Decision 0005. This proves the seal account is the canonical PDA for the
-/// exact descriptor, action, authenticated Trading interpreter release and
-/// Market-selected Registry, is owned by this Program, is read-only and
-/// rent-exempt at its exact width, and carries a canonical body that agrees
-/// with that derivation. It consumes nothing from the seal; every artifact the
-/// seal names is still bound to its own digest, live, by
-/// `borrow_finalized_record`.
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn authenticate_capability_seal_v3<'a>(
-    program_id: &Pubkey,
-    frame: HotFrameV3<'_, '_>,
-    rent: &Rent,
-    descriptor_schema: [u8; 32],
-    descriptor_digest: [u8; 32],
-    action: u32,
-    trading_semantic_release: [u8; 32],
-    bytes: &'a [u8],
-) -> Result<SealedDescriptorClosureV1<'a>, ProgramError> {
-    let key = CapabilitySealKeyV1::new(
-        descriptor_schema,
-        descriptor_digest,
-        action,
-        trading_semantic_release,
-        frame.registry.key.to_bytes(),
-    )
-    .map_err(|_| TradingSbfError::Content)?;
-    let seal = frame.capability_seal;
-    let expected = Pubkey::find_program_address(&key.seeds().as_slices(), program_id).0;
-    if seal.key != &expected
-        || seal.owner != program_id
-        || seal.is_signer
-        || seal.is_writable
-        || seal.executable
-        || seal.data_len() != CAPABILITY_SEAL_BYTES_V1
-        || bytes.len() != CAPABILITY_SEAL_BYTES_V1
-        || !rent.is_exempt(seal.lamports(), CAPABILITY_SEAL_BYTES_V1)
-    {
-        return Err(TradingSbfError::Content.into());
-    }
-    let closure = SealedDescriptorClosureV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
-    closure
-        .require_key(key)
-        .map_err(|_| TradingSbfError::Content)?;
-    Ok(closure)
-}
-
-/// Borrow one finalized record against the addresses a Trading seal derived.
-///
-/// The seal's row supplies the two canonical Registry addresses that
-/// `borrow_finalized_record` would otherwise re-derive with two
-/// `find_program_address` calls from the very same seeds under the very same
-/// Registry, which is a seed of the seal. Everything else is the identical
-/// conjunction, `hash(bytes) == digest` included: the row is honoured only
-/// after its `schema` and `content_digest` are required to equal the identities
-/// the authenticated descriptor names for this role. The caller mints the
-/// sealed token from the returned borrow, so the token can never name a range
-/// the caller did not just authenticate.
-#[allow(clippy::too_many_arguments)]
-fn borrow_sealed_record<'a, 'info>(
-    frame: HotFrameV3<'_, 'info>,
-    closure: SealedDescriptorClosureV1,
-    role: SealedRoleV1,
-    raw: &'a AccountInfo<'info>,
-    staging: &AccountInfo<'info>,
-    rent: &Rent,
-    schema: [u8; 32],
-    digest: [u8; 32],
-) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
-    let row: SealedRecordRowV1 = closure.row(role).map_err(|_| TradingSbfError::Content)?;
-    if row.schema() != schema || row.content_digest() != digest {
-        return Err(TradingSbfError::Content.into());
-    }
-    borrow_record_against(
-        frame,
-        raw,
-        staging,
-        rent,
-        digest,
-        Pubkey::new_from_array(row.raw_record_account()),
-        Pubkey::new_from_array(row.staging_account()),
-    )
-}
-
-/// Mint one sealed-artifact token for a record this invocation just borrowed.
-fn sealed_token<'a>(
-    closure: SealedDescriptorClosureV1,
-    role: SealedRoleV1,
-    schema: [u8; 32],
-    digest: [u8; 32],
-    bytes: &'a [u8],
-) -> Result<SealedArtifactV1<'a>, ProgramError> {
-    closure
-        .authenticate_artifact(role, schema, digest, bytes)
-        .map_err(|_| TradingSbfError::Content.into())
-}
+pub use seal::{
+    SEAL_ACCOUNT_COUNT_V1, SEAL_PAYER_ACCOUNT_V1, SEAL_SYSTEM_PROGRAM_ACCOUNT_V1,
+    process_capability_seal_v1,
+};
+use seal::{authenticate_capability_seal_v3, borrow_sealed_record, sealed_token};
 
 /// Borrow one finalized record at the canonical bumps its root recorded.
 ///
@@ -9880,6 +9642,229 @@ mod tests {
             decode_accelerator_register_bank_v4(
                 request,
                 bank.get(..40).expect("bank holds at least 40 bytes")
+            )
+            .is_err()
+        );
+    }
+
+    /// The accelerator's read-only frame is bound to the top-level instruction
+    /// ENTIRE -- every fixed slot, the capability seal included.
+    ///
+    /// The loop this exercises is a `zip`, and `zip` truncates to the shorter
+    /// side without a diagnostic. Its array held thirty-eight entries against
+    /// thirty-nine metas, so `HOT_CAPABILITY_SEAL_ACCOUNT_V3` was silently
+    /// never compared: an accelerator could be handed a frame whose seal slot
+    /// was an account the authorized instruction never named, and this
+    /// authenticator ACCEPTED it. The seal is the account that survived that
+    /// gap, but it is not what this test asserts -- it walks EVERY index, so
+    /// the fortieth account is covered the day the frame grows one, which is
+    /// the drift that produced the hole in the first place (see
+    /// `ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4`).
+    ///
+    /// A positive baseline is load-bearing here. Three of this path's four
+    /// known defects survived precisely because the only test asserting them
+    /// asserted REFUSAL, and a function that can only refuse passes such a test
+    /// perfectly. So the substitutions below are differentials against an
+    /// invocation that genuinely succeeds.
+    #[test]
+    fn the_accelerator_top_level_frame_binds_every_fixed_meta_including_the_seal() {
+        use solana_instructions_sysvar::construct_instructions_data;
+        use solana_program::sysvar::instructions::{BorrowedAccountMeta, BorrowedInstruction};
+
+        fn info(
+            key: Pubkey,
+            owner: Pubkey,
+            executable: bool,
+            data: Vec<u8>,
+        ) -> AccountInfo<'static> {
+            // The accelerator frame is read-only by construction:
+            // `parse_accelerator_readonly` refuses any signer or writable slot.
+            AccountInfo::new(
+                Box::leak(Box::new(key)),
+                false,
+                false,
+                Box::leak(Box::new(0_u64)),
+                Box::leak(data.into_boxed_slice()),
+                Box::leak(Box::new(owner)),
+                executable,
+            )
+        }
+
+        let trading_program = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let mut keys = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
+            .map(|_| Pubkey::new_unique())
+            .collect::<Vec<_>>();
+        let set = |keys: &mut Vec<Pubkey>, slot: usize, key: Pubkey| {
+            *keys.get_mut(slot).expect("Hot fixed slot inside the frame") = key;
+        };
+        set(&mut keys, HOT_TRADING_PROGRAM_ACCOUNT_V3, trading_program);
+        set(&mut keys, HOT_RENT_SYSVAR_ACCOUNT_V3, sysvar::rent::ID);
+        set(
+            &mut keys,
+            HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+            sysvar::instructions::ID,
+        );
+        let key_at = |keys: &[Pubkey], slot: usize| {
+            *keys.get(slot).expect("Hot fixed slot inside the frame")
+        };
+
+        let envelope = HotExecutionEnvelopeV3::new(
+            1,
+            [0x31; 32],
+            key_at(&keys, HOT_MARKET_ACCOUNT_V3).to_bytes(),
+            7,
+            [0x32; 32],
+        )
+        .expect("envelope");
+        let mut hot_bytes = envelope.to_bytes().to_vec();
+        hot_bytes.push(9);
+
+        // Two scalars and one identity is a 48-byte bank: one inline chunk, so
+        // exactly one caller authority, which is what the frame supplies below.
+        let bank = vec![0x5a_u8; 48];
+        let content = |byte| ContentId::new([byte; 32]).expect("nonzero content");
+        let request = AcceleratorRequestV2::new(
+            RequestTransportV2::Inline,
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            ContentId::new(hash(&bank).to_bytes()).expect("bank digest"),
+            7,
+            2,
+            1,
+            0,
+            &bank,
+        )
+        .expect("inline request");
+        assert_eq!(request.chunk_count(), 1);
+
+        let strategy_keys = (0..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
+            .map(|_| Pubkey::new_unique())
+            .collect::<Vec<_>>();
+        let caller_key = Pubkey::new_unique();
+
+        // The canonical meta vector: the thirty-nine fixed slots, the eight
+        // strategy evidence accounts, then this chunk's caller authority. Only
+        // the root is writable on the ordinary (non-Registry) top level.
+        let sysvar_bytes = |meta_keys: &[Pubkey]| {
+            let mut metas = meta_keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| BorrowedAccountMeta {
+                    pubkey: key,
+                    is_signer: false,
+                    is_writable: index == HOT_ROOT_ACCOUNT_V3,
+                })
+                .collect::<Vec<_>>();
+            metas.extend(
+                strategy_keys
+                    .iter()
+                    .chain(core::iter::once(&caller_key))
+                    .map(|key| BorrowedAccountMeta {
+                        pubkey: key,
+                        is_signer: false,
+                        is_writable: false,
+                    }),
+            );
+            let borrowed = [BorrowedInstruction {
+                program_id: &trading_program,
+                accounts: metas,
+                data: &hot_bytes,
+            }];
+            let mut data = construct_instructions_data(&borrowed);
+            let end = data.len();
+            data.get_mut(end - 2..)
+                .expect("current instruction")
+                .copy_from_slice(&0_u16.to_le_bytes());
+            data
+        };
+
+        let canonical_sysvar = sysvar_bytes(&keys);
+        let fixed = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                let executable = matches!(
+                    index,
+                    HOT_CORE_PROGRAM_ACCOUNT_V3
+                        | HOT_TRADING_PROGRAM_ACCOUNT_V3
+                        | HOT_REGISTRY_PROGRAM_ACCOUNT_V3
+                );
+                let data = if index == HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3 {
+                    canonical_sysvar.clone()
+                } else {
+                    Vec::new()
+                };
+                info(*key, owner, executable, data)
+            })
+            .collect::<Vec<_>>();
+        let strategy_evidence = strategy_keys
+            .iter()
+            .map(|key| info(*key, owner, false, Vec::new()))
+            .collect::<Vec<_>>();
+        let caller_authority = info(caller_key, owner, false, Vec::new());
+
+        let frame = HotFrameV3::parse_accelerator_readonly(&trading_program, &fixed)
+            .expect("read-only accelerator frame");
+
+        // BASELINE, and it must be a success: everything below is a
+        // differential against it.
+        assert_eq!(
+            authenticate_accelerator_top_level_v4(
+                frame,
+                &strategy_evidence,
+                &caller_authority,
+                request,
+            )
+            .expect("canonical accelerator top level"),
+            hot_bytes
+        );
+
+        // Substituting ANY fixed meta must refuse. Before the array carried its
+        // thirty-ninth entry, index 38 -- the capability seal -- passed.
+        let unrelated = Pubkey::new_unique();
+        for index in 0..HOT_FIXED_ACCOUNT_COUNT_V3 {
+            let mut substituted = keys.clone();
+            set(&mut substituted, index, unrelated);
+            let bytes = sysvar_bytes(&substituted);
+            assert_eq!(bytes.len(), canonical_sysvar.len());
+            fixed
+                .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+                .expect("instructions sysvar slot inside the frame")
+                .try_borrow_mut_data()
+                .expect("instructions data")
+                .copy_from_slice(&bytes);
+            assert!(
+                authenticate_accelerator_top_level_v4(
+                    frame,
+                    &strategy_evidence,
+                    &caller_authority,
+                    request,
+                )
+                .is_err(),
+                "fixed meta {index} is not bound to the top-level instruction"
+            );
+            fixed
+                .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+                .expect("instructions sysvar slot inside the frame")
+                .try_borrow_mut_data()
+                .expect("instructions restore")
+                .copy_from_slice(&canonical_sysvar);
+        }
+
+        // The evidence vector is length-checked rather than zipped short: a
+        // caller handing over seven evidence accounts must refuse, not silently
+        // authenticate the seven it can see.
+        assert!(
+            authenticate_accelerator_top_level_v4(
+                frame,
+                strategy_evidence
+                    .get(..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4 - 1)
+                    .expect("short evidence vector"),
+                &caller_authority,
+                request,
             )
             .is_err()
         );

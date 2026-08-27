@@ -434,6 +434,50 @@ And the project diagnosed this exact pathology in a commit body one day ago:
 An implementation queued behind an event that will never arrive is the same
 thing with the sign flipped.
 
+**THE STRUCTURED ROW IS AMENDED, 2026-08-27 (STRUCT-PHYS-r, decision 0011).**
+The island is still closed, and this row still stands. What is wrong with it is
+the implied diagnosis: it reads as though the route were simply unwritten. It
+was written, against a seam that does not exist.
+
+`dclutch-structured-v2-contract/src/hot_v2.rs` is 547 lines describing itself as
+the "onchain-safe execution candidate for common Trading Hot", with a
+`prepare` / `validate_token_poststate` / `validate_root_poststate` protocol for
+the executor to drive. Nothing drives it. Every caller in the tree is a test,
+and `programs/dclutch-trading-sbf/Cargo.toml` does not depend on the crate under
+any feature. `dclutch-fractional-claim-contract` carries the identical shape
+with the identical zero non-test callers, so **this is a superseded generation
+spanning two families, not a Structured oversight** — and it is why "consumed by
+nothing" understates the cost. The work exists; it points nowhere.
+
+It also cannot be pointed anywhere by wiring: driving it would require Trading
+to link a family crate and branch on a family between Token CPIs, which is what
+decision 0006 §3 forbids. Decision 0011 records the route that does exist (a
+sealed artifact closure, with a child-ABI choice ahead of it and
+`EffectProgramV4` first within it, because that digest feeds the descriptor,
+the seal and the ProgramSet identity), retargets the candidate as
+the operator's host-side adversary rather than deleting it, and measures the
+second trap: `frame.rs`'s 23-account base is a standalone instruction frame, and
+thirteen of its coordinates name accounts the Trading hot frame already fixes or
+injects, so transcribing it into an `AccountProfileV2` would reproduce decision
+0006 §2's objection inside a family crate.
+
+Landed against this row: `dee3311e` (the frame becomes the sole author of the
+effect account coordinates, replacing a hand-written table in `tests/actions.rs`
+that disagreed with `frame.rs` in every coordinate and in the indexing rule),
+`68f7a5fd` (decision 0011), `a8e269f2` (`K_i = S · c_i` derived rather than
+written as literals, plus the self-backing refusal in both directions). The
+census row is still not flippable and `"structured"` still appears in neither
+`blocked.json` nor the census — that is downstream of the artifacts, in the
+order decision 0011 §6 fixes.
+
+One more thing this row should not let a reader assume: **an effect program
+cannot move a token.** `ResolvedEffectV3` is lamports, account-data writes and
+child-request patches, so Structured's six Token kinds cannot become effect
+operations — they need a `FixedRole::Claims` child, and decision 0011 §3a
+records the open choice between adopting the Rational child ABI (which already
+executes all six, four of them under names that say "Structured") and giving
+Structured its own. That choice sits ahead of every artifact.
+
 ### M-10. Every expansion frontier, verdicted
 
 Verified against the tree, not taken from the doc (which has no status column and
@@ -526,13 +570,40 @@ ADR-0006 needs no exception. Opens and closes are permissionless inside a slot
 window, because `root.retire()` refuses while `open_batches != 0` and an
 unbounded open batch would deny retirement forever.
 
-**Still open, and the third hole is the sharpest of the three:** nothing
-submits or verifies a candidate. `evaluate_runtime_consider_row_with_manifest_v2`
-— the whole streamed verifier — **has no caller outside tests**, and `Consider`
-reads a `SubmittedVerifiedCandidate` out of a readonly account that no action
-writes. Also open: the three routes themselves (a batched artifact regeneration,
-shareable with ADR-0006 §8 item 7), escrow at placement rather than the current
-collect-time debit, cancellation, and rent ownership. See §6 of the decision.
+**THE THIRD HOLE IS CLOSED, 2026-08-27 (GEN-CAND).**
+`crates/dclutch-general-adapter-contract/src/candidate_v1.rs` (`5987febc`,
+`658b7a3f`) gives `evaluate_runtime_consider_row_with_manifest_v2` its first
+caller and `Consider` its first writer: `GeneralCandidateV1::submit` creates the
+record `Consider` reads, and `verify_candidate_row_v1` streams a row at a time
+through the real evaluator, binding each row to the ESCROWED order record it
+names. `b61f1186` routes the real-ELF campaign through it, so the certificate
+the seven actions settle is one the protocol produced rather than one the
+fixture fabricated — with accounts, packet extent and scratch pages identical in
+all 22 measured rows.
+
+Closed with it: **escrow at admission** (`39c12d82`) — the collect-time
+`External(owner)` debit was a live credit regression, and admission now MOVES the
+maker's worst case into the order's own Custody vault and Claims Position, so
+`Collect` settles from a balance the protocol holds; **cancellation and release**;
+and **the exactly-seven relaxation** (`211079f6`), which became four named
+profiles rather than an inequality, batched with the EffectV4 envelope
+(`6f654f94`) that GEN-HOT found — General published a bare `ProgramV3` and
+`process_hot_execution_v3` decodes only V4, so nothing General emitted could
+enter the Hot executor at all.
+
+Two defects found en route, both invisible because the only things exercising
+the paths shared an author with the code: a candidate could fill an order with a
+**portfolio its maker never signed** (the per-lot vectors were unbound, and the
+verifier accumulates claim movement from them), and a candidate could **name any
+identity it liked** (`CandidateV2` treats `candidate_id` as a declared field).
+
+**Still open** — see `docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md`
+§6: the seven artifact triples for the new actions (they are protocol selectors
+with authenticated pure transitions and no TransitionVM program, EffectProgram
+or AccountProfile, and every generator refuses them by name); lamport movement
+for the work escrow and for rent ownership; the claim-escrow Position lifecycle;
+`ExpireSettlement`'s gen-3 counterpart; and the census rows, which still need the
+ALT/v0 route because six of seven N=258 actions serialise past 1,232 bytes.
 
 `U-001`'s first clause is *"General batch collection"*. Its long status text in
 the index is entirely about the activation seam, the release content, and the
@@ -769,9 +840,130 @@ retired"* and none of these was. All live only on the board, in `/private/tmp`.
 | M-29 | **The AccountInfo migration** — 4,776 bytes, *"the floor… W2f's spec is still the only way at it"* | specced by W2g, taken by nobody |
 | M-30 | **`--no-default-features --features dealer-family` does not compile** — four `use` sites reference `crate::series` unconditionally | *"owner unclaimed"* — named three times |
 | M-31 | **W2h item 1, the allocator cfg** — a `no-entrypoint` library build of Trading runs Hot code under whichever allocator its host installs | *"an owner decision rather than a tail-of-lane edit"* — refused with reasons, never re-taken |
-| M-32 | **`GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1` is 33 bytes** — same defect class that made an entire transition dead at runtime; only Custody has the seed-length assertion | *"unowned"* |
+| M-32 | **`GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1` is 33 bytes** — same defect class that made an entire transition dead at runtime; only Custody has the seed-length assertion | **CLOSED 2026-08-27 (GEN-CAND, `5987febc`).** The gen-3 constant is `b"dclutch-general-page-v1"` (23 bytes), and all three candidate-half domains carry the `const _: () = assert!(… ≤ 32)` guard Custody had and General did not. The class is closed by construction for this half, not by measurement |
 | M-33 | **`core-sbf/src/tests.rs:141` measures a frame 13 accounts narrower than the real one**, so its packet claim is understated | *"Core owner"* — never claimed. `WAVE.md:399` carries the packet claim but not the understatement |
 | M-34 | **Four independent ProgramTest-evidence emitters** from four lanes in one hour, plus `check-witnesses.sh` duplicated | *"Somebody should own converging these before a fifth"* |
+
+
+### DECOMP dispositions, 2026-08-27 (M-27 / M-28 / M-29 / M-31 / M-34)
+
+`WAVE.md`'s DECOMP charter routed five of these rows to one lane. Each below is
+either done, ruled, or priced with the arithmetic that priced it. None is left
+as "named".
+
+**M-27 — the visitor seam. The sharing half stands; the asymptotic half is NOT
+this bundle's lever, measured.** W2l's `ChildWalkResolutionV3` already removed
+the second Claims-composition decode and the second role-carrier resolution
+(78,146 CU, 1,465 bytes) and that is intact. The remaining claim was that
+`ProgramV4::resolved_invocation` is O(R²·I) through `route_request_start`'s
+prefix rescan. DECOMP profiled the shipped Direct continuation phase by phase
+and it is not where the compute is: both invocation resolutions together are
+`pf-invocation-resolved` 4,127 CU, against `p7-effect-projection` 164,290,
+`p5r-account-projection` 122,881 and `commit-non-root` 122,268. And the entire
+CROSS-SEED variance of the swept path — the thing that makes one draw in sixty
+approach the ceiling — is five phases, every one of them a PDA bump search
+(`p1-invocation` 3,000, `p1-root` 3,000, `request-lifecycle-preplan` 4,500,
+`pf-invocation-preflighted` 3,000, `cm-children` 4,501, at fixture seeds 9/13/1).
+The prefix rescan is real and is the right fix for a family with many routes;
+it is not the lever for Direct, and pricing it as "the single highest-value item
+in the tree" was inherited from a measurement of the SHARING half. Re-priced,
+still unowned, no longer mis-sold.
+
+**M-28 — the sysvar-parser convergence. Inventoried in full, and it is one
+missing accessor.** The two parsers are
+`native_signature::SysvarInstructionV1::read` (the borrowed record reader, with
+the ten-test adversarial corpus at `native_signature.rs:371`) and
+`entrypoint_adapter::admitted_heap_frame_bytes_from_sysvar_v1:1041` (the
+heap-admission scanner, which reaches `dispatch` on every invocation whose data
+satisfies `declares_extended_heap_profile_v1`). Their layout arithmetic is
+byte-identical — 2-byte count, 2-byte offset stride, 2-byte account count,
+33-byte metas, 32-byte program id, 2-byte data length — and both refuse with
+`TradingSbfError::NativeSignature`, so folding changes no refusal. The scanner
+needs only `program_id()` and `data()` of every instruction plus the leading
+count, so the fold is: add a count accessor to `SysvarInstructionV1`, loop
+`0..count` over `read(i, data)`, and delete the scanner's private `read_u16`
+(its `read_u32` stays for the grant payload). **The concrete gap the row names
+is real and sharper than "no corpus":** the admission tests' own `sysvar_bytes`
+helper hardcodes `accounts: Vec::new()`, so `accounts.checked_mul(META_BYTES)`
+is only ever exercised at zero — the crafted-offset-table, oversized-declared-
+account-count and substituted-meta classes have no analogue on the admission
+path at all. The in-code `QUEUED CONVERGENCE` note at
+`entrypoint_adapter.rs:1035` gives the original reason ("that reader is another
+lane's in-flight work"); that lane landed, and the reason has expired.
+
+**M-29 — the AccountInfo migration. PRICED, and the answer is not now.** The
+heap is not the binding wall and has not been since W2p. Peak 29,895 of 32,768
+leaves 2,873 bytes, 8.8% of the budget, and DECOMP's changes leave that peak
+exactly where it was. Compute is the binding wall, at 5,238–12,567 CU of a
+1,400,000 ceiling on the worst of sixty fixture draws — 0.4–0.9%. So the 4,776
+bytes are worth an order of magnitude less than the same effort spent on CU.
+And they are not even the next heap bytes available: W2p's own sized list has
+1,688 (the System-instruction clones in `lifecycle-creates`, for which
+`entrypoint_adapter::invoke_signed_owned_v1` already exists and the commit path
+does not use it), 912 (child-walk buffers reserved to the widest invocation) and
+720 (the preflight walk's frame and wire) — 3,320 bytes, more than the current
+margin, ahead of the floor. **Trigger, so this is a decision and not a
+deferral:** take the migration when the heap peak passes 31,000 with those three
+cuts already taken, or when a family lands whose runtime account count exceeds
+Direct's. Until then it is the last resort, not the next one.
+
+**M-31 — the allocator cfg. RULED: take it, and the incoherence is LIVE, which
+is not how it was previously argued.** W2h refused it partly because the
+motivating measurement (253 frame diagnostics) was stale — it is 0 today, and
+that is still true. But the underlying incoherence is not latent. Two SBF
+cdylibs build `dclutch-trading-sbf` with `no-entrypoint`
+(`dclutch-dealer-accelerator-sbf`, `program-test/test-programs/trading-outer`)
+and the accelerator executes `authenticate_accelerator_invocation_v4`, which is
+`hot_v3` code that Boxes and Vecs freely, under the SDK's allocator rather than
+the audited `BumpHeapV1` it was measured against. Worse, under
+`no-entrypoint` + `target_os = "solana"` the `scratch_backing` module takes its
+NEGATED, host arm inside an SBF program — and W2p already recorded what that
+costs: "the `thread_local!` in it made the trading-outer test program ELF
+UNLOADABLE… the runtime reports that as `UnsupportedProgramId` and names nothing
+about TLS. Cost one gate cycle." **The shipped Trading ELF does not move either
+way** (`no-entrypoint` is off there, so all the predicates already evaluate the
+same), which is what makes this safe to take.
+**The edit is NOT the two files TA-DLR's board post names**, and taking that
+post literally will not compile. It is: the `not(feature = "no-entrypoint")`
+term removed from EIGHT `#[cfg]` sites in `entrypoint_adapter.rs` (seven
+positive — the `#[global_allocator]` static, `program_heap_bytes_used_v1`,
+`program_heap_capacity_v1`, `program_heap_scratch_bytes_v1`, the on-chain
+`scratch_backing`, `admit_heap_frame_v1`, `lift_declared_heap_profile_v1` — plus
+the negated host `scratch_backing` arm, which must narrow to
+`not(target_os = "solana")`), the mirror pair at `hot_v3.rs:330/343` that gates
+`hot_heap_outstanding`, and `custom-heap` enabled on both cdylibs — where
+`trading-outer`'s `custom-heap` feature **does not exist yet and must be added**.
+The `not(shadow-accelerator-auth-only)` term the post says "stays" is gone from
+the tree entirely. **The trap for whoever takes it:** `trading-outer` is the
+outer program of `hot_heap_frame_is_inert`, the instrument that measures the
+32,768-byte heap wall. Changing its allocator changes the instrument, so the
+edit lands with a full re-measurement of the sweep, not beside one. DECOMP did
+not take it inside this lane for exactly that reason: it would have mixed the
+instrument with the measurement it was reporting.
+
+**M-34 — the four ProgramTest emitters. VERIFIED TWO-THIRDS STALE, and the real
+residue is not a convergence.** Of the four the board named, three no longer
+exist: `tools/gauntlet/programtest/evidence.rs` and `tools/gauntlet/tier3/producer/`
+were never committed (no git history for either path) and tier2's campaign was
+deleted in `cc21a7d7`. `check-witnesses.sh` has exactly ONE copy
+(`tools/gauntlet/tier1/`, whose own header says "SHARED by every tier. Do not
+fork it"); the duplicate the row complains about was untracked and is gone. The
+shell half already converged: all five ProgramTest run scripts fold through the
+one `fold-program-test-evidence` binary.
+What remains is two emitters, `tools/gauntlet/program-test-evidence` (the shared
+crate, ~11 suites) and `tools/gauntlet/direct/producer` (its own workspace, its
+own `dclutch-gauntlet-direct-campaign-evidence-v1` schema, serde_json). **They
+cannot simply be merged**: `direct/run-direct.sh` feeds the producer's document
+straight to `check-witnesses.sh`, and `direct/witnesses.json` plus
+`expectations.json` query `artifact.*`, `fast_lane.*` and `ack` — keys the
+shared `TransactionEvidence` shape does not carry. The scoped convergence that
+IS available: keep the Direct envelope and have its `transactions` entries be
+`TransactionEvidence`, which is the only part `census/src/ledger.rs` reads
+(it requires `transactions[].label`, `.signature`, `.logs[]`, optional
+`.compute_units_consumed`, and ignores every envelope key). **Blocked on a live
+claim, not on difficulty:** SN6 claimed `tools/gauntlet/direct/producer` under
+M-42 (`wire_bytes` is `None` there) on 2026-08-27 12:11. Whoever takes M-42
+should take this with it — it is the same file and the same afternoon.
 | M-35 | **The census cannot follow a dispatch through an `unsafe` block** — *"No Direct row can be claimed through Trading until it is closed"* | *"belongs to the census owner."* `WAVE.md:379` carries a *different* census gap |
 | M-36 | **590 literal byte offsets hand-mirrored in the browser** across 21 files (51 magics, 33 seed domains) | ratcheted by `lib/abiCoverage.test.ts`, never assigned a lane. Pattern 3 would kill the genus but does not name the inventory |
 | M-37 | **`REPLAY_STATE_BYTES` has no Rust or Lean authority anywhere** — the browser decides a replay-account width on its own | *"Owner should be the banish lane"* |
@@ -799,7 +991,7 @@ to most of them — the finding is that for these specific ones, nobody said so.
 |---|---|---|---|
 | M-48 | **A coordinated-disclosure process** | *"A private reporting address and coordinated-disclosure process **will be added** before any public test deployment."* — `SECURITY.md:50` | No `SECURITY.md` in dclutch. Devnet is a public test deployment |
 | M-49 | **Independent demand evidence** | *"It is not… **independent demand evidence**, or a protocol release."* — `CURRENT_TRUTH.md:59` | Named repeatedly in gen-1; appears nowhere in gen-3. The project has never tested whether anyone wants it |
-| M-50 | **The permissionless work economy** | *"Anyone may submit paid observation, repair, clear, finalize, or cleanup work."* — `PROJECT.md:194`; and *"Candidate submission is solver work, not a crank"* | Gen-3 has prepaid `bounty_lamports`. No solver, no keeper reward, and (M-12) no candidate submission route |
+| M-50 | **The permissionless work economy** | *"Anyone may submit paid observation, repair, clear, finalize, or cleanup work."* — `PROJECT.md:194`; and *"Candidate submission is solver work, not a crank"* | **PARTLY ANSWERED 2026-08-27 (GEN-CAND, `658b7a3f`)** for General's candidate half: submission is permissionless and unbonded, and every crank — one per execution row, one for the consideration, one for cleanup — is paid out of a compartmentalized, fully refundable work escrow the submission funds exactly, re-proven at every transition by `validate_capitalization`, refunded to the solver on loss. This also fixes what gen-2 got wrong: its consideration was permissionless and **unpaid**, so a valid candidate nobody cranked never competed. Still open: the lamports do not MOVE yet (a transfer is an account operation and these are pure transitions), and the same pattern is unbuilt for observation and repair |
 | M-51 | **Zero-volume survivability, protocol-wide** | *"every admitted Market can observe, repair, finalize, and settle from prepaid resources even if later volume is zero"*; and *"there is no global `LivenessPolicy` and no protocol-wide no-stranding result"* | Gen-3 prepays per-capability. No protocol-wide result exists or is scheduled |
 | M-52 | **Venue adapters — Manifest, AMMs, RFQs, Jupiter** | *"Materialized Eggs can trade on Manifest, AMMs, RFQs, and future Jupiter routes without making those venues authoritative."* — `PROJECT.md:106`; and ember: *"do we allow using jupiter to witness prices and stuff like that..?"* | Nowhere in gen-3. External venue routing for materialized claims was never re-planned or retired |
 | M-53 | **Aeneas/Charon — collapsing the Rust/Lean duplication** | *"may remove the two-implementation cost entirely. Our kernel is unusually Aeneas-friendly (no_std, no unsafe, fixed arrays, checked arith)."* — `GOAL.md:1302`, a "NEXT SESSION — start here" item | Zero hits outside docs in either repo. Named as end 1 of the two-ended TV chain and never started. The session never came |
@@ -1349,6 +1541,29 @@ and the gate is a *price-admission* rule. Two generations built the gate and no
 decision in any generation retired it. The scorecard's trigger — write it down
 now rather than rediscover it — is the right closure, and `O-013` is not where
 it goes.
+
+**Closed 2026-08-27 (PRICE-GATE), and here is the part this entry said it could
+not judge.** Item 1 above ends *"whether the quantized checker is sound,
+complete, or cheap is not something this sweep can say"*. It can now be said, in
+the successor's own terms rather than by reading gen-2's tree: the hull-membership
+rule **is sound**, and `DClutchSemantics.LiabilityBasisV2PriceGate.Certificate.no_arbitrage`
+is the proof — zero `sorry`, zero `native_decide`, three standard axioms. It is
+**not complete** in the sense that matters, and the incompleteness is inherited
+rather than introduced: a `u64` mixture mass refuses a hull price whose every
+representation needs a larger denominator, exactly the residual gen-2 named at
+`docs/design/PRICE_MEASURE_WITNESS_V2.md:188`, and it fails closed. Both
+directions of gen-2's refutation are reproduced against this tree's evaluator as
+`decide` witnesses and as corpus cases. The gate is in the kernel today as one
+admission conjunct; item 2's layout half is still unbuilt and still out of scope
+by Frontier 2's gate, which is the right order — the price plane is ready
+*before* the layout that would make it reachable. See
+`docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` ("the row that flipped")
+and `docs/compost/PRICE_GATE_HULL_2026_08_27.md`.
+
+**Item 3 is not retired by this.** The pattern happened three times; it was
+*corrected* the third time, one lane later, before a Market could select the
+basis. That is a better outcome than gen-1's two days with the hole open, and it
+is not evidence the pattern will not recur.
 
 ## G-2. The compute ceiling is gen-1's *scaling* verdict, and its named answer is in no queue
 
@@ -2563,6 +2778,56 @@ for doing them; the rest are genuinely optional.
    forty-three of them are here. Three are cheap enough to close this week:
    `N-5`'s two upstream fetches, `N-2`'s bounded outcome-cap sweep, and `N-9`'s
    Cert-F instrumentation against the wall that is standing right now.
+
+### DECOMP-r, 2026-08-27: three rows the sweep opened
+
+**M-45 — unexecuted code in a crate `hot_v3` links is a COMPUTE change, and
+nothing in the tree says so.** Measured while landing `7ead0716`: adding 662
+lines of preimage-builder code to `dclutch-execution-strategy-contract` took the
+20-seed sweep from 18/20 to **0/20**, every seed dying at 1,399,944 of 1,400,000.
+The new code was never called on the swept bundle -- proven, not assumed, by
+stubbing all three wrappers to return an error and watching the path *pass* at
+essentially the baseline rather than refuse. The cost was LLVM inlining the new
+bodies into `hot_v3`'s callers and spilling everything else worse: **43,887 CU
+from code that does not run.** `#[inline(never)]` on the six functions recovered
+it and then some (20/20, and the two seeds main fails now pass), with a
+byte-size-identical ELF. `hot_v3`'s own `hot_cu_checkpoint` doc already recorded
+one instance of this mechanism; this is the second, and the first from
+*unexecuted* code. **The row is the missing rule**: a lane that adds a helper to
+any contract crate Trading links and verifies only "my function is not called"
+has verified nothing. The gate is the sweep. `#[inline(never)]` is the cheap
+prophylactic for anything cold living beside something hot. Whoever owns
+`AGENTS.md`/`WAVE.md` lane guidance should carry this; DECOMP-r has only carried
+it in one commit message and on the board.
+
+**M-46 — main regressed from 20/20 to 18/20 on the compute gate and nobody
+boarded it.** At `211079f6` the board records the sweep at 20/20, min 1,328,933,
+max 1,372,433, worst margin 27,567. At `a4be9a83`, clean build, same sweep,
+same harness: **18/20**, seeds 0 and 3 failing, max 1,395,229 with **4,771 CU of
+margin** on seed 15. That is roughly +23,000 CU on the mean from lanes landing
+between those two commits, and it is nobody's declared result -- every lane in
+that window measured its own thing. `7ead0716` happens to take it back to 20/20,
+which means this row is *masked*, not closed: the +23,000 is still in the path
+and the next lane to add cold code beside the hot path will meet the ceiling
+again. Owner: whoever takes the next CU lane. Bisecting `211079f6..a4be9a83`
+against the sweep is the cheap version and it is one script that already exists.
+
+**M-47 — `hot_v3`'s five Shadow-digest call sites still take the allocating
+wrappers, and those heap-allocate what the streaming form did not.** The owed
+second half of `7ead0716`. `runtime_transcript_digest_v3`,
+`execute_admitted_candidate_v3`, `execute_shadow_candidate_v3` (twice) and
+`accelerator_runtime_observations_digest_v4` should size the two buffers from
+counts they already hold and take them from the scratch region the phase already
+opens, after which `trading-sbf` can drop the crate's `alloc` feature entirely.
+The cost of not doing it is exact: 37 + 80n bytes for n runtime observations
+(20,517 at the accelerator's 256-account maximum, 6,277 at a 78-account frame),
+13+8s scratch plus 32+16i slices for the candidate bank, and 17+8l+84r for the
+effect projection -- against zero for the `Sha256` stack value it replaced. All
+five are gated on a shadow caller, an admitted caller or the accelerator
+boundary, so none executes on the canonical Interpreted Direct bundle and the
+29,895-byte heap peak is untouched; on the paths that DO reach them this is
+strictly worse heap than what it replaced. Not a fail-closed, not polish: debt
+with a number.
 
 ---
 

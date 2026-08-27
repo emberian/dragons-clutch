@@ -6,6 +6,7 @@
 //! profile independently revalidates that action and its exact coordinate
 //! grammar before projecting caller-owned registers.
 
+use crate::effect_artifacts_v3::unauthored_actions;
 use dclutch_general_codec::Action;
 use dclutch_request_profile_contract::{Error, RequestProfileV1};
 
@@ -20,6 +21,12 @@ pub use generated::*;
 #[must_use]
 pub const fn general_request_profile_bytes_v1(action: Action) -> &'static [u8] {
     match action {
+        // No Lean-emitted RequestProfile exists for the collection and
+        // candidate actions. The empty slice is not a usable profile: the
+        // artifact join compares the supplied profile against this value, and
+        // `RequestProfileV1::decode` refuses an empty record, so an unauthored
+        // action cannot be admitted with any profile at all.
+        unauthored_actions!() => &[],
         Action::Consider => &GENERAL_CONSIDER_REQUEST_PROFILE_V1,
         Action::Freeze => &GENERAL_FREEZE_REQUEST_PROFILE_V1,
         Action::InitializeSettlement => &GENERAL_INITIALIZE_REQUEST_PROFILE_V1,

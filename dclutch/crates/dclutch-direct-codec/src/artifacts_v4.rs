@@ -36,7 +36,7 @@ use dclutch_request_profile_contract::{
     v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
 };
 use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::{
     execution_v3::{
@@ -504,10 +504,6 @@ fn require_content(selected: [u8; 32], bytes: &[u8]) -> Result<()> {
 
 fn content(bytes: [u8; 32]) -> Result<ContentId> {
     ContentId::new(bytes).map_err(|_| DirectArtifactErrorV4::ContentIdentity)
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
 }
 
 #[cfg(test)]

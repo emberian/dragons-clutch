@@ -18,7 +18,7 @@ deployed.
 A refusal is the protocol working. dClutch fails closed: an input, account
 shape, authority, or state that does not authenticate exactly is refused with
 a code that names the program and the reason, and no partial effect survives
-the transaction. The tables below carry all **198** protocol
+the transaction. The tables below carry all **201** protocol
 codes with their meanings, straight from the refusal enums' own doc comments.
 
 ## Band allocation
@@ -278,13 +278,16 @@ codes with their meanings, straight from the refusal enums' own doc comments.
 | `0x8007` | `ResolutionError::SourceMaterial` | Source material or one of its embedded content identities was inconsistent. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:53` |
 | `0x8008` | `ResolutionError::ProductDomain` | The external Product-owned result-domain identity or bytes differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:55` |
 | `0x8009` | `ResolutionError::ProviderRelease` | The selected Pyth provider-release record or Loader accounts differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:57` |
-| `0x800A` | `ResolutionError::ProviderObservation` | Pyth configuration or fully verified update authentication failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:59` |
-| `0x800B` | `ResolutionError::Sysvar` | Clock or Rent sysvar identity or bytes were invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:61` |
-| `0x800C` | `ResolutionError::Transition` | Provider-neutral Source admission or Product mapping refused. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:63` |
-| `0x800D` | `ResolutionError::Arithmetic` | Checked physical arithmetic or signed timestamp conversion failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:65` |
-| `0x800E` | `ResolutionError::Funding` | Canonical capability funding, typed custody, or exact bounty debit failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:67` |
-| `0x800F` | `ResolutionError::RelayedRecord` | The sealed relayed observation record was not consumable against this Market's authenticated Source graph. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:70` |
-| `0x8010` | `ResolutionError::RelayedWindow` | The relayed observation was admissible but did not satisfy the Product's own window: it is no answer rather than a wrong one, and the market is still live. Distinct from every "the bytes were wrong" refusal on purpose, because "come back later" and "something is broken" are not the same message to whoever is holding the position. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:76` |
+| `0x800A` | `ResolutionError::ProviderObservation` | Fully verified update authentication failed: the posted bytes, their digest, the write authority, the posted slot, or an evidence identity was not the one this frame committed to.  This used to be all of §12.3 as well. It is not any more: the three questions `docs/design/MAINNET_STATE_RELAY.md` §12.3 says an operator must be able to tell apart now have their own codes (`ProviderWindow`, `ProviderFreshness`, `ProviderConfiguration`), and this one is the residue — "the update itself did not authenticate". | `programs/dclutch-resolution-proof-sbf/src/lib.rs:67` |
+| `0x800B` | `ResolutionError::Sysvar` | Clock or Rent sysvar identity or bytes were invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:69` |
+| `0x800C` | `ResolutionError::Transition` | Provider-neutral Source admission or Product mapping refused. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:71` |
+| `0x800D` | `ResolutionError::Arithmetic` | Checked physical arithmetic or signed timestamp conversion failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:73` |
+| `0x800E` | `ResolutionError::Funding` | Canonical capability funding, typed custody, or exact bounty debit failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:75` |
+| `0x800F` | `ResolutionError::RelayedRecord` | The sealed relayed observation record was not consumable against this Market's authenticated Source graph. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:78` |
+| `0x8010` | `ResolutionError::RelayedWindow` | The relayed observation was admissible but did not satisfy the Product's own window: it is no answer rather than a wrong one, and the market is still live. Distinct from every "the bytes were wrong" refusal on purpose, because "come back later" and "something is broken" are not the same message to whoever is holding the position. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:84` |
+| `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`.  Like `RelayedWindow`, and for the same reason: this is no answer rather than a wrong one, and the Market is still live. §12.3's first operator question. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:91` |
+| `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`.  §12.3's second operator question, and the one whose answer is an instruction: if the publication is too OLD, a pinned fixture has outlived its declared shelf life and must be recaptured — not widened. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:99` |
+| `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits.  §12.3's third operator question. Unlike the first two this one is not "come back later": nothing about waiting changes it. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:106` |
 
 ## series-shadow
 

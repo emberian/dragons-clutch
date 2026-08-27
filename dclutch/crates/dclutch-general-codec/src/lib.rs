@@ -84,6 +84,20 @@ pub enum Action {
     Distribute = generated_general_controller::ACTION_DISTRIBUTE,
     /// Route the exact quote remainder and enter terminal state.
     Close = generated_general_controller::ACTION_CLOSE,
+    /// Open one batch window against the root's exact next sequence.
+    OpenBatch = generated_general_controller::ACTION_OPEN_BATCH,
+    /// Admit one signed order, escrowing its exact worst-case obligation.
+    PlaceOrder = generated_general_controller::ACTION_PLACE_ORDER,
+    /// Return one live order's whole escrow to the maker who placed it.
+    CancelOrder = generated_general_controller::ACTION_CANCEL_ORDER,
+    /// Make one batch's order set final.
+    CloseBatch = generated_general_controller::ACTION_CLOSE_BATCH,
+    /// Submit one content-addressed candidate against a closed batch.
+    SubmitCandidate = generated_general_controller::ACTION_SUBMIT_CANDIDATE,
+    /// Verify one candidate execution row against its escrowed order.
+    VerifyCandidateRow = generated_general_controller::ACTION_VERIFY_CANDIDATE_ROW,
+    /// Return one order's residual escrow after its batch's window ends.
+    ReleaseOrder = generated_general_controller::ACTION_RELEASE_ORDER,
 }
 
 impl Action {
@@ -98,6 +112,15 @@ impl Action {
             generated_general_controller::ACTION_MATERIALIZE => Ok(Self::Materialize),
             generated_general_controller::ACTION_DISTRIBUTE => Ok(Self::Distribute),
             generated_general_controller::ACTION_CLOSE => Ok(Self::Close),
+            generated_general_controller::ACTION_OPEN_BATCH => Ok(Self::OpenBatch),
+            generated_general_controller::ACTION_PLACE_ORDER => Ok(Self::PlaceOrder),
+            generated_general_controller::ACTION_CANCEL_ORDER => Ok(Self::CancelOrder),
+            generated_general_controller::ACTION_CLOSE_BATCH => Ok(Self::CloseBatch),
+            generated_general_controller::ACTION_SUBMIT_CANDIDATE => Ok(Self::SubmitCandidate),
+            generated_general_controller::ACTION_VERIFY_CANDIDATE_ROW => {
+                Ok(Self::VerifyCandidateRow)
+            }
+            generated_general_controller::ACTION_RELEASE_ORDER => Ok(Self::ReleaseOrder),
             _ => Err(Error::UnknownTag),
         }
     }

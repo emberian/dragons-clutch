@@ -37,8 +37,9 @@ pub use frame::{
     STRUCTURED_ACCOUNT_TERMS_STAGING_V2, STRUCTURED_ACCOUNT_TOKEN_PROGRAM_V2,
     STRUCTURED_ASSET_ACCOUNT_COUNT_V2, STRUCTURED_ASSET_ACTOR_SHARD_V2,
     STRUCTURED_ASSET_CUSTODY_SHARD_V2, STRUCTURED_ASSET_SHARD_MINT_V2,
-    STRUCTURED_BASE_ACCOUNT_COUNT_V2, StructuredFrameErrorV2, StructuredFrameSpecV2,
-    structured_account_is_active_v2, structured_account_is_writable_v2,
+    STRUCTURED_BASE_ACCOUNT_COUNT_V2, StructuredFrameEffectSlotsV2, StructuredFrameErrorV2,
+    StructuredFrameSpecV2, structured_account_is_active_v2, structured_account_is_writable_v2,
+    structured_frame_effect_slots_v2,
 };
 pub use hot_v2::{
     Result as StructuredHotResultV2, STRUCTURED_HOT_MAX_TOKEN_EFFECTS_V2,

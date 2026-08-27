@@ -21,7 +21,15 @@ use support::{
 const COEFFICIENTS: [u64; 2] = [1, 3];
 const QUANTITY: u64 = 4;
 
-/// Profile coordinates used by every fixture below.
+/// Arbitrary distinct coordinates, and deliberately NOT the frame's.
+///
+/// The candidate never learns the account frame: it checks that an effect's
+/// five accounts do not alias each other and that the authority is exactly the
+/// root or the actor, which is true of any injective assignment. Testing it at
+/// the frame's own coordinates would hide that independence, and would also
+/// suggest these constants are an account layout. They are not -- `frame.rs`
+/// is the only layout authority, decision 0011 says why, and the operator's
+/// `tests/actions.rs` is where the two are made to agree.
 const TOKEN_PROGRAM_COORDINATE: u16 = 0;
 const ROOT_COORDINATE: u16 = 1;
 const OWNER_COORDINATE: u16 = 2;
@@ -566,6 +574,200 @@ fn hostile_candidates_refuse() {
             Some(rent_close(rent_credit)),
             &fixture.root_bytes
         ),
+        Some(StructuredHotErrorV2::TokenMismatch)
+    );
+}
+
+/// A wider, coprime basis, so that `quantity * c_i` is a different number for
+/// every coordinate and no two rows can be swapped without changing an amount.
+const WIDE_COEFFICIENTS: [u64; 3] = [2, 5, 11];
+
+fn wide_shard_effect(
+    index: u16,
+    kind: StructuredHotTokenKindV2,
+    basket: u64,
+    authority: StructuredHotAccountRefV2,
+    mints: &[[u8; 32]],
+) -> StructuredHotTokenEffectV2 {
+    let tag = u8::try_from(index).expect("coordinate tag");
+    let holder = account_key(
+        HOLDER_COORDINATE_BASE + index,
+        identity(HOLDER_SHARD_BASE + tag),
+    );
+    let custody = account_key(
+        CUSTODY_COORDINATE_BASE + index,
+        identity(CUSTODY_SHARD_BASE + tag),
+    );
+    let (source, destination) = if kind == StructuredHotTokenKindV2::LockShards {
+        (holder, custody)
+    } else {
+        (custody, holder)
+    };
+    StructuredHotTokenEffectV2 {
+        kind,
+        representation_coordinate: u32::from(index),
+        token_program: account(TOKEN_PROGRAM_COORDINATE, TOKEN_PROGRAM),
+        mint: account_key(
+            SHARD_MINT_COORDINATE_BASE + index,
+            mints.get(usize::from(index)).copied().expect("shard mint"),
+        ),
+        source: Some(source),
+        destination: Some(destination),
+        authority,
+        amount: basket,
+        pre_supply: 0,
+        post_supply: 0,
+        pre_source: 1_000,
+        post_source: 1_000 - basket,
+        pre_destination: 500,
+        post_destination: 500 + basket,
+    }
+}
+
+#[test]
+fn every_locked_basket_is_the_quantity_times_its_own_coefficient() {
+    // K_i = S * c_i, asserted as an identity rather than as three literals.
+    // The fixtures elsewhere in this file write `QUANTITY * 3` by hand, which
+    // cannot fail when the coefficient moves; these amounts are DERIVED, so a
+    // coefficient change that the effect did not follow is a failing test.
+    let shard_bytes = shard_terms_bytes(3, DENOMINATOR_FIXTURE);
+    let shard = shard_terms(&shard_bytes);
+    let terms_bytes = structured_terms_bytes(&WIDE_COEFFICIENTS, DENOMINATOR_FIXTURE);
+    let terms = structured_terms(&terms_bytes, shard);
+    let root_state = root_bytes(digest(&terms_bytes), 7);
+    let root = account(ROOT_COORDINATE, ROOT);
+    let owner = account(OWNER_COORDINATE, OWNER);
+    let mints = shard_mints(3);
+
+    for (action, kind, authority) in [
+        (
+            StructuredActionV2::Issue,
+            StructuredHotTokenKindV2::LockShards,
+            owner,
+        ),
+        (
+            StructuredActionV2::Unwrap,
+            StructuredHotTokenKindV2::ReleaseShards,
+            root,
+        ),
+        (
+            StructuredActionV2::TerminalRedeem,
+            StructuredHotTokenKindV2::ReleaseShards,
+            root,
+        ),
+    ] {
+        let receipt = if action == StructuredActionV2::Issue {
+            StructuredHotTokenKindV2::MintReceipts
+        } else {
+            StructuredHotTokenKindV2::BurnReceipts
+        };
+        let mut effects = vec![receipt_effect(receipt, root)];
+        let mut baskets = Vec::new();
+        for (index, coefficient) in WIDE_COEFFICIENTS.iter().enumerate() {
+            let basket = QUANTITY.checked_mul(*coefficient).expect("basket");
+            baskets.push(basket);
+            effects.push(wide_shard_effect(
+                u16::try_from(index).expect("index"),
+                kind,
+                basket,
+                authority,
+                &mints,
+            ));
+        }
+        // The three baskets must be pairwise distinct, or the per-coordinate
+        // skew below would be provable by a swap and prove nothing.
+        baskets.sort_unstable();
+        let distinct = baskets.len();
+        baskets.dedup();
+        assert_eq!(baskets.len(), distinct);
+
+        let candidate = StructuredHotCandidateV2::prepare(StructuredHotCandidateInputV2 {
+            request: request(action, terms),
+            terms,
+            shard_terms: shard,
+            root_bytes: &root_state,
+            root,
+            token_effects: &effects,
+            rent_close: None,
+        })
+        .expect("candidate accepts the exact basket");
+        assert_eq!(candidate.token_effects().len(), 4);
+        for (index, effect) in candidate.token_effects().iter().skip(1).enumerate() {
+            let coefficient = WIDE_COEFFICIENTS.get(index).copied().expect("coefficient");
+            assert_eq!(effect.amount, QUANTITY * coefficient);
+        }
+
+        // One atom off on ONE coordinate refuses, and the coordinate that moved
+        // is the only thing that changed.
+        for offset in 0..WIDE_COEFFICIENTS.len() {
+            let mut skewed = effects.clone();
+            let effect = skewed.get_mut(offset + 1).expect("shard effect");
+            effect.amount += 1;
+            effect.post_source -= 1;
+            effect.post_destination += 1;
+            assert_eq!(
+                StructuredHotCandidateV2::prepare(StructuredHotCandidateInputV2 {
+                    request: request(action, terms),
+                    terms,
+                    shard_terms: shard,
+                    root_bytes: &root_state,
+                    root,
+                    token_effects: &skewed,
+                    rent_close: None,
+                })
+                .err(),
+                Some(StructuredHotErrorV2::TokenMismatch),
+                "{action:?} accepted a basket one atom off at coordinate {offset}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_structured_node_cannot_be_backed_by_its_own_receipts() {
+    // The single backing edge points at the claim-shard layer and never past
+    // it.  A shard row whose Mint is the receipt Mint would be a node backed by
+    // itself, and the exact claim-shard terms are what refuse it: the receipt
+    // Mint is not the shard Mint of any coordinate.
+    let fixture = Fixture::new();
+    let terms = fixture.terms();
+    let root = account(ROOT_COORDINATE, ROOT);
+
+    let mut self_backed = issue_effects(root);
+    let effect = self_backed.get_mut(1).expect("first shard effect");
+    effect.mint = account_key(SHARD_MINT_COORDINATE_BASE, terms.receipt_mint());
+    assert_eq!(
+        StructuredHotCandidateV2::prepare(StructuredHotCandidateInputV2 {
+            request: request(StructuredActionV2::Issue, terms),
+            terms,
+            shard_terms: fixture.shard(),
+            root_bytes: &fixture.root_bytes,
+            root,
+            token_effects: &self_backed,
+            rent_close: None,
+        })
+        .err(),
+        Some(StructuredHotErrorV2::TokenMismatch)
+    );
+
+    // The mirror of the same confusion: the RECEIPT row naming a shard Mint.
+    let mut shard_as_receipt = issue_effects(root);
+    let effect = shard_as_receipt.get_mut(0).expect("receipt effect");
+    effect.mint = account_key(
+        RECEIPT_MINT_COORDINATE,
+        shard_mints(2).first().copied().expect("shard mint"),
+    );
+    assert_eq!(
+        StructuredHotCandidateV2::prepare(StructuredHotCandidateInputV2 {
+            request: request(StructuredActionV2::Issue, terms),
+            terms,
+            shard_terms: fixture.shard(),
+            root_bytes: &fixture.root_bytes,
+            root,
+            token_effects: &shard_as_receipt,
+            rent_close: None,
+        })
+        .err(),
         Some(StructuredHotErrorV2::TokenMismatch)
     );
 }

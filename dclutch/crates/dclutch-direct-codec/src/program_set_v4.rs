@@ -14,7 +14,7 @@ use dclutch_capability_program_contract::{
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::{
     execution_v3::{DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3, DirectExecutionActionV3},
@@ -22,7 +22,8 @@ use crate::{
         DirectInlineOrdinaryHotBundleV4, validate_direct_inline_ordinary_hot_bundle_v4,
     },
     registered_bundle_v4::{
-        DirectRegisterBuyHotBundleV4, validate_direct_register_buy_hot_bundle_v4,
+        DirectRegisterBuyHotBundleV4, DirectRegisterSellHotBundleV4,
+        validate_direct_register_buy_hot_bundle_v4, validate_direct_register_sell_hot_bundle_v4,
     },
 };
 
@@ -84,6 +85,23 @@ pub fn validate_direct_register_buy_capability_v4(
         .map_err(|_| DirectProgramSetErrorV4::Bundle)?;
     Ok(validated(
         DirectExecutionActionV3::RegisterBuy,
+        &bundle.descriptor,
+    ))
+}
+
+/// Validate one complete RegisterSell bundle before admitting its set entry.
+///
+/// A Sell's entry is obtained the same way every other entry is -- by its own
+/// bundle validating -- and it is a DIFFERENT entry: distinct selector, distinct
+/// descriptor, and not one artifact digest shared with the Buy.
+pub fn validate_direct_register_sell_capability_v4(
+    bundle: &DirectRegisterSellHotBundleV4,
+    capacity_profile: [u8; 32],
+) -> Result<ValidatedDirectCapabilityV4, DirectProgramSetErrorV4> {
+    validate_direct_register_sell_hot_bundle_v4(bundle, capacity_profile)
+        .map_err(|_| DirectProgramSetErrorV4::Bundle)?;
+    Ok(validated(
+        DirectExecutionActionV3::RegisterSell,
         &bundle.descriptor,
     ))
 }
@@ -170,10 +188,6 @@ fn program_set_entry(
         entry.action as u32,
         CapabilityDescriptorReferenceV2::new(schema, descriptor),
     ))
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
 }
 
 #[cfg(test)]

@@ -1,8 +1,25 @@
 //! The canonical Structured V2 physical account frame.
 //!
-//! One author for two readers: the host operator that BUILDS the instruction
-//! and the onchain adapter that PARSES it.  Neither carries a per-action
-//! account table of its own, so the two cannot drift.
+//! One author for two readers: the operator that LOWERS an action plan into
+//! candidate effects, and the candidate that JUDGES it.  Neither carries a
+//! per-action account table of its own, so the two cannot drift.
+//!
+//! # What this frame is not
+//!
+//! It is not the `AccountProfileV2` the chain expands.  Decision 0011 measures
+//! the difference: the Trading hot frame already fixes 39 accounts and injects
+//! five more at profile coordinates 0..4, so thirteen of this frame's
+//! twenty-three BASE coordinates name something already owned elsewhere --
+//! the Market, the Core and Registry programs, the activation cache, the Rent
+//! sysvar, the root itself, the role programs the child composition resolves,
+//! and the caller-authority triple the executor derives per route.  This base
+//! is the account list a Structured program with its own entrypoint would
+//! parse, and Structured has no such program.  Transcribing it into a profile
+//! would install a second authority for accounts the hot frame already fixes.
+//!
+//! The per-coordinate triple stride and the effect slot assignment below are a
+//! different matter and carry over to that profile unchanged: they describe
+//! the family's own accounts, which nothing else names.
 //!
 //! The frame is a fixed base followed by one triple per BACKED representation
 //! coordinate — the same coordinates, in the same strictly ascending Mint
@@ -135,6 +152,17 @@ impl StructuredFrameSpecV2 {
             .ok_or(StructuredFrameErrorV2::Arithmetic)
     }
 
+    /// Exact Token effect count for this frame: one receipt plus one per
+    /// backed coordinate.
+    ///
+    /// Restated from the backed width rather than passed in, so the effect
+    /// sequence and the account frame cannot be sized by two different facts.
+    pub fn effect_count(self) -> Result<usize> {
+        self.backed_coordinates
+            .checked_add(1)
+            .ok_or(StructuredFrameErrorV2::Arithmetic)
+    }
+
     /// First account index of one backed coordinate's triple.
     pub fn asset_base(self, backed_index: usize) -> Result<usize> {
         if backed_index >= self.backed_coordinates {
@@ -166,6 +194,121 @@ impl StructuredFrameSpecV2 {
             .checked_add(slot)
             .ok_or(StructuredFrameErrorV2::Arithmetic)
     }
+}
+
+/// Exact frame coordinates of the five accounts one Token effect can name.
+///
+/// This is the join that makes the frame load-bearing rather than descriptive.
+/// `StructuredHotCandidateV2::prepare` checks that an effect's accounts do not
+/// alias and that its authority is exactly the root or the actor; it cannot
+/// check that they sit where the frame says, because the coordinates reach it
+/// already chosen.  Deriving them here means the operator that BUILDS the
+/// instruction and the adapter that PARSES it read the same assignment, so the
+/// only way to disagree with the frame is to stop calling this function.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructuredFrameEffectSlotsV2 {
+    /// Terms-selected Token program.
+    pub token_program: u16,
+    /// Receipt Mint, or the shard Mint of this effect's backed coordinate.
+    pub mint: u16,
+    /// Source account, absent exactly when the effect has none.
+    pub source: Option<u16>,
+    /// Destination account, absent exactly when the effect has none.
+    pub destination: Option<u16>,
+    /// Signing authority: the root, or the actor for a lock transfer.
+    pub authority: u16,
+}
+
+/// Exact frame coordinates for one effect of one action's canonical sequence.
+///
+/// `effect_index` walks the same sequence `StructuredHotCandidateV2::prepare`
+/// requires: the receipt effect FIRST for the three supply-changing actions and
+/// LAST for retirement, so the custody-closure sweep runs before the Mint
+/// closes; the backed coordinates strictly ascending in between.
+pub fn structured_frame_effect_slots_v2(
+    spec: StructuredFrameSpecV2,
+    action: StructuredActionV2,
+    effect_index: usize,
+) -> Result<StructuredFrameEffectSlotsV2> {
+    let retiring = matches!(action, StructuredActionV2::ZeroSupplyRetire);
+    if effect_index >= spec.effect_count()? {
+        return Err(StructuredFrameErrorV2::InvalidCoordinate);
+    }
+    // The receipt slot is the only index that is not a backed coordinate, so
+    // the shard index is the walk position with the receipt slot removed.
+    let receipt_slot = if retiring {
+        spec.backed_coordinates()
+    } else {
+        0
+    };
+    let token_program = narrow(STRUCTURED_ACCOUNT_TOKEN_PROGRAM_V2)?;
+    if effect_index == receipt_slot {
+        let (source, destination, authority) = match action {
+            StructuredActionV2::Issue => (
+                None,
+                Some(narrow(STRUCTURED_ACCOUNT_RECEIPT_TOKEN_V2)?),
+                narrow(STRUCTURED_ACCOUNT_ROOT_V2)?,
+            ),
+            StructuredActionV2::Unwrap | StructuredActionV2::TerminalRedeem => (
+                Some(narrow(STRUCTURED_ACCOUNT_RECEIPT_TOKEN_V2)?),
+                None,
+                narrow(STRUCTURED_ACCOUNT_ROOT_V2)?,
+            ),
+            // Retirement pays the Mint's recovered rent to the lifecycle
+            // RentCredit, which is the only action that admits it at all.
+            StructuredActionV2::ZeroSupplyRetire => (
+                None,
+                Some(narrow(STRUCTURED_ACCOUNT_RENT_CREDIT_V2)?),
+                narrow(STRUCTURED_ACCOUNT_ROOT_V2)?,
+            ),
+        };
+        return Ok(StructuredFrameEffectSlotsV2 {
+            token_program,
+            mint: narrow(STRUCTURED_ACCOUNT_RECEIPT_MINT_V2)?,
+            source,
+            destination,
+            authority,
+        });
+    }
+    let backed_index = if retiring {
+        effect_index
+    } else {
+        effect_index
+            .checked_sub(1)
+            .ok_or(StructuredFrameErrorV2::Arithmetic)?
+    };
+    let actor_shard = narrow(spec.actor_shard(backed_index)?)?;
+    let custody_shard = narrow(spec.custody_shard(backed_index)?)?;
+    let (source, destination, authority) = match action {
+        // The actor signs the lock: the basket leaves an account the root has
+        // no authority over, so the transfer cannot be root-authorized.
+        StructuredActionV2::Issue => (
+            Some(actor_shard),
+            Some(custody_shard),
+            narrow(STRUCTURED_ACCOUNT_ACTOR_V2)?,
+        ),
+        StructuredActionV2::Unwrap | StructuredActionV2::TerminalRedeem => (
+            Some(custody_shard),
+            Some(actor_shard),
+            narrow(STRUCTURED_ACCOUNT_ROOT_V2)?,
+        ),
+        StructuredActionV2::ZeroSupplyRetire => (
+            Some(custody_shard),
+            Some(narrow(STRUCTURED_ACCOUNT_RENT_CREDIT_V2)?),
+            narrow(STRUCTURED_ACCOUNT_ROOT_V2)?,
+        ),
+    };
+    Ok(StructuredFrameEffectSlotsV2 {
+        token_program,
+        mint: narrow(spec.shard_mint(backed_index)?)?,
+        source,
+        destination,
+        authority,
+    })
+}
+
+fn narrow(index: usize) -> Result<u16> {
+    u16::try_from(index).map_err(|_| StructuredFrameErrorV2::Arithmetic)
 }
 
 /// Whether one base coordinate is ACTIVE for one action.
@@ -331,6 +474,190 @@ mod tests {
             retire,
             STRUCTURED_ACCOUNT_RENT_CREDIT_V2
         ));
+    }
+
+    const EVERY_ACTION: [StructuredActionV2; 4] = [
+        StructuredActionV2::Issue,
+        StructuredActionV2::Unwrap,
+        StructuredActionV2::TerminalRedeem,
+        StructuredActionV2::ZeroSupplyRetire,
+    ];
+
+    fn slots(
+        action: StructuredActionV2,
+        backed: usize,
+        index: usize,
+    ) -> StructuredFrameEffectSlotsV2 {
+        structured_frame_effect_slots_v2(
+            StructuredFrameSpecV2::new(backed).expect("spec"),
+            action,
+            index,
+        )
+        .expect("slots")
+    }
+
+    #[test]
+    fn the_receipt_effect_is_first_except_for_retirement_where_it_is_last() {
+        let receipt_mint = u16::try_from(STRUCTURED_ACCOUNT_RECEIPT_MINT_V2).expect("mint");
+        for action in EVERY_ACTION {
+            let retiring = matches!(action, StructuredActionV2::ZeroSupplyRetire);
+            let receipt_slot = if retiring { 3 } else { 0 };
+            for index in 0..4 {
+                let slot = slots(action, 3, index);
+                assert_eq!(
+                    slot.mint == receipt_mint,
+                    index == receipt_slot,
+                    "{action:?} effect {index} named the wrong Mint kind"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_shard_walk_ascends_the_triples_in_lockstep_with_the_effect_sequence() {
+        for action in EVERY_ACTION {
+            let retiring = matches!(action, StructuredActionV2::ZeroSupplyRetire);
+            let spec = StructuredFrameSpecV2::new(4).expect("spec");
+            let mut previous: Option<u16> = None;
+            for index in 0..spec.effect_count().expect("count") {
+                if index == if retiring { 4 } else { 0 } {
+                    continue;
+                }
+                let slot = structured_frame_effect_slots_v2(spec, action, index).expect("slots");
+                // Strictly ascending Mint coordinates is exactly what
+                // `StructuredHotCandidateV2::prepare` requires of the sweep.
+                if let Some(previous) = previous {
+                    assert!(
+                        slot.mint > previous,
+                        "{action:?} effect {index} did not ascend"
+                    );
+                }
+                previous = Some(slot.mint);
+                let backed_index = if retiring { index } else { index - 1 };
+                assert_eq!(
+                    slot.mint,
+                    u16::try_from(spec.shard_mint(backed_index).expect("mint")).expect("narrow")
+                );
+            }
+            assert!(previous.is_some());
+        }
+    }
+
+    #[test]
+    fn no_effect_ever_names_one_account_twice() {
+        // The alias check inside `StructuredHotCandidateV2::prepare` refuses a
+        // repeated coordinate.  The frame must never PRODUCE one, or the two
+        // authors would disagree only at runtime.
+        for action in EVERY_ACTION {
+            for backed in 1..6 {
+                for index in 0..=backed {
+                    let slot = slots(action, backed, index);
+                    let named = [
+                        Some(slot.token_program),
+                        Some(slot.mint),
+                        slot.source,
+                        slot.destination,
+                        Some(slot.authority),
+                    ];
+                    for (left, value) in named.iter().enumerate() {
+                        let Some(value) = value else { continue };
+                        for other in named.iter().skip(left + 1).flatten() {
+                            assert_ne!(
+                                value, other,
+                                "{action:?} backed={backed} effect {index} aliased a coordinate"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_lock_is_actor_authorized_and_only_retirement_pays_rent_credit() {
+        let actor = u16::try_from(STRUCTURED_ACCOUNT_ACTOR_V2).expect("actor");
+        let root = u16::try_from(STRUCTURED_ACCOUNT_ROOT_V2).expect("root");
+        let rent_credit = u16::try_from(STRUCTURED_ACCOUNT_RENT_CREDIT_V2).expect("rent");
+        for action in EVERY_ACTION {
+            for index in 0..3 {
+                let slot = slots(action, 2, index);
+                let locking = matches!(action, StructuredActionV2::Issue) && index != 0;
+                assert_eq!(slot.authority, if locking { actor } else { root });
+                // A RentCredit destination is admissible for exactly the one
+                // action whose frame declares that coordinate active.
+                if slot.destination == Some(rent_credit) {
+                    assert!(structured_account_is_active_v2(
+                        action,
+                        STRUCTURED_ACCOUNT_RENT_CREDIT_V2
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retirement_closes_every_custody_account_and_the_mint_last() {
+        let rent_credit = u16::try_from(STRUCTURED_ACCOUNT_RENT_CREDIT_V2).expect("rent");
+        let spec = StructuredFrameSpecV2::new(3).expect("spec");
+        for index in 0..3 {
+            let slot =
+                structured_frame_effect_slots_v2(spec, StructuredActionV2::ZeroSupplyRetire, index)
+                    .expect("slots");
+            assert_eq!(
+                slot.source,
+                Some(u16::try_from(spec.custody_shard(index).expect("custody")).expect("narrow"))
+            );
+            assert_eq!(slot.destination, Some(rent_credit));
+        }
+        let mint_close =
+            structured_frame_effect_slots_v2(spec, StructuredActionV2::ZeroSupplyRetire, 3)
+                .expect("slots");
+        assert_eq!(mint_close.source, None);
+        assert_eq!(mint_close.destination, Some(rent_credit));
+    }
+
+    #[test]
+    fn an_effect_index_past_the_sequence_refuses() {
+        for action in EVERY_ACTION {
+            let spec = StructuredFrameSpecV2::new(2).expect("spec");
+            assert_eq!(spec.effect_count(), Ok(3));
+            assert!(structured_frame_effect_slots_v2(spec, action, 2).is_ok());
+            assert_eq!(
+                structured_frame_effect_slots_v2(spec, action, 3),
+                Err(StructuredFrameErrorV2::InvalidCoordinate)
+            );
+            assert_eq!(
+                structured_frame_effect_slots_v2(spec, action, usize::MAX),
+                Err(StructuredFrameErrorV2::InvalidCoordinate)
+            );
+        }
+    }
+
+    #[test]
+    fn issue_moves_the_basket_toward_custody_and_unwrap_moves_it_back() {
+        let spec = StructuredFrameSpecV2::new(2).expect("spec");
+        for index in 1..3 {
+            let backed = index - 1;
+            let actor = u16::try_from(spec.actor_shard(backed).expect("actor")).expect("narrow");
+            let custody =
+                u16::try_from(spec.custody_shard(backed).expect("custody")).expect("narrow");
+            let issue = structured_frame_effect_slots_v2(spec, StructuredActionV2::Issue, index)
+                .expect("issue");
+            assert_eq!(
+                (issue.source, issue.destination),
+                (Some(actor), Some(custody))
+            );
+            for release in [
+                StructuredActionV2::Unwrap,
+                StructuredActionV2::TerminalRedeem,
+            ] {
+                let slot = structured_frame_effect_slots_v2(spec, release, index).expect("release");
+                assert_eq!(
+                    (slot.source, slot.destination),
+                    (Some(custody), Some(actor))
+                );
+            }
+        }
     }
 
     #[test]

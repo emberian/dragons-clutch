@@ -180,6 +180,9 @@ const fn map_provider_join_error(error: ProviderJoinErrorV3) -> ResolutionError 
         ProviderJoinErrorV3::Source => ResolutionError::SourceMaterial,
         ProviderJoinErrorV3::Product => ResolutionError::ProductDomain,
         ProviderJoinErrorV3::Provider => ResolutionError::ProviderObservation,
+        ProviderJoinErrorV3::ProviderWindow => ResolutionError::ProviderWindow,
+        ProviderJoinErrorV3::ProviderFreshness => ResolutionError::ProviderFreshness,
+        ProviderJoinErrorV3::ProviderConfiguration => ResolutionError::ProviderConfiguration,
         ProviderJoinErrorV3::Transition => ResolutionError::Transition,
         ProviderJoinErrorV3::Arithmetic => ResolutionError::Arithmetic,
     }

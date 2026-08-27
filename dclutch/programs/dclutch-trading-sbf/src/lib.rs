@@ -20,6 +20,9 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
+/// One author for the child-CPI caller authority, derived once per execution.
+pub mod child_authority_v4;
+
 /// Ephemeral exact prior-child receipt retention for the common Hot executor.
 mod child_receipt_v3;
 
@@ -175,17 +178,67 @@ impl From<TradingSbfError> for ProgramError {
     }
 }
 
+use crate::admitted_composition_v3::ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4;
+use dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
+
+/// Bank pages the widest common heap profile carries.
+///
+/// **Measured-profile headroom, not a protocol fact** -- the same kind of
+/// number as `entrypoint_adapter::ADAPTER_STACK_SLOTS_V1`, and named for the
+/// same reason: so the bound it feeds is a sum of things that can be checked
+/// one at a time. Each page carries
+/// `dclutch_execution_strategy_contract::generated_v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2`
+/// (880) bytes of accelerator input bank.
+pub const TRADING_MAX_HOT_BANK_PAGES_V3: usize = 10;
+
+/// Non-injected physical runtime representatives the widest common heap
+/// profile carries.
+///
+/// **Measured-profile headroom, not a protocol fact.** The canonical
+/// Registry-continuation Hot bundle uses 78 account slots; this is the ceiling
+/// the entrypoint will deserialize, not a width anything reaches.
+pub const TRADING_MAX_HOT_PHYSICAL_REPRESENTATIVES_V3: usize = 251;
+
 /// Maximum bounded account vector accepted by the canonical Trading entrypoint.
 ///
 /// This covers the Registry-continuation Hot frame at the common heap-profile
-/// maxima: 38 fixed accounts, one continuation admission, eight admitted-AOT
-/// evidence accounts, ten 880-byte bank pages, and 251 non-injected physical
-/// runtime representatives. `entrypoint_adapter` deserializes this vector
-/// without the obsolete 64-account fixed-array limit, on the stack up to
+/// maxima, and is now the SUM OF ITS TERMS rather than a literal that has to be
+/// re-added by hand:
+///
+/// | term | value | authority |
+/// |---|---:|---|
+/// | common fixed frame | [`HOT_FIXED_ACCOUNT_COUNT_V3`] | capability-program contract |
+/// | Registry continuation admission | 1 | `hot_v3::authenticate_hot_invocation_v3` |
+/// | admitted-AOT strategy evidence | [`ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4`] | `admitted_composition_v3` |
+/// | bank pages | [`TRADING_MAX_HOT_BANK_PAGES_V3`] | measured profile |
+/// | physical runtime representatives | [`TRADING_MAX_HOT_PHYSICAL_REPRESENTATIVES_V3`] | measured profile |
+///
+/// It was written as `308` on 2026-08-26 with `38 fixed accounts` in its prose,
+/// and the fixed frame had ALREADY become 39 -- `ca5e5f14` appended
+/// `HOT_CAPABILITY_SEAL_ACCOUNT_V3` at index 38. So the declared bound was one
+/// account short of the very shape its own comment enumerated, and would have
+/// refused a maximal frame of that shape. This is the third copy of that stale
+/// `38` to be found (see `ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4` for the first
+/// two), which is why it is a sum now and not a number.
+///
+/// The Registry continuation's six-account OUTER prefix is deliberately absent
+/// from this arithmetic, and that resolves an open question rather than
+/// forgetting one: the prefix lives in the top-level instruction's sysvar
+/// record, never in the account vector this bound measures.
+/// `hot_v3::authenticate_hot_invocation_v3` proves it, comparing
+/// `observed.metas_from(REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1).len()`
+/// against `accounts.len()` -- the nested vector begins after the prefix.
+///
+/// `entrypoint_adapter` deserializes this vector without the obsolete
+/// 64-account fixed-array limit, on the stack up to
 /// `entrypoint_adapter::ADAPTER_STACK_SLOTS_V1` and in an exactly-sized heap
 /// buffer above it; larger frames refuse before any family or mutation path
 /// executes.
-pub const TRADING_MAX_INSTRUCTION_ACCOUNTS_V3: usize = 308;
+pub const TRADING_MAX_INSTRUCTION_ACCOUNTS_V3: usize = HOT_FIXED_ACCOUNT_COUNT_V3
+    + 1
+    + ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
+    + TRADING_MAX_HOT_BANK_PAGES_V3
+    + TRADING_MAX_HOT_PHYSICAL_REPRESENTATIVES_V3;
 
 /// Execute the family-neutral authenticated activation route.
 ///
@@ -278,6 +331,32 @@ mod entrypoint_tests {
         );
         assert_eq!(
             require_instruction_account_bound_v3(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3 + 1),
+            Err(TradingSbfError::UnsupportedContent.into())
+        );
+    }
+
+    #[test]
+    fn canonical_bound_admits_a_maximal_frame_and_moves_when_its_terms_move() {
+        // NOT a restatement of the definition. The bound is a sum now, so the
+        // only thing left to assert is that its VALUE is pinned: any term
+        // changing lands here as a diff on a number a reviewer has to look at,
+        // the same discipline this repo's identity tables use. The reason it
+        // needs one is on the record -- the bound read `308` with `38 fixed
+        // accounts` in its prose while the contract already said 39, so it
+        // would have refused a maximal frame of the exact shape it enumerated.
+        assert_eq!(HOT_FIXED_ACCOUNT_COUNT_V3, 39);
+        assert_eq!(TRADING_MAX_INSTRUCTION_ACCOUNTS_V3, 309);
+
+        // The property the pin exists to protect: a frame of the widest
+        // enumerated shape is ADMITTED, and one account wider is refused.
+        let widest = HOT_FIXED_ACCOUNT_COUNT_V3
+            + 1
+            + ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4
+            + TRADING_MAX_HOT_BANK_PAGES_V3
+            + TRADING_MAX_HOT_PHYSICAL_REPRESENTATIVES_V3;
+        assert_eq!(require_instruction_account_bound_v3(widest), Ok(()));
+        assert_eq!(
+            require_instruction_account_bound_v3(widest + 1),
             Err(TradingSbfError::UnsupportedContent.into())
         );
     }

@@ -1,10 +1,21 @@
-//! Fixed-topology Profile14 for registered Buy creation.
+//! Fixed-topology Profile14 for registered creation, both sides.
 //!
-//! The profile authenticates the Direct root, maker replay, registered record,
+//! A Buy profile authenticates the Direct root, maker replay, registered record,
 //! and the exact ordered Custody InitializeReplay/OpenVault/deposit frames.  It
 //! carries no token parser: Realm and routed token identities are projected,
 //! while Custody remains the sole owner of token, delegate, and allowance
 //! validation.
+//!
+//! A Sell profile is the same twelve-coordinate prefix and ONE further account.
+//! A Sell escrows claims rather than collateral, so it opens no Custody replay,
+//! no vault and no deposit, and the three Custody frames are simply absent. What
+//! it may NOT drop is the maker's collateral token account: the shared creation
+//! Transition compares the frame-observed key against the maker's signed one
+//! UNCONDITIONALLY, and the record persists that key as the destination its
+//! eventual fill proceeds are paid to. Coordinate 12 is that account. It is
+//! stated opaque and readonly and nothing here parses it -- a Sell performs no
+//! Custody CPI, so mint and token-program authentication happens where it always
+//! does, at the fill's Custody route, whose semantic owner is Custody.
 
 use dclutch_account_profile_contract::v2::{
     AccountPrestateV2, AccountProfileV2, FIXED_DATA_PREDICATE_BYTES,
@@ -38,6 +49,7 @@ use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
 use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
 use crate::{
+    execution_v3::DirectExecutionActionV3,
     registered_creation_artifacts_v4::{
         DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
         DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4,
@@ -82,6 +94,23 @@ pub const DIRECT_REGISTER_BUY_OPEN_ACCOUNT_START_V4: u16 = 24;
 pub const DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4: u16 = 40;
 /// Exact fixed logical account count for registered Buy creation.
 pub const DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4: u16 = 55;
+/// Exact fixed logical account count for registered Sell creation.
+pub const DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4: u16 = 13;
+/// Maker collateral token account, the one coordinate a Sell adds to the prefix.
+///
+/// `REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4` has exactly one writer in the
+/// family, and on the Buy side it is `project_key(SOURCE_ACCOUNT, ..)` inside the
+/// Custody `Transfer` window. A Sell carries no such window, and the shared
+/// Transition still compares the register against the maker's signed collateral
+/// account outside its side branch -- so without this coordinate a Sell compares
+/// a signed nonzero key against zero and can never be admitted.
+pub const DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4: u16 = 12;
+
+const _: () = assert!(
+    DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4 + 1 == DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4
+);
+const _: () =
+    assert!(DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4 as usize == CREATION_PREFIX_ACCOUNTS);
 /// Executable Custody program all three Custody routes are invoked through.
 ///
 /// A Custody FrameSpec names `CallerProgram`/`CallerProgramData` -- Trading's --
@@ -104,7 +133,14 @@ const _: () = assert!(
 );
 
 const FIXED_ACCOUNTS: usize = DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4 as usize;
+const SELL_FIXED_ACCOUNTS: usize = DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4 as usize;
+/// Coordinates 0..11, identical on both sides, and the whole of a Sell but one.
+const CREATION_PREFIX_ACCOUNTS: usize = 12;
 const FIXED_OPERATIONS: usize = 34;
+/// The prefix operations, identical on both sides.
+const CREATION_PREFIX_OPERATIONS: usize = 26;
+/// Prefix operations plus `project_key` on the collateral account.
+const SELL_FIXED_OPERATIONS: usize = CREATION_PREFIX_OPERATIONS + 1;
 const FIXED_DATA_PREDICATES: usize = 9;
 const SYSTEM_PROGRAM_ACCOUNT: u16 = 11;
 const REALM_ACCOUNT: u16 = 18;
@@ -117,11 +153,33 @@ const SOURCE_ACCOUNT: u16 = 50;
 const ROOT_BYTES: usize = CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1;
 const BASIS_PREFIX_BYTES: usize = BASIS_WIDTH_OFFSET_V3 + 4;
 
+const fn profile_bytes(accounts: usize, operations: usize) -> usize {
+    FIXED_DATA_PREDICATE_HEADER_BYTES
+        + FIXED_DATA_PREDICATES * FIXED_DATA_PREDICATE_BYTES
+        + accounts * RULE_BYTES
+        + operations * OPERATION_BYTES
+}
+
 /// Exact encoded Profile14 width for RegisterBuy.
-pub const DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4: usize = FIXED_DATA_PREDICATE_HEADER_BYTES
-    + FIXED_DATA_PREDICATES * FIXED_DATA_PREDICATE_BYTES
-    + FIXED_ACCOUNTS * RULE_BYTES
-    + FIXED_OPERATIONS * OPERATION_BYTES;
+pub const DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4: usize =
+    profile_bytes(FIXED_ACCOUNTS, FIXED_OPERATIONS);
+/// Exact encoded Profile14 width for RegisterSell.
+pub const DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4: usize =
+    profile_bytes(SELL_FIXED_ACCOUNTS, SELL_FIXED_OPERATIONS);
+
+/// Exact encoded Profile14 width for one side-selected registered creation.
+#[must_use]
+pub const fn direct_registered_creation_account_profile_bytes_v4(
+    action: DirectExecutionActionV3,
+) -> Option<usize> {
+    match action {
+        DirectExecutionActionV3::RegisterBuy => Some(DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4),
+        DirectExecutionActionV3::RegisterSell => {
+            Some(DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4)
+        }
+        _ => None,
+    }
+}
 
 /// Exact chain-observed logical data widths used to finalize the profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +187,10 @@ pub struct DirectRegisterBuyAccountProfileInputV4<'a> {
     /// Exact logical widths in the declared Profile14 coordinate order.
     pub logical_data_lengths: &'a [u32],
 }
+
+/// Exact chain-observed logical data widths for one side-selected creation.
+pub type DirectRegisteredCreationAccountProfileInputV4<'a> =
+    DirectRegisterBuyAccountProfileInputV4<'a>;
 
 /// Stable registered AccountProfile refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,6 +201,46 @@ pub enum DirectRegisteredAccountArtifactErrorV4 {
     Frame,
     /// The Profile14 encoder or hostile decoder refused.
     Profile(dclutch_account_profile_contract::v2::Error),
+}
+
+/// Emit the exact side-selected registered creation AccountProfile atomically.
+///
+/// Both sides declare coordinates 0..11 identically -- the shared LifecycleV5
+/// names four of them and the shared Transition reads registers projected from
+/// six -- so a side that renumbered the prefix would fork both.
+pub fn encode_direct_registered_creation_account_profile_v4_atomic(
+    action: DirectExecutionActionV3,
+    input: DirectRegisteredCreationAccountProfileInputV4<'_>,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    match action {
+        DirectExecutionActionV3::RegisterBuy => {
+            encode_direct_register_buy_account_profile_v4_atomic(input, scratch, output)
+        }
+        DirectExecutionActionV3::RegisterSell => {
+            encode_direct_register_sell_account_profile_v4_atomic(input, scratch, output)
+        }
+        _ => Err(DirectRegisteredAccountArtifactErrorV4::Geometry),
+    }
+}
+
+/// Emit the exact registered Sell AccountProfile atomically.
+pub fn encode_direct_register_sell_account_profile_v4_atomic(
+    input: DirectRegisteredCreationAccountProfileInputV4<'_>,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    if scratch.len() != DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4
+        || output.len() != DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4
+    {
+        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+    }
+    validate_sell_lengths(input.logical_data_lengths)?;
+    let rules = sell_rules(input.logical_data_lengths)?;
+    let predicates = fixed_data_predicates()?;
+    let operations = sell_operations()?;
+    encode_profile(&predicates, &rules, &operations, scratch, output)
 }
 
 /// Emit the exact registered Buy AccountProfile atomically.
@@ -156,6 +258,19 @@ pub fn encode_direct_register_buy_account_profile_v4_atomic(
     let rules = rules(input.logical_data_lengths)?;
     let predicates = fixed_data_predicates()?;
     let operations = operations()?;
+    encode_profile(&predicates, &rules, &operations, scratch, output)
+}
+
+/// The Profile14 envelope both sides share: same trusted environment, same
+/// fixed-data predicates, same register geometry; only the rule and operation
+/// tables differ.
+fn encode_profile(
+    predicates: &[FixedDataPredicateInputV2],
+    rules: &[AccountRuleWithPrestateInputV2],
+    operations: &[AccountOperationInputV2],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
     encode_account_profile_with_fixed_data_predicates_v2_atomic(
         TrustedEnvironmentV2::CurrentSlot {
             destination: scalar(REGISTERED_SCALAR_SLOT_V4)?,
@@ -167,10 +282,10 @@ pub fn encode_direct_register_buy_account_profile_v4_atomic(
             destination: identity(REGISTERED_IDENTITY_SYSTEM_PROGRAM_V4)?,
         },
         &[],
-        &predicates,
-        &rules,
+        predicates,
+        rules,
         &[],
-        &operations,
+        operations,
         RegisterGeometryV2 {
             common_scalars: scalar(DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4)?,
             item_scalar_stride: DIRECT_REGISTERED_CREATION_ITEM_SCALAR_STRIDE_V4,
@@ -249,101 +364,10 @@ fn rules(
 ) -> Result<[AccountRuleWithPrestateInputV2; FIXED_ACCOUNTS], DirectRegisteredAccountArtifactErrorV4>
 {
     let readonly = AccountPrivilegesV2::new(false, false, false);
-    let writable = AccountPrivilegesV2::new(false, true, false);
-    let signer_writable = AccountPrivilegesV2::new(true, true, false);
     let executable = AccountPrivilegesV2::new(false, false, true);
     let none = AccountEffectPermissionsV2::new(false, false, false);
     let mut output = [exact(readonly, none, 0, 0); FIXED_ACCOUNTS];
-    for (rule, data_length) in output.iter_mut().zip(lengths.iter().copied()) {
-        rule.rule.data_length = data_length;
-    }
-    *rule_mut(&mut output, 0)? = exact(
-        writable,
-        AccountEffectPermissionsV2::new(false, false, true),
-        width(ROOT_BYTES)?,
-        0,
-    );
-    rule_mut(&mut output, 1)?.rule.data_length = width(DIRECT_EXECUTION_CONFIG_BYTES_V1)?;
-    rule_mut(&mut output, 2)?.rule.data_length = width(PRODUCT_RECORD_BYTES_V2)?;
-    let portfolio = rule_mut(&mut output, 3)?;
-    portfolio.rule.data_length = width(PORTFOLIO_HEADER_BYTES)?;
-    portfolio.rule.data_item_stride = width(PORTFOLIO_COEFFICIENT_BYTES)?;
-    *rule_mut(&mut output, 4)? = AccountRuleWithPrestateInputV2 {
-        rule: AccountRuleInputV2 {
-            privileges: readonly,
-            effect_permissions: none,
-            alias: AccountAliasInputV2::SelfCoordinate,
-            data_length: width(BASIS_PREFIX_BYTES)?,
-            data_item_stride: 0,
-        },
-        prestate: AccountPrestateV2::AdapterAuthenticatedVariableData,
-    };
-    for (account, bytes) in [
-        (
-            DIRECT_REGISTERED_MAKER_ACCOUNT_V4,
-            DIRECT_MAKER_REPLAY_BYTES_V1,
-        ),
-        (
-            DIRECT_REGISTERED_RECORD_ACCOUNT_V4,
-            DIRECT_REGISTERED_RECORD_BYTES_V2,
-        ),
-    ] {
-        *rule_mut(&mut output, usize::from(account))? = AccountRuleWithPrestateInputV2 {
-            rule: AccountRuleInputV2 {
-                privileges: writable,
-                effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
-                alias: AccountAliasInputV2::SelfCoordinate,
-                data_length: width(bytes)?,
-                data_item_stride: 0,
-            },
-            prestate: AccountPrestateV2::LifecycleBound,
-        };
-    }
-    // A registered creation has ONE payer. Coordinate 9 is an authenticated
-    // route alias of coordinate 6 (see `ROUTE_ALIASES`); both are still stated
-    // here so the alias loop's privilege-equality refusal has the pre-alias
-    // privileges to compare, exactly as the ordinary topology states its own.
-    for account in [
-        DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
-        DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
-    ] {
-        *rule_mut(&mut output, usize::from(account))? = exact(
-            signer_writable,
-            AccountEffectPermissionsV2::new(true, false, false),
-            0,
-            0,
-        );
-    }
-    // One lifecycle-scoped RentCredit serves the whole Market lifecycle: a
-    // `LifecycleRentCreditV2` PDA is keyed by Market and generation alone, so
-    // the two per-account V1 credits this profile used to pin were never two
-    // accounts on chain. Coordinate 7 is that sole credit; the adapter requires
-    // it writable so a Close may credit it, and authenticates its 128 bytes,
-    // rent exemption, Market/release-set/generation binding, and PDA itself.
-    *rule_mut(
-        &mut output,
-        usize::from(DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4),
-    )? = exact(
-        writable,
-        AccountEffectPermissionsV2::new(false, true, false),
-        width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?,
-        0,
-    );
-    // The Rent program owns that credit. The adapter derives the credit from
-    // `account.owner` and then requires the owner to appear in the frame as an
-    // executable readonly account, so the Rent program is a coordinate here.
-    // Its record is a loader's business -- 36 bytes under the upgradeable
-    // loader, a whole ELF under a fixed loader -- so nothing pins its width.
-    *rule_mut(
-        &mut output,
-        usize::from(DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4),
-    )? = opaque(executable);
-    // The System Program is a chain-supplied builtin, not a protocol record: a
-    // live validator backs it with a NativeLoader account whose width is the
-    // validator's business (21 bytes under solana-program-test, 14 on Agave).
-    // The profile authenticates its identity through the trusted-builtin
-    // `require_key` below and asserts nothing about its bytes.
-    *rule_mut(&mut output, usize::from(SYSTEM_PROGRAM_ACCOUNT))? = opaque(executable);
+    apply_prefix_rules(&mut output, lengths)?;
     // The Custody program the three Custody routes are invoked through. Stated
     // opaque for the same reason the inline-ordinary topology states its own:
     // the loader that deployed it owns the record width, and the Registry
@@ -404,18 +428,163 @@ fn rules(
                 .ok_or(DirectRegisteredAccountArtifactErrorV4::Geometry)?;
         }
     }
-    // An authenticated route alias is a privilege-free logical view: the
-    // representative coordinate is the single semantic owner of the route's
-    // physical privileges.  The equality check keeps that fact observed rather
-    // than silently discarded when the alias is rewritten.
-    for (account, representative) in ROUTE_ALIASES {
-        let privileges = rule_at(&output, usize::from(*representative))?
+    apply_route_aliases(&mut output, ROUTE_ALIASES)?;
+    Ok(output)
+}
+
+/// The RegisterSell topology: the shared prefix and the maker's collateral
+/// token account.
+fn sell_rules(
+    lengths: &[u32],
+) -> Result<
+    [AccountRuleWithPrestateInputV2; SELL_FIXED_ACCOUNTS],
+    DirectRegisteredAccountArtifactErrorV4,
+> {
+    let readonly = AccountPrivilegesV2::new(false, false, false);
+    let none = AccountEffectPermissionsV2::new(false, false, false);
+    let mut output = [exact(readonly, none, 0, 0); SELL_FIXED_ACCOUNTS];
+    apply_prefix_rules(&mut output, lengths)?;
+    // Opaque and readonly, and deliberately unparsed. A Token-2022 account
+    // carrying extensions is not 165 bytes, and a Sell performs no Custody CPI
+    // at creation, so there is no Realm-authenticated mint or token program in
+    // this frame to check it against. Custody authenticates it at the fill,
+    // where the transfer that pays this account actually happens; restating a
+    // weaker version of that here is exactly what TR-A-DIR deleted from the
+    // Buy's own Custody coordinates.
+    *rule_mut(
+        &mut output,
+        usize::from(DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4),
+    )? = opaque(readonly);
+    apply_route_aliases(&mut output, SELL_ROUTE_ALIASES)?;
+    Ok(output)
+}
+
+/// Coordinates 0..11, which both sides declare identically. The shared
+/// LifecycleV5 names four of them (5, 6, 7, 8) and the shared Transition reads
+/// registers projected from six, so a side that renumbered this prefix would
+/// have to fork the lifecycle and the transition with it.
+fn apply_prefix_rules(
+    output: &mut [AccountRuleWithPrestateInputV2],
+    lengths: &[u32],
+) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    let readonly = AccountPrivilegesV2::new(false, false, false);
+    let writable = AccountPrivilegesV2::new(false, true, false);
+    let signer_writable = AccountPrivilegesV2::new(true, true, false);
+    let executable = AccountPrivilegesV2::new(false, false, true);
+    let none = AccountEffectPermissionsV2::new(false, false, false);
+    if output.len() < CREATION_PREFIX_ACCOUNTS {
+        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+    }
+    for (rule, data_length) in output.iter_mut().zip(lengths.iter().copied()) {
+        rule.rule.data_length = data_length;
+    }
+    *rule_mut(output, 0)? = exact(
+        writable,
+        AccountEffectPermissionsV2::new(false, false, true),
+        width(ROOT_BYTES)?,
+        0,
+    );
+    rule_mut(output, 1)?.rule.data_length = width(DIRECT_EXECUTION_CONFIG_BYTES_V1)?;
+    rule_mut(output, 2)?.rule.data_length = width(PRODUCT_RECORD_BYTES_V2)?;
+    let portfolio = rule_mut(output, 3)?;
+    portfolio.rule.data_length = width(PORTFOLIO_HEADER_BYTES)?;
+    portfolio.rule.data_item_stride = width(PORTFOLIO_COEFFICIENT_BYTES)?;
+    *rule_mut(output, 4)? = AccountRuleWithPrestateInputV2 {
+        rule: AccountRuleInputV2 {
+            privileges: readonly,
+            effect_permissions: none,
+            alias: AccountAliasInputV2::SelfCoordinate,
+            data_length: width(BASIS_PREFIX_BYTES)?,
+            data_item_stride: 0,
+        },
+        prestate: AccountPrestateV2::AdapterAuthenticatedVariableData,
+    };
+    for (account, bytes) in [
+        (
+            DIRECT_REGISTERED_MAKER_ACCOUNT_V4,
+            DIRECT_MAKER_REPLAY_BYTES_V1,
+        ),
+        (
+            DIRECT_REGISTERED_RECORD_ACCOUNT_V4,
+            DIRECT_REGISTERED_RECORD_BYTES_V2,
+        ),
+    ] {
+        *rule_mut(output, usize::from(account))? = AccountRuleWithPrestateInputV2 {
+            rule: AccountRuleInputV2 {
+                privileges: writable,
+                effect_permissions: AccountEffectPermissionsV2::new(false, true, true),
+                alias: AccountAliasInputV2::SelfCoordinate,
+                data_length: width(bytes)?,
+                data_item_stride: 0,
+            },
+            prestate: AccountPrestateV2::LifecycleBound,
+        };
+    }
+    // A registered creation has ONE payer. Coordinate 9 is an authenticated
+    // route alias of coordinate 6 (see `ROUTE_ALIASES`); both are still stated
+    // here so the alias loop's privilege-equality refusal has the pre-alias
+    // privileges to compare, exactly as the ordinary topology states its own.
+    for account in [
+        DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
+        DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
+    ] {
+        *rule_mut(output, usize::from(account))? = exact(
+            signer_writable,
+            AccountEffectPermissionsV2::new(true, false, false),
+            0,
+            0,
+        );
+    }
+    // One lifecycle-scoped RentCredit serves the whole Market lifecycle: a
+    // `LifecycleRentCreditV2` PDA is keyed by Market and generation alone, so
+    // the two per-account V1 credits this profile used to pin were never two
+    // accounts on chain. Coordinate 7 is that sole credit; the adapter requires
+    // it writable so a Close may credit it, and authenticates its 128 bytes,
+    // rent exemption, Market/release-set/generation binding, and PDA itself.
+    *rule_mut(
+        output,
+        usize::from(DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4),
+    )? = exact(
+        writable,
+        AccountEffectPermissionsV2::new(false, true, false),
+        width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?,
+        0,
+    );
+    // The Rent program owns that credit. The adapter derives the credit from
+    // `account.owner` and then requires the owner to appear in the frame as an
+    // executable readonly account, so the Rent program is a coordinate here.
+    // Its record is a loader's business -- 36 bytes under the upgradeable
+    // loader, a whole ELF under a fixed loader -- so nothing pins its width.
+    *rule_mut(
+        output,
+        usize::from(DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4),
+    )? = opaque(executable);
+    // The System Program is a chain-supplied builtin, not a protocol record: a
+    // live validator backs it with a NativeLoader account whose width is the
+    // validator's business (21 bytes under solana-program-test, 14 on Agave).
+    // The profile authenticates its identity through the trusted-builtin
+    // `require_key` below and asserts nothing about its bytes.
+    *rule_mut(output, usize::from(SYSTEM_PROGRAM_ACCOUNT))? = opaque(executable);
+    Ok(())
+}
+/// An authenticated route alias is a privilege-free logical view: the
+/// representative coordinate is the single semantic owner of the route's
+/// physical privileges.  The equality check keeps that fact observed rather
+/// than silently discarded when the alias is rewritten.
+fn apply_route_aliases(
+    output: &mut [AccountRuleWithPrestateInputV2],
+    aliases: &[(u16, u16)],
+) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    let readonly = AccountPrivilegesV2::new(false, false, false);
+    let none = AccountEffectPermissionsV2::new(false, false, false);
+    for (account, representative) in aliases {
+        let privileges = rule_at(output, usize::from(*representative))?
             .rule
             .privileges;
-        if rule_at(&output, usize::from(*account))?.rule.privileges != privileges {
+        if rule_at(output, usize::from(*account))?.rule.privileges != privileges {
             return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
         }
-        *rule_mut(&mut output, usize::from(*account))? = AccountRuleWithPrestateInputV2 {
+        *rule_mut(output, usize::from(*account))? = AccountRuleWithPrestateInputV2 {
             rule: AccountRuleInputV2 {
                 privileges: readonly,
                 effect_permissions: none,
@@ -426,12 +595,75 @@ fn rules(
             prestate: AccountPrestateV2::AuthenticatedRouteAlias,
         };
     }
-    Ok(output)
+    Ok(())
 }
 
 fn operations()
 -> Result<[AccountOperationInputV2; FIXED_OPERATIONS], DirectRegisteredAccountArtifactErrorV4> {
-    Ok([
+    let mut output = [require_owner(0, REGISTERED_IDENTITY_TRADING_PROGRAM_V4)?; FIXED_OPERATIONS];
+    let mut next = 0_usize;
+    push_prefix_operations(&mut output, &mut next)?;
+    // The Custody-window projections. Every account named here lives inside one
+    // of the three Custody frames, which is why a Sell -- carrying none of them
+    // -- has no counterpart for any of these eight.
+    for operation in [
+        project_key(REALM_ACCOUNT, REGISTERED_IDENTITY_REALM_V4)?,
+        project_identity(
+            REALM_ACCOUNT,
+            RealmLayoutV1::COLLATERAL_MINT,
+            REGISTERED_IDENTITY_MINT_V4,
+        )?,
+        project_identity(
+            REALM_ACCOUNT,
+            RealmLayoutV1::TOKEN_PROGRAM,
+            REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
+        )?,
+        require_key(MINT_ACCOUNT, REGISTERED_IDENTITY_MINT_V4)?,
+        project_key(VAULT_ACCOUNT, REGISTERED_IDENTITY_CUSTODY_VAULT_V4)?,
+        project_key(
+            CUSTODY_AUTHORITY_ACCOUNT,
+            REGISTERED_IDENTITY_CUSTODY_AUTHORITY_V4,
+        )?,
+        require_key(TOKEN_PROGRAM_ACCOUNT, REGISTERED_IDENTITY_TOKEN_PROGRAM_V4)?,
+        project_key(SOURCE_ACCOUNT, REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4)?,
+    ] {
+        push_operation(&mut output, &mut next, operation)?;
+    }
+    if next != output.len() {
+        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+    }
+    Ok(output)
+}
+
+/// The RegisterSell operations: the shared prefix, and the one projection that
+/// keeps `REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4` written.
+fn sell_operations()
+-> Result<[AccountOperationInputV2; SELL_FIXED_OPERATIONS], DirectRegisteredAccountArtifactErrorV4>
+{
+    let mut output =
+        [require_owner(0, REGISTERED_IDENTITY_TRADING_PROGRAM_V4)?; SELL_FIXED_OPERATIONS];
+    let mut next = 0_usize;
+    push_prefix_operations(&mut output, &mut next)?;
+    push_operation(
+        &mut output,
+        &mut next,
+        project_key(
+            DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4,
+            REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4,
+        )?,
+    )?;
+    if next != output.len() {
+        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+    }
+    Ok(output)
+}
+
+/// The operations both sides declare, in their shared order.
+fn push_prefix_operations(
+    output: &mut [AccountOperationInputV2],
+    next: &mut usize,
+) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    for operation in [
         require_owner(0, REGISTERED_IDENTITY_TRADING_PROGRAM_V4)?,
         project_identity(
             0,
@@ -555,26 +787,24 @@ fn operations()
             DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4,
             REGISTERED_IDENTITY_LIFECYCLE_RENT_PROGRAM_V4,
         )?,
-        project_key(REALM_ACCOUNT, REGISTERED_IDENTITY_REALM_V4)?,
-        project_identity(
-            REALM_ACCOUNT,
-            RealmLayoutV1::COLLATERAL_MINT,
-            REGISTERED_IDENTITY_MINT_V4,
-        )?,
-        project_identity(
-            REALM_ACCOUNT,
-            RealmLayoutV1::TOKEN_PROGRAM,
-            REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
-        )?,
-        require_key(MINT_ACCOUNT, REGISTERED_IDENTITY_MINT_V4)?,
-        project_key(VAULT_ACCOUNT, REGISTERED_IDENTITY_CUSTODY_VAULT_V4)?,
-        project_key(
-            CUSTODY_AUTHORITY_ACCOUNT,
-            REGISTERED_IDENTITY_CUSTODY_AUTHORITY_V4,
-        )?,
-        require_key(TOKEN_PROGRAM_ACCOUNT, REGISTERED_IDENTITY_TOKEN_PROGRAM_V4)?,
-        project_key(SOURCE_ACCOUNT, REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4)?,
-    ])
+    ] {
+        push_operation(output, next, operation)?;
+    }
+    Ok(())
+}
+
+fn push_operation(
+    output: &mut [AccountOperationInputV2],
+    next: &mut usize,
+    operation: AccountOperationInputV2,
+) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    *output
+        .get_mut(*next)
+        .ok_or(DirectRegisteredAccountArtifactErrorV4::Geometry)? = operation;
+    *next = next
+        .checked_add(1)
+        .ok_or(DirectRegisteredAccountArtifactErrorV4::Geometry)?;
+    Ok(())
 }
 
 /// Logical coordinates that are views of another coordinate's physical account.
@@ -605,6 +835,15 @@ fn operations()
 /// and the next lane to reach for a second signer should re-read that and not
 /// the ordinary packet number. The derived figures are an ESTIMATE from a
 /// measured baseline; no registered continuation has ever been compiled.
+/// A Sell keeps only the one alias the whole family shares: coordinate 9 is the
+/// record payer and coordinate 6 the maker-replay payer, and a registered
+/// creation has ONE payer. Every other entry in `ROUTE_ALIASES` is a view into a
+/// Custody frame window a Sell does not carry.
+const SELL_ROUTE_ALIASES: &[(u16, u16)] = &[(
+    DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
+    DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
+)];
+
 const ROUTE_ALIASES: &[(u16, u16)] = &[
     (
         DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
@@ -651,9 +890,9 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
     (53, 36),
 ];
 
-fn validate_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
-    if lengths.len() != FIXED_ACCOUNTS
-        || length_at(lengths, 0)? != width(ROOT_BYTES)?
+/// The prefix widths both sides pin identically.
+fn validate_prefix_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    if length_at(lengths, 0)? != width(ROOT_BYTES)?
         || length_at(lengths, 1)? != width(DIRECT_EXECUTION_CONFIG_BYTES_V1)?
         || length_at(lengths, 2)? != width(PRODUCT_RECORD_BYTES_V2)?
         || length_at(lengths, 4)? < width(BASIS_PREFIX_BYTES)?
@@ -662,6 +901,42 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifa
         || length_at(lengths, 7)? != width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?
         || length_at(lengths, 8)? != width(DIRECT_REGISTERED_RECORD_BYTES_V2)?
         || length_at(lengths, 9)? != 0
+    {
+        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+    }
+    let portfolio_count = affine_count(
+        length_at(lengths, 3)?,
+        PORTFOLIO_HEADER_BYTES,
+        PORTFOLIO_COEFFICIENT_BYTES,
+    )?;
+    if portfolio_count == 0 {
+        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+    }
+    Ok(())
+}
+
+/// RegisterSell widths. Coordinates 10 and 11 are chain-supplied programs and 12
+/// is a token account of a width the selected token program owns -- a
+/// Token-2022 account carrying extensions is not 165 bytes -- so nothing here
+/// pins any of the three.
+fn validate_sell_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    if lengths.len() != SELL_FIXED_ACCOUNTS {
+        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+    }
+    validate_prefix_lengths(lengths)?;
+    for (account, representative) in SELL_ROUTE_ALIASES {
+        if length_at(lengths, usize::from(*account))?
+            != length_at(lengths, usize::from(*representative))?
+        {
+            return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
+        }
+    }
+    Ok(())
+}
+
+fn validate_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifactErrorV4> {
+    validate_prefix_lengths(lengths)?;
+    if lengths.len() != FIXED_ACCOUNTS
         // Coordinates 10, 11 and 54 are chain-supplied programs -- the Rent
         // program that owns the lifecycle credit, the System Program, and the
         // release-selected Custody program the Custody routes are invoked
@@ -678,14 +953,6 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifa
         || length_at(lengths, REPLAY_ACCOUNT as usize)? != 0
         || length_at(lengths, VAULT_ACCOUNT as usize)? != 0
     {
-        return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
-    }
-    let portfolio_count = affine_count(
-        length_at(lengths, 3)?,
-        PORTFOLIO_HEADER_BYTES,
-        PORTFOLIO_COEFFICIENT_BYTES,
-    )?;
-    if portfolio_count == 0 {
         return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
     }
     for (account, representative) in ROUTE_ALIASES {
@@ -862,7 +1129,7 @@ fn project_identity(
 }
 
 fn rule_mut(
-    rules: &mut [AccountRuleWithPrestateInputV2; FIXED_ACCOUNTS],
+    rules: &mut [AccountRuleWithPrestateInputV2],
     index: usize,
 ) -> Result<&mut AccountRuleWithPrestateInputV2, DirectRegisteredAccountArtifactErrorV4> {
     rules
@@ -871,7 +1138,7 @@ fn rule_mut(
 }
 
 fn rule_at(
-    rules: &[AccountRuleWithPrestateInputV2; FIXED_ACCOUNTS],
+    rules: &[AccountRuleWithPrestateInputV2],
     index: usize,
 ) -> Result<&AccountRuleWithPrestateInputV2, DirectRegisteredAccountArtifactErrorV4> {
     rules
@@ -941,19 +1208,24 @@ mod tests {
 
     use super::*;
     use crate::registered_state_artifacts_v4::{
-        DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5, DirectRegisteredCreationChildRentWidthsV4,
+        DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5, DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5,
+        DirectRegisteredCreationChildRentWidthsV4,
         encode_direct_registered_creation_lifecycle_v5_atomic,
     };
     use dclutch_account_profile_contract::{
         EFFECT_PERMISSION_CREDIT_LAMPORTS,
         lifecycle_v3::StateLifecyclePolicyV5,
-        v2::{FixedDataPredicateKindV2, derive_effect_permissions},
+        v2::{
+            FixedDataPredicateKindV2, ProjectionRegisterKindV2, ProjectionRegisterSpaceV2,
+            ProjectionTargetV2, derive_effect_permissions,
+        },
     };
     use dclutch_custody_contract::{
         INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1, TRANSFER_ACCOUNT_COUNT_V1,
     };
     use dclutch_effect_kernel::v2::AccountPermission;
     use dclutch_effect_kernel::{v2::FixedRole, v4::ProgramV4 as EffectProgramV4};
+    use sha2::{Digest, Sha256};
 
     use crate::registered_effect_artifacts_v4::{
         DIRECT_REGISTER_BUY_EFFECT_BYTES_V4, encode_direct_register_buy_effect_v4_atomic,
@@ -1348,6 +1620,223 @@ mod tests {
         assert_eq!(
             crate::execution_v3::DIRECT_REGISTRATION_REQUEST_BYTES_V3,
             316
+        );
+    }
+
+    fn sell_lengths() -> [u32; SELL_FIXED_ACCOUNTS] {
+        let mut output = [0_u32; SELL_FIXED_ACCOUNTS];
+        let buy = lengths();
+        let (prefix, tail) = output.split_at_mut(CREATION_PREFIX_ACCOUNTS);
+        prefix.copy_from_slice(buy.get(..CREATION_PREFIX_ACCOUNTS).expect("prefix"));
+        // The one coordinate a Sell adds. 165 is a legacy SPL token account; the
+        // rule is opaque, so this width is descriptive and nothing pins it.
+        *tail.first_mut().expect("collateral") = 165;
+        output
+    }
+
+    fn emit_sell_from(lengths: &[u32]) -> [u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4] {
+        let mut scratch = [0_u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4];
+        let mut output = [0_u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4];
+        encode_direct_register_sell_account_profile_v4_atomic(
+            DirectRegisteredCreationAccountProfileInputV4 {
+                logical_data_lengths: lengths,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("Sell profile");
+        output
+    }
+
+    /// THE SELL'S WRITER FOR THE REGISTER THE SHARED TRANSITION READS.
+    ///
+    /// `7357aece` verified the blocker: `REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4`
+    /// had exactly one writer in the family -- `project_key(SOURCE_ACCOUNT=50)`,
+    /// which sits inside the Custody `Transfer` window a Sell drops entirely --
+    /// while the SHARED creation Transition compares it unconditionally, outside
+    /// the side branch. The fix chosen here is a writer rather than a branch:
+    /// the record persists that key as the destination its eventual fill's
+    /// proceeds are paid to, so a Sell needs the account named whether or not it
+    /// moves a token at creation, and branching the comparison out would have
+    /// left the record's payout destination unauthenticated.
+    ///
+    /// This states the fix as the join it is: the register the Transition reads
+    /// is a register this profile declares it writes.
+    #[test]
+    fn the_sell_profile_writes_the_collateral_source_the_shared_transition_reads() {
+        let bytes = emit_sell_from(&sell_lengths());
+        let profile = AccountProfileV2::decode(&bytes).expect("Sell profile decode");
+        assert_eq!(
+            profile.fixed_account_count(),
+            DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4
+        );
+        assert!(
+            profile
+                .writes_register(ProjectionTargetV2 {
+                    kind: ProjectionRegisterKindV2::Identity,
+                    space: ProjectionRegisterSpaceV2::Common,
+                    index: u16::try_from(REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4)
+                        .expect("register"),
+                })
+                .expect("writes"),
+            "the Sell profile must write the collateral source"
+        );
+        // The coordinate it projects from is the Sell's own, NOT the Buy's
+        // Custody `Transfer` source at 50 -- which does not exist in a
+        // thirteen-account frame.
+        assert_eq!(
+            DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4,
+            u16::try_from(CREATION_PREFIX_ACCOUNTS).expect("prefix")
+        );
+        const { assert!(SOURCE_ACCOUNT >= DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4) };
+        // One signer, exactly as `e03a51fd` ruled for the family.
+        let signers = (0..DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4)
+            .filter(|coordinate| {
+                profile
+                    .rule(false, *coordinate)
+                    .expect("rule")
+                    .route_privileges()
+                    .signer()
+            })
+            .count();
+        assert_eq!(signers, 1, "a registered creation carries one signer");
+        // The record payer is still the maker payer's alias, and it is the only
+        // alias a Sell has: every other `ROUTE_ALIASES` entry views a Custody
+        // frame window this side does not carry.
+        assert_eq!(SELL_ROUTE_ALIASES.len(), 1);
+        assert_eq!(
+            profile.representative(0, usize::from(DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4)),
+            Ok(usize::from(DIRECT_REGISTERED_PAYER_ACCOUNT_V4))
+        );
+        assert_eq!(
+            profile.logical_account_count(0),
+            Ok(usize::from(DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4))
+        );
+        assert_eq!(
+            profile.physical_account_count(0),
+            Ok(SELL_FIXED_ACCOUNTS - 1)
+        );
+
+        let mut policy_scratch = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
+        let mut policy = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
+        encode_direct_registered_creation_lifecycle_v5_atomic(
+            DirectExecutionActionV3::RegisterSell,
+            None,
+            &mut policy_scratch,
+            &mut policy,
+        )
+        .expect("Sell lifecycle");
+        let id: [u8; 32] = Sha256::digest(policy).into();
+        StateLifecyclePolicyV5::decode_selected(id, id, &policy)
+            .expect("lifecycle decode")
+            .validate_account_profile(profile)
+            .expect("the Sell lifecycle names only prefix coordinates");
+    }
+
+    /// The twelve coordinates neither side may renumber.
+    ///
+    /// The shared LifecycleV5 names four of them and the shared Transition reads
+    /// registers projected from six. A side that moved one would have to fork
+    /// both, so this compares the emitted rules coordinate by coordinate rather
+    /// than trusting that one function called another.
+    #[test]
+    fn both_sides_declare_the_same_twelve_coordinate_prefix() {
+        let buy_bytes = emit_from(&lengths());
+        let sell_bytes = emit_sell_from(&sell_lengths());
+        let buy = AccountProfileV2::decode(&buy_bytes).expect("Buy profile");
+        let sell = AccountProfileV2::decode(&sell_bytes).expect("Sell profile");
+        for coordinate in 0..u16::try_from(CREATION_PREFIX_ACCOUNTS).expect("prefix") {
+            let left = buy.rule(false, coordinate).expect("Buy rule");
+            let right = sell.rule(false, coordinate).expect("Sell rule");
+            assert_eq!(
+                (
+                    left.privileges(),
+                    left.effect_permissions(),
+                    left.prestate(),
+                    left.data_length(),
+                    left.data_item_stride(),
+                    left.alias_kind(),
+                    left.alias_index(),
+                ),
+                (
+                    right.privileges(),
+                    right.effect_permissions(),
+                    right.prestate(),
+                    right.data_length(),
+                    right.data_item_stride(),
+                    right.alias_kind(),
+                    right.alias_index(),
+                ),
+                "prefix coordinate {coordinate} differs between the two sides"
+            );
+        }
+        // The register banks are family-wide, which is what lets the Transition
+        // be shared at all.
+        assert_eq!(buy.common_scalar_count(), sell.common_scalar_count());
+        assert_eq!(buy.common_identity_count(), sell.common_identity_count());
+        // And the two profiles are NOT the same artifact: the Buy carries the
+        // three Custody frames and the Sell carries none.
+        assert_ne!(
+            DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4,
+            DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4
+        );
+        assert_ne!(
+            DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4,
+            DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4
+        );
+    }
+
+    #[test]
+    fn malformed_sell_width_or_output_refuses_atomically() {
+        // The prefix widths are pinned on both sides.
+        let mut hostile = sell_lengths();
+        *hostile.get_mut(8).expect("record") = 267;
+        let mut scratch = [0_u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4];
+        let mut output = [0x55_u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4];
+        let before = output;
+        assert_eq!(
+            encode_direct_register_sell_account_profile_v4_atomic(
+                DirectRegisteredCreationAccountProfileInputV4 {
+                    logical_data_lengths: &hostile,
+                },
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectRegisteredAccountArtifactErrorV4::Geometry)
+        );
+        assert_eq!(output, before);
+
+        // A Buy-length observation is not a Sell observation.
+        assert_eq!(
+            encode_direct_register_sell_account_profile_v4_atomic(
+                DirectRegisteredCreationAccountProfileInputV4 {
+                    logical_data_lengths: &lengths(),
+                },
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectRegisteredAccountArtifactErrorV4::Geometry)
+        );
+        assert_eq!(output, before);
+
+        // And the side selector refuses an action outside the family.
+        assert_eq!(
+            encode_direct_registered_creation_account_profile_v4_atomic(
+                DirectExecutionActionV3::FillRegisteredOrdinary,
+                DirectRegisteredCreationAccountProfileInputV4 {
+                    logical_data_lengths: &sell_lengths(),
+                },
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectRegisteredAccountArtifactErrorV4::Geometry)
+        );
+        assert_eq!(output, before);
+        assert_eq!(
+            direct_registered_creation_account_profile_bytes_v4(
+                DirectExecutionActionV3::FillRegisteredOrdinary
+            ),
+            None
         );
     }
 

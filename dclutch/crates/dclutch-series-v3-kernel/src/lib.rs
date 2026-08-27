@@ -15,7 +15,7 @@ use dclutch_market_core_codec::{
     Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, SeriesCoreActionV1,
     SeriesCoreRequestV1, SeriesPermitExpiryRequestV1,
 };
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digestv;
 
 /// Complete stateless Ticket-to-Found Consume composition.
 pub mod composition;
@@ -1012,18 +1012,42 @@ pub fn validate_series_permit_expiry_request_v3(
     Ok(())
 }
 
+/// Largest FundingState list this kernel will commit to.
+///
+/// CHAIN-DERIVED. A funding list is a list of account keys, and the only thing
+/// that ever checks one is [`require_funding_list`], which compares the whole
+/// ordered list against a commitment in a single instruction. The runtime locks
+/// at most 64 accounts for one transaction, so a list longer than this cannot be
+/// presented for checking by any transaction that could exist. The kernel used
+/// to accept any list fitting `u16`; a 65,535-key list was never verifiable, it
+/// was only quadratically expensive to refuse to verify.
+pub const SERIES_MAX_FUNDING_STATES_V3: usize = 64;
+
 /// Hash an exact ordered, nonempty, alias-free FundingState key list.
 ///
 /// The preimage is `u16_le(count) || key[0] || ... || key[count-1]` under the
-/// Lean-owned funding-list domain. This SDK-free kernel imposes no old
-/// width-specific account-profile bound; the exact list must only fit `u16`.
+/// Lean-owned funding-list domain, and it is unchanged: this function commits
+/// the same bytes it always did, for every list it still accepts. What changed
+/// is that it now names [`SERIES_MAX_FUNDING_STATES_V3`] as the bound above
+/// which no list is checkable, so the slice list handed to the digest has a
+/// declared width.
 pub fn funding_list_id(funding_states: &[AccountKeyV3]) -> Result<ContentId, SeriesV3Error> {
-    if funding_states.is_empty() {
+    if funding_states.is_empty() || funding_states.len() > SERIES_MAX_FUNDING_STATES_V3 {
         return Err(SeriesV3Error::Funding);
     }
     let count = u16::try_from(funding_states.len()).map_err(|_| SeriesV3Error::Funding)?;
-    let mut hasher = content_hasher(&generated::SERIES_FUNDING_LIST_DOMAIN_V3);
-    hasher.update(count.to_le_bytes());
+    let count = count.to_le_bytes();
+    let mut preimage: [&[u8]; SERIES_MAX_FUNDING_STATES_V3 + 3] =
+        [&[]; SERIES_MAX_FUNDING_STATES_V3 + 3];
+    let mut written = 0_usize;
+    for part in [
+        generated::SERIES_FUNDING_LIST_DOMAIN_V3.as_slice(),
+        HASH_SEPARATOR.as_slice(),
+        count.as_slice(),
+    ] {
+        *preimage.get_mut(written).ok_or(SeriesV3Error::Funding)? = part;
+        written += 1;
+    }
     for (index, key) in funding_states.iter().enumerate() {
         if funding_states
             .get(..index)
@@ -1033,9 +1057,13 @@ pub fn funding_list_id(funding_states: &[AccountKeyV3]) -> Result<ContentId, Ser
         {
             return Err(SeriesV3Error::Funding);
         }
-        hasher.update(key.as_bytes());
+        *preimage.get_mut(written).ok_or(SeriesV3Error::Funding)? = key.as_bytes();
+        written += 1;
     }
-    content_id_from_hasher(hasher)
+    ContentId::new(digestv(
+        preimage.get(..written).ok_or(SeriesV3Error::Funding)?,
+    ))
+    .map_err(|_| SeriesV3Error::Identity)
 }
 
 /// Require actual ordered FundingState keys to match an occurrence commitment.
@@ -1090,29 +1118,16 @@ fn proof_height(count: u32) -> usize {
 }
 
 fn projection_node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(generated::SERIES_PROJECTION_NODE_DOMAIN_V3);
-    hasher.update(HASH_SEPARATOR);
-    hasher.update(left);
-    hasher.update(right);
-    hasher.finalize().into()
+    digestv(&[
+        &generated::SERIES_PROJECTION_NODE_DOMAIN_V3,
+        &HASH_SEPARATOR,
+        left,
+        right,
+    ])
 }
 
 fn content_id(domain: &[u8], bytes: &[u8]) -> Result<ContentId, SeriesV3Error> {
-    let mut hasher = content_hasher(domain);
-    hasher.update(bytes);
-    content_id_from_hasher(hasher)
-}
-
-fn content_hasher(domain: &[u8]) -> Sha256 {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    hasher.update(HASH_SEPARATOR);
-    hasher
-}
-
-fn content_id_from_hasher(hasher: Sha256) -> Result<ContentId, SeriesV3Error> {
-    ContentId::new(hasher.finalize().into()).map_err(|_| SeriesV3Error::Identity)
+    ContentId::new(digestv(&[domain, &HASH_SEPARATOR, bytes])).map_err(|_| SeriesV3Error::Identity)
 }
 
 fn core_content_identity(value: ContentId) -> Result<CoreIdentity, SeriesV3Error> {

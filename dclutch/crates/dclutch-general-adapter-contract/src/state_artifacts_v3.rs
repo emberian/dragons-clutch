@@ -6,6 +6,7 @@
 //! state key, and Trading owner.  Family evaluation never supplies those
 //! protected values.
 
+use crate::effect_artifacts_v3::unauthored_actions;
 use dclutch_account_profile_contract::lifecycle_v3::{
     ACTION_PLAN_BYTES, CURRENT_RENT_QUOTE_BYTES_V5, HEADER_BYTES, IMMUTABLE_IDENTITY_BINDING_BYTES,
     PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SEED_BYTES, StateLifecyclePolicyV4,
@@ -157,6 +158,7 @@ fn general_state_lifecycle_bytes(action: Action, current_rent_v5: bool) -> Resul
 #[must_use]
 pub const fn general_readonly_evidence_count_v3(action: Action) -> u16 {
     match action {
+        unauthored_actions!() => 0,
         Action::Consider => 2,
         Action::Freeze => 0,
         Action::InitializeSettlement => 3,
@@ -629,6 +631,7 @@ fn binding(
 
 const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
     match action {
+        unauthored_actions!() => (0, 0, 0),
         Action::Consider | Action::Freeze => (1, 4, 1),
         Action::InitializeSettlement
         | Action::Collect
@@ -640,6 +643,7 @@ const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
 
 const fn lifecycle_binding_count(action: Action) -> usize {
     match action {
+        unauthored_actions!() => 0,
         Action::Consider | Action::Freeze => 5,
         Action::InitializeSettlement
         | Action::Collect

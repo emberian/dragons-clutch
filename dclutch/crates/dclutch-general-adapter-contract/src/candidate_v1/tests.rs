@@ -33,6 +33,39 @@ const SETTLEMENT_CLOSE: u64 = 2_000;
 const ADMISSION_SLOT: u64 = 10;
 const SUBMISSION_SLOT: u64 = 1_100;
 const PAGE_REVISION: u64 = 9;
+const REWARD_RATE: u64 = 5_000;
+const ROW_COUNT: u32 = 2;
+
+/// Advance one submission's work escrow as if `cranks` rows had been verified.
+///
+/// The record layer is the authority for this, so the helper round-trips
+/// through the canonical bytes rather than reaching into private state.
+fn spend_verification_cranks(submission: GeneralCandidateV1, cranks: u32) -> GeneralCandidateV1 {
+    let mut bytes = submission.to_bytes();
+    let spent = u64::from(cranks) * submission.opening().reward_rate_lamports;
+    let remaining = submission.state().verification_remaining - spent;
+    bytes[192..200].copy_from_slice(&remaining.to_le_bytes());
+    GeneralCandidateV1::decode(&bytes).expect("canonical spent submission")
+}
+
+/// Submit with this module's canonical work-escrow parameters.
+fn submit_at(
+    batch: GeneralBatchV1,
+    candidate: CandidateV2<'_>,
+    funded_lamports: u64,
+    slot: u64,
+) -> GeneralCandidateResultV1<GeneralCandidateV1> {
+    GeneralCandidateV1::submit(
+        batch,
+        candidate,
+        PAGE_REVISION,
+        ROW_COUNT,
+        REWARD_RATE,
+        id(40),
+        funded_lamports,
+        slot,
+    )
+}
 
 fn id(low: u8) -> [u8; 32] {
     let mut value = [0_u8; 32];
@@ -237,11 +270,25 @@ fn fixture() -> Fixture {
     let row_refs: Vec<&[u8]> = rows.iter().map(Vec::as_slice).collect();
     let page = page_bytes(candidate_id, 1, 1, &row_refs);
 
+    let opening_probe = GeneralCandidateOpeningV1 {
+        outcome_count: WIDTH,
+        page_count: 1,
+        page_revision: PAGE_REVISION,
+        submitted_slot: SUBMISSION_SLOT,
+        candidate_id,
+        batch_id: batch.batch_id(),
+        solver_id: id(40),
+        row_count: ROW_COUNT,
+        reward_rate_lamports: REWARD_RATE,
+    };
     let submission = GeneralCandidateV1::submit(
         batch,
         CandidateV2::decode(&candidate).expect("candidate"),
         PAGE_REVISION,
+        ROW_COUNT,
+        REWARD_RATE,
         id(40),
+        opening_probe.work_capacity().expect("capacity"),
         SUBMISSION_SLOT,
     )
     .expect("submit");
@@ -299,6 +346,9 @@ fn verify_all(fixture: &Fixture) -> (Vec<u8>, GeneralCandidateV1) {
         )
         .expect("row verifies");
         assert_eq!(summary.manifest_order_count, manifest_orders);
+        assert_eq!(summary.reward.lamports, REWARD_RATE);
+        assert_eq!(summary.reward.compartment, WorkCompartmentV1::Verification);
+        submission = summary.submission;
         cursor = cursor_output;
         if summary.complete {
             certificate = verified_output;
@@ -363,7 +413,8 @@ fn the_whole_candidate_life_runs_through_the_evaluator() {
         fixture.submission.opening().candidate_id
     );
 
-    submission.record_considered().expect("considered");
+    let reward = submission.record_considered().expect("considered");
+    assert_eq!(reward.lamports, REWARD_RATE);
     assert_eq!(
         submission.state().status,
         GeneralCandidateStatusV1::Considered
@@ -393,11 +444,14 @@ fn a_candidate_must_carry_its_own_digest_as_its_identity() {
         Err(GeneralCandidateErrorV1::NonCanonicalIdentity)
     );
     assert_eq!(
-        GeneralCandidateV1::submit(
+        submit_at(
             fixture.batch,
             forged_candidate,
-            PAGE_REVISION,
-            id(40),
+            fixture
+                .submission
+                .opening()
+                .work_capacity()
+                .expect("capacity"),
             SUBMISSION_SLOT,
         ),
         Err(GeneralCandidateErrorV1::NonCanonicalIdentity)
@@ -437,9 +491,10 @@ fn hostile_a_candidate_cannot_be_submitted_against_an_open_batch_or_outside_the_
     let candidate = candidate_bytes(batch.batch_id(), 1, &[40, 60, 0]);
     let decoded = CandidateV2::decode(&candidate).expect("candidate");
 
+    let funded = ROW_COUNT as u64 * REWARD_RATE + 2 * REWARD_RATE;
     // The batch is still collecting, so its order set can still grow.
     assert_eq!(
-        GeneralCandidateV1::submit(batch, decoded, PAGE_REVISION, id(40), SUBMISSION_SLOT),
+        submit_at(batch, decoded, funded, SUBMISSION_SLOT),
         Err(GeneralCandidateErrorV1::Collection(
             GeneralCollectionErrorV1::NotClosed
         ))
@@ -449,16 +504,15 @@ fn hostile_a_candidate_cannot_be_submitted_against_an_open_batch_or_outside_the_
     batch.close(&mut root, revision).expect("close");
     // Before the collection window ends, a solver could submit and then close.
     assert_eq!(
-        GeneralCandidateV1::submit(batch, decoded, PAGE_REVISION, id(40), COLLECTION_CLOSE - 1),
+        submit_at(batch, decoded, funded, COLLECTION_CLOSE - 1),
         Err(GeneralCandidateErrorV1::OutsideWindow)
     );
     // After the settlement window there is nothing left to settle.
     assert_eq!(
-        GeneralCandidateV1::submit(batch, decoded, PAGE_REVISION, id(40), SETTLEMENT_CLOSE),
+        submit_at(batch, decoded, funded, SETTLEMENT_CLOSE),
         Err(GeneralCandidateErrorV1::OutsideWindow)
     );
-    GeneralCandidateV1::submit(batch, decoded, PAGE_REVISION, id(40), SUBMISSION_SLOT)
-        .expect("inside the window");
+    submit_at(batch, decoded, funded, SUBMISSION_SLOT).expect("inside the window");
 }
 
 #[test]
@@ -475,10 +529,23 @@ fn a_submission_round_trips_through_a_hostile_decode() {
         Err(GeneralCandidateErrorV1::InvalidLength)
     );
     let mut noncanonical = bytes;
-    noncanonical[176] = 1;
+    noncanonical[180] = 1;
     assert_eq!(
         GeneralCandidateV1::decode(&noncanonical),
         Err(GeneralCandidateErrorV1::InvalidHeader)
+    );
+    // A submission whose work escrow holds more than the work it declared.
+    let mut overfunded = bytes;
+    let past_capacity = fixture
+        .submission
+        .opening()
+        .verification_capacity()
+        .expect("capacity")
+        + 1;
+    overfunded[192..200].copy_from_slice(&past_capacity.to_le_bytes());
+    assert_eq!(
+        GeneralCandidateV1::decode(&overfunded),
+        Err(GeneralCandidateErrorV1::Uncapitalized)
     );
     let mut unknown_status = bytes;
     unknown_status[20] = 9;
@@ -656,12 +723,20 @@ fn hostile_verification_cannot_start_on_an_already_verified_submission() {
 #[test]
 fn hostile_the_certificate_recorded_must_be_this_submissions_own() {
     let fixture = fixture();
-    let (certificate, _) = verify_all(&fixture);
+    let (certificate, verified_submission) = verify_all(&fixture);
+    // Recording happens on a submission whose rows were really verified: its
+    // escrow already says so, and a fresh one would be refused for exactly
+    // that reason.
+    let pre_record = spend_verification_cranks(fixture.submission, ROW_COUNT);
+    assert_eq!(
+        verified_submission.state().verification_remaining,
+        pre_record.state().verification_remaining
+    );
 
     // A certificate for a candidate this submission does not name.
     let mut foreign = certificate.clone();
     foreign[32..64].copy_from_slice(&id(0x71));
-    let mut submission = fixture.submission;
+    let mut submission = pre_record;
     assert_eq!(
         submission.record_verified(fixture.batch, &foreign),
         Err(GeneralCandidateErrorV1::Substitution)
@@ -684,8 +759,8 @@ fn hostile_the_certificate_recorded_must_be_this_submissions_own() {
     // And considering may not run before verification.
     let mut fresh = fixture.submission;
     assert_eq!(
-        fresh.record_considered(),
-        Err(GeneralCandidateErrorV1::InvalidPhaseTransition)
+        fresh.record_considered().err(),
+        Some(GeneralCandidateErrorV1::InvalidPhaseTransition)
     );
 }
 
@@ -695,7 +770,7 @@ fn a_certificate_whose_debit_exceeds_the_batch_escrow_is_refused_at_recording() 
     let (certificate, _) = verify_all(&fixture);
     let verified = VerifiedCandidateV2::decode(&certificate).expect("certificate");
     // The honest certificate fits inside what the batch is holding.
-    let mut submission = fixture.submission;
+    let mut submission = spend_verification_cranks(fixture.submission, ROW_COUNT);
     submission
         .record_verified(fixture.batch, &certificate)
         .expect("inside the escrow");
@@ -706,7 +781,7 @@ fn a_certificate_whose_debit_exceeds_the_batch_escrow_is_refused_at_recording() 
     let mut overdrawn = certificate.clone();
     let past_escrow = fixture.batch.state().committed_quote_reserve + 1;
     overdrawn[136..144].copy_from_slice(&past_escrow.to_le_bytes());
-    let mut fresh = fixture.submission;
+    let mut fresh = spend_verification_cranks(fixture.submission, ROW_COUNT);
     assert!(verified.header().quote_debit < past_escrow);
     assert_eq!(
         fresh.record_verified(fixture.batch, &overdrawn),
@@ -825,4 +900,183 @@ fn run_inner(
             manifest_output: &mut manifest_output,
         },
     )
+}
+
+// ---------------------------------------------------------------------------
+// The funded work escrow
+//
+// Gen-2's Consider was permissionless and UNPAID, which makes a verb
+// permissible rather than live: a valid candidate nobody cranked before the
+// selection window closed simply never competed, and a submitter whose
+// consideration was censored had no recourse. These pin the thing that
+// replaces hoping.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_permissionless_crank_is_paid_out_of_the_candidates_own_escrow() {
+    let fixture = fixture();
+    let opening = fixture.submission.opening();
+    // One reward per row, plus one for the single consideration, plus one to
+    // close the candidate out.
+    assert_eq!(opening.verification_capacity(), Ok(3 * REWARD_RATE));
+    assert_eq!(opening.cleanup_capacity(), REWARD_RATE);
+    assert_eq!(opening.work_capacity(), Ok(4 * REWARD_RATE));
+
+    let (_, mut submission) = verify_all(&fixture);
+    // Both rows drew, and the consideration is what the remainder is for.
+    assert_eq!(submission.state().verification_remaining, REWARD_RATE);
+    let reward = submission.record_considered().expect("considered");
+    assert_eq!(reward.lamports, REWARD_RATE);
+    assert_eq!(reward.compartment, WorkCompartmentV1::Verification);
+    assert_eq!(submission.state().verification_remaining, 0);
+
+    // Closing out pays its own crank and returns nothing, because a candidate
+    // that ran to completion spent exactly what it was funded for.
+    let (cleanup, solver_refund) = submission.close_out().expect("close out");
+    assert_eq!(cleanup.lamports, REWARD_RATE);
+    assert_eq!(cleanup.compartment, WorkCompartmentV1::Cleanup);
+    assert_eq!(solver_refund, 0);
+    assert_eq!(
+        submission.close_out().err(),
+        Some(GeneralCandidateErrorV1::Uncapitalized)
+    );
+}
+
+#[test]
+fn an_abandoned_candidate_refunds_its_unspent_work_to_the_solver() {
+    let fixture = fixture();
+    // Nobody verified it. The cleanup crank is still paid -- someone did the
+    // work of closing the accounts -- and everything else goes back to the
+    // solver rather than to whoever happened to call.
+    let mut submission = fixture.submission;
+    let (cleanup, solver_refund) = submission.close_out().expect("close out");
+    assert_eq!(cleanup.lamports, REWARD_RATE);
+    assert_eq!(solver_refund, 3 * REWARD_RATE);
+}
+
+#[test]
+fn hostile_a_submission_must_be_funded_for_exactly_the_work_it_declares() {
+    let fixture = fixture();
+    let candidate = CandidateV2::decode(&fixture.candidate).expect("candidate");
+    let exact = fixture
+        .submission
+        .opening()
+        .work_capacity()
+        .expect("capacity");
+
+    // Underfunding buys work nobody is paid for; overfunding leaves lamports
+    // with no rule for who gets them, which is the same hole facing the other
+    // way. Both are refused with the same name.
+    for funded in [0, exact - 1, exact + 1, exact * 2] {
+        assert_eq!(
+            submit_at(fixture.batch, candidate, funded, SUBMISSION_SLOT).err(),
+            Some(GeneralCandidateErrorV1::Uncapitalized),
+            "funding {funded} against a capacity of {exact}"
+        );
+    }
+    submit_at(fixture.batch, candidate, exact, SUBMISSION_SLOT).expect("exact funding");
+}
+
+#[test]
+fn hostile_a_declared_row_count_that_is_not_the_candidates_own_cannot_complete() {
+    // The declared row count is what the work escrow is sized against, so a
+    // submission that declares more rows than its candidate carries would be
+    // buying cranks nobody can perform -- and one that declares fewer would be
+    // consuming cranks nobody paid for. The terminal row is required to land
+    // exactly on the declaration, so neither completes.
+    let mut fixture = fixture();
+    let overstated = GeneralCandidateV1::submit(
+        fixture.batch,
+        CandidateV2::decode(&fixture.candidate).expect("candidate"),
+        PAGE_REVISION,
+        ROW_COUNT + 1,
+        REWARD_RATE,
+        id(40),
+        (u64::from(ROW_COUNT + 1) + 2) * REWARD_RATE,
+        SUBMISSION_SLOT,
+    )
+    .expect("a longer declaration is fundable");
+    fixture.submission = overstated;
+
+    let cursor_len = candidate_verifier_len_v1(overstated).expect("cursor width");
+    let verified_len = candidate_certificate_len_v1(overstated).expect("certificate width");
+    let mut cursor = vec![0_u8; cursor_len];
+    let certificate = vec![0_u8; verified_len];
+    let page = PageV2::decode(&fixture.pages[0]).expect("page");
+    let mut submission = overstated;
+    let mut last = Ok(());
+
+    for row_index in 0..page.row_count() {
+        let view = CandidateVerifyRowViewV1 {
+            batch: fixture.batch,
+            submission,
+            candidate: &fixture.candidate,
+            page: &fixture.pages[0],
+            order: &fixture.orders[usize::try_from(row_index).expect("row")],
+            cursor_before: &cursor,
+            verified_before: &certificate,
+            expected_page_index: 0,
+            expected_row_index: row_index,
+            expected_revision: u64::from(row_index),
+        };
+        let manifest_orders = candidate_verify_manifest_orders_v1(&view).expect("manifest sizing");
+        let manifest_len =
+            settlement_manifest_len_v2(WIDTH, manifest_orders).expect("manifest width");
+        let mut manifest_scratch = vec![0_u8; manifest_len];
+        let mut manifest_output = vec![0_u8; manifest_len];
+        let mut cursor_scratch = vec![0_u8; cursor_len];
+        let mut cursor_output = vec![0_u8; cursor_len];
+        let mut verified_scratch = vec![0_u8; verified_len];
+        let mut verified_output = vec![0_u8; verified_len];
+        match verify_candidate_row_v1(
+            view,
+            CandidateVerifyRowBuffersV1 {
+                cursor_scratch: &mut cursor_scratch,
+                cursor_output: &mut cursor_output,
+                verified_scratch: &mut verified_scratch,
+                verified_output: &mut verified_output,
+                manifest_scratch: &mut manifest_scratch,
+                manifest_output: &mut manifest_output,
+            },
+        ) {
+            Ok(summary) => {
+                submission = summary.submission;
+                cursor = cursor_output;
+            }
+            Err(error) => {
+                last = Err(error);
+                break;
+            }
+        }
+    }
+    // The terminal row is the one that refuses: two rows really exist, and the
+    // submission said there were three.
+    assert_eq!(last, Err(GeneralCandidateErrorV1::Uncapitalized));
+}
+
+#[test]
+fn hostile_a_crank_cannot_be_drawn_twice_for_one_row() {
+    let fixture = fixture();
+    let cursor_len = candidate_verifier_len_v1(fixture.submission).expect("cursor width");
+    let verified_len = candidate_certificate_len_v1(fixture.submission).expect("certificate width");
+
+    // A submission whose escrow already says both rows were paid, offered a
+    // row-zero step. The capitalization check runs BEFORE the work, against
+    // the revision the step claims, so the replay is refused at the escrow
+    // rather than at the verifier.
+    let mut replayed = fixture;
+    replayed.submission = spend_verification_cranks(replayed.submission, ROW_COUNT);
+    assert_eq!(
+        run_one(
+            &replayed,
+            &replayed.candidate.clone(),
+            &replayed.pages[0].clone(),
+            0,
+            0,
+            0,
+            cursor_len,
+            verified_len,
+        ),
+        Err(GeneralCandidateErrorV1::Uncapitalized)
+    );
 }
