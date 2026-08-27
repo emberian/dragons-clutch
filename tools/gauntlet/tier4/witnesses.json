@@ -28,6 +28,12 @@
       "query": "[.transactions[] | select(.error == null) | .label] | sort | join(\"|\")",
       "expect": "Series occurrence Consume founds its Market with a Core permit|Series occurrence Consume founds its Market with a Core permit (replay campaign)",
       "provenance": "A route is EXECUTED in this census only on a succeeding transaction, and a campaign that accidentally accepted one of its own hostile cases would flip a row on the strength of a bug. This witness pins which single transaction is allowed to succeed, so a future change that weakened either refusal fails the tier instead of silently improving its coverage numbers. The rule it encodes is AGENTS.md's: do not weaken a refusal to make an integration test pass."
+    },
+    {
+      "id": "the-founding-fast-lane-is-inside-its-cu-budgets",
+      "kind": "cu-budget",
+      "campaign": "tier4-series-occurrence-programtest",
+      "provenance": "The budgets and their tolerances live in tools/gauntlet/CU_BUDGETS.json with their measurement dates and observed noise bands; this witness carries no number of its own. The independent value is Solana's 1,400,000 per-transaction MAX_COMPUTE_UNIT_LIMIT. This tier is the PRE-CAMPAIGN check: it drives Core's found-and-permit — the same Core code that is the 433,129-CU stage 2 of the validator campaign's DCLTGMF1 — with no validator and no port, so a Core founding regression surfaces here in under a minute instead of after a six-minute campaign that needs the single global 127.0.0.1:20890 slot. The tolerances were set from six runs of this campaign on the same ELFs, not from one."
     }
   ]
 }

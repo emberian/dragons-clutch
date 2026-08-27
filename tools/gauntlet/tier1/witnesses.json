@@ -162,6 +162,12 @@
       "query": ".accounts.abort_refunded_principal_wallet.owner",
       "expect": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
       "provenance": "The canonical SPL Token-2022 program address, an external identity dClutch does not define. The refunded principal lands in a real token account owned by the party that supplied it; the runner separately requires the balance to have risen by exactly the principal and all four staged accounts to be closed."
+    },
+    {
+      "id": "the-golden-transactions-are-inside-their-cu-budgets",
+      "kind": "cu-budget",
+      "campaign": "tier1",
+      "provenance": "The budgets and their tolerances live in tools/gauntlet/CU_BUDGETS.json with their measurement dates, revisions and observed noise bands; this witness carries no number of its own. The independent value is Solana's 1,400,000 per-transaction MAX_COMPUTE_UNIT_LIMIT, which is the chain's and not ours: a transaction that reaches it is refused outright with no partial result, and DCLTGMF1 grew 84.6% -> 91.3% of it in one evening from other lanes' changes with nothing watching. The budgets are pinned at the highest measured draw plus a tolerance derived from the campaign's own measured run-to-run band, so an ordinary run cannot produce a red row and a structural regression can."
     }
   ]
 }
