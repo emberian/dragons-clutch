@@ -3423,10 +3423,14 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
     );
     let receipt_backed = {
         let request = receipt_backed_by_receipt_request(&fixture);
-        // The REQUEST GRAMMAR already refuses it: a shard Mint may not alias the
-        // receipt Mint, so these bytes are not a decodable request at all. The
-        // chain is still made to say so below, because a host decoder asserting
-        // against itself is not evidence.
+        // The REQUEST GRAMMAR refuses it: a shard Mint may not alias the receipt
+        // Mint, so these bytes are not a decodable request at all. That is where
+        // this hostile dies, and the campaign records WHERE rather than
+        // pretending Claims caught it: every caller must decode the request to
+        // derive its own Trading authority (`CallerAuthoritySeedsV1` over the
+        // request's `parent_context`), so a request the grammar rejects cannot
+        // acquire a signer and cannot reach the CPI. Submitted below anyway, so
+        // the refusal is a chain observation instead of a host assertion.
         assert_eq!(
             RepresentationRequestV2::decode(&request).err(),
             Some(RationalRequestError::AccountAlias),
@@ -3509,6 +3513,7 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
     }
 
     for (why, label, instruction) in labelled {
+        let caller_side = label == "receipt backed by receipt";
         let result = submit_v0(
             &mut context,
             &fixture,
@@ -3520,6 +3525,15 @@ async fn the_structured_family_hostiles_refuse_through_the_real_wire() {
         .await
         .expect("hostile transaction");
         assert!(!result.accepted, "{why} must refuse");
+        assert_eq!(
+            result
+                .logs
+                .iter()
+                .any(|log| log.starts_with(&format!("Program {CLAIMS_PROGRAM_ID} failed"))),
+            !caller_side,
+            "{why}: the campaign records WHICH program refused, and \
+             receipt-backed-by-receipt is the one that never reaches Claims"
+        );
         assert_eq!(
             snapshot(&mut context, &fixture).await,
             before,
@@ -3628,9 +3642,20 @@ async fn a_receipt_mint_missing_its_burn_role_refuses_at_the_first_issue() {
     )
     .await
     .expect("UnwrapStructured transaction");
+    // Unwrap refuses too, and NOT for the burn role: the Issue above committed
+    // nothing, so no representation replay exists to carry revision one and the
+    // frame is refused on accounts (0x5001). That is the whole consequence of the
+    // adapter catching the missing role up front -- there is never anything to
+    // unwrap, so `BurnReceipt` is never the thing that fails.
     assert!(
         !unwrapped.accepted,
-        "BurnReceipt must refuse without the permissioned-burn role"
+        "there is nothing to unwrap against a founding that could not issue"
+    );
+    assert!(
+        unwrapped.logs.iter().any(|log| log
+            == &format!("Program {CLAIMS_PROGRAM_ID} failed: custom program error: 0x5001")),
+        "the unwrap refusal is the missing replay, not the missing burn role: {}",
+        unwrapped.logs.join("\n")
     );
     assert_eq!(
         snapshot(&mut context, &fixture).await,
