@@ -7,7 +7,8 @@ use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_KIND_OFFSET, CAPABILITY_PROGRAM_MAGIC_V1, CAPABILITY_PROGRAM_PROFILE_OFFSET,
     CAPABILITY_PROGRAM_PROFILE_V2, CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET,
     CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, initialize_root_account_v1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
+    initialize_root_account_v1,
 };
 use dclutch_dealer_codec::{
     Action, CANDIDATE_BYTES, CandidateInput, CurveBand, CurveInput, Phase, Side, encode_candidate,
@@ -126,7 +127,14 @@ fn fixture() -> (
         ContentId::new(hash(&config).to_bytes()).expect("config digest"),
     )
     .expect("selection");
-    let header = CapabilityRootHeaderV1::new(release, market, 3, selection).expect("header");
+    let header = CapabilityRootHeaderV1::new(
+        release,
+        market,
+        3,
+        selection,
+        SelectedRecordBumpsV1::default(),
+    )
+    .expect("header");
     let child_root = Pubkey::find_program_address(&header.seeds().as_slices(), &program_id).0;
     let receipt = AuthenticatedRoleReceiptV1::new(
         ExecutionRoleV1::Trading,
@@ -273,6 +281,7 @@ fn descriptor_config_root_candidate_position_and_vaults_join_exactly() {
         profile.context().market(),
         profile.context().generation(),
         profile.context().selection(),
+        profile.context().record_bumps(),
     )
     .expect("header");
     let mut root = vec![0_u8; profile.context().root_account_bytes()];

@@ -30,7 +30,7 @@ use dclutch_account_profile_contract::{
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1, CapabilityRootHeaderV1,
-    initialize_root_account_v1,
+    SelectedRecordBumpsV1, initialize_root_account_v1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_general_adapter_contract::{
@@ -105,8 +105,14 @@ fn composite_root(lifecycle: GeneralLifecycleV2) -> (Vec<u8>, Vec<u8>) {
         config_id,
     )
     .expect("selection");
-    let header = CapabilityRootHeaderV1::new(content([0x26; 32]), MARKET, GENERATION, selection)
-        .expect("root header");
+    let header = CapabilityRootHeaderV1::new(
+        content([0x26; 32]),
+        MARKET,
+        GENERATION,
+        selection,
+        SelectedRecordBumpsV1::default(),
+    )
+    .expect("root header");
 
     let mut root = GeneralRootV2::decode(
         &general_root_creation_tail_v2(MARKET, config_id.to_bytes(), GENERATION)

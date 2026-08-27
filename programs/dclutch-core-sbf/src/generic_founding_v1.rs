@@ -10,7 +10,7 @@ use dclutch_capability_contract::{
     CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
     FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
 };
-use dclutch_capability_program_contract::CapabilityRootHeaderV1;
+use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_claims_svm::founding_v5::{
     CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, ClaimsFoundingAggregateSeedsV5,
     ClaimsFoundingReceiptV5, ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5,
@@ -720,6 +720,11 @@ fn authenticate_derived_capability_root(
         request.market().to_bytes(),
         request.generation(),
         selection,
+        // Core builds this header only to DERIVE the root address, never to
+        // write one: the root PDA seeds are the semantic coordinates alone, so
+        // the record bumps Trading fills in at activation are not among them
+        // and no value here can move the address checked below.
+        SelectedRecordBumpsV1::default(),
     )
     .map_err(|_| CoreSbfError::Reference)?;
     if Pubkey::find_program_address(&header.seeds().as_slices(), trading_program.key)

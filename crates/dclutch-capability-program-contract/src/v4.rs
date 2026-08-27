@@ -576,6 +576,7 @@ mod tests {
             21,
             CapabilityExecutionSelectionV1::new(0, id(22), id(1), id(23), id(24))
                 .expect("selection"),
+            super::super::SelectedRecordBumpsV1::default(),
         )
         .expect("header");
         let mut root = [0_u8; 360];

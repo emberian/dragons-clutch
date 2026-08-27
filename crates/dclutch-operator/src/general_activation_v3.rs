@@ -38,7 +38,7 @@ use dclutch_capability_contract::{
     ContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
 };
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
@@ -172,6 +172,12 @@ pub fn plan_general_capability_activation_v3(
         market_key,
         generation,
         selection,
+        // The planner builds this header to DERIVE the root address and the
+        // funding coordinates; the root PDA seeds are the semantic identities
+        // alone, so the record bumps the on-chain activation fills in are not
+        // among them. Whatever the chain writes there does not move any address
+        // this planner computes.
+        SelectedRecordBumpsV1::default(),
     )
     .map_err(|_| GeneralActivationErrorV3::Root)?;
     let (root, root_bump) =

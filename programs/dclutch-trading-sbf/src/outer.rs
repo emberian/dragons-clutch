@@ -23,12 +23,12 @@ use dclutch_account_profile_contract::{
     project_atomic as project_accounts_atomic,
 };
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId, FUNDING_STATE_BYTES,
-    FundingCustodyObservationV1, FundingStateV1,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
+    ContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
-    CapabilityRootAccountV1, CapabilityRootHeaderV1,
+    CapabilityRootAccountV1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     activation_registers_v2::{
         ACTIVATION_ACCOUNT_PROFILE_IDENTITY_V2, ACTIVATION_ACTION_SCALAR_V2,
         ACTIVATION_CAPABILITY_RELEASE_IDENTITY_V2, ACTIVATION_COMMON_IDENTITIES_V2,
@@ -209,7 +209,10 @@ pub fn process_activation(
         .release_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    authenticate_finalized_record(
+    // Activation is the one route entitled to SEARCH for these coordinates. It
+    // hands what it finds to the root it is about to write, and every hot
+    // reader derives from that instead. See `hot_v3::borrow_finalized_record_at`.
+    let release_record_bumps = authenticate_finalized_record(
         suffix.registry.key,
         suffix.release_raw,
         suffix.release_staging,
@@ -236,11 +239,35 @@ pub fn process_activation(
     let root_bytes = descriptor
         .root_account_bytes()
         .map_err(|_| TradingSbfError::Root)?;
+    // The manifest record is authenticated by content here, never by address --
+    // the activation frame carries no staging cursor for it -- so its two bumps
+    // are DERIVED rather than observed. That is sound because a bump is a pure
+    // function of the seeds: what the root records is a memo of a computation,
+    // and the hot reader still requires the account it is handed to sit at the
+    // address that memo reproduces, Registry-owned, hashing to this digest.
+    let manifest_record_bumps = finalized_record_bumps(
+        suffix.registry.key,
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        request.selection().manifest().to_bytes(),
+    );
+    let config_record_bumps = finalized_record_bumps(
+        suffix.registry.key,
+        descriptor.config_schema().to_bytes(),
+        request.selection().config().to_bytes(),
+    );
     let root_header = CapabilityRootHeaderV1::new(
         content(envelope.release_set().to_bytes())?,
         envelope.market().to_bytes(),
         envelope.generation(),
-        request.selection(),
+        request
+            .selection()
+            .with_capability_release_record_bumps(release_record_bumps.0, release_record_bumps.1),
+        SelectedRecordBumpsV1::new(
+            manifest_record_bumps.0,
+            manifest_record_bumps.1,
+            config_record_bumps.0,
+            config_record_bumps.1,
+        ),
     )
     .map_err(|_| TradingSbfError::Root)?;
     authenticate_vacant_root(program_id, framed.child_root(), root_header, root_bytes)?;
@@ -281,7 +308,7 @@ pub fn process_activation(
         .config_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
-    authenticate_finalized_record(
+    authenticate_finalized_record_at(
         suffix.registry.key,
         suffix.config_raw,
         suffix.config_staging,
@@ -289,6 +316,7 @@ pub fn process_activation(
         descriptor.config_schema().to_bytes(),
         request.selection().config().to_bytes(),
         &config_data,
+        config_record_bumps,
     )?;
     let descriptor = authenticate_activation_program(
         context,
@@ -715,7 +743,22 @@ fn authenticate_vacant_root(
     Ok(())
 }
 
-fn authenticate_finalized_record(
+/// The canonical raw/staging bumps of one finalized record's coordinate.
+///
+/// A pure function of the seeds: no account is consulted and none needs to
+/// exist. Activation calls this so the root it writes can carry what it found,
+/// and every later reader derives with `create_program_address` instead of
+/// searching. See `hot_v3::borrow_finalized_record_at`.
+fn finalized_record_bumps(registry: &Pubkey, schema: [u8; 32], digest: [u8; 32]) -> (u8, u8) {
+    (
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry).1,
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry).1,
+    )
+}
+
+/// Authenticate one finalized record at bumps the caller already derived.
+#[allow(clippy::too_many_arguments)]
+fn authenticate_finalized_record_at(
     registry: &Pubkey,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
@@ -723,11 +766,18 @@ fn authenticate_finalized_record(
     schema: [u8; 32],
     digest: [u8; 32],
     bytes: &[u8],
+    bumps: (u8, u8),
 ) -> Result<(), ProgramError> {
-    let expected_raw =
-        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], registry).0;
-    let expected_staging =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], registry).0;
+    let expected_raw = Pubkey::create_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[bumps.0]],
+        registry,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let expected_staging = Pubkey::create_program_address(
+        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest, &[bumps.1]],
+        registry,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
     if raw.key != &expected_raw
         || raw.owner != registry
         || raw.is_writable
@@ -743,6 +793,25 @@ fn authenticate_finalized_record(
         return Err(TradingSbfError::Content.into());
     }
     Ok(())
+}
+
+/// Authenticate one finalized record, searching for both of its addresses.
+///
+/// Activation is a write-time route: it is entitled to search, and it is the
+/// authority that hands the readers what it found. It returns the two canonical
+/// bumps for exactly that reason.
+fn authenticate_finalized_record(
+    registry: &Pubkey,
+    raw: &AccountInfo<'_>,
+    staging: &AccountInfo<'_>,
+    rent: &Rent,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    bytes: &[u8],
+) -> Result<(u8, u8), ProgramError> {
+    let bumps = finalized_record_bumps(registry, schema, digest);
+    authenticate_finalized_record_at(registry, raw, staging, rent, schema, digest, bytes, bumps)?;
+    Ok(bumps)
 }
 
 struct RuntimeFrameV2<'accounts, 'info> {
@@ -1103,7 +1172,10 @@ fn seed_common_registers(
             .ok_or(TradingSbfError::Content)? = value;
     }
     for (slot, value) in [
-        (ACTIVATION_TRADING_PROGRAM_IDENTITY_V2, program_id.to_bytes()),
+        (
+            ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+            program_id.to_bytes(),
+        ),
         (
             ACTIVATION_CORE_PROGRAM_IDENTITY_V2,
             suffix.core_program.key.to_bytes(),
@@ -1117,7 +1189,10 @@ fn seed_common_registers(
             envelope.release_set().to_bytes(),
         ),
         (ACTIVATION_MARKET_IDENTITY_V2, envelope.market().to_bytes()),
-        (ACTIVATION_CONTEXT_IDENTITY_V2, envelope.context().to_bytes()),
+        (
+            ACTIVATION_CONTEXT_IDENTITY_V2,
+            envelope.context().to_bytes(),
+        ),
         (
             ACTIVATION_MANIFEST_IDENTITY_V2,
             request.selection().manifest().to_bytes(),

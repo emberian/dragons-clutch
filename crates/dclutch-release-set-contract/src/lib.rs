@@ -39,6 +39,15 @@ pub use protocol_infrastructure::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_PREIMAGE_V1, ProtocolInfrastructureProfileV1,
 };
 
+/// Offset of the program-set record's two canonical PDA bumps.
+///
+/// These are the two bytes the Lean-emitted layout calls `reserved`; claiming
+/// them moves no offset and changes no width. A selection that has never been
+/// activated carries `[0, 0]` here, which is not a valid derivation and refuses
+/// at the reader rather than admitting a wrong address.
+pub const CAPABILITY_EXECUTION_SELECTION_RECORD_BUMPS_OFFSET: usize =
+    CAPABILITY_EXECUTION_SELECTION_RESERVED_OFFSET;
+
 /// Bytes in one program-identity or content-identity coordinate.
 pub const IDENTITY_BYTES: usize = 32;
 /// Number of semantic execution roles in profile 1.
@@ -354,10 +363,16 @@ pub struct CapabilityExecutionSelectionV1 {
     kind: ContentId,
     capability_release: ContentId,
     config: ContentId,
+    capability_release_record_bumps: [u8; 2],
 }
 
 impl CapabilityExecutionSelectionV1 {
     /// Construct one manifest-derived fixed-role projection.
+    ///
+    /// The record bumps are absent from this constructor deliberately: a
+    /// selection travelling on the wire carries none, and the only authority
+    /// that may fill them is the on-chain activation that derives them. See
+    /// [`Self::with_capability_release_record_bumps`].
     pub fn new(
         entry_index: u16,
         manifest: ContentId,
@@ -371,7 +386,43 @@ impl CapabilityExecutionSelectionV1 {
             kind,
             capability_release,
             config,
+            capability_release_record_bumps: [0; 2],
         })
+    }
+
+    /// Return this selection with the program-set record's canonical bumps.
+    ///
+    /// The program-set record lives at
+    /// `[RAW_RECORD_PDA_SEED_V1, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+    /// capability_release]` under the Market's Registry, and its staging cursor
+    /// at the matching `STAGING_CURSOR_PDA_SEED_V1` seeds. Both are immutable
+    /// facts about a selection that never change once the record is finalized,
+    /// so the activation that authenticates the record by searching for it once
+    /// records what it found here, and every later reader derives instead of
+    /// searching.
+    #[must_use]
+    pub const fn with_capability_release_record_bumps(mut self, raw: u8, staging: u8) -> Self {
+        self.capability_release_record_bumps = [raw, staging];
+        self
+    }
+
+    /// The canonical bump of the program-set record's raw account.
+    pub const fn capability_release_raw_bump(self) -> u8 {
+        self.capability_release_record_bumps[0]
+    }
+
+    /// The canonical bump of the program-set record's staging cursor.
+    pub const fn capability_release_staging_bump(self) -> u8 {
+        self.capability_release_record_bumps[1]
+    }
+
+    /// True when this selection carries no record bumps at all.
+    ///
+    /// A selection on the wire must be in exactly this state: the caller has no
+    /// standing to assert a bump, because a non-canonical bump names a
+    /// different valid address.
+    pub const fn carries_no_record_bumps(self) -> bool {
+        self.capability_release_record_bumps[0] == 0 && self.capability_release_record_bumps[1] == 0
     }
 
     /// Validate raw coordinates and construct one projection.
@@ -414,14 +465,15 @@ impl CapabilityExecutionSelectionV1 {
         {
             return Err(Error::UnsupportedArtifactProfile);
         }
-        require_zero(bytes, CAPABILITY_EXECUTION_SELECTION_RESERVED_OFFSET, 2)?;
-        Self::from_bytes(
+        let bumps: [u8; 2] = read_array(bytes, CAPABILITY_EXECUTION_SELECTION_RECORD_BUMPS_OFFSET)?;
+        Ok(Self::from_bytes(
             read_u16(bytes, CAPABILITY_EXECUTION_SELECTION_ENTRY_INDEX_OFFSET)?,
             read_array(bytes, CAPABILITY_EXECUTION_SELECTION_MANIFEST_OFFSET)?,
             read_array(bytes, CAPABILITY_EXECUTION_SELECTION_KIND_OFFSET)?,
             read_array(bytes, CAPABILITY_EXECUTION_SELECTION_RELEASE_OFFSET)?,
             read_array(bytes, CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET)?,
-        )
+        )?
+        .with_capability_release_record_bumps(bumps[0], bumps[1]))
     }
 
     /// Encode the one exact canonical projection.
@@ -441,6 +493,11 @@ impl CapabilityExecutionSelectionV1 {
             &mut output,
             CAPABILITY_EXECUTION_SELECTION_PROFILE_OFFSET,
             CAPABILITY_EXECUTION_SELECTION_PROFILE_V1,
+        );
+        copy_infallible(
+            &mut output,
+            CAPABILITY_EXECUTION_SELECTION_RECORD_BUMPS_OFFSET,
+            &self.capability_release_record_bumps,
         );
         put_u16(
             &mut output,
@@ -968,10 +1025,6 @@ mod tests {
                 CAPABILITY_EXECUTION_SELECTION_PROFILE_OFFSET,
                 Error::UnsupportedArtifactProfile,
             ),
-            (
-                CAPABILITY_EXECUTION_SELECTION_RESERVED_OFFSET,
-                Error::NonCanonicalReservedBytes,
-            ),
         ] {
             let mut hostile = canonical;
             mutate(&mut hostile, offset, u8::MAX);
@@ -980,6 +1033,38 @@ mod tests {
                 Err(expected)
             );
         }
+        // The two bytes this layout calls `reserved` are the program-set
+        // record's canonical bumps now, so decoding must CARRY them rather than
+        // refuse them. Nothing is weakened by that: a selection on the wire is
+        // still required to carry none (see
+        // `TradingActivationRequestV1::decode`), and a wrong bump in a root is
+        // refused by the derivation it fails to reproduce, not by this decoder.
+        let mut carried = canonical;
+        mutate(
+            &mut carried,
+            CAPABILITY_EXECUTION_SELECTION_RECORD_BUMPS_OFFSET,
+            0xfd,
+        );
+        mutate(
+            &mut carried,
+            CAPABILITY_EXECUTION_SELECTION_RECORD_BUMPS_OFFSET + 1,
+            0xfc,
+        );
+        let carried =
+            CapabilityExecutionSelectionV1::decode(&carried).expect("bumps decode, never refuse");
+        assert_eq!(carried.capability_release_raw_bump(), 0xfd);
+        assert_eq!(carried.capability_release_staging_bump(), 0xfc);
+        assert!(!carried.carries_no_record_bumps());
+        assert!(selection.carries_no_record_bumps());
+        assert_eq!(
+            carried,
+            selection.with_capability_release_record_bumps(0xfd, 0xfc)
+        );
+        assert_eq!(carried.to_bytes(), carried.to_bytes());
+        assert_eq!(
+            CapabilityExecutionSelectionV1::decode(&carried.to_bytes()),
+            Ok(carried)
+        );
 
         assert_eq!(selection.executor_role(), ExecutionRoleV1::Trading);
     }

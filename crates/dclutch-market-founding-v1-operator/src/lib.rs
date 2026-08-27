@@ -10,7 +10,7 @@
 #![deny(missing_docs)]
 
 use dclutch_capability_contract::CapabilityManifestV1;
-use dclutch_capability_program_contract::CapabilityRootHeaderV1;
+use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
@@ -143,6 +143,10 @@ pub fn construct_generic_founding_root_selection_v1(
         template.market().to_bytes(),
         template.generation(),
         selection,
+        // Address derivation only: the root PDA seeds are the semantic
+        // identities, so the record bumps the on-chain activation records are
+        // not among them.
+        SelectedRecordBumpsV1::default(),
     )
     .map_err(|_| GenericMarketFoundingOperatorErrorV1::Selection)?;
     let capability_root =

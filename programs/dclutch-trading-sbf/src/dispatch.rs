@@ -3,7 +3,7 @@
 use dclutch_capability_contract::{CapabilityEntryV1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_ACCOUNT_MAX_BYTES_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
-    CapabilityRootHeaderV1, Error as CapabilityProgramError,
+    CapabilityRootHeaderV1, Error as CapabilityProgramError, SelectedRecordBumpsV1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
@@ -38,6 +38,16 @@ impl<'a> TradingActivationRequestV1<'a> {
                 .ok_or(TradingSbfError::Content)?,
         )
         .map_err(|_| TradingSbfError::Content)?;
+        // A selection arriving on the wire asserts identities, never addresses.
+        // The two record-bump bytes are filled in exactly once, on chain, by the
+        // activation that searched for the program-set record and proved what it
+        // found; a caller has no standing to name a bump, because a
+        // non-canonical bump names a different valid address. Requiring them
+        // zero here keeps the request encoding exactly as canonical as it was
+        // when these bytes were reserved.
+        if !selection.carries_no_record_bumps() {
+            return Err(TradingSbfError::Content);
+        }
         let funding = CapabilityFundingHeaderV1::decode(
             role_request
                 .get(funding_offset..family_offset)
@@ -211,6 +221,7 @@ pub struct TradingFamilyContextV1 {
     generation: u64,
     release_set: ContentId,
     selection: CapabilityExecutionSelectionV1,
+    record_bumps: SelectedRecordBumpsV1,
     artifact_release: ArtifactReleaseIdV1,
     interpreter_semantic_release: ContentId,
 }
@@ -300,6 +311,7 @@ impl TradingFamilyContextV1 {
             generation: root.generation(),
             release_set: root.release_set(),
             selection: root.selection(),
+            record_bumps: root.record_bumps(),
             artifact_release: trading_receipt.artifact_release_id(),
             interpreter_semantic_release: trading_receipt.semantic_release_id(),
         })
@@ -328,6 +340,16 @@ impl TradingFamilyContextV1 {
     /// Return the immutable execution release-set identity.
     pub const fn release_set(self) -> ContentId {
         self.release_set
+    }
+    /// Return the canonical PDA bumps this Market's activation derived for the
+    /// manifest and config records it selected.
+    ///
+    /// Every hot reader locates those two records with these, through
+    /// `create_program_address`; none searches. The bumps are as immutable as
+    /// the identities they belong to, and this root is the only authority that
+    /// may assert them.
+    pub const fn record_bumps(self) -> SelectedRecordBumpsV1 {
+        self.record_bumps
     }
     /// Return the exact persisted activation projection.
     pub const fn selection(self) -> CapabilityExecutionSelectionV1 {
@@ -611,7 +633,14 @@ mod tests {
             CapabilityExecutionSelectionV1::new(0, manifest_id, id(1), descriptor_id, config_id)
                 .expect("selection");
         let release_set = id(12);
-        let root = CapabilityRootHeaderV1::new(release_set, [13; 32], 14, selection).expect("root");
+        let root = CapabilityRootHeaderV1::new(
+            release_set,
+            [13; 32],
+            14,
+            selection,
+            SelectedRecordBumpsV1::default(),
+        )
+        .expect("root");
         let decoded_descriptor = CapabilityProgramV1::decode(&descriptor).expect("descriptor");
         let mut root_account = vec![
             0_u8;
@@ -795,8 +824,8 @@ mod tests {
     #[test]
     fn hot_dispatch_uses_persisted_selection_without_manifest_input() {
         let (context, _manifest, descriptor, config) = canonical_dispatch_fixture();
-        let admitted = hot_result(context, &descriptor, &config)
-            .expect("authenticated hot dispatch");
+        let admitted =
+            hot_result(context, &descriptor, &config).expect("authenticated hot dispatch");
         assert_eq!(admitted.kind(), id(1));
         assert_eq!(admitted.transition_program().instruction_count(), 1);
 

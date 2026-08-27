@@ -3,7 +3,7 @@ extern crate std;
 use std::{boxed::Box, vec, vec::Vec};
 
 use dclutch_capability_program_contract::{
-    CapabilityRootHeaderV1,
+    CapabilityRootHeaderV1, SelectedRecordBumpsV1,
     v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
@@ -350,7 +350,14 @@ impl Fixture {
 
         let selection = CapabilityExecutionSelectionV1::new(0, id(30), id(1), id(36), id(31))
             .expect("ProgramSet selection");
-        let root = CapabilityRootHeaderV1::new(id(32), [33; 32], 34, selection).expect("root");
+        let root = CapabilityRootHeaderV1::new(
+            id(32),
+            [33; 32],
+            34,
+            selection,
+            SelectedRecordBumpsV1::default(),
+        )
+        .expect("root");
         let trading_program = Pubkey::new_from_array([203; 32]);
         let child_root =
             Pubkey::find_program_address(&root.seeds().as_slices(), &trading_program).0;

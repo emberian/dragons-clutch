@@ -10,7 +10,7 @@ use dclutch_capability_contract::{
     MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_capability_program_contract::{
-    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1, SelectedRecordBumpsV1,
 };
 use dclutch_claims_svm::{
     founding_v5::ClaimsFoundingAggregateSeedsV5,
@@ -784,6 +784,7 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
         base.market.to_bytes(),
         GENERATION,
         selection,
+        SelectedRecordBumpsV1::default(),
     )
     .expect("root header");
     let root = Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID).0;

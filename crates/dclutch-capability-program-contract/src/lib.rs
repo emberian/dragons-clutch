@@ -396,6 +396,85 @@ impl SupportedContentV1 {
     }
 }
 
+/// Offset of the Market-selected records' canonical PDA bumps in a root header.
+///
+/// These are the four bytes the Lean-emitted layout calls `reserved`; claiming
+/// them moves no offset and changes no width.
+pub const CAPABILITY_ROOT_RECORD_BUMPS_OFFSET: usize = CAPABILITY_ROOT_RESERVED_OFFSET;
+
+/// The canonical PDA bumps of the two Market-selected records a hot action must
+/// locate for itself.
+///
+/// The manifest and the capability config are named by *content identities the
+/// Market selected*, so their Registry addresses cannot be carried by any
+/// content-addressed artifact — a record that carried a bump would be a record
+/// that only worked under one Registry. They are carried here instead, in the
+/// Market's own root, which already names exactly one Registry through the
+/// Market it binds. The activation that writes this root is the sole authority
+/// that may fill them: it searches for each address once, proves the account
+/// it found is the finalized record, and records what it found. Every later
+/// reader derives with the stored bump and refuses a mismatch — the derivation
+/// *is* the check, and no reader searches.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SelectedRecordBumpsV1 {
+    manifest_raw: u8,
+    manifest_staging: u8,
+    config_raw: u8,
+    config_staging: u8,
+}
+
+impl SelectedRecordBumpsV1 {
+    /// Record the four canonical bumps one activation derived.
+    pub const fn new(
+        manifest_raw: u8,
+        manifest_staging: u8,
+        config_raw: u8,
+        config_staging: u8,
+    ) -> Self {
+        Self {
+            manifest_raw,
+            manifest_staging,
+            config_raw,
+            config_staging,
+        }
+    }
+
+    /// Read the four bumps from their canonical wire order.
+    pub const fn from_bytes(bytes: [u8; 4]) -> Self {
+        Self::new(bytes[0], bytes[1], bytes[2], bytes[3])
+    }
+
+    /// The four bumps in canonical wire order.
+    pub const fn to_bytes(self) -> [u8; 4] {
+        [
+            self.manifest_raw,
+            self.manifest_staging,
+            self.config_raw,
+            self.config_staging,
+        ]
+    }
+
+    /// The canonical bump of the manifest record's raw account.
+    pub const fn manifest_raw(self) -> u8 {
+        self.manifest_raw
+    }
+
+    /// The canonical bump of the manifest record's staging cursor.
+    pub const fn manifest_staging(self) -> u8 {
+        self.manifest_staging
+    }
+
+    /// The canonical bump of the config record's raw account.
+    pub const fn config_raw(self) -> u8 {
+        self.config_raw
+    }
+
+    /// The canonical bump of the config record's staging cursor.
+    pub const fn config_staging(self) -> u8 {
+        self.config_staging
+    }
+}
+
 /// Immutable activation projection at the front of one Trading root account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityRootHeaderV1 {
@@ -403,6 +482,7 @@ pub struct CapabilityRootHeaderV1 {
     market: [u8; 32],
     generation: u64,
     selection: CapabilityExecutionSelectionV1,
+    record_bumps: SelectedRecordBumpsV1,
 }
 
 impl CapabilityRootHeaderV1 {
@@ -412,6 +492,7 @@ impl CapabilityRootHeaderV1 {
         market: [u8; 32],
         generation: u64,
         selection: CapabilityExecutionSelectionV1,
+        record_bumps: SelectedRecordBumpsV1,
     ) -> Result<Self> {
         if market.iter().all(|byte| *byte == 0) {
             return Err(Error::ZeroIdentity);
@@ -421,6 +502,7 @@ impl CapabilityRootHeaderV1 {
             market,
             generation,
             selection,
+            record_bumps,
         })
     }
 
@@ -445,7 +527,6 @@ impl CapabilityRootHeaderV1 {
         if read_u16(bytes, CAPABILITY_ROOT_PROFILE_OFFSET)? != CAPABILITY_ROOT_PROFILE_V1 {
             return Err(Error::UnsupportedArtifactProfile);
         }
-        require_zero(bytes, CAPABILITY_ROOT_RESERVED_OFFSET, 4)?;
         Self::new(
             content(bytes, CAPABILITY_ROOT_RELEASE_SET_OFFSET)?,
             read_array(bytes, CAPABILITY_ROOT_MARKET_OFFSET)?,
@@ -456,6 +537,10 @@ impl CapabilityRootHeaderV1 {
                 CAPABILITY_EXECUTION_SELECTION_BYTES_V1,
             )?)
             .map_err(|_| Error::SelectionMismatch)?,
+            SelectedRecordBumpsV1::from_bytes(read_array(
+                bytes,
+                CAPABILITY_ROOT_RECORD_BUMPS_OFFSET,
+            )?),
         )
     }
 
@@ -476,6 +561,11 @@ impl CapabilityRootHeaderV1 {
             &mut output,
             CAPABILITY_ROOT_PROFILE_OFFSET,
             CAPABILITY_ROOT_PROFILE_V1,
+        );
+        copy(
+            &mut output,
+            CAPABILITY_ROOT_RECORD_BUMPS_OFFSET,
+            &self.record_bumps.to_bytes(),
         );
         copy(
             &mut output,
@@ -511,6 +601,11 @@ impl CapabilityRootHeaderV1 {
     /// Return the exact manifest-derived activation projection.
     pub const fn selection(self) -> CapabilityExecutionSelectionV1 {
         self.selection
+    }
+    /// Return the canonical bumps the activation derived for this Market's
+    /// manifest and config records.
+    pub const fn record_bumps(self) -> SelectedRecordBumpsV1 {
+        self.record_bumps
     }
     /// Return the sole canonical root-account PDA seed projection.
     pub fn seeds(self) -> CapabilityRootSeedsV1 {
@@ -785,7 +880,13 @@ mod tests {
     }
 
     fn selection() -> CapabilityExecutionSelectionV1 {
-        CapabilityExecutionSelectionV1::new(3, id(9), id(1), id(10), id(11)).expect("selection")
+        CapabilityExecutionSelectionV1::new(3, id(9), id(1), id(10), id(11))
+            .expect("selection")
+            .with_capability_release_record_bumps(0xfd, 0xfc)
+    }
+
+    fn record_bumps() -> SelectedRecordBumpsV1 {
+        SelectedRecordBumpsV1::new(0xff, 0xfe, 0xfb, 0xfa)
     }
 
     fn entry() -> CapabilityEntryV1 {
@@ -940,8 +1041,8 @@ mod tests {
 
     #[test]
     fn composite_root_round_trip_and_seed_order_bind_full_selection() {
-        let header =
-            CapabilityRootHeaderV1::new(id(12), [13; 32], 14, selection()).expect("header");
+        let header = CapabilityRootHeaderV1::new(id(12), [13; 32], 14, selection(), record_bumps())
+            .expect("header");
         let descriptor_bytes = descriptor(1);
         let program = CapabilityProgramV1::decode(&descriptor_bytes).expect("descriptor");
         let initial_state = [44_u8; 128];
@@ -965,14 +1066,20 @@ mod tests {
 
     #[test]
     fn root_hostile_decoding_refuses_without_alternate_projection() {
-        let canonical = CapabilityRootHeaderV1::new(id(12), [13; 32], 14, selection())
-            .expect("root")
-            .to_bytes();
+        let canonical =
+            CapabilityRootHeaderV1::new(id(12), [13; 32], 14, selection(), record_bumps())
+                .expect("root")
+                .to_bytes();
+        // Offset 12 is NOT in this table any more, and that is the point of
+        // this lane: those four bytes are the Market-selected records' canonical
+        // bumps, not reserved padding, so the decoder must carry whatever they
+        // hold. What refuses a wrong bump is the derivation at the reader --
+        // `create_program_address` under the stored bump either reproduces the
+        // record account the caller supplied or it does not.
         for (offset, expected) in [
             (0, Error::InvalidMagic),
             (8, Error::UnsupportedSchema),
             (10, Error::UnsupportedArtifactProfile),
-            (12, Error::NonCanonicalReservedBytes),
             (CAPABILITY_ROOT_SELECTION_OFFSET, Error::SelectionMismatch),
         ] {
             let mut hostile = canonical;
@@ -984,12 +1091,27 @@ mod tests {
             CapabilityRootHeaderV1::decode(&canonical[..231]),
             Err(Error::InvalidLength)
         );
+        // The four bump bytes survive the round trip, in order, and a flip in
+        // any of them decodes to a DIFFERENT header rather than to a refusal.
+        let decoded = CapabilityRootHeaderV1::decode(&canonical).expect("canonical root");
+        assert_eq!(decoded.record_bumps(), record_bumps());
+        assert_eq!(
+            decoded.selection().capability_release_raw_bump(),
+            selection().capability_release_raw_bump()
+        );
+        for offset in CAPABILITY_ROOT_RECORD_BUMPS_OFFSET..CAPABILITY_ROOT_RECORD_BUMPS_OFFSET + 4 {
+            let mut altered = canonical;
+            let value = altered.get(offset).copied().expect("bump byte") ^ 0xff;
+            fixture_set(&mut altered, offset, value);
+            let altered = CapabilityRootHeaderV1::decode(&altered).expect("altered root");
+            assert_ne!(altered.record_bumps(), decoded.record_bumps());
+        }
     }
 
     #[test]
     fn mutable_split_exposes_only_the_descriptor_sized_tail() {
-        let header =
-            CapabilityRootHeaderV1::new(id(12), [13; 32], 14, selection()).expect("header");
+        let header = CapabilityRootHeaderV1::new(id(12), [13; 32], 14, selection(), record_bumps())
+            .expect("header");
         let descriptor_bytes = descriptor(1);
         let program = CapabilityProgramV1::decode(&descriptor_bytes).expect("descriptor");
         let mut account = [0_u8; CAPABILITY_ROOT_HEADER_BYTES_V1 + 128];

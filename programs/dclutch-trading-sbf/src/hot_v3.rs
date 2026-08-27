@@ -623,23 +623,30 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     let rent = Rent::from_account_info(frame.rent).map_err(|_| TradingSbfError::Content)?;
     let product_runtime = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
 
-    let manifest_data = borrow_finalized_record(
+    // Same three Market-selected records as the canonical hot path, located the
+    // same way: from the bumps this Market's root recorded at activation.
+    let record_bumps = family_context.record_bumps();
+    let manifest_data = borrow_finalized_record_at(
         frame,
         frame.manifest_raw,
         frame.manifest_staging,
         &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         family_context.selection().manifest().to_bytes(),
+        record_bumps.manifest_raw(),
+        record_bumps.manifest_staging(),
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, &family_context)?;
     drop(manifest_data);
-    let program_set_data = borrow_finalized_record(
+    let program_set_data = borrow_finalized_record_at(
         frame,
         frame.program_set_raw,
         frame.program_set_staging,
         &rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         family_context.selection().capability_release().to_bytes(),
+        family_context.selection().capability_release_raw_bump(),
+        family_context.selection().capability_release_staging_bump(),
     )?;
     let program_set = CapabilityProgramSetV2::decode_selected(
         family_context.selection().capability_release().to_bytes(),
@@ -671,13 +678,15 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
     authenticate_descriptor_root_selection(&descriptor, &family_context, &entry)?;
     drop(entry);
 
-    let config_data = borrow_finalized_record(
+    let config_data = borrow_finalized_record_at(
         frame,
         frame.config_raw,
         frame.config_staging,
         &rent,
         descriptor.config_schema().to_bytes(),
         family_context.selection().config().to_bytes(),
+        record_bumps.config_raw(),
+        record_bumps.config_staging(),
     )?;
     // As on the canonical path: `borrow_finalized_record` already refused
     // unless `hash(config_data)` is the selected config identity.
@@ -1688,24 +1697,31 @@ pub fn process_hot_execution_v3(
     let product_runtime_v3 = authenticate_product_runtime_boxed_v3(&frame, &rent, &market)?;
     let product_runtime = product_runtime_v3.runtime;
     hot_cu_checkpoint!("root-product");
-    let manifest_data = borrow_finalized_record(
+    // The three record coordinates below are read, not searched for. See
+    // `borrow_finalized_record_at`.
+    let record_bumps = context.record_bumps();
+    let manifest_data = borrow_finalized_record_at(
         *frame,
         frame.manifest_raw,
         frame.manifest_staging,
         &rent,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         context.selection().manifest().to_bytes(),
+        record_bumps.manifest_raw(),
+        record_bumps.manifest_staging(),
     )?;
     let entry = authenticate_manifest_entry_boxed_v3(&manifest_data, context)?;
 
     let capability_release = context.selection().capability_release().to_bytes();
-    let program_set_data = borrow_finalized_record(
+    let program_set_data = borrow_finalized_record_at(
         *frame,
         frame.program_set_raw,
         frame.program_set_staging,
         &rent,
         CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         capability_release,
+        context.selection().capability_release_raw_bump(),
+        context.selection().capability_release_staging_bump(),
     )?;
     // The record's own authentication is the single owner of its content
     // digest: `borrow_finalized_record` refuses unless `hash(program_set_data)`
@@ -1765,13 +1781,15 @@ pub fn process_hot_execution_v3(
     let descriptor = decode_capability_program_boxed_v3(&descriptor_data)?;
     authenticate_descriptor_root_selection(&descriptor, context, &entry)?;
 
-    let config_data = borrow_finalized_record(
+    let config_data = borrow_finalized_record_at(
         *frame,
         frame.config_raw,
         frame.config_staging,
         &rent,
         descriptor.config_schema().to_bytes(),
         context.selection().config().to_bytes(),
+        record_bumps.config_raw(),
+        record_bumps.config_staging(),
     )?;
     // The config record needs no digest of its own here either: the borrow
     // above refuses unless `hash(config_data)` is the selected config identity,
@@ -9161,6 +9179,67 @@ fn sealed_token<'a>(
         .map_err(|_| TradingSbfError::Content.into())
 }
 
+/// Borrow one finalized record at the canonical bumps its root recorded.
+///
+/// This is `borrow_finalized_record` with the two `find_program_address` calls
+/// replaced by the two `create_program_address` calls they would have ended on.
+/// Nothing about the conjunction is weakened: the derivation still has to
+/// reproduce the account the caller supplied, still under this Market's
+/// Registry and still from the schema and digest the caller is holding the
+/// record to. What changes is only who paid for the search. A record's address
+/// is an immutable fact about (schema, digest, Registry); the activation that
+/// wrote this Market's root searched for it once, proved the account it found
+/// was the finalized record, and wrote down the bump. A wrong bump reproduces a
+/// different address and refuses here — the derivation IS the check — so the
+/// stored bump is a hint that cannot lie, not an authority.
+///
+/// Measured (W2q, against the shipped ELF): `try_find_program_address` costs
+/// 1,500 CU per attempt, and the two Market-selected records cost between 5 and
+/// 19 attempts depending on which keys drew the Market. That spread is what put
+/// fixture seed 10 at 1,399,944 CU of a 1,400,000 ceiling.
+#[allow(clippy::too_many_arguments)]
+fn borrow_finalized_record_at<'a, 'info>(
+    frame: HotFrameV3<'_, 'info>,
+    raw: &'a AccountInfo<'info>,
+    staging: &AccountInfo<'info>,
+    rent: &Rent,
+    schema: [u8; 32],
+    digest: [u8; 32],
+    raw_bump: u8,
+    staging_bump: u8,
+) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
+    let expected_raw = Pubkey::create_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest, &[raw_bump]],
+        frame.registry.key,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let expected_staging = Pubkey::create_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &schema,
+            &digest,
+            &[staging_bump],
+        ],
+        frame.registry.key,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    borrow_record_against(
+        frame,
+        raw,
+        staging,
+        rent,
+        digest,
+        expected_raw,
+        expected_staging,
+    )
+}
+
+/// Borrow one finalized record, searching for both of its addresses.
+///
+/// This is the write-time form: the routes that must ESTABLISH a record's
+/// canonical coordinate — activation, and the validated-artifact seal outer —
+/// use it, once, and hand what they found to the readers. A hot action never
+/// calls it; see [`borrow_finalized_record_at`].
 fn borrow_finalized_record<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
     raw: &'a AccountInfo<'info>,
