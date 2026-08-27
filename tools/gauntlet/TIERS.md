@@ -362,11 +362,19 @@ tools/gauntlet/run.sh --from campaign
 On hbox, `run.sh` routes every build through `swarm-build` automatically when it
 is on `PATH`. hbox is co-tenant with codex's HOL build; keep waves small.
 
-`--mode full` is a **single global slot per machine**: the successor launcher is
-pinned to `127.0.0.1:20890` and refuses to start while anything else listens
-there, whatever `--work` root you pass. Coordinate on the wave board before a
-full run, and never kill a `solana-test-validator` whose `--ledger` is not under
-your own `--work` root. `--mode census` needs no port and may run concurrently.
+`--mode full` **used to be a single global slot per machine** and is not any
+more. The launcher was pinned to `127.0.0.1:20890`; the origin is a parameter
+now, so `--rpc-port auto` (or an explicit base) lets N campaigns run at once on
+disjoint 42-port blocks. The default is still 20890, so two runs that both take
+the default still contend. Give each concurrent run its own `--work` root, and
+never kill a `solana-test-validator` whose `--ledger` is not under your own.
+`--mode census` needs no port and may run concurrently.
+
+A tier that starts a validator inherits two rules from this. It must take its
+origin from the same `--rpc-port`/`$DCLUTCH_GAUNTLET_RPC_PORT` parameter rather
+than writing a port down, and it must hold the ledger lock around
+`census observe`, which is a read-modify-write of a file every family runner
+defaults to sharing.
 
 And never edit `run.sh` while a run is in flight — bash reads a script
 incrementally by byte offset, so a mid-run edit makes it re-execute or skip a

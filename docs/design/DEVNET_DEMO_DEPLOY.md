@@ -43,7 +43,10 @@ the protocol rather than by convenience:
 The third is done. The first two are what this runbook adds, and writing them
 down surfaced three blockers that no local run could have found, because a local
 run is handed exactly the substrate that devnet does not have. They are
-[§7](#7-what-is-still-blocking-deploy-day).
+[§7](#7-what-is-still-blocking-deploy-day). **A and B are now closed** —
+observed deployment slots are minted, driven and exercised, and a checked
+manifest can describe a deployed-then-revoked program. C, the frontend's
+Core/Registry conflation, is open.
 
 ---
 
@@ -806,7 +809,11 @@ present in both, and the per-stage CU differ only by bump-seed noise
 Three, all found by writing this document rather than by running anything,
 because each is invisible to a local run by construction.
 
-### Blocker A: the bootstrap hardcodes `deployment_slot = 0`
+**Two of them are now closed.** A and B were killed on 2026-08-27 (`993a9ec`,
+`c5d791e`, `09d7884`); the sections below keep the diagnosis, which is still
+the reason the code has the shape it has, and say what closed it. C is open.
+
+### Blocker A: the bootstrap hardcodes `deployment_slot = 0` — CLOSED
 
 `tools/local-validator/bootstrap/successor/src/plan.rs:597-607` builds every
 `ArtifactReleaseV1` with `deployment_slot` literal `0`. That is correct for
@@ -829,16 +836,41 @@ refuses. The measured local deploy landed at slot 167 and its redeploy at 531 �
 the value is not even stable across two runs on the same machine, so it cannot
 be pre-committed.
 
-**Fix**: a per-role `--<role>-deployment-slot` on `prepare` and a matching
-run-spec field, defaulting to 0 so local runs are unchanged. Small, additive,
-and it must land before deploy day. **Not done in this lane** — it is a protocol
-input plumbing change and the value cannot be known until §2 has run, so it
-belongs with whoever owns the deploy execution.
+**Closed, in two halves.**
+
+`993a9ec` went further than the fix proposed here. The slot is never a number a
+caller hands the plan: every role's ProgramData image goes through
+`ProgramDataV3View::parse` — the same hostile decode `require_loader_linkage`
+runs — and the release binds whatever that parse reports. What a caller chooses
+is which *image*:
+
+```text
+--<role>-observed-programdata PATH    a real account read off a cluster
+--<role>-genesis-deployment-slot N    a nonzero slot in a genesis install a
+                                      LOCAL rehearsal materializes
+```
+
+They are mutually exclusive, an observation whose ELF or authority is not the
+one the plan authenticates against is refused at plan time rather than by a
+chain refusal after the rent is spent, and the run spec carries both per role
+(`observed_programdata`, `genesis_deployment_slot`). The supervisor then reads
+all seven slots back off the live chain before the first record body is
+published, matches each against the minted body, and waits out the Loader's own
+rule that a program is not executable until *after* the slot it was deployed in.
+
+`c5d791e` closed the half that made the first half untestable: **nothing in the
+repository drove it.** No caller supplied a nonzero slot, so every role stayed
+at `0 == 0`, and neither `DeploymentSlotMismatch` nor the not-executable-yet
+rule had ever been exercised once. `tools/gauntlet/run.sh` now assigns distinct
+prime slots per role (11, 13, 17, 19, 23, 29, 31) under
+`--record-publication transaction` — the devnet rehearsal — and only there;
+`genesis` mode is the local install where 0 is the honest answer and stays
+byte-identical.
 
 Note the ordering this forces and that §3.0 states: deploy all seven → revoke →
 observe seven slots → mint the nine bodies → publish → initialize → activate.
 
-### Blocker B: no checked manifest can describe a deployed-then-revoked program
+### Blocker B: no checked manifest can describe a deployed-then-revoked program — CLOSED
 
 `dclutch_release_tool::loader_v3_programdata_account_data_v1` writes the
 authority tag and key when `--upgrade-authority` is given, and **zeros
@@ -868,12 +900,31 @@ it. It **does** break the frontend's
 `docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md` specifies as a byte-exact
 geometry-and-digest gate. Every devnet role would be refused by the browser.
 
-**Fix**: give `loader-accounts` a `--revoked-authority <hex32>` that emits tag
-`0` with the retained key, and produce the deploy-day manifests from *observed*
-accounts with observed slots — at which point the manifests stop being
-predictions and become deployment observations, one rung up the evidence ladder.
-That is the same regeneration the checked-release candidate already says is the
-cheapest next step on this path.
+**Closed by `09d7884`,** which is the fix this section proposed.
+`loader-accounts` takes `--revoked-authority <hex32>`, mutually exclusive with
+`--upgrade-authority`, and the third parameter of
+`loader_v3_programdata_account_data_v1` is now a three-state
+`LoaderV3AuthorityStateV1` rather than an `Option<Pubkey>` that could not
+express the middle row:
+
+| flags | tag | `[13..45]` | what it is |
+|---|---:|---|---|
+| neither | `0` | zero | never authorized — a genesis install |
+| `--upgrade-authority K` | `1` | `K` | mutable, upgradeable by `K` |
+| `--revoked-authority K` | `0` | `K` | **immutable, formerly `K`** |
+
+The *reader* side never needed changing and this is worth recording, because it
+is why the fix is small: `ProgramDataMetadataV3View::parse` has always read tag
+`0` as `None` and never surfaced the residue, and `CheckedReleaseV1` records
+`upgrade_authority: None` for it while its account digest commits to the
+retained bytes. Only the constructor could not express the state.
+
+A run carrying a retained authority reports
+`evidence_class=loader-state-carrying-an-observed-retained-authority`, because
+nothing offline knows which key a program used to have: that value can only
+come from reading the account. **So a deploy-day manifest set built this way is
+no longer a prediction of the deployment — it quotes an observation of it**,
+which is the rung up the evidence ladder this section asked for.
 
 ### Blocker C: the frontend still conflates Core with the Registry program
 
@@ -920,7 +971,9 @@ a formality:
       digests.
 - [ ] `DCLTGMF1` has been re-measured at that commit and is under ~95% of
       1,400,000 CU.
-- [ ] Blocker A is fixed and the record bodies carry observed deployment slots.
+- [x] Blocker A is fixed and the record bodies carry observed deployment slots.
+      (`993a9ec` + `c5d791e`; exercised end to end by
+      `tools/gauntlet/run.sh --record-publication transaction`.)
 - [ ] The devnet `PythReleaseV1` row exists, minted by the adapter lane.
 - [ ] The dry-run gate (§6) is green at that commit.
 - [ ] The Core ephemeral authority's lifetime and destruction are decided in
@@ -937,4 +990,6 @@ local-validator execution, and devnet execution are distinct evidence levels,
 and this document sits below the lowest of them because nothing in it has been
 executed against a cluster at all. No deployment or frontend described here may
 be called official: that requires a checked release manifest over *observed*
-accounts, which Blocker B says cannot currently be produced.
+accounts. Blocker B used to say those could not be produced at all; since
+`09d7884` they can, and the remaining requirement is simply that somebody
+actually reads the accounts off a cluster and builds the set from them.

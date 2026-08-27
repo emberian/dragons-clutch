@@ -10,7 +10,10 @@ tools/gauntlet/run.sh --mode census          # once, for the inventory
 tools/gauntlet/journey/run-journey.sh --holders 4
 ```
 
-It takes the single global `127.0.0.1:20890` slot. Coordinate on the wave board.
+It takes `127.0.0.1:20890` by default and `--rpc-port auto` takes a free
+42-port block instead, so it can run beside a `run.sh --mode full` campaign.
+Two runs that both take the default still contend; coordinate on the wave board
+for that case. `--ledger PATH` gives a concurrent run its own census ledger.
 
 ## Not a fast lane
 
@@ -56,7 +59,8 @@ derivation rather than a number somebody typed. `--keypair-seed none` takes
 fresh keys instead.
 
 It is safe here and **only** here: the producer refuses the flag outright unless
-the RPC endpoint is loopback, and this tier is pinned to `127.0.0.1:20890`. Read
+the RPC endpoint is loopback, and this tier only ever names a `127.0.0.1`
+origin, whatever base it runs on. Read
 `seed.rs` before using it anywhere else. The transcript records
 `deterministic_keypairs`, because a transcript that does not say which mode
 produced its numbers is a transcript whose numbers cannot be used.
