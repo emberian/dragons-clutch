@@ -652,6 +652,235 @@ mod host {
             }
         }
 
+        /// THE FILL'S READ SET, MEASURED -- and the writers it is still owed.
+        ///
+        /// `registered_bundle_v4`'s
+        /// `every_register_the_effect_reads_has_a_declared_writer` measures an
+        /// EFFECT's reads by perturbation and joins them to the artifacts' own
+        /// static write declarations. The fill has no Effect, no AccountProfile
+        /// and no LifecycleV5, so the same method runs one artifact earlier: each
+        /// common register is perturbed in isolation and counted as READ exactly
+        /// when it moves the shipped transition's decision or its output bank.
+        ///
+        /// Two writers exist in this family today, and this test names them: the
+        /// RequestProfile above projects the matcher's quantity and execution
+        /// price, and the program owns the five constants it loads. Everything
+        /// else the measurement finds is read by an object that ships and written
+        /// by nothing -- an AccountProfile projection or a LifecycleV5 protected
+        /// output has to supply it, and neither artifact exists.
+        ///
+        /// MEASURED: fifty-four scalars and nine identities are read; two of the
+        /// scalars have a writer. The other fifty-two group cleanly, and the
+        /// grouping is the specification for whoever authors the missing
+        /// artifacts:
+        ///
+        /// * seven (0..5, 12) are the authenticated root phase, the Clock slot,
+        ///   the Product outcome count, the Core Market generation, the immutable
+        ///   config price scale and fee rate, and the root's live-maker count --
+        ///   AccountProfile projections, exactly as the inline-ordinary profile
+        ///   already projects its own.
+        /// * thirty-eight (13..50) are the two persisted record-plus-replay
+        ///   spans, whole and symmetric: nineteen coordinates per side, read out
+        ///   of `DirectRegisteredRecordLayoutV2` and `DirectMakerReplayLayoutV1`.
+        /// * three (80, 81, 84) are the child pre-revisions the settlement's
+        ///   `expected_revision` fields commit to: two Claims Positions and the
+        ///   buyer record's Custody replay.
+        /// * four (88..91) are the rent principals the transition requires
+        ///   NONZERO, and they are a DECISION rather than a lookup. Either the
+        ///   AccountProfile projects them from each account's persisted
+        ///   `RENT_PRINCIPAL` field, or a LifecycleV5 declares them as protected
+        ///   outputs. The second costs schema: a
+        ///   `LifecycleProtectedOutputsInputV3` names seven coordinates per plan
+        ///   and this schema has only `historical_rent_principal` and `state` for
+        ///   all four accounts, so four authenticate plans would want twelve more
+        ///   scalars (created, bump observation, bump) and six more identities
+        ///   (two maker beneficiaries, four owners) -- and the identity bank
+        ///   carries eight unaddressed registers, which is enough for six. The
+        ///   two guarded `Close` plans a terminal record needs cost nothing:
+        ///   `LifecycleGuardInputV3::ScalarEq` reads `sellerTerminal` /
+        ///   `buyerTerminal`, and `sellerRentOwner` / `buyerRentOwner` are
+        ///   already the record RentCredit beneficiaries a Close requires.
+        ///
+        /// The nine identities are the Market, both makers, both intent Markets,
+        /// both maker-replay Markets, and both replay-stored owners. The other
+        /// twenty-three named coordinates are read by no instruction in the
+        /// program: they exist for the Effect and the AccountProfile.
+        #[test]
+        fn the_transition_reads_registers_no_artifact_in_the_family_writes() {
+            let (read_scalars, read_identities) = measured_read_set();
+
+            // The measurement discriminates: a register the program writes
+            // before it reads does not move the result when it is perturbed.
+            for derived in [
+                FILL_SCALAR_GROSS_V4,
+                FILL_SCALAR_SELLER_NET_V4,
+                FILL_SCALAR_TOTAL_FEE_V4,
+                FILL_SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V4,
+                FILL_SCALAR_CUSTODY_REVISION_AFTER_FEE_V4,
+            ] {
+                assert!(
+                    !read_scalars.contains(&derived),
+                    "scalar {derived} is derived, not read"
+                );
+            }
+            // Same for the five constants: each is loaded before any use.
+            for constant in [
+                FILL_SCALAR_ZERO_V4,
+                FILL_SCALAR_ONE_V4,
+                FILL_SCALAR_GTC_V4,
+                FILL_SCALAR_FEE_DENOMINATOR_V4,
+                FILL_SCALAR_TERMINAL_V4,
+            ] {
+                assert!(
+                    !read_scalars.contains(&constant),
+                    "scalar {constant} is program-owned"
+                );
+            }
+
+            // The whole of what this family writes into the fill's bank today.
+            let projected = [FILL_SCALAR_QUANTITY_V4, FILL_SCALAR_EXECUTION_PRICE_V4];
+            for index in projected {
+                assert!(read_scalars.contains(&index));
+            }
+            let unwritten: std::vec::Vec<usize> = read_scalars
+                .iter()
+                .copied()
+                .filter(|index| !projected.contains(index))
+                .collect();
+
+            assert_eq!(read_scalars.len(), 54);
+            assert_eq!(unwritten.len(), 52);
+            assert_eq!(read_identities.len(), 9);
+
+            // Seven come from the authenticated root, config, Product and Clock.
+            for index in [
+                FILL_SCALAR_ROOT_PHASE_V4,
+                FILL_SCALAR_SLOT_V4,
+                FILL_SCALAR_OUTCOME_COUNT_V4,
+                FILL_SCALAR_MARKET_GENERATION_V4,
+                FILL_SCALAR_PRICE_SCALE_V4,
+                FILL_SCALAR_POLICY_FEE_BPS_V4,
+                FILL_SCALAR_ROOT_OPEN_COUNT_V4,
+            ] {
+                assert!(unwritten.contains(&index));
+            }
+            // Thirty-eight are the two persisted record-plus-replay spans, whole.
+            for index in FILL_SCALAR_SELLER_SIDE_V4..=FILL_SCALAR_BUYER_MAKER_GENERATION_V4 {
+                assert!(unwritten.contains(&index), "persisted scalar {index}");
+            }
+            // Three are the child pre-revisions each settlement leg commits to.
+            for index in [
+                FILL_SCALAR_CLAIM_SOURCE_REVISION_V4,
+                FILL_SCALAR_CLAIM_DESTINATION_REVISION_V4,
+                FILL_SCALAR_CUSTODY_REVISION_V4,
+            ] {
+                assert!(unwritten.contains(&index));
+            }
+            // And four are the rent principals, the decision named above.
+            for index in [
+                FILL_SCALAR_SELLER_MAKER_RENT_PRINCIPAL_V4,
+                FILL_SCALAR_SELLER_RECORD_RENT_PRINCIPAL_V4,
+                FILL_SCALAR_BUYER_MAKER_RENT_PRINCIPAL_V4,
+                FILL_SCALAR_BUYER_RECORD_RENT_PRINCIPAL_V4,
+            ] {
+                assert!(unwritten.contains(&index));
+            }
+
+            // The nine identities are exactly the ones the transition
+            // authenticates against; the other twenty-three named coordinates
+            // are the Effect's and the AccountProfile's, not this program's.
+            assert_eq!(
+                read_identities,
+                std::vec![
+                    FILL_IDENTITY_MARKET_V4,
+                    FILL_IDENTITY_SELLER_MAKER_V4,
+                    FILL_IDENTITY_BUYER_MAKER_V4,
+                    FILL_IDENTITY_SELLER_INTENT_MARKET_V4,
+                    FILL_IDENTITY_BUYER_INTENT_MARKET_V4,
+                    FILL_IDENTITY_SELLER_MAKER_MARKET_V4,
+                    FILL_IDENTITY_BUYER_MAKER_MARKET_V4,
+                    FILL_IDENTITY_SELLER_MAKER_REPLAY_OWNER_V4,
+                    FILL_IDENTITY_BUYER_MAKER_REPLAY_OWNER_V4,
+                ]
+            );
+        }
+
+        /// Perturb every common register in isolation against the canonical
+        /// admitted bank and keep the ones that move the result.
+        fn measured_read_set() -> (std::vec::Vec<usize>, std::vec::Vec<usize>) {
+            let base_scalars = matched_scalars();
+            let base_identities = valid_identities();
+            let base = resolve(base_scalars, base_identities);
+            assert!(base.is_some(), "the baseline fill must be admitted");
+
+            let mut scalars = std::vec::Vec::new();
+            for index in 0..DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4 {
+                let original = *base_scalars.get(index).expect("scalar coordinate");
+                let moved = [0, 1, 2, u64::MAX, original.wrapping_add(1)]
+                    .into_iter()
+                    .filter(|candidate| *candidate != original)
+                    .any(|candidate| {
+                        let mut perturbed = base_scalars;
+                        *perturbed.get_mut(index).expect("scalar coordinate") = candidate;
+                        resolve(perturbed, base_identities) != base
+                    });
+                if moved {
+                    scalars.push(index);
+                }
+            }
+
+            let mut identities = std::vec::Vec::new();
+            for index in 0..DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4 {
+                let original = *base_identities.get(index).expect("identity coordinate");
+                let moved = [[9_u8; 32], [0_u8; 32], [7_u8; 32]]
+                    .into_iter()
+                    .filter(|candidate| *candidate != original)
+                    .any(|candidate| {
+                        let mut perturbed = base_identities;
+                        *perturbed.get_mut(index).expect("identity coordinate") = candidate;
+                        resolve(base_scalars, perturbed) != base
+                    });
+                if moved {
+                    identities.push(index);
+                }
+            }
+            (scalars, identities)
+        }
+
+        /// Execute the emitted program, returning the output bank on admission.
+        fn resolve(
+            input: [u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4],
+            identities: [[u8; 32]; DIRECT_REGISTERED_FILL_COMMON_IDENTITIES_V4],
+        ) -> Option<[u64; DIRECT_REGISTERED_FILL_COMMON_SCALARS_V4]> {
+            let mut scratch = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            let mut bytes = [0_u8; DIRECT_REGISTERED_FILL_TRANSITION_BYTES_V4];
+            encode_direct_registered_fill_transition_v4_atomic(&mut scratch, &mut bytes)
+                .expect("transition");
+            let transition = ProgramV3::decode(&bytes).expect("decode");
+            let mut scalar_scratch = input;
+            let mut output = input;
+            let mut identity_scratch = identities;
+            let mut identity_output = identities;
+            execute_fold_atomic(
+                transition,
+                3,
+                RegisterInput {
+                    scalars: &input,
+                    identities: &identities,
+                },
+                RegisterOutput {
+                    scalars: &mut scalar_scratch,
+                    identities: &mut identity_scratch,
+                },
+                RegisterOutput {
+                    scalars: &mut output,
+                    identities: &mut identity_output,
+                },
+            )
+            .ok()
+            .map(|()| output)
+        }
+
         /// The boundary itself stays admissible: a venue rate exactly at the
         /// denominator takes the whole quote as fee, which is a policy the
         /// makers may sign.
