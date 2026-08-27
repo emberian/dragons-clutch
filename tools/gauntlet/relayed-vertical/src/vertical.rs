@@ -208,9 +208,10 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     // The producer published every record the material names directly; the
     // relayer key set and the relayed adapter configuration are named from
     // inside the provider release, and publishing them is the keeper's act.
-    let authority = session
-        .forge
-        .keypair(crate::seed::role::CORE_UPGRADE_AUTHORITY);
+    // An owned copy of the session's own authority: the forge would issue a
+    // NEW indexed key for the role, which is a different signer entirely.
+    let authority = Keypair::try_from(session.authority.to_bytes().as_slice())
+        .map_err(|error| Error::new(format!("authority keypair copy: {error}")))?;
     let key_set_record = publish_record(
         &mut session.rpc,
         registry_program,
