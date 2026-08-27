@@ -4739,9 +4739,8 @@ fn prepare_lifecycle_v4<'a>(
                                 // exact seed bytes and checked it against this
                                 // exact account; `admit` refuses below unless
                                 // the state coordinate is the preplan's too.
-                                derived = Some(
-                                    *accounts.get(state).ok_or(TradingSbfError::Content)?.key,
-                                );
+                                derived =
+                                    Some(*accounts.get(state).ok_or(TradingSbfError::Content)?.key);
                                 bump
                             }
                         };
@@ -4943,8 +4942,7 @@ fn require_lifecycle_replan_agreement_v4(
     transition_scalars: &[u64],
     transition_identities: &[[u8; 32]],
 ) -> Result<(), ProgramError> {
-    if revalidated.scalars != transition_scalars
-        || revalidated.identities != transition_identities
+    if revalidated.scalars != transition_scalars || revalidated.identities != transition_identities
     {
         Err(TradingSbfError::Transition.into())
     } else {
@@ -9431,7 +9429,11 @@ mod tests {
         );
     }
 
-    fn preplanned_invocation(state: usize, seed: u8, canonical: u8) -> PreparedLifecycleInvocationV3 {
+    fn preplanned_invocation(
+        state: usize,
+        seed: u8,
+        canonical: u8,
+    ) -> PreparedLifecycleInvocationV3 {
         PreparedLifecycleInvocationV3 {
             plan: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
                 state: [seed; 32],
@@ -9457,8 +9459,7 @@ mod tests {
         let prior = preplanned_invocation(1, 0x11, 0x63);
         let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         assert!(seeds.push(&[0x11, 0x11]).is_ok());
-        let mut diverged =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let mut diverged = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         assert!(diverged.push(&[0x11, 0x12]).is_err());
         // A seed of the right bytes but the wrong width is not the same seed.
         let mut short = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
@@ -9484,8 +9485,7 @@ mod tests {
             seeds: alloc::vec![alloc::vec![0x11, 0x11], alloc::vec![254, 254]],
             ..preplanned_invocation(1, 0x11, 0x63)
         };
-        let mut seeds =
-            LifecycleSeedsV4::new(Some(malformed.seeds.as_slice()), 2).expect("verify");
+        let mut seeds = LifecycleSeedsV4::new(Some(malformed.seeds.as_slice()), 2).expect("verify");
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
         assert!(seeds.pending_bump(&program).is_err());
     }
@@ -9505,8 +9505,7 @@ mod tests {
         // yields a collected vector: the two modes cannot be confused silently.
         assert!(seeds.exhausted().is_err());
         let prior = preplanned_invocation(1, 0x11, 0x63);
-        let verifying =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let verifying = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         assert!(verifying.collected().is_err());
     }
 
@@ -9519,8 +9518,7 @@ mod tests {
         let program = Pubkey::new_from_array([0x77; 32]);
         let agreeing = |state: usize, canonical: u8| {
             let sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
-            let mut seeds =
-                LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+            let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
             seeds.push(&[0x11, 0x11]).expect("first seed agrees");
             let LifecycleCanonicalBumpV4::Reused { bump } =
                 seeds.pending_bump(&program).expect("reused")
@@ -9528,11 +9526,9 @@ mod tests {
                 return Err(TradingSbfError::Content.into());
             };
             seeds.push(&[bump]).expect("bump agrees");
-            let mut bindings = LifecycleBindingsV4::new(
-                Some(prior.immutable_identity_bindings.as_slice()),
-                1,
-            )
-            .expect("verify");
+            let mut bindings =
+                LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
+                    .expect("verify");
             bindings
                 .push(PreparedImmutableIdentityBindingV4 {
                     data_offset: 16,
@@ -9603,8 +9599,7 @@ mod tests {
         let expected = alloc::vec![preplanned_invocation(1, 0x11, 0x63)];
         let prior = expected.first().expect("one preplanned invocation");
         let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
-        let mut seeds =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
         // The bump seed was never pushed.
         let mut bindings =
@@ -9622,8 +9617,7 @@ mod tests {
         );
         // And the mirror: every seed reached, no binding reached.
         let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
-        let mut seeds =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
         seeds.push(&[254]).expect("bump agrees");
         let bindings =
