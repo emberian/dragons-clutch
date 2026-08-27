@@ -13,7 +13,7 @@ use solana_sdk::signature::Signer;
 use crate::{
     Error, Result,
     ledger::{ConservationLedgerV1, LamportClaimV1, ObservationV1},
-    resolution::{self, ProviderLegVerdictV1},
+    provider, resolution,
     stages::{self, MarketAddressesV1, StageReportV1},
 };
 
@@ -65,9 +65,11 @@ pub(crate) struct JourneyTranscriptV1 {
     pub(crate) claim_unit_atoms: u64,
     pub(crate) markets: Vec<MarketPhaseV1>,
     pub(crate) stages: Vec<StageReportV1>,
-    /// How far the Pyth transport could carry this Market, and exactly what
-    /// stopped it.
-    pub(crate) provider_legs: ProviderLegVerdictV1,
+    /// Stages that were supposed to execute and did not, with the exact
+    /// refusal. A journey that meets one still writes its transcript and its
+    /// ledger -- the evidence is the point -- and then fails, so a wall is
+    /// never traded for a green run.
+    pub(crate) unexpected_refusals: Vec<String>,
     pub(crate) gaps: Vec<GapV1>,
     pub(crate) observations: Vec<ObservationV1>,
     pub(crate) transactions_total: usize,
@@ -107,6 +109,8 @@ pub(crate) fn execute(
         &session.accounts,
     )?;
     resolution::watch(&mut ledger, &resolution_addresses);
+    let provider_plan = provider::ProviderPlanV1::derive(&mut session.rpc, &session.plan)?;
+    provider::watch(&mut ledger, &provider_plan);
 
     ledger.observe(
         &mut session.rpc,
@@ -177,7 +181,9 @@ pub(crate) fn execute(
         LamportClaimV1::fees(ring_fees),
     )?;
 
-    let (resolution_report, provider_legs, resolution_fees) = resolution::resolve(
+    let mut unexpected_refusals = Vec::new();
+
+    let (resolution_report, resolution_fees) = resolution::resolve(
         &mut session.rpc,
         &session.authority,
         &resolution_addresses,
@@ -193,6 +199,55 @@ pub(crate) fn execute(
         0,
         0,
         LamportClaimV1::fees(resolution_fees),
+    )?;
+
+    // The provider legs bootstrap two captured third-party programs and then
+    // drive the Market to Terminal. A refusal here is a FINDING, and a finding
+    // is worth more written down beside a complete ledger than thrown as an
+    // error that discards the rest of the journey -- so the stage is recorded
+    // either way and the run fails at the end, after the transcript exists.
+    let (provider_report, provider_fees) = match provider::resolve_through_pyth(
+        &mut session.rpc,
+        &session.authority,
+        &session.plan,
+        &resolution_addresses,
+        &provider_plan,
+        &mut session.transactions,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            unexpected_refusals.push(format!(
+                "resolution: the Pyth transport carries the Market to Terminal -- {error}"
+            ));
+            (
+                StageReportV1 {
+                    stage: "resolution: the Pyth transport carries the Market to Terminal".into(),
+                    outcome: "refused".into(),
+                    transactions: 0,
+                    compute_units: 0,
+                    note: format!(
+                        "REFUSED, and the refusal is the finding: {error}. Everything the legs \
+                         need is on this chain -- the receiver and router ELFs are loaded by the \
+                         launcher, the Pyth release record is published by the infrastructure \
+                         plan, and the Market's own source spec, window spec, statistic spec, \
+                         provider release and adapter configuration are finalized records at the \
+                         identities its SourceMaterialV2 names."
+                    ),
+                },
+                0,
+            )
+        }
+    };
+    stages.push(provider_report);
+    // Resolution moves no collateral either: a terminal certificate is an
+    // assertion about which outcome won, not a transfer. The Hoard must not
+    // move by one atom while the Market becomes resolvable-against.
+    ledger.observe(
+        &mut session.rpc,
+        "resolution: the Pyth transport carries the Market to Terminal",
+        0,
+        0,
+        LamportClaimV1::fees(provider_fees),
     )?;
 
     let (rent, rent_fees) = stages::recover_rent(
@@ -219,7 +274,7 @@ pub(crate) fn execute(
         )?,
         market_phase(&mut session.rpc, "found31_market", addresses.found31_market)?,
     ];
-    let gaps = gap_register(&provider_legs);
+    let gaps = gap_register();
     for gap in &gaps {
         stages.push(StageReportV1 {
             stage: gap.stage.clone(),
@@ -249,7 +304,7 @@ pub(crate) fn execute(
         claim_unit_atoms,
         markets,
         stages,
-        provider_legs,
+        unexpected_refusals: unexpected_refusals.clone(),
         gaps,
         observations: ledger.observations().to_vec(),
         transactions_total: session.transactions.len(),
@@ -266,6 +321,15 @@ pub(crate) fn execute(
             violations.len(),
             transcript_path.display(),
             violations.join("\n  ")
+        )));
+    }
+    if !unexpected_refusals.is_empty() {
+        return Err(Error::new(format!(
+            "{} stage(s) that were supposed to execute refused; the transcript and the complete \
+             conservation ledger are at {}:\n  {}",
+            unexpected_refusals.len(),
+            transcript_path.display(),
+            unexpected_refusals.join("\n  ")
         )));
     }
     Ok(transcript)
@@ -301,7 +365,7 @@ fn market_phase(
 /// SWEEP always was. What is left is the trading half, which is behind three
 /// independent walls rather than the one the Hot gate looked like, and the
 /// terminal half, which is behind one.
-fn gap_register(provider: &ProviderLegVerdictV1) -> Vec<GapV1> {
+fn gap_register() -> Vec<GapV1> {
     vec![
         GapV1 {
             stage: "post-open life: outcome-token distribution and holder-to-holder transfers".into(),
@@ -404,18 +468,6 @@ fn gap_register(provider: &ProviderLegVerdictV1) -> Vec<GapV1> {
                      commit and the other must refuse on the nonce rather than both committing or \
                      both refusing. Neither is constructible until (3) above is answered."
                 .into(),
-        },
-        GapV1 {
-            stage: "resolution: the Pyth transport carries this Market to Terminal".into(),
-            routes: vec![
-                "resolution/provider_transport_v3#Submit".into(),
-                "resolution/provider_transport_v3#Execute".into(),
-                "core/persist_state#AdmitTerminal".into(),
-            ],
-            owner: "the demo Market\'s own source graph (market.rs::demo_market_input), \
-                    journey-adjacent"
-                .into(),
-            reason: provider.detail.clone(),
         },
         GapV1 {
             stage: "redemption: winners redeem through terminal settlement".into(),

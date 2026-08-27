@@ -47,6 +47,7 @@ mod seed;
 // ------------------------------------------------------------- this campaign
 mod journey;
 mod ledger;
+mod provider;
 mod resolution;
 mod stages;
 

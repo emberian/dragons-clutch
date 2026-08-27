@@ -19,8 +19,11 @@
 //! stages, which need a program to sign its own PDA and are therefore behind
 //! the Hot gate no matter what state the Market is in.
 //!
-//! What this stage reaches, and what it does not, is decided by ONE fact about
-//! the campaign's Market and is documented on `ProviderLegVerdictV1`.
+//! This module owns the FUNDING half of the ladder. The provider half -- one
+//! Pyth update through the real receiver ELF, then the Core-driven execution
+//! that mints the terminal certificate -- is `provider.rs`, because it also has
+//! to bootstrap two captured third-party programs and that is a different kind
+//! of work from deriving a Core effect.
 
 use std::collections::BTreeMap;
 
@@ -29,6 +32,9 @@ use dclutch_capability_contract::{
     FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
 };
 use dclutch_market_core_codec::{CoreState, Phase, Readiness};
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
@@ -40,11 +46,11 @@ use dclutch_resolution_core_v3_operator::{
     validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
-    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-    SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceMaterialV2, SourceResolutionPhaseV1,
-    SourceResolutionStateV2,
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, RECOVERY_POLICY_SCHEMA_ID_V2,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV2,
+    SourceResolutionPhaseV1, SourceResolutionStateV2, WINDOW_SPEC_SCHEMA_ID_V1,
 };
-use serde::Serialize;
 use solana_program::hash::hash;
 use solana_sdk::{
     pubkey::Pubkey,
@@ -84,6 +90,23 @@ pub(crate) struct ResolutionAddressesV1 {
     pub(crate) source_material: RecordPairV1,
     pub(crate) capability_manifest: RecordPairV1,
     pub(crate) recovery_policy: RecordPairV1,
+    /// The five source-graph records the provider legs authenticate, plus the
+    /// three Product-graph records terminal admission reads. Every one is
+    /// derived from its own body's digest and cross-checked against the address
+    /// the founding recorded, so a record that moved is a named mismatch here
+    /// rather than an unattributable refusal three transactions later.
+    pub(crate) source_spec: RecordPairV1,
+    pub(crate) window_spec: RecordPairV1,
+    pub(crate) statistic_spec: RecordPairV1,
+    pub(crate) provider_release: RecordPairV1,
+    pub(crate) adapter_config: RecordPairV1,
+    pub(crate) product: RecordPairV1,
+    pub(crate) result_domain: RecordPairV1,
+    pub(crate) portfolio: RecordPairV1,
+    /// The infrastructure plan's Pyth release record, published before any
+    /// Market existed. Its raw coordinate only; the provider legs never read a
+    /// staging cursor for it.
+    pub(crate) pyth_release: Pubkey,
     pub(crate) source_state: Pubkey,
     /// Recovery, exhaustion, failure — in the order the operator consumes them.
     pub(crate) funding: [Pubkey; 3],
@@ -125,19 +148,6 @@ impl RecordPairV1 {
     }
 }
 
-/// What the provider legs of the ladder could do against this campaign's chain.
-///
-/// Kept as its own type because the answer is a PROPERTY OF THE MARKET, not of
-/// this tier, and it deserves to be named rather than folded into a note.
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct ProviderLegVerdictV1 {
-    pub(crate) reachable: bool,
-    /// Record identities the Market's own `SourceMaterialV2` names and that no
-    /// record body can ever hash to.
-    pub(crate) unrealizable_record_ids: Vec<String>,
-    pub(crate) detail: String,
-}
-
 /// Derive every resolution coordinate from the founding's evidence.
 ///
 /// The three funding destinations are re-derived here from the manifest, which
@@ -159,49 +169,57 @@ pub(crate) fn derive(
         .map_err(|error| Error::new(format!("founded Market: {error:?}")))?;
     let generation = market.identity.generation;
 
-    let source_material_body = record_body(rpc, evidence, "source_material_record")?;
-    let manifest_body = record_body(rpc, evidence, "capability_manifest_record")?;
-    let recovery_body = record_body(rpc, evidence, "recovery_policy_record")?;
-
-    let source_material = RecordPairV1::derive(
-        registry_program,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-        &source_material_body,
-    );
-    let capability_manifest = RecordPairV1::derive(
-        registry_program,
-        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-        &manifest_body,
-    );
-    let recovery_policy = RecordPairV1::derive(
-        registry_program,
-        RECOVERY_POLICY_SCHEMA_ID_V2,
-        &recovery_body,
-    );
-    for (label, derived, recorded) in [
-        (
-            "source_material_record",
-            source_material.raw,
-            evidence_address(evidence, "source_material_record")?,
-        ),
-        (
-            "capability_manifest_record",
-            capability_manifest.raw,
-            evidence_address(evidence, "capability_manifest_record")?,
-        ),
-        (
-            "recovery_policy_record",
-            recovery_policy.raw,
-            evidence_address(evidence, "recovery_policy_record")?,
-        ),
-    ] {
-        if derived != recorded {
+    // Every finalized record is located the same way: read the body the
+    // founding recorded, derive both coordinates from its digest, and REFUSE if
+    // the derived raw address is not the one the founding named. That check is
+    // the whole reason to derive rather than to look up -- a record whose
+    // address is not its own content identity is not a finalized record, and
+    // this is where that stops being true quietly.
+    let located = |rpc: &mut Rpc,
+                   label: &str,
+                   schema: [u8; 32]|
+     -> Result<(RecordPairV1, Vec<u8>)> {
+        let recorded = evidence_address(evidence, label)?;
+        let body = rpc.required_account(recorded, label)?.data;
+        let pair = RecordPairV1::derive(registry_program, schema, &body);
+        if pair.raw != recorded {
             return Err(Error::new(format!(
-                "{label} sits at {recorded} but its own body hashes to a record at {derived}; a \
-                 record whose address is not its content identity is not a finalized record"
+                "{label} sits at {recorded} but its own body hashes to a record at {}; a record \
+                 whose address is not its content identity is not a finalized record",
+                pair.raw
             )));
         }
-    }
+        Ok((pair, body))
+    };
+    let (source_material, source_material_body) = located(
+        rpc,
+        "source_material_record",
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+    )?;
+    let (capability_manifest, manifest_body) = located(
+        rpc,
+        "capability_manifest_record",
+        CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+    )?;
+    let (recovery_policy, recovery_body) =
+        located(rpc, "recovery_policy_record", RECOVERY_POLICY_SCHEMA_ID_V2)?;
+    let (source_spec, _) = located(rpc, "source_spec_record", SOURCE_SPEC_SCHEMA_ID_V1)?;
+    let (window_spec, _) = located(rpc, "window_spec_record", WINDOW_SPEC_SCHEMA_ID_V1)?;
+    let (statistic_spec, _) = located(rpc, "statistic_spec_record", STATISTIC_SPEC_SCHEMA_ID_V1)?;
+    let (provider_release, _) = located(
+        rpc,
+        "provider_release_record",
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+    )?;
+    let (adapter_config, _) = located(
+        rpc,
+        "pyth_adapter_config_record",
+        PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+    )?;
+    let (product, _) = located(rpc, "product_record", PRODUCT_RECORD_SCHEMA_ID_V2)?;
+    let (result_domain, _) = located(rpc, "result_domain_record", RESULT_DOMAIN_SCHEMA_ID_V2)?;
+    let (portfolio, _) = located(rpc, "portfolio_record", PORTFOLIO_SCHEMA_ID_V2)?;
+    let pyth_release = crate::runtime::record(plan, "pyth_release")?.0;
 
     let material = SourceMaterialV2::decode(&source_material_body)
         .map_err(|error| Error::new(format!("SourceMaterialV2: {error:?}")))?;
@@ -271,6 +289,15 @@ pub(crate) fn derive(
         source_material,
         capability_manifest,
         recovery_policy,
+        source_spec,
+        window_spec,
+        statistic_spec,
+        provider_release,
+        adapter_config,
+        product,
+        result_domain,
+        portfolio,
+        pyth_release,
         source_state,
         funding,
         funding_entry_indices,
@@ -300,7 +327,7 @@ pub(crate) fn resolve(
     payer: &Keypair,
     addresses: &ResolutionAddressesV1,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(StageReportV1, ProviderLegVerdictV1, u64)> {
+) -> Result<(StageReportV1, u64)> {
     let state = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
         .map_err(|error| Error::new(format!("Market: {error:?}")))?;
     if state.phase != Phase::Open || state.readiness != Readiness::Consumed {
@@ -361,6 +388,22 @@ pub(crate) fn resolve(
         transactions.push(evidence);
     }
 
+    // 2. The frame does not fit a legacy packet, and that is a measurement
+    //    rather than an inconvenience: `CreateFund` carries twenty accounts and
+    //    a Core effect envelope, and the first execution of this stage was
+    //    refused by the RPC at 2,016 bytes against the 1,232 limit. So it rides
+    //    a finalized address lookup table as a v0 transaction, exactly as
+    //    Found31 and DCLTGMF1 do, through the producer's own table publisher --
+    //    one author for the routing shape rather than a second copy of it here.
+    let (routing, tables) = crate::market::publish_routing_table(
+        rpc,
+        payer,
+        "Resolution CreateFund",
+        std::slice::from_ref(&create.instruction),
+        transactions,
+    )?;
+    submitted += 2;
+
     // 2. The adversarial half FIRST. A second creation at the same generation
     //    must refuse, and the cheapest honest way to prove the guard is live is
     //    to submit the creation twice and assert the SECOND one fails — which
@@ -368,13 +411,16 @@ pub(crate) fn resolve(
     //    Before that: an over-funded Fund. Every Fund's lamports must equal
     //    rent plus exactly the native principal its own manifest entry quotes,
     //    and over-funding is not a donation a prepaid compartment may keep.
-    let over = rpc.send_expected_failure(
+    let over = rpc.send_v0_expected_failure_with_signers(
         "journey: over-funding a Resolution Fund by one lamport refuses the creation",
         &[
             transfer(&payer.pubkey(), &addresses.funding[0], 1),
             create.instruction.clone(),
         ],
         payer,
+        &[],
+        routing,
+        &tables,
     )?;
     fees = fees.saturating_add(over.fee_lamports.unwrap_or(0));
     compute_units = compute_units.saturating_add(over.compute_units_consumed.unwrap_or(0));
@@ -401,10 +447,13 @@ pub(crate) fn resolve(
             create.source_top_up_lamports, create.funding_top_up_lamports
         )));
     }
-    let evidence = rpc.send(
+    let evidence = rpc.send_v0_with_signers(
         "journey: an Open Market creates its own Resolution Fund",
         std::slice::from_ref(&create.instruction),
         payer,
+        &[],
+        routing,
+        &tables,
     )?;
     fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
     compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
@@ -437,10 +486,13 @@ pub(crate) fn resolve(
 
     // 4. Double create. The Source PDA is one per Market generation, and the
     //    prepaid-output rule refuses anything not System-owned and empty.
-    let double = rpc.send_expected_failure(
+    let double = rpc.send_v0_expected_failure_with_signers(
         "journey: a second CreateFund at the same generation refuses",
         &[create.instruction],
         payer,
+        &[],
+        routing,
+        &tables,
     )?;
     fees = fees.saturating_add(double.fee_lamports.unwrap_or(0));
     compute_units = compute_units.saturating_add(double.compute_units_consumed.unwrap_or(0));
@@ -459,10 +511,25 @@ pub(crate) fn resolve(
         .account(addresses.rent_beneficiary)?
         .map(|account| account.lamports)
         .unwrap_or(0);
-    let evidence = rpc.send(
-        "journey: activate the three-ledger Resolution funding of an Open Market",
-        &[verify.instruction],
+    // Same shape, same reason: twenty accounts and an effect envelope do not
+    // fit a legacy packet. A second table rather than a reused one, because
+    // the two frames route different accounts and a table extended to cover
+    // both would be a routing fact this campaign invented.
+    let (verify_routing, verify_tables) = crate::market::publish_routing_table(
+        rpc,
         payer,
+        "Resolution VerifyFundReady",
+        std::slice::from_ref(&verify.instruction),
+        transactions,
+    )?;
+    submitted += 2;
+    let evidence = rpc.send_v0_with_signers(
+        "journey: activate the three-ledger Resolution funding of an Open Market",
+        std::slice::from_ref(&verify.instruction),
+        payer,
+        &[],
+        verify_routing,
+        &verify_tables,
     )?;
     fees = fees.saturating_add(evidence.fee_lamports.unwrap_or(0));
     compute_units = compute_units.saturating_add(evidence.compute_units_consumed.unwrap_or(0));
@@ -500,7 +567,6 @@ pub(crate) fn resolve(
         }
     }
 
-    let provider = provider_leg_verdict(rpc, addresses)?;
     Ok((
         StageReportV1 {
             stage: "resolution: create and activate the Market's Resolution funding".into(),
@@ -515,69 +581,12 @@ pub(crate) fn resolve(
                  on the way: over-funding a Fund by one lamport, and a second CreateFund at the \
                  same generation. Manifest entries {:?} carry the recovery, exhaustion and failure \
                  compartments. The Market stayed Open + Consumed, and its rent beneficiary gained \
-                 exactly the {} lamports the activation declared. {}",
-                addresses.funding_entry_indices,
-                verify.expected_beneficiary_credit_lamports,
-                provider.detail
+                 exactly the {} lamports the activation declared.",
+                addresses.funding_entry_indices, verify.expected_beneficiary_credit_lamports
             ),
         },
-        provider,
         fees,
     ))
-}
-
-/// Decide whether the provider legs can run against THIS Market, and say why.
-///
-/// The answer turns on one thing, and it is not the Hot gate and not the
-/// prestate: `SourceMaterialV2` names its source spec, window spec and
-/// statistic spec by CONTENT IDENTITY, and a finalized record's address is
-/// derived from the hash of its own body. So a Market whose material names
-/// identities that are not the hash of any record body has named records that
-/// cannot be published — by anyone, ever, short of a preimage attack.
-fn provider_leg_verdict(
-    rpc: &mut Rpc,
-    addresses: &ResolutionAddressesV1,
-) -> Result<ProviderLegVerdictV1> {
-    let body = rpc
-        .required_account(addresses.source_material.raw, "source material record")?
-        .data;
-    let material = SourceMaterialV2::decode(&body)
-        .map_err(|error| Error::new(format!("SourceMaterialV2: {error:?}")))?;
-    // A record's address is `[domain, schema, sha256(body)]`, so an identity is
-    // realizable exactly when some body hashes to it. Nothing here can decide
-    // that in general; what it CAN do is report the three identities the
-    // Market's own material names, so the claim is checkable by whoever tries
-    // to publish them rather than taken on this campaign's word.
-    let unrealizable = [
-        ("primary source spec", material.primary_source_spec()),
-        ("window spec", material.window_spec()),
-        ("statistic spec", material.statistic_spec()),
-    ]
-    .into_iter()
-    .map(|(label, id)| format!("{label} {}", hex(&id.to_bytes())))
-    .collect();
-    Ok(ProviderLegVerdictV1 {
-        reachable: false,
-        unrealizable_record_ids: unrealizable,
-        detail:
-            "The provider legs -- one Pyth update submitted through the real Receiver ELF and one \
-             Core-driven execution that mints the terminal certificate -- did NOT run, and the \
-             reason is upstream of both the Hot gate and the prestate. Both legs authenticate the \
-             Market's SourceSpecV1, WindowSpecV1 and StatisticSpecV1 as finalized Registry \
-             records, and a finalized record lives at an address derived from the hash of its own \
-             body. This Market's SourceMaterialV2 names all three by domain-separated DEMO \
-             digests (`demo_id(\"source-spec/pyth-price-update\", ..)` and siblings in \
-             market.rs::demo_market_input), which are not the hash of any record body, so no \
-             record can ever be published at those identities and the ladder stops here by \
-             construction. The Pyth receiver and router ELFs ARE deployed on this validator \
-             (dclutch-successor-validator loads both), and the plan already publishes the \
-             deployment-slot-zero `local_validator_release_v1` Pyth release record, so everything \
-             else the legs need is present. The fix is journey-adjacent and named: compile real \
-             SourceSpecV1/WindowSpecV1/StatisticSpecV1/ProviderReleaseV1/PythAdapterConfigV1 \
-             bodies in the demo market input, name them by their own digests, and publish them \
-             with the rest of the graph."
-                .into(),
-    })
 }
 
 fn funding_labels(addresses: &ResolutionAddressesV1) -> [(&'static str, Pubkey); 3] {
@@ -782,16 +791,6 @@ fn observed_or_vacant(
     })
 }
 
-fn record_body(
-    rpc: &mut Rpc,
-    evidence: &BTreeMap<String, AccountEvidence>,
-    label: &str,
-) -> Result<Vec<u8>> {
-    Ok(rpc
-        .required_account(evidence_address(evidence, label)?, label)?
-        .data)
-}
-
 fn evidence_address(evidence: &BTreeMap<String, AccountEvidence>, label: &str) -> Result<Pubkey> {
     let recorded = evidence.get(label).ok_or_else(|| {
         Error::new(format!(
@@ -800,8 +799,4 @@ fn evidence_address(evidence: &BTreeMap<String, AccountEvidence>, label: &str) -
         ))
     })?;
     pubkey(&recorded.address)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

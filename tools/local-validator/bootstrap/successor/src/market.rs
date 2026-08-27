@@ -64,8 +64,10 @@ use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_BYTES_V2, LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
+    ContentId as SourceContentId, PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+    RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV2,
+    WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use dclutch_token_svm::{
     ACCOUNT_BYTES, AccountState, CollateralAdapterReleaseV1, MINT_BYTES, Mint,
@@ -92,6 +94,34 @@ use crate::{
     runtime::{PublishedRecord, decode_hex, publish_product_graph, publish_record, record},
     seed::{KeyForge, role},
 };
+
+/// The captured Pyth `PriceUpdateV2` account body this demo Market resolves
+/// against. It is one of the eleven provenance-pinned artifacts
+/// `dclutch-successor-validator` verifies before it starts, and the launcher
+/// loads the receiver and router ELFs beside it, so the bytes here and the
+/// programs on the chain come from one pinned set.
+const FIXTURE_PRICE_UPDATE: &[u8] =
+    include_bytes!("../../../../../fixtures/pyth/local-upgraded-2026-08-22/price-update.account");
+
+/// The demo Market's terminal window width, in seconds.
+///
+/// Not one instant: TWIN measured that a window pinned to a single second is
+/// answered only when a publication happens to land on it, and Pyth's SOL/USD
+/// cadence is nearer five minutes. Three hundred seconds is one cadence of
+/// margin on a period that ends at the publication the market is about.
+const TERMINAL_WINDOW_WIDTH_SECONDS: i64 = 300;
+
+/// How stale the captured publication may be, measured against the CLUSTER's
+/// clock rather than against the window.
+///
+/// This is the fixture's shelf life and not a market's staleness tolerance.
+/// The captured publication instant is frozen; a validator's clock is
+/// wall-clock; so the quantity this bounds grows by 86,400 every day the
+/// fixture is not recaptured. One year is a stated bound with a tripwire
+/// behind it: the journey campaign refuses once the fixture outlives it, so
+/// the number can never be quietly widened instead of the fixture being
+/// refreshed. A Market resolving against a live feed states seconds here.
+const FIXTURE_SHELF_LIFE_SECONDS: u32 = 31_536_000;
 
 pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign reaches an OPEN Market. It publishes the Realm/Product/ResultDomain/Portfolio/Source/RecoveryPolicy/capability-manifest graph and the canonical ProductBasisV3 the Product declares as its liability basis, creates a real lifecycle RentCreditV2, creates a Market through canonical Core Found31 at 223,540 compute units, stages the complete projected-Custody prestate through DCLTPCB1 at its own generation - all four stages, 754,119 CU, in one rollback domain - pre-funds the five accounts the protocol allocates but never funds, and then founds a second Market atomically through DCLTGMF1: Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open LAST, five stages in one rollback domain and one transaction, at 1,184,132 CU or 84.6% of the per-transaction maximum. This string used to say that DCLTPCB1 was heap-bound and that no runner could fix it, because RequestHeapFrame enlarges the region the runtime grants while the stock solana-program-entrypoint allocator is built with the compile-time constant HEAP_LENGTH = 32 KiB. That was true of the tree that measured it. Trading now owns its entrypoint and its allocator and re-derives the grant from the instructions sysvar, and the grant reaches the two founding routes because they present that sysvar in their own frames - it was a wire fact, not a transaction fact. DCLTPCB1 completes with 645,581 CU unspent; it is neither heap-bound nor compute-bound. What is left is not a seam in this path. The Market is Open, the Claims liability aggregate and the founder Position and the admission record exist at their derived addresses and runtime-derived widths, the Hoard holds the exact founding principal, the source compartment is closed and the one-shot permit consumed, and the projection is realized in place as the Market's normal Custody replay. The projected-Custody family still has no AbortSourceAndClose terminal, so a founder who bootstraps and never founds has principal that can only move forward through Lock; that is deliberate and it is queued. See docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md.";
 
@@ -143,11 +173,66 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
     ] {
         let _ = source_id(value)?;
     }
+    // Three of those four identities name a record body this spec also
+    // carries, and the identity of a finalized record IS the SHA-256 of its
+    // body. Checking that here rather than trusting the pair is the whole
+    // point of carrying the bodies: an identity that is not its body's digest
+    // names a record that can never be published, which is the defect this
+    // check exists to make impossible to reintroduce. The provider release and
+    // adapter configuration are named from INSIDE the source spec rather than
+    // at top level, so they are checked by decoding the source spec below.
+    for (label, identity, body) in [
+        (
+            "primary source spec",
+            &input.primary_source_spec_id,
+            &input.source_spec_hex,
+        ),
+        ("window spec", &input.window_spec_id, &input.window_spec_hex),
+        (
+            "statistic spec",
+            &input.statistic_spec_id,
+            &input.statistic_spec_hex,
+        ),
+    ] {
+        let bytes = decode_hex(body)?;
+        if bytes.is_empty() {
+            return Err(Error::new(format!(
+                "the run spec names a {label} and carries no body for it"
+            )));
+        }
+        if record_identity(&bytes) != source_id(identity)?.to_bytes() {
+            return Err(Error::new(format!(
+                "the {label} identity is not the SHA-256 of the {label} body this spec carries, so                  it names a finalized record that can never exist"
+            )));
+        }
+    }
+    {
+        let source_spec =
+            dclutch_source_contract::SourceSpecV1::decode(&decode_hex(&input.source_spec_hex)?)
+                .map_err(|error| Error::new(format!("SourceSpecV1: {error:?}")))?;
+        let provider_release = decode_hex(&input.provider_release_hex)?;
+        let adapter_config = decode_hex(&input.pyth_adapter_config_hex)?;
+        if record_identity(&provider_release) != source_spec.provider_release_id().to_bytes() {
+            return Err(Error::new(
+                "the provider release body is not the one the source spec names",
+            ));
+        }
+        if record_identity(&adapter_config) != source_spec.adapter_config_id().to_bytes() {
+            return Err(Error::new(
+                "the Pyth adapter configuration body is not the one the source spec names",
+            ));
+        }
+    }
     let recovery_bytes = decode_hex(&input.recovery_policy_hex)?;
-    let recovery = RecoveryPolicyV2::decode(&recovery_bytes)
-        .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
-    if recovery.to_bytes().as_slice() != recovery_bytes {
-        return Err(Error::new("RecoveryPolicyV2 input was not canonical"));
+    // Empty means the material carries NO recovery policy: the deliberate
+    // section-12.8 demo shape, admitted on chain at e5b6923 and decided in
+    // MAINNET_STATE_RELAY.md section 13. Non-empty keeps the original rule.
+    if !recovery_bytes.is_empty() {
+        let recovery = RecoveryPolicyV2::decode(&recovery_bytes)
+            .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
+        if recovery.to_bytes().as_slice() != recovery_bytes {
+            return Err(Error::new("RecoveryPolicyV2 input was not canonical"));
+        }
     }
     let manifest = decode_hex(&input.capability_manifest_hex)?;
     let manifest = CapabilityManifestV1::decode(&manifest)
@@ -176,7 +261,7 @@ pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
 /// The semantic preimage deliberately omits the Product and result-domain
 /// links, so this identity exists before the Product that will declare it.
 /// That omission is what makes the join acyclic rather than a fixed point.
-fn semantic_basis_identity_v3(bytes: &[u8]) -> Result<[u8; 32]> {
+pub(crate) fn semantic_basis_identity_v3(bytes: &[u8]) -> Result<[u8; 32]> {
     let preimage = semantic_basis_preimage_v3(bytes)
         .map_err(|error| Error::new(format!("ProductBasisV3: {error:?}")))?;
     let mut hasher = Sha256::new();
@@ -193,7 +278,7 @@ fn semantic_basis_identity_v3(bytes: &[u8]) -> Result<[u8; 32]> {
 /// scale, no knots, no graded terms, and one basis claim per outcome. Nothing
 /// here is a free parameter except the two acyclic links, and both are checked
 /// against the compiled Product graph before publication.
-fn compile_linked_basis_v3(
+pub(crate) fn compile_linked_basis_v3(
     product_id: [u8; 32],
     result_domain_id: [u8; 32],
     coordinate_domain_id: [u8; 32],
@@ -233,9 +318,19 @@ struct MarketRecords {
     domain: PublishedRecord,
     portfolio: PublishedRecord,
     source: PublishedRecord,
-    recovery: PublishedRecord,
+    recovery: Option<PublishedRecord>,
     manifest: PublishedRecord,
     basis: PublishedRecord,
+    /// The five source-graph records both provider legs authenticate. They are
+    /// published with the rest of the graph rather than left to a resolution
+    /// campaign, because the Market's `SourceMaterialV2` NAMES them and a
+    /// Market that names records nobody published is a Market that cannot
+    /// resolve.
+    source_spec: PublishedRecord,
+    window_spec: PublishedRecord,
+    statistic_spec: PublishedRecord,
+    provider_release: PublishedRecord,
+    adapter_config: PublishedRecord,
 }
 
 struct FinalizedSnapshot {
@@ -494,12 +589,25 @@ pub(crate) fn execute_found_market(
         ("result_domain_record", records.domain.raw),
         ("portfolio_record", records.portfolio.raw),
         ("source_material_record", records.source.raw),
-        ("recovery_policy_record", records.recovery.raw),
         ("capability_manifest_record", records.manifest.raw),
+        ("source_spec_record", records.source_spec.raw),
+        ("window_spec_record", records.window_spec.raw),
+        ("statistic_spec_record", records.statistic_spec.raw),
+        ("provider_release_record", records.provider_release.raw),
+        ("pyth_adapter_config_record", records.adapter_config.raw),
         ("linked_liability_basis_record", records.basis.raw),
     ] {
         let account = rpc.required_account(key, label)?;
         accounts.insert(label.into(), account_evidence(key, &account));
+    }
+    // A no-recovery material published no recovery record, and the evidence
+    // says so by absence rather than by a placeholder address.
+    if let Some(recovery) = &records.recovery {
+        let account = rpc.required_account(recovery.raw, "recovery_policy_record")?;
+        accounts.insert(
+            "recovery_policy_record".into(),
+            account_evidence(recovery.raw, &account),
+        );
     }
     let mut completed = vec![
             "created an exact Token-2022 collateral Mint and funded raw-atom wallet with ephemeral local keys".into(),
@@ -599,22 +707,30 @@ fn publish_market_records(
     let domain_digest: [u8; 32] = Sha256::digest(&domain).into();
 
     let recovery_bytes = decode_hex(&input.recovery_policy_hex)?;
-    let recovery = RecoveryPolicyV2::decode(&recovery_bytes)
-        .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
-    if recovery.to_bytes().as_slice() != recovery_bytes {
-        return Err(Error::new("RecoveryPolicyV2 input was not canonical"));
-    }
-    let recovery_digest: [u8; 32] = Sha256::digest(&recovery_bytes).into();
+    let recovery_link = if recovery_bytes.is_empty() {
+        // The no-recovery material: a silent provider walks the funded
+        // Primary -> Exhausted -> FailureCommitted path to the Product's own
+        // pre-disclosed failure outcome (MAINNET_STATE_RELAY.md section 13).
+        None
+    } else {
+        let recovery = RecoveryPolicyV2::decode(&recovery_bytes)
+            .map_err(|error| Error::new(format!("RecoveryPolicyV2: {error:?}")))?;
+        if recovery.to_bytes().as_slice() != recovery_bytes {
+            return Err(Error::new("RecoveryPolicyV2 input was not canonical"));
+        }
+        let recovery_digest: [u8; 32] = Sha256::digest(&recovery_bytes).into();
+        Some(
+            SourceContentId::new(recovery_digest)
+                .map_err(|error| Error::new(format!("Recovery digest: {error:?}")))?,
+        )
+    };
     let source = SourceMaterialV2::new(
         SourceContentId::new(product_digest)
             .map_err(|error| Error::new(format!("Product digest: {error:?}")))?,
         source_id(&input.primary_source_spec_id)?,
         source_id(&input.window_spec_id)?,
         source_id(&input.statistic_spec_id)?,
-        Some(
-            SourceContentId::new(recovery_digest)
-                .map_err(|error| Error::new(format!("Recovery digest: {error:?}")))?,
-        ),
+        recovery_link,
         source_id(&input.failure_policy_release_id)?,
     )
     .to_bytes();
@@ -666,21 +782,99 @@ fn publish_market_records(
         None,
         transactions,
     )?;
-    let recovery = publish_record(
-        rpc,
-        registry,
-        payer,
-        RECOVERY_POLICY_SCHEMA_ID_V2,
-        &recovery_bytes,
-        None,
-        transactions,
-    )?;
+    let recovery = if recovery_bytes.is_empty() {
+        None
+    } else {
+        Some(publish_record(
+            rpc,
+            registry,
+            payer,
+            RECOVERY_POLICY_SCHEMA_ID_V2,
+            &recovery_bytes,
+            None,
+            transactions,
+        )?)
+    };
     let manifest = publish_record(
         rpc,
         registry,
         payer,
         CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
         &manifest,
+        None,
+        transactions,
+    )?;
+    // The five source-graph records. `validate_market_input` has already
+    // checked that each identity the material names IS the SHA-256 of the body
+    // published here, so `publish_record` cannot land a record at an address
+    // the Market does not point at.
+    let source_spec = publish_record(
+        rpc,
+        registry,
+        payer,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        &decode_hex(&input.source_spec_hex)?,
+        None,
+        transactions,
+    )?;
+    let window_spec = publish_record(
+        rpc,
+        registry,
+        payer,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        &decode_hex(&input.window_spec_hex)?,
+        None,
+        transactions,
+    )?;
+    let statistic_spec = publish_record(
+        rpc,
+        registry,
+        payer,
+        STATISTIC_SPEC_SCHEMA_ID_V1,
+        &decode_hex(&input.statistic_spec_hex)?,
+        None,
+        transactions,
+    )?;
+    let provider_release = publish_record(
+        rpc,
+        registry,
+        payer,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        &decode_hex(&input.provider_release_hex)?,
+        None,
+        transactions,
+    )?;
+    // Which schema the adapter-config body publishes under is the provider
+    // release's own statement, not a spec field a caller could skew: the Pyth
+    // extension names a PythAdapterConfigV1; the relayed extension names the
+    // VENUE's ArtifactReleaseV1 (MAINNET_STATE_RELAY.md section 12.4). A third
+    // extension is refused because no schema is known for it.
+    let adapter_config_schema = {
+        let provider = dclutch_source_contract::ProviderReleaseV1::decode(&decode_hex(
+            &input.provider_release_hex,
+        )?)
+        .map_err(|error| Error::new(format!("ProviderReleaseV1: {error:?}")))?;
+        match provider.adapter_release_id().to_bytes() {
+            dclutch_source_contract::PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1 => {
+                PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1
+            }
+            dclutch_source_contract::RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1 => {
+                dclutch_registry_contract::ARTIFACT_RELEASE_SCHEMA_ID_V1
+            }
+            other => {
+                return Err(Error::new(format!(
+                    "the provider release names an adapter extension this publisher has no                      adapter-config schema for: {}",
+                    hex(&other)
+                )));
+            }
+        }
+    };
+    let adapter_config = publish_record(
+        rpc,
+        registry,
+        payer,
+        adapter_config_schema,
+        &decode_hex(&input.pyth_adapter_config_hex)?,
         None,
         transactions,
     )?;
@@ -724,6 +918,11 @@ fn publish_market_records(
             recovery,
             manifest,
             basis,
+            source_spec,
+            window_spec,
+            statistic_spec,
+            provider_release,
+            adapter_config,
         },
         semantic_product_id,
     ))
@@ -734,7 +933,7 @@ fn publish_market_records(
 /// Only non-signer coordinates and the invoked Program are routed; the fee
 /// payer and every signer stay in the message's static key list. The table is
 /// authority-owned so its rent stays recoverable, and it is never frozen.
-fn publish_routing_table(
+pub(crate) fn publish_routing_table(
     rpc: &mut Rpc,
     payer: &Keypair,
     label: &str,
@@ -1077,6 +1276,16 @@ fn product_id(value: &str) -> Result<ProductContentId> {
 fn source_id(value: &str) -> Result<SourceContentId> {
     SourceContentId::new(hex32(value)?)
         .map_err(|error| Error::new(format!("Source content ID: {error:?}")))
+}
+
+/// One source identity from raw bytes rather than from a hex string.
+pub(crate) fn source_content(bytes: [u8; 32]) -> Result<SourceContentId> {
+    SourceContentId::new(bytes).map_err(|error| Error::new(format!("Source content ID: {error:?}")))
+}
+
+/// The SHA-256 a finalized record's address is derived from.
+pub(crate) fn record_identity(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 fn identity(bytes: [u8; 32]) -> Result<Identity> {
@@ -3592,7 +3801,7 @@ fn authenticate_open_market_poststate_v1(
 /// registry publishes it outside this local lab.
 const DEMO_ID_DOMAIN_V1: &[u8] = b"dclutch/local-demo-market/v1";
 
-fn demo_id(role: &str, parts: &[&[u8]]) -> [u8; 32] {
+pub(crate) fn demo_id(role: &str, parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(DEMO_ID_DOMAIN_V1);
     hasher.update([0]);
@@ -3626,12 +3835,25 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
         ContentId as CapabilityContentId, FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES,
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
-    use dclutch_pyth_svm::synthetic_fixture::synthetic_local_release_v1;
+    use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
     use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
-    use dclutch_source_contract::{RECOVERY_POLICY_MAX_ATTEMPTS_V2, RecoveryAttemptV2};
+    use dclutch_source_contract::{
+        CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
+        RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
+        SourceAccessProfile, SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1,
+        WindowKind, WindowSpecV1,
+    };
 
-    let fixture = synthetic_local_release_v1()
-        .map_err(|error| Error::new(format!("synthetic-local Pyth release: {error:?}")))?;
+    // The release this Market resolves against is the LOCAL-VALIDATOR
+    // projection, not the captured one. They differ in exactly two facts --
+    // the local label and both Loader deployment slots -- and the difference
+    // is the whole point: `solana-test-validator --upgradeable-program`
+    // regenerates the receiver's and router's `ProgramData` headers with
+    // deployment slot ZERO, and the captured row states devnet's slots. A
+    // Market that named the captured row would be resolvable only on a chain
+    // where those deployments happened, which is not this one.
+    let fixture = local_validator_release_v1()
+        .map_err(|error| Error::new(format!("local-validator Pyth release: {error:?}")))?;
     let local_label = fixture.local_label();
     let adapter = fixture.release().adapter_id();
     let feed = b"sol-usd".as_slice();
@@ -3642,10 +3864,129 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     let claim_basis = demo_id("claim-basis/unit-complete-set", &[]);
     let representation = demo_id("representation/categorical-fixed-width", &[]);
     let mapping = demo_id("mapping/scaled-integer-cut", &[&coordinate_domain]);
-    let primary_source = demo_id("source-spec/pyth-price-update", &[&adapter, feed]);
-    let window = demo_id("window-spec/single-verified-post-at-expiry", &[&adapter]);
-    let statistic = demo_id("statistic-spec/last-verified-price", &[&adapter]);
-    let failure_policy = demo_id("failure-policy/explicit-failure-outcome", &[]);
+    // ------------------------------------------------------------ the source graph
+    //
+    // The four identities below used to be domain-separated demo digests, and
+    // that made this Market UNRESOLVABLE in a way nothing refused. Both
+    // provider legs authenticate the source spec, window spec and statistic
+    // spec as FINALIZED REGISTRY RECORDS, and a finalized record lives at an
+    // address derived from the hash of its own body -- so an identity that is
+    // the digest of a SENTENCE names a record nobody can ever publish. The
+    // Market could create and activate its Resolution funding, and then stop
+    // forever, one step short of a certificate. Found by JRNY-2, which is the
+    // first campaign to drive the funding ladder against a chain and then ask
+    // what came next; the Pyth receiver and router were deployed and waiting
+    // the whole time.
+    //
+    // So the graph is compiled here, its identities ARE its bodies' digests,
+    // and the run spec carries the bodies for the same reason it already
+    // carries `linked_basis_hex` rather than an opaque digest.
+    let update = FullPriceUpdateV2::parse(FIXTURE_PRICE_UPDATE)
+        .map_err(|error| Error::new(format!("captured Pyth price update: {error:?}")))?;
+    let capacity = SourceCapacityProfileV1::new(
+        CapacityEnvelope::Measured,
+        1,
+        1,
+        source_content(demo_id("capacity/terminal-verifier", &[&local_label]))?,
+        source_content(demo_id("capacity/envelope-basis", &[&local_label]))?,
+        256,
+        0,
+    )
+    .map_err(|error| Error::new(format!("demo source capacity: {error:?}")))?;
+    let capacity_id = source_content(record_identity(&capacity.to_bytes()))?;
+
+    let pyth_release_bytes = fixture.release().to_bytes();
+    let provider_release = ProviderReleaseV1::new(
+        source_content(demo_id("provider-family/pyth", &[]))?,
+        source_content(adapter)?,
+        source_content(record_identity(&pyth_release_bytes))?,
+        source_content(fixture.release().price_update_codec_id())?,
+        source_content(fixture.release().router_abi_id())?,
+    );
+    let provider_release_bytes = provider_release.to_bytes();
+    let provider_release_id = record_identity(&provider_release_bytes);
+
+    // `max_confidence_bps` is the adapter's tolerance for the provider's own
+    // stated confidence interval, and 10_000 bps is its ceiling -- the widest
+    // the type admits. That is a LAB setting and reads as one: this Market
+    // resolves against a single captured publication whose confidence is
+    // whatever it was on the day it was captured, and refusing it on
+    // confidence would be refusing the fixture rather than testing the
+    // adapter. A Market on a live feed states a real bound here.
+    let adapter_config = PythAdapterConfigV1::new(update.feed_id(), update.exponent(), 10_000)
+        .map_err(|error| Error::new(format!("demo Pyth adapter configuration: {error:?}")))?;
+    let adapter_config_bytes = adapter_config.to_bytes();
+    let adapter_config_id = record_identity(&adapter_config_bytes);
+
+    let source_unit = demo_id("source-unit/pyth-scaled-price", &[&adapter, feed]);
+    let source_spec = SourceSpecV1::new(
+        source_content(coordinate_domain)?,
+        source_content(source_unit)?,
+        source_content(provider_release_id)?,
+        SourceAccessProfile::PythTerminalOneTransaction,
+        source_content(adapter_config_id)?,
+        capacity_id,
+    );
+    let source_spec_bytes = source_spec.to_bytes();
+    let primary_source = record_identity(&source_spec_bytes);
+
+    // The §12.3 admission is TWO predicates over two different clocks, and
+    // conflating them is what made the old fixture unusable:
+    //
+    //   observation_unix_seconds in [window.start, window.end]      -- what it is ABOUT
+    //   publication_unix_seconds in [now - max_age, now + max_skew] -- how FRESH it is
+    //
+    // The first is a market parameter, and this Market states a real
+    // 300-second terminal period ending at the captured publication. That
+    // width is TWIN's finding: a window forced to one instant is answered only
+    // when a publication happens to land on that exact second, and Pyth's
+    // SOL/USD cadence is nearer five minutes, so a degenerate window is a
+    // market nobody can resolve. It is legal and it is a choice, not the
+    // type's demand.
+    //
+    // The second is NOT a market parameter here and must never be read as one.
+    // The fixture's publication instant is FROZEN at the capture date and a
+    // local validator's clock is wall-clock, so `now - publication` is THE AGE
+    // OF THE FIXTURE and it grows by 86,400 every day. `max_age_seconds` is
+    // therefore stated as the fixture's declared shelf life, and the journey
+    // campaign REFUSES the moment the fixture outlives it rather than anyone
+    // quietly widening the number again. A Market resolving against a live
+    // feed states seconds here.
+    let window = WindowSpecV1::new(
+        source_content(primary_source)?,
+        WindowKind::Terminal,
+        update
+            .publish_time()
+            .checked_sub(TERMINAL_WINDOW_WIDTH_SECONDS)
+            .ok_or_else(|| Error::new("terminal window start underflowed"))?,
+        update.publish_time(),
+        FIXTURE_SHELF_LIFE_SECONDS,
+        1,
+        source_content(demo_id("window-schedule/terminal-single-sample", &[]))?,
+    )
+    .map_err(|error| Error::new(format!("demo terminal window: {error:?}")))?;
+    let window_bytes = window.to_bytes();
+    let window = record_identity(&window_bytes);
+
+    let statistic = StatisticSpecV1::new(
+        source_content(source_unit)?,
+        source_content(result_unit)?,
+        StatisticKind::TerminalSample,
+        RoundingBoundary::ExactRational,
+        1,
+        0,
+        capacity_id,
+        source_content(demo_id("statistic-evaluator/terminal-sample", &[]))?,
+        capacity,
+    )
+    .map_err(|error| Error::new(format!("demo terminal statistic: {error:?}")))?;
+    let statistic_bytes = statistic.to_bytes();
+    let statistic = record_identity(&statistic_bytes);
+
+    // The failure policy is a PROTOCOL release identity, not this campaign's
+    // to name. It was a demo digest for the same reason the three above were,
+    // and it had the same consequence.
+    let failure_policy = SOURCE_FAILURE_POLICY_RELEASE_ID_V2;
     let recovery_allocation = demo_id("recovery/funding-allocation", &[&local_label]);
     let recovery_source = demo_id("recovery/secondary-source-spec", &[&adapter, feed]);
     let recovery_authority = demo_id("recovery/attempt-authority", &[&local_label]);
@@ -3842,6 +4183,11 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
         window_spec_id: hex(&window),
         statistic_spec_id: hex(&statistic),
         failure_policy_release_id: hex(&failure_policy),
+        source_spec_hex: hex(&source_spec_bytes),
+        window_spec_hex: hex(&window_bytes),
+        statistic_spec_hex: hex(&statistic_bytes),
+        provider_release_hex: hex(&provider_release_bytes),
+        pyth_adapter_config_hex: hex(&adapter_config_bytes),
         recovery_policy_hex: hex(&recovery_bytes),
         capability_manifest_hex: hex(&manifest),
         linked_basis_hex: hex(&linked_basis),

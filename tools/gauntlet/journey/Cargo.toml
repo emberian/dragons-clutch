@@ -29,6 +29,7 @@ dclutch-product-runtime-v2 = { path = "../../../crates/dclutch-product-runtime-v
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2-admission = { path = "../../../crates/dclutch-product-runtime-v2-admission" }
 dclutch-product-runtime-v2-operator = { path = "../../../crates/dclutch-product-runtime-v2-operator" }
+dclutch-provider-transport-v3-operator = { path = "../../../crates/dclutch-provider-transport-v3-operator" }
 dclutch-pyth-svm = { path = "../../../crates/dclutch-pyth-svm", features = ["synthetic-local-fixture"] }
 dclutch-realm-contract = { path = "../../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../../crates/dclutch-record-contract" }
