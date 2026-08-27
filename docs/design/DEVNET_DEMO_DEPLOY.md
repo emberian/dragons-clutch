@@ -831,13 +831,17 @@ present in both, and the per-stage CU differ only by bump-seed noise
 
 ## 7. What is still blocking deploy day
 
-Three, all found by writing this document rather than by running anything,
-because each is invisible to a local run by construction.
+Four. The first three were found by writing this document rather than by
+running anything, because each is invisible to a local run by construction. The
+fourth arrived later, from the same blind spot in a different tree: decision
+0012 changed what the protocol admits, and the browser's copy of the old rule
+was not on anyone's site map.
 
-**All three are now closed.** A and B were killed on 2026-08-27 (`993a9ec`,
+**All four are now closed.** A and B were killed on 2026-08-27 (`993a9ec`,
 `c5d791e`, `09d7884`); C was killed the same day (`3645eed`, exercised against
-a real chain at `5129362`). The sections below keep the diagnosis, which is
-still the reason the code has the shape it has, and say what closed it.
+a real chain at `5129362`); D on the same evening (`abe1e70d`). The sections
+below keep the diagnosis, which is still the reason the code has the shape it
+has, and say what closed it.
 
 ### Blocker A: the bootstrap hardcodes `deployment_slot = 0` — CLOSED
 
@@ -983,6 +987,44 @@ refusal: a revoked Core's retained-authority bytes differ from the release
 tool's all-zero offline construction, which is a release-tool question, not a
 frontend one. `lib/releaseRegistry.ts` carries no Core/Registry conflation
 today.
+
+### Blocker D: the browser refused the iteration substrate outright — CLOSED
+
+Decision 0012 admits a mutable devnet substrate, and PIN-0012 (`0e34c036`)
+carried the admission through every Rust reader. It did not carry it through
+the TypeScript, and said so: the TS host mirrors were never on the ADR's site
+map. Two sites, both fatal on deploy day and both silent until then:
+
+- `apps/dclutch-web/lib/localSuccessor.ts:102` required
+  `deployment_slot === 0 && upgrade_authority === null`, so a checkpoint could
+  only ever describe a genesis-prepared irrevocable validator. `:121` refused
+  any ProgramData that did not read as slot-zero with a `None` tag.
+- `apps/dclutch-web/lib/infrastructure.ts:141` was
+  `if (artifact.upgradeAuthority !== null) throw ... is not immutable`, which
+  refused every role of an iterated substrate before a single account was read.
+
+The same code stands in `packages/dclutch-sdk`, so the CLI inherited it.
+
+**Closed by `abe1e70d`.** Both mirrors now call `requireSlotPinnedReleaseV1`,
+the exact TS mirror of the contract's `require_slot_pinned_release_v1`, and the
+slot comparison names its own refusal: a strictly later observed slot on an
+`ExactAuthority` release is `ReleaseSupersededByUpgrade` and everything else is
+`DeploymentSlotMismatch`, matching `ArtifactReleaseV1::slot_pin_refusal`. The
+supersession sentence is not written in the browser — it is read out of the
+generated refusal registry, whose eight `ReleaseSuperseded` rows carry one
+meaning, so the page tells a deploy-day operator exactly what the chain would
+have told them.
+
+**A second defect this uncovered, which was not about 0012 at all.**
+`localSuccessor.ts` still carried `requireZero(bytes, 13, 32)` on the
+ProgramData header — the check `releaseRegistry.ts` removed on 2026-08-27 after
+measuring it against a live validator, for the reason §2.5 of this document
+records: Loader V3 writes `ProgramData { slot, upgrade_authority: None }` as
+thirteen bytes over a forty-five byte header, so a **revoked** program keeps its
+former key inert at `[13..45]`. This copy was missed. It passed only because the
+local genesis writes that tail zeroed — which means it would have failed on the
+first revoked role read from a real cluster, and the immutable ceremony this
+document prescribes ends in exactly that revocation. Regression-tested.
 
 ---
 
