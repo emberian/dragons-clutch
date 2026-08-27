@@ -224,6 +224,111 @@ theorem apportion_le_scale
   apportionFrom_le_scale scale denominator 0 0 weights positive payout member
     (by omega)
 
+/-! ### How far the apportionment can move a claim
+
+Exactness of the total says nothing on its own about any individual claim: an
+apportionment that gave claim zero everything would still sum to `Q`. The
+bound below is what makes the boundary honest per claim.
+-/
+
+theorem apportionFrom_within_one_atom
+    (scale denominator cumulative carried : Nat) (weights : List Nat)
+    (positive : 0 < denominator)
+    (carriedExact : cumulativeFloorBoundaryV2 scale cumulative denominator = carried)
+    (pair : Nat × Nat)
+    (member : pair ∈
+      (apportionFrom scale denominator carried cumulative weights).zip weights) :
+    pair.1 * denominator < scale * pair.2 + denominator ∧
+      scale * pair.2 < (pair.1 + 1) * denominator := by
+  induction weights generalizing carried cumulative with
+  | nil => simp [apportionFrom] at member
+  | cons weight weights induction =>
+      simp only [apportionFrom, List.zip_cons_cons, List.mem_cons] at member
+      rcases member with rfl | member
+      · -- The head claim: one boundary step, bracketed on both sides.
+        have lowBefore := cumulativeFloorBoundaryV2_never_rounds_up scale cumulative
+          denominator
+        have highBefore := cumulativeFloorBoundaryV2_residue_lt_one_atom scale cumulative
+          denominator positive
+        have lowAfter := cumulativeFloorBoundaryV2_never_rounds_up scale
+          (cumulative + weight) denominator
+        have highAfter := cumulativeFloorBoundaryV2_residue_lt_one_atom scale
+          (cumulative + weight) denominator positive
+        have ordered : carried
+            ≤ cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator := by
+          rw [← carriedExact]
+          exact cumulativeFloorBoundaryV2_monotone scale cumulative (cumulative + weight)
+            denominator (by omega)
+        -- Expand every product `omega` would otherwise treat as an opaque atom.
+        have expandBefore :
+            (cumulativeFloorBoundaryV2 scale cumulative denominator + 1) * denominator
+              = cumulativeFloorBoundaryV2 scale cumulative denominator * denominator
+                + denominator := by
+          rw [Nat.add_mul, Nat.one_mul]
+        have expandAfter :
+            (cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator + 1)
+                * denominator
+              = cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator
+                * denominator + denominator := by
+          rw [Nat.add_mul, Nat.one_mul]
+        have expandStep :
+            (cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator - carried)
+                * denominator
+              = cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator
+                * denominator - carried * denominator := by
+          rw [Nat.sub_mul]
+        have expandPayout :
+            (cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator - carried
+                + 1) * denominator
+              = (cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator
+                - carried) * denominator + denominator := by
+          rw [Nat.add_mul, Nat.one_mul]
+        have carriedProduct : carried * denominator
+            = cumulativeFloorBoundaryV2 scale cumulative denominator * denominator := by
+          rw [carriedExact]
+        have spread : scale * (cumulative + weight) = scale * cumulative + scale * weight :=
+          Nat.mul_add _ _ _
+        have monotoneProduct :
+            carried * denominator
+              ≤ cumulativeFloorBoundaryV2 scale (cumulative + weight) denominator
+                * denominator :=
+          Nat.mul_le_mul_right denominator ordered
+        simp only
+        omega
+      · exact induction _ _ rfl member
+
+/-- **No claim is apportioned more than one atom from its exact share.** The
+integer payout `p` of a claim whose exact rational share is `Q * w / D`
+satisfies `|p - Q*w/D| < 1`, stated over integers to avoid a rational. This is
+the per-claim honesty bound the exact partition sum does not by itself
+provide. -/
+theorem apportion_within_one_atom
+    (scale denominator : Nat) (weights : List Nat) (positive : 0 < denominator)
+    (pair : Nat × Nat)
+    (member : pair ∈ (apportion scale denominator weights).zip weights) :
+    pair.1 * denominator < scale * pair.2 + denominator ∧
+      scale * pair.2 < (pair.1 + 1) * denominator :=
+  apportionFrom_within_one_atom scale denominator 0 0 weights positive
+    (by simp [cumulativeFloorBoundaryV2]) pair member
+
+/-- **A claim with no exact weight is never handed a collateral atom.** This is
+what carries B-spline local support through the apportionment: outside the
+`degree + 1` claims supported on the located span, the payout is an exact zero
+rather than a rounded one. -/
+theorem apportion_zero_weight
+    (scale denominator : Nat) (weights : List Nat) (positive : 0 < denominator)
+    (pair : Nat × Nat)
+    (member : pair ∈ (apportion scale denominator weights).zip weights)
+    (unweighted : pair.2 = 0) : pair.1 = 0 := by
+  obtain ⟨bound, _⟩ := apportion_within_one_atom scale denominator weights positive
+    pair member
+  rw [unweighted, Nat.mul_zero, Nat.zero_add] at bound
+  have scaled : pair.1 * denominator < 1 * denominator := by
+    rw [Nat.one_mul]
+    exact bound
+  have below : pair.1 < 1 := Nat.lt_of_mul_lt_mul_right scaled
+  omega
+
 /-! ### The ramp is the width-two instance
 
 The successor's first slice apportioned two claims with one floor and an exact
@@ -469,5 +574,405 @@ theorem levelsProduct_positive
         weightProduct_positive level (fun weight member => (levelBounded weight member).2)
       have tail : 0 < levelsProduct levels := induction (width + 1) tailWellFormed
       simpa [levelsProduct] using Nat.mul_pos head tail
+
+/-! ## Local support
+
+A degree-`d` basis function is supported on `d+1` knot spans, so at any one
+coordinate exactly `d+1` of the `K` claims can pay anything at all.  The de
+Boor triangle computes those `d+1` weights; every other claim's weight is a
+real zero rather than a rounded one, and `scatter` places the triangle at the
+located span.
+-/
+
+/-- Place the locally supported weights inside the runtime-width vector. -/
+def scatter (width offset : Nat) (values : List Nat) : List Nat :=
+  List.replicate offset 0 ++ values ++
+    List.replicate (width - (offset + values.length)) 0
+
+theorem sum_replicate_zero (count : Nat) : (List.replicate count 0).sum = 0 := by
+  induction count with
+  | zero => rfl
+  | succ count induction => simp [List.replicate_succ, induction]
+
+/-- Scattering moves no weight: the claims outside the local support carry
+exact zeros. -/
+@[simp] theorem scatter_sum (width offset : Nat) (values : List Nat) :
+    (scatter width offset values).sum = values.sum := by
+  simp only [scatter, List.sum_append, sum_replicate_zero]
+  omega
+
+theorem scatter_length
+    (width offset : Nat) (values : List Nat)
+    (inside : offset + values.length ≤ width) :
+    (scatter width offset values).length = width := by
+  simp only [scatter, List.length_append, List.length_replicate]
+  omega
+
+/-! ## The B-spline profile
+
+Knots are exact signed numerators over one positive common denominator, the
+same representation the ramp profile uses.  Repeated knots are admitted: an
+interior knot of multiplicity `r` drops the spline's continuity there by `r`,
+which is how a corner or a jump is expressed inside a smooth basis at all.
+Gen-1 forbade interior multiplicity outright and had to record the consequence
+as a limitation — a tent was exact at degree one and inexact at every smooth
+degree.  Here degenerate spans are skipped by the span locator instead of
+being refused by the profile.
+-/
+
+abbrev RationalCoordinate := DClutch.ProductV2.RationalCoordinate
+
+/-- A degree-`1..3` B-spline liability basis over an exact rational knot
+vector. `knots` is the full knot vector *with* multiplicity, so `width` claims
+need `width + degree + 1` knots. -/
+structure SplineProfile where
+  degree : Nat
+  scale : Nat
+  knotDenominator : Nat
+  knots : List Int
+  degreePositive : 0 < degree
+  degreeBounded : degree ≤ 3
+  scalePositive : 0 < scale
+  knotDenominatorPositive : 0 < knotDenominator
+  enoughKnots : 2 * degree + 2 ≤ knots.length
+
+/-- One claim per basis function: `K = |knots| - degree - 1`. -/
+def SplineProfile.width (profile : SplineProfile) : Nat :=
+  profile.knots.length - profile.degree - 1
+
+theorem SplineProfile.degree_lt_width (profile : SplineProfile) :
+    profile.degree < profile.width := by
+  have enough := profile.enoughKnots
+  unfold SplineProfile.width
+  omega
+
+theorem SplineProfile.width_positive (profile : SplineProfile) :
+    0 < profile.width :=
+  Nat.lt_of_le_of_lt (Nat.zero_le _) profile.degree_lt_width
+
+/-- Total knot read; an out-of-range index reads zero and is ruled out by the
+domain checks. -/
+def knotAt (knots : List Int) (index : Nat) : Int := knots[index]?.getD 0
+
+/-- Scaled knot, over the common denominator of the knots and the coordinate —
+definitionally the ramp lane's `scaledKnot`. -/
+def SplineProfile.scaledKnot
+    (profile : SplineProfile) (coordinate : RationalCoordinate) (index : Nat) : Int :=
+  knotAt profile.knots index * coordinate.denominator
+
+/-- Scaled coordinate — definitionally the ramp lane's `scaledCoordinate`. -/
+def SplineProfile.scaledCoordinate
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : Int :=
+  coordinate.numerator * profile.knotDenominator
+
+/-- **Boundary clamp.** Coordinates below the first knot of the domain and
+above the last are pulled onto the domain, so the outermost claims pay their
+full weight at and beyond the edge rather than falling off a half-open span.
+This is the spline form of the ramp's two explicit tail clamps. -/
+def SplineProfile.clampedCoordinate
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : Int :=
+  max (profile.scaledKnot coordinate profile.degree)
+    (min (profile.scaledCoordinate coordinate)
+      (profile.scaledKnot coordinate profile.width))
+
+/-- Spans inside the domain that are not degenerate. A knot of multiplicity
+`r` collapses `r-1` spans; those are skipped here rather than refused, which
+is what admits multiplicity at all. -/
+def SplineProfile.spanCandidates
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : List Nat :=
+  ((List.range (profile.width - profile.degree)).map (fun offset =>
+      profile.degree + offset)).filter (fun span =>
+    decide (profile.scaledKnot coordinate span
+      < profile.scaledKnot coordinate (span + 1)))
+
+/-- The non-degenerate span carrying the clamped coordinate: the last candidate
+whose left knot the coordinate has reached. The top of the domain is closed,
+so the final coordinate lands in the final span rather than nowhere. -/
+def SplineProfile.locateSpan
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : Nat :=
+  let candidates := profile.spanCandidates coordinate
+  match (candidates.filter (fun span =>
+      decide (profile.scaledKnot coordinate span
+        ≤ profile.clampedCoordinate coordinate))).getLast? with
+  | some span => span
+  | none => candidates.headD profile.degree
+
+/-- The `k` Cox-de-Boor weights of one level, at knot indices `span+1-k` up to
+`span`. The numerator is clamped to the denominator so that no weight can
+exceed one; on a correctly located span the clamp is inert, exactly as the
+ramp's interior clamp is. -/
+def SplineProfile.levelWeights
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (span level : Nat) : List (Nat × Nat) :=
+  (List.range level).map (fun offset =>
+    let index := span + 1 + offset - level
+    let elapsed :=
+      (profile.clampedCoordinate coordinate
+        - profile.scaledKnot coordinate index).toNat
+    let support :=
+      (profile.scaledKnot coordinate (index + level)
+        - profile.scaledKnot coordinate index).toNat
+    (Nat.min elapsed support, support))
+
+@[simp] theorem SplineProfile.levelWeights_length
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (span level : Nat) :
+    (profile.levelWeights coordinate span level).length = level := by
+  simp [SplineProfile.levelWeights]
+
+theorem SplineProfile.levelWeights_bounded
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (span level : Nat) (weight : Nat × Nat)
+    (member : weight ∈ profile.levelWeights coordinate span level) :
+    weight.1 ≤ weight.2 := by
+  simp only [SplineProfile.levelWeights, List.mem_map] at member
+  obtain ⟨_, _, rfl⟩ := member
+  exact Nat.min_le_right _ _
+
+/-- The degree levels of the triangle, from level one up to the degree. -/
+def SplineProfile.weightLevelsFrom
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (span : Nat) : Nat → Nat → List (List (Nat × Nat))
+  | 0, _ => []
+  | remaining + 1, level =>
+      profile.levelWeights coordinate span level ::
+        profile.weightLevelsFrom coordinate span remaining (level + 1)
+
+def SplineProfile.weightLevels
+    (profile : SplineProfile) (coordinate : RationalCoordinate) :
+    List (List (Nat × Nat)) :=
+  profile.weightLevelsFrom coordinate (profile.locateSpan coordinate)
+    profile.degree 1
+
+/-- **Evaluator admission.** Three decidable facts: the coordinate is a real
+rational, the located span sits inside the domain, and every de Boor
+denominator is a non-degenerate knot span. Nothing else is needed — weight
+nonnegativity and the `p ≤ q` bound are structural. -/
+def SplineProfile.admits
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : Bool :=
+  decide (0 < coordinate.denominator) &&
+    decide (profile.degree ≤ profile.locateSpan coordinate) &&
+    decide (profile.locateSpan coordinate < profile.width) &&
+    (profile.weightLevels coordinate).all (fun level =>
+      level.all (fun weight => decide (0 < weight.2)))
+
+theorem SplineProfile.weightLevelsFrom_wellFormed
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (span remaining level : Nat)
+    (positive : ∀ entry ∈ profile.weightLevelsFrom coordinate span remaining level,
+      ∀ weight ∈ entry, 0 < weight.2) :
+    LevelsWellFormed (profile.weightLevelsFrom coordinate span remaining level) level := by
+  induction remaining generalizing level with
+  | zero => trivial
+  | succ remaining induction =>
+      refine ⟨profile.levelWeights_length coordinate span level, ?_, ?_⟩
+      · intro weight member
+        exact ⟨profile.levelWeights_bounded coordinate span level weight member,
+          positive _ (by simp [SplineProfile.weightLevelsFrom]) weight member⟩
+      · exact induction (level + 1) (fun entry member =>
+          positive entry (by simp [SplineProfile.weightLevelsFrom, member]))
+
+/-- An admitted coordinate gives a well-formed triangle starting from the
+single degree-zero value. -/
+theorem SplineProfile.wellFormed_of_admits
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    LevelsWellFormed (profile.weightLevels coordinate) 1 := by
+  unfold SplineProfile.admits at admitted
+  simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at admitted
+  refine profile.weightLevelsFrom_wellFormed coordinate _ _ _ ?_
+  intro entry member weight weightMember
+  exact admitted.2 entry member weight weightMember
+
+theorem SplineProfile.admits_coordinateDenominator
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) : 0 < coordinate.denominator := by
+  unfold SplineProfile.admits at admitted
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at admitted
+  exact admitted.1.1.1
+
+theorem SplineProfile.admits_span_inside
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    profile.degree ≤ profile.locateSpan coordinate ∧
+      profile.locateSpan coordinate < profile.width := by
+  unfold SplineProfile.admits at admitted
+  simp only [Bool.and_eq_true, decide_eq_true_eq] at admitted
+  exact ⟨admitted.1.1.2, admitted.1.2⟩
+
+/-! ### The exact rational basis, then the exact integer payouts -/
+
+/-- Local de Boor values, one per basis function supported on the located
+span. Their common denominator is `basisDenominator`. -/
+def SplineProfile.localNumerators
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : List Nat :=
+  deBoorLevels (profile.weightLevels coordinate) [1]
+
+/-- The exact common denominator of one evaluation. -/
+def SplineProfile.basisDenominator
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : Nat :=
+  levelsProduct (profile.weightLevels coordinate)
+
+/-- The exact rational basis weights, as numerators over `basisDenominator`,
+placed at their claim coordinates. -/
+def SplineProfile.basisNumerators
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : List Nat :=
+  scatter profile.width (profile.locateSpan coordinate - profile.degree)
+    (profile.localNumerators coordinate)
+
+/-- **The evaluator.** Exact rational B-spline weights, apportioned into
+integer collateral atoms by the single cumulative floor boundary. -/
+def SplineProfile.evaluate
+    (profile : SplineProfile) (coordinate : RationalCoordinate) : List Nat :=
+  apportion profile.scale (profile.basisDenominator coordinate)
+    (profile.basisNumerators coordinate)
+
+theorem SplineProfile.weightLevelsFrom_length
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (span remaining level : Nat) :
+    (profile.weightLevelsFrom coordinate span remaining level).length = remaining := by
+  induction remaining generalizing level with
+  | zero => rfl
+  | succ remaining induction =>
+      simp only [SplineProfile.weightLevelsFrom, List.length_cons]
+      rw [induction (level + 1)]
+
+@[simp] theorem SplineProfile.weightLevels_length
+    (profile : SplineProfile) (coordinate : RationalCoordinate) :
+    (profile.weightLevels coordinate).length = profile.degree :=
+  profile.weightLevelsFrom_length coordinate _ _ _
+
+/-- Exactly `degree + 1` claims are locally supported, which is the B-spline
+locality property in its integer form. -/
+theorem SplineProfile.localNumerators_length
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    (profile.localNumerators coordinate).length = profile.degree + 1 := by
+  have wellFormed := profile.wellFormed_of_admits coordinate admitted
+  have stepped := deBoorLevels_length (profile.weightLevels coordinate) [1] 1
+    (by simp) wellFormed
+  simp only [SplineProfile.localNumerators]
+  rw [stepped, profile.weightLevels_length coordinate]
+  omega
+
+theorem SplineProfile.basisDenominator_positive
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    0 < profile.basisDenominator coordinate :=
+  levelsProduct_positive _ 1 (profile.wellFormed_of_admits coordinate admitted)
+
+/-- **Partition of unity, in exact rational form.** The B-spline weights at an
+admitted coordinate sum to exactly one — as integer numerators, to exactly
+their own common denominator. No approximation and no rounding has happened
+yet at this point. -/
+theorem SplineProfile.basisNumerators_sum
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    (profile.basisNumerators coordinate).sum = profile.basisDenominator coordinate := by
+  have wellFormed := profile.wellFormed_of_admits coordinate admitted
+  simp only [SplineProfile.basisNumerators, scatter_sum, SplineProfile.localNumerators,
+    SplineProfile.basisDenominator]
+  rw [deBoorLevels_sum (profile.weightLevels coordinate) [1] 1 (by simp) wellFormed]
+  simp
+
+theorem SplineProfile.basisNumerators_length
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    (profile.basisNumerators coordinate).length = profile.width := by
+  obtain ⟨spanLow, spanHigh⟩ := profile.admits_span_inside coordinate admitted
+  refine scatter_length _ _ _ ?_
+  rw [profile.localNumerators_length coordinate admitted]
+  omega
+
+theorem SplineProfile.evaluate_length
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    (profile.evaluate coordinate).length = profile.width := by
+  simp only [SplineProfile.evaluate, apportion_length]
+  exact profile.basisNumerators_length coordinate admitted
+
+/-- **Exact partition sum.** The integer payouts of a degree-`1..3` B-spline
+basis sum to exactly the collateral scale `Q` at every admitted coordinate.
+This is the theorem `M-4` names: the B-spline partition-of-unity property
+holding over the integer-apportioned form, at every runtime width, with one
+named rounding boundary and no residue. -/
+theorem SplineProfile.evaluate_partition
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) :
+    (profile.evaluate coordinate).sum = profile.scale :=
+  apportion_sum profile.scale (profile.basisDenominator coordinate) _
+    (profile.basisDenominator_positive coordinate admitted)
+    (profile.basisNumerators_sum coordinate admitted)
+
+theorem SplineProfile.evaluate_bounded
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true)
+    (payout : Nat) (member : payout ∈ profile.evaluate coordinate) :
+    payout ≤ profile.scale :=
+  apportion_le_scale profile.scale (profile.basisDenominator coordinate) _
+    (profile.basisDenominator_positive coordinate admitted)
+    (profile.basisNumerators_sum coordinate admitted) payout member
+
+/-! ### The B-spline family as a liability basis
+
+Instantiating `Basis` is what carries the whole supply algebra across:
+complete-set split, complete-set merge, claim transfer and terminal
+redemption, plus the `Q * peak(T)` solvency envelope, are all inherited from
+`LiabilityBasisV2` rather than re-proved here.
+-/
+
+/-- Admitted terminal results of one profile. -/
+def SplineProfile.Admitted (profile : SplineProfile) : Type :=
+  { coordinate : RationalCoordinate // profile.admits coordinate = true }
+
+/-- **The degree-`1..3` B-spline liability basis.** -/
+def SplineProfile.basis (profile : SplineProfile) : Basis profile.Admitted := {
+  width := profile.width
+  scale := profile.scale
+  widthPositive := profile.width_positive
+  scalePositive := profile.scalePositive
+  evaluate := fun result => profile.evaluate result.val
+  exactWidth := fun result => profile.evaluate_length result.val result.property
+  payoutBounded := fun result => profile.evaluate_bounded result.val result.property
+  partitionUnity := fun result => profile.evaluate_partition result.val result.property
+}
+
+@[simp] theorem SplineProfile.basis_width (profile : SplineProfile) :
+    profile.basis.width = profile.width := rfl
+
+@[simp] theorem SplineProfile.basis_scale (profile : SplineProfile) :
+    profile.basis.scale = profile.scale := rfl
+
+/-- The hostile partition checker never refuses an honest spline evaluation. -/
+theorem SplineProfile.validPartition_evaluate
+    (profile : SplineProfile) (result : profile.Admitted) :
+    validPartition (profile.evaluate result.val) profile.scale = true :=
+  profile.basis.validPartition_evaluate result
+
+/-- **Per-claim honesty.** Every claim's integer payout is within one collateral
+atom of `Q` times its exact rational B-spline weight. -/
+theorem SplineProfile.evaluate_within_one_atom
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) (pair : Nat × Nat)
+    (member : pair ∈
+      (profile.evaluate coordinate).zip (profile.basisNumerators coordinate)) :
+    pair.1 * profile.basisDenominator coordinate
+        < profile.scale * pair.2 + profile.basisDenominator coordinate ∧
+      profile.scale * pair.2
+        < (pair.1 + 1) * profile.basisDenominator coordinate :=
+  apportion_within_one_atom profile.scale (profile.basisDenominator coordinate) _
+    (profile.basisDenominator_positive coordinate admitted) pair member
+
+/-- **Local support survives apportionment.** A claim whose exact B-spline
+weight is zero — every claim outside the `degree + 1` supported on the located
+span — receives an exact zero payout, never a rounded atom. -/
+theorem SplineProfile.evaluate_zero_outside_support
+    (profile : SplineProfile) (coordinate : RationalCoordinate)
+    (admitted : profile.admits coordinate = true) (pair : Nat × Nat)
+    (member : pair ∈
+      (profile.evaluate coordinate).zip (profile.basisNumerators coordinate))
+    (unweighted : pair.2 = 0) : pair.1 = 0 :=
+  apportion_zero_weight profile.scale (profile.basisDenominator coordinate) _
+    (profile.basisDenominator_positive coordinate admitted) pair member unweighted
 
 end DClutch.LiabilityBasisV2.Spline
