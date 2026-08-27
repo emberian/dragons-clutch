@@ -3838,10 +3838,10 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
     use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
     use dclutch_source_contract::{
-        CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
-        RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-        SourceAccessProfile, SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1,
-        WindowKind, WindowSpecV1,
+        CapacityEnvelope, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1, ProviderReleaseV1,
+        PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2, RecoveryAttemptV2, RoundingBoundary,
+        SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceAccessProfile, SourceCapacityProfileV1,
+        SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
     };
 
     // The release this Market resolves against is the LOCAL-VALIDATOR
@@ -3896,9 +3896,18 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
     let capacity_id = source_content(record_identity(&capacity.to_bytes()))?;
 
     let pyth_release_bytes = fixture.release().to_bytes();
+    // `adapter_release_id` is the PROVIDER EXTENSION this release belongs to,
+    // and it is a closed protocol constant rather than anything about this
+    // fixture: `PythProviderAdapterObligationV1::from_material_view` refuses
+    // any release that is not the Pyth extension, and the demo publisher picks
+    // the adapter-config schema off the same field. Naming the captured
+    // release's own `adapter_id` here -- which is what it reads like it should
+    // be, and what this campaign tried first -- refuses on both sides at once:
+    // `UnsupportedProviderExtension` on chain, and "no adapter-config schema
+    // for this extension" before the record is even published.
     let provider_release = ProviderReleaseV1::new(
         source_content(demo_id("provider-family/pyth", &[]))?,
-        source_content(adapter)?,
+        source_content(PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1)?,
         source_content(record_identity(&pyth_release_bytes))?,
         source_content(fixture.release().price_update_codec_id())?,
         source_content(fixture.release().router_abi_id())?,
