@@ -133,28 +133,85 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
   `{1}` is substantive dynamic-span WIP); `stash@{2}` is source-contract WIP,
   unowned.
 
-## Queue (next linger points)
+## Queue (next linger points) — reconciled by GIT-SCAN 2026-08-27
 
-- **LINGER₂ Sonnet batch** (one batched Opus reviewer behind it): fold all
-  satellite workspaces into the root workspace (no dependency skew exists —
-  every lock pins solana-program 3.0.0); delete the two empty skeleton dirs
-  (`crates/dclutch-series-v2-kernel`, `programs/dclutch-effect-proof-sbf` —
-  owner check first); un-gitignore `programs/dclutch-series-sbf/Cargo.lock`;
-  clear the 30-warning `dealer_chain` fixture debt.
-- **Frontend ABI convergence** (small Opus): `302ad80` made the Registry
-  continuation headerless and deleted `DIRECT_NATIVE_EVIDENCE_REGISTRY_BIAS_V3`;
-  the web generator + checked-in `lib/generated/directInlineV3.ts` are stale
-  against the protocol. Also the two pre-existing verify failures
-  (`abi:found` marker, `abi:rational-terminal-v3` ENOENT) and converging
-  `productV2.decodeCapability` onto `lib/capabilityManifest.ts`.
-- **Cycle-2 General charter item**: general-sbf's activation handler
-  (`c1cdc82`-era) needs the missing contract-side counterpart — the
-  `GENERAL_ROOT_PDA_DOMAIN_V2` preimage is a protocol fact its owner must mint.
-- **Cycle-3 pull-forwards** (from L3): `/markets/:market` detail before the
-  wizard; portfolio via direct Position-PDA derivation (`[POSITION_SEED,
-  market, owner]` — no indexer needed); wizard = compose `/product-v2` →
-  `/found` carrying compiled Product identity. The missing market *indexer*
-  remains the one honest discovery gap.
+- **LINGER₂ Sonnet batch — DONE.** Satellites folded (root `exclude` is now
+  empty; nested program-test harness workspaces stay per 5c663da precedent);
+  both skeleton dirs deleted; `dealer_chain` warnings cleared (21df8e5).
+  The series-sbf lock item is OBSOLETE — the program was banished.
+- **Frontend ABI convergence — DONE** (d2f2e60, 48ece27, 4478897, c25de02,
+  127c5a4, 413c3db; every `abi:*:verify` plus `fixtures:verify` green since
+  839edc8/822e5da).
+- **Cycle-2 General charter item — OBSOLETE**: 5b19626 ruled
+  `GENERAL_ROOT_PDA_DOMAIN_V2` must NOT exist (decision 0003) and deleted
+  general-sbf. The real remaining General work is the next-dispatch queue
+  below (eighth set entry, exactly-seven relaxation, GEN-HOT, DCLTCPR1
+  encoder).
+- **Cycle-3 pull-forwards**: `/markets/:address` detail (73da1ab) and
+  `/portfolio` (fbb926b) are DONE. Remaining: the wizard (compose
+  `/product-v2` → `/found`), and the missing market *indexer* — still the one
+  honest discovery gap.
+
+## GIT-SCAN still-open ledger (2026-08-27 — named in commits, carried nowhere)
+
+Sweep of all 1,509 commit messages; each item below was promised/deferred in a
+commit and is NOT covered by any queue above or by blocked.json. Ranked by risk
+of silent loss.
+
+1. **activation-role-resolution CU budget WILL red-row the next genesis run**
+   (9fbbab4; CU_BUDGETS.md "mode caveat"): the Resolution artifact grew 18,944
+   bytes at 87e4590 (the funded failure walk — legitimate) and its owner lane
+   yielded. Re-pin the row with provenance. Small batch, do before the next
+   tier-1 run.
+2. **Relayed recovery leg unsupported**: `RecoveryMaterialSlotV1::new` is still
+   Pyth-only (source-contract lib.rs:2286), so §4.8's "silent relayer degrades
+   to a named alternative source" has no relayed form — it walks straight to
+   the failure outcome (425a3c9 §10.5). Relayer/Source lane, or an explicit
+   decision that the v1 demo accepts direct-to-failure.
+3. **Relayer daemon gaps** (2b920d6): publication-log public push NOT
+   implemented (§4.11 unsatisfied, tools/relayer/README.md:211); submission
+   never run against any cluster; root-workspace promotion an open decision.
+   Plus the carried v0/ALT note for its two oversized transactions.
+4. **AOT/interpreter semantic divergence, permanently #[ignore]d**
+   (55616a8; direct-aot-v3-contract/src/tests.rs:520): the
+   `outcome >= tail_count` guard exists only in hand-written Rust, absent from
+   Lean-emitted DIRECT_ORDINARY_PRELUDE_V3. Unreachable today. Owner decision:
+   add the clause in Lean or delete the Rust guard.
+5. **RegisterBuy topology defects, reported-not-fixed** (9b99662):
+   `validate_lengths` still pins System at width 0
+   (registered_account_artifacts_v4.rs:562) and Exact loader/program widths the
+   opaque ruling should cover — refuses on any real validator. Attach to the
+   tranche-A Direct family charter.
+6. **Dealer equity profile migration** to the FixedDataPredicate profile
+   (d64d0c2 "QUEUED, NOT DONE") so its callee can be `opaque(executable)`.
+   Attach to tranche-A Dealer.
+7. **blocked.json's two UNASSIGNED owner decisions**: RentCreditV1
+   Create/Withdraw supersession (delete V1 or state why both survive — O-005
+   pressure), and registry/batch_v2 reachability at real ELF sizes. Fable
+   wave / ember.
+8. **sha2 default-features latent no_std breakage** in 7 on-chain-reachable
+   manifests (7123164; verified: general-config-contract,
+   rational-representation-v2-lifecycle-contract, registry-svm,
+   structured-v2-contract, structured-v2-kernel, token-svm,
+   fractional-claim-kernel). Mechanical small batch.
+9. **DEVNET_DEMO_DEPLOY.md blocker C is STALE**: the doc says the web
+   Core/Registry conflation "is open"; it was removed (3645eed) and exercised
+   against a real chain (5129362). Runbook correction — a stale blocker on
+   deploy day misdirects.
+10. **stash@{0} wip-source-borrowed-view**: still uninspected, unowned
+    (verified). Inspect, land or drop.
+11. **claims-svm test-module clippy debt** (b82feed): product_basis_terminal_v3
+    `too_many_arguments`, terminal_settlement_v3 `indexing_slicing` — left for
+    owner. Trivial.
+
+Doctrine-debt audit (same scan): 01a2246 annotates its mixed lock hunk in its
+own message; ea4954a's carried tier2/README is annotated in cc21a7d; the
+46f03df-era contaminated commit never reached main (dangling; re-split as
+f26863c, recorded in the Cycle-1 log above). The 35fb8ed→2f55c81
+revert/reapply sandwich of 2a35720 (29 seconds, net zero) carries only stock
+messages — its explanation lives on the W2c board entry; recorded here so the
+history stays legible after the board expires. 15ac612's revert of the
+demo-cut WAVE edit is explained by the no-scope-cut direction above.
 
 ## The demo is the completed dClutch (direction set by ember, 2026-08-26 night)
 
