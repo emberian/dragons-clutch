@@ -685,3 +685,8 @@ QUEUED with owners:
   split. Real shape: the cap on the Market root, checked at founding AND at
   split. Interacts with the founding-root ADR; design queued at
   MAINNET_STATE_RELAY §11.2.
+
+- Next small batch: series-shadow-sbf + the fractional crates still carry
+  production sha2 — convert to dclutch-sha256-adapter (the landed backend;
+  one-shot hashv only, never the incremental Hasher). GIT-SCAN item 8 row
+  CLOSED (69ea61fe, verified by SHASEAM).
