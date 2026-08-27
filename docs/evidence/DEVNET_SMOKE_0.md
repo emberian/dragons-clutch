@@ -11,7 +11,10 @@ a total cost of 0.0096 SOL. What does not exist yet is the road from a
 deployed program set to a living market: the life requires revocation
 (permanent ~31.7 SOL), the devnet Pyth release row is unminted, and no driver
 in the tree can speak to a non-loopback cluster (§2). Those are SMOKE-1's
-preconditions, each with an owner (§6), and the first is ember's ruling.
+preconditions, each with an owner (§6). Two fell the same evening: ember
+ruled W1 live (iteration over full trustlessness — decision 0012 carries the
+design), and the devnet `PythReleaseV1` row was minted under deputization
+(`crates/dclutch-pyth-svm/src/devnet.rs`, commit `11f249ff`).
 
 Charter: the scope-limited first phase of `WAVE.md`'s DEVNET-SMOKE — a
 recyclable single-market tire-kick on devnet, authorized by ember for exactly
@@ -417,20 +420,20 @@ recycle window at every moment. Every reclaimable lamport came back.
 Everything between here and a devnet market living its whole life, with an
 owner and a size where one is knowable. The first item is ember's alone.
 
-1. **The W1 ruling (ember, before anything else).** The recyclable smoke the
-   charters describe does not exist: the life costs the deploy rent
-   permanently (~31.7 SOL at current sizes). The honest choices:
-   - **(a) The deploy is THE deploy** — recommended. Revoke, run the smoke
-     exchange on it, keep it as the standing devnet substrate (SMOKE-1 and the
-     demo REUSE it rather than redeploying; the runbook already notes the
-     budget buys one deployment, not two). "Recycle" then means market
-     accounts, ALTs, credits, buffers — everything inside a window — and the
-     dossier says so plainly instead of promising the rent back.
-   - (b) Keep smoke-0-style mutable rehearsals only, and defer the life to a
-     cheaper cluster story (a public localnet relay, or a paid devnet RPC and
-     a re-priced budget) — this buys information but never the thesis.
-   - Not a choice: forcing the life onto a mutable deployment — the CU
-     ceiling refuses it structurally (W1).
+1. **The W1 ruling — RULED by ember, live, during this run.** This lane's
+   original recommendation ("the deploy is THE deploy; spend the ~31.7 once")
+   was built on wrong economics: devnet SOL arrives by faucet at a few SOL a
+   day, so ~32 SOL is days of accumulation and the deploy will be iterated
+   many times, not performed once. Ember's ruling: **the devnet substrate
+   does not need to be fully trustless if full trustlessness prevents
+   iteration.** The execution design — mutable roles, iteration by `Upgrade`
+   at fee-cost, and the loader's slot-write invariant replacing the
+   revocation in the fast path's soundness argument (fail-closed: an upgrade
+   makes every open market refuse until re-released) — is **decision 0012**
+   (`docs/decisions/0012-devnet-iteration-substrate.md`), with the complete
+   verified site map. What remains structurally true from this dossier's W1:
+   the life cannot run on a mutable substrate *at HEAD*; 0012 is what makes
+   it able to.
 2. **The devnet driver (a real lane, not a flag).** An external-cluster mode
    for the successor campaign: real persisted per-role keypairs, a payer
    wallet, pacing/retry against public RPC, no validator launch,
@@ -438,9 +441,13 @@ owner and a size where one is knowable. The first item is ember's alone.
    proven; the driver around it does not). The journey runner needs the same
    externalization for the life + ledger stages, plus a persistent-founder
    decision it was designed to refuse.
-3. **The devnet `PythReleaseV1` row** (adapter lane): all inputs pinned and
-   re-verified live today (§1.2); minting stays a protocol fact, not host
-   tooling.
+3. **The devnet `PythReleaseV1` row — DONE, same evening** (`11f249ff`,
+   minted under ember's deputization): `devnet_release_v1()` in
+   `crates/dclutch-pyth-svm/src/devnet.rs`, every cluster fact carrying its
+   two confirmations (2026-08-26 PROVENANCE pins + this run's live reads),
+   the synthetic fixture rewired to derive from it so the shared provider
+   facts keep one author, masked-equality tests bounding the derivation on
+   both sides.
 4. **Deploy-day transport policy** (§5): buffer writes ride the TPU path —
    measured 1.32 MB in 23 s, which makes the seven-role ladder ~2 minutes of
    writes, not the hours the `--use-rpc` pace implied. What still wants a
