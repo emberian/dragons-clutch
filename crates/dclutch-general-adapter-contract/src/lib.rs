@@ -24,6 +24,8 @@ pub mod admitted_accelerator_v3;
 pub mod artifacts_v3;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
+/// Batch and signed-order records: the collection half settlement consumes.
+pub mod collection_v1;
 /// Generated exact-child EffectProgram artifacts for every General action.
 pub mod effect_artifacts_v3;
 /// Complete General Hot38 candidate register ABI for exact child packets.
