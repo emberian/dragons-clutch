@@ -16,5 +16,8 @@ dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
+[dev-dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }
+
 [lints]
 workspace = true

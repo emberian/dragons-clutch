@@ -2389,6 +2389,7 @@ version = "0.1.0"
 name = "dclutch-registry-activation-auth-v1"
 version = "0.1.0"
 dependencies = [
+ "dclutch-core-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",

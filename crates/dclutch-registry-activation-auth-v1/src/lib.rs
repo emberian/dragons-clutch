@@ -295,3 +295,6 @@ pub fn cached_role_deployment_observation_v1(
     )
     .map_err(|_| ActivationAuthErrorV1::Deployment)
 }
+
+#[cfg(test)]
+mod tests;
