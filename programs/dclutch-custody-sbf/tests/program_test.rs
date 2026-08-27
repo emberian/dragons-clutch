@@ -915,7 +915,7 @@ async fn submit(
         v0::Message::try_compile(
             &payer,
             &[instruction],
-            &[lookup.clone()],
+            std::slice::from_ref(lookup),
             blockhash,
         )
         .expect("v0 message"),

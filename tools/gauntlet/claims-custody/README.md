@@ -72,14 +72,25 @@ conditions this lane satisfies three and **fails the first**:
    transaction is a v0 message over a real, activated Address Lookup Table,
    which is the shape a validator would need.
 
-   **This is how the Custody family's own packet defect was found.** With keys
+   **Two packet defects surfaced the moment the measurement went in.** The
+   composed Claims chain, with three 320-byte requests inline, serialised to
+   1,261 bytes -- 29 past the maximum -- so the wrapper now DERIVES the Close
+   request from the two requests the composition already binds and carries only
+   the source Position's four rent facts, bringing the chain to 973 bytes. Any
+   real controller composing these three routes has the same budget problem and
+   the same way out: the join rules make the third request almost entirely
+   redundant.
+
+   **And the Custody family's own defect.** With keys
    inline as legacy messages, thirteen of the seventeen Custody transactions per
    token profile are past the maximum: OpenVault at 1,340 bytes (+108), Transfer
    and CloseVault at 1,306 (+74), and the DCLCUDQ2 delegated wire — a 776-byte
    request — at 1,410 (+178). Only CloseReplay (1,174) and InitializeReplay
    (1,208) fit. Nothing had ever noticed, because no tier had ever submitted a
-   Custody transaction as a packet. Any live caller of these routes must route
-   them over a finalized lookup table, exactly as Found31 must.
+   Custody transaction as a packet. The campaign now routes every transaction
+   over a finalized lookup table as a v0 message, which brings the largest to
+   1,043 bytes; any live caller of these routes must do the same, exactly as
+   Found31 must.
 3. **Compute and heap — satisfied.** 1,400,000 and 32,768, neither adjusted.
 4. **Real account shapes — satisfied.** The real System program with its
    NativeLoader metadata, real SPL Token and Token-2022 mints and accounts
