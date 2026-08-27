@@ -9,6 +9,9 @@
 //! account owner, executable bit, public keys, Program-to-ProgramData linkage,
 //! and any hash or release-catalog comparison. Shape alone is never identity.
 
+/// Test-only decoder evidence against the cluster-observed upgraded generation.
+#[cfg(test)]
+mod cluster_observation;
 /// Exact Upgradeable Loader V3 byte views.
 pub mod loader;
 /// Exact borrowed Pyth Receiver `PostUpdateParams` body view.
