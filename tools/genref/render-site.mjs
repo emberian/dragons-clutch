@@ -383,8 +383,9 @@ Generated from the protocol's own authorities: routes and their execution
 status, every refusal code with its meaning, compute budgets, ABI tables,
 the decision index.</li>
 <li><strong><a href="guides/README.html">Guides</a></strong>
-Trader, operator, and reader: what a claim is, how to run a market, and how
-to audit the whole thing.</li>
+Trader, operator, reader, client developers, and trenchers: what a claim
+is, how to run a market, how to audit the whole thing, how to build your
+own client on the SDK, and the same protocol in trench terms.</li>
 <li><strong><a href="app/index.html">The application</a></strong>
 The real frontend, statically exported: market discovery, portfolio,
 transaction workbenches. It reads whatever chain you point it at; with

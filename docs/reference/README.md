@@ -19,7 +19,7 @@ with `tools/genref/generate.sh`, verify with
 `tools/genref/generate.sh --check`.
 
 Current totals: **13 programs**, **100 routes**
-(69 with an in-tree execution binding), **201 protocol
+(70 with an in-tree execution binding), **201 protocol
 refusal codes**.
 
 - [programs.md](programs.md) -- the on-chain programs, their entrypoints, and
@@ -36,7 +36,8 @@ refusal codes**.
 - [abi/](abi/README.md) -- record layouts, magics, PDA seed domains, schema
   identities, and account tables, per surface.
 
-The hand-written [guides](../guides/README.md) -- trader, operator, reader --
+The hand-written [guides](../guides/README.md) -- trader, operator, reader,
+client developers, trenchers --
 are the narrative entry points; they link into these tables rather than
 restating them.
 
