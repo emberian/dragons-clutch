@@ -154,7 +154,8 @@ use crate::{
     },
     dispatch::TradingFamilyContextV1,
     dynamic_accounts_v4::{
-        downgrade_dynamic_child_accounts_v4, expand_dynamic_physical_accounts_v4,
+        PhysicalAccountsV4, downgrade_dynamic_child_accounts_v4,
+        expand_dynamic_physical_accounts_v4,
     },
     execution_strategy_v2::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
@@ -3783,16 +3784,16 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
             return Err(TradingSbfError::Content.into());
         }
     }
-    let mut physical = Vec::with_capacity(physical_count);
-    physical.extend(injected);
-    physical.extend(supplied_suffix.iter());
+    // Addressed in place, never concatenated into a `Vec`. See
+    // [`PhysicalAccountsV4`]: the joined buffer was dead the moment the logical
+    // vector existed and still cost its full physical width for the rest of the
+    // instruction.
+    let physical = PhysicalAccountsV4::new(&injected, supplied_suffix);
+    if physical.len() != physical_count {
+        return Err(TradingSbfError::Content.into());
+    }
     if dynamic {
-        return expand_dynamic_physical_accounts_v4(
-            profile,
-            tail_count,
-            span_counts,
-            physical.as_slice(),
-        );
+        return expand_dynamic_physical_accounts_v4(profile, tail_count, span_counts, &physical);
     }
     // One forward sweep, not one prefix recount per coordinate: see
     // `expand_dynamic_physical_accounts_v4` for why the two maps are identical.
@@ -3805,9 +3806,9 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
             .representative(tail_count, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
         let resolved = if !packs {
-            *physical.get(coordinate).ok_or(TradingSbfError::Content)?
+            physical.get(coordinate).ok_or(TradingSbfError::Content)?
         } else if representative == coordinate {
-            let resolved = *physical.get(next).ok_or(TradingSbfError::Content)?;
+            let resolved = physical.get(next).ok_or(TradingSbfError::Content)?;
             next = next.checked_add(1).ok_or(TradingSbfError::Content)?;
             resolved
         } else {
