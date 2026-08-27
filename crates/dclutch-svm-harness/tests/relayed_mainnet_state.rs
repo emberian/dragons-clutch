@@ -122,6 +122,14 @@ const GENERATION: u64 = 73;
 /// A finalized mainnet slot, as a number. Nothing was read to obtain it.
 const OBSERVED_SLOT: u64 = 423_941_138;
 const CREATED_UNIX: i64 = 1_756_000_000;
+/// The window's closed lower bound. The default fixture's attested foreign
+/// clock (`mainnet_clock_body`) sits at `CREATED_UNIX`, the closing edge, so
+/// widening the window down to here changes nothing about the happy path --
+/// it only gives the window real width to refuse *below*, the way
+/// `require_window_admits` distinguishes "before the market opened" from
+/// "after it closed." A degenerate `start == end` window could never exercise
+/// that lower edge at all.
+const WINDOW_START_UNIX: i64 = CREATED_UNIX - 900;
 const WINDOW_MAX_AGE_SECONDS: u32 = 5_400;
 const CLUSTER_SKEW_SECONDS: u64 = 120;
 
@@ -807,7 +815,7 @@ fn source_graph(
     let window_value = WindowSpecV1::new(
         source_id(spec_digest),
         WindowKind::Terminal,
-        CREATED_UNIX,
+        WINDOW_START_UNIX,
         CREATED_UNIX,
         WINDOW_MAX_AGE_SECONDS,
         1,
@@ -2794,27 +2802,34 @@ async fn a_foreign_clock_that_is_stale_or_from_another_slot_refuses() {
 
 #[tokio::test]
 async fn an_observation_outside_the_products_window_refuses_even_when_it_is_fresh() {
-    // The second time bound, and the reason there are two. This observation is
-    // perfectly fresh -- the relayer was prompt, the clocks agree -- and it is
-    // about the wrong moment. A market resolved by a fresh observation of the
-    // wrong week would be resolved by evidence about something the Product
-    // never sold.
-    let mut fixture = fixture(1, &[]);
-    let mut clock = vec![0_u8; 40];
-    clock[..8].copy_from_slice(&OBSERVED_SLOT.to_le_bytes());
-    clock[32..40].copy_from_slice(&(CREATED_UNIX + 1).to_le_bytes());
-    fixture.positions[3].body = clock;
-    let mut context = start(&mut fixture).await;
-    seal_record(&mut context, &fixture).await;
-    refused_with(
-        submit(
+    // The two time-bound refusals, and the reason there are two. Both
+    // observations below are perfectly fresh -- the relayer was prompt, the
+    // clocks agree -- and both are about the wrong moment. A market resolved
+    // by a fresh observation of the wrong week would be resolved by evidence
+    // about something the Product never sold. `require_window_admits` names
+    // why the edges differ: below `start` the market had not started selling
+    // yet; above `end` the observation is *late*, the case a provider cadence
+    // straddling the deadline produces.
+    for (name, timestamp) in [
+        ("before the window opened", WINDOW_START_UNIX - 1),
+        ("after the window closed", CREATED_UNIX + 1),
+    ] {
+        let mut fixture = fixture(1, &[]);
+        let mut clock = vec![0_u8; 40];
+        clock[..8].copy_from_slice(&OBSERVED_SLOT.to_le_bytes());
+        clock[32..40].copy_from_slice(&timestamp.to_le_bytes());
+        fixture.positions[3].body = clock;
+        let mut context = start(&mut fixture).await;
+        seal_record(&mut context, &fixture).await;
+        let result = submit(
             &mut context,
             &[fixture.consume_instruction(ConsumeSubstitution::default())],
             &[&fixture.worker],
         )
-        .await,
-        REFUSAL_RELAYED_WINDOW,
-    );
+        .await;
+        assert!(result.is_err(), "{name} was accepted");
+        refused_with(result, REFUSAL_RELAYED_WINDOW);
+    }
 }
 
 /// Move the pinned devnet clock past a market's primary deadline.
