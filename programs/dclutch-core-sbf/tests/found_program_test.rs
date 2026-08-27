@@ -1643,7 +1643,7 @@ async fn execute_series_twice(
     let first = submit_and_record(
         &context,
         Transaction::new_signed_with_payer(
-            &[instruction.clone()],
+            core::slice::from_ref(&instruction),
             Some(&context.payer.pubkey()),
             &[&context.payer],
             blockhash,
