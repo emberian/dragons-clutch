@@ -526,13 +526,40 @@ ADR-0006 needs no exception. Opens and closes are permissionless inside a slot
 window, because `root.retire()` refuses while `open_batches != 0` and an
 unbounded open batch would deny retirement forever.
 
-**Still open, and the third hole is the sharpest of the three:** nothing
-submits or verifies a candidate. `evaluate_runtime_consider_row_with_manifest_v2`
-— the whole streamed verifier — **has no caller outside tests**, and `Consider`
-reads a `SubmittedVerifiedCandidate` out of a readonly account that no action
-writes. Also open: the three routes themselves (a batched artifact regeneration,
-shareable with ADR-0006 §8 item 7), escrow at placement rather than the current
-collect-time debit, cancellation, and rent ownership. See §6 of the decision.
+**THE THIRD HOLE IS CLOSED, 2026-08-27 (GEN-CAND).**
+`crates/dclutch-general-adapter-contract/src/candidate_v1.rs` (`5987febc`,
+`658b7a3f`) gives `evaluate_runtime_consider_row_with_manifest_v2` its first
+caller and `Consider` its first writer: `GeneralCandidateV1::submit` creates the
+record `Consider` reads, and `verify_candidate_row_v1` streams a row at a time
+through the real evaluator, binding each row to the ESCROWED order record it
+names. `b61f1186` routes the real-ELF campaign through it, so the certificate
+the seven actions settle is one the protocol produced rather than one the
+fixture fabricated — with accounts, packet extent and scratch pages identical in
+all 22 measured rows.
+
+Closed with it: **escrow at admission** (`39c12d82`) — the collect-time
+`External(owner)` debit was a live credit regression, and admission now MOVES the
+maker's worst case into the order's own Custody vault and Claims Position, so
+`Collect` settles from a balance the protocol holds; **cancellation and release**;
+and **the exactly-seven relaxation** (`211079f6`), which became four named
+profiles rather than an inequality, batched with the EffectV4 envelope
+(`6f654f94`) that GEN-HOT found — General published a bare `ProgramV3` and
+`process_hot_execution_v3` decodes only V4, so nothing General emitted could
+enter the Hot executor at all.
+
+Two defects found en route, both invisible because the only things exercising
+the paths shared an author with the code: a candidate could fill an order with a
+**portfolio its maker never signed** (the per-lot vectors were unbound, and the
+verifier accumulates claim movement from them), and a candidate could **name any
+identity it liked** (`CandidateV2` treats `candidate_id` as a declared field).
+
+**Still open** — see `docs/decisions/0010-general-candidate-escrow-and-the-set-relaxation.md`
+§6: the seven artifact triples for the new actions (they are protocol selectors
+with authenticated pure transitions and no TransitionVM program, EffectProgram
+or AccountProfile, and every generator refuses them by name); lamport movement
+for the work escrow and for rent ownership; the claim-escrow Position lifecycle;
+`ExpireSettlement`'s gen-3 counterpart; and the census rows, which still need the
+ALT/v0 route because six of seven N=258 actions serialise past 1,232 bytes.
 
 `U-001`'s first clause is *"General batch collection"*. Its long status text in
 the index is entirely about the activation seam, the release content, and the
@@ -769,7 +796,7 @@ retired"* and none of these was. All live only on the board, in `/private/tmp`.
 | M-29 | **The AccountInfo migration** — 4,776 bytes, *"the floor… W2f's spec is still the only way at it"* | specced by W2g, taken by nobody |
 | M-30 | **`--no-default-features --features dealer-family` does not compile** — four `use` sites reference `crate::series` unconditionally | *"owner unclaimed"* — named three times |
 | M-31 | **W2h item 1, the allocator cfg** — a `no-entrypoint` library build of Trading runs Hot code under whichever allocator its host installs | *"an owner decision rather than a tail-of-lane edit"* — refused with reasons, never re-taken |
-| M-32 | **`GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1` is 33 bytes** — same defect class that made an entire transition dead at runtime; only Custody has the seed-length assertion | *"unowned"* |
+| M-32 | **`GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1` is 33 bytes** — same defect class that made an entire transition dead at runtime; only Custody has the seed-length assertion | **CLOSED 2026-08-27 (GEN-CAND, `5987febc`).** The gen-3 constant is `b"dclutch-general-page-v1"` (23 bytes), and all three candidate-half domains carry the `const _: () = assert!(… ≤ 32)` guard Custody had and General did not. The class is closed by construction for this half, not by measurement |
 | M-33 | **`core-sbf/src/tests.rs:141` measures a frame 13 accounts narrower than the real one**, so its packet claim is understated | *"Core owner"* — never claimed. `WAVE.md:399` carries the packet claim but not the understatement |
 | M-34 | **Four independent ProgramTest-evidence emitters** from four lanes in one hour, plus `check-witnesses.sh` duplicated | *"Somebody should own converging these before a fifth"* |
 | M-35 | **The census cannot follow a dispatch through an `unsafe` block** — *"No Direct row can be claimed through Trading until it is closed"* | *"belongs to the census owner."* `WAVE.md:379` carries a *different* census gap |
@@ -799,7 +826,7 @@ to most of them — the finding is that for these specific ones, nobody said so.
 |---|---|---|---|
 | M-48 | **A coordinated-disclosure process** | *"A private reporting address and coordinated-disclosure process **will be added** before any public test deployment."* — `SECURITY.md:50` | No `SECURITY.md` in dclutch. Devnet is a public test deployment |
 | M-49 | **Independent demand evidence** | *"It is not… **independent demand evidence**, or a protocol release."* — `CURRENT_TRUTH.md:59` | Named repeatedly in gen-1; appears nowhere in gen-3. The project has never tested whether anyone wants it |
-| M-50 | **The permissionless work economy** | *"Anyone may submit paid observation, repair, clear, finalize, or cleanup work."* — `PROJECT.md:194`; and *"Candidate submission is solver work, not a crank"* | Gen-3 has prepaid `bounty_lamports`. No solver, no keeper reward, and (M-12) no candidate submission route |
+| M-50 | **The permissionless work economy** | *"Anyone may submit paid observation, repair, clear, finalize, or cleanup work."* — `PROJECT.md:194`; and *"Candidate submission is solver work, not a crank"* | **PARTLY ANSWERED 2026-08-27 (GEN-CAND, `658b7a3f`)** for General's candidate half: submission is permissionless and unbonded, and every crank — one per execution row, one for the consideration, one for cleanup — is paid out of a compartmentalized, fully refundable work escrow the submission funds exactly, re-proven at every transition by `validate_capitalization`, refunded to the solver on loss. This also fixes what gen-2 got wrong: its consideration was permissionless and **unpaid**, so a valid candidate nobody cranked never competed. Still open: the lamports do not MOVE yet (a transfer is an account operation and these are pure transitions), and the same pattern is unbuilt for observation and repair |
 | M-51 | **Zero-volume survivability, protocol-wide** | *"every admitted Market can observe, repair, finalize, and settle from prepaid resources even if later volume is zero"*; and *"there is no global `LivenessPolicy` and no protocol-wide no-stranding result"* | Gen-3 prepays per-capability. No protocol-wide result exists or is scheduled |
 | M-52 | **Venue adapters — Manifest, AMMs, RFQs, Jupiter** | *"Materialized Eggs can trade on Manifest, AMMs, RFQs, and future Jupiter routes without making those venues authoritative."* — `PROJECT.md:106`; and ember: *"do we allow using jupiter to witness prices and stuff like that..?"* | Nowhere in gen-3. External venue routing for materialized claims was never re-planned or retired |
 | M-53 | **Aeneas/Charon — collapsing the Rust/Lean duplication** | *"may remove the two-implementation cost entirely. Our kernel is unusually Aeneas-friendly (no_std, no unsafe, fixed arrays, checked arith)."* — `GOAL.md:1302`, a "NEXT SESSION — start here" item | Zero hits outside docs in either repo. Named as end 1 of the two-ended TV chain and never started. The session never came |
