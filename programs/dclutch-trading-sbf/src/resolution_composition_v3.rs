@@ -32,7 +32,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
+use crate::{
+    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    hot_v3::DowngradedEffectAccountsV3,
+};
 
 const RESOLUTION_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-resolution-receipt:v3";
 const CALLER_AUTHORITY_ACCOUNT_V3: usize = 0;
@@ -77,7 +80,7 @@ pub fn preflight_resolution_route_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     family_request: &[u8],
     resolution_program: &AccountInfo<'_>,
@@ -110,7 +113,7 @@ pub fn execute_resolution_route_v3<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
@@ -219,7 +222,7 @@ fn prepare(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     family_request: &[u8],
     resolution_program: &AccountInfo<'_>,
@@ -503,18 +506,20 @@ fn invocation_request(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let mut output = vec![];
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    output.extend_from_slice(
-        accounts
-            .get(fixed_start..fixed_end)
+    accounts.extend_window(
+        &mut output,
+        fixed_start,
+        fixed_end
+            .checked_sub(fixed_start)
             .ok_or(TradingSbfError::Content)?,
-    );
+    )?;
     if invocation.kind != RouteKindV3::Once
         || invocation.item_account_count != 0
         || invocation.repeated_item_count != 0

@@ -154,7 +154,7 @@ use crate::{
     },
     dispatch::TradingFamilyContextV1,
     dynamic_accounts_v4::{
-        PhysicalAccountsV4, downgrade_dynamic_child_accounts_v4,
+        PhysicalAccountsV4, dynamic_declared_privileges_v4, dynamic_logical_account_count_v4,
         expand_dynamic_physical_accounts_v4,
     },
     execution_strategy_v2::{
@@ -2463,6 +2463,7 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         &runtime_accounts,
     )?;
+    hot_heap_mark!("downgraded-effects");
     preflight_child_routes_v3(
         program_id,
         *frame,
@@ -2470,7 +2471,7 @@ fn execute_authenticated_hot_v3(
         tail_count,
         &transition_output_scalars,
         &transition_output_identities,
-        &effect_accounts,
+        effect_accounts,
         &output_requests,
         family_request,
         request_digest,
@@ -2480,6 +2481,7 @@ fn execute_authenticated_hot_v3(
         &aliases,
         locally_mutated.as_deref(),
     )?;
+    hot_cu_checkpoint!("preflight-children");
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
         execute_shadow_candidate_v3(ShadowCandidateViewV3 {
             program_id,
@@ -2518,7 +2520,7 @@ fn execute_authenticated_hot_v3(
         scalars: &transition_output_scalars,
         identities: &transition_output_identities,
         runtime_accounts: &runtime_accounts,
-        effect_accounts: &effect_accounts,
+        effect_accounts,
         request_bank: &output_requests,
         family_request,
         request_digest,
@@ -2555,7 +2557,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
     runtime_accounts: &'a [&'accounts AccountInfo<'info>],
-    effect_accounts: &'a [AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'a, 'accounts, 'info>,
     request_bank: &'a [u8],
     family_request: &'a [u8],
     request_digest: [u8; 32],
@@ -2596,8 +2598,11 @@ fn commit_prepared_hot_result_v3(
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
     )?;
+    hot_heap_mark!("lifecycle-creates");
     let child_execution_digest = execute_prepared_child_routes_v3(prepared)?;
+    hot_heap_mark!("children-executed");
     commit_prepared_post_children_v3(prepared)?;
+    hot_heap_mark!("post-children");
     let root_poststate = {
         let bytes = prepared
             .frame
@@ -3852,49 +3857,176 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
     Ok(logical)
 }
 
-#[inline(never)]
-fn downgraded_effect_accounts_v3<'info>(
-    profile: AccountProfileV2<'_>,
+/// The child-CPI view of the logical account vector, materialised one window at
+/// a time instead of all at once.
+///
+/// Every consumer of this vector reads a CONTIGUOUS WINDOW of it -- one
+/// invocation's fixed span, plus its repeated item spans -- and copies that
+/// window into a `Vec` of its own before building the CPI. Nothing ever holds
+/// the whole thing, nothing mutates it, and every entry is a pure function of
+/// (physical account, representative's declared privileges). Materialising all
+/// of it up front therefore bought nothing and cost, measured on the canonical
+/// Registry-continuation Direct bundle at a 256 KiB diagnostic heap, **4,374
+/// bytes** -- 91 coordinates at 48 bytes plus the probe -- on an allocator whose
+/// `dealloc` is a no-op, so it stayed charged for the rest of the instruction
+/// while the windows that actually get used were allocated on top of it.
+///
+/// A window is still a `&[AccountInfo]` to the composition that receives it;
+/// only the 91-wide intermediate is gone.
+///
+/// # What did NOT become lazy
+///
+/// The whole-frame privilege check did not. `new` walks every coordinate and
+/// applies the same refusal the eager build did, materialising nothing: a
+/// declaration that is writable where the transaction is not, or whose
+/// executability disagrees with the account, refuses the instruction before any
+/// child runs -- not when some later route happens to gather that coordinate.
+/// Deferring that check would have quietly narrowed the refusal set to the
+/// coordinates a particular request touches, which is a different program.
+#[derive(Clone, Copy)]
+pub struct DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
+    profile: AccountProfileV2<'a>,
     tail_count: u32,
-    span_counts: &[u32],
-    logical_accounts: &[&AccountInfo<'info>],
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    if profile.uses_dynamic_fixed_spans() {
-        return downgrade_dynamic_child_accounts_v4(
-            profile,
-            tail_count,
-            span_counts,
-            logical_accounts,
-        );
+    span_counts: &'a [u32],
+    logical: &'a [&'accounts AccountInfo<'info>],
+    dynamic: bool,
+}
+
+impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
+    /// Logical width, which is the width the eager vector had.
+    pub const fn len(self) -> usize {
+        self.logical.len()
     }
-    if !span_counts.is_empty() {
-        return Err(TradingSbfError::Content.into());
+
+    /// A frame with no coordinates at all, which no admitted profile produces.
+    pub const fn is_empty(self) -> bool {
+        self.logical.is_empty()
     }
-    if logical_accounts.len()
-        != profile
+
+    /// The declared route privileges of one logical coordinate.
+    ///
+    /// Every privilege comes from the REPRESENTATIVE coordinate -- the semantic
+    /// owner of the physical account's authenticated declaration -- and never
+    /// from an authenticated route alias, which the AccountProfile validator
+    /// requires to be emitted privilege-free and which therefore states nothing.
+    fn declared(self, coordinate: usize) -> Result<RouteAccountPrivilegesV2, ProgramError> {
+        if self.dynamic {
+            return dynamic_declared_privileges_v4(
+                self.profile,
+                self.tail_count,
+                self.span_counts,
+                coordinate,
+            );
+        }
+        self.profile
+            .route_privileges(
+                self.tail_count,
+                self.profile
+                    .representative(self.tail_count, coordinate)
+                    .map_err(|_| TradingSbfError::Content)?,
+            )
+            .map_err(|_| TradingSbfError::Content.into())
+    }
+
+    /// One coordinate's child view.
+    pub fn view(self, coordinate: usize) -> Result<AccountInfo<'info>, ProgramError> {
+        child_route_view_v3(
+            self.logical
+                .get(coordinate)
+                .ok_or(TradingSbfError::Content)?,
+            self.declared(coordinate)?,
+        )
+    }
+
+    /// How many coordinates in one window carry a given program.
+    ///
+    /// A key comparison only, so it reads the logical vector directly and
+    /// materialises nothing at all -- the privilege downgrade cannot change an
+    /// account's address.
+    pub fn count_program_in_window(
+        self,
+        start: usize,
+        count: usize,
+        program: &Pubkey,
+    ) -> Result<usize, ProgramError> {
+        let end = start.checked_add(count).ok_or(TradingSbfError::Content)?;
+        Ok(self
+            .logical
+            .get(start..end)
+            .ok_or(TradingSbfError::Content)?
+            .iter()
+            .filter(|account| account.key == program)
+            .count())
+    }
+
+    /// Append one contiguous window's child views to a caller-owned buffer.
+    ///
+    /// This is the only shape any consumer ever needed: each composition's
+    /// `invocation_accounts` was `output.extend_from_slice(accounts[a..b])` over
+    /// windows it computes from its own resolved invocation.
+    pub fn extend_window(
+        self,
+        output: &mut Vec<AccountInfo<'info>>,
+        start: usize,
+        count: usize,
+    ) -> Result<(), ProgramError> {
+        let end = start.checked_add(count).ok_or(TradingSbfError::Content)?;
+        if end > self.logical.len() {
+            return Err(TradingSbfError::Content.into());
+        }
+        output
+            .try_reserve(count)
+            .map_err(|_| TradingSbfError::Content)?;
+        let mut coordinate = start;
+        while coordinate < end {
+            output.push(self.view(coordinate)?);
+            coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Ok(())
+    }
+}
+
+#[inline(never)]
+pub(crate) fn downgraded_effect_accounts_v3<'a, 'accounts, 'info>(
+    profile: AccountProfileV2<'a>,
+    tail_count: u32,
+    span_counts: &'a [u32],
+    logical_accounts: &'a [&'accounts AccountInfo<'info>],
+) -> Result<DowngradedEffectAccountsV3<'a, 'accounts, 'info>, ProgramError> {
+    let dynamic = profile.uses_dynamic_fixed_spans();
+    let logical_count = if dynamic {
+        dynamic_logical_account_count_v4(profile, tail_count, span_counts)?
+    } else {
+        if !span_counts.is_empty() {
+            return Err(TradingSbfError::Content.into());
+        }
+        profile
             .logical_account_count(tail_count)
             .map_err(|_| TradingSbfError::Content)?
-    {
+    };
+    if logical_accounts.len() != logical_count {
         return Err(TradingSbfError::Content.into());
     }
-    let mut downgraded = Vec::new();
-    downgraded
-        .try_reserve_exact(logical_accounts.len())
-        .map_err(|_| TradingSbfError::Content)?;
-    for (coordinate, account) in logical_accounts.iter().enumerate() {
-        downgraded.push(child_route_view_v3(
-            account,
-            profile
-                .route_privileges(
-                    tail_count,
-                    profile
-                        .representative(tail_count, coordinate)
-                        .map_err(|_| TradingSbfError::Content)?,
-                )
-                .map_err(|_| TradingSbfError::Content)?,
-        )?);
+    let accounts = DowngradedEffectAccountsV3 {
+        profile,
+        tail_count,
+        span_counts,
+        logical: logical_accounts,
+        dynamic,
+    };
+    // The whole-frame privilege check, eagerly, materialising nothing.
+    let mut coordinate = 0_usize;
+    while coordinate < logical_count {
+        require_child_route_privileges_v3(
+            accounts
+                .logical
+                .get(coordinate)
+                .ok_or(TradingSbfError::Content)?,
+            accounts.declared(coordinate)?,
+        )?;
+        coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(downgraded)
+    Ok(accounts)
 }
 
 /// Build one child CPI view of a physical account from the privileges its
@@ -3924,14 +4056,24 @@ fn child_route_view_v3<'info>(
     account: &AccountInfo<'info>,
     declared: RouteAccountPrivilegesV2,
 ) -> Result<AccountInfo<'info>, ProgramError> {
-    if (declared.writable() && !account.is_writable) || declared.executable() != account.executable
-    {
-        return Err(TradingSbfError::Content.into());
-    }
+    require_child_route_privileges_v3(account, declared)?;
     let mut logical = account.clone();
     logical.is_signer = declared.signer();
     logical.is_writable = declared.writable();
     Ok(logical)
+}
+
+/// The refusal half of [`child_route_view_v3`], separated so the whole-frame
+/// check can run over every coordinate without materialising a single view.
+fn require_child_route_privileges_v3(
+    account: &AccountInfo<'_>,
+    declared: RouteAccountPrivilegesV2,
+) -> Result<(), ProgramError> {
+    if (declared.writable() && !account.is_writable) || declared.executable() != account.executable
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -5561,6 +5703,45 @@ fn apply_lifecycle_closes_v3(
     Ok(())
 }
 
+/// A heap-allocated `T` whose allocation REFUSES instead of aborting.
+///
+/// `Box::new` allocates infallibly: on an exhausted heap it aborts the whole
+/// invocation (`memory allocation failed` -> `ProgramFailedToComplete`), which
+/// rolls the transaction back but names nothing and reaches no refusal code.
+/// `Box::try_new` is unstable, so the fallible reservation goes through `Vec`,
+/// whose `try_reserve_exact` is stable, and `into_boxed_slice` does not
+/// reallocate at capacity equal to length. `Box<[T; 1]>` is that same
+/// allocation with a safe conversion available; `Box<[T]> -> Box<T>` is not.
+///
+/// This exists because the phase-8 boundary is where the heap actually runs
+/// out, and the composition decode is the first thing past it to allocate.
+struct HeapBoxV3<T>(Box<[T; 1]>);
+
+impl<T> HeapBoxV3<T> {
+    fn new(value: T) -> Result<Self, ProgramError> {
+        let mut storage = Vec::new();
+        storage
+            .try_reserve_exact(1)
+            .map_err(|_| TradingSbfError::Content)?;
+        storage.push(value);
+        Ok(Self(
+            storage
+                .into_boxed_slice()
+                .try_into()
+                .map_err(|_| TradingSbfError::Content)?,
+        ))
+    }
+}
+
+impl<T> core::ops::Deref for HeapBoxV3<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        let [value] = &*self.0;
+        value
+    }
+}
+
 #[cfg(any(
     feature = "families",
     feature = "series-family",
@@ -5576,18 +5757,19 @@ fn decode_claims_composition_boxed_v3<'request>(
     request_bank: &'request [u8],
     family_request: &'request [u8],
     parent: ClaimsCompositionParentV3,
-) -> Result<Box<ClaimsCompositionV3<'request>>, ProgramError> {
-    ClaimsCompositionV3::decode_selected_with_witness(
-        effect.base(),
-        tail_count,
-        scalars,
-        identities,
-        request_bank,
-        family_request,
-        parent,
+) -> Result<HeapBoxV3<ClaimsCompositionV3<'request>>, ProgramError> {
+    HeapBoxV3::new(
+        ClaimsCompositionV3::decode_selected_with_witness(
+            effect.base(),
+            tail_count,
+            scalars,
+            identities,
+            request_bank,
+            family_request,
+            parent,
+        )
+        .map_err(|_| TradingSbfError::Content)?,
     )
-    .map(Box::new)
-    .map_err(|_| TradingSbfError::Content.into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5599,7 +5781,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
     request_digest: [u8; 32],
@@ -5625,6 +5807,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     if locally_mutated.len() != aliases.len() {
         return Err(TradingSbfError::Content.into());
     }
+    hot_heap_mark!("pf-enter");
     #[cfg(any(
         feature = "families",
         feature = "series-family",
@@ -5649,6 +5832,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
+    hot_heap_mark!("pf-claims-composition");
     #[cfg(any(
         feature = "families",
         feature = "series-family",
@@ -5711,6 +5895,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             let invocation = effect
                 .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
+            hot_heap_mark!("pf-invocation");
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
@@ -5744,7 +5929,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         let composition = claims_composition
                             .as_deref()
                             .ok_or(TradingSbfError::Content)?;
-                        let selected = claims_program.ok_or(TradingSbfError::Release)?;
+                        let selected = claims_program.as_ref().ok_or(TradingSbfError::Release)?;
                         if invocation_index != 0
                             || !(composition.admit_route() == Some(route)
                                 || composition.mutation_route() == route
@@ -5781,7 +5966,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         identities,
                         effect_accounts,
                         request_bank,
-                        custody_program.ok_or(TradingSbfError::Release)?,
+                        custody_program.as_ref().ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -5810,7 +5995,9 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         effect_accounts,
                         request_bank,
                         family_request,
-                        resolution_program.ok_or(TradingSbfError::Release)?,
+                        resolution_program
+                            .as_ref()
+                            .ok_or(TradingSbfError::Release)?,
                         ResolutionCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -5858,7 +6045,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
     // The per-logical-coordinate representative table `effect_accounts` was
     // downgraded at. Only `selected_role_program_v3` reads it here, to tell one
     // physical account named several times from several physical accounts.
@@ -5980,15 +6167,19 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Claims => claims_program.ok_or(TradingSbfError::Release)?,
+                    FixedRole::Claims => claims_program.as_ref().ok_or(TradingSbfError::Release)?,
                     #[cfg(any(
                         feature = "families",
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Custody => custody_program.ok_or(TradingSbfError::Release)?,
+                    FixedRole::Custody => {
+                        custody_program.as_ref().ok_or(TradingSbfError::Release)?
+                    }
                     #[cfg(feature = "families")]
-                    FixedRole::Resolution => resolution_program.ok_or(TradingSbfError::Release)?,
+                    FixedRole::Resolution => resolution_program
+                        .as_ref()
+                        .ok_or(TradingSbfError::Release)?,
                     #[cfg(not(feature = "families"))]
                     _ => return Err(TradingSbfError::UnsupportedContent.into()),
                 };
@@ -6083,12 +6274,12 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            claims_program.ok_or(TradingSbfError::Release)?,
+                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
                         )?;
                         (
                             FixedRole::Claims,
                             claims_receipt_digest_v3(receipt)?,
-                            claims_program.ok_or(TradingSbfError::Release)?,
+                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -6116,7 +6307,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             prior_receipt,
-                            custody_program.ok_or(TradingSbfError::Release)?,
+                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6128,7 +6319,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Custody,
                             digest,
-                            custody_program.ok_or(TradingSbfError::Release)?,
+                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -6153,7 +6344,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            resolution_program.ok_or(TradingSbfError::Release)?,
+                            resolution_program
+                                .as_ref()
+                                .ok_or(TradingSbfError::Release)?,
                             ResolutionCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6168,7 +6361,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Resolution,
                             digest,
-                            resolution_program.ok_or(TradingSbfError::Release)?,
+                            resolution_program
+                                .as_ref()
+                                .ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(feature = "families"))]
@@ -6450,19 +6645,20 @@ fn require_no_common_projection_child_accounts_v3(
 ))]
 fn invocation_accounts_contain_program(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
-    accounts: &[AccountInfo<'_>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     program: &Pubkey,
 ) -> Result<usize, ProgramError> {
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    let mut count = accounts
-        .get(fixed_start..fixed_end)
-        .ok_or(TradingSbfError::Content)?
-        .iter()
-        .filter(|account| account.key == program)
-        .count();
+    let mut count = accounts.count_program_in_window(
+        fixed_start,
+        fixed_end
+            .checked_sub(fixed_start)
+            .ok_or(TradingSbfError::Content)?,
+        program,
+    )?;
     let item_count = usize::from(invocation.item_account_count);
     let stride = usize::from(invocation.item_account_stride);
     let mut item = 0_u32;
@@ -6480,14 +6676,11 @@ fn invocation_accounts_contain_program(
             .checked_add(item_count)
             .ok_or(TradingSbfError::Content)?;
         count = count
-            .checked_add(
-                accounts
-                    .get(start..end)
-                    .ok_or(TradingSbfError::Content)?
-                    .iter()
-                    .filter(|account| account.key == program)
-                    .count(),
-            )
+            .checked_add(accounts.count_program_in_window(
+                start,
+                end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+                program,
+            )?)
             .ok_or(TradingSbfError::Content)?;
         item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
@@ -6499,13 +6692,13 @@ fn invocation_accounts_contain_program(
     feature = "series-family",
     feature = "dealer-family"
 ))]
-fn selected_role_program_v3<'accounts, 'info>(
+fn selected_role_program_v3<'info>(
     frame: HotFrameV3<'_, 'info>,
-    accounts: &'accounts [AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
     role: ExecutionRoleV1,
     release_set: [u8; 32],
-) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
+) -> Result<AccountInfo<'info>, ProgramError> {
     let cache = frame
         .activation_cache
         .try_borrow_data()
@@ -6550,22 +6743,45 @@ fn selected_role_program_v3<'accounts, 'info>(
     feature = "series-family",
     feature = "dealer-family"
 ))]
-fn resolve_role_carrier_v3<'accounts, 'info>(
-    accounts: &'accounts [AccountInfo<'info>],
+fn resolve_role_carrier_v3<'info>(
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
     expected: [u8; 32],
-) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
+) -> Result<AccountInfo<'info>, ProgramError> {
     // `accounts` is the downgraded LOGICAL vector and `aliases` is the
     // per-logical-coordinate representative table built at the same registers.
-    // They are the same length by construction; refuse rather than assume it,
-    // because an `aliases` longer than `accounts` would read as a silent short
-    // scan rather than as an error.
-    if accounts.len() != aliases.len() {
+    // They are the same length by construction; the resolver refuses rather
+    // than assuming it, because an `aliases` longer than `accounts` would read
+    // as a silent short scan rather than as an error.
+    resolve_carrier_by_representative_v3(accounts.len(), aliases, expected, |coordinate| {
+        accounts.view(coordinate)
+    })
+}
+
+/// The dedup itself, over any per-coordinate child view.
+///
+/// Separated from the account source so the rule can be driven with hand-built
+/// frames: it is the rule, not the profile decoding, that this lane changed.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+fn resolve_carrier_by_representative_v3<'info>(
+    len: usize,
+    aliases: &[usize],
+    expected: [u8; 32],
+    view: impl Fn(usize) -> Result<AccountInfo<'info>, ProgramError>,
+) -> Result<AccountInfo<'info>, ProgramError> {
+    if len != aliases.len() {
         return Err(TradingSbfError::Release.into());
     }
-    let mut found: Option<(usize, &'accounts AccountInfo<'info>)> = None;
-    for (coordinate, account) in accounts.iter().enumerate() {
+    let mut found: Option<(usize, AccountInfo<'info>)> = None;
+    let mut coordinate = 0_usize;
+    while coordinate < len {
+        let account = view(coordinate)?;
         if account.key.to_bytes() != expected {
+            coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
             continue;
         }
         // Per-account, and BEFORE the dedup: a carrier that arrived writable or
@@ -6582,6 +6798,7 @@ fn resolve_role_carrier_v3<'accounts, 'info>(
             Some(_) => {}
             None => found = Some((representative, account)),
         }
+        coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     found
         .map(|(_, account)| account)
@@ -9093,9 +9310,12 @@ mod tests {
         // nothing at all, and a child CPI meta built from the alias would hand
         // the child program a readonly view of an account its own authenticated
         // declaration states as writable.
-        assert!(child[4].is_writable);
-        assert!(child[6].is_writable);
-        assert_eq!(child[4].key, child[6].key);
+        assert!(child.view(4).expect("child view").is_writable);
+        assert!(child.view(6).expect("child view").is_writable);
+        assert_eq!(
+            child.view(4).expect("child view").key,
+            child.view(6).expect("child view").key
+        );
 
         // A declaration never becomes a writable meta for an account the
         // transaction did not include as writable.
@@ -9214,10 +9434,19 @@ mod tests {
 
         let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
             .expect("alias of an executable representative downgrades");
-        assert!(child[1].executable);
-        assert!(child[2].executable, "alias lost its physical executability");
-        assert_eq!(child[1].key, child[2].key);
-        assert!(!child[2].is_signer && !child[2].is_writable);
+        assert!(child.view(1).expect("child view").executable);
+        assert!(
+            child.view(2).expect("child view").executable,
+            "alias lost its physical executability"
+        );
+        assert_eq!(
+            child.view(1).expect("child view").key,
+            child.view(2).expect("child view").key
+        );
+        assert!(
+            !child.view(2).expect("child view").is_signer
+                && !child.view(2).expect("child view").is_writable
+        );
 
         // The representative's own executable bit is still checked against the
         // physical account, in both directions.
@@ -9252,6 +9481,16 @@ mod tests {
         let carrier = account(false, false, true);
         let expected = carrier.key.to_bytes();
         let other = account(false, false, false);
+        // Drives the dedup rule directly over hand-built child views: it is the
+        // rule this pins, not the profile decoding that produces the views.
+        let resolve = |frame: &[AccountInfo<'static>], aliases: &[usize]| {
+            resolve_carrier_by_representative_v3(frame.len(), aliases, expected, |index| {
+                frame
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| ProgramError::from(TradingSbfError::Content))
+            })
+        };
 
         // The Series consume shape: three logical coordinates, one physical
         // account, all readonly executable. Coordinates 1 and 3 are aliases of
@@ -9266,7 +9505,7 @@ mod tests {
         ];
         let aliases = [0, 0, 2, 0];
         assert_eq!(
-            resolve_role_carrier_v3(&series, &aliases, expected)
+            resolve(&series, &aliases)
                 .expect("one account named three times resolves")
                 .key,
             carrier.key
@@ -9276,7 +9515,7 @@ mod tests {
         // refused. Same key, but self-representatives at two coordinates, so
         // nothing says which one the CPI is made through.
         let ambiguous = [carrier.clone(), other.clone(), carrier.clone()];
-        assert!(resolve_role_carrier_v3(&ambiguous, &[0, 1, 2], expected).is_err());
+        assert!(resolve(&ambiguous, &[0, 1, 2]).is_err());
 
         // An aliased carrier that arrived writable or signing is refused even
         // though its representative is clean: the privilege check is per
@@ -9285,7 +9524,7 @@ mod tests {
             let mut copy = hostile.clone();
             copy.key = carrier.key;
             let frame = [carrier.clone(), copy];
-            assert!(resolve_role_carrier_v3(&frame, &[0, 0], expected).is_err());
+            assert!(resolve(&frame, &[0, 0]).is_err());
         }
 
         // A non-executable carrier is refused, and a role nothing carries has
@@ -9295,11 +9534,11 @@ mod tests {
             value.key = carrier.key;
             value
         };
-        assert!(resolve_role_carrier_v3(&[inert], &[0], expected).is_err());
-        assert!(resolve_role_carrier_v3(&[other.clone()], &[0], expected).is_err());
+        assert!(resolve(&[inert], &[0]).is_err());
+        assert!(resolve(&[other.clone()], &[0]).is_err());
 
         // The alias table has to be the one this vector was downgraded at.
-        assert!(resolve_role_carrier_v3(&series, &[0, 0, 2], expected).is_err());
+        assert!(resolve(&series, &[0, 0, 2]).is_err());
     }
 
     #[test]

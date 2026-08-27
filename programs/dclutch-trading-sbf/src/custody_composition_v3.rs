@@ -23,7 +23,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
+use crate::{
+    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    hot_v3::DowngradedEffectAccountsV3,
+};
 
 const CUSTODY_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-custody-receipt:v3";
 const CUSTODY_REPLAY_FRAME_COORDINATE_V1: usize = 8;
@@ -53,7 +56,7 @@ pub fn preflight_custody_route_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
@@ -85,7 +88,7 @@ pub fn execute_custody_route_v3<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     prior_receipt: Option<&[u8]>,
     custody_program: &AccountInfo<'info>,
@@ -192,7 +195,7 @@ fn prepare<'a>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &'a [u8],
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
@@ -391,18 +394,20 @@ fn invocation_request(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let mut output = Vec::new();
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    output.extend_from_slice(
-        accounts
-            .get(fixed_start..fixed_end)
+    accounts.extend_window(
+        &mut output,
+        fixed_start,
+        fixed_end
+            .checked_sub(fixed_start)
             .ok_or(TradingSbfError::Content)?,
-    );
+    )?;
     let item_count = usize::from(invocation.item_account_count);
     match invocation.kind {
         RouteKindV3::Once => {
@@ -418,11 +423,12 @@ fn invocation_accounts<'info>(
                 .item_account_start
                 .checked_add(item_count)
                 .ok_or(TradingSbfError::Content)?;
-            output.extend_from_slice(
-                accounts
-                    .get(invocation.item_account_start..end)
+            accounts.extend_window(
+                &mut output,
+                invocation.item_account_start,
+                end.checked_sub(invocation.item_account_start)
                     .ok_or(TradingSbfError::Content)?,
-            );
+            )?;
         }
         RouteKindV3::AffineOnce => {
             let stride = usize::from(invocation.item_account_stride);
@@ -440,7 +446,11 @@ fn invocation_accounts<'info>(
                 let end = start
                     .checked_add(item_count)
                     .ok_or(TradingSbfError::Content)?;
-                output.extend_from_slice(accounts.get(start..end).ok_or(TradingSbfError::Content)?);
+                accounts.extend_window(
+                    &mut output,
+                    start,
+                    end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+                )?;
                 item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
             }
         }

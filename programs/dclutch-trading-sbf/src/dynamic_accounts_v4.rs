@@ -7,7 +7,7 @@
 
 use std::vec::Vec;
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
+use dclutch_account_profile_contract::v2::{AccountProfileV2, RouteAccountPrivilegesV2};
 use solana_program::{account_info::AccountInfo, program_error::ProgramError};
 
 use crate::TradingSbfError;
@@ -119,48 +119,36 @@ pub(crate) fn expand_dynamic_physical_accounts_v4<'accounts, 'info>(
     Ok(logical)
 }
 
-/// Clone the complete logical vector into route-local child views.
+/// The declared route privileges of one logical coordinate under dynamic spans.
 ///
 /// Every privilege in a child view comes from the representative coordinate --
 /// the semantic owner of the physical account's authenticated declaration --
 /// and never from an authenticated route alias, which the AccountProfile
 /// validator requires to be emitted privilege-free and therefore states
-/// nothing at all. A declaration is never turned into a meta the transaction
-/// did not grant, and executability is exact in both directions.
-pub(crate) fn downgrade_dynamic_child_accounts_v4<'info>(
+/// nothing at all.
+pub(crate) fn dynamic_declared_privileges_v4(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
     span_counts: &[u32],
-    logical_accounts: &[&AccountInfo<'info>],
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    let logical_count = profile
+    coordinate: usize,
+) -> Result<RouteAccountPrivilegesV2, ProgramError> {
+    let representative = profile
+        .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
+        .map_err(|_| TradingSbfError::Content)?;
+    profile
+        .route_privileges_with_dynamic_spans(tail_count, span_counts, representative)
+        .map_err(|_| TradingSbfError::Content.into())
+}
+
+/// Exact logical width of the dynamic-span account vector.
+pub(crate) fn dynamic_logical_account_count_v4(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+) -> Result<usize, ProgramError> {
+    profile
         .logical_account_count_with_dynamic_spans(tail_count, span_counts)
-        .map_err(|_| TradingSbfError::Content)?;
-    if logical_accounts.len() != logical_count {
-        return Err(TradingSbfError::Content.into());
-    }
-    let mut downgraded = Vec::new();
-    downgraded
-        .try_reserve_exact(logical_count)
-        .map_err(|_| TradingSbfError::Content)?;
-    for (coordinate, physical) in logical_accounts.iter().enumerate() {
-        let representative = profile
-            .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
-            .map_err(|_| TradingSbfError::Content)?;
-        let declared = profile
-            .route_privileges_with_dynamic_spans(tail_count, span_counts, representative)
-            .map_err(|_| TradingSbfError::Content)?;
-        if (declared.writable() && !physical.is_writable)
-            || declared.executable() != physical.executable
-        {
-            return Err(TradingSbfError::Content.into());
-        }
-        let mut logical = (*physical).clone();
-        logical.is_signer = declared.signer();
-        logical.is_writable = declared.writable();
-        downgraded.push(logical);
-    }
-    Ok(downgraded)
+        .map_err(|_| TradingSbfError::Content.into())
 }
 
 #[cfg(all(test, any(feature = "families", feature = "series-family")))]
@@ -245,21 +233,26 @@ mod tests {
         assert_eq!(logical[53].key, logical[137].key);
         assert!(logical[53].is_writable);
 
-        let child = downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical)
-            .expect("child views");
+        // The dynamic path is reached through the one entry point that owns
+        // it; `downgraded_effect_accounts_v3` dispatches on
+        // `uses_dynamic_fixed_spans` and runs the same whole-frame check.
+        let child =
+            crate::hot_v3::downgraded_effect_accounts_v3(profile, 0, &span_counts, &logical)
+                .expect("child views");
+        let at = |coordinate: usize| child.view(coordinate).expect("child view");
         // 18 is the Shared Market representative and owns every privilege fact
         // about the physical account. 20 is an authenticated route alias of it:
         // an alias is emitted privilege-free, so it states nothing, and a child
         // CPI meta built from the alias would silently hand the child program a
         // readonly view of an account the representative declares writable.
-        assert!(child[18].is_writable);
-        assert!(child[20].is_writable);
-        assert_eq!(child[18].key, child[20].key);
+        assert!(at(18).is_writable);
+        assert!(at(20).is_writable);
+        assert_eq!(at(18).key, at(20).key);
         // 53 and its alias 137 are readonly at the representative, so both
         // child views stay readonly: inheriting from the representative is not
         // a blanket upgrade.
-        assert!(!child[53].is_writable);
-        assert!(!child[137].is_writable);
+        assert!(!at(53).is_writable);
+        assert!(!at(137).is_writable);
     }
 
     /// A route view must never claim a privilege the transaction did not grant,
@@ -278,7 +271,10 @@ mod tests {
         let view = PhysicalAccountsV4::new(&[], &physical);
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
-        assert!(downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical).is_err());
+        assert!(
+            crate::hot_v3::downgraded_effect_accounts_v3(profile, 0, &span_counts, &logical)
+                .is_err()
+        );
     }
 
     #[test]
@@ -300,7 +296,10 @@ mod tests {
         let view = PhysicalAccountsV4::new(&[], &physical);
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
-        assert!(downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical).is_err());
+        assert!(
+            crate::hot_v3::downgraded_effect_accounts_v3(profile, 0, &span_counts, &logical)
+                .is_err()
+        );
     }
 
     /// The split view addresses exactly the vector the concatenation produced.

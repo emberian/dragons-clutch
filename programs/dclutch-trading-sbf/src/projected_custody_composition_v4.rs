@@ -29,6 +29,7 @@ use solana_sdk_ids::system_program;
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ChildReceiptBankV3, ExpectedReceiptProvenanceV4},
+    hot_v3::DowngradedEffectAccountsV3,
 };
 
 pub(crate) const PROJECTED_CUSTODY_LOCK_ROUTE_V4: u16 = 0;
@@ -124,7 +125,7 @@ pub(crate) fn execute_projected_custody_lock_route_v4<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     custody_program: &AccountInfo<'info>,
     provenance: ExpectedReceiptProvenanceV4,
@@ -205,7 +206,7 @@ fn prepare<'a>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &'a [u8],
     custody_program: &AccountInfo<'_>,
     provenance: ExpectedReceiptProvenanceV4,
@@ -307,17 +308,22 @@ fn validate_lock_invocation_v4(invocation: ResolvedInvocationV3) -> Result<(), P
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let start = usize::from(invocation.fixed_account_start);
     let end = start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    let selected = accounts.get(start..end).ok_or(TradingSbfError::Content)?;
-    if selected.len() != LOCK_ACCOUNT_COUNT_V4 {
+    let mut output = Vec::new();
+    accounts.extend_window(
+        &mut output,
+        start,
+        end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+    )?;
+    if output.len() != LOCK_ACCOUNT_COUNT_V4 {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(selected.to_vec())
+    Ok(output)
 }
 
 fn authenticate_lock_frame_v4(

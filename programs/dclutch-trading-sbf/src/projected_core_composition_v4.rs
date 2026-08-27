@@ -31,6 +31,7 @@ use crate::{
     child_receipt_v3::{
         ChildReceiptBankV3, ExpectedReceiptProvenanceV4, append_receipt_dependency_v3,
     },
+    hot_v3::DowngradedEffectAccountsV3,
     projected_custody_composition_v4::AuthenticatedProjectedCustodyPrefixV4,
     projected_market_v2::{
         AuthenticatedFoundSpanV2, ProjectedMarketExecutionV2, authenticate_series_found_span_v2,
@@ -144,7 +145,7 @@ pub(crate) fn execute_projected_core_found_route_v4<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     core_program: &AccountInfo<'info>,
     lock_prefix: &AuthenticatedProjectedCustodyPrefixV4,
@@ -223,7 +224,7 @@ fn prepare(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     core_program: &AccountInfo<'_>,
     lock_prefix: &AuthenticatedProjectedCustodyPrefixV4,
@@ -401,16 +402,19 @@ fn validate_found_invocation(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let start = usize::from(invocation.fixed_account_start);
     let end = start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    accounts
-        .get(start..end)
-        .map(Vec::from)
-        .ok_or_else(|| TradingSbfError::Content.into())
+    let mut output = Vec::new();
+    accounts.extend_window(
+        &mut output,
+        start,
+        end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+    )?;
+    Ok(output)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -31,6 +31,7 @@ use solana_sdk_ids::system_program;
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ExpectedReceiptProvenanceV4, append_receipt_dependency_v3},
+    hot_v3::DowngradedEffectAccountsV3,
     projected_claims_composition_v4::AuthenticatedProjectedClaimsV4,
     projected_core_composition_v4::AuthenticatedProjectedCorePrefixV4,
     projected_custody_composition_v4::AuthenticatedProjectedCustodyPrefixV4,
@@ -106,7 +107,7 @@ pub(crate) fn execute_projected_open_route_v4<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     core_program: &AccountInfo<'info>,
     outer_root: &AccountInfo<'info>,
@@ -213,7 +214,7 @@ fn prepare(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     core_program: &AccountInfo<'_>,
     outer_root: &AccountInfo<'_>,
@@ -420,16 +421,19 @@ fn validate_invocation(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let start = usize::from(invocation.fixed_account_start);
     let end = start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    accounts
-        .get(start..end)
-        .map(Vec::from)
-        .ok_or_else(|| TradingSbfError::Content.into())
+    let mut output = Vec::new();
+    accounts.extend_window(
+        &mut output,
+        start,
+        end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+    )?;
+    Ok(output)
 }
 
 fn ticket_context_from_frame(accounts: &[AccountInfo<'_>]) -> Result<[u8; 32], ProgramError> {
