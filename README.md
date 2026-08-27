@@ -18,14 +18,16 @@ market, nothing value-bearing. Everything runs on local test chains.
 
 - [`dclutch/`](dclutch/) — the current protocol. Everything else here is
   context for it.
-- [`programs/`](programs/), [`crates/`](crates/), [`apps/`](apps/),
-  [`lean/`](lean/), [`verus/`](verus/), [`rocq/`](rocq/),
-  [`research/`](research/) — the retained first-generation implementation
-  and its formal work.
-- [`docs/`](docs/) — first-generation architecture, protocol, and review
-  documents.
-- [`site/`](site/) — the first generation's static microsite (no longer
-  published; the live site builds from `dclutch/`).
+- [`archive/`](archive/) — the first generation, superseded in August 2026.
+  [`archive/gen1/`](archive/gen1/) holds its implementation and formal work
+  ([`programs/`](archive/gen1/programs/), [`crates/`](archive/gen1/crates/),
+  [`apps/`](archive/gen1/apps/), [`lean/`](archive/gen1/lean/),
+  [`verus/`](archive/gen1/verus/), [`rocq/`](archive/gen1/rocq/),
+  [`research/`](archive/gen1/research/)), its architecture, protocol, and
+  review documents ([`docs/`](archive/gen1/docs/)), and its static microsite
+  ([`site/`](archive/gen1/site/) — no longer published; the live site builds
+  from `dclutch/`). [`archive/handoffs/`](archive/handoffs/) holds the
+  planning and status documents that drove it.
 
 ## The first generation
 
@@ -36,9 +38,10 @@ atom accounted for — and its requirements, invariants, and counterexamples
 shaped the rebuild. It is no longer developed; anything found wrong in it
 gets fixed in dClutch instead.
 
-Where its history lives: [`CURRENT_TRUTH.md`](CURRENT_TRUTH.md) for what
-it did and didn't do,
-[`docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md`](docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
+Where its history lives:
+[`archive/handoffs/CURRENT_TRUTH.md`](archive/handoffs/CURRENT_TRUTH.md) for
+what it did and didn't do,
+[`archive/gen1/docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md`](archive/gen1/docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
 for why the rebuild happened, and
 [`dclutch/COMPOST.md`](dclutch/COMPOST.md) for the rules on what may be
 carried forward.
@@ -55,4 +58,4 @@ First-party source and documentation are licensed under
 import, copy, or depend on JOSHI, joshibot, leanuweave, minidregg,
 breadstuffs, Oracle Pit, or historical DREGG prototypes without an
 explicit provenance and license review
-([`docs/PROVENANCE.md`](docs/PROVENANCE.md)).
+([`archive/gen1/docs/PROVENANCE.md`](archive/gen1/docs/PROVENANCE.md)).
