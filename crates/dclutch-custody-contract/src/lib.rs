@@ -40,6 +40,16 @@ pub const CUSTODY_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-authority:v
 pub const CUSTODY_REPLAY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-replay:v1";
 /// Exact token-vault PDA seed domain.
 pub const CUSTODY_VAULT_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-vault:v1";
+
+const _: () = {
+    // A PDA seed may be at most thirty-two bytes. An over-long domain refuses
+    // every bump inside `find_program_address`, so the authority it names can
+    // never sign and every route through it is unreachable. Assert it here
+    // rather than discovering it on a validator.
+    assert!(CUSTODY_AUTHORITY_PDA_DOMAIN_V1.len() <= projected::MAX_PDA_SEED_BYTES);
+    assert!(CUSTODY_REPLAY_PDA_DOMAIN_V1.len() <= projected::MAX_PDA_SEED_BYTES);
+    assert!(CUSTODY_VAULT_PDA_DOMAIN_V1.len() <= projected::MAX_PDA_SEED_BYTES);
+};
 /// Domain separating the adapter's token/replay poststate commitment.
 pub const CUSTODY_POSTSTATE_DOMAIN_V1: &[u8] = b"dclutch:custody-poststate:v1";
 

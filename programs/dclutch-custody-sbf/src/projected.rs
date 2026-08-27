@@ -6,7 +6,8 @@ use core::convert::TryFrom;
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1,
     CompartmentV1, CustodyReplayV1, CustodyVaultSeedsV1,
-    PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_STATE_BYTES_V1, ProjectedCustodyCallerSeedsV1, ProjectedCustodyLockReceiptV1,
     ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
     ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1, normal_replay_from_realization_v1,
@@ -46,14 +47,14 @@ const CALLER_PROGRAM: usize = 4;
 const CALLER_PROGRAMDATA: usize = 5;
 const RENT_CREDIT: usize = 6;
 
-const INITIALIZE_ACCOUNTS: usize = 42;
+const INITIALIZE_ACCOUNTS: usize = PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1;
 const INITIALIZE_CORE_PROGRAM: usize = 7;
 const INITIALIZE_PAYER: usize = 8;
 const INITIALIZE_RENT: usize = 9;
 const INITIALIZE_SYSTEM: usize = 10;
 const INITIALIZE_FOUND_START: usize = 11;
 
-const OPEN_ACCOUNTS: usize = 15;
+const OPEN_ACCOUNTS: usize = PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1;
 const OPEN_VAULT: usize = 7;
 const OPEN_AUTHORITY: usize = 8;
 const OPEN_MINT: usize = 9;

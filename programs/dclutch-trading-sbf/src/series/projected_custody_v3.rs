@@ -63,15 +63,6 @@ pub struct SeriesProjectedCustodyPhysicalV3 {
     pub escrow_vault_rent_lamports: u64,
 }
 
-/// Exact two projected requests executed during Prepare.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SeriesProjectedPrepareV3 {
-    /// Initialize projected replay from an immediate Core ProjectFound receipt.
-    pub initialize: ProjectedCustodyRequestV1,
-    /// Open the canonical empty future-Market Hoard.
-    pub open_hoard: ProjectedCustodyRequestV1,
-}
-
 /// Exact projected requests surrounding Core Found during Consume.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SeriesProjectedConsumeV3 {
@@ -79,19 +70,6 @@ pub struct SeriesProjectedConsumeV3 {
     pub lock_and_close_source: ProjectedCustodyRequestV1,
     /// After Core Found, realize Hoard and close projected replay.
     pub realize_and_close: ProjectedCustodyRequestV1,
-}
-
-/// Project Initialize and OpenHoard without granting either physical authority.
-pub fn project_prepare_v3(
-    escrow: dclutch_series_v3_kernel::PrefoundingSeriesEscrowV3,
-    expiry_slot: u64,
-    physical: SeriesProjectedCustodyPhysicalV3,
-) -> Result<SeriesProjectedPrepareV3> {
-    let base = base_request(escrow, expiry_slot, physical)?;
-    Ok(SeriesProjectedPrepareV3 {
-        initialize: with_transition(base, ProjectedCustodyOperationV1::Initialize, 0, 0)?,
-        open_hoard: with_transition(base, ProjectedCustodyOperationV1::OpenHoard, 1, 0)?,
-    })
 }
 
 /// Project atomic source close before Found and realization after Found.
@@ -368,9 +346,6 @@ mod tests {
     #[test]
     fn one_series_projection_owns_prepare_consume_and_expiry_coordinates() {
         let escrow = escrow();
-        let prepare = project_prepare_v3(escrow, 100, physical()).expect("prepare");
-        assert_eq!(prepare.initialize.expected_revision, 0);
-        assert_eq!(prepare.open_hoard.expected_revision, 1);
         let consume =
             project_consume_v3(consume_series_escrow_v3(escrow), 100, physical()).expect("consume");
         assert_eq!(
@@ -427,7 +402,7 @@ mod tests {
         let mut no_rent = physical();
         no_rent.escrow_vault_rent_lamports = 0;
         assert_eq!(
-            project_prepare_v3(escrow, 100, no_rent),
+            project_consume_v3(consume_series_escrow_v3(escrow), 100, no_rent),
             Err(SeriesProjectedCustodyErrorV3::MissingRent)
         );
     }

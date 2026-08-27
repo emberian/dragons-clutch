@@ -17,6 +17,13 @@ pub const PROJECTED_CUSTODY_REQUEST_BYTES_V1: usize = 768;
 pub const PROJECTED_CUSTODY_STATE_BYTES_V1: usize = 808;
 /// Exact terminal receipt width.
 pub const PROJECTED_CUSTODY_RECEIPT_BYTES_V1: usize = 320;
+/// Exact projected-Custody replay-creation physical frame width.
+///
+/// Seven common accounts, four Initialize-specific accounts, and the exact
+/// thirty-one-account Core `ProjectFound` sub-frame this operation forwards.
+pub const PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1: usize = 42;
+/// Exact projected-Custody Hoard-vault-creation physical frame width.
+pub const PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact projected-Custody lock-and-source-close physical frame width.
 pub const PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1: usize = 14;
 /// Exact projected-Custody realization physical frame width.
@@ -26,7 +33,23 @@ pub const PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1: usize = 320;
 /// Domain separating the projected-Hoard replay context from its funding source.
 pub const PROJECTED_HOARD_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch:projected-hoard-context:v1";
 /// PDA seed domain for the one typed Trading-capability caller.
-pub const PROJECTED_CUSTODY_CALLER_PDA_DOMAIN_V1: &[u8] = b"dclutch:projected-custody-caller:v1";
+///
+/// The name is abbreviated because a PDA seed may be at most
+/// [`MAX_PDA_SEED_BYTES`] bytes and the unabbreviated
+/// `dclutch:projected-custody-caller:v1` is thirty-five. That spelling could
+/// never derive an address: `find_program_address` refuses every bump for an
+/// over-long seed, so no signer existed for any projected-Custody transition
+/// and the whole projected family was unreachable at runtime. The static
+/// assertion below is what keeps that from recurring silently.
+pub const PROJECTED_CUSTODY_CALLER_PDA_DOMAIN_V1: &[u8] = b"dclutch:proj-custody-caller:v1";
+
+/// Maximum bytes in one Solana program-derived-address seed.
+pub const MAX_PDA_SEED_BYTES: usize = 32;
+
+const _: () = assert!(
+    PROJECTED_CUSTODY_CALLER_PDA_DOMAIN_V1.len() <= MAX_PDA_SEED_BYTES,
+    "a PDA seed domain longer than 32 bytes can never derive an address"
+);
 /// Lock-and-close receipt magic.
 pub const PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCL01";
 const VERSION_V1: u16 = 1;
@@ -254,6 +277,24 @@ pub struct ProjectedCustodyRequestV1 {
     pub funding_source_vault_rent_lamports: u64,
 }
 
+/// Replay revision a projected-Custody `Initialize` always produces.
+pub const INITIALIZE_RESULTING_REVISION_V1: u64 = 1;
+/// Replay revision a projected-Custody `OpenHoard` always produces.
+pub const OPEN_HOARD_RESULTING_REVISION_V1: u64 = 2;
+
+/// The exact ordered prestate requests one terminal Lock request determines.
+///
+/// Family-neutral by construction: every field except the four transition
+/// fields is carried from the terminal request, so no venue family, escrow
+/// shape, or ticket namespace enters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProjectedCustodyFoundingPrestateV1 {
+    /// Creates the projected replay at revision `0 -> 1`.
+    pub initialize: ProjectedCustodyRequestV1,
+    /// Creates the projected Hoard vault at revision `1 -> 2`.
+    pub open_hoard: ProjectedCustodyRequestV1,
+}
+
 impl ProjectedCustodyRequestV1 {
     /// Validate identities and the exact operation shape.
     pub fn validate(self) -> Result<(), ProjectedCustodyError> {
@@ -312,6 +353,59 @@ impl ProjectedCustodyRequestV1 {
             return Err(ProjectedCustodyError::NonCanonical);
         }
         Ok(())
+    }
+
+    /// Derive the exact ordered prestate requests this terminal request needs.
+    ///
+    /// A projected-Custody replay reaches `HoardOpen` — the sole prestate the
+    /// atomic founding Lock stage accepts — by exactly two prior transitions:
+    /// `Initialize` at revision `0 -> 1`, which creates the replay, and
+    /// `OpenHoard` at `1 -> 2`, which creates the Hoard vault. There is no
+    /// other route, so this terminal request fully determines both.
+    ///
+    /// [`ProjectedCustodyStateV1::authenticate_next`] admits a successor only
+    /// when all thirty of its non-transition fields match the persisted
+    /// request byte-for-byte; `operation`, `expected_revision`,
+    /// `resulting_revision`, and `amount` are the only four it permits to
+    /// vary. Both prestates are therefore built by functional update from
+    /// `self`, varying exactly those four and nothing else. A family cannot
+    /// enter here and a caller cannot mis-parameterize a coordinate: the two
+    /// prestates agree with the terminal request by construction rather than
+    /// by a constructor remembering to copy thirty fields.
+    pub fn founding_prestate_v1(
+        self,
+    ) -> Result<ProjectedCustodyFoundingPrestateV1, ProjectedCustodyError> {
+        self.validate()?;
+        if self.operation != ProjectedCustodyOperationV1::LockHoardAndCloseSource {
+            return Err(ProjectedCustodyError::NonCanonical);
+        }
+        // `Initialize` is pinned to `0 -> 1` by `validate`, and `OpenHoard` is
+        // the only transition between `Initialized` and `HoardOpen`, so a Lock
+        // that does not expect revision two cannot be reached from a fresh
+        // replay and must refuse here rather than at the third CPI.
+        if self.expected_revision != OPEN_HOARD_RESULTING_REVISION_V1 {
+            return Err(ProjectedCustodyError::Revision);
+        }
+        let initialize = Self {
+            operation: ProjectedCustodyOperationV1::Initialize,
+            expected_revision: 0,
+            resulting_revision: INITIALIZE_RESULTING_REVISION_V1,
+            amount: 0,
+            ..self
+        };
+        let open_hoard = Self {
+            operation: ProjectedCustodyOperationV1::OpenHoard,
+            expected_revision: INITIALIZE_RESULTING_REVISION_V1,
+            resulting_revision: OPEN_HOARD_RESULTING_REVISION_V1,
+            amount: 0,
+            ..self
+        };
+        initialize.validate()?;
+        open_hoard.validate()?;
+        Ok(ProjectedCustodyFoundingPrestateV1 {
+            initialize,
+            open_hoard,
+        })
     }
 
     /// Encode one exact request.
@@ -1678,5 +1772,156 @@ mod tests {
         assert_eq!(receipt.source_replay, id(42));
         let bytes = receipt.encode().expect("receipt bytes");
         assert_eq!(ProjectedCustodyLockReceiptV1::decode(&bytes), Ok(receipt));
+    }
+
+    #[test]
+    fn every_caller_seed_is_short_enough_to_derive_an_address() {
+        // A PDA seed longer than thirty-two bytes refuses every bump, so an
+        // authority named by one can never sign and every route through it is
+        // dead on a validator while compiling and unit-testing cleanly. This
+        // exact defect made the whole projected-Custody family unreachable:
+        // the domain was thirty-five bytes. Assert the real precondition on
+        // the real seed vector, not just on the domain constant.
+        let request = request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_HOARD_RESULTING_REVISION_V1,
+            500,
+        );
+        let seeds = ProjectedCustodyCallerSeedsV1::new(request, id(40));
+        let slices = seeds.as_slices();
+        assert!(slices.len() < 16, "a PDA admits at most sixteen seeds");
+        for (index, seed) in slices.iter().enumerate() {
+            assert!(
+                seed.len() <= MAX_PDA_SEED_BYTES,
+                "caller seed {index} is {} bytes",
+                seed.len()
+            );
+        }
+
+        let state = ProjectedCustodyStateSeedsV1::from_request(request);
+        for (index, seed) in state.as_slices().iter().enumerate() {
+            assert!(
+                seed.len() <= MAX_PDA_SEED_BYTES,
+                "replay seed {index} is {} bytes",
+                seed.len()
+            );
+        }
+    }
+
+    #[test]
+    fn founding_prestate_varies_only_the_four_transition_fields() {
+        let lock = request(
+            ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+            OPEN_HOARD_RESULTING_REVISION_V1,
+            500,
+        );
+        let prestate = lock.founding_prestate_v1().expect("prestate");
+
+        assert_eq!(
+            prestate.initialize.operation,
+            ProjectedCustodyOperationV1::Initialize
+        );
+        assert_eq!(prestate.initialize.expected_revision, 0);
+        assert_eq!(prestate.initialize.resulting_revision, 1);
+        assert_eq!(prestate.initialize.amount, 0);
+        assert_eq!(
+            prestate.open_hoard.operation,
+            ProjectedCustodyOperationV1::OpenHoard
+        );
+        assert_eq!(prestate.open_hoard.expected_revision, 1);
+        assert_eq!(prestate.open_hoard.resulting_revision, 2);
+        assert_eq!(prestate.open_hoard.amount, 0);
+
+        // Every other field is the terminal request's, byte for byte. Rebuild
+        // each prestate from the terminal request by varying only the four
+        // transition fields: equality here is the whole family-neutrality
+        // claim, and it fails the moment a coordinate is silently reshaped.
+        for (derived, operation, expected, resulting) in [
+            (
+                prestate.initialize,
+                ProjectedCustodyOperationV1::Initialize,
+                0,
+                1,
+            ),
+            (
+                prestate.open_hoard,
+                ProjectedCustodyOperationV1::OpenHoard,
+                1,
+                2,
+            ),
+        ] {
+            assert_eq!(
+                derived,
+                ProjectedCustodyRequestV1 {
+                    operation,
+                    expected_revision: expected,
+                    resulting_revision: resulting,
+                    amount: 0,
+                    ..lock
+                }
+            );
+        }
+
+        // The persisted state admits each derived successor in order, which is
+        // the property the Trading bootstrap route depends on.
+        let mut state = ProjectedCustodyStateV1 {
+            bump: 254,
+            phase: ProjectedCustodyPhaseV1::Initialized,
+            request: prestate.initialize,
+            next_revision: INITIALIZE_RESULTING_REVISION_V1,
+            locked_amount: 0,
+            last_request_digest: id(40),
+        };
+        assert_eq!(
+            state.authenticate_next(&prestate.open_hoard, id(41)),
+            Ok(())
+        );
+        state.request = prestate.open_hoard;
+        state.next_revision = OPEN_HOARD_RESULTING_REVISION_V1;
+        assert_eq!(state.authenticate_next(&lock, id(42)), Ok(()));
+    }
+
+    #[test]
+    fn founding_prestate_refuses_a_non_terminal_or_unreachable_request() {
+        for operation in [
+            ProjectedCustodyOperationV1::Initialize,
+            ProjectedCustodyOperationV1::OpenHoard,
+            ProjectedCustodyOperationV1::LockHoard,
+            ProjectedCustodyOperationV1::RefundAndClose,
+            ProjectedCustodyOperationV1::RealizeAndClose,
+            ProjectedCustodyOperationV1::AbortOpenAndClose,
+        ] {
+            let amount = u64::from(matches!(
+                operation,
+                ProjectedCustodyOperationV1::LockHoard
+                    | ProjectedCustodyOperationV1::RefundAndClose
+                    | ProjectedCustodyOperationV1::RealizeAndClose
+            )) * 500;
+            let revision = if operation == ProjectedCustodyOperationV1::Initialize {
+                0
+            } else {
+                OPEN_HOARD_RESULTING_REVISION_V1
+            };
+            assert_eq!(
+                request(operation, revision, amount).founding_prestate_v1(),
+                Err(ProjectedCustodyError::NonCanonical),
+                "{operation:?} is not the terminal founding Lock"
+            );
+        }
+
+        // A Lock expecting any revision but two cannot be reached from a fresh
+        // replay, because Initialize is pinned to 0 -> 1 and OpenHoard is the
+        // only step to HoardOpen.
+        for revision in [3, 4, 9] {
+            assert_eq!(
+                request(
+                    ProjectedCustodyOperationV1::LockHoardAndCloseSource,
+                    revision,
+                    500,
+                )
+                .founding_prestate_v1(),
+                Err(ProjectedCustodyError::Revision)
+            );
+        }
     }
 }
