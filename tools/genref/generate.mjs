@@ -498,7 +498,7 @@ reachable inside an entry route's request.
       .sort((a, b) => (a.ref < b.ref ? -1 : 1))
       .map((u) => [`\`${u.ref}\``, `\`${u.file}\``, u.label]);
     unknown =
-      `\n\n## Bindings naming routes the census does not\n\n` +
+      `\n\n## Campaign records naming routes the code does not\n\n` +
       `These route names appear in a campaign's records but match no route in
 the current code. Each one is stale or a gap; it is listed here so it gets
 fixed rather than dropped.\n\n` +
