@@ -1713,6 +1713,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-provider-transport-v3-operator"
 version = "0.1.0"
 dependencies = [
@@ -1865,6 +1869,7 @@ dependencies = [
  "dclutch-market-retirement-v1-operator",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
+ "dclutch-program-test-evidence",
  "dclutch-provider-transport-v3-operator",
  "dclutch-pyth-svm",
  "dclutch-realm-contract",

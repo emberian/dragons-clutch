@@ -1,0 +1,54 @@
+{
+  "campaign": "resolution-relayed-programtest",
+  "witnesses": [
+    {
+      "id": "relayed-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it."
+    },
+    {
+      "id": "relayed-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured -- which matters more here than usual, because two of them do not fit and the next witness is where that is written down."
+    },
+    {
+      "id": "exactly-two-relayed-transactions-do-not-fit-a-legacy-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes > 1232) | .label] | sort | join(\" + \")",
+      "expect": "relayed consumption: a sealed graduation resolves the market + relayed transport: append observation 2",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree until 4e1c4db put it on a v0 ALT. This family was never measured before 2026-08-27, and TWO of its transactions are over: the consumption at 1,534 bytes (28 accounts) and the append carrying the 424-byte VirtualPool body at 1,377 bytes. Neither can be submitted by a real relayer on a legacy message; both need v0 messages over an Address Lookup Table, exactly as the Claims campaigns already do. This witness names the two by label rather than counting them, so a THIRD transaction going over turns this red instead of passing silently, and so does fixing either one -- at which point whoever fixes it edits this expectation down. It is a recorded defect, not a tolerance."
+    },
+    {
+      "id": "the-deadline-walk-fits-a-legacy-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"relayed liveness:\")) | .wire_bytes] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "The liveness walk is the one route in this family that has to work when nobody is cooperating, so it is the one that must not depend on an Address Lookup Table a silent operator might never have published. Its twenty-two-account frame serialises to 991 bytes against Solana's 1,232-byte legacy maximum -- it fits on a bare legacy message, and this checks that separately from the family's two over-limit transactions above."
+    },
+    {
+      "id": "every-relayed-refusal-reached-the-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this campaign claims is a decision the Resolution program made on a named field, so a bare runtime refusal appearing here would mean a hostile case stopped being about the adapter."
+    },
+    {
+      "id": "the-walk-moves-no-lamports-through-the-system-program",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error == null) | select(.label | startswith(\"relayed liveness:\") or startswith(\"relayed consumption:\")) | ([.logs[] | select(test(\"^Program 11111111111111111111111111111111 invoke\"))] | length)] | unique | join(\",\")",
+      "expect": "2",
+      "provenance": "The bounty must move by direct lamport assignment between accounts the Resolution program owns, not by a System transfer from whoever submitted the transaction -- otherwise a \"prepaid\" bounty is a subsidy from the walker's own payer, and the escrow the market funded at founding is decoration. What the adapter legitimately asks the System Program for is exactly two things, and only for the certificate account: `allocate` then `assign`, because the certificate arrives PREPAID and System-owned (initialize_certificate_at_kind refuses anything else) so there is nothing to fund. This asserts the walk makes exactly those two System invocations -- the SAME two the already-audited consumption route makes for the same prepaid-output shape, which is why both labels are in the query and the result is required to be a single value. A third would be a transfer. `11111111111111111111111111111111` is Solana's System Program address; its provenance is outside this repository."
+    },
+    {
+      "id": "the-relayed-family-executes-six-distinct-actions",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error == null) | .label | sub(\" [0-9]+$\"; \"\")] | unique | length | tostring",
+      "expect": "6",
+      "provenance": "The family's closed action set is `RelayActionV1`: CreateRecord, AppendObservation, SealRecord, RetireRecord, ConsumeRecord, CommitDeadlineFailure -- six variants, enumerated in crates/dclutch-relay-contract/src/instruction.rs. This counts distinct COMMITTED labels (the append index stripped, since four appends are one action) and asserts the campaign drives all six rather than five plus a refusal. It is the arithmetic that stops the census rows below from overstating the family: a seventh action added to the enum with no campaign behind it turns this red."
+    }
+  ]
+}

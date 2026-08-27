@@ -37,6 +37,7 @@ use dclutch_capability_contract::{
     MAX_DEPENDENCIES_PER_CAPABILITY,
 };
 use dclutch_core_contract::ContentId;
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
 };
@@ -1603,6 +1604,88 @@ async fn submit(
     context.banks_client.process_transaction(transaction).await
 }
 
+/// The extent of a signed legacy transaction on the wire.
+///
+/// It MEASURES and does not judge, and deliberately does not carry a copy of
+/// Solana's 1,232-byte `PACKET_DATA_BYTES` to compare against.
+/// `solana-program-test` submits no packet and cannot enforce that maximum
+/// itself -- Found31 was ten bytes over and survived every fixture test in the
+/// tree -- so the number has to be checked somewhere a campaign cannot quietly
+/// satisfy. That place is the tier's own witness
+/// (`tools/gauntlet/resolution-relayed/witnesses.json`), which reads the
+/// recorded extents back and compares them to the limit without asking this
+/// file's opinion. Two of this campaign's transactions are over it.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    1 + signatures * 64 + message.len()
+}
+
+/// Submit, and record the runtime's own account of what happened.
+///
+/// Identical to [`submit`] except that it names the transaction for the census
+/// and asks the bank for metadata instead of a bare result. The evidence is
+/// emitted BEFORE the caller gets to assert anything, so a case that fails its
+/// own assertion still leaves behind what the chain did.
+///
+/// Only the cases the census binds go through here. The hostile corpora and the
+/// internal plumbing keep [`submit`], because a campaign that labelled every
+/// transaction it happens to send would be claiming coverage it has not written
+/// a binding for.
+async fn submit_recorded(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    signers: &[&Keypair],
+    label: &str,
+) -> Result<(), BanksClientError> {
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let mut all: Vec<&Keypair> = vec![&context.payer];
+    all.extend_from_slice(signers);
+    let transaction = Transaction::new_signed_with_payer(
+        instructions,
+        Some(&context.payer.pubkey()),
+        &all,
+        blockhash,
+    );
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let extent = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await?;
+    let outcome = processed.result.clone();
+    let failure = outcome.clone().err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(extent),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    outcome.map_err(BanksClientError::TransactionError)
+}
+
 async fn record_bytes(context: &mut ProgramTestContext, record: Pubkey) -> Vec<u8> {
     context
         .banks_client
@@ -1640,10 +1723,11 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
         .start_with_context()
         .await;
 
-    submit(
+    submit_recorded(
         &mut context,
         &[fixture.create_instruction(4, 1)],
         &[&fixture.worker],
+        "relayed transport: create the observation record",
     )
     .await
     .expect("create the observation record");
@@ -1671,9 +1755,14 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
             u16::try_from(APPEND_OBSERVATION_PREFIX_BYTES).expect("offset"),
             1,
         );
-        submit(&mut context, &[precompile, append], &[&fixture.worker])
-            .await
-            .unwrap_or_else(|error| panic!("append {index} failed: {error:?}"));
+        submit_recorded(
+            &mut context,
+            &[precompile, append],
+            &[&fixture.worker],
+            &format!("relayed transport: append observation {index}"),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("append {index} failed: {error:?}"));
         running = fold(running, body_slice(&message));
         let data = record_bytes(&mut context, fixture.record).await;
         let view = RelayedObservationRecordViewV1::decode(&data).expect("record decodes");
@@ -1692,9 +1781,14 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
         u16::try_from(SEAL_RECORD_PREFIX_BYTES).expect("offset"),
         1,
     );
-    submit(&mut context, &[precompile, seal_ix], &[&fixture.worker])
-        .await
-        .expect("seal the completed set");
+    submit_recorded(
+        &mut context,
+        &[precompile, seal_ix],
+        &[&fixture.worker],
+        "relayed transport: seal the completed set",
+    )
+    .await
+    .expect("seal the completed set");
 
     let data = record_bytes(&mut context, fixture.record).await;
     let view = RelayedObservationRecordViewV1::decode(&data).expect("record decodes");
@@ -1750,10 +1844,11 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
         .expect("bank read")
         .expect("beneficiary exists")
         .lamports;
-    submit(
+    submit_recorded(
         &mut context,
         &[fixture.retire_instruction()],
         &[&fixture.worker],
+        "relayed transport: retire the record into the Market beneficiary",
     )
     .await
     .expect("retire the record into the Market beneficiary");
@@ -2278,10 +2373,11 @@ async fn a_sealed_graduation_resolves_the_market_through_the_products_own_domain
     let mut context = start(&mut fixture).await;
     seal_record(&mut context, &fixture).await;
 
-    submit(
+    submit_recorded(
         &mut context,
         &[fixture.consume_instruction(ConsumeSubstitution::default())],
         &[&fixture.worker],
+        "relayed consumption: a sealed graduation resolves the market",
     )
     .await
     .expect("consume the sealed graduation record");
@@ -2912,10 +3008,11 @@ async fn a_silent_relayer_cannot_make_the_market_unresolvable() {
         "the escrow starts holding rent plus exactly the quoted bounty"
     );
 
-    submit(
+    submit_recorded(
         &mut context,
         &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
         &[&fixture.worker],
+        "relayed liveness: a silent market walks to its pre-disclosed failure",
     )
     .await
     .expect("a silent market walks to its pre-disclosed failure");
@@ -3006,10 +3103,11 @@ async fn the_walk_refuses_before_the_deadline_it_is_named_for() {
     let before = walk_state(&mut context, &fixture).await;
 
     refused_with(
-        submit(
+        submit_recorded(
             &mut context,
             &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
             &[&fixture.worker],
+            "relayed liveness: a walk before the deadline refuses",
         )
         .await,
         REFUSAL_TRANSITION,
@@ -3025,30 +3123,34 @@ async fn the_walk_refuses_before_the_deadline_it_is_named_for() {
 async fn the_bounty_cannot_be_collected_twice() {
     // The certificate is a PDA of the Source state, the kind and the sequence,
     // and the Source state is terminal after the first walk, so the second
-    // attempt has two independent reasons to refuse. What this asserts is the
-    // one that would cost real money if it were wrong: the escrow does not pay
-    // again.
+    // attempt has several independent reasons to refuse. Which one it reaches
+    // is worth pinning: `Funding` (14), not `Transition` (12), because
+    // `plan_deadline_failure_v1` debits BEFORE it transitions, and the
+    // compartment's bounty is already spent. A walk that cannot be paid for
+    // cannot move the market -- that ordering was a claim in `funded.rs`'s
+    // doc comment and this is the case that executes it.
     let mut fixture = fixture(1, &[]);
     let mut context = start(&mut fixture).await;
     warp_past_the_deadline(&mut context).await;
-    submit(
+    submit_recorded(
         &mut context,
         &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
         &[&fixture.worker],
+        "relayed liveness: a silent market walks to its pre-disclosed failure",
     )
     .await
     .expect("the first walk commits");
     let after_first = walk_state(&mut context, &fixture).await;
 
-    assert!(
-        submit(
+    refused_with(
+        submit_recorded(
             &mut context,
             &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
             &[&fixture.worker],
+            "relayed liveness: a second walk cannot collect the bounty twice",
         )
-        .await
-        .is_err(),
-        "a market that already failed cannot be walked again"
+        .await,
+        REFUSAL_FUNDING,
     );
     assert_eq!(
         walk_state(&mut context, &fixture).await,
@@ -3076,13 +3178,14 @@ async fn a_live_compartment_of_the_same_market_cannot_stand_in_for_the_escrow() 
     let before = walk_state(&mut context, &fixture).await;
 
     refused_with(
-        submit(
+        submit_recorded(
             &mut context,
             &[fixture.deadline_failure_instruction(DeadlineSubstitution {
                 funding: Some(fixture.exhaustion_funding),
                 ..DeadlineSubstitution::default()
             })],
             &[&fixture.worker],
+            "relayed liveness: a live compartment that is not the escrow refuses",
         )
         .await,
         REFUSAL_FUNDING,
@@ -3117,10 +3220,11 @@ async fn an_escrow_that_does_not_hold_what_the_market_promised_refuses() {
     let before = walk_state(&mut context, &fixture).await;
 
     refused_with(
-        submit(
+        submit_recorded(
             &mut context,
             &[fixture.deadline_failure_instruction(DeadlineSubstitution::default())],
             &[&fixture.worker],
+            "relayed liveness: an escrow one lamport short refuses",
         )
         .await,
         REFUSAL_FUNDING,
