@@ -1,10 +1,11 @@
 # dclutch-structured-v2-contract
 
-Wire records and the onchain-safe execution candidate for shard-backed
-Structured receipts. The pure kernel stays the sole owner of coefficient,
-backing, settlement, and lifecycle arithmetic.
+Wire records, canonical resource derivations, the physical account frame, and
+the host-side execution candidate for shard-backed Structured receipts. The pure
+kernel stays the sole owner of coefficient, backing, settlement, and lifecycle
+arithmetic.
 
-Three records:
+Five records:
 
 - `StructuredRequestV2` — 432 fixed bytes: one action, the identities that must
   join, one receipt quantity, and the optimistic replay revision. No
@@ -13,9 +14,29 @@ Three records:
   beneficiary only. The lifecycle phase is deliberately absent, because it is
   authenticated per transaction from the Market and Product terminal record and
   persisting it would create a second owner for a fact Core already owns.
-- `StructuredHotCandidateV2` — the opaque bounded candidate consumed by common
-  Trading Hot. It revalidates every amount against the immutable coefficients
-  and exposes borrowed effects plus commit-last root bytes.
+- `StructuredRootSeedsV2` / `StructuredReceiptMintSeedsV2` /
+  `StructuredShardCustodySeedsV2` — the exact seed order for the three derived
+  resources, and the anti-aliasing rule. The root is keyed by `terms_id` alone;
+  the receipt Mint cannot be, because the terms persist its address, so it is
+  keyed by the digest of the terms with that field EXCISED under its own domain;
+  custody is keyed by `[terms_id, shard_mint]`, so the mint-to-custody binding
+  is a derivation rather than an index lookup. No address is derived here —
+  `find_program_address` belongs to the adapter.
+- `StructuredFrameSpecV2` — the physical account frame: a fixed base plus one
+  (shard Mint, actor shard, custody shard) triple per BACKED coordinate, and the
+  sole author of which coordinate each Token effect's five accounts occupy.
+  Zero-coefficient rows contribute no accounts at all.
+- `StructuredHotCandidateV2` — the opaque bounded candidate. It revalidates
+  every amount against the immutable coefficients and exposes borrowed effects
+  plus commit-last root bytes.
+
+  **It is a host-side adversary, not a chain seam.** It judges what
+  `dclutch-structured-v2-operator` plans; nothing on chain calls it, and
+  decision 0011 records why nothing can. A family reaches the Trading executor
+  through a sealed artifact closure, never through Rust the family wrote.
+  `frame.rs` is likewise not the `AccountProfileV2` the chain expands — thirteen
+  of its twenty-three base coordinates name accounts the hot frame already
+  fixes or injects.
 
 There is **no Claims child**. A Structured receipt's single backing edge points
 at the exact claim-shard layer, so every Structured effect is an ordinary

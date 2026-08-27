@@ -11,10 +11,12 @@
 //! PDA, or persists a supply projection.
 //!
 //! Solana SDK types are deliberately absent: instruction construction, PDA
-//! derivation, AccountProfile expansion, and CPI belong to the physical
-//! integration adapter, which consumes
+//! derivation, AccountProfile expansion, and CPI belong to a physical adapter
+//! that does not exist yet, and that will not consume
 //! [`StructuredHotCandidateInputV2`](dclutch_structured_v2_contract::StructuredHotCandidateInputV2)
-//! and revalidates every field independently.
+//! when it does.  Decision 0011: the chain reaches a family through its sealed
+//! artifact closure, so the candidate is this crate's own adversary rather than
+//! the executor's.
 
 mod action;
 mod lowering;
