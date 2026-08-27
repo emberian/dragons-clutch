@@ -78,7 +78,7 @@
     },
     {
       "route": "resolution/*",
-      "reason": "The Resolution ELF IS bound into the five-role release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. Resolution routes need a Source/provider tier.",
+      "reason": "The Resolution ELF IS bound into the five-role release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. Resolution routes need a Source/provider tier. NEVER-EXECUTED here means never executed by a TIER: the four RelayedMainnetStateV1 transport routes (process_create_record, process_append, process_seal, process_retire) and the two provider-resolution campaigns run green under ProgramTest against the compiled ELF -- crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs and resolution_core_v3_lifecycle.rs. What no tier drives is the same code on a validator, in a transaction, against genesis Loader-v3 accounts.",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
     },
     {
