@@ -725,10 +725,29 @@ mod tests {
     fn authenticated_accelerator_v4_frame_is_exact_and_nonoverlapping() {
         assert_eq!(ADMITTED_ACCELERATOR_CALLER_AUTHORITY_ACCOUNT_V4, 0);
         assert_eq!(ADMITTED_ACCELERATOR_HOT_FIXED_START_V4, 1);
-        assert_eq!(ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4, 38);
-        assert_eq!(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4, 39);
+        assert_eq!(ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4, 39);
+        assert_eq!(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4, 40);
         assert_eq!(ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4, 8);
-        assert_eq!(ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4, 47);
+        assert_eq!(ADMITTED_ACCELERATOR_RUNTIME_ACCOUNTS_START_V4, 48);
+
+        // The literals above pin the layout. THIS is the assertion that pins it
+        // to something: the accelerator carries the common Hot fixed frame
+        // entire, so its count is the contract's count and not a number that
+        // happens to match today.
+        //
+        // The literals alone were what let the frame count drift. They read as
+        // a careful layout check and were three copies of one stale number, so
+        // when `HOT_FIXED_ACCOUNT_COUNT_V3` went 38 -> 39 this test did not
+        // catch the break — it asserted it, and stayed green over an
+        // authentication path that could no longer succeed from either end.
+        assert_eq!(
+            ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4,
+            HOT_FIXED_ACCOUNT_COUNT_V3
+        );
+        assert_eq!(
+            ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_START_V4,
+            ADMITTED_ACCELERATOR_HOT_FIXED_START_V4 + HOT_FIXED_ACCOUNT_COUNT_V3
+        );
     }
 
     #[test]
