@@ -453,6 +453,93 @@ campaign. The generalisation is that **a family adopting an existing child ABI
 inherits that ABI's whole artifact closure**, and the expensive part is not the
 encoder but discovering where its own semantics disagree with the wire's.
 
+## 3d. CORRECTION: "already landed" was true of the code and false of its behaviour
+
+STRUCT-CAMP, 2026-08-27, found while taking §3c's short path. Two corrections
+to §3c and one to §3b, all measured.
+
+### The builders did not run
+
+§3c's central claim is that Structured authors no artifacts because the four
+builders are "already landed". They are written. At the moment §3c was
+recorded, `dclutch-bearer-v2-operator` was **5 of 20** and every profile-emitting
+test in it had been failing since 2026-08-26, from two sweeps that each stopped
+one producer short:
+
+- `cc228cdd` made a nonzero privilege on an `AuthenticatedRouteAlias` a refusal.
+  The rule is right — `authenticate` takes `representative_privileges` for any
+  coordinate whose representative is another (`v2.rs:2360-2369`) and never reads
+  the alias's own field. WAVE.md records that it "silently broke every Profile14
+  emission — fixed producer-side"; that fix reached the Direct producer and not
+  the three in this crate, all of which marked their Claims/Token-program
+  placeholder aliases `executable`.
+- `ca5e5f14` moved `HOT_FIXED_ACCOUNT_COUNT_V3` from 38 to 39, and three
+  transaction tests kept the old account indices. Invisible beneath the first
+  break, which panicked in the shared fixture before any assertion ran.
+
+Both are fixed (`57c8fc3c`, 21/21). **The generalisable rule, which belongs in
+any future ruling of this shape: an artifact builder with no caller outside its
+own crate is not landed, it is parked.** A builder with no callers has no gate,
+so "already landed" should be read as "already written" until something outside
+the crate drives it. `b99d6adf` gives these four their first such caller, and
+the descriptor it hands them is the first one they have ever been given that a
+Record account could hold: the crate's own fixture hand-fills the preimage and
+then supplies an arbitrary `descriptor_id` that is not the digest of those
+bytes, while the Claims adapter computes `descriptor_id = hash(record data)`.
+
+### `graph_id` is the exposure bundle, and §3b's lowering joined the wrong one
+
+`RepresentationDescriptorV2::graph_id()` / `graph_digest()` name the
+`CompositionExposureBundleV3` record, not the source graph: the adapter hands
+them to that decoder as `RecordAdmissionV3` under
+`COMPOSITION_EXPOSURE_SCHEMA_ID_V3`
+(`rational-representation-v2-operator/src/lib.rs:558-576`) and
+`authenticate_exposure` requires equality with `exposure.bundle_id()`
+(`rational-representation-v2-kernel/src/lib.rs:902`). The descriptor's own
+encoder already names the field `exposure_id`; the decoder's accessor is the
+legacy name, and it is what made the first version of §3b's lowering compare
+`StructuredTermsV2::graph_id` — a record the terms decoder *proves* is a
+different one, so the join could never be satisfied by a descriptor the chain
+would accept. Fixed at `55378ca6`; the field is now `exposure_id` in Structured's
+own type, because the shared name is the defect.
+
+**Fractional's twin inherits this trap specifically**, on top of §3c's
+generalisation: any family lowering onto this wire will read the name `graph_id`
+and join its own graph identity.
+
+### The live route no longer checks that the coefficients are the recipe
+
+`authenticate_graph` held `coefficient * scale == root_exposure * denominator`
+per outcome. It reads the superseded `RepresentationGraphV2` and has zero
+non-test callers; the live route runs `authenticate_exposure`, which checks the
+bundle's identity, digest and width and never the coefficients. Combined with
+§3b's finding that the Structured terms reach no on-chain reader at all, that
+makes **founding the last moment the recipe can be checked against the
+composition it claims to represent**. It is tolerable — the coefficients are
+immutable and the descriptor is content-addressed, so a wrong recipe is a wrong
+founding rather than a forgeable request — but it must be checked somewhere, and
+`derive_structured_representation_descriptor_v2` is where.
+
+Recorded as a **RECORDS-MIGRATE** row rather than resolved here: `root_id` has
+no live consumer at all, and `graph_id`/`graph_digest` are double-booked between
+the dead legacy-graph path and the live exposure path. Collapsing that moves
+every live `descriptor_id`, hence every shard Mint, custody account, Position and
+replay record of every representation.
+
+### The campaign is a lane, not a project
+
+`programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs`
+already executes `IssueStructured`, `UnwrapStructured`, `Denominate`,
+`Reconstitute` and terminal redemption on real Claims/Custody/Registry/Core ELFs
+with a genuine Token-2022 v11, with 28 census bindings at
+`tools/gauntlet/claims-rational-representation-v2/`, at `K = 2`, coefficients
+`[3, 7]`, denominator `10`. Its descriptor is planted by `add_finalized_record`,
+so the on-chain route already accepts a self-identifying descriptor. Structured's
+campaign is that test parameterized by
+`derive_structured_representation_descriptor_v2` at `K = 3`, plus the
+family-specific hostiles and a `tools/gauntlet/structured/` binding directory.
+It needs no `DCLTGMF1`, no successor bootstrap and no validator.
+
 ## 4. `frame.rs` is two objects, and only one of them is an artifact input
 
 `frame.rs` is now load-bearing for the effect coordinates (`dee3311e`), and
