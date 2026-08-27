@@ -33,7 +33,9 @@ use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_resolution_core_v3_operator::ObservedAccount;
-use dclutch_source_contract::{SourceResolutionPhaseV1, SourceResolutionStateV2};
+use dclutch_source_contract::{
+    PythAdapterConfigV1, SourceResolutionPhaseV1, SourceResolutionStateV2, WindowSpecV1,
+};
 use solana_program::hash::hash;
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
@@ -493,6 +495,22 @@ pub(crate) fn resolve_through_pyth(
         &mut submitted,
         transactions,
     )?;
+    // The §12.3 PREFLIGHT. Three questions reach the wire as one number:
+    // `InvalidObservationSchedule`, `InvalidPublicationTime` and
+    // `InvalidPythObservation` all become `ProviderJoinErrorV3::Provider` and
+    // then `ResolutionError::ProviderObservation` (0x800A), even though
+    // `normalize_authenticated_update`'s own doc comment says an operator must
+    // be able to tell a fresh publication about the wrong period from a stale
+    // one about the right period. They cannot, and this tier paid a whole
+    // campaign to that collapse.
+    //
+    // So the campaign evaluates the same three predicates itself, from the
+    // records the CHAIN holds and the update the chain posted, and says which
+    // one will refuse before it spends 1,070,265 CU finding out. When all three
+    // hold it says that too -- which is the useful half, because it means a
+    // 0x800A from here is NOT the window and the next reader can stop looking
+    // at it.
+    let window_note = preflight_window_admission(rpc, addresses, provider, chain_now)?;
     let execute = build_provider_execute_v3(
         &execute_snapshot(rpc, addresses, submit.lifecycle, provider)?,
         ProviderExecuteDeploymentV3 {
@@ -608,7 +626,8 @@ pub(crate) fn resolve_through_pyth(
                  {FIXTURE_SHELF_LIFE_SECONDS}: the observation is ABOUT a time inside the Market's \
                  300-second terminal window, and its PUBLICATION is inside the band around the \
                  cluster's clock, which is the two-clock shape of the admission and not one \
-                 tolerance doing both jobs.",
+                 tolerance doing both jobs. Checked before submission, not inferred after: \
+                 {window_note}.",
                 terminal.terminal_winner, addresses.generation
             ),
         },
@@ -644,6 +663,91 @@ pub(crate) fn table_rent(tables: &[ObservedAccount]) -> u64 {
         .iter()
         .map(|table| table.lamports)
         .fold(0_u64, u64::saturating_add)
+}
+
+/// Evaluate §12.3's three admission predicates off-chain, and name the one that
+/// will refuse.
+///
+/// This is a DIAGNOSIS, never an authority: the chain decides, and this refuses
+/// early only when it can say exactly why. The inputs are the finalized window
+/// and adapter-config records the Market itself published and the price update
+/// the receiver actually posted, so it is reading the same facts the adapter
+/// will.
+fn preflight_window_admission(
+    rpc: &mut Rpc,
+    addresses: &ResolutionAddressesV1,
+    provider: &ProviderPlanV1,
+    chain_now: i64,
+) -> Result<String> {
+    let window = WindowSpecV1::decode(
+        &rpc.required_account(addresses.window_spec.raw, "window spec record")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("WindowSpecV1: {error:?}")))?;
+    let config = PythAdapterConfigV1::decode(
+        &rpc.required_account(addresses.adapter_config.raw, "Pyth adapter config record")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("PythAdapterConfigV1: {error:?}")))?;
+    let posted = rpc.required_account(provider.update.pubkey(), "posted PriceUpdateV2")?;
+    let update = FullPriceUpdateV2::parse(&posted.data)
+        .map_err(|error| Error::new(format!("posted PriceUpdateV2: {error:?}")))?;
+
+    let publication = update.publish_time();
+    if publication < window.start_unix_seconds() || publication > window.end_unix_seconds() {
+        return Err(Error::new(format!(
+            "§12.3 SCHEDULE: the posted publication is at {publication} and this Market's terminal \
+             window is [{}, {}]. The observation is not ABOUT the period the market sold. On chain \
+             this is InvalidObservationSchedule and it reaches the log as 0x800A, indistinguishable \
+             from the two predicates below.",
+            window.start_unix_seconds(),
+            window.end_unix_seconds()
+        )));
+    }
+    let oldest = chain_now.saturating_sub(i64::from(window.max_age_seconds()));
+    let newest = chain_now.saturating_add(i64::from(window.max_future_skew_seconds()));
+    if publication < oldest || publication > newest {
+        return Err(Error::new(format!(
+            "§12.3 FRESHNESS: the posted publication is at {publication} and this cluster's clock \
+             admits [{oldest}, {newest}] (now {chain_now}, max_age {}, max_future_skew {}). The \
+             observation is about the right period and this cluster will not act on it. If the \
+             publication is too OLD the pinned fixture has outlived its declared shelf life -- \
+             recapture it, do not widen the window. On chain this is InvalidPublicationTime and it \
+             reaches the log as 0x800A.",
+            window.max_age_seconds(),
+            window.max_future_skew_seconds()
+        )));
+    }
+    if update.feed_id() != config.provider_feed_id()
+        || update.exponent() != config.expected_exponent()
+    {
+        return Err(Error::new(
+            "§12.3 OBSERVATION: the posted update's feed identity or exponent is not the one this \
+             Market's adapter configuration names. On chain this is InvalidPythObservation and it \
+             reaches the log as 0x800A.",
+        ));
+    }
+    let admitted = u128::from(update.price().unsigned_abs())
+        .saturating_mul(u128::from(config.max_confidence_bps()));
+    if u128::from(update.confidence()).saturating_mul(10_000) > admitted {
+        return Err(Error::new(format!(
+            "§12.3 OBSERVATION: the posted update's confidence {} is wider than this Market's \
+             adapter configuration admits at {} bps of price {}. On chain this is \
+             InvalidPythObservation and it reaches the log as 0x800A.",
+            update.confidence(),
+            config.max_confidence_bps(),
+            update.price()
+        )));
+    }
+    Ok(format!(
+        "all three §12.3 predicates hold off-chain before submission: the publication at \
+         {publication} is inside the window [{}, {}] (it is ABOUT the right period), inside the \
+         cluster band [{oldest}, {newest}] at clock {chain_now} (it is FRESH ENOUGH), and its feed, \
+         exponent and confidence satisfy the adapter configuration. A 0x800A from this frame is \
+         therefore NOT the window",
+        window.start_unix_seconds(),
+        window.end_unix_seconds()
+    ))
 }
 
 fn submit_snapshot(
