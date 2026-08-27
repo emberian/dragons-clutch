@@ -1110,6 +1110,24 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
         Some(VIRTUAL_POOL_DISCRIMINATOR.as_slice())
     );
 
+    // The rent goes where Core says this Market's rent goes, and the record's
+    // whole balance moves: the worker prepaid it, and the beneficiary collects
+    // it. Asserting the lamports is the difference between "the account is
+    // gone" and "the account was returned".
+    let record_lamports = context
+        .banks_client
+        .get_account(fixture.record)
+        .await
+        .expect("bank read")
+        .expect("record exists")
+        .lamports;
+    let beneficiary_before = context
+        .banks_client
+        .get_account(fixture.rent_beneficiary)
+        .await
+        .expect("bank read")
+        .expect("beneficiary exists")
+        .lamports;
     submit(
         &mut context,
         &[fixture.retire_instruction()],
@@ -1123,7 +1141,17 @@ async fn the_record_transport_runs_create_append_seal_and_retire() {
             .get_account(fixture.record)
             .await
             .expect("bank read")
-            .is_none_or(|account| account.data.is_empty())
+            .is_none_or(|account| account.data.is_empty() && account.lamports == 0)
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(fixture.rent_beneficiary)
+            .await
+            .expect("bank read")
+            .expect("beneficiary exists")
+            .lamports,
+        beneficiary_before + record_lamports
     );
 }
 
