@@ -284,7 +284,7 @@ impl Rpc {
         observation: Observation,
         tables: &[ObservedAccount],
     ) -> Result<TransactionEvidence> {
-        self.send_v0_inner(label, instructions, payer, observation, tables, false)
+        self.send_v0_inner(label, instructions, payer, &[], observation, tables, false)
     }
 
     pub(crate) fn send_v0_expected_failure(
@@ -295,14 +295,41 @@ impl Rpc {
         observation: Observation,
         tables: &[ObservedAccount],
     ) -> Result<TransactionEvidence> {
-        self.send_v0_inner(label, instructions, payer, observation, tables, true)
+        self.send_v0_inner(label, instructions, payer, &[], observation, tables, true)
     }
 
+    /// Submit one routed v0 transaction carrying additional exact signers.
+    ///
+    /// A routed frame can still require a signature that is not the fee
+    /// payer's: the projected-Custody bootstrap needs the principal supplier to
+    /// sign while remaining non-writable, which the fee payer cannot do.
+    pub(crate) fn send_v0_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            additional_signers,
+            observation,
+            tables,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn send_v0_inner(
         &mut self,
         label: &str,
         instructions: &[Instruction],
         payer: &Keypair,
+        additional_signers: &[&Keypair],
         observation: Observation,
         tables: &[ObservedAccount],
         expect_failure: bool,
@@ -317,7 +344,14 @@ impl Rpc {
             tables,
         )
         .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
-        let transaction = VersionedTransaction::try_new(plan.message, &[payer])
+        let mut signers: Vec<&dyn Signer> = Vec::with_capacity(additional_signers.len() + 1);
+        signers.push(payer);
+        signers.extend(
+            additional_signers
+                .iter()
+                .map(|signer| *signer as &dyn Signer),
+        );
+        let transaction = VersionedTransaction::try_new(plan.message, &signers)
             .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
         let signature = self.submit(label, &transaction, expect_failure)?;
         self.confirm(label, signature, expect_failure)
