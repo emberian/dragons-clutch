@@ -117,8 +117,25 @@ impl PythProviderAdapterObligationV2 {
 
     /// Normalize exact Pyth facts only after the SVM adapter authenticated the
     /// selected provider release, real Receiver update, write authority, and
-    /// current Clock. The publication window is enforced here so no caller may
+    /// current Clock. Both time bounds are enforced here so no caller may
     /// supply an already-normalized observation as authority.
+    ///
+    /// The two bounds answer different questions and carry different refusals,
+    /// matching `NormalizedProviderEvidenceV1::validate`. `[window.start,
+    /// window.end]` says whether this publication is *about the period the
+    /// market sold*, and failing it is `InvalidObservationSchedule`. The
+    /// `max_age`/`max_future_skew` band around this cluster's clock says
+    /// whether the publication is one this cluster will still act on, and
+    /// failing that is `InvalidPublicationTime`. A fresh publication about the
+    /// wrong period and a stale publication about the right one must both
+    /// refuse, and an operator reading the log should be able to tell which
+    /// happened.
+    ///
+    /// A publication after `window.end` is the *late* case a real provider
+    /// cadence produces when nobody submitted in time. It refuses here rather
+    /// than resolving the market on a price from after the question closed; the
+    /// market's remaining route is the funded failure walk at
+    /// `window.end + max_age`.
     #[allow(clippy::too_many_arguments)]
     pub fn normalize_authenticated_update(
         self,
@@ -130,11 +147,13 @@ impl PythProviderAdapterObligationV2 {
         publication_unix_seconds: i64,
         current_unix_seconds: i64,
     ) -> Result<NormalizedProviderEvidenceV1> {
-        if current_unix_seconds <= 0
-            || publication_unix_seconds < self.window.start_unix_seconds()
+        if current_unix_seconds <= 0 {
+            return Err(Error::InvalidPublicationTime);
+        }
+        if publication_unix_seconds < self.window.start_unix_seconds()
             || publication_unix_seconds > self.window.end_unix_seconds()
         {
-            return Err(Error::InvalidPublicationTime);
+            return Err(Error::InvalidObservationSchedule);
         }
         let oldest = current_unix_seconds
             .checked_sub(i64::from(self.window.max_age_seconds()))
@@ -232,7 +251,11 @@ mod tests {
         );
         let provider = ProviderReleaseV1::new(id(10), id(11), id(12), id(13), id(19));
         let adapter = PythAdapterConfigV1::new([42; 32], -8, 100).expect("canonical Pyth adapter");
-        let window = WindowSpecV1::new(source_id, WindowKind::Terminal, 100, 100, 10, 2, id(14))
+        // A window with real width, because a terminal market sells a period.
+        // The fixture used to be `(100, 100)`, which is the shape that made
+        // every check below pass while nothing on a real provider cadence
+        // could ever satisfy them.
+        let window = WindowSpecV1::new(source_id, WindowKind::Terminal, 100, 400, 10, 2, id(14))
             .expect("terminal window");
         let capacity =
             SourceCapacityProfileV1::new(CapacityEnvelope::Measured, 1, 0, id(15), id(16), 208, 0)
@@ -291,7 +314,7 @@ mod tests {
         let fixture = fixture();
         let evidence = obligation(&fixture)
             .expect("joined records")
-            .normalize_authenticated_update(id(30), [42; 32], 1_000_000, 5_000, -8, 100, 101)
+            .normalize_authenticated_update(id(30), [42; 32], 1_000_000, 5_000, -8, 250, 255)
             .expect("authenticated update");
         assert_eq!(evidence.source_spec_id(), fixture.source_id);
         assert_eq!(evidence.provider_release_id(), fixture.provider_id);
@@ -338,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn hostile_feed_confidence_exponent_and_time_refuse() {
+    fn hostile_feed_confidence_and_exponent_refuse() {
         let fixture = fixture();
         let obligation = obligation(&fixture).expect("joined records");
         for result in [
@@ -348,8 +371,8 @@ mod tests {
                 1_000_000,
                 5_000,
                 -8,
-                100,
-                101,
+                250,
+                255,
             ),
             obligation.normalize_authenticated_update(
                 id(30),
@@ -357,8 +380,8 @@ mod tests {
                 1_000_000,
                 20_000,
                 -8,
-                100,
-                101,
+                250,
+                255,
             ),
             obligation.normalize_authenticated_update(
                 id(30),
@@ -366,9 +389,54 @@ mod tests {
                 1_000_000,
                 5_000,
                 -7,
-                100,
-                101,
+                250,
+                255,
             ),
+        ] {
+            assert!(result.is_err());
+        }
+    }
+
+    /// The window is a closed period and both of its edges are reachable.
+    ///
+    /// Under the old one-instant terminal window this test could not exist:
+    /// there was one admissible second and it was also both edges, so nothing
+    /// distinguished "inside" from "on the boundary" from "unreachable".
+    #[test]
+    fn both_edges_of_the_terminal_window_admit_an_observation() {
+        let fixture = fixture();
+        let obligation = obligation(&fixture).expect("joined records");
+        for publication in [100, 250, 400] {
+            assert!(
+                obligation
+                    .normalize_authenticated_update(
+                        id(30),
+                        [42; 32],
+                        1_000_000,
+                        5_000,
+                        -8,
+                        publication,
+                        publication + 5,
+                    )
+                    .is_ok(),
+                "the window sells [100, 400] and {publication} is in it"
+            );
+        }
+    }
+
+    /// The two time bounds are different questions and say so.
+    ///
+    /// A publication one second outside either edge is about the wrong period,
+    /// and a publication squarely inside the window that this cluster sat on
+    /// for longer than `max_age_seconds` is about the right one. Both refuse,
+    /// with different refusals, and each is fresh/in-window on the other axis
+    /// so exactly one bound can be responsible.
+    #[test]
+    fn the_window_and_the_freshness_clock_refuse_separately() {
+        let fixture = fixture();
+        let obligation = obligation(&fixture).expect("joined records");
+        // One second before the market started selling.
+        assert_eq!(
             obligation.normalize_authenticated_update(
                 id(30),
                 [42; 32],
@@ -376,10 +444,51 @@ mod tests {
                 5_000,
                 -8,
                 99,
-                101,
+                105
             ),
-        ] {
-            assert!(result.is_err());
-        }
+            Err(Error::InvalidObservationSchedule)
+        );
+        // One second after it closed: the late observation a provider cadence
+        // straddling the deadline produces. Resolving on this would answer the
+        // market with a price from after the question closed.
+        assert_eq!(
+            obligation.normalize_authenticated_update(
+                id(30),
+                [42; 32],
+                1_000_000,
+                5_000,
+                -8,
+                401,
+                405
+            ),
+            Err(Error::InvalidObservationSchedule)
+        );
+        // The right period, delivered too late to be acted on.
+        assert_eq!(
+            obligation.normalize_authenticated_update(
+                id(30),
+                [42; 32],
+                1_000_000,
+                5_000,
+                -8,
+                250,
+                300
+            ),
+            Err(Error::InvalidPublicationTime)
+        );
+        // The right period, from further in this cluster's future than the
+        // window admits skew for.
+        assert_eq!(
+            obligation.normalize_authenticated_update(
+                id(30),
+                [42; 32],
+                1_000_000,
+                5_000,
+                -8,
+                250,
+                247
+            ),
+            Err(Error::InvalidPublicationTime)
+        );
     }
 }

@@ -412,10 +412,15 @@ fn fixture() -> Fixture {
         capacity_id,
     );
     let source_spec_id = source_id(hash(&source.to_bytes()).to_bytes());
+    // A closed period, not the current second. The upper bound stays at `NOW`
+    // because every deadline in this fixture is `end + max_age_seconds` and
+    // the legacy-dispatch cases are pinned to those numbers; the false
+    // assumption this fixture carried was the WIDTH, and `NOW` now sits on the
+    // window's closing edge rather than being its only admissible second.
     let window = WindowSpecV1::new(
         source_spec_id,
         WindowKind::Terminal,
-        NOW,
+        NOW - 60,
         NOW,
         10,
         2,

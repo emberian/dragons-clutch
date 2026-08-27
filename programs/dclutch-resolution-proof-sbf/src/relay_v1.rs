@@ -367,3 +367,89 @@ pub fn plan_relayed_resolution_v1(
         evidence_id,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use dclutch_source_contract::ContentId as SourceContentId;
+
+    use super::*;
+
+    fn source_id(tag: u8) -> SourceContentId {
+        let mut bytes = [0_u8; 32];
+        bytes[0] = tag;
+        SourceContentId::new(bytes).expect("nonzero Source content ID")
+    }
+
+    /// A window with real width, which is the only shape that can tell the two
+    /// edges apart. `2_000..=2_600` is ten minutes, about two Solana-mainnet
+    /// relayer rounds at the cadence this family is built for.
+    fn window() -> WindowSpecV1 {
+        WindowSpecV1::new(
+            source_id(1),
+            WindowKind::Terminal,
+            2_000,
+            2_600,
+            300,
+            60,
+            source_id(2),
+        )
+        .expect("terminal window")
+    }
+
+    /// Both edges and the interior are admitted, and one second outside either
+    /// edge is refused.
+    ///
+    /// The lower bound is the one this consumer had DELETED, because under a
+    /// one-instant terminal window it was a route nothing could pass. Its
+    /// absence meant an observation of a period the market had not started
+    /// selling could resolve that market, so this case is the regression the
+    /// widening was for.
+    #[test]
+    fn the_relayed_window_admits_its_closed_interval_and_nothing_else() {
+        for observed in [2_000, 2_001, 2_300, 2_599, 2_600] {
+            assert_eq!(
+                require_window_admits(window(), observed),
+                Ok(()),
+                "{observed} is inside the period the Product sold"
+            );
+        }
+        assert_eq!(
+            require_window_admits(window(), 1_999),
+            Err(RelayJoinErrorV1::Window),
+            "one second before the market opened is the wrong period"
+        );
+        assert_eq!(
+            require_window_admits(window(), 2_601),
+            Err(RelayJoinErrorV1::Window),
+            "a late observation must not answer a question that already closed"
+        );
+    }
+
+    /// A degenerate window still means exactly what it says.
+    ///
+    /// Terminal windows may still be one instant; that is now a market's choice
+    /// rather than the constructor's rule, and the bound is enforced the same
+    /// way at both edges when a market makes it.
+    #[test]
+    fn a_degenerate_terminal_window_is_still_one_second() {
+        let instant = WindowSpecV1::new(
+            source_id(1),
+            WindowKind::Terminal,
+            2_000,
+            2_000,
+            300,
+            60,
+            source_id(2),
+        )
+        .expect("degenerate terminal window");
+        assert_eq!(require_window_admits(instant, 2_000), Ok(()));
+        assert_eq!(
+            require_window_admits(instant, 1_999),
+            Err(RelayJoinErrorV1::Window)
+        );
+        assert_eq!(
+            require_window_admits(instant, 2_001),
+            Err(RelayJoinErrorV1::Window)
+        );
+    }
+}

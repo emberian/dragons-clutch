@@ -371,6 +371,11 @@ mod tests {
         "../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-post-update.data"
     );
 
+    /// One Pyth publication cadence, rounded. Devnet SOL/USD publishes on a
+    /// measured p50 near 313 seconds, so a window narrower than this is one no
+    /// ordinary publication would land in.
+    const CADENCE_SECONDS: i64 = 300;
+
     #[derive(Clone, Copy)]
     enum Case {
         Success,
@@ -378,6 +383,11 @@ mod tests {
         WrongProductDomain,
         ParallelProviderRelease,
         ParallelAdapter,
+        /// The market had not started selling this period yet.
+        ObservationBeforeWindowOpens,
+        /// The window closed before this publication: the *late* observation a
+        /// real provider cadence produces when nobody submitted in time.
+        ObservationAfterWindowCloses,
     }
 
     fn source_id(tag: u8) -> SourceContentId {
@@ -402,6 +412,15 @@ mod tests {
     }
 
     fn plan(case: Case) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
+        plan_against(case, None)
+    }
+
+    /// `prior` replays the join against an already-terminal Source, which is
+    /// how the "exactly one answer" refusal is executed rather than asserted.
+    fn plan_against(
+        case: Case,
+        prior: Option<SourceResolutionStateV2>,
+    ) -> Result<ProviderResolutionPlanV3, ProviderJoinErrorV3> {
         let post_body = POST_DATA.get(8..).ok_or(ProviderJoinErrorV3::Provider)?;
         let update = FullPriceUpdateV2::parse(UPDATE).expect("captured full Pyth update");
         let coordinate_domain = source_id(1);
@@ -500,11 +519,27 @@ mod tests {
         );
         let source_spec_id =
             SourceContentId::new(hash(&source.to_bytes()).to_bytes()).expect("source digest");
+        // The window is a closed period the market sold, and this fixture used
+        // to set both bounds to the captured publication's own timestamp --
+        // which is to say it chose its window to match its observation, and so
+        // could never have caught the one-instant defect. It now sells a
+        // cadence on each side of that publication, so the observation is
+        // strictly interior and the two edges are separately probeable.
+        let publication = update.publish_time();
+        let (window_open, window_close) = match case {
+            Case::ObservationBeforeWindowOpens => {
+                (publication + 1, publication + 1 + 2 * CADENCE_SECONDS)
+            }
+            Case::ObservationAfterWindowCloses => {
+                (publication - 1 - 2 * CADENCE_SECONDS, publication - 1)
+            }
+            _ => (publication - CADENCE_SECONDS, publication + CADENCE_SECONDS),
+        };
         let window = WindowSpecV1::new(
             source_spec_id,
             WindowKind::Terminal,
-            update.publish_time(),
-            update.publish_time(),
+            window_open,
+            window_close,
             10,
             1,
             source_id(44),
@@ -549,9 +584,11 @@ mod tests {
         let material_id =
             SourceContentId::new(hash(&material.to_bytes()).to_bytes()).expect("material digest");
         let market = [48; 32];
-        let state = SourceResolutionStateV2::fresh(market, 7, material_id, [49; 32], 1, 0, 0)
-            .expect("fresh Source")
-            .state();
+        let state = prior.unwrap_or_else(|| {
+            SourceResolutionStateV2::fresh(market, 7, material_id, [49; 32], 1, 0, 0)
+                .expect("fresh Source")
+                .state()
+        });
         let provider_submitter = if matches!(case, Case::WrongSubmitter) {
             [50; 32]
         } else {
@@ -632,6 +669,34 @@ mod tests {
         assert_eq!(
             result.certificate.provider_evidence,
             result.receipt.provider_evidence
+        );
+    }
+
+    /// The window has width, so the whole shape a one-instant window could not
+    /// express is executable: one second before it opens, one second after it
+    /// closes, and a second observation against an already-answered Source.
+    #[test]
+    fn the_window_refuses_early_late_and_second_observations() {
+        assert_eq!(
+            plan(Case::ObservationBeforeWindowOpens),
+            Err(ProviderJoinErrorV3::Provider),
+            "a publication from before the market opened is about the wrong period"
+        );
+        assert_eq!(
+            plan(Case::ObservationAfterWindowCloses),
+            Err(ProviderJoinErrorV3::Provider),
+            "a late publication must not answer a question that already closed"
+        );
+
+        // Exactly one answer, executed. The first admissible observation
+        // terminalizes; replaying the same join against the post-state refuses
+        // in the transition, without inspecting the second observation at all.
+        let first = plan(Case::Success).expect("first admissible observation resolves");
+        assert_eq!(first.next_source.phase(), SourceResolutionPhaseV1::Resolved);
+        assert_eq!(
+            plan_against(Case::Success, Some(first.next_source)),
+            Err(ProviderJoinErrorV3::Transition),
+            "a resolved Source answers no second observation from its own window"
         );
     }
 
