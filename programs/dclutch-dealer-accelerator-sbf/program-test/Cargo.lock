@@ -1689,11 +1689,15 @@ dependencies = [
  "dclutch-token-svm",
  "sha2 0.10.9",
  "solana-account 4.3.2",
+ "solana-address-lookup-table-interface",
+ "solana-message 4.4.1",
  "solana-program",
  "solana-program-option",
  "solana-program-pack",
  "solana-program-test",
+ "solana-sdk",
  "solana-sdk-ids",
+ "solana-transaction 4.1.6",
  "spl-token-interface",
 ]
 
