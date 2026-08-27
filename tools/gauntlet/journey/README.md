@@ -35,7 +35,15 @@ The one edit this required was splitting the producer's `execute` into
 `found_through_open` plus the write it always did. The bootstrap binary's
 behaviour is unchanged: same transactions, same order, same document.
 
-If the founding moves, this build breaks. That is the intended tripwire.
+If the founding moves, this build breaks. That is the intended tripwire — and it
+has a consequence worth knowing before it surprises you. **`cargo check` in this
+directory compiles the producer's files out of the shared working tree**, so it
+goes red while any lane has the bootstrap dirty, whether or not anything is
+wrong with the journey. The authoritative build is the one `run-journey.sh`
+does, from `git archive` of an exact revision; to reproduce it by hand, archive
+HEAD to a scratch directory and check there. Observed on 2026-08-27, when a lane
+mid-way through adding a `--keypair-seed` option turned this tree red for
+several minutes while HEAD was clean.
 
 ## The conservation ledger
 
