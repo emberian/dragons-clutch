@@ -11,7 +11,7 @@
     "measured_at": "the `measured` value of every entry is the HIGHEST draw this lane observed, not a single run. Pinning the highest draw is what keeps ordinary noise from producing a red row.",
     "noise": "BOTH CAMPAIGNS ARE SEEDED NOW, and the residual is measured rather than assumed. The original cause was exact: every campaign drew fresh signing keypairs per run (Keypair::new() in the successor bootstrap; Keypair::new() and Pubkey::new_unique() in the ProgramTest fast lane), which changes how many iterations find_program_address needs for an off-curve bump, and each iteration is one sol_create_program_address syscall at 1,500 CU. Every delta measured between runs was an exact multiple of 1,500 (a handful of +-4 residuals aside), which is what made the diagnosis a measurement rather than a story. tier 4 is now band 0 on every row, proven over four runs of one compiled binary. tier 1 is NOT: 82 of its 101 transactions are byte-identical across two seeded runs at one revision and 19 are not, because A KEYPAIR SEED ONLY SEEDS KEYPAIRS -- the founding ladders carry expiry slots derived as finalized_slot + 500,000 and lookup tables derived from [authority, recent_slot], and those move with when the campaign happens to run. See CU_BUDGETS.md.",
     "measured_bands": "SEEDED, tier 1, two campaigns at 5465341 on 2026-08-27 with one seed digest and one set of ELFs: 14 of the 24 enforced rows are band 0, including every per-role activation, Found31 and its rollback case, the infrastructure profile init, the non-terminal DCLTPCB1 refusal, the second projected-Custody prestate and both DCLTPCA1 cases. The other 10 are the two founding ladders and their stages: dcltgmf1-whole 9,004; its stages 1,500 / 2 / 2 / 1,500; dcltpcb1-whole 24,000; its stages 6,000 / 4,500 / 1,500; the reordered-tail refusal 24,000. UNSEEDED, which is what this file's pins were written against and what a real founder still pays: DCLTGMF1 58,494, DCLTPCB1 51,005 across campaigns and 79,500 within ONE campaign, the reordered-tail refusal 55,503, per-role activation 1,500-9,000. tier 4 seeded: 0 on every row over four runs; unseeded it spanned 24,000 on the founding case and 6,000 on the substituted-ProgramData refusal, which six runs had not bounded.",
-    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and \u2014 the thing W1f actually asked for \u2014 the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
+    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and — the thing W1f actually asked for — the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
     "how_to_shrink_it": "TAKEN, 2026-08-27. dclutch-local-successor-bootstrap run takes --keypair-seed <64 hex> behind a loopback-only refusal, and programs/dclutch-core-sbf/tests/found_program_test.rs and programs/dclutch-custody-sbf/tests/program_test.rs derive their fixture keys from documented preimages. What remains is NOT a keypair: the tier-1 founding ladders hash slot- and clock-derived material into addresses, so shrinking those rows further means making the campaign's expiry and lookup-table inputs a function of the seed rather than of the wall clock. That is a change to what the campaign SUBMITS, not to how it draws keys, and it is not obviously worth it: the world is still as noisy as it ever was and a founding is exactly where a real founder pays that noise too."
   },
   "budgets": [
@@ -170,7 +170,7 @@
       "tolerance": 50000,
       "budget": 209108,
       "enforced": true,
-      "provenance": "The third inner stage's own `consumed` line. This is the stage that had never executed at all before run 4 \u2014 it died out-of-memory under the heap wall \u2014 so a budget on it is a regression floor on a route with barely any history."
+      "provenance": "The third inner stage's own `consumed` line. This is the stage that had never executed at all before run 4 — it died out-of-memory under the heap wall — so a budget on it is a regression floor on a route with barely any history."
     },
     {
       "id": "dcltpcb1-second-prestate-whole",
@@ -192,7 +192,7 @@
       "tolerance": 70000,
       "budget": 851102,
       "enforced": true,
-      "provenance": "The hostile case W1e refused to count until run 5 supplied a discriminator. It matters that it stays BELOW the honest transaction it shadows: when the two were within 300 CU of each other the refusal was indistinguishable from an out-of-memory death at the same point. This budget does not check that relation \u2014 it is a ceiling on one number \u2014 but a red row here is the first sign that the two have converged again."
+      "provenance": "The hostile case W1e refused to count until run 5 supplied a discriminator. It matters that it stays BELOW the honest transaction it shadows: when the two were within 300 CU of each other the refusal was indistinguishable from an out-of-memory death at the same point. This budget does not check that relation — it is a ceiling on one number — but a red row here is the first sign that the two have converged again."
     },
     {
       "id": "dcltpcb1-non-terminal-refusal",
@@ -247,7 +247,7 @@
       "tolerance": 20000,
       "budget": 566984,
       "enforced": true,
-      "provenance": "Per-role activation of the immutable release set. Before the immutability-argument fast path this whole family hashed whole ELFs on chain \u2014 five-role activation with real artifacts exceeded 1,400,000 outright \u2014 so each role gets its own row and the worst role is the one that decides whether activation is reachable at all."
+      "provenance": "Per-role activation of the immutable release set. Before the immutability-argument fast path this whole family hashed whole ELFs on chain — five-role activation with real artifacts exceeded 1,400,000 outright — so each role gets its own row and the worst role is the one that decides whether activation is reachable at all."
     },
     {
       "id": "activation-role-claims",
@@ -335,7 +335,7 @@
       "tolerance": 15000,
       "budget": 737142,
       "enforced": true,
-      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit \u2014 the same Core code that costs stage 2 of DCLTGMF1 \u2014 with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
+      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit — the same Core code that costs stage 2 of DCLTGMF1 — with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
     },
     {
       "id": "series-consume-founds-with-permit-replay-campaign",
@@ -488,66 +488,66 @@
       "campaign": "custody-family-programtest",
       "scope": "transaction",
       "transaction": "custody legacy: open vault",
-      "measured": 143015,
+      "measured": 145500,
       "tolerance": 15000,
-      "budget": 158015,
+      "budget": 160500,
       "enforced": true,
-      "provenance": "Opening the vault against the real SPL Token program. Custody is one of the three programs whose changes moved DCLTGMF1 toward the ceiling, and the Lock and Realize stages of DCLTGMF1 are this code. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [143015, 143015], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "Closing/opening/transferring under the role-seeded Custody replay PDA (decision 0008 section 7). RE-PINNED 2026-08-27 by the CUSTROLE lane from TWO runs of this campaign at one revision: draws [145500, 145500], band 0, so the tolerance is the 15,000 floor. The move is measured, not assumed: the same test at 3918cb8 (the revision before the role entered the replay seeds, built from a worktree so only custody-sbf and dclutch-custody-contract differ) drew 130494, and the delta is +15006 CU = +10 x 1,500 + 6. 1,500 CU is one find_program_address iteration and 6 CU is the extra sha256 for one more seed byte, so the ENTIRE move is the bump search re-rolling on a seed tuple that gained a component. It is not a code-path cost and it has no direction: the six rows moved +15006 here and one of them moved DOWN. NOTE for the CU-BUDGET lane: the pins this replaces were ALREADY stale at 3918cb8 -- the baseline draws above differ from them by -12,521 to +11,480, which is drift from lanes between c55b606 and 3918cb8, not from this one."
     },
     {
       "id": "custody-token-2022-open-vault",
       "campaign": "custody-family-programtest",
       "scope": "transaction",
       "transaction": "custody token-2022: open vault",
-      "measured": 134082,
+      "measured": 145567,
       "tolerance": 15000,
-      "budget": 149082,
+      "budget": 160567,
       "enforced": true,
-      "provenance": "The same transaction against real Token-2022, budgeted separately because the token program is a different program with a different cost, and because a budget must name exactly one transaction: 'custody *: open vault' is a bindings wildcard and would be AMBIGUOUS here. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [134082, 134082], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "Closing/opening/transferring under the role-seeded Custody replay PDA (decision 0008 section 7). RE-PINNED 2026-08-27 by the CUSTROLE lane from TWO runs of this campaign at one revision: draws [145567, 145567], band 0, so the tolerance is the 15,000 floor. The move is measured, not assumed: the same test at 3918cb8 (the revision before the role entered the replay seeds, built from a worktree so only custody-sbf and dclutch-custody-contract differ) drew 141061, and the delta is +4506 CU = +3 x 1,500 + 6. 1,500 CU is one find_program_address iteration and 6 CU is the extra sha256 for one more seed byte, so the ENTIRE move is the bump search re-rolling on a seed tuple that gained a component. It is not a code-path cost and it has no direction: the six rows moved +4506 here and one of them moved DOWN. NOTE for the CU-BUDGET lane: the pins this replaces were ALREADY stale at 3918cb8 -- the baseline draws above differ from them by -12,521 to +11,480, which is drift from lanes between c55b606 and 3918cb8, not from this one."
     },
     {
       "id": "custody-legacy-delegated-external-transfer",
       "campaign": "custody-family-programtest",
       "scope": "transaction",
       "transaction": "custody legacy: delegated external transfer",
-      "measured": 142811,
+      "measured": 148297,
       "tolerance": 15000,
-      "budget": 157811,
+      "budget": 163297,
       "enforced": true,
-      "provenance": "The delegated path, which is the one that carries a replay revision and an external counterparty -- the most account-heavy Custody transaction here. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [142811, 142811], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "Closing/opening/transferring under the role-seeded Custody replay PDA (decision 0008 section 7). RE-PINNED 2026-08-27 by the CUSTROLE lane from TWO runs of this campaign at one revision: draws [148297, 148297], band 0, so the tolerance is the 15,000 floor. The move is measured, not assumed: the same test at 3918cb8 (the revision before the role entered the replay seeds, built from a worktree so only custody-sbf and dclutch-custody-contract differ) drew 134791, and the delta is +13506 CU = +9 x 1,500 + 6. 1,500 CU is one find_program_address iteration and 6 CU is the extra sha256 for one more seed byte, so the ENTIRE move is the bump search re-rolling on a seed tuple that gained a component. It is not a code-path cost and it has no direction: the six rows moved +13506 here and one of them moved DOWN. NOTE for the CU-BUDGET lane: the pins this replaces were ALREADY stale at 3918cb8 -- the baseline draws above differ from them by -12,521 to +11,480, which is drift from lanes between c55b606 and 3918cb8, not from this one."
     },
     {
       "id": "custody-token-2022-delegated-external-transfer",
       "campaign": "custody-family-programtest",
       "scope": "transaction",
       "transaction": "custody token-2022: delegated external transfer",
-      "measured": 131260,
+      "measured": 139746,
       "tolerance": 15000,
-      "budget": 146260,
+      "budget": 154746,
       "enforced": true,
-      "provenance": "The delegated path against Token-2022. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [131260, 131260], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "Closing/opening/transferring under the role-seeded Custody replay PDA (decision 0008 section 7). RE-PINNED 2026-08-27 by the CUSTROLE lane from TWO runs of this campaign at one revision: draws [139746, 139746], band 0, so the tolerance is the 15,000 floor. The move is measured, not assumed: the same test at 3918cb8 (the revision before the role entered the replay seeds, built from a worktree so only custody-sbf and dclutch-custody-contract differ) drew 142740, and the delta is -2994 CU = -2 x 1,500 + 6. 1,500 CU is one find_program_address iteration and 6 CU is the extra sha256 for one more seed byte, so the ENTIRE move is the bump search re-rolling on a seed tuple that gained a component. It is not a code-path cost and it has no direction: the six rows moved -2994 here and one of them moved DOWN. NOTE for the CU-BUDGET lane: the pins this replaces were ALREADY stale at 3918cb8 -- the baseline draws above differ from them by -12,521 to +11,480, which is drift from lanes between c55b606 and 3918cb8, not from this one."
     },
     {
       "id": "custody-legacy-close-vault",
       "campaign": "custody-family-programtest",
       "scope": "transaction",
       "transaction": "custody legacy: close vault",
-      "measured": 131566,
+      "measured": 144553,
       "tolerance": 15000,
-      "budget": 146566,
+      "budget": 159553,
       "enforced": true,
-      "provenance": "Closing the vault, which is the transaction a stranded-collateral hazard would make unaffordable first. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [131566, 131566], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "Closing/opening/transferring under the role-seeded Custody replay PDA (decision 0008 section 7). RE-PINNED 2026-08-27 by the CUSTROLE lane from TWO runs of this campaign at one revision: draws [144553, 144553], band 0, so the tolerance is the 15,000 floor. The move is measured, not assumed: the same test at 3918cb8 (the revision before the role entered the replay seeds, built from a worktree so only custody-sbf and dclutch-custody-contract differ) drew 138547, and the delta is +6006 CU = +4 x 1,500 + 6. 1,500 CU is one find_program_address iteration and 6 CU is the extra sha256 for one more seed byte, so the ENTIRE move is the bump search re-rolling on a seed tuple that gained a component. It is not a code-path cost and it has no direction: the six rows moved +6006 here and one of them moved DOWN. NOTE for the CU-BUDGET lane: the pins this replaces were ALREADY stale at 3918cb8 -- the baseline draws above differ from them by -12,521 to +11,480, which is drift from lanes between c55b606 and 3918cb8, not from this one."
     },
     {
       "id": "custody-token-2022-close-vault",
       "campaign": "custody-family-programtest",
       "scope": "transaction",
       "transaction": "custody token-2022: close vault",
-      "measured": 125533,
+      "measured": 158020,
       "tolerance": 15000,
-      "budget": 140533,
+      "budget": 173020,
       "enforced": true,
-      "provenance": "Closing the vault against Token-2022. Pinned 2026-08-27 from TWO runs of this campaign at one revision: draws [125533, 125533], band 0. Band 0, so the tolerance is the 15,000 floor."
+      "provenance": "Closing/opening/transferring under the role-seeded Custody replay PDA (decision 0008 section 7). RE-PINNED 2026-08-27 by the CUSTROLE lane from TWO runs of this campaign at one revision: draws [158020, 158020], band 0, so the tolerance is the 15,000 floor. The move is measured, not assumed: the same test at 3918cb8 (the revision before the role entered the replay seeds, built from a worktree so only custody-sbf and dclutch-custody-contract differ) drew 137014, and the delta is +21006 CU = +14 x 1,500 + 6. 1,500 CU is one find_program_address iteration and 6 CU is the extra sha256 for one more seed byte, so the ENTIRE move is the bump search re-rolling on a seed tuple that gained a component. It is not a code-path cost and it has no direction: the six rows moved +21006 here and one of them moved DOWN. NOTE for the CU-BUDGET lane: the pins this replaces were ALREADY stale at 3918cb8 -- the baseline draws above differ from them by -12,521 to +11,480, which is drift from lanes between c55b606 and 3918cb8, not from this one."
     }
   ]
 }
