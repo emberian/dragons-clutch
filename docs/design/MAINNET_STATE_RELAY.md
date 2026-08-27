@@ -1614,7 +1614,11 @@ Both remain unmeasured against a real cluster.
   RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1`), in both the encoder and the byte
   validator. Closed, deliberately.
 - **`RecoveryMaterialSlotV1::new` is still Pyth-only, and that is the gap in
-  §4.8's headline.** The property "relayer liveness failure degrades to a named
+  §4.8's headline.** *(Superseded 2026-08-27: §13 decides this — the pin is
+  V1-material vocabulary with no live route behind it, the live V2 recovery
+  vocabulary already names sources by content identity, and the actual missing
+  organ is a funded V2 `FailNext` walk. v1 degrades direct-to-failure by
+  design.)* The property "relayer liveness failure degrades to a named
   alternative source, not to a stuck market" needs a *relayed* recovery leg —
   a disjoint key set as recovery 0 — and a relayed source cannot currently
   occupy a recovery slot. Until that lift lands, a silent relayer walks to the
@@ -1995,3 +1999,64 @@ measured two-clock skew profile; the daemon actually running and publishing
 (§4.11 is specification only); and a `RecoveryMaterialSlotV1` that admits a
 relayed source, without which §4.8's "degrades to a named alternative source"
 remains false (§10.5) — the walk itself is no longer on this list (§12.7).
+**The third item is superseded: §13 decides the recovery leg**, and it is not
+the slot's Pyth pin that decides it.
+
+## 13. The recovery leg, decided (DEMO-VERT lane, 2026-08-27)
+
+**Decision: v1 degrades direct-to-failure, by design.** A v1 relayed market
+carries **no recovery policy**; when the relayer goes silent it walks the
+funded `Primary → Exhausted → FailureCommitted` path of §12.7 to the
+Product's own pre-disclosed failure outcome. §4.8 clause 4 — "relayer
+liveness failure degrades to a *named alternative source*" — is deferred to a
+post-v1 funded-recovery lane and is **not** faked in the meantime. This is
+consistent with what the family already discloses: §12.6's conflation
+sentence ("the relayer went silent", "the venue was upgraded" and "it never
+graduated" all land on one failure outcome) is the Product-level statement of
+exactly this shape.
+
+The argument is from the code as it executes, and it moves the gap §10.5
+named:
+
+1. **The Pyth-only pin at `RecoveryMaterialSlotV1::new`
+   (`dclutch-source-contract` lib.rs:2286) is V1-material vocabulary with no
+   live route behind it.** The slot is a by-value component of the V1 inline
+   material; §11.3 already recorded that the V1 material's inline component
+   slots left with the gen-2 monolith. Its only remaining consumers are the
+   source contract itself and Resolution's test module. Lifting its pin would
+   be dead code on arrival.
+2. **The live V2 vocabulary already admits a relayed recovery leg.**
+   `RecoveryAttemptV2` names `source_spec_id` and `provider_release_id` by
+   content identity — no adapter-typed inline config, no Pyth pin. The day a
+   funded recovery walk exists, a recovery attempt naming a relayed
+   `SourceSpecV1` (disjoint key set as recovery 0, §4.8's own example) needs
+   no new vocabulary and no new transport: consuming its evidence is the §12
+   consume route pointed at the attempt's spec.
+3. **The real gap is that no funded recovery walk is live at all.** `FailNext`
+   exists only in the source contract's transition set and Resolution's
+   tests; no program routes it. `exhaust_after_primary_deadline` refuses any
+   material carrying a recovery policy (correctly — skipping paid-for legs
+   would take an outcome away from the holders who paid for them). So a
+   with-recovery market currently has **no** terminal path on provider
+   silence, relayed or otherwise. The missing organ is a V2 `FailNext` funded
+   transition — per-leg deadlines, per-leg funded compartments, §4.8's
+   six-transition worst case — and that is a lane of its own, not a
+   constructor's admission set.
+4. **Until this lane, the no-recovery market could not exist on chain
+   either.** Every fund-creation guard (`core-sbf` resolution.rs,
+   `resolution-proof-sbf` core_effect.rs, and the resolution-core-v3
+   operator) required `material.recovery_policy() == Some` with exactly one
+   attempt — the exact material shape the walk refuses — so §12.7's executed
+   walk was reachable only from a seeded prestate no live route could create.
+   The admission landed at `e5b6923`: the no-recovery frame is the same frame
+   without its two RecoveryPolicyV2 tail positions, checked for coherence
+   against the authenticated material, and the failure compartment is pinned
+   by configuration exactly as `funded::plan_funding_release` admits it.
+
+What the post-v1 lane owes, named so devnet day does not rediscover it: a
+funded `FailNext` route over `RecoveryPolicyV2` in the Resolution role; the
+§12.3 window discipline applied per leg; and one executed campaign in which
+recovery 0 is a **relayed** source under a disjoint key set — at which point
+§4.8 clause 4 becomes true by execution rather than by assertion, and
+`RecoveryMaterialSlotV1` is retired with the rest of the V1 material
+vocabulary instead of being widened.
