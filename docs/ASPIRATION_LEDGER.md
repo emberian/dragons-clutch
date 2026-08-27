@@ -452,8 +452,9 @@ nothing" understates the cost. The work exists; it points nowhere.
 It also cannot be pointed anywhere by wiring: driving it would require Trading
 to link a family crate and branch on a family between Token CPIs, which is what
 decision 0006 §3 forbids. Decision 0011 records the route that does exist (a
-sealed artifact closure: `EffectProgramV4` first, because its digest feeds the
-descriptor, the seal and the ProgramSet identity), retargets the candidate as
+sealed artifact closure, with a child-ABI choice ahead of it and
+`EffectProgramV4` first within it, because that digest feeds the descriptor,
+the seal and the ProgramSet identity), retargets the candidate as
 the operator's host-side adversary rather than deleting it, and measures the
 second trap: `frame.rs`'s 23-account base is a standalone instruction frame, and
 thirteen of its coordinates name accounts the Trading hot frame already fixes or
@@ -468,6 +469,14 @@ written as literals, plus the self-backing refusal in both directions). The
 census row is still not flippable and `"structured"` still appears in neither
 `blocked.json` nor the census — that is downstream of the artifacts, in the
 order decision 0011 §6 fixes.
+
+One more thing this row should not let a reader assume: **an effect program
+cannot move a token.** `ResolvedEffectV3` is lamports, account-data writes and
+child-request patches, so Structured's six Token kinds cannot become effect
+operations — they need a `FixedRole::Claims` child, and decision 0011 §3a
+records the open choice between adopting the Rational child ABI (which already
+executes all six, four of them under names that say "Structured") and giving
+Structured its own. That choice sits ahead of every artifact.
 
 ### M-10. Every expansion frontier, verdicted
 
