@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
-sha2 = "=0.10.9"
+sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]
 workspace = true
