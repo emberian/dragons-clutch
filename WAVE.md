@@ -204,3 +204,15 @@ pool prices, majors). Cross-cluster truth transport:
    the verticals live/dead split, dealer/general contracts, the remaining
    gen-2 cascade, and the census denominator correction. The repo's contents
    converge to ONLY the active built system.
+
+## MILESTONE: THE MARKET IS OPEN (2026-08-27, run 6, 67e441d)
+
+DCLTGMF1 executes end-to-end on a real validator: 1,189,823 CU, reproduced
+three times, whole-chain rollback hostile case green, gauntlet 23/23 witnesses,
+42/~119 routes executed. Eight founding blockers found and killed across six
+runs. AbortSourceAndClose landed + executed (was a stranded-collateral hazard).
+Remaining to the joined trading gate: hot tail heap (2,383 over at phase 7,
+tail >=39,521 vs 32,768) + first-ever phase-8+ child CPI territory (W2i lane).
+URGENT unowned->now owned: DCLTGMF1 CU grew 84.6%->91.3% of ceiling in one
+evening from unrelated changes; CU-BUDGET lane adds checked-in budgets.
+The monolith is fully deleted (legacy copy removed; git history only).
