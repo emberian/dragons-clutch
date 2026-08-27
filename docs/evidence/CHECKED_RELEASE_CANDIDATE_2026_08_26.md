@@ -20,6 +20,37 @@ during this session's own runs. **The moment either ELF changes, this candidate
 is superseded** and must be regenerated. That regeneration costs about one
 minute — see *Re-run cost* below.
 
+> ### Regenerated 2026-08-27 at `35075a34`, and the pipeline is still green
+>
+> Every digest below is from `ec557e81`, **248 commits back**, with nine of the
+> ten role trees changed since. They are dead and this document keeps them
+> because they are what the run they describe produced, not because anything
+> should still match them.
+>
+> The verdict from the regeneration, which is what is load-bearing:
+>
+> - Every verification in *Verification results* below ran and passed again —
+>   ten `create`/`verify`/`inspect` triples, the five-role set, the
+>   infrastructure join, and every byte-identical text-projection `cmp`.
+> - **`sbf_build_diagnostics_total=0`, down from 36**, and
+>   `sbf_build_diagnostics_accepted=false`. Finding 1 below is CLOSED: the run
+>   no longer needs `--allow-build-diagnostics` and did not use it. The
+>   dealer-accelerator's overflowing `hot_v3::process_hot_execution_v3`
+>   monomorphization is gone, and so is the 65-diagnostic
+>   `relay_transport_v1::process_relay_transport_v1` frame that JRNY-1 found
+>   independently on the Resolution artifact. **All ten roles are at zero.**
+> - Toolchain pins unmoved: solana-cli 4.0.2, cargo-build-sbf 4.0.0, platform
+>   tools v1.53, SBF rustc 1.89.0.
+> - Summary at `/private/tmp/opsfinish/release-candidate/SUMMARY.txt`,
+>   `source_digest=0603d72f7e58838d…`.
+>
+> Two structural notes for whoever regenerates next. `dclutch-series-shadow-sbf`
+> was workspace-*excluded* with its own `Cargo.lock` at `ec557e81` and is a
+> plain member with none today, so `root_cargo_lock_digest` differs from this
+> document on that basis alone and `target_dir_for`'s excluded-crate branch is
+> now dead code. And `--keep-elf` re-stamps a STALE diagnostics total, because
+> the line that resets `build-diagnostics.txt` sits inside the build guard.
+
 ## Reproducing it
 
 ```sh
@@ -168,6 +199,11 @@ this candidate was produced with `--allow-build-diagnostics`, which stamps
 
 Owner: the W2 hot-fast-path lane (`hot_v3.rs`, its file). This is a finding to
 fix there, not to relabel here.
+
+**CLOSED, measured 2026-08-27 at `35075a34`: the total is 0 and every one of the
+ten roles is 0.** The regeneration needed no `--allow-build-diagnostics` and did
+not pass it, so the runner's default refusal is now a gate that a real run
+clears rather than one every run has to be waved past.
 
 ### 2. The capability-execution bundle path cannot yet be exercised on real accelerators
 
