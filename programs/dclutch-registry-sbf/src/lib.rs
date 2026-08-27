@@ -156,11 +156,6 @@ pub fn process_instruction(
     {
         return continuation_v1::process(program_id, accounts, instruction_data);
     }
-    if instruction_data.get(..8)
-        == Some(dclutch_registry_svm::batch_v2::ROLE_BATCH_REQUEST_MAGIC_V2.as_slice())
-    {
-        return batch_v2::process(program_id, accounts, instruction_data);
-    }
     match RegistryInstructionV1::decode(instruction_data).map_err(|_| RegistryError::Instruction)? {
         RegistryInstructionV1::ActivateRole(role) => {
             process_activate_role(program_id, accounts, role)

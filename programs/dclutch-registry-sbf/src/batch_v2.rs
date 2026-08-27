@@ -1,17 +1,26 @@
 //! Family-neutral read-only batch authentication of activated execution roles.
+//!
+//! This is authentication material, not a route. The standalone DCLTRGB2 entry
+//! that returned an 896-byte role-batch receipt was deleted on 2026-08-27: no
+//! tier ever invoked it, and a five-role request cannot execute at real ELF
+//! sizes -- the five per-role activation pins sum to 2,407,858 CU against a
+//! 1,400,000 ceiling, and the same five deployment authentications are what a
+//! batch performs in one transaction. Tier 1 activates and reauthenticates one
+//! role per transaction.
+//!
+//! `authenticate_request` stays because it is live: `continuation_v1::process`
+//! and `hot_continuation_v2::process` both reach it in-process, each selecting
+//! one observation out of the batch it authenticates.
 
 use std::vec::Vec;
 
 use dclutch_core_contract::ContentId;
 use dclutch_registry_contract::{ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1};
-use dclutch_registry_svm::batch_v2::{
-    ROLE_BATCH_RECEIPT_BYTES_V2, RoleBatchReceiptInputV2, RoleBatchRequestV2,
-    RoleDeploymentObservationV2, encode_role_batch_receipt_v2,
-};
-use dclutch_release_set_contract::{ExecutionRoleV1, ProgramIdentityV1};
+use dclutch_registry_svm::batch_v2::{RoleBatchRequestV2, RoleDeploymentObservationV2};
+use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_program::{
-    account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
-    program_error::ProgramError, pubkey::Pubkey,
+    account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program_error::ProgramError,
+    pubkey::Pubkey,
 };
 
 use super::{RegistryError, authenticate_cache_identity, cached_role_deployment_observation};
@@ -19,38 +28,6 @@ use super::{RegistryError, authenticate_cache_identity, cached_role_deployment_o
 pub(super) struct AuthenticatedBatchV2 {
     pub(super) cache_digest: ContentId,
     pub(super) observations: Vec<RoleDeploymentObservationV2>,
-}
-
-/// Process one fixed, canonical role batch.
-#[inline(never)]
-pub(super) fn process(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo<'_>],
-    instruction_data: &[u8],
-) -> ProgramResult {
-    let request = RoleBatchRequestV2::decode(instruction_data)
-        .map_err(|_| ProgramError::from(RegistryError::Batch))?;
-    let authenticated = authenticate_request(program_id, accounts, request)?;
-    let cache = accounts.first().ok_or(RegistryError::AccountFrame)?;
-    let request_digest =
-        ContentId::new(hash(instruction_data).to_bytes()).map_err(|_| RegistryError::Batch)?;
-    let registry_program =
-        ProgramIdentityV1::new(program_id.to_bytes()).map_err(|_| RegistryError::Batch)?;
-    let mut receipt = [0_u8; ROLE_BATCH_RECEIPT_BYTES_V2];
-    encode_role_batch_receipt_v2(
-        RoleBatchReceiptInputV2 {
-            registry_program,
-            activation_cache: cache.key.to_bytes(),
-            activation_cache_digest: authenticated.cache_digest,
-            release_set_id: request.release_set_id(),
-            request_digest,
-            observations: &authenticated.observations,
-        },
-        &mut receipt,
-    )
-    .map_err(|_| RegistryError::Batch)?;
-    set_return_data(&receipt);
-    Ok(())
 }
 
 /// Authenticate one exact read-only batch without materializing return data.

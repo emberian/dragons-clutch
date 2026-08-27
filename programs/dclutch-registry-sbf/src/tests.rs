@@ -10,11 +10,7 @@ use dclutch_registry_contract::{
 };
 use dclutch_registry_svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
-    batch_v2::{
-        AuthenticatedRoleBatchReceiptV2, BatchErrorV2, ROLE_BATCH_RECEIPT_BYTES_V2,
-        RoleBatchReceiptInputV2, RoleBatchRequestV2, RoleDeploymentObservationV2,
-        encode_role_batch_receipt_v2,
-    },
+    batch_v2::{BatchErrorV2, ROLE_BATCH_REQUEST_MAGIC_V2, RoleBatchRequestV2},
 };
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
@@ -514,6 +510,9 @@ fn reauthentication_refuses_substituted_cache_and_stale_programdata() {
     );
 }
 
+// The standalone DCLTRGB2 route is deleted; `batch_v2::authenticate_request` is
+// not. It is what `continuation_v1` and `hot_continuation_v2` reach in-process,
+// so these two tests drive it directly instead of through a dispatch arm.
 #[test]
 fn batch_reauthentication_accepts_one_cache_and_four_ordered_current_roles() {
     let fixture = Fixture::new();
@@ -529,55 +528,38 @@ fn batch_reauthentication_accepts_one_cache_and_four_ordered_current_roles() {
     ];
     let request = RoleBatchRequestV2::new(fixture.release_set_id, cache_digest, &roles)
         .expect("batch request");
+    assert_eq!(request.role_mask(), 0b1_0111);
     let mut accounts = vec![cache];
     for _ in roles {
         accounts.extend([fixture.program.clone(), fixture.programdata.clone()]);
     }
-    process_instruction(&fixture.registry, &accounts, &request.to_bytes())
-        .expect("one physical Registry batch");
-
-    // Host syscall stubs do not retain return data. Reconstruct the exact
-    // bytes from the authenticated facts and exercise the hostile decoder.
-    let observations = roles.map(|role| {
-        RoleDeploymentObservationV2::new(
-            role,
-            fixture.release.program(),
-            fixture.release.programdata(),
-            fixture.artifact_id,
-            fixture.release.semantic_release_id(),
-            fixture.release.deployment_slot(),
-        )
-        .expect("observation")
-    });
-    let request_bytes = request.to_bytes();
-    let mut receipt_bytes = [0_u8; ROLE_BATCH_RECEIPT_BYTES_V2];
-    encode_role_batch_receipt_v2(
-        RoleBatchReceiptInputV2 {
-            registry_program: ProgramIdentityV1::new(fixture.registry.to_bytes())
-                .expect("Registry program"),
-            activation_cache: *accounts.first().expect("cache").key.as_array(),
-            activation_cache_digest: cache_digest,
-            release_set_id: fixture.release_set_id,
-            request_digest: ContentId::new(hash(&request_bytes).to_bytes())
-                .expect("request digest"),
-            observations: &observations,
-        },
-        &mut receipt_bytes,
-    )
-    .expect("receipt");
-    let receipt = AuthenticatedRoleBatchReceiptV2::decode(&receipt_bytes).expect("batch receipt");
-    assert_eq!(receipt.role_count(), 4);
-    assert_eq!(receipt.role_mask(), 0b1_0111);
-    for (index, role) in roles.into_iter().enumerate() {
+    let authenticated =
+        crate::batch_v2::authenticate_request(&fixture.registry, &accounts, request)
+            .expect("one read-only Registry batch");
+    assert_eq!(authenticated.cache_digest, cache_digest);
+    assert_eq!(authenticated.observations.len(), roles.len());
+    for (observation, role) in authenticated.observations.iter().zip(roles) {
+        assert_eq!(observation.role(), role);
+        assert_eq!(observation.program(), fixture.release.program());
+        assert_eq!(observation.programdata(), fixture.release.programdata());
+        assert_eq!(observation.artifact_release_id(), fixture.artifact_id);
         assert_eq!(
-            receipt
-                .observation(index)
-                .expect("active observation")
-                .expect("valid observation")
-                .role(),
-            role
+            observation.semantic_release_id(),
+            fixture.release.semantic_release_id()
+        );
+        assert_eq!(
+            observation.deployment_slot(),
+            fixture.release.deployment_slot()
         );
     }
+
+    // And the retired entry route is gone from dispatch: a canonical DCLTRGB2
+    // request no longer selects a handler, it refuses as an unknown instruction.
+    assert!(request.to_bytes().starts_with(&ROLE_BATCH_REQUEST_MAGIC_V2));
+    assert_eq!(
+        process_instruction(&fixture.registry, &accounts, &request.to_bytes()),
+        Err(RegistryError::Instruction.into())
+    );
 }
 
 #[test]
@@ -617,8 +599,8 @@ fn batch_reauthentication_refuses_duplicate_reorder_cache_and_deployment_substit
         fixture.programdata.clone(),
     ];
     assert_eq!(
-        process_instruction(&fixture.registry, &accounts, &wrong_digest.to_bytes()),
-        Err(RegistryError::ActivationCache.into())
+        crate::batch_v2::authenticate_request(&fixture.registry, &accounts, wrong_digest).err(),
+        Some(RegistryError::ActivationCache.into())
     );
 
     let wrong_cache = account(
@@ -638,12 +620,13 @@ fn batch_reauthentication_refuses_duplicate_reorder_cache_and_deployment_substit
         fixture.programdata.clone(),
     ];
     assert_eq!(
-        process_instruction(
+        crate::batch_v2::authenticate_request(
             &fixture.registry,
             &substituted_cache_accounts,
-            &request.to_bytes(),
-        ),
-        Err(RegistryError::ActivationCache.into())
+            request,
+        )
+        .err(),
+        Some(RegistryError::ActivationCache.into())
     );
 
     let stale_programdata = account(
@@ -663,8 +646,8 @@ fn batch_reauthentication_refuses_duplicate_reorder_cache_and_deployment_substit
         stale_programdata,
     ];
     assert_eq!(
-        process_instruction(&fixture.registry, &stale_accounts, &request.to_bytes()),
-        Err(RegistryError::Deployment.into())
+        crate::batch_v2::authenticate_request(&fixture.registry, &stale_accounts, request).err(),
+        Some(RegistryError::Deployment.into())
     );
 }
 

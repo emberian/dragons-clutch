@@ -192,11 +192,6 @@
       "owner": "cycle-2 retirement (behind a terminal Market), then JRNY-1"
     },
     {
-      "route": "registry/batch_v2::process",
-      "reason": "DCLTRGB2, the role-batch request route. Tier 1 activates one role per transaction (whole-ELF hashing makes a five-role transaction exceed the maximum), so the batch route is not on its path.",
-      "owner": "UNASSIGNED \u2014 needs a decision on whether batch activation is still reachable at real ELF sizes"
-    },
-    {
       "route": "registry/continuation_v1::process",
       "reason": "DCLRGCI1, the Registry continuation route. Reached from a continuation-bearing child request; no tier-1 transaction carries one.",
       "owner": "W1d for the Open chain; cycle-2 tranche A"
