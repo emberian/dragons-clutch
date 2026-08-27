@@ -1,7 +1,7 @@
 # General's escrow, made physical — and the copy of the ruling the chain runs
 
 Lane GEN-ESCROW, 2026-08-27. Commits `4f823c4a`, `31eca2fa`, `ba63fc8c`,
-`b6e28707`. Charter: ADR-0010 §6 items 1 and 3 — make the escrow move, and
+`b6e28707`, `53da0565`. Charter: ADR-0010 §6 items 1 and 3 — make the escrow move, and
 author the seven artifact triples.
 
 This is not release evidence. It records what was executed, what it cost, and —
@@ -301,16 +301,29 @@ Not "only the validator-evidence tier". Precisely:
    the callees. `tests/unauthored_actions_v1.rs` is the check that does not
    depend on which is true today.
 
-4. **The census rows do not flip.** Six of seven N=258 actions serialise past
-   1,232 bytes, so `blocked.json`'s clause stands; there is still no
-   `tools/gauntlet/general/` lane, so even the N=1 evidence — where the packet
-   clause holds — is not folded into the census. That is bounded, mechanical
-   work: `record()` in the campaign's `submit`, `bindings.json`,
-   `witnesses.json`, a `run-general.sh` that greps for frame diagnostics, and one
-   `census observe`.
+4. **The census row flipped at N=1 and not at the canonical width** —
+   `53da0565`. `tools/gauntlet/general/` now exists: `record()` in both
+   campaigns' `submit`, eight bindings on the one route the accelerator exposes,
+   eight witnesses, a `run-general.sh` with a frame-diagnostic gate and a ledger
+   lock, and the four fast-lane clauses merged into the evidence document.
+   `general-accelerator/process_instruction` reads
+   `EXECUTED (18x via general-accelerator-programtest)` with one of its five
+   refusal codes observed, and `blocked.json`'s entry is deleted.
+
+   **The width restriction is the design, not an economy.** At N=258 six of seven
+   actions do not fit a packet and ProgramTest cannot notice, so recording one
+   would flip a route to EXECUTED on a frame no validator would accept. The
+   campaign still runs and measures both widths; it records only N=1, gated
+   inside the fixture on the width rather than on a test name, with a witness
+   pinning that nothing else got recorded. What is still owed: the canonical
+   width needs the ALT/v0 route, and the real path needs a General Hot bundle
+   that does not exist.
 
 5. **General has no rows in `tools/gauntlet/CU_BUDGETS.json`.** The table in §4
-   is this document's, not the census's.
+   is this document's, not the census's, and the new tier deliberately carries no
+   `cu-budget` witness — one naming a campaign with no budget entries is a red
+   `NOCAMPAIGN` row, which would be a worse statement than silence. Pinning
+   budgets is the CU-BUDGET lane's file and its call.
 
 6. **`ExpireSettlement` has no gen-3 counterpart**, and **the claim escrow's
    Position lifecycle** still has nothing that creates or closes the
@@ -330,7 +343,9 @@ programs/dclutch-general-accelerator-sbf/program-test/run-program-test.sh
 
 The second needs `cargo build-sbf`; it builds the accelerator and the test-caller
 ELFs into a temporary directory and runs the four suites with `--nocapture`,
-which is how the evidence rows in §4 reach stdout. It carries its own
+which is how the evidence rows in §4 reach stdout. `tools/gauntlet/general/run-general.sh`
+wraps the same build and test with the frame-diagnostic gate, the witnesses and
+`census observe`. The program-test carries its own
 `Cargo.lock` and passes `--locked`; that lock still named `sha2` after the
 `dclutch-sha256-adapter` migration removed it from the adapter, so **the campaign
 could not be run at all from a checkout of main** until `31eca2fa`.
