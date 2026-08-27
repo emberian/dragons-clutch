@@ -183,7 +183,7 @@ pub(crate) fn execute(
 
     let mut unexpected_refusals = Vec::new();
 
-    let (resolution_report, resolution_fees) = resolution::resolve(
+    let (resolution_report, resolution_lamports) = resolution::resolve(
         &mut session.rpc,
         &session.authority,
         &resolution_addresses,
@@ -198,7 +198,7 @@ pub(crate) fn execute(
         "resolution: create and activate the Market's Resolution funding",
         0,
         0,
-        LamportClaimV1::fees(resolution_fees),
+        resolution_lamports,
     )?;
 
     // The provider legs bootstrap two captured third-party programs and then
@@ -206,7 +206,7 @@ pub(crate) fn execute(
     // is worth more written down beside a complete ledger than thrown as an
     // error that discards the rest of the journey -- so the stage is recorded
     // either way and the run fails at the end, after the transcript exists.
-    let (provider_report, provider_fees) = match provider::resolve_through_pyth(
+    let (provider_report, provider_lamports) = match provider::resolve_through_pyth(
         &mut session.rpc,
         &session.authority,
         &session.plan,
@@ -234,7 +234,10 @@ pub(crate) fn execute(
                          identities its SourceMaterialV2 names."
                     ),
                 },
-                0,
+                LamportClaimV1::inapplicable(
+                    "the stage refused part way through, so what it placed and where is exactly \
+                     what is not known; L7 does not guess across a wall",
+                ),
             )
         }
     };
@@ -247,14 +250,14 @@ pub(crate) fn execute(
         "resolution: the Pyth transport carries the Market to Terminal",
         0,
         0,
-        LamportClaimV1::fees(provider_fees),
+        provider_lamports,
     )?;
 
     // Retirement runs BEFORE rent recovery, and the order is load-bearing: the
     // Source closure refunds its rent into the Market's own beneficiary credit,
     // so sweeping first would sweep a surplus the retirement is about to add to
     // and leave the larger half sitting there.
-    let (retirement, retirement_fees) = resolution::retire(
+    let (retirement, retirement_lamports) = resolution::retire(
         &mut session.rpc,
         &session.authority,
         &resolution_addresses,
@@ -267,7 +270,7 @@ pub(crate) fn execute(
         "retirement: begin retiring and close the Source subtree",
         0,
         0,
-        LamportClaimV1::fees(retirement_fees),
+        retirement_lamports,
     )?;
 
     let (rent, rent_fees) = stages::recover_rent(

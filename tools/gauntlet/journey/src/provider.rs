@@ -29,8 +29,8 @@ use dclutch_provider_transport_v3_operator::{
 use dclutch_pyth_svm::FullPriceUpdateV2;
 use dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1;
 use dclutch_resolution_codec::{
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    ResolutionCertificateKindV2, ResolutionCertificateV2,
+    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+    RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_resolution_core_v3_operator::ObservedAccount;
 use dclutch_source_contract::{SourceResolutionPhaseV1, SourceResolutionStateV2};
@@ -126,6 +126,13 @@ pub(crate) struct ProviderPlanV1 {
     /// the submitter: the two roles are separable in the protocol and a
     /// campaign that collapses them cannot tell whether the separation holds.
     pub(crate) resolver: Keypair,
+    /// The router-owned buffer the signed VAA is written into.
+    pub(crate) encoded_vaa: Keypair,
+    /// The Resolution lifecycle for the posted update, derived here rather than
+    /// read off the submit report, so the ledger watches it from before it
+    /// exists. Its seeds are the domain and the update account, both of which
+    /// this campaign draws.
+    pub(crate) lifecycle: Pubkey,
 }
 
 impl ProviderPlanV1 {
@@ -133,10 +140,21 @@ impl ProviderPlanV1 {
     pub(crate) fn derive(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<Self> {
         let (raw, _) = crate::runtime::record(plan, "pyth_release")?;
         let release = rpc.required_account(raw, "published Pyth release record")?;
+        let update = Keypair::new();
+        let lifecycle = Pubkey::find_program_address(
+            &[
+                PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+                update.pubkey().as_ref(),
+            ],
+            &pubkey(&plan.resolution.program_id)?,
+        )
+        .0;
         Ok(Self {
             addresses: ProviderAddressesV1::from_release(&release.data)?,
-            update: Keypair::new(),
+            update,
             resolver: Keypair::new(),
+            encoded_vaa: Keypair::new(),
+            lifecycle,
         })
     }
 }
@@ -147,6 +165,8 @@ pub(crate) fn watch(ledger: &mut crate::ledger::ConservationLedgerV1, plan: &Pro
     for (label, address) in [
         ("provider_price_update", plan.update.pubkey()),
         ("provider_resolver", plan.resolver.pubkey()),
+        ("provider_encoded_vaa", plan.encoded_vaa.pubkey()),
+        ("provider_update_lifecycle", plan.lifecycle),
         ("provider_receiver_config", plan.addresses.config),
         ("provider_receiver_treasury", plan.addresses.treasury),
         ("provider_guardian_set", plan.addresses.guardian_set),
@@ -166,7 +186,7 @@ pub(crate) fn resolve_through_pyth(
     addresses: &ResolutionAddressesV1,
     provider: &ProviderPlanV1,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(StageReportV1, u64)> {
+) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
     let mut fees = 0_u64;
     let mut compute_units = 0_u64;
     let mut submitted = 0_usize;
@@ -267,7 +287,7 @@ pub(crate) fn resolve_through_pyth(
     }
 
     // ------------------------------------------------------- the signed VAA
-    let encoded = Keypair::new();
+    let encoded = &provider.encoded_vaa;
     let encoded_size = ENCODED_VAA_HEADER_BYTES + SIGNED_VAA.len();
     let encoded_rent = rpc.minimum_balance(encoded_size)?;
     send(
@@ -281,7 +301,7 @@ pub(crate) fn resolve_through_pyth(
             &addresses_p.router,
         )],
         payer,
-        &[&encoded],
+        &[encoded],
         &mut fees,
         &mut compute_units,
         &mut submitted,
@@ -400,6 +420,14 @@ pub(crate) fn resolve_through_pyth(
         },
     )
     .map_err(|error| Error::new(format!("chain-derived provider submission: {error:?}")))?;
+    if submit.lifecycle != provider.lifecycle {
+        return Err(Error::new(format!(
+            "the operator derives the update lifecycle at {} and this campaign registered {} with \
+             the conservation ledger; a lifecycle the ledger does not watch is a lamport placement \
+             it cannot see",
+            submit.lifecycle, provider.lifecycle
+        )));
+    }
     let lifecycle_rent = rpc.minimum_balance(PROVIDER_UPDATE_LIFECYCLE_BYTES_V3)?;
     // Both provider frames are wide -- the submit leg carries the release
     // observation, the record pairs and the receiver's own accounts -- so both
@@ -426,6 +454,7 @@ pub(crate) fn resolve_through_pyth(
         transactions,
     )?;
     submitted += 2;
+    let mut table_lamports = table_rent(&submit_tables);
     let evidence = rpc.send_v0_with_signers(
         "journey: Resolution submits one update through the real receiver ELF",
         std::slice::from_ref(&submit.instruction),
@@ -496,6 +525,7 @@ pub(crate) fn resolve_through_pyth(
         transactions,
     )?;
     submitted += 2;
+    table_lamports = table_lamports.saturating_add(table_rent(&execute_tables));
     let evidence = rpc.send_v0_with_signers(
         "journey: Core admits the terminal state of an atomically founded Market",
         std::slice::from_ref(&execute.instruction),
@@ -573,8 +603,22 @@ pub(crate) fn resolve_through_pyth(
                 terminal.terminal_winner, addresses.generation
             ),
         },
-        fees,
+        crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
+            table_lamports,
+            "two address lookup tables, rent-funded to route the two oversized provider frames",
+        ),
     ))
+}
+
+/// Rent held by the routing tables a stage published.
+///
+/// Read off the tables themselves rather than recomputed, so the number L7
+/// accepts is the one the chain charged.
+pub(crate) fn table_rent(tables: &[ObservedAccount]) -> u64 {
+    tables
+        .iter()
+        .map(|table| table.lamports)
+        .fold(0_u64, u64::saturating_add)
 }
 
 fn submit_snapshot(

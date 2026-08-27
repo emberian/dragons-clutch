@@ -347,7 +347,7 @@ pub(crate) fn resolve(
     payer: &Keypair,
     addresses: &ResolutionAddressesV1,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(StageReportV1, u64)> {
+) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
     let state = CoreState::decode(&rpc.required_account(addresses.market, "Market")?.data)
         .map_err(|error| Error::new(format!("Market: {error:?}")))?;
     if state.phase != Phase::Open || state.readiness != Readiness::Consumed {
@@ -423,6 +423,7 @@ pub(crate) fn resolve(
         transactions,
     )?;
     submitted += 2;
+    let mut table_lamports = crate::provider::table_rent(&tables);
 
     // 2. The adversarial half FIRST. A second creation at the same generation
     //    must refuse, and the cheapest honest way to prove the guard is live is
@@ -543,6 +544,7 @@ pub(crate) fn resolve(
         transactions,
     )?;
     submitted += 2;
+    table_lamports = table_lamports.saturating_add(crate::provider::table_rent(&verify_tables));
     let evidence = rpc.send_v0_with_signers(
         "journey: activate the three-ledger Resolution funding of an Open Market",
         std::slice::from_ref(&verify.instruction),
@@ -605,7 +607,11 @@ pub(crate) fn resolve(
                 addresses.funding_entry_indices, verify.expected_beneficiary_credit_lamports
             ),
         },
-        fees,
+        crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
+            table_lamports,
+            "two address lookup tables, rent-funded to route CreateFund and VerifyFundReady past \
+             the legacy packet limit",
+        ),
     ))
 }
 
@@ -835,7 +841,7 @@ pub(crate) fn retire(
     addresses: &ResolutionAddressesV1,
     hoard: Pubkey,
     transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(StageReportV1, u64)> {
+) -> Result<(StageReportV1, crate::ledger::LamportClaimV1)> {
     let mut fees = 0_u64;
     let mut compute_units = 0_u64;
     let mut submitted = 0_usize;
@@ -855,7 +861,7 @@ pub(crate) fn retire(
                     state.phase
                 ),
             },
-            0,
+            crate::ledger::LamportClaimV1::fees(0),
         ));
     }
 
@@ -936,6 +942,7 @@ pub(crate) fn retire(
         transactions,
     )?;
     submitted += 2;
+    let table_lamports = crate::provider::table_rent(&tables);
     let beneficiary_before = rpc
         .account(addresses.rent_beneficiary)?
         .map(|account| account.lamports)
@@ -1022,7 +1029,10 @@ pub(crate) fn retire(
                 close.expected_refund_lamports
             ),
         },
-        fees,
+        crate::ledger::LamportClaimV1::fees(fees).with_unwatched(
+            table_lamports,
+            "one address lookup table, rent-funded to route CloseFund past the legacy packet limit",
+        ),
     ))
 }
 

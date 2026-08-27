@@ -82,6 +82,18 @@ use crate::{Error, Result, rpc::Rpc};
 pub(crate) struct LamportClaimV1 {
     /// Fees the stage's own transactions paid, summed from their evidence.
     pub(crate) fees_lamports: u64,
+    /// Lamports the stage placed in accounts this ledger does not watch.
+    ///
+    /// There is exactly one legitimate source of these and it is named in
+    /// `unwatched_note`: an address lookup table's address is derived from the
+    /// slot that created it, so it cannot be registered from before it exists
+    /// the way every other account this journey creates is. The number is read
+    /// off the tables themselves, not chosen — and a nonzero value with an
+    /// empty note VIOLATES L7 rather than excusing it, because "declare
+    /// whatever makes it balance" is the failure this term could otherwise
+    /// become.
+    pub(crate) unwatched_lamports: u64,
+    pub(crate) unwatched_note: String,
     /// Why L7 cannot be evaluated at this boundary, when it cannot. A stage
     /// that cannot account for its lamports says so; it never stays silent.
     pub(crate) inapplicable: Option<String>,
@@ -92,6 +104,8 @@ impl LamportClaimV1 {
     pub(crate) fn inapplicable(reason: impl Into<String>) -> Self {
         Self {
             fees_lamports: 0,
+            unwatched_lamports: 0,
+            unwatched_note: String::new(),
             inapplicable: Some(reason.into()),
         }
     }
@@ -101,8 +115,18 @@ impl LamportClaimV1 {
     pub(crate) fn fees(fees_lamports: u64) -> Self {
         Self {
             fees_lamports,
+            unwatched_lamports: 0,
+            unwatched_note: String::new(),
             inapplicable: None,
         }
+    }
+
+    /// A stage that also rent-funded routing tables, whose addresses depend on
+    /// the slot that created them and so cannot be watched in advance.
+    pub(crate) fn with_unwatched(mut self, lamports: u64, note: impl Into<String>) -> Self {
+        self.unwatched_lamports = lamports;
+        self.unwatched_note = note.into();
+        self
     }
 }
 
@@ -673,17 +697,36 @@ impl ConservationLedgerV1 {
                 i128::from(after.lamports) - i128::from(before)
             })
             .sum();
-        let residual = payer_delta + i128::from(now.lamports.fees_lamports) + watched_growth
+        if now.lamports.unwatched_lamports > 0 && now.lamports.unwatched_note.trim().is_empty() {
+            return VerdictV1::violated(
+                "L7",
+                format!(
+                    "the stage declared {} lamports placed outside the watched set and did not say \
+                     where; an undescribed declaration is a hole with a number in it",
+                    now.lamports.unwatched_lamports
+                ),
+            );
+        }
+        let residual = payer_delta
+            + i128::from(now.lamports.fees_lamports)
+            + watched_growth
+            + i128::from(now.lamports.unwatched_lamports)
             - payer_label_growth;
         if residual == 0 {
             VerdictV1::holds(
                 "L7",
                 format!(
                     "the payer moved {payer_delta} lamports since `{}`, its transactions paid {} in \
-                     fees, and watched accounts gained {}; debit == credit + fee",
+                     fees, watched accounts gained {}, and {} went to {}; debit == credit + fee",
                     previous.stage,
                     now.lamports.fees_lamports,
-                    watched_growth - payer_label_growth
+                    watched_growth - payer_label_growth,
+                    now.lamports.unwatched_lamports,
+                    if now.lamports.unwatched_note.is_empty() {
+                        "nothing unwatched"
+                    } else {
+                        now.lamports.unwatched_note.as_str()
+                    }
                 ),
             )
         } else {
