@@ -119,6 +119,31 @@ canonical bump in the record it belongs to, as the capability seal already does
 for the sealed roles — is an authority decision on record layout. See the board
 for the phase-level attribution.
 
+**W2q ruled and executed that fix (2026-08-27, commits 569b582…34bebe8), and it
+is NOT enough on its own.** The three Market-selected record coordinates — the
+manifest, the program set and the config — are now READ from bumps the
+activation stored, never searched for: four in `CapabilityRootHeaderV1`'s
+reserved word, two in the embedded selection's, so no offset moved, no width
+changed and nothing regenerated. `process_activation` is the sole writer, a
+selection on the wire must still carry none, and `create_program_address` under
+the stored bump is the check. Measured: `artifacts-strategy-effect` spread
+across fixture seeds is now **ZERO** (W2p measured 21,000 between seeds 1 and
+10), the phase costs 82,294 → 76,426 CU, and **seed 10 — W2p's failing draw —
+now lands at 1,377,761 from 1,401,761**, under the ceiling by this change alone.
+The 20-seed sweep goes 17/20 → 18/20 (min 1,343,261, max 1,388,260); every seed
+is strictly cheaper.
+
+**Seeds 1 and 7 still exceed 1,400,000, and the wall has moved to a phase whose
+searches CANNOT be stored.** `commit-lifecycle-closes` carries 24,001 CU of
+cross-seed spread (16 bump attempts) — four times the +6,002 W2p reported, which
+was a two-seed sample of a random variable, not a bound. Those are the child
+CPIs' caller-authority PDAs, seeded by per-execution request digests; there is
+no record to carry a bump for a coordinate that exists only for the length of
+one instruction. `root-product` holds 6,000 more and `request-lifecycle-preplan`
+4,500. **The next lever is not a bump: it is fewer or cheaper child authorities**
+(or a wire-carried bump the callee's own canonical derivation checks, which
+moves the cost rather than removing it). DECOMP owns the residual.
+
 Tranche A (Direct, Claims→Custody→Token-2022 terminal, Series chains) launches
 when W2b lands the heap gate — family ProgramTest campaigns do NOT wait for the
 open market. The open-market path (W1b) runs in parallel and gates only the
