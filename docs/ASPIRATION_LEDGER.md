@@ -2906,6 +2906,59 @@ links, and a lane that reports "Trading is unchanged" today means Trading at
 `default = ["families"]`. Owner: whoever next measures a Trading number that a
 family accelerator also has to live with.
 
+### POST-0012, 2026-08-27: two rows the slot-pin closing sweep opened
+
+**M-63 -- a measurement can be structurally incapable of testing the thing it
+is quoted for, and green tells you nothing about that.** Decision 0012's whole
+claim is that the market life fits on a MUTABLE substrate, because the slot pin
+replaces a ~700,000-CU whole-ELF hash with one `u64` comparison. PIN-0012
+landed the admission and honestly named the claim as argued and unit-tested,
+never measured end to end -- so the debt was recorded as *"run the sweep"*. The
+sweep was then run, at HEAD, and came back **20/20, mean 1,345,302 of
+1,400,000**. That number is real and it is not evidence for the claim, because
+`waist::release` builds every release `Immutable` and `waist::immutable_programdata`
+writes the ProgramData authority option as `None`, so
+`slot_pinned_release_elf_digest_v1` always took its `Immutable` arm -- the arm
+its own doc calls delegated *unchanged*, and which never hashed anything. **The
+Hot tail never paid the hash, so it had nothing to save, and the `ExactAuthority`
+arm that 0012 exists to add was not constructible by the fixture at all.**
+Checkable rather than asserted: the pre-`0e34c036` sweep meaned 1,366,177 and
+this one means 1,345,302; the 20,875 gap is about fourteen bump iterations,
+inside M-61's +/-46,000 draw, and a 700k effect could not have hidden in it.
+The general form, which is the row: **before quoting a measurement as evidence
+for a change, name the branch the change added and check the fixture can reach
+it.** A suite that cannot construct the case is not a suite that tested the case
+and passed. This one had a second tell nobody read -- the numbers did not move
+when the admission landed, which is what "the fast path was already free here"
+looks like from the outside. Structural fix in flight (a `FixtureSubstrateV1`
+with an `ExactAuthority` arm AND an `ImmutablePinned` control that isolates the
+M-61 redraw from the real cost, because the policy byte, bound authority and
+bound slot all live inside the bytes the artifact id hashes and therefore move
+every PDA seeded by it).
+
+**M-64 -- `lake build` was not a gate over the Lean library; it was a gate over
+whatever the root module happened to import.** `ProtocolInfrastructure.lean`
+carried two theorems -- `mutable_artifact_refuses`,
+`mutable_core_registry_or_rent_refuses` -- that stated the OPPOSITE of the
+shipped protocol after decision 0012 inverted them. They survived because
+**nothing imported the file**: `lake build`'s 93 jobs never elaborated it, and
+no gate in the repo ever had. Measured properly, 26 of 118 modules were
+unreachable from the root; 22 were reachable from some `Emit*` exe (so CI did
+elaborate them, invisibly to the default target) and **four had no builder
+anywhere in the repo** -- `SeriesEscrowV3`, `SeriesReplayV3`,
+`SeriesReplayPlanV3`, `RationalRepresentationV2Examples`, 40 theorems between
+them, all four describing LIVE Rust in `dclutch-series-v3-kernel`, none of them
+compost. Closed at `a7de18e5` with the import list AND, more importantly,
+`globs = ["DClutchSemantics.+"]` on the `lean_lib`: membership is a pattern
+now, so a new orphan is structurally impossible rather than dependent on
+somebody remembering. 93 jobs -> 120, zero red, zero `sorry`, and every
+emitter's `check-generated.sh` still `cmp`-clean. **The residual, stated
+because the fix does not reach it**: elaborating green proves a proof is
+internally sound, not that its STATEMENT matches the Rust.
+`ProtocolInfrastructure` would have elaborated green for the whole period its
+two theorems were backwards. Those 40 newly-covered theorems are now auditable;
+they are not yet audited.
+
 ---
 
 *Gen-1 did not fail to write things down. It wrote them down — in reviews, in a
