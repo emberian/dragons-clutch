@@ -17,6 +17,14 @@ use crate::GeneralConfigV2;
 
 /// Exact canonical byte width of the mutable [`GeneralRootV2`] tail.
 pub const GENERAL_ROOT_BYTES_V2: usize = crate::generated::GENERAL_ROOT_BYTES_V2;
+/// Exact tail-relative byte offset of the [`GeneralLifecycleV2`] discriminant.
+///
+/// Published so that a physical adapter can project the live lifecycle byte out
+/// of the composite `CapabilityRootHeaderV1 || GeneralRootV2` account without
+/// decoding the whole tail, and without minting a second layout authority. The
+/// adapter's account-data offset is `CAPABILITY_ROOT_HEADER_BYTES_V1` plus this
+/// value.
+pub const GENERAL_ROOT_LIFECYCLE_OFFSET_V2: usize = crate::generated::ROOT_LIFECYCLE_OFFSET;
 /// Domain preimage for the General capability-kind identity.
 pub const GENERAL_CAPABILITY_KIND_PREIMAGE_V1: &[u8] = b"dclutch/general/capability-kind/v1";
 /// SHA-256 of [`GENERAL_CAPABILITY_KIND_PREIMAGE_V1`].
@@ -45,6 +53,12 @@ pub enum GeneralLifecycleV2 {
 }
 
 impl GeneralLifecycleV2 {
+    /// Exact persisted discriminant byte.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+
     fn decode(value: u8) -> RootResult<Self> {
         match value {
             1 => Ok(Self::Active),

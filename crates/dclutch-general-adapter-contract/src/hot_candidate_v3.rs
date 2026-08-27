@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 88;
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 90;
 /// Outcome index, quantity, three claim magnitudes, and cursor inventory.
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
 /// Exact common identity-register count in the General Hot38 ABI.
@@ -209,6 +209,18 @@ pub mod scalar {
     pub const INPUT_SCRATCH_PAGE_COUNT: u32 = 86;
     /// Verifier-emitted settlement-manifest row ordinal selected by the request.
     pub const MANIFEST_ORDER_INDEX: u32 = 87;
+    /// AccountProfile-projected capability-root lifecycle byte.
+    ///
+    /// The composite root is `CapabilityRootHeaderV1 || GeneralRootV2`. The
+    /// header proves identity and says nothing about whether the capability
+    /// still accepts work, so the runtime-width path projects the tail's
+    /// lifecycle byte itself. Nothing else writes this coordinate: no request
+    /// profile projects it (proved in
+    /// `DClutchSemantics.GeneralRequestProfilesV1`), so an AccountProfile that
+    /// omits the projection leaves it zero and every action refuses.
+    pub const ROOT_LIFECYCLE_OBSERVATION: u32 = 88;
+    /// Transition-owned `GeneralLifecycleV2::Active` constant.
+    pub const ROOT_LIFECYCLE_ACTIVE: u32 = 89;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.
