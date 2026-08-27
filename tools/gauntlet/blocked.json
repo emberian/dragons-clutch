@@ -1,0 +1,340 @@
+{
+  "note": "Routes that cannot be driven by any gauntlet tier today. Every entry names WHY and WHO. A route with no entry and no observation appears in the report's 'NO stated reason at all' row, which is the row that should make someone uncomfortable. 'No tier drives it yet' is a real and admissible reason; it is deliberately NOT phrased as 'blocked' when nothing structural prevents it, so that a missing test never launders itself into an external blocker. Rules: most specific matching rule wins; a trailing '*' is a prefix glob; keep an entry only while it is true, and delete it the moment its route executes.",
+  "blocked": [
+    {
+      "route": "monolith/*",
+      "reason": "programs/dclutch-sbf is the gen-1 single-program prototype. It is a workspace member and still builds, but it is not one of the seven artifacts the successor release set binds (Registry, Core, Claims, Trading, Resolution, Custody, Rent), so the transaction-only bootstrap never deploys it and no route of it is reachable by any tier. Whether it is superseded debt to delete under AGENTS.md's 'do not preserve parallel legacy/current authority paths' rule, or a live target that needs its own tier, has not been decided anywhere in the tree.",
+      "owner": "UNASSIGNED — needs an owner decision, not a test"
+    },
+    {
+      "route": "claims-proof/*",
+      "reason": "Capability-child proof artifact, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md)"
+    },
+    {
+      "route": "custody-proof/*",
+      "reason": "Capability-child proof artifact, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md)"
+    },
+    {
+      "route": "controller-proof/*",
+      "reason": "Direct controller proof artifact, not part of the seven-role successor release set; no tier deploys it. Its campaign belongs with the Direct family tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Direct"
+    },
+    {
+      "route": "direct-aot/*",
+      "reason": "Direct ahead-of-time artifact, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md), Direct"
+    },
+    {
+      "route": "dealer/*",
+      "reason": "Dealer family artifact, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md), Dealer"
+    },
+    {
+      "route": "dealer-accelerator/*",
+      "reason": "Dealer accelerator, not part of the seven-role successor release set; no tier deploys it. Additionally: RL measured 36 SBF stack-frame-overwrite diagnostics naming hot_v3::process_hot_execution_v3 under this package's feature set (docs/evidence/CHECKED_RELEASE_CANDIDATE_2026_08_26.md); the gauntlet's build stage counts and reports those, and this artifact would trip that count.",
+      "owner": "cycle-2 tranche A (WAVE.md), Dealer"
+    },
+    {
+      "route": "general-accelerator/*",
+      "reason": "General accelerator, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "GN general-sbf lane, then cycle-2"
+    },
+    {
+      "route": "series/*",
+      "reason": "Series family artifact, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "series-shadow/*",
+      "reason": "Shadow accelerator. Excluded from the root workspace because `shadow-accelerator-auth-only` is a SUBTRACTIVE feature, which breaks Cargo's additive-feature contract; the sound fixes are to extract the shadow authenticator into its own crate or to invert the feature (W2 lane analysis, board 2026-08-26 22:5x). Not deployed by any tier.",
+      "owner": "UNASSIGNED — the feature refactor is queued in WAVE.md cycle-2"
+    },
+    {
+      "route": "economic/*",
+      "reason": "Economic projection adapter, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md)"
+    },
+    {
+      "route": "effect/*",
+      "reason": "Effect projection adapter, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md)"
+    },
+    {
+      "route": "product-payoff/*",
+      "reason": "Payoff evaluator artifact, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md)"
+    },
+    {
+      "route": "product-evidence/*",
+      "reason": "Payoff evidence artifact, not part of the seven-role successor release set; no tier deploys it.",
+      "owner": "cycle-2 tranche A (WAVE.md)"
+    },
+    {
+      "route": "product-runtime-v2/*",
+      "reason": "Product Runtime V2 admission artifact, not part of the seven-role successor release set; no tier deploys it. Tier 1 does publish the Runtime-V2 Product graph as Registry records, but never invokes this program.",
+      "owner": "cycle-2 tranche A (WAVE.md)"
+    },
+    {
+      "route": "claims/*",
+      "reason": "The Claims ELF IS bound into the five-role release set and IS activated by tier 1, but no tier-1 transaction reaches it: the Found31 path invokes only Registry, Core and Rent (tools/local-validator/bootstrap/successor/README.md). Claims routes need either the Open-last chain (Core Open consumes a Claims FoundingV5 receipt) or a family tier.",
+      "owner": "W1d for the Open-last chain; cycle-2 tranche A for the family tier"
+    },
+    {
+      "route": "resolution/*",
+      "reason": "The Resolution ELF IS bound into the five-role release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. Resolution routes need a Source/provider tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "trading/hot_v3::process_hot_execution_v3",
+      "reason": "Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses Custom(3) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). Compute and heap are no longer the blocker; the emitter is.",
+      "owner": "DP2 (Direct emitter repairs); W2d (per-Market authentication cache) for the remaining ~640,861 CU of repeated artifact decode-and-validate"
+    },
+    {
+      "route": "registry/hot_continuation_v2::process",
+      "reason": "The Registry Hot continuation is only reachable behind a Hot execution, which refuses on the Direct Profile14 emitter defects above.",
+      "owner": "DP2, then W2d"
+    },
+    {
+      "route": "trading/generic_market_founding_v1::process_generic_market_founding_v1",
+      "reason": "DCLTGMF1, the atomic Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core Open-last outer. Blocked on the Lock stage's funding source: LockHoardAndCloseSource consumes a normal CustodyReplayV1 whose market field is the Market being founded while requiring that Market account to be VACANT, and every route that writes a normal replay goes through custody-sbf's authenticate_market, which requires live Core-owned state at that address. The fix is a new projected-family Custody operation that opens a SOURCE compartment against a vacant Market. Also needs the DCLTGMF1 builder plus address-lookup-table routing for its 137 account references in the bootstrap.",
+      "owner": "W1d (board 2026-08-27, 'Blocker C: the source compartment, then the Open gate')"
+    },
+    {
+      "route": "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+      "reason": "DCLTPCB1 exists (28d2da6): a 60-account Trading route driving projected-Custody Initialize and OpenHoard under their single-use ProjectedCustodyCallerSeedsV1 signers. No campaign stage drives it yet. NOTE for whoever adds that stage: f30d087 fixed a 35-byte caller PDA seed domain against Solana's 32-byte cap, which means no projected-Custody transition could ever have signed before it — precisely the class of defect the census exists to make visible.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/projected::process",
+      "reason": "The projected-Custody family is reachable only through DCLTPCB1 and DCLTGMF1, neither of which any tier drives yet.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/initialize#Initialize",
+      "reason": "Projected-Custody action; reachable only through DCLTPCB1.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/open_hoard#OpenHoard",
+      "reason": "Projected-Custody action; reachable only through DCLTPCB1.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/open_source_compartment#OpenSourceCompartment",
+      "reason": "The new projected-family Custody operation that opens a source compartment against a vacant Market — the operation W1d added for the Open gate. No campaign drives it yet.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/lock_hoard#LockHoard",
+      "reason": "Projected-Custody Lock action; reachable only through the DCLTGMF1 Lock stage.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/lock_hoard_and_close_source#LockHoardAndCloseSource",
+      "reason": "Projected-Custody Lock action; reachable only through the DCLTGMF1 Lock stage, and itself the operation whose vacant-Market prestate is the Open gate's blocker.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/realize_and_close#RealizeAndClose",
+      "reason": "Projected-Custody Realize action; reachable only through the DCLTGMF1 Realize stage.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/refund_and_close#RefundAndClose",
+      "reason": "Projected-Custody refund path; reachable only after a projected compartment exists.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/abort_open_and_close#AbortOpenAndClose",
+      "reason": "Projected-Custody abort path; reachable only after a projected compartment exists.",
+      "owner": "W1d"
+    },
+    {
+      "route": "custody/delegated::process",
+      "reason": "Delegated custody requires a live Core-owned Market, i.e. the Open path.",
+      "owner": "W1d for Open; cycle-2 tranche A for the Claims -> Custody -> Token-2022 terminal tier"
+    },
+    {
+      "route": "custody/initialize_replay#InitializeReplay",
+      "reason": "Normal custody goes through authenticate_market, which requires live Core-owned Market state; no tier reaches an open Market.",
+      "owner": "W1d for Open; cycle-2 tranche A"
+    },
+    {
+      "route": "custody/open_vault#OpenVault",
+      "reason": "Normal custody; requires a live Core-owned Market.",
+      "owner": "W1d for Open; cycle-2 tranche A"
+    },
+    {
+      "route": "custody/execute_transfer#Transfer",
+      "reason": "Normal custody; requires a live Core-owned Market.",
+      "owner": "W1d for Open; cycle-2 tranche A"
+    },
+    {
+      "route": "custody/close_vault#CloseVault",
+      "reason": "Normal custody; requires a live Core-owned Market.",
+      "owner": "W1d for Open; cycle-2 tranche A"
+    },
+    {
+      "route": "custody/close_replay#CloseReplay",
+      "reason": "Normal custody; requires a live Core-owned Market.",
+      "owner": "W1d for Open; cycle-2 tranche A"
+    },
+    {
+      "route": "custody/process_instruction",
+      "reason": "The Custody ELF is activated by tier 1 but never invoked: every one of its routes needs either an open Market or the projected-Custody bootstrap.",
+      "owner": "W1d"
+    },
+    {
+      "route": "core/open_market::process#OpenMarket",
+      "reason": "Core Open-last. Reachable only as the final stage of DCLTGMF1, which is blocked on the Lock stage's funding source.",
+      "owner": "W1d"
+    },
+    {
+      "route": "core/process_found#FoundAndPermit",
+      "reason": "Generic-founding stage inside the DCLTGMF1 chain.",
+      "owner": "W1d"
+    },
+    {
+      "route": "core/process_open#Open",
+      "reason": "Generic-founding stage inside the DCLTGMF1 chain.",
+      "owner": "W1d"
+    },
+    {
+      "route": "core/generic_founding_v1::process",
+      "reason": "DCLTGFQ1, the Core side of generic founding. Reachable only from Trading's DCLTGMF1 outer.",
+      "owner": "W1d"
+    },
+    {
+      "route": "core/capability::process#ActivateCapability",
+      "reason": "ADR 0004 makes the founding capability root DERIVED at founding and created afterwards by the ordinary activation route. Tier 1 stops at Found and never runs that activation.",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "core/capability::process#CloseCapability",
+      "reason": "Capability closure; needs an activated capability root first.",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "core/activate_capability_child#ActivateCapability",
+      "reason": "Capability child activation; needs an activated capability root first.",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "core/close_capability_child#CloseCapability",
+      "reason": "Capability child closure; needs an activated capability child first.",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "core/series_open::process",
+      "reason": "Series Core route; needs the Series family tier and a Claims FoundingV5 receipt.",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "core/series_consume::process",
+      "reason": "Series Core route; needs the Series family tier and a projected-Custody Lock receipt.",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "core/series_permit_expiry::process",
+      "reason": "Series permit expiry; needs an open Series Market.",
+      "owner": "cycle-2 tranche A (WAVE.md), Series"
+    },
+    {
+      "route": "core/execute_provider_v3::process#ExecuteProvider",
+      "reason": "Provider execution; needs the Source/provider tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "core/resolution::process#CreateFund",
+      "reason": "Resolution Fund lifecycle; needs the Source/provider tier and an open Market.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "core/resolution::process#CloseFund",
+      "reason": "Resolution Fund lifecycle; needs the Source/provider tier and an open Market.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "core/resolution::process#Retire",
+      "reason": "Resolution readiness/terminal admission; needs the Source/provider tier and an open Market.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "core/persist_state#VerifyFundReady",
+      "reason": "Resolution Fund readiness; needs the Source/provider tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "core/persist_state#AdmitTerminal",
+      "reason": "Terminal admission; needs the Source/provider tier and a resolved Market.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "core/begin_retiring::process#BeginRetiring",
+      "reason": "Market retirement; needs an open, then terminal, Market.",
+      "owner": "cycle-2 (WAVE.md), retirement"
+    },
+    {
+      "route": "core/retire_v1::process#Retire",
+      "reason": "Market retirement; needs an open, then terminal, Market.",
+      "owner": "cycle-2 (WAVE.md), retirement"
+    },
+    {
+      "route": "core/found::project",
+      "reason": "DCLTPFQ1, the host-side Found projection request route. Tier 1 computes the Found projection with the operator crate off finalized RPC state rather than asking Core for it, so this on-chain route is unexercised.",
+      "owner": "UNASSIGNED — needs a decision on whether the on-chain projection route is still wanted now that the operator derives it"
+    },
+    {
+      "route": "rent/process_create#Create",
+      "reason": "RentCreditV1 Create. Superseded on the live path by the Market-scoped LifecycleRentCreditV2 that tier 1 does exercise; AGENTS.md forbids preserving parallel legacy/current authority paths, so this is a supersession decision, not a missing test.",
+      "owner": "UNASSIGNED — owner decision (delete V1, or state why both survive)"
+    },
+    {
+      "route": "rent/process_withdraw#Withdraw",
+      "reason": "RentCreditV1 Withdraw; same supersession question as V1 Create.",
+      "owner": "UNASSIGNED — owner decision (delete V1, or state why both survive)"
+    },
+    {
+      "route": "rent/process_sweep_v2#Sweep",
+      "reason": "LifecycleRentCreditV2 Sweep. Tier 1 creates a V2 credit and stops at Found; nothing sweeps it. This is a missing tier stage, not a structural blocker — it should be the first thing a tier-1 extension adds.",
+      "owner": "FT (this lane's next slice)"
+    },
+    {
+      "route": "rent/process_close_v2#Close",
+      "reason": "LifecycleRentCreditV2 Close. Same as Sweep: a missing tier stage, not a structural blocker.",
+      "owner": "FT (this lane's next slice)"
+    },
+    {
+      "route": "registry/batch_v2::process",
+      "reason": "DCLTRGB2, the role-batch request route. Tier 1 activates one role per transaction (whole-ELF hashing makes a five-role transaction exceed the maximum), so the batch route is not on its path.",
+      "owner": "UNASSIGNED — needs a decision on whether batch activation is still reachable at real ELF sizes"
+    },
+    {
+      "route": "registry/continuation_v1::process",
+      "reason": "DCLRGCI1, the Registry continuation route. Reached from a continuation-bearing child request; no tier-1 transaction carries one.",
+      "owner": "W1d for the Open chain; cycle-2 tranche A"
+    },
+    {
+      "route": "registry/process_reauthenticate#Reauthenticate",
+      "reason": "Registry role reauthentication, invoked by CPI from a Market-creating instruction. Tier 1's Found31 path reaches Core but the reauthentication CPI is on the generic-founding path.",
+      "owner": "W1d"
+    },
+    {
+      "route": "core/process_instruction#CloseCapability",
+      "reason": "The inline arm of Core's capability dispatch. Same blocker as core/capability::process#CloseCapability: it needs an activated capability root, which tier 1 never creates because it stops at Found.",
+      "owner": "W1d (ADR 0004 fallout), then cycle-2"
+    },
+    {
+      "route": "trading/outer::process_activation#else",
+      "reason": "Trading child-root activation, the fallthrough branch of Trading's dispatch. Tier 1 activates the five REGISTRY release-set roles, which is a different thing: it never activates a Trading capability child. Reachable once a Market exists and a capability child is activated against it.",
+      "owner": "W1d for the Open path; W2d owns outer.rs"
+    },
+    {
+      "route": "trading/process_instruction",
+      "reason": "The Trading ELF is bound into the release set and activated by tier 1, but no tier-1 transaction ever invokes Trading: every Trading route needs either a Market (DCLTGMF1), the projected-Custody bootstrap (DCLTPCB1), or a Hot execution. The activation transaction hashes Trading's ProgramData; it does not run it.",
+      "owner": "W1d (DCLTGMF1, DCLTPCB1); DP2 + W2d (Hot)"
+    }
+  ]
+}

@@ -1,0 +1,214 @@
+# Authoring a gauntlet tier
+
+A **tier** is one campaign: an ordered set of real transactions submitted to a
+real validator, bound to census routes, with witnesses. Tier 1 is the
+infrastructure floor. Family tiers get added here as their lanes land.
+
+Read `DESIGN.md` first. This file is the mechanics.
+
+## What exists today
+
+```
+tools/gauntlet/
+  DESIGN.md              the five principles; read before changing anything
+  TIERS.md               this file
+  run.sh                 build -> deploy -> campaign -> census, resumable
+  blocked.json           NEVER-EXECUTED routes with reason + owning lane
+  census/                the route census tool (standalone cargo package)
+  tier1/
+    bindings.json        campaign transaction label -> census route
+    witnesses.json       asserted witnesses with provenance
+    check-witnesses.sh   evaluates them against the campaign evidence
+```
+
+Tier 1's transactions are produced by the transaction-only bootstrap in
+`tools/local-validator/bootstrap/successor/` (owned by the W1d lane; the
+gauntlet consumes it read-only, as a subprocess). The gauntlet owns the build,
+the ELF pinning, the spec, the resumable staging, the witnesses, the census, and
+the report.
+
+## The three files a tier needs
+
+### 1. A transaction producer
+
+Something that submits real transactions and emits a machine-readable record of
+what it submitted. Tier 1 reuses the successor bootstrap's
+`dclutch-local-successor-run-evidence-v2` document, whose `transactions[]`
+entries carry `label`, `signature`, `slot`, `error`, `compute_units_consumed`,
+and — critically — the finalized `logs`.
+
+**The logs are not optional.** `census observe` cross-checks every claimed route
+against the chain's own `Program <address> invoke [n]` lines. A producer that
+does not surface finalized log messages cannot feed the census, because its
+claims would be unverifiable and the census would be a mirror again.
+
+A new producer must emit at minimum, per transaction:
+
+| field | why |
+|---|---|
+| `label` | the binding key; must be stable |
+| `signature` | so an observation names a specific finalized transaction |
+| `slot` | ordering, and proof of finality |
+| `error` | `null` on success; the structured `InstructionError` on refusal |
+| `logs` | the chain's account of which programs ran and which code refused |
+| `compute_units_consumed` | recorded in the ledger; a real limit, not a note |
+
+### 2. `bindings.json`
+
+```json
+{
+  "campaign": "tier1",
+  "note": "why this campaign exists",
+  "bindings": [
+    {
+      "label": "create canonical Found31 Market",
+      "routes": ["core/found::process#Found"],
+      "program": "core",
+      "outcome": "executed",
+      "note": "Canonical Core Found31, the 31-account frame routed over a finalized ALT."
+    },
+    {
+      "label": "Found31 refuses substituted lifecycle credit",
+      "routes": ["core/found::process#Found"],
+      "program": "core",
+      "outcome": "refused",
+      "refusal": "core/CoreSbfError::RentCredit",
+      "note": "The hostile case; the named refusal must be what the chain reports."
+    }
+  ]
+}
+```
+
+Rules the census enforces, all of them hard errors:
+
+- **Every campaign transaction must be bound.** An unbound label fails the
+  census. Unbound labels are how coverage silently rots.
+- **Every transaction must match exactly ONE binding.** Overlapping globs fail.
+  A binding may cover many transactions; a transaction may not have two owners.
+- **A binding that matched nothing fails.** A stale binding overstates coverage.
+- **Named routes must exist in the inventory.** A route id that the enumerator
+  no longer produces fails, so a dispatch refactor cannot quietly orphan a
+  binding.
+- **The chain must corroborate the program.** If the finalized logs do not show
+  `program`'s address invoked, the observation is refused.
+- **A named refusal must be the refusal the chain reported.** The census
+  compares the census's enumerated numeric code against the transaction's
+  `custom program error: 0x…`.
+
+`label` accepts `*` as a wildcard anywhere in the pattern
+(`publish Product graph: *Begin`), and it is the only metacharacter — a binding
+pattern is read by a human deciding whether a campaign step is covered, and a
+regex would make that harder rather than easier.
+
+`program: ""` with `routes: []` is the honest form for a transaction that drives
+no protocol route — an airdrop, a Loader `SetAuthority`, an Address Lookup Table
+extension. Say so explicitly rather than leaving it unbound.
+
+A refusal raised *before* the program's own taxonomy — a runtime privilege or
+frame refusal that never reaches the program — is recorded as an unnamed
+refusal rather than credited to a code. That is deliberate: crediting it would
+overstate what the program proved.
+
+### 3. `witnesses.json`
+
+```json
+{
+  "campaign": "tier1",
+  "witnesses": [
+    {
+      "id": "found31-packet-fits",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"create canonical Found31 Market\") | .error",
+      "expect": "null",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes ... Found31 misses by ten with keys inline (docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md), so it must ride a finalized ALT as v0."
+    }
+  ]
+}
+```
+
+`provenance` is **required** and is checked for non-emptiness. A witness with no
+provenance is rejected by `check-witnesses.sh`, because a number with no
+provenance is a mirror wearing a hat.
+
+The three admissible provenance kinds, from `DESIGN.md`:
+
+1. A Lean-emitted vector, byte-checked by the owning crate's
+   `check-generated.sh`.
+2. A hand-stated constant naming its source — a Solana runtime limit, an SPL
+   layout, a measured validator observation with date and validator version.
+3. A cross-check against a second implementation.
+
+Reading a value out of the code under test and asserting it equals itself is
+not a witness, however many lines it takes.
+
+## Adding a family tier
+
+1. **Check the census first.** `run.sh --mode census` takes seconds and prints
+   the routes your family exposes and which of them have never executed. That
+   list is your tier's target set.
+2. **Write the tier's `blocked.json` entries before you write the tier.** Any
+   route your family exposes that you cannot drive yet gets an entry naming the
+   reason and the owning lane. A route with no entry and no observation shows up
+   in the report's "NO stated reason at all" row, which is the row that should
+   make someone uncomfortable.
+3. **Add a producer** under `tools/gauntlet/tier<N>/`, emitting the evidence
+   shape above.
+4. **Extend `run.sh`** with a `tier<N>` stage. Follow tier 1's staging: a stamp
+   keyed on the stage's exact inputs, outputs under `$WORK`, never in the repo.
+   Do not key a campaign stage on its bindings file — authoring a binding must
+   never cost a campaign re-run.
+5. **Bind, witness, observe.** `census observe` is called once per campaign; the
+   ledger accumulates across tiers.
+
+## The ProgramTest fast-lane bar
+
+`solana-program-test` may back a tier's fast lane **only** when every one of
+these holds, and the tier must state which:
+
+- The tier does not depend on genesis Loader-v3 ProgramData layout, on a real
+  `SetAuthority(Some -> None)`, or on ProgramData deployment slots.
+- The tier does not depend on packet serialisation limits. ProgramTest does not
+  submit a packet, so it cannot catch a 1,242-byte frame against a 1,232-byte
+  limit. Found31 is exactly this defect; it survived every fixture test.
+- The tier sets the compute limit to 1,400,000 and the heap to 32,768 and treats
+  neither as adjustable. A diagnostic budget is a *measurement*, and a
+  measurement never satisfies a gate.
+- The tier's account shapes are the real Agave ones — the all-zero System
+  Program with its NativeLoader metadata, Token-2022 mints with extensions.
+
+Tier 1 satisfies none of these and therefore has no fast lane. `run.sh --mode
+census` is the cheap mode; it does static enumeration only and says so.
+
+A fast lane is always **additional** evidence, never a substitute: a route whose
+only observation came from a fast lane is recorded with that campaign name, and
+the report shows the campaign.
+
+## Extension points in the census tool
+
+- `TARGETS` in `census/src/main.rs` lists the programs enumerated. A program
+  directory that exists and is not in the list makes `inventory` **fail**, so a
+  new program cannot become invisible by being forgotten.
+- `arm_selectors` / `selectors_from` in `census/src/enumerate.rs` classify wire
+  discriminants. A new dispatch shape goes here. The rule when extending: an
+  unrecognised dispatch position must land in `unclassified` and be printed, not
+  dropped.
+- `MAX_DISPATCH_DEPTH` bounds how far the enumerator follows a dispatch chain.
+  Raising it finds more action tags and more internal-branch noise; the current
+  value of 2 is entry dispatch plus one action match.
+
+## Running it
+
+```sh
+# seconds, no chain: the static census and the report
+tools/gauntlet/run.sh --mode census
+
+# the whole thing: build seven ELFs, bootstrap a fresh localhost ledger by
+# transaction, run tier 1, fold the evidence into the ledger, render the report
+tools/gauntlet/run.sh --mode full
+
+# re-run one stage onward
+tools/gauntlet/run.sh --from campaign
+```
+
+On hbox, `run.sh` routes every build through `swarm-build` automatically when it
+is on `PATH`. hbox is co-tenant with codex's HOL build; keep waves small.
