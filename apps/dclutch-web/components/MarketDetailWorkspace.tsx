@@ -197,6 +197,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <Link href="/liquidity">Liquidity</Link>
         <Link href="/redeem">Represent</Link>
         <Link href="/release">Release</Link>
+        <Link href="/explorer">Explorer</Link>
       </nav>
       <span className="preview-control"><i className="preview-dot" />raw-u64 economics</span>
     </header>
@@ -211,6 +212,12 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <span>Market address</span>
         <strong>{shortAddressV1(address, 10)}</strong>
         <p><code>{address}</code></p>
+        {/* The five program ids live in this component's state and nowhere
+            else, so the link carries them: the explorer is URL-addressable
+            exactly so a reader does not have to retype them. */}
+        <p><Link href={`/explorer?view=market&q=${encodeURIComponent(address)}&rpc=${encodeURIComponent(endpoint)}${coreProgram === '' ? '' : `&core=${encodeURIComponent(coreProgram)}`}${registryProgram === '' ? '' : `&registry=${encodeURIComponent(registryProgram)}`}${claimsProgram === '' ? '' : `&claims=${encodeURIComponent(claimsProgram)}`}${custodyProgram === '' ? '' : `&custody=${encodeURIComponent(custodyProgram)}`}`}>
+          Open the record graph in the explorer →
+        </Link></p>
       </aside>
     </section>
 
