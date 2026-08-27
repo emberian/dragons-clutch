@@ -834,3 +834,13 @@ chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
   39-workspace discovery is the enumeration to reuse.
 - LINGER item: genref regen once the tree quiets (two lanes deferred it
   rather than publish unlanded line numbers as generated truth — correct).
+
+- Decision 0012's CU debt: CLOSED BY MEASUREMENT + REFRAME (d20837fd): the
+  ExactAuthority arm runs 20/20 at +2,098 CU upper-bound vs immutable-pinned
+  (one bump iteration); on the Direct Hot route NEITHER arm ever hashed — the
+  decision's purchase is "mutable: refused → admitted at parity." The 700k
+  figure belongs to the Shadow path's hashing site only; its counterfactual
+  is not owed (a hashing variant nobody ships). Substrate arms live in
+  waist::FixtureSubstrateV1 (DCLUTCH_FIXTURE_SUBSTRATE).
+- SN7: registry-sbf lib.rs:378-380 doc prose is pre-0012 ("keeps the full
+  current-ELF hash" — no longer true of the function it documents).
