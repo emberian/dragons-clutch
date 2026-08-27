@@ -725,7 +725,7 @@ mod tests {
             ..REQUEST_TAIL_RESERVED_OFFSET + REQUEST_TAIL_RESERVED_BYTES
         {
             let mut tail = request.encode().expect("encode");
-            tail[offset] = 1;
+            *tail.get_mut(offset).expect("reserved byte") = 1;
             assert_eq!(
                 GenericFoundingRequestV1::decode(&tail),
                 Err(Error::NonzeroReserved),

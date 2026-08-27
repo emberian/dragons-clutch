@@ -138,11 +138,23 @@ pub const SERIES_PREPARE_ESCROW_LOCK_OFFSET_V3: usize =
 pub const SERIES_PREPARE_IR_REQUEST_BYTES_V3: usize =
     2 * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3 + 3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
 /// Exact Projected Initialize child frame, including internal ProjectFound.
-pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 =
-    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1 as u16;
+pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 42;
 /// Exact Projected OpenHoard child frame.
-pub const SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3: u16 =
-    PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1 as u16;
+pub const SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3: u16 = 15;
+
+const _: () = {
+    // These two widths belong to `dclutch-custody-contract`, which owns the
+    // frames. Series states them again only because the request-profile ABI is
+    // u16-typed; the build fails if the two ever disagree.
+    assert!(
+        SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3 as usize
+            == PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1
+    );
+    assert!(
+        SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3 as usize
+            == PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1
+    );
+};
 /// Exact normal Custody InitializeReplay child frame.
 pub const SERIES_PREPARE_REPLAY_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 12;
 /// Exact normal Custody OpenVault child frame.

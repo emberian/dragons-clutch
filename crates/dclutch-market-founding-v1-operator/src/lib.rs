@@ -601,7 +601,9 @@ mod tests {
             construct_generic_founding_root_selection_v1(
                 trading,
                 template,
-                &manifest_bytes[..manifest_bytes.len() - 1],
+                manifest_bytes
+                    .get(..manifest_bytes.len() - 1)
+                    .expect("truncated manifest"),
             ),
             Err(GenericMarketFoundingOperatorErrorV1::Manifest)
         );
