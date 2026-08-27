@@ -1759,27 +1759,88 @@ identity the record and the configuration both already committed to. The tail
 width is exact in both directions, so no shadow entry rides outside the digest
 and none is elided.
 
-### 12.3 A terminal window is one instant, and the lower bound had to go
+### 12.3 A terminal window has width, and how wide it has to be
 
-`WindowSpecV1::new` refuses `start != end` for `WindowKind::Terminal`
-(*verified-from-source*, `dclutch-source-contract`). A terminal window is
-therefore a single second, not a range. Bounding the attested foreign clock by
-`[start, end]` would require a read of another cluster to land on one exact
-second — not a bound, a route nothing can pass.
+**Superseded 2026-08-27.** This section used to record that
+`WindowSpecV1::new` refused `start != end` for `WindowKind::Terminal`, that a
+terminal window was therefore a single second, and that the relayed consumer had
+consequently dropped its lower window bound because "requiring a read of another
+cluster to land on one exact second is not a bound, it is a route nothing can
+pass". Both halves of that are gone. Terminal now requires only `start <= end`
+(*verified-from-source*, `dclutch-source-contract`), and `require_window_admits`
+enforces `[start, end]` again at both edges.
 
-The consumer bounds by `observed <= window.end_unix_seconds` only. The lower
-bound is supplied by `require_observation_freshness`, so the admitted span is
-`[now - max_age, min(end, now + skew)]`. **The same constraint applies to the
-Pyth family** — `normalize_authenticated_update` compares `publication_time`
-against `[window.start, window.end]` — and the current fixture hides it by
-choosing the window to match the observation. A Pyth terminal market on a real
-cluster will hit this.
+The defect the old text described as a constraint was the reason to fix the
+constraint. A market that can only be answered on one exact second is answered
+essentially never, so on a real cluster every terminal market walked to its
+failure outcome instead of resolving — and the fixtures could not see it,
+because each of them chose its window to match its own observation.
 
-Two deadlines coincide by construction and the campaign records it: the walk's
-`primary_deadline` is `window.end + window.max_age`, and the configuration's own
-`max_observation_age_seconds` is the same grace, so the last second an
-observation may resolve a market and the first second the failure walk may take
-it are adjacent, with no gap where neither route can act.
+#### How wide
+
+Devnet SOL/USD publishes on a **measured** p50 near **313 s** between
+publications (lane measurement, 2026-08-27). Modelling publications as a
+Poisson process of that mean rate — an approximation, since Pyth publishes on
+price movement and confidence thresholds rather than on a timer, which makes the
+real process more regular near the median and heavier in the tail — a window of
+width `W` seconds contains at least one publication with probability about
+`1 - exp(-W / 313)` (*provisional*):
+
+| `W` | shape | P(at least one publication) |
+| --- | --- | --- |
+| 1 s | the old forced shape | ~0.3% |
+| 300 s | one cadence | ~62% |
+| 600 s | two cadences | ~85% |
+| 1,250 s | four cadences | ~98% |
+| 1,800 s | 30 minutes | ~99.7% |
+
+So the operative guidance for a terminal Pyth market on devnet is a window of
+**at least four cadences (~21 minutes), and 30 minutes for a market that should
+not fail for provider reasons**. The failure walk is not a bug at any of these
+widths — it is the pre-disclosed outcome when the provider really was silent —
+but it should be reached because nothing published, not because the market asked
+an unanswerable question.
+
+`max_age_seconds` is a separate budget and must cover *submission* latency, not
+publication cadence: it bounds `now - publication_time` at the moment a keeper
+submits, and it also sets the deadline `end + max_age`. A window wide enough to
+be published into is useless if no keeper can get the transaction landed inside
+`max_age` of that publication.
+
+#### The two clocks and the two edges
+
+The window says whether an observation is **about the period the market sold**;
+`require_observation_freshness` (relayed) and the `max_age`/`max_future_skew`
+band (Pyth) say whether it is one this cluster will still **act on**. A fresh
+observation of the wrong week and a stale observation of the right one must both
+refuse, and they now refuse differently: the Pyth join reports a window miss as
+`InvalidObservationSchedule` and a clock miss as `InvalidPublicationTime`,
+matching the split `NormalizedProviderEvidenceV1::validate` already made. The
+admitted span is `[max(start, now - max_age), min(end, now + skew)]`.
+
+The two edges of the window are also different refusals. Below `start` the
+observation is about a period the market had not started selling; above `end` it
+is **late** — the exact case a provider cadence straddling the deadline
+produces, and the one that must refuse rather than answer a closed question with
+a later price.
+
+#### Exactly one answer
+
+A window with width admits more than one observation, so "one answer" stopped
+being a consequence of arithmetic and became a property to prove. The rule is
+that the **first admissible observation terminalizes**: the transition
+single-writes the phase (`resolve_primary_from_authenticated_domain` refuses
+anywhere but `Primary`), so every later observation refuses without being
+inspected. `formal/dclutch-semantics`'s `checkEvidence_ok_is_admissible`,
+`two_admissible_observations_cannot_both_terminalize`, and
+`exhaust_requires_the_window_to_have_closed` are the machine-checked statement
+of that rule against the model the emitters share.
+
+Two deadlines still coincide by construction and the campaign still records it:
+the walk's `primary_deadline` is `window.end + window.max_age`, and the
+configuration's own `max_observation_age_seconds` is the same grace, so the last
+second an observation may resolve a market and the first second the failure walk
+may take it are adjacent, with no gap where neither route can act.
 
 ### 12.4 `SourceSpecV1.adapter_config_id` names the venue's pinned deployment
 

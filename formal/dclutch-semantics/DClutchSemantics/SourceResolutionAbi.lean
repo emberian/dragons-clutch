@@ -472,6 +472,31 @@ def exhaustedState : State := {
   exampleState with phase := .exhausted, transitionSequence := 2
 }
 
+/-! The observation-free expiry, executed on both sides of its own second.
+
+`exhaust_requires_the_window_to_have_closed` says `.exhaust` succeeds only after
+the active leg's `acceptThrough`; these two guards say that second is reachable
+rather than empty, which is what keeps that theorem from being vacuous.  The
+last leg here closes at `1_030`, so `1_030` is still a second on which an honest
+observation may resolve the market and `1_031` is the first on which it may be
+walked to failure. -/
+
+def lastLegState : State := {
+  exampleState with phase := .recovery 0, transitionSequence := 1
+}
+
+#guard match specialize exampleConfig lastLegState (exampleFunding 44 10)
+    (.exhaust 1_030 61 63) with
+  | .error .legExpired => true
+  | _ => false
+
+#guard match specialize exampleConfig lastLegState (exampleFunding 44 10)
+    (.exhaust 1_031 61 63) with
+  | .ok plan =>
+      plan.sourcePost.phase == .exhausted &&
+      plan.certificate.kind == .exhausted
+  | .error _ => false
+
 #guard match specialize exampleConfig exhaustedState (exampleFunding 45 10)
     (.commitFailure 61 64) with
   | .ok plan =>
