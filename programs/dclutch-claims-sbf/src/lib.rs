@@ -249,13 +249,12 @@ pub fn process_instruction(
     {
         return founding_v5::process(program_id, accounts, instruction_data);
     }
-    // The Custody request ABI is this route's own wire: Claims forwards one
-    // canonical `InitializeReplay` it recomputed itself, the way Core carries a
-    // Custody request through `open_market`. The magic belongs to Custody and
-    // collides with no Claims family, and the width pins it further.
-    if instruction_data.len() == dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1
-        && instruction_data.get(..dclutch_custody_contract::CUSTODY_REQUEST_MAGIC_V1.len())
-            == Some(dclutch_custody_contract::CUSTODY_REQUEST_MAGIC_V1.as_slice())
+    if instruction_data
+        .get(..dclutch_claims_svm::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1.len())
+        == Some(
+            dclutch_claims_svm::custody_replay_v1::CLAIMS_CUSTODY_REPLAY_REQUEST_MAGIC_V1
+                .as_slice(),
+        )
     {
         return custody_replay_v1::process(program_id, accounts, instruction_data);
     }

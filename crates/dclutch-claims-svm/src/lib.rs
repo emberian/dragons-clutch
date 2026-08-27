@@ -10,6 +10,7 @@
 
 pub mod affine_batch_v2;
 pub mod composition_v3;
+pub mod custody_replay_v1;
 pub mod founding_v4;
 pub mod founding_v5;
 pub mod frame_spec_v1;

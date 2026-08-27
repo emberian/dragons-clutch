@@ -42,18 +42,24 @@
 //!   written into the replay as its immutable `rent_refund`, so `CloseReplay`
 //!   returns the rent to whoever advanced it.
 //!
-//! # The request is not caller-chosen
+//! # Nothing about the request is caller-chosen
 //!
-//! The instruction data is one canonical [`CustodyRequestV1`] — the Custody ABI
-//! itself, dispatched by its own magic, exactly as `core-sbf/open_market.rs`
-//! carries a Custody request through Core. This route does not TRUST one byte of
-//! it: it recomputes the whole request from the aggregate, the Rent sysvar and
-//! the payer account, and refuses anything that is not byte-identical. The only
-//! thing a caller decides is which account pays the rent and receives the
-//! refund. Creation is therefore permissionless without being permissive: two
-//! different callers submitting this route against one Market submit the same
-//! 672 bytes except for the payer, and the second one finds the account already
-//! exists.
+//! The wire is [`ClaimsCustodyReplayRequestV1`] and it carries ONE field, the
+//! Market, which addresses the aggregate. The Custody request is not submitted
+//! at all: [`expected_request_v1`] builds all twenty-two of its coordinates
+//! from the aggregate, the Rent sysvar and the payer account, so there is no
+//! byte for a caller to bend and no comparison for a guard to get wrong. The
+//! only thing a caller decides is which account pays the rent and receives the
+//! refund.
+//!
+//! Creation is therefore permissionless without being permissive: two callers
+//! submitting this route against one Market submit the same forty-eight bytes,
+//! and the second finds the account already there.
+//!
+//! [`expected_request_v1`] is public and is the SINGLE author of that request
+//! for the program and for every builder. A campaign, operator or browser that
+//! restated the fields would be a second place the namespace could be
+//! re-guessed, which is the exact defect decision 0008 was written about.
 //!
 //! # Return data
 //!
@@ -69,7 +75,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use dclutch_claims_svm::{
-    ClaimsAggregateSeedsV1, liability_basis_state_v2::LiabilityBasisMarketViewV2,
+    custody_replay_v1::ClaimsCustodyReplayRequestV1,
+    liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
@@ -143,12 +150,12 @@ const _: () = assert!(
     "the first accounts of this route are the Custody InitializeReplay frame verbatim"
 );
 
-/// Recompute the sole Custody request this route will accept.
+/// Build the sole Custody request this route will ever send.
 ///
-/// One author for the program and for every builder: a campaign, an operator or
-/// a browser that constructs this instruction calls THIS function rather than
-/// restating the twenty-two fields, so a builder cannot disagree with the guard
-/// and there is no second place for the namespace to be re-guessed.
+/// One author for the program and for every builder. Nothing here is read from
+/// the instruction wire: the namespace and the Market identities come from the
+/// aggregate, the role from this route, the rent from the Rent sysvar, and the
+/// payer from the account that signs for it.
 pub fn expected_request_v1(
     aggregate: LiabilityBasisMarketViewV2,
     claims_program: [u8; 32],
@@ -216,9 +223,9 @@ pub fn process(
     if accounts.len() != CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1 {
         return Err(ClaimsSbfError::Accounts.into());
     }
-    let submitted =
-        CustodyRequestV1::decode(instruction_data).map_err(|_| ClaimsSbfError::Instruction)?;
-    let aggregate = authenticate_aggregate(program_id, accounts, submitted)?;
+    let named = ClaimsCustodyReplayRequestV1::decode(instruction_data)
+        .map_err(|_| ClaimsSbfError::Instruction)?;
+    let aggregate = authenticate_aggregate(program_id, accounts, named)?;
     let payer = account(accounts, PAYER)?;
     let rent_account = account(accounts, RENT_SYSVAR)?;
     if rent_account.key != &sysvar::rent::ID {
@@ -231,12 +238,6 @@ pub fn process(
         payer.key.to_bytes(),
         rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
     )?;
-    // Every field of the request is a function of the aggregate, the Rent
-    // sysvar and the payer account. A submitted request that differs anywhere
-    // is refused whole rather than corrected.
-    if submitted != request {
-        return Err(ClaimsSbfError::Identity.into());
-    }
     let request_bytes = request.to_bytes().map_err(|_| ClaimsSbfError::Identity)?;
     let request_digest = hash(&request_bytes).to_bytes();
     authenticate_frame(program_id, accounts, request, request_digest)?;
@@ -247,19 +248,24 @@ pub fn process(
 fn authenticate_aggregate(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    submitted: CustodyRequestV1,
+    named: ClaimsCustodyReplayRequestV1,
 ) -> Result<LiabilityBasisMarketViewV2, ProgramError> {
     let aggregate = account(accounts, AGGREGATE)?;
-    // The Market coordinate is the only field of the submitted request read
-    // before authentication, and it is read solely to ADDRESS the aggregate.
-    // The aggregate then determines every field, this one included.
-    let seeds =
-        ClaimsAggregateSeedsV1::new(submitted.market).map_err(|_| ClaimsSbfError::Identity)?;
+    // The wire's Market coordinate ADDRESSES the aggregate; it does not describe
+    // it. Everything the request will carry then comes out of the account this
+    // derivation admitted, so a substituted aggregate is refused by derivation
+    // rather than by trusting what it says about itself. The seed is the one
+    // every other LiabilityBasisV2 consumer uses, imported rather than restated.
+    let expected = Pubkey::find_program_address(
+        &[LIABILITY_BASIS_MARKET_SEED_V2, named.market().as_slice()],
+        program_id,
+    )
+    .0;
     if aggregate.owner != program_id
         || aggregate.is_signer
         || aggregate.is_writable
         || aggregate.executable
-        || aggregate.key != &Pubkey::find_program_address(&seeds.as_slices(), program_id).0
+        || aggregate.key != &expected
     {
         return Err(ClaimsSbfError::Identity.into());
     }
@@ -267,7 +273,7 @@ fn authenticate_aggregate(
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     let view = LiabilityBasisMarketViewV2::decode(&bytes).map_err(|_| ClaimsSbfError::Identity)?;
-    if view.logical_market != submitted.market {
+    if view.logical_market != named.market() {
         return Err(ClaimsSbfError::Identity.into());
     }
     Ok(view)
