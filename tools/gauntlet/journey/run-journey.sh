@@ -120,6 +120,14 @@ run_build() { if [ -n "$WRAP" ]; then "$WRAP" "$@"; else "$@"; fi; }
 
 SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
 SOURCE_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" | sha256_stdin)"
+# The ELF stage is keyed on the artifacts' OWN inputs, not on the whole tree.
+# Keying it on SOURCE_DIGEST meant every edit to this tier's README rebuilt seven
+# SBF programs, which is six minutes per iteration to re-derive artifacts that
+# cannot have changed. The set below is exhaustive for `cargo build-sbf`: nothing
+# outside it is compiled into a program. `--full-tree` is deliberate so the key
+# does not depend on the invoking directory.
+ELF_INPUT_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" \
+    -- programs crates Cargo.toml Cargo.lock rust-toolchain.toml | sha256_stdin)"
 say "journey at $SOURCE_REVISION (holders=$HOLDERS, keypairs=$([ "$KEYPAIR_SEED" = none ] && echo fresh || echo deterministic))"
 
 # ------------------------------------------------------------------ 1. archive
@@ -147,6 +155,9 @@ DIAGNOSTIC_PATTERN='overwrites values in the frame'
 # when its own stamp says they were built from this digest -- an ELF directory
 # that merely exists proves nothing about what is in it.
 REUSED="false"
+# run.sh keys its own ELF stamp on the whole-tree digest, so its artifacts are
+# reusable only when that digest matches -- a stricter test than this tier's, and
+# reusing under it is always sound.
 if [ -f "$GAUNTLET_WORK/stamps/elf" ] \
    && [ "$(cat "$GAUNTLET_WORK/stamps/elf")" = "$SOURCE_DIGEST" ]; then
     REUSED="true"
@@ -165,7 +176,7 @@ if [ "$REUSED" = "true" ]; then
         cp "$GAUNTLET_WORK/logs/build-$role.log" "$LOGS/build-$role.log"
         printf '  %s  %s\n' "$(sha256 "$ELF_DIR/$role.so")" "$role"
     done
-elif [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$SOURCE_DIGEST" ]; then
+elif [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$ELF_INPUT_DIGEST" ]; then
     say "stage elf"
     for entry in $ROLES; do
         role="${entry%%:*}"; rest="${entry#*:}"; package="${rest%%:*}"; stem="${rest#*:}"
@@ -178,7 +189,7 @@ elif [ ! -f "$WORK/stamps.elf" ] || [ "$(cat "$WORK/stamps.elf")" != "$SOURCE_DI
         printf '  %s  %s (%s frame diagnostics)\n' "$(sha256 "$ELF_DIR/$role.so")" "$role" \
             "$(grep -c "$DIAGNOSTIC_PATTERN" "$LOGS/build-$role.log" || true)"
     done
-    printf '%s\n' "$SOURCE_DIGEST" > "$WORK/stamps.elf"
+    printf '%s\n' "$ELF_INPUT_DIGEST" > "$WORK/stamps.elf"
 else
     echo "stage elf: up to date"
 fi
