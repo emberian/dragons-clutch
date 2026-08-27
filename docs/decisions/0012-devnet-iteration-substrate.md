@@ -18,6 +18,58 @@ without converting it the fast path was dead for Trading. Named debt: the
 CU claim (the life fits a mutable substrate) is argued and unit-tested, not
 end-to-end measured — DEPLOY-1 re-measures the 20-seed sweep.
 
+**Closing sweep, same evening (lane POST-0012).** PIN-0012's spawnable
+leftovers are closed and two of them were worse than recorded.
+
+- **The TS host mirrors are converted** (`abe1e70d`). `localSuccessor.ts:102/121`
+  and `infrastructure.ts:141`, in `apps/dclutch-web` and `packages/dclutch-sdk`
+  alike, hard-required slot zero and a `None` authority — the browser and the
+  CLI refused any iterated substrate before reading an account. They now mirror
+  the contract by name (`requireSlotPinnedReleaseV1`, `slotPinRefusalV1`), and
+  the supersession sentence is READ OUT of the generated refusal registry
+  rather than written in the browser, so a client cannot become a second
+  authority on what the protocol means. Recorded as Blocker D in
+  `docs/design/DEVNET_DEMO_DEPLOY.md` §7 — it was a deploy-day blocker nobody
+  had listed. **A second defect surfaced there that is not about 0012 at all**:
+  `localSuccessor.ts` still carried `requireZero(bytes, 13, 32)` on the
+  ProgramData header — the check `releaseRegistry.ts` removed the same day
+  after a live measurement, because Loader V3 leaves a revoked program's former
+  key inert at `[13..45]`. It passed only because the local genesis writes that
+  tail zeroed, so it would have failed on the first revoked role read from a
+  real cluster — which is exactly how the immutable ceremony ends.
+- **Deviation 3 is closed the way PIN-0012 recommended** (`7bb9a075`): a
+  manifest FIELD, not a decode flag. `require_immutable` and
+  `CapabilityAcceleratorMustBeImmutable` both call the contract's own
+  `require_slot_pinned_release_v1` now, and both checked manifests carry a
+  DERIVED `evidence_class` naming which substrate they are evidence for. The
+  strictness did not disappear, it moved to where a reader can act on it;
+  substitution is still refused by identity, because the policy and the
+  authority are inside the artifact bytes the id hashes.
+- **The Lean statements are corrected** (`d91763a3`, `0392c9f3`), and the
+  finding is bigger than the fix: `ProtocolInfrastructure.lean` **was not
+  imported by anything**, so `lake build` had never elaborated the two
+  theorems that stated the opposite of this decision. `a7de18e5` makes library
+  membership a lakefile glob so a new orphan is structurally impossible
+  (93 → 120 jobs, zero red, zero `sorry`). See ledger M-64.
+- **The CU debt is NOT closed, and the reason is the interesting part.** The
+  20-seed sweep is now a real tier (`9db549ef`,
+  `tools/gauntlet/hot-cu/run-hot-cu.sh`) and measures HEAD at 20/20, mean
+  1,345,302 of 1,400,000. **That number cannot be evidence for this record's
+  claim.** `waist::release` builds every release `Immutable` and
+  `waist::immutable_programdata` writes the authority option as `None`, so
+  `slot_pinned_release_elf_digest_v1` always takes its `Immutable` arm — the
+  arm delegated *unchanged* to `immutable_release_elf_digest_v1`, which never
+  hashed anything. The `ExactAuthority` arm this decision exists to add was not
+  constructible by the fixture at all, so the Hot tail never paid the hash it
+  was supposed to have saved. Corroborating rather than merely asserting it:
+  the pre-`0e34c036` sweep meaned 1,366,177 against this one's 1,345,302, and
+  that ~20,875 gap is about fourteen bump iterations, inside M-61's ±46,000
+  draw — a 700k effect could not have hidden there. Ledger M-63 records the
+  general form. Making the arm measurable (an `ExactAuthority` fixture
+  substrate, plus an `ImmutablePinned` control that isolates the M-61 redraw
+  from the real cost) is in flight and is what actually settles this record's
+  headline number.
+
 A sharpening found in the tree itself while implementing: the contract
 already anticipated this design. `ArtifactReleaseV1::slot_mismatch_refusal`
 (`crates/dclutch-registry-contract/src/artifact.rs`) names a strictly-later
