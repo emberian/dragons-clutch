@@ -84,10 +84,16 @@ pub fn devnet_release_v1() -> PythReleaseV1Result<PythReleaseV1> {
             144, 55, 34, 39, 166, 84, 85, 21, 198, 154, 109, 140, 219, 31,
         ],
         config_digest: DEVNET_RECEIVER_CONFIG_DIGEST_V1,
+        // sha256(fixtures/pyth/local-upgraded-2026-08-22/receiver.so) — the
+        // inherited synthetic-fixture literal had dropped the nibble at hex
+        // index 7 and repacked the tail (found by DRIVER, 2026-08-27, board;
+        // independently re-hashed by this lane before fixing). The test below
+        // pins this array to the runbook spelling so the transcription class
+        // cannot recur.
         receiver_abi_id: [
-            0xc5, 0x07, 0x95, 0x58, 0x64, 0xfc, 0x34, 0xdb, 0xd5, 0xfe, 0x87, 0xb4, 0xaa, 0x9f,
-            0xba, 0x3a, 0x1e, 0xd2, 0x26, 0x90, 0x36, 0x3e, 0xc4, 0x90, 0x44, 0x9e, 0x86, 0x60,
-            0xe7, 0x3a, 0xf6, 0x04,
+            0xc5, 0x07, 0x95, 0x59, 0x86, 0x4f, 0xc3, 0x4d, 0xbd, 0x5f, 0xe8, 0x7b, 0x4a, 0xa9,
+            0xfb, 0xa3, 0xa1, 0xed, 0x22, 0x69, 0x03, 0x63, 0xec, 0x49, 0x04, 0x49, 0xe8, 0x66,
+            0x0e, 0x73, 0xaf, 0x64,
         ],
         router_abi_id: [
             0xf9, 0x06, 0x1f, 0x03, 0xa8, 0x1b, 0x89, 0xdb, 0x29, 0xf4, 0x60, 0x36, 0x77, 0xe3,
@@ -181,5 +187,56 @@ mod tests {
         );
         assert_eq!(devnet.receiver_deployment_slot(), 460_336_311);
         assert_eq!(devnet.router_deployment_slot(), 460_336_290);
+    }
+
+    /// Local hex decode so byte arrays can be pinned to the exact spellings
+    /// the runbook and PROVENANCE state.
+    fn hex(value: &str) -> [u8; 32] {
+        let mut output = [0_u8; 32];
+        let digits = value.as_bytes();
+        assert_eq!(digits.len(), 64, "expected 64 hex digits");
+        for (index, byte) in output.iter_mut().enumerate() {
+            let hi = (digits[index * 2] as char).to_digit(16).expect("hex digit");
+            let lo = (digits[index * 2 + 1] as char)
+                .to_digit(16)
+                .expect("hex digit");
+            *byte = ((hi << 4) | lo) as u8;
+        }
+        output
+    }
+
+    /// Transcription defense: every hex-stated digest in the row equals the
+    /// spelling `docs/design/DEVNET_DEMO_DEPLOY.md` §5.2 and the fixture
+    /// PROVENANCE state. The `receiver_abi_id` array shipped one dropped
+    /// nibble for two generations of fixture literals because the array and
+    /// the spelling had no comparison holding them together; this is that
+    /// comparison.
+    #[test]
+    fn every_stated_digest_matches_its_documented_spelling() {
+        let devnet = devnet_release_v1().expect("devnet release validates");
+        assert_eq!(
+            devnet.receiver_abi_id(),
+            hex("c5079559864fc34dbd5fe87b4aa9fba3a1ed22690363ec490449e8660e73af64"),
+        );
+        assert_eq!(
+            devnet.router_abi_id(),
+            hex("f9061f03a81b89db29f4603677e3b3d89b3bbf08d67827b2832f18a4e2b61acb"),
+        );
+        assert_eq!(
+            devnet.config_digest(),
+            hex("23a7a19cf60c1fda8f070323fb8f1013a32851b0921fb7b2ac085990cbfaa37a"),
+        );
+        assert_eq!(
+            devnet.price_update_codec_id(),
+            hex("12d0ce8bc3907ae2949043397eaf3d5bd25deed98450c6969d957be402c807ae"),
+        );
+        assert_eq!(
+            devnet.adapter_id(),
+            hex("3fdfc94589c69b133864468320976f8e790e7fe0f145897b6eabc22bd7c8711b"),
+        );
+        assert_eq!(
+            devnet.sdk_crate_digest(),
+            hex("245b1b03dd2177402018b6072fcbb7bea5b3d280427b1954796bf1dc189be48b"),
+        );
     }
 }
