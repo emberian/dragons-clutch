@@ -13,9 +13,11 @@
   you'd actually hold, why the payout can't be walked back, and the
   standing bounty.
 
-Exact numbers — instructions, error codes, compute costs, byte layouts —
-live in the [reference](../reference/README.md), which is generated from
-the code itself.
+Two generated reference pages back these guides up:
+[every error code with its meaning](../reference/refusals.md) and
+[the exact byte layouts](../reference/abi/README.md). The rest of the
+generated reference — routes, costs, decisions — lives in the
+[repository](../reference/README.md).
 
 dClutch is not live yet: no deployment, no live market, nothing to buy
 today. The guides describe the protocol as it runs on a local test chain.
