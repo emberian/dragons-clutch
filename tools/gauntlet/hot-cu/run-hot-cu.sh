@@ -45,8 +45,6 @@
 # whoever they are, so the spread is a property of the protocol.
 #
 # ============================================================================
-#
-# ============================================================================
 # THE SUBSTRATE ARMS (decision 0012)
 # ============================================================================
 #
@@ -179,6 +177,12 @@ git -C "$REPO" diff --quiet HEAD -- programs crates Cargo.toml Cargo.lock 2>/dev
 # ProgramData and the substrate arms are compiled out of --repo on every run.
 # Reporting only the build's cleanliness would let a figure drawn from an
 # uncommitted fixture edit be quoted as a clean-revision number.
+#
+# It is reported against --repo's OWN HEAD, never against `--commit`'s revision:
+# the harness is whatever is checked out here, and labelling it with the
+# revision the ELFs were archived from would be the same mispairing again, one
+# level down.
+HARNESS_REVISION="$(git -C "$REPO" rev-parse HEAD)"
 HARNESS_DIRTY="clean"
 git -C "$REPO" diff --quiet HEAD -- $HARNESS_PATHS 2>/dev/null || HARNESS_DIRTY="DIRTY"
 if [ -n "$(git -C "$REPO" ls-files --others --exclude-standard -- $HARNESS_PATHS 2>/dev/null)" ]; then
@@ -407,7 +411,7 @@ printf 'SUB  %s  (DCLUTCH_FIXTURE_SUBSTRATE)\n' "$SUBSTRATE"
 # harness beside a clean-archive SRC is not automatically a wrong measurement --
 # it is the ordinary state of a lane measuring its own uncommitted fixture --
 # but it is a fact the number has to be quoted with.
-printf 'HARN %s (%s) %s\n' "${REVISION:0:12}" "$HARNESS_DIRTY" "$HARNESS_PATHS"
+printf 'HARN %s (%s) %s\n' "${HARNESS_REVISION:0:12}" "$HARNESS_DIRTY" "$HARNESS_PATHS"
 echo
 echo "M-61: quote PASS and MEAN. MIN is not a margin and MAX is not a bound --"
 echo "      both are draws, and any one-byte change to the ELF above redraws"
@@ -429,7 +433,7 @@ cat > "$SUMMARY" <<EOF
   "trading_elf_sha256": "$TRADING_SHA",
   "elf_dir": "$ELF_DIR",
   "substrate": "$SUBSTRATE",
-  "harness_revision": "$REVISION",
+  "harness_revision": "$HARNESS_REVISION",
   "harness_state": "$HARNESS_DIRTY",
   "seeds": $SEEDS,
   "pass": $pass,

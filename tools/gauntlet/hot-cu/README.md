@@ -4,6 +4,7 @@
 tools/gauntlet/hot-cu/run-hot-cu.sh                  # working tree, seeds 0..19
 tools/gauntlet/hot-cu/run-hot-cu.sh --commit HEAD    # a CLEAN revision — see below
 tools/gauntlet/hot-cu/run-hot-cu.sh --seeds 40
+tools/gauntlet/hot-cu/run-hot-cu.sh --substrate slot-pinned        # decision 0012's arm
 tools/gauntlet/hot-cu/run-hot-cu.sh --elf-dir /somewhere/deploy   # skip the build
 ```
 
@@ -65,7 +66,17 @@ MAX  …
 SPREAD …  ~ n bump-search iterations at 1,500 CU each
 ELF  <sha256>  dclutch_trading_sbf.so
 SRC  <revision> (clean git archive)
+SUB  <substrate>  (DCLUTCH_FIXTURE_SUBSTRATE)
+HARN <revision> (clean|DIRTY) programs/dclutch-trading-sbf/program-test
 ```
+
+`HARN` is a second cleanliness fact and not a duplicate of `SRC`. `--commit`
+archives the **build**; the harness — the fixture keys, the staged ProgramData,
+the substrate arms — is compiled out of `--repo` on every run, committed or not.
+A clean `SRC` beside a `DIRTY` harness is the ordinary state of a lane measuring
+its own uncommitted fixture, and it is not automatically wrong; it is a fact the
+number has to be quoted with, which it could not be while only the build's
+cleanliness was reported.
 
 `SRC` describes **where the artifacts came from**, not where the checkout is
 standing. Under `--elf-dir` it says so and names no revision, because printing
@@ -125,12 +136,14 @@ Two consequences of that, both deliberate:
   to measure, and an instrument that refuses to measure the regression is
   useless on the day it matters.
 
-## What this fixture does not exercise: decision 0012's fast path
+## Decision 0012's fast path, and why the default sweep says nothing about it
 
 Decision 0012 (`docs/decisions/0012-devnet-iteration-substrate.md`, implemented
 in `0e34c036`) claims a large CU saving: re-hashing a megabyte ELF on every
-action "was ~700k CU on Trading alone". **This sweep cannot measure that claim,
-and a lane must not cite it as though it had.**
+action "was ~700k CU on Trading alone". **A default run of this sweep cannot
+measure that claim, and a lane must not cite it as though it had.** `--substrate`
+is what makes it measurable; the rest of this section is why the option had to
+exist, and the section after it is how to read what it produces.
 
 The reason is in the fixture. `waist::release` constructs every artifact release
 with `ArtifactUpgradePolicyV1::Immutable` and no bound authority, and the
@@ -162,9 +175,76 @@ paying a megabyte hash before `0e34c036`, this table could not look like this.
 
 **To measure 0012 end to end, the fixture needs an `ExactAuthority` variant** —
 a release with a bound authority and a ProgramData observation carrying the
-pinned slot — swept the same way, against the same commit, before and after. No
-such variant exists in `direct-hot/`. Until one does, 0012's CU claim is argued
-and unit-tested, not measured.
+pinned slot — swept the same way, against the same ELF. That variant now exists:
+`waist::FixtureSubstrateV1`, selected by `--substrate`.
+
+## The three substrate arms, and the only number that is a signal
+
+```sh
+tools/gauntlet/hot-cu/run-hot-cu.sh --commit <rev> --substrate immutable
+tools/gauntlet/hot-cu/run-hot-cu.sh --commit <rev> --substrate immutable-pinned
+tools/gauntlet/hot-cu/run-hot-cu.sh --commit <rev> --substrate slot-pinned
+```
+
+Pass the **same `--commit`** to all three. The second and third runs reuse the
+first one's completed build — a stamp under the ELF directory records the
+revision — so the three arms are drawn against one ELF *byte for byte* rather
+than against three builds that ought to agree. That is a requirement, not a
+speedup: under M-61 a one-byte difference between two builds would redraw every
+seed by more than any substrate effect could.
+
+| arm | policy | bound authority | bound slot | digest arm taken |
+|---|---|---|---|---|
+| `immutable` | `Immutable` | none | 0 | `immutable_release_elf_digest_v1` |
+| `immutable-pinned` | `Immutable` | none | 167 | `immutable_release_elf_digest_v1` |
+| `slot-pinned` | `ExactAuthority` | `[0x9a; 32]` | 167 | the 0012 slot-pin arm |
+| `slot-pinned-superseded` | `ExactAuthority` | `[0x9a; 32]` | 167, observed 531 | refuses |
+
+**`slot-pinned` minus `immutable` is not 0012's cost.** The policy byte, the
+bound authority and the bound slot all live inside `ArtifactReleaseV1::to_bytes`,
+so changing the arm moves the artifact id, the release-set identity, and every
+PDA seeded by it — and the Registry derives its activation cache and its Hot
+admission address with `find_program_address` **on chain**. Switching arms
+therefore redraws the same lottery M-61 is about, before any code path differs.
+
+`immutable-pinned` is the control that separates them. It keeps the `Immutable`
+policy and the absent authority, so it takes the **same** digest arm as the
+default and executes the same code; it binds the same nonzero slot, so it has a
+**different** release identity. Its distance from `immutable` is therefore pure
+redraw, measured rather than assumed:
+
+```
+    immutable-pinned − immutable  =  REDRAW ALONE
+    slot-pinned      − immutable  =  REDRAW + whatever 0012 costs or saves
+    ────────────────────────────────────────────────────────────────────
+    the difference of those two   =  the signal, and the only real number
+```
+
+A signal smaller than the redraw is a legitimate result and must be reported as
+one. It says the sweep bounds 0012's effect below the lottery's width on this
+path — which, given the claim under test is ~700,000 CU, is itself an answer.
+
+The fourth arm does not sweep. `slot-pinned-superseded` moves the Trading
+ProgramData to a later slot and is exercised by
+`tests/slot_pin_supersession.rs`, which requires the refusal by its declared
+discriminant rather than a CU figure.
+
+### What a pinned arm needs from the runtime
+
+Two facts, both of which produce failures that say nothing about the pin if you
+miss them, and both handled by `waist::start_with_substrate`:
+
+- a Loader V3 program is visible from `deployment_slot + 1`, and the program
+  cache admits an entry only when its deployment slot is an **ancestor** of the
+  executing slot. A pin at 167 on a bank at slot 1 fails inside
+  `ProgramCache::assign_program` with *"Unexpected replacement of an entry"*;
+- `warp_to_slot(T)` roots `T − 1`, so only one nonzero deployment generation is
+  visible at a time. The superseded arm therefore redeploys the whole set and
+  leaves the staleness in Trading's **release**, not in a second live generation.
+
+The maker replays the Direct campaign signs are valid for `clock_slot ± 1`, so
+the bank slot and the fixture clock are read from one place and must not be set
+independently.
 
 ## Outputs
 
@@ -173,11 +253,17 @@ under the shared `target/`: parallel lanes share this working tree.
 
 | path | what |
 |---|---|
-| `elf/*.so` | the eight artifacts the fixture installs |
+| `elf/*.so` | the eight artifacts the fixture installs (working-tree build) |
+| `elf-<rev>/*.so` | the same, from a `--commit` archive |
+| `elf-<rev>/.hot-cu-built` | the completed-build stamp a later `--commit` run reuses |
 | `logs/build-*.log` | per-program build logs, where the frame-diagnostic count is read |
-| `sweep/seed<N>.log` | the full `--nocapture` log for one seed |
-| `sweep/observed-cu.txt` | one CU figure per completed seed |
-| `summary.json` | `dclutch-hot-cu-sweep-v1`: pass/fail, mean/min/max, the ELF digest |
+| `sweep/<substrate>/seed<N>.log` | the full `--nocapture` log for one seed |
+| `sweep/<substrate>/observed-cu.txt` | one CU figure per completed seed |
+| `summary-<substrate>.json` | `dclutch-hot-cu-sweep-v1`: pass/fail, mean/min/max, the ELF digest, the substrate |
+
+Logs and summaries are keyed by substrate because comparing arms means holding
+three sweeps at once, and a shared directory would blend them — the `rm -f` that
+keeps a re-run from mixing shapes would otherwise delete the control.
 
 The script exits nonzero if any seed failed.
 
