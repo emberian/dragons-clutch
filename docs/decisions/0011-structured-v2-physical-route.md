@@ -540,6 +540,73 @@ campaign is that test parameterized by
 family-specific hostiles and a `tools/gauntlet/structured/` binding directory.
 It needs no `DCLTGMF1`, no successor bootstrap and no validator.
 
+## 3e. CORRECTION: the campaign ran, and it moved two of §3b's numbers
+
+STRUCT-CAMP-2, 2026-08-27. §3d's short path was taken: the real-ELF campaign at
+`programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs`
+is parameterized by `derive_structured_representation_descriptor_v2` and runs at
+`K = 3`, coefficients `[2, 3, 5]`, denominator `7`. Three things it measured
+disagree with what is recorded above.
+
+### The RequestProfile is not the binding ceiling for the two full-width actions
+
+§3b derived `K = 3` as the executable ceiling from the RequestProfile artifact —
+`29 + 8K` operations at 24 bytes against `REQUEST_PROFILE_MAX_BYTES_V1 = 1312`,
+so `K = 3` fits with 8 bytes to spare and `K = 4` is refused at 1,496 — and
+called it hard. It is real and it is not the one that bites first.
+
+A transaction carrying `IssueStructured` or `UnwrapStructured` at `K = 3` is
+**1,357 bytes** as a v0 message compiled against a real activated Address Lookup
+Table, against Solana's 1,232-byte `PACKET_DATA_BYTES`. Over by 125. The ALT is
+applied, not withheld: it is what takes the identical frame from 2,594 down to
+1,357, so the house v0/ALT pattern has already been spent. A coordinate costs
+`ASSET_BYTES_V2 + 2 * RATIONAL_ASSET_ACCOUNT_COUNT_V2 = 168` wire bytes — its
+160-byte asset row, plus one index in the instruction's account array and one in
+the v0 lookup list for each of its four materialized accounts — and
+`1,021 + (K - 1) * 168 <= 1,232` gives `K <= 2`.
+
+**So the two full-width actions cap at `K = 2` on a cluster, one coordinate
+below §3b's ceiling.** The selected-outcome actions are untouched: `Denominate`,
+`Reconstitute` and `RedeemTerminal` carry `asset_count == 1` at every width
+(`request.rs:470-481`), so their request is `488 + 160` bytes at any `K` and
+their frames fit. A `K = 3` Structured product can be denominated, reconstituted
+and redeemed on a cluster and can never be issued or unwrapped there. The
+measurement is derived rather than asserted, in
+`the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`, so the
+number moves when the frame does.
+
+### The two Token-2022 roles are enforced up front, not discovered at BurnReceipt
+
+§3b's third cost said: "Founding must configure both roles on the receipt Mint,
+or `BurnReceipt` fails at the Token program with the descriptor already
+committed." The cost is right and that consequence does not happen.
+
+With a receipt Mint carrying the representation authority as its Mint authority
+and no permissioned-burn extension, the FIRST `IssueStructured` refuses
+`ClaimsSbfError::Token` (0x5009) with **zero Token-2022 CPIs issued** —
+`parse_behavior_mint` reads the receipt Mint's behavior profile on every action
+and requires the permissioned-burn authority present and pinned to the
+representation authority. Nothing commits, so no receipt is ever minted against a
+Mint that could not burn it. An under-configured founding is a representation
+that can never ISSUE, not one that can never be unwound. (The `UnwrapStructured`
+that follows refuses on `Accounts` (0x5001) because no representation replay
+exists, not because of the burn role; the campaign asserts that distinction so a
+reader cannot take the second refusal for the first.)
+
+### The campaign's balances are not free parameters, and the fixture had said so
+
+Worth recording because the next family lowering onto this wire will hit it.
+`StructuredProjectionV2::validate`
+(`rational-representation-v2-kernel/src/lib.rs:419-452`) binds three identities
+the chain recomputes on every action: `shard_supply == denominator *
+native_locked`, `structured_custody == receipt_supply * coefficient`, and
+`shard_supply == structured_custody + explicit_free`. And
+`ResultDomainV2::outcome_count()` is `cuts + 2`, which `join_product_v2`
+requires to equal the portfolio's coefficient count, so a `K`-wide Product needs
+`K - 2` domain cuts. The campaign had stated all of that as literals that
+happened to satisfy every rule at `K = 2`; moving the basis produced a bare
+`0x5002` and a bare `0x5008` four transactions deep. They are derived now.
+
 ## 4. `frame.rs` is two objects, and only one of them is an artifact input
 
 `frame.rs` is now load-bearing for the effect coordinates (`dee3311e`), and
