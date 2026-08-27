@@ -215,18 +215,32 @@ pub fn fold(
             ));
         }
         if binding.outcome == Outcome::Refused {
-            match &binding.refusal {
-                None => problems.push(format!(
+            match (&binding.refusal, &binding.unnamed_refusal) {
+                (None, None) => problems.push(format!(
                     "binding `{}` expects a refusal but names no census refusal id",
                     binding.label
                 )),
-                Some(refusal) if !known_refusals.contains_key(refusal.as_str()) => {
+                (Some(_), Some(_)) => problems.push(format!(
+                    "binding `{}` names both a census refusal and an unnamed one; \
+                     a refusal has exactly one account of where it came from",
+                    binding.label
+                )),
+                (Some(refusal), None) if !known_refusals.contains_key(refusal.as_str()) => {
                     problems.push(format!(
                         "binding `{}` names refusal `{refusal}`, which is not in the inventory",
                         binding.label
                     ));
                 }
-                Some(_) => {}
+                (Some(_), None) => {}
+                (None, Some(unnamed)) if unnamed.reason.trim().is_empty() => {
+                    problems.push(format!(
+                        "binding `{}` credits its refusal to no census code but does not say \
+                         which program raised it; an uncredited refusal with no reason is how \
+                         a real refusal launders itself out of the taxonomy",
+                        binding.label
+                    ));
+                }
+                (None, Some(_)) => {}
             }
         }
     }
@@ -294,7 +308,24 @@ pub fn fold(
         }
 
         let mut refusal = None;
-        if observed_outcome == Outcome::Refused {
+        if observed_outcome == Outcome::Refused
+            && let Some(unnamed) = binding.unnamed_refusal.as_ref()
+        {
+            // The code is still checked against the chain; it is simply not
+            // credited to any enumerated program's taxonomy.
+            let reported = reported_custom_code(&transaction.logs, transaction.error.as_deref());
+            if reported != Some(u64::from(unnamed.code)) {
+                problems.push(format!(
+                    "`{}` expects the uncredited refusal {} ({}) but the chain reported {}",
+                    transaction.label,
+                    unnamed.code,
+                    unnamed.reason,
+                    reported.map_or_else(|| "no custom program error".to_owned(), |code| code
+                        .to_string())
+                ));
+                continue;
+            }
+        } else if observed_outcome == Outcome::Refused {
             let expected = binding.refusal.as_deref().unwrap_or_default();
             let expected_code = known_refusals.get(expected).copied().flatten();
             let reported = reported_custom_code(&transaction.logs, transaction.error.as_deref());
@@ -379,7 +410,9 @@ pub fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Binding, Inventory, ProgramSurface, Refusal, Route, RouteKind};
+    use crate::model::{
+        Binding, Inventory, ProgramSurface, Refusal, Route, RouteKind, UnnamedRefusal,
+    };
     use serde_json::json;
 
     fn inventory() -> Inventory {
@@ -435,6 +468,7 @@ mod tests {
             program: "core".into(),
             outcome: Outcome::Executed,
             refusal: None,
+            unnamed_refusal: None,
             note: String::new(),
         }
     }
@@ -613,6 +647,116 @@ mod tests {
             "{:?}",
             report.problems
         );
+    }
+
+    #[test]
+    fn a_refusal_from_outside_the_census_is_checked_but_never_credited() {
+        // A test-only caller that refuses AFTER the child committed reports its
+        // own code. Here that code is 6, which collides exactly with
+        // `core/CoreSbfError::RentCredit`. Crediting the collision would make
+        // the census claim Core raised a refusal it never raised.
+        let refused = json!([{
+            "label": "caller refuses after Found31 committed",
+            "signature": "sig9",
+            "slot": 11,
+            "error": {"InstructionError": [0, {"Custom": 6}]},
+            "compute_units_consumed": 12_345,
+            "logs": ["Program CoreProgram1111 invoke [1]",
+                     "Program CoreProgram1111 success",
+                     "Program TestCaller11111 failed: custom program error: 0x6"]
+        }]);
+
+        let mut lying = executed_binding();
+        lying.label = "caller refuses after Found31 committed".into();
+        lying.outcome = Outcome::Refused;
+        lying.refusal = Some("core/CoreSbfError::RentCredit".into());
+        let report = run(&bindings(lying), &evidence(&refused));
+        // The census cannot tell this apart from a real Core refusal, which is
+        // exactly why the honest form has to be available and used.
+        assert_eq!(report.admitted, 1);
+
+        let mut both = executed_binding();
+        both.label = "caller refuses after Found31 committed".into();
+        both.outcome = Outcome::Refused;
+        both.refusal = Some("core/CoreSbfError::RentCredit".into());
+        both.unnamed_refusal = Some(UnnamedRefusal {
+            code: 6,
+            reason: "the test caller".into(),
+        });
+        let report = run(&bindings(both), &evidence(&refused));
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("exactly one account")),
+            "{:?}",
+            report.problems
+        );
+
+        let mut silent = executed_binding();
+        silent.label = "caller refuses after Found31 committed".into();
+        silent.outcome = Outcome::Refused;
+        silent.refusal = None;
+        silent.unnamed_refusal = Some(UnnamedRefusal {
+            code: 6,
+            reason: "   ".into(),
+        });
+        let report = run(&bindings(silent), &evidence(&refused));
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("launders itself")),
+            "{:?}",
+            report.problems
+        );
+
+        let mut wrong_code = executed_binding();
+        wrong_code.label = "caller refuses after Found31 committed".into();
+        wrong_code.outcome = Outcome::Refused;
+        wrong_code.refusal = None;
+        wrong_code.unnamed_refusal = Some(UnnamedRefusal {
+            code: 3,
+            reason: "the test-only caller's DeliberateLateFailure".into(),
+        });
+        let report = run(&bindings(wrong_code), &evidence(&refused));
+        assert_eq!(report.admitted, 0);
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("uncredited refusal 3")),
+            "{:?}",
+            report.problems
+        );
+
+        let mut honest = executed_binding();
+        honest.label = "caller refuses after Found31 committed".into();
+        honest.outcome = Outcome::Refused;
+        honest.refusal = None;
+        honest.unnamed_refusal = Some(UnnamedRefusal {
+            code: 6,
+            reason: "the test-only caller's DeliberateLateFailure, which is not \
+                     a Core refusal despite sharing its number"
+                .into(),
+        });
+        let mut ledger = Ledger::default();
+        let report = fold(
+            &mut ledger,
+            &inventory(),
+            &bindings(honest),
+            &programs(),
+            &evidence(&refused),
+            "evidence.json",
+            b"{}",
+        )
+        .expect("fold");
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.admitted, 1);
+        // Recorded as a refusal, credited to no first-party code.
+        assert_eq!(ledger.observations.len(), 1);
+        assert_eq!(ledger.observations[0].outcome, Outcome::Refused);
+        assert_eq!(ledger.observations[0].refusal, None);
     }
 
     #[test]

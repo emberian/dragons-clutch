@@ -13,6 +13,10 @@ struct Coverage<'a> {
     refused: BTreeSet<&'a str>,
     refusal_seen: BTreeSet<&'a str>,
     by_route: BTreeMap<&'a str, usize>,
+    /// Which campaigns drove each route. A fast lane is additional evidence,
+    /// never a substitute, so a reader must be able to see at a glance that a
+    /// route's only observation came from one.
+    campaigns: BTreeMap<&'a str, BTreeSet<&'a str>>,
 }
 
 fn coverage(ledger: &Ledger) -> Coverage<'_> {
@@ -20,8 +24,13 @@ fn coverage(ledger: &Ledger) -> Coverage<'_> {
     let mut refused = BTreeSet::new();
     let mut refusal_seen = BTreeSet::new();
     let mut by_route: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut campaigns: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for observation in &ledger.observations {
         *by_route.entry(observation.route.as_str()).or_default() += 1;
+        campaigns
+            .entry(observation.route.as_str())
+            .or_default()
+            .insert(observation.campaign.as_str());
         match observation.outcome {
             Outcome::Executed => {
                 executed.insert(observation.route.as_str());
@@ -39,6 +48,7 @@ fn coverage(ledger: &Ledger) -> Coverage<'_> {
         refused,
         refusal_seen,
         by_route,
+        campaigns,
     }
 }
 
@@ -155,12 +165,17 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
                         stale_because_executed.push((entry.route.clone(), route.id.clone()));
                     }
                 }
+                let campaigns = coverage
+                    .campaigns
+                    .get(id)
+                    .map(|names| names.iter().copied().collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
                 let status = if executed {
                     totals.routes_executed += 1;
-                    format!("EXECUTED ({count}x)")
+                    format!("EXECUTED ({count}x via {campaigns})")
                 } else if refused {
                     totals.routes_refused_only += 1;
-                    format!("REFUSED-ONLY ({count}x)")
+                    format!("REFUSED-ONLY ({count}x via {campaigns})")
                 } else {
                     totals.routes_never += 1;
                     match blocked_for(blocked, id) {
