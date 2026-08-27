@@ -1255,6 +1255,18 @@ pub fn authenticate_resolution_retirement_receipt_v3(
     Ok(observed)
 }
 
+/// Authenticate a Market that may still create and activate its Resolution Fund.
+///
+/// The two admissible prestates are the two founding routes, and they are the
+/// same fact: `Founding + Prepaid` is the readiness ladder, and `Open +
+/// Consumed` is the atomic founding, whose commit-last Open moves from the
+/// first straight to the second without ever passing the ladder. Core and the
+/// Resolution program admit exactly this pair; an operator that admitted less
+/// would refuse transactions the chain accepts, and one that admitted more
+/// would compile transactions the chain refuses.
+///
+/// A Market that has minted a terminal receipt is refused explicitly, so a
+/// later phase cannot inherit the admission by accident.
 fn authenticate_founding_market(
     market_account: &ObservedAccount,
     registry_program: &ObservedAccount,
@@ -1264,8 +1276,11 @@ fn authenticate_founding_market(
     if market_account.owner != core_program.key
         || market_account.executable
         || market_account.key.to_bytes() != market.identity.market_id.to_bytes()
-        || market.phase != Phase::Founding
-        || market.readiness != Readiness::Prepaid
+        || market.terminal_receipt.is_some()
+        || !matches!(
+            (market.phase, market.readiness),
+            (Phase::Founding, Readiness::Prepaid) | (Phase::Open, Readiness::Consumed)
+        )
         || registry_program.key.to_bytes() != market.identity.registry_program.to_bytes()
     {
         return Err(ResolutionCoreOperatorErrorV3::Market);
