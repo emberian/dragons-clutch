@@ -59,6 +59,7 @@ members = [
     "crates/dclutch-release-set-contract",
     "crates/dclutch-release-tool",
     "crates/dclutch-resolution-codec",
+    "crates/dclutch-resolution-policy-kernel",
     "crates/dclutch-resolution-core-v3-operator",
     "crates/dclutch-realm-contract",
     "crates/dclutch-rent-contract",

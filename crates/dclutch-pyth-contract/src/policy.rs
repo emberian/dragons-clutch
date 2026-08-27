@@ -4,7 +4,7 @@
 //! owned solely by [`CategoricalPythV1Policy`]; construction and decoding both
 //! pass every field through that kernel validator.
 
-use dclutch_kernel::resolution::categorical_pyth_v1::{
+use dclutch_resolution_policy_kernel::categorical_pyth_v1::{
     CategoricalPythV1Policy, CategoricalPythV1PolicyInput, MAX_PRICE_CELLS,
 };
 
@@ -331,7 +331,7 @@ fn put<const N: usize>(output: &mut [u8; N], offset: usize, input: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use dclutch_kernel::resolution::categorical_pyth_v1::PythV1Error;
+    use dclutch_resolution_policy_kernel::categorical_pyth_v1::PythV1Error;
 
     use super::*;
 

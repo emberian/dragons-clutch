@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
-dclutch-kernel = { path = "../dclutch-kernel" }
+dclutch-resolution-policy-kernel = { path = "../dclutch-resolution-policy-kernel" }
 
 [lints]
 workspace = true
