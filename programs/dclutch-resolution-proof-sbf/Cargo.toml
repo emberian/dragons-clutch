@@ -20,7 +20,6 @@ custom-panic = []
 dclutch-capability-contract = { path = "../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
-dclutch-market-contract = { path = "../../crates/dclutch-market-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
