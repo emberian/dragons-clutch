@@ -25,6 +25,7 @@ import DClutchSemantics.EconomicKernel
 import DClutchSemantics.EconomicExamples
 import DClutchSemantics.EconomicCodec
 import DClutchSemantics.ExecutionRelease
+import DClutchSemantics.ProtocolInfrastructure
 import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 import DClutchSemantics.SourceMaterialV2Abi
