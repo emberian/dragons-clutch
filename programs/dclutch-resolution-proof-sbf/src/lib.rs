@@ -21,10 +21,12 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 mod core_effect;
 mod provider_instruction_v3;
 mod provider_transport_v3;
-mod relay_transport_v1;
 /// Current-ABI real-provider evidence composition shared by fixed Core and
 /// data-defined Trading callers.
 pub mod provider_v3;
+mod relay_transport_v1;
+/// Current-ABI sealed relayed-record evidence composition.
+pub mod relay_v1;
 
 /// Stable Resolution controller refusal.
 #[repr(u32)]
