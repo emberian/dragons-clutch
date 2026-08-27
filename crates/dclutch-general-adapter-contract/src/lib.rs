@@ -22,6 +22,8 @@ pub mod account_rules_v3;
 pub mod admitted_accelerator_v3;
 /// Complete content-addressed General V3 artifact joins for generic Trading.
 pub mod artifacts_v3;
+/// Candidate submission and streamed on-chain page verification.
+pub mod candidate_v1;
 /// Exact canonical Claims/Custody packet construction and receipt verification.
 pub mod child_packets;
 /// Batch and signed-order records: the collection half settlement consumes.
@@ -63,7 +65,7 @@ use dclutch_general_codec::{
     PageViewV1, Phase, SelectionCriterion, SelectionCursorV1, SelectionPolicyV1,
     SettlementCursorV1,
 };
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digestv;
 
 /// Exact verified-candidate certificate width.
 pub const VERIFIED_CANDIDATE_BYTES_V1: usize = 416;
@@ -1281,10 +1283,7 @@ impl<'a> GeneralChildPlanV2<'a> {
         self.validate()?;
         let mut header = [0_u8; GENERAL_CHILD_PLAN_HEADER_BYTES_V2];
         self.encode_header(&mut header);
-        let mut hasher = Sha256::new();
-        hasher.update(header);
-        hasher.update(self.quantities);
-        Ok(hasher.finalize().into())
+        Ok(digestv(&[&header, self.quantities]))
     }
 
     /// Exact selected child effect.

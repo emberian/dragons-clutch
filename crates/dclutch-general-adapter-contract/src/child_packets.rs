@@ -14,7 +14,7 @@ use dclutch_custody_contract::{
     CustodyRequestV1, OperationV1,
 };
 use dclutch_release_set_contract::ExecutionRoleV1;
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::{
     AggregateReplayContextV1, Error as GeneralError, GeneralChildEffectV1, GeneralChildPlanV2,
@@ -121,7 +121,7 @@ impl ClaimsPacketV2 {
     /// SHA-256 of the exact Claims request bytes.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
-        Sha256::digest(self.bytes()).into()
+        digest(self.bytes())
     }
 
     /// Hostile-decode the exact canonical request.
@@ -153,7 +153,7 @@ impl CustodyPacketV2 {
     /// SHA-256 of the exact Custody request bytes.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
-        Sha256::digest(self.bytes).into()
+        digest(&self.bytes)
     }
 }
 

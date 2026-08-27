@@ -1,0 +1,23 @@
+[package]
+name = "dclutch-sha256-adapter"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The one named adapter between first-party SHA-256 call sites and the runtime that computes them"
+
+[lib]
+path = "src/lib.rs"
+
+# The whole point of this crate is that neither dependency is unconditional.
+# On the Solana target the runtime computes the digest and no software SHA-256
+# implementation is linked at all; off the Solana target there is no runtime to
+# ask, and no Solana SDK crate enters a host build.
+[target.'cfg(target_os = "solana")'.dependencies]
+solana-sha256-hasher = { version = "=3.1.0", default-features = false }
+
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+sha2 = { version = "=0.10.9", default-features = false }
+
+[lints]
+workspace = true

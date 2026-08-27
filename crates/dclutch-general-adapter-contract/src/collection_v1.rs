@@ -23,7 +23,7 @@
 //! `docs/decisions/0009-general-batch-collection.md`.
 
 use dclutch_general_config_contract::root::{GeneralRootV2, RootError};
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::runtime_verify::AuthenticatedOrderTermsV2;
 use crate::runtime_width::{CandidateHeaderV2, ExecutionV2, VerifiedCandidateHeaderV2};
@@ -358,9 +358,7 @@ impl GeneralBatchV1 {
     #[must_use]
     pub fn batch_id(self) -> [u8; 32] {
         let bytes = self.to_bytes();
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes[..GENERAL_BATCH_PREFIX_BYTES_V1]);
-        hasher.finalize().into()
+        digest(bytes.get(..GENERAL_BATCH_PREFIX_BYTES_V1).unwrap_or_default())
     }
 
     /// Admit one signed order, ESCROWING its exact worst-case obligation.
@@ -877,9 +875,7 @@ impl<'a> GeneralOrderV1<'a> {
     #[must_use]
     pub fn order_id(self) -> [u8; 32] {
         let prefix = general_order_prefix_len_v1(self.header.outcome_count).unwrap_or(0);
-        let mut hasher = Sha256::new();
-        hasher.update(self.bytes.get(..prefix).unwrap_or_default());
-        hasher.finalize().into()
+        digest(self.bytes.get(..prefix).unwrap_or_default())
     }
 
     /// Write this order's successor escrow state into an exact-width buffer.

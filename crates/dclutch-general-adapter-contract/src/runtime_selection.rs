@@ -7,7 +7,7 @@
 //! the common lifecycle/effect machinery. The evaluator owns no accounts and
 //! performs no CPI.
 
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use dclutch_general_codec::SelectionPolicyV1;
 
@@ -446,10 +446,6 @@ fn exact_state_widths(before: &[u8], scratch: &[u8], output: &[u8]) -> Result<()
 
 fn map_comparison(_error: RuntimeVerifyErrorV2) -> RuntimeSelectionErrorV2 {
     RuntimeSelectionErrorV2::Comparison
-}
-
-fn digest(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
 }
 
 fn zero(value: &[u8; 32]) -> bool {

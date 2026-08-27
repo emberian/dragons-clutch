@@ -12,7 +12,7 @@ use dclutch_execution_strategy_contract::v2::{
     AcceleratorAckV2, ExecutionCandidateV2, StrategyDispositionV2, resolve_execution_candidate_v2,
 };
 use dclutch_general_codec::{Action, SelectionPolicyV1};
-use sha2::{Digest, Sha256};
+use dclutch_sha256_adapter::digest;
 
 use crate::{
     artifacts_v3::{
@@ -79,7 +79,7 @@ pub fn authenticate_frozen_selection_v3<'a>(
     let frozen = RuntimeSelectionCursorV2::decode(frozen_selection)
         .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Settlement)?;
     let frozen_header = frozen.header();
-    let verified_digest: [u8; 32] = Sha256::digest(verified).into();
+    let verified_digest: [u8; 32] = digest(verified);
     if frozen_header.phase != crate::runtime_selection::RuntimeSelectionPhaseV2::Frozen
         || frozen_header.outcome_count != tail_count
         || frozen_header.policy_id != selection_policy_id
@@ -506,8 +506,7 @@ const fn action_matches(action: Action, settlement: RuntimeSettlementActionV2) -
 }
 
 fn content(bytes: &[u8]) -> Result<ContentId> {
-    ContentId::new(Sha256::digest(bytes).into())
-        .map_err(|_| GeneralAdmittedAcceleratorErrorV3::Identity)
+    ContentId::new(digest(bytes)).map_err(|_| GeneralAdmittedAcceleratorErrorV3::Identity)
 }
 
 #[cfg(test)]
