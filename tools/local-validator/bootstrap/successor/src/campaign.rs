@@ -284,10 +284,21 @@ pub(crate) fn read_keypair_file(path: &Path, label: &str) -> Result<[u8; 32]> {
             bytes.len()
         )));
     }
-    let mut secret = [0_u8; 32];
-    let mut declared = [0_u8; 32];
-    secret.copy_from_slice(bytes.get(..32).unwrap_or_default());
-    declared.copy_from_slice(bytes.get(32..).unwrap_or_default());
+    // Split by value rather than by `copy_from_slice` on a `get(..).unwrap_or`:
+    // the width was checked above, but a slice copy whose panic is prevented by
+    // a check thirty lines away is a panic waiting for someone to move the
+    // check. `try_into` carries its own proof.
+    let (secret, declared): ([u8; 32], [u8; 32]) = match (bytes.get(..32), bytes.get(32..)) {
+        (Some(secret), Some(declared)) => (
+            secret
+                .try_into()
+                .map_err(|_| Error::new("keypair secret half was not 32 bytes"))?,
+            declared
+                .try_into()
+                .map_err(|_| Error::new("keypair public half was not 32 bytes"))?,
+        ),
+        _ => return Err(Error::new("keypair file could not be split into halves")),
+    };
     let derived = Keypair::new_from_array(secret);
     if derived.pubkey().to_bytes() != declared {
         return Err(Error::new(format!(
@@ -396,7 +407,6 @@ pub(crate) fn publication_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<S
             }
         }
     }
-    let _ = registry;
     Ok(if !wrong.is_empty() {
         StageStateV1::Conflict(format!(
             "records exist at their derived addresses with bytes that are not this plan's: {}",
@@ -778,15 +788,20 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     if !args.execute {
         return Ok(());
     }
-    execute_stages(&mut rpc, &plan, &authority, &forge, &states, args.through)
+    execute_stages(&mut rpc, &plan, &authority, &states, args.through)
 }
 
 /// Advance the chain through the requested stages, skipping what is done.
+///
+/// The forge is deliberately NOT a parameter yet. Every stage this function can
+/// execute signs with the Core authority alone; the founding is the one that
+/// needs the other roles, and it refuses below. Threading a forge through for a
+/// caller that does not exist would make the signature describe an intention
+/// rather than the code.
 fn execute_stages(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     authority: &Keypair,
-    forge: &KeyForge,
     states: &[(StageV1, StageStateV1)],
     through: StageV1,
 ) -> Result<()> {
@@ -861,7 +876,6 @@ fn execute_stages(
             }
         }
     }
-    let _ = forge;
     eprintln!(
         "campaign: {} transactions submitted this run",
         transactions.len()
