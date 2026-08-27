@@ -9,8 +9,10 @@
 - Encoded bytes: 120
 - Header bytes: 8
 - Effect records: 7 × 16 bytes
-- Differential consumer:
-  `dclutch-direct-contract::tests::lean_effect_plan_matches_inline_ordinary_reference`
+- Differential consumer: `dclutch-effect-kernel`, which decodes this vector in
+  its own tests. The originally named consumer,
+  `dclutch-direct-contract::tests::lean_effect_plan_matches_inline_ordinary_reference`,
+  was banished with the DCLTCAT1 stratum on 2026-08-27.
 
 The vector is a reproducible semantic fixture. It is not a deployment artifact
 or evidence about an SBF program.
@@ -34,6 +36,14 @@ the same semantic frame:
 |---|---|---:|---:|
 | `direct-inline-ordinary-claims-v1.hex` | `lake exe emit-claim-vector` | 72 | 4 claim/replay effects |
 | `direct-inline-ordinary-custody-v1.hex` | `lake exe emit-custody-vector` | 40 | 2 indivisible transfers |
+
+**Neither of these two has a Rust differential consumer any more.** Both were
+checked by `dclutch-direct-contract`, banished with the DCLTCAT1 stratum on
+2026-08-27. They are still emitted, still reproducible, and still carry their
+Lean theorems -- but nothing in Rust re-derives them, so treat them as Lean
+artifacts rather than as a cross-language gate until a live consumer picks them
+up. (`formal/qedsvm-claims-proof` reads the claims one in its capture recipe;
+that is an ELF-lift procedure, not a differential test.)
 
 The claim plan is ordinary Effect V1. The custody plan uses `DCCP`, version 1,
 an eight-byte header, and two fixed sixteen-byte records. One custody record is
