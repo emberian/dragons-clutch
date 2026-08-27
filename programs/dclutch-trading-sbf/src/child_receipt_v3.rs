@@ -46,6 +46,22 @@ impl ChildReceiptBankV3 {
         }
     }
 
+    /// A bank that has already bought room for one receipt per declared route.
+    ///
+    /// The receipts vector grew from empty, one `push` at a time, and on the
+    /// SBF bump allocator every rung of that doubling ladder stays charged for
+    /// the rest of the instruction. The walk knows its route count before it
+    /// starts, and on the canonical Direct bundle that count is exactly the
+    /// number of invocations, so the ladder becomes one exact allocation. A
+    /// route with several invocations still grows the way it always did.
+    pub(crate) fn with_route_capacity(routes: u16) -> Result<Self, ProgramError> {
+        let mut receipts = Vec::new();
+        receipts
+            .try_reserve_exact(usize::from(routes))
+            .map_err(|_| TradingSbfError::Content)?;
+        Ok(Self { receipts })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_exact(
         &mut self,

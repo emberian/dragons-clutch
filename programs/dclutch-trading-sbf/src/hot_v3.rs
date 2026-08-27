@@ -6468,7 +6468,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     let _ = shared;
     let mut execution = Box::new(ChildExecutionStateV3 {
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
-        receipt_bank: ChildReceiptBankV3::new(),
+        receipt_bank: ChildReceiptBankV3::with_route_capacity(effect.route_count())?,
         prior_receipt_bytes: Vec::new(),
         buffers: ChildInvocationBuffersV3::new(),
         route: 0,
@@ -6929,17 +6929,41 @@ fn mark_local_mutation(
     Ok(())
 }
 
+/// Refuse a child invocation that reaches a coordinate this Effect's own local
+/// operations mutate.
+///
+/// The coordinates are ENUMERATED, never COLLECTED. This used to gather them
+/// into a `Vec<usize>` and then walk it, once per invocation, on an allocator
+/// that gives nothing back -- 184 bytes for a Claims frame and again for a
+/// Custody one, in the preflight walk, on top of the doubling ladder the
+/// second `extend` pays for. The check is per coordinate and order-independent,
+/// so the window walk answers directly and the first offending coordinate
+/// refuses in exactly the same place it did before.
 fn require_child_disjoint_from_local(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     aliases: &[usize],
     locally_mutated: &[bool],
 ) -> Result<(), ProgramError> {
-    let mut coordinates = Vec::new();
+    let refuse_window = |start: usize, end: usize| -> Result<(), ProgramError> {
+        let mut coordinate = start;
+        while coordinate < end {
+            let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Content)?;
+            if locally_mutated
+                .get(representative)
+                .copied()
+                .ok_or(TradingSbfError::Content)?
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+            coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Ok(())
+    };
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    coordinates.extend(fixed_start..fixed_end);
+    refuse_window(fixed_start, fixed_end)?;
     let item_count = usize::from(invocation.item_account_count);
     let stride = usize::from(invocation.item_account_stride);
     let mut item = 0_u32;
@@ -6956,18 +6980,8 @@ fn require_child_disjoint_from_local(
         let end = start
             .checked_add(item_count)
             .ok_or(TradingSbfError::Content)?;
-        coordinates.extend(start..end);
+        refuse_window(start, end)?;
         item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    for coordinate in coordinates {
-        let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Content)?;
-        if locally_mutated
-            .get(representative)
-            .copied()
-            .ok_or(TradingSbfError::Content)?
-        {
-            return Err(TradingSbfError::Content.into());
-        }
     }
     Ok(())
 }
