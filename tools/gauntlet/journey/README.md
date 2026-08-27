@@ -102,18 +102,25 @@ yet" to "the Market's entire post-Open life is behind one door."
 
 ### An atomically founded Market can never be resolved
 
-`core/execute_provider_v3` needs a `SourceResolutionStateV2` at phase `Primary`.
-The only route that creates one is `core/resolution::process#CreateFund`, which
-admits **only** `Phase::Founding` with `Readiness::Prepaid`
-(`programs/dclutch-core-sbf/src/resolution.rs:334`). `DCLTGMF1`'s commit-last
-stage is `open_series_market`
-(`crates/dclutch-market-core-codec/src/generated.rs:922`), which goes
-`Founding+Prepaid -> Open+Consumed` in a single transition and never passes
+Every route that can put a terminal receipt on a Market consumes a
+`SourceResolutionStateV2`: `execute_provider_v3` requires one at phase
+`Primary`, `funded::process_funded_transition` takes one as account 0, and
+`resolution::process#AdmitTerminal` requires the certificate those produce. The
+**only** route that creates a Source state is
+`core/resolution::process#CreateFund`, whose phase gate
+(`programs/dclutch-core-sbf/src/resolution.rs:331`) admits `Founding+Prepaid`
+and nothing else. `DCLTGMF1`'s commit-last stage is `open_series_market`
+(`programs/dclutch-core-sbf/src/generic_founding_v1.rs:1671`,
+`crates/dclutch-market-core-codec/src/generated.rs:922`), which goes
+`Founding+Prepaid -> Open+Consumed` in **one** transition and never passes
 through `Ready`.
 
 So the moment a Market is founded atomically, the route that would give it a
-Source state has already become unreachable for it. **At this revision the
-atomic founding and the resolution lifecycle are mutually exclusive prestates.**
+Source state has already closed behind it. Note the precise shape: the founded
+Market *passes* `AdmitTerminal`'s own phase gate — it is `Open+Consumed`. What
+it can never obtain is the **certificate**, because the thing that mints one
+needs the Source state. **At this revision the atomic founding and the
+resolution lifecycle are mutually exclusive prestates.**
 Two witnesses pin both halves on chain: the founded Market is
 `Open+Consumed+false`, and the canonical Found31 Market this same campaign
 leaves behind is still `Founding+Prepaid` — which is where a Source/provider

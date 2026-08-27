@@ -259,16 +259,23 @@ fn gap_register() -> Vec<GapV1> {
             ],
             owner: "the Source/provider tier; and an owner decision on the founding ladder".into(),
             reason: "NEW FINDING, and the one worth acting on: at HEAD the atomic founding and the \
-                     resolution lifecycle are mutually exclusive prestates. ExecuteProvider needs a \
-                     SourceResolutionStateV2 at phase Primary; the only route that creates one is \
-                     core/resolution::process#CreateFund, which admits ONLY Phase::Founding with \
-                     Readiness::Prepaid. DCLTGMF1's commit-last stage is open_series_market, which \
-                     goes Founding+Prepaid -> Open+Consumed in a single transition and never passes \
-                     through Ready -- so the moment a Market is founded atomically, the route that \
-                     would give it a Source state has already become unreachable for it. The \
-                     Market this journey founds can therefore never be resolved by any route at \
-                     HEAD. The reachable prestate is on the same ledger: the Found31 Market, still \
-                     Founding+Prepaid, which is what a Source/provider tier should drive."
+                     resolution lifecycle are mutually exclusive prestates. Every route that can \
+                     put a terminal receipt on a Market consumes a SourceResolutionStateV2 -- \
+                     execute_provider_v3 requires one at phase Primary, funded::process_funded_ \
+                     transition takes one as account 0, and resolution::process#AdmitTerminal \
+                     requires the certificate those produce. The ONLY route that creates a Source \
+                     state is core/resolution::process#CreateFund, whose phase gate \
+                     (core-sbf/src/resolution.rs:331) admits Founding+Prepaid and nothing else. \
+                     DCLTGMF1's commit-last stage is open_series_market \
+                     (core-sbf/src/generic_founding_v1.rs:1671, market-core-codec generated.rs:922), \
+                     which goes Founding+Prepaid -> Open+Consumed in ONE transition and never \
+                     passes through Ready. So the moment a Market is founded atomically, the route \
+                     that would give it a Source state has already closed behind it. Note the \
+                     precise shape: the founded Market PASSES AdmitTerminal's own phase gate \
+                     (Open+Consumed) -- what it can never obtain is the certificate, because the \
+                     thing that mints one needs the Source state. The reachable prestate is on the \
+                     same ledger: the canonical Found31 Market, still Founding+Prepaid, which is \
+                     what a Source/provider tier should drive."
                 .into(),
         },
         GapV1 {
