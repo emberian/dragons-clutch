@@ -57,6 +57,8 @@ pub mod direct_inline_v3;
 pub mod direct_successor;
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
+/// Chain-derived General V3 capability activation planning.
+pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.
 pub mod general_hot_v3;
 /// Chain-derived unsigned General physical-controller workflows.
