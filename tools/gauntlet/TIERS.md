@@ -146,6 +146,9 @@ not a witness, however many lines it takes.
 | tier | directory | backing | what it drives |
 |---|---|---|---|
 | 1 | `tier1/` | localhost validator | the infrastructure floor: seven-artifact bootstrap through Found31 |
+| 4 | `tier4/` | `solana-program-test` | the Series occurrence waist (numbered before the rule below) |
+| Claims/Custody | `claims-custody/` | `solana-program-test` | the protocol Position lifecycle, the composed Admit -> SparseNativeTransfer -> Close chain, and ordinary plus delegated Custody against real SPL Token and Token-2022 |
+| Dealer | `dealer/` | `solana-program-test` | the Dealer equity pool's rounding boundary |
 | Direct | `direct/` | `solana-program-test` | the stateless Direct V2 AOT accelerator |
 
 **Numbered directories turned out to be a bad idea.** `tier<N>` is a global
@@ -164,34 +167,20 @@ whatever CONTEXT file the tier wants `expect_from` to read; tier 1 passes the
 bootstrap plan, `direct/` passes a hand-derived expectations file merged with
 its build stage's artifact record.
 
-## Family lanes are named, not numbered
+## What a family lane owns
 
-Tier 1 is a number because it is the infrastructure floor and there is one of
-it. Everything after it is a FAMILY, several land at once, and four lanes
-independently numbering their own tier is a race nobody wins -- it happened, on
-2026-08-27, and the numbering had to be renegotiated live while a committed
-`tier2/` was being moved to `tier4/`. A family lane therefore lives in a
-directory named for its family:
+A family lane owns a `run-<family>.sh` that builds its ELFs, runs its campaigns,
+folds the evidence, checks its witnesses and calls `census observe` itself. It
+does NOT add a stage to `run.sh`: `run.sh` owns tier 1 and the census, and a
+shared script every family edits is the numbered-directory race one level down.
+Render the report afterwards with `run.sh --mode census`, which is cheap and
+reads the accumulated ledger.
 
-```
-tools/gauntlet/
-  tier1/            the infrastructure floor: a real validator, a real deploy
-  tier4/            the Series occurrence fast lane (numbered before this rule)
-  claims-custody/   the Claims and Custody family fast lanes
-  dealer/           the Dealer family fast lane
-  direct/           the Direct family fast lane
-```
-
-Each family lane owns a `run-<family>.sh` that builds its ELFs, runs its
-campaigns, folds the evidence, checks its witnesses and calls `census observe`
-itself. It does NOT add a stage to `run.sh`: `run.sh` owns tier 1 and the
-census, and a shared script that every family edits is the same race one level
-down. Render the report afterwards with `run.sh --mode census`, which is cheap
-and reads the accumulated ledger.
-
-A family lane may carry more than one census campaign. It has to when its
+A family lane may carry more than one census campaign, and has to when its
 campaigns disagree about an address: a census campaign has ONE program map, and
-`claims-custody` pins different `registry` addresses in its two families.
+`claims-custody` pins different `registry` addresses in its two families. One
+`run-<family>.sh` then loops the groups, each with its own bindings, program map
+and witness file.
 
 ## A refusal the census cannot name
 
