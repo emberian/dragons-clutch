@@ -89,6 +89,44 @@ minute — see *Re-run cost* below.
 > the only stage in the tree that built it -- which is why both instances were
 > found here, at release time, rather than in the lane that caused them. The
 > Trading seam's own runner and the Dealer tier build those links now.
+>
+> #### Where the digest movement actually is, measured same-tip
+>
+> ACCEL-FRAME verified this fix independently and reported different numbers.
+> Both are right; they are different stages of the same pipeline, and the
+> distinction matters to anyone pinning a digest. Built at `606d6571` and at
+> `7c12af9c`, fresh target directory each side, with the crate confirmed
+> recompiled:
+>
+> | artifact | before | after |
+> | --- | --- | --- |
+> | trading, `deploy/` (SHIPPED, stripped) | 1,324,688 B `d862d3fd` | 1,325,128 B `4c6dbd36` |
+> | trading, pre-strip | 1,459,248 B `96e8e094` | 1,459,800 B `c0a11c66` |
+> | dealer accelerator, `deploy/` | 537,928 B `2f0ba765` | 537,928 B `5c478de1` |
+> | dealer accelerator, pre-strip | 593,512 B `04c098fa` | 593,512 B `3cfd404e` |
+>
+> **The accelerator's executable bytes did not change.** Section by section, its
+> `.text` is byte-identical across the fix -- 527,000 bytes, sha256
+> `a76607fce809…` on both sides -- as are `.rodata`, `.rel.dyn`, `.dynsym` and
+> `.dynstr`. The only section that differs is `.data.rel.ro`, 1,304 bytes. And
+> `execute_child_routes_v3` is not in the linked accelerator's symbol table at
+> all: the accelerator reaches the admitted-AOT path and never the hot child
+> walk, so the overflowing monomorphization was emitted into the rlib and then
+> dead-stripped.
+>
+> That inverts where the risk was. The honest framing for a release note is **a
+> monomorphization that was compiled and discarded**, not a deployed artifact
+> that may execute undefined behavior -- and correspondingly, all of the fix's
+> artifact movement is on the TRADING side, which is the opposite of where one
+> would look first. The gate is still right to refuse: `cargo build-sbf` cannot
+> tell you which of its outputs the linker will keep, and the same codegen in
+> the Trading ELF is reached.
+>
+> Two things this file's own numbers should not be read as saying. The
+> accelerator's whole-file digest DOES move (`.data.rel.ro`), so anything pinned
+> to the accelerator ELF sha256 is still superseded even though no instruction
+> changed. And "byte-identical .so" is a claim the section table refutes; the
+> defensible claim is byte-identical `.text`.
 
 ## Reproducing it
 
