@@ -1,0 +1,88 @@
+{
+  "campaign": "claims-affine-batch-programtest",
+  "note": "Real-ELF ProgramTest for the canonical affine LBV2 Claims waist (blocked.json: 'A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet'). Real Claims, Registry and Core ELFs with the Product Runtime V3 graph and LiabilityBasisV2 aggregate INSTALLED directly, so the route is reachable with no Hot execution and no open Market. Campaign: programs/dclutch-claims-sbf/program-test/affine-batch (tests/affine_batch_v2.rs).",
+  "bindings": [
+    {
+      "label": "claims affine-batch: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims affine-batch: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims affine-batch: admit under a substituted Position alias",
+      "routes": [
+        "claims/process_instruction",
+        "claims/affine_batch_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/AffineBatchSbfErrorV2::Accounts",
+      "note": "HOSTILE. Position outcome 21's account is substituted for an unrelated Position, aliasing a coordinate. Refuses Accounts (161); the campaign asserts the Claims aggregate and both Positions are byte-identical to their prestate."
+    },
+    {
+      "label": "claims affine-batch: admit against a substituted Product record",
+      "routes": [
+        "claims/process_instruction",
+        "claims/affine_batch_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/AffineBatchSbfErrorV2::ProductBasis",
+      "note": "HOSTILE. The finalized Product raw/staging pair is substituted for a differently-shaped Product. Refuses ProductBasis (163)."
+    },
+    {
+      "label": "claims affine-batch: admit against a substituted linked basis",
+      "routes": [
+        "claims/process_instruction",
+        "claims/affine_batch_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/AffineBatchSbfErrorV2::ProductBasis",
+      "note": "HOSTILE. The finalized linked-basis raw/staging pair is substituted for another Product's basis at the same semantic identity. Refuses ProductBasis (163)."
+    },
+    {
+      "label": "claims affine-batch: caller refuses after a complete batch",
+      "routes": [
+        "claims/process_instruction",
+        "claims/affine_batch_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 3,
+        "reason": "The test-only caller's DeliberateLateFailure, raised AFTER Claims logged success, to prove the affine batch's allocation and mutation roll back together. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+      },
+      "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit. The campaign asserts the Claims aggregate and both Positions are byte-identical to their prestate."
+    },
+    {
+      "label": "claims affine-batch: canonical batch commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/affine_batch_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The canonical runtime-width-exact affine batch: two Position mutations and the aggregate update commit atomically in one instruction."
+    },
+    {
+      "label": "claims affine-batch: stale batch refuses",
+      "routes": [
+        "claims/process_instruction",
+        "claims/affine_batch_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/AffineBatchSbfErrorV2::ClaimsState",
+      "note": "HOSTILE replay. The same request is resubmitted after the canonical batch already advanced the aggregate and Position revisions. Refuses ClaimsState (164)."
+    }
+  ]
+}

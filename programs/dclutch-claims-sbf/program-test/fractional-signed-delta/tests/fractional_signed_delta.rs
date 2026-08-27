@@ -19,6 +19,7 @@ use dclutch_fractional_claims_kernel::{
     fractional_signed_delta_shape_v1, lower_fractional_signed_delta_v1,
 };
 use dclutch_fractional_signed_delta_test_caller_sbf::FRACTIONAL_SIGNED_DELTA_TEST_WRAPPER_BYTES;
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -537,7 +538,22 @@ fn lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> 
     addresses
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) {
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The extent of a legacy or v0 message once signed, checked against Solana's
+/// packet maximum. `solana-program-test` submits no packet and cannot enforce
+/// this itself -- Found31 was ten bytes over and survived every fixture test --
+/// so the campaign measures it directly.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -549,12 +565,39 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed ALT transaction")
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
         .expect("ALT lifecycle processing");
-    assert!(processed.result.is_ok(), "ALT lifecycle must commit");
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert!(accepted, "ALT lifecycle must commit");
 }
 
 async fn create_live_lookup_table(
@@ -571,11 +614,17 @@ async fn create_live_lookup_table(
         .expect("make lookup-table slot recent");
     let payer = context.payer.pubkey();
     let (create, table) = create_lookup_table(payer, payer, clock.slot);
-    process_legacy(context, create).await;
-    for chunk in addresses.chunks(20) {
+    process_legacy(
+        context,
+        create,
+        "claims fractional-signed-delta: create lookup table",
+    )
+    .await;
+    for (index, chunk) in addresses.chunks(20).enumerate() {
         process_legacy(
             context,
             extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+            &format!("claims fractional-signed-delta: extend lookup table {index}"),
         )
         .await;
     }
@@ -595,6 +644,7 @@ async fn submit_v0(
     instruction: Instruction,
     table: Pubkey,
     addresses: &[Pubkey],
+    label: &str,
 ) -> Result<(bool, u64, Vec<String>), BanksClientError> {
     let blockhash: Hash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
@@ -611,15 +661,41 @@ async fn submit_v0(
     );
     let transaction =
         VersionedTransaction::try_new(message, &[&context.payer]).expect("signed v0 transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
     let accepted = processed.result.is_ok();
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
     let (compute, logs) = processed
         .metadata
         .map(|metadata| (metadata.compute_units_consumed, metadata.log_messages))
         .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
     Ok((accepted, compute, logs))
 }
 
@@ -645,18 +721,30 @@ async fn real_sbf_fractional_wrap_lowers_n258_and_rolls_back_after_late_refusal(
     let table = create_live_lookup_table(&mut context, &addresses).await;
     let before = snapshot(&mut context, &fixture).await;
 
-    let (accepted, _, _) = submit_v0(&mut context, substituted_basis, table, &addresses)
-        .await
-        .expect("substituted-basis transaction");
+    let (accepted, _, _) = submit_v0(
+        &mut context,
+        substituted_basis,
+        table,
+        &addresses,
+        "claims fractional-signed-delta: wrap against a substituted linked basis",
+    )
+    .await
+    .expect("substituted-basis transaction");
     assert!(
         !accepted,
         "same-width different-Product linked basis must refuse"
     );
     assert_eq!(snapshot(&mut context, &fixture).await, before);
 
-    let (accepted, late_compute, logs) = submit_v0(&mut context, late, table, &addresses)
-        .await
-        .expect("late-refusal transaction");
+    let (accepted, late_compute, logs) = submit_v0(
+        &mut context,
+        late,
+        table,
+        &addresses,
+        "claims fractional-signed-delta: caller refuses after a complete wrap",
+    )
+    .await
+    .expect("late-refusal transaction");
     assert!(
         !accepted,
         "caller must deliberately refuse after Claims success"
@@ -668,10 +756,15 @@ async fn real_sbf_fractional_wrap_lowers_n258_and_rolls_back_after_late_refusal(
     );
     assert_eq!(snapshot(&mut context, &fixture).await, before);
 
-    let (accepted, success_compute, logs) =
-        submit_v0(&mut context, direct.clone(), table, &addresses)
-            .await
-            .expect("canonical Fractional transaction");
+    let (accepted, success_compute, logs) = submit_v0(
+        &mut context,
+        direct.clone(),
+        table,
+        &addresses,
+        "claims fractional-signed-delta: canonical wrap commits",
+    )
+    .await
+    .expect("canonical Fractional transaction");
     assert!(
         accepted,
         "canonical real-SBF Fractional wrap must commit: {logs:#?}"
@@ -683,9 +776,15 @@ async fn real_sbf_fractional_wrap_lowers_n258_and_rolls_back_after_late_refusal(
     assert_eq!(fixture.expected.lowering.native_claims(), WRAP_QUANTITY);
     assert_eq!(fixture.expected.lowering.collateral_atoms(), 0);
 
-    let (accepted, _, _) = submit_v0(&mut context, direct, table, &addresses)
-        .await
-        .expect("stale Fractional transaction");
+    let (accepted, _, _) = submit_v0(
+        &mut context,
+        direct,
+        table,
+        &addresses,
+        "claims fractional-signed-delta: stale wrap refuses",
+    )
+    .await
+    .expect("stale Fractional transaction");
     assert!(!accepted, "stale Claims revisions must refuse");
     assert_eq!(snapshot(&mut context, &fixture).await, after);
     println!(

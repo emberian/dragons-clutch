@@ -1,0 +1,66 @@
+{
+  "campaign": "claims-fractional-signed-delta-programtest",
+  "note": "Real-ELF ProgramTest for the N=258 Fractional wrap through the canonical Claims SignedDeltaV3 route (blocked.json: 'A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet'). Real Claims, Registry and Core ELFs with the Product Runtime V3 graph and LiabilityBasisV2 aggregate INSTALLED directly. Campaign: programs/dclutch-claims-sbf/program-test/fractional-signed-delta (tests/fractional_signed_delta.rs). Every submitted transaction, including the hostile ones, goes through a test-only wrapper that itself lowers the request via the production dclutch-fractional-claims-kernel before CPI-ing into Claims, so a failure the wrapper raises BEFORE that CPI (the stale-revision case) never invokes Claims at all and is bound with no program/route claim.",
+  "bindings": [
+    {
+      "label": "claims fractional-signed-delta: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims fractional-signed-delta: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims fractional-signed-delta: wrap against a substituted linked basis",
+      "routes": [
+        "claims/process_instruction",
+        "claims/signed_delta_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/SignedDeltaSbfErrorV3::ProductBasis",
+      "note": "HOSTILE. The finalized linked-basis raw/staging pair is substituted for another Product's basis at the same semantic identity. Claims itself is invoked (CPI'd by the test-only wrapper) and refuses ProductBasis (0xcb/203); the wrapper's own top-level failure log repeats the same code because a failed CPI aborts the whole transaction before the wrapper's Rust code regains control -- it is Claims' refusal, not the wrapper's."
+    },
+    {
+      "label": "claims fractional-signed-delta: caller refuses after a complete wrap",
+      "routes": [
+        "claims/process_instruction",
+        "claims/signed_delta_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 3,
+        "reason": "The test-only wrapper's DeliberateLateFailure, raised AFTER Claims logged success and the wrapper validated Claims' receipt, to prove the wrap rolls back whole. It is not a Claims refusal, and it collides numerically with claims/ClaimsSbfError::Release, which is exactly why it is not credited to one."
+      },
+      "note": "The chain's own logs show `Program <claims> success` inside a transaction that did not commit."
+    },
+    {
+      "label": "claims fractional-signed-delta: canonical wrap commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/signed_delta_v3::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The canonical N=258 Fractional wrap: the test-only wrapper lowers the request through the production kernel and CPIs into Claims, which commits both Positions and the aggregate."
+    },
+    {
+      "label": "claims fractional-signed-delta: stale wrap refuses",
+      "routes": [],
+      "program": "",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 0,
+        "reason": "The same instruction is resubmitted after the canonical wrap already advanced on-chain state. The test-only wrapper recomputes its lowering host-side from CURRENT account state before ever invoking Claims, and the request's baked-in post-revision/post-reserve fields no longer match, so the wrapper's own Instruction-shape check refuses BEFORE any CPI -- the finalized logs show no `Program <claims> invoke` line at all. This collides numerically with claims/ClaimsSbfError::Instruction, which is exactly why no program or route is claimed here: the census cannot corroborate an invocation the chain never recorded."
+      },
+      "note": "Claims is never invoked for this transaction; recorded to keep every submitted transaction bound, per TIERS.md, without overstating what ran."
+    }
+  ]
+}

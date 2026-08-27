@@ -23,6 +23,7 @@ solana-program = { version = "=3.0.0" }
 solana-sdk-ids = "=3.1.0"
 
 [dev-dependencies]
+dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 solana-account = "=4.3.2"
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.4.1"

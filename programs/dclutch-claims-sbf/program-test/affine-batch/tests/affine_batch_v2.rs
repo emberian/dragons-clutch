@@ -13,6 +13,7 @@ use dclutch_claims_affine_batch_program_test::{
 };
 use dclutch_claims_svm::affine_batch_v2::{DeltaDirectionV2, SignedMagnitudeV2};
 use dclutch_core_contract::ContentId;
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -610,7 +611,22 @@ fn lookup_addresses(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> 
     addresses
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) {
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The extent of a legacy or v0 message once signed, checked against Solana's
+/// packet maximum. `solana-program-test` submits no packet and cannot enforce
+/// this itself -- Found31 was ten bytes over and survived every fixture test --
+/// so the campaign measures it directly.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -622,12 +638,39 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed ALT transaction")
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
         .expect("ALT lifecycle processing");
-    assert!(processed.result.is_ok(), "ALT lifecycle must commit");
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert!(accepted, "ALT lifecycle must commit");
 }
 
 async fn create_live_lookup_table(
@@ -644,11 +687,12 @@ async fn create_live_lookup_table(
         .expect("make lookup-table slot recent");
     let payer = context.payer.pubkey();
     let (create, table) = create_lookup_table(payer, payer, clock.slot);
-    process_legacy(context, create).await;
-    for chunk in addresses.chunks(20) {
+    process_legacy(context, create, "claims affine-batch: create lookup table").await;
+    for (index, chunk) in addresses.chunks(20).enumerate() {
         process_legacy(
             context,
             extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+            &format!("claims affine-batch: extend lookup table {index}"),
         )
         .await;
     }
@@ -668,6 +712,7 @@ async fn submit_v0(
     instruction: Instruction,
     table: Pubkey,
     addresses: &[Pubkey],
+    label: &str,
 ) -> Result<(bool, Vec<String>), BanksClientError> {
     let blockhash: Hash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
@@ -684,15 +729,42 @@ async fn submit_v0(
     );
     let transaction =
         VersionedTransaction::try_new(message, &[&context.payer]).expect("signed v0 transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
-    let logs = processed
+    let accepted = processed.result.is_ok();
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
         .metadata
-        .map(|metadata| metadata.log_messages)
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
         .unwrap_or_default();
-    Ok((processed.result.is_ok(), logs))
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Ok((accepted, logs))
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
@@ -784,17 +856,36 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     let table = create_live_lookup_table(&mut context, &addresses).await;
     let before = claims_snapshot(&mut context, &fixture).await;
 
-    for hostile in [alias, substituted_product, substituted_basis] {
-        let (accepted, _) = submit_v0(&mut context, hostile, table, &addresses)
+    for (hostile, label) in [
+        (
+            alias,
+            "claims affine-batch: admit under a substituted Position alias",
+        ),
+        (
+            substituted_product,
+            "claims affine-batch: admit against a substituted Product record",
+        ),
+        (
+            substituted_basis,
+            "claims affine-batch: admit against a substituted linked basis",
+        ),
+    ] {
+        let (accepted, _) = submit_v0(&mut context, hostile, table, &addresses, label)
             .await
             .expect("hostile transaction");
         assert!(!accepted, "hostile affine substitution must refuse");
         assert_eq!(claims_snapshot(&mut context, &fixture).await, before);
     }
 
-    let (accepted, logs) = submit_v0(&mut context, late, table, &addresses)
-        .await
-        .expect("late caller transaction");
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        late,
+        table,
+        &addresses,
+        "claims affine-batch: caller refuses after a complete batch",
+    )
+    .await
+    .expect("late caller transaction");
     assert!(!accepted, "test caller must deliberately refuse late");
     assert!(
         logs.iter()
@@ -803,9 +894,15 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     );
     assert_eq!(claims_snapshot(&mut context, &fixture).await, before);
 
-    let (accepted, _) = submit_v0(&mut context, direct.clone(), table, &addresses)
-        .await
-        .expect("canonical affine transaction");
+    let (accepted, _) = submit_v0(
+        &mut context,
+        direct.clone(),
+        table,
+        &addresses,
+        "claims affine-batch: canonical batch commits",
+    )
+    .await
+    .expect("canonical affine transaction");
     assert!(accepted, "canonical real-SBF affine batch must commit");
     let after = claims_snapshot(&mut context, &fixture).await;
     assert_eq!(read_u64(&after.market.data, 16), 1);
@@ -818,9 +915,15 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     assert_eq!(read_u64(&after.market.data, 256), 7);
     assert_eq!(read_u64(&after.market.data, 256 + 257 * 8), u64::MAX);
 
-    let (accepted, _) = submit_v0(&mut context, direct, table, &addresses)
-        .await
-        .expect("stale affine transaction");
+    let (accepted, _) = submit_v0(
+        &mut context,
+        direct,
+        table,
+        &addresses,
+        "claims affine-batch: stale batch refuses",
+    )
+    .await
+    .expect("stale affine transaction");
     assert!(!accepted, "stale aggregate/Position revisions must refuse");
     assert_eq!(claims_snapshot(&mut context, &fixture).await, after);
 }

@@ -1,0 +1,47 @@
+{
+  "campaign": "claims-fractional-signed-delta-programtest",
+  "witnesses": [
+    {
+      "id": "fractional-signed-delta-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it."
+    },
+    {
+      "id": "fractional-signed-delta-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign therefore serialises every transaction it submits over a real activated Address Lookup Table and records the extent, and this witness checks the largest against the stated limit."
+    },
+    {
+      "id": "fractional-signed-delta-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured."
+    },
+    {
+      "id": "every-fractional-signed-delta-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this campaign claims -- named or unnamed_refusal -- is a program decision (Claims' own, or the test-only wrapper's), so a bare runtime refusal appearing here would mean a hostile case stopped being about a program."
+    },
+    {
+      "id": "the-stale-wrap-never-invoked-claims",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"claims fractional-signed-delta: stale wrap refuses\") | [.logs[] | select(contains(\"Bswb3UyeD1pUTaGiE6WvqwFpJZsQSEY1xhJePCDTHdvp invoke\"))] | length | tostring",
+      "expect": "0",
+      "provenance": "The bindings claim NO program and NO route for this transaction because Claims is never invoked -- the test-only wrapper's own host-side lowering refuses on stale on-chain state before any CPI. This checks the chain's own logs for the absence of a Claims invocation, so the uncredited binding cannot quietly overstate coverage."
+    },
+    {
+      "id": "fractional-signed-delta-canonical-commits-exactly-once",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label == \"claims fractional-signed-delta: canonical wrap commits\") | select(.error == null)] | length | tostring",
+      "expect": "1",
+      "provenance": "The canonical Fractional wrap is the one transaction this campaign asserts must commit; every other labelled transaction is either ALT plumbing or a hostile case. This checks the runtime's own recorded outcome, not the campaign's own assertion of it."
+    }
+  ]
+}
