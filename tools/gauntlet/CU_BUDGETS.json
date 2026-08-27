@@ -11,7 +11,7 @@
     "measured_at": "the `measured` value of every entry is the HIGHEST draw this lane observed, not a single run. Pinning the highest draw is what keeps ordinary noise from producing a red row.",
     "noise": "BOTH CAMPAIGNS ARE SEEDED NOW, and the residual is measured rather than assumed. The original cause was exact: every campaign drew fresh signing keypairs per run (Keypair::new() in the successor bootstrap; Keypair::new() and Pubkey::new_unique() in the ProgramTest fast lane), which changes how many iterations find_program_address needs for an off-curve bump, and each iteration is one sol_create_program_address syscall at 1,500 CU. Every delta measured between runs was an exact multiple of 1,500 (a handful of +-4 residuals aside), which is what made the diagnosis a measurement rather than a story. tier 4 is now band 0 on every row, proven over four runs of one compiled binary. tier 1 is NOT: 82 of its 101 transactions are byte-identical across two seeded runs at one revision and 19 are not, because A KEYPAIR SEED ONLY SEEDS KEYPAIRS -- the founding ladders carry expiry slots derived as finalized_slot + 500,000 and lookup tables derived from [authority, recent_slot], and those move with when the campaign happens to run. See CU_BUDGETS.md.",
     "measured_bands": "SEEDED, tier 1, two campaigns at 5465341 on 2026-08-27 with one seed digest and one set of ELFs: 14 of the 24 enforced rows are band 0, including every per-role activation, Found31 and its rollback case, the infrastructure profile init, the non-terminal DCLTPCB1 refusal, the second projected-Custody prestate and both DCLTPCA1 cases. The other 10 are the two founding ladders and their stages: dcltgmf1-whole 9,004; its stages 1,500 / 2 / 2 / 1,500; dcltpcb1-whole 24,000; its stages 6,000 / 4,500 / 1,500; the reordered-tail refusal 24,000. UNSEEDED, which is what this file's pins were written against and what a real founder still pays: DCLTGMF1 58,494, DCLTPCB1 51,005 across campaigns and 79,500 within ONE campaign, the reordered-tail refusal 55,503, per-role activation 1,500-9,000. tier 4 seeded: 0 on every row over four runs; unseeded it spanned 24,000 on the founding case and 6,000 on the substituted-ProgramData refusal, which six runs had not bounded.",
-    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and — the thing W1f actually asked for — the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
+    "what_this_buys_and_what_it_does_not": "A tolerance that exceeds the band cannot also catch a regression smaller than the band. On tier 1's founding transactions the band is 58,494-79,500, so a +30,000 regression to DCLTGMF1 is NOT reliably caught by its whole-transaction budget and this file will not pretend otherwise. What IS caught: any structural regression larger than the tolerance, on any draw; and \u2014 the thing W1f actually asked for \u2014 the moment the transaction gets close enough to the 1,400,000 ceiling that the budget can no longer be written down. The teeth at the 30,000 scale live on the entries whose measured band is zero or near it (Found31, the Found31 rollback case, the infrastructure profile init, the DCLTPCB1 non-terminal refusal) and on the tier-4 fast lane, which is also the one that runs pre-campaign.",
     "how_to_shrink_it": "TAKEN, 2026-08-27. dclutch-local-successor-bootstrap run takes --keypair-seed <64 hex> behind a loopback-only refusal, and programs/dclutch-core-sbf/tests/found_program_test.rs and programs/dclutch-custody-sbf/tests/program_test.rs derive their fixture keys from documented preimages. What remains is NOT a keypair: the tier-1 founding ladders hash slot- and clock-derived material into addresses, so shrinking those rows further means making the campaign's expiry and lookup-table inputs a function of the seed rather than of the wall clock. That is a change to what the campaign SUBMITS, not to how it draws keys, and it is not obviously worth it: the world is still as noisy as it ever was and a founding is exactly where a real founder pays that noise too."
   },
   "budgets": [
@@ -170,7 +170,7 @@
       "tolerance": 50000,
       "budget": 209108,
       "enforced": true,
-      "provenance": "The third inner stage's own `consumed` line. This is the stage that had never executed at all before run 4 — it died out-of-memory under the heap wall — so a budget on it is a regression floor on a route with barely any history."
+      "provenance": "The third inner stage's own `consumed` line. This is the stage that had never executed at all before run 4 \u2014 it died out-of-memory under the heap wall \u2014 so a budget on it is a regression floor on a route with barely any history."
     },
     {
       "id": "dcltpcb1-second-prestate-whole",
@@ -192,7 +192,7 @@
       "tolerance": 70000,
       "budget": 851102,
       "enforced": true,
-      "provenance": "The hostile case W1e refused to count until run 5 supplied a discriminator. It matters that it stays BELOW the honest transaction it shadows: when the two were within 300 CU of each other the refusal was indistinguishable from an out-of-memory death at the same point. This budget does not check that relation — it is a ceiling on one number — but a red row here is the first sign that the two have converged again."
+      "provenance": "The hostile case W1e refused to count until run 5 supplied a discriminator. It matters that it stays BELOW the honest transaction it shadows: when the two were within 300 CU of each other the refusal was indistinguishable from an out-of-memory death at the same point. This budget does not check that relation \u2014 it is a ceiling on one number \u2014 but a red row here is the first sign that the two have converged again."
     },
     {
       "id": "dcltpcb1-non-terminal-refusal",
@@ -247,7 +247,7 @@
       "tolerance": 20000,
       "budget": 566984,
       "enforced": true,
-      "provenance": "Per-role activation of the immutable release set. Before the immutability-argument fast path this whole family hashed whole ELFs on chain — five-role activation with real artifacts exceeded 1,400,000 outright — so each role gets its own row and the worst role is the one that decides whether activation is reachable at all."
+      "provenance": "Per-role activation of the immutable release set. Before the immutability-argument fast path this whole family hashed whole ELFs on chain \u2014 five-role activation with real artifacts exceeded 1,400,000 outright \u2014 so each role gets its own row and the worst role is the one that decides whether activation is reachable at all."
     },
     {
       "id": "activation-role-claims",
@@ -335,7 +335,7 @@
       "tolerance": 15000,
       "budget": 737142,
       "enforced": true,
-      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit — the same Core code that costs stage 2 of DCLTGMF1 — with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
+      "provenance": "The ProgramTest FAST LANE for the Core founding path, and the reason this campaign is in the budgets file at all: it drives Core's `found` plus the one-shot permit \u2014 the same Core code that costs stage 2 of DCLTGMF1 \u2014 with no validator and no port, in under a minute. A Core founding regression surfaces here BEFORE the six-minute tier-1 campaign. Re-pinned by the SEED lane at bbfc53a, on a SEEDED fixture: programs/dclutch-core-sbf/tests/found_program_test.rs now derives its payer and its vault addresses from a fixed checked-in seed instead of Keypair::new() and Pubkey::new_unique(). FOUR runs of one compiled test binary against byte-identical ELFs (core d272bc7d669f0983, custody fe7ce5f80f4a08c8, registry 0033c6b55e8277dc, rent 3486a8197af49231, series-consume-caller ce1160b7035c4295) produced the SAME number every time, the fourth under --test-threads 1. Band 0, so tolerance is the 15,000 floor. The single-threaded run is the load-bearing one: Pubkey::new_unique() reads a process-global counter, so before the seed the value a test drew depended on how four concurrent tests interleaved, and a run that changes the thread count would have moved it. The previous pin was 744,795, the highest of six UNSEEDED runs with a 24,000 band; the drop is not a saving, it is the bump-search iterations leaving the measurement."
     },
     {
       "id": "series-consume-founds-with-permit-replay-campaign",
@@ -548,6 +548,105 @@
       "budget": 173020,
       "enforced": true,
       "provenance": "Closing/opening/transferring under the role-seeded Custody replay PDA (decision 0008 section 7). RE-PINNED 2026-08-27 by the CUSTROLE lane from TWO runs of this campaign at one revision: draws [158020, 158020], band 0, so the tolerance is the 15,000 floor. The move is measured, not assumed: the same test at 3918cb8 (the revision before the role entered the replay seeds, built from a worktree so only custody-sbf and dclutch-custody-contract differ) drew 137014, and the delta is +21006 CU = +14 x 1,500 + 6. 1,500 CU is one find_program_address iteration and 6 CU is the extra sha256 for one more seed byte, so the ENTIRE move is the bump search re-rolling on a seed tuple that gained a component. It is not a code-path cost and it has no direction: the six rows moved +21006 here and one of them moved DOWN. NOTE for the CU-BUDGET lane: the pins this replaces were ALREADY stale at 3918cb8 -- the baseline draws above differ from them by -12,521 to +11,480, which is drift from lanes between c55b606 and 3918cb8, not from this one."
+    },
+    {
+      "id": "structured-cross-schema-exposure-as-descriptor",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: cross-schema substitution: exposure as descriptor",
+      "measured": 185950,
+      "tolerance": 15000,
+      "budget": 200950,
+      "enforced": true,
+      "provenance": "Cross-family/cross-schema substitution, direction one: the finalized CompositionExposureBundleV3 record offered in the immutable descriptor's account slot. The cost is the record-authentication prologue -- release set, Product/representation admission, both record digests -- which is where a substituted record is caught, so this row is the price of the join rather than of any transition. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [185950, 185950], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-cross-schema-descriptor-as-exposure",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: cross-schema substitution: descriptor as exposure",
+      "measured": 185949,
+      "tolerance": 15000,
+      "budget": 200949,
+      "enforced": true,
+      "provenance": "The SAME substitution the other way, because a family wire that refuses one direction and admits the other is not joined. One compute unit cheaper than its twin, which is what a symmetric refusal reached at the same depth looks like. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [185949, 185949], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-recipe-substitution-permuted-coefficients",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: recipe substitution: permuted coefficients",
+      "measured": 226236,
+      "tolerance": 15000,
+      "budget": 241236,
+      "enforced": true,
+      "provenance": "A same-width RepresentationDescriptorV2 whose coefficients are the canonical ones PERMUTED -- a valid record naming a recipe the composition does not state. More expensive than the cross-schema pair because the descriptor decodes cleanly and the refusal comes from the request/descriptor identity join rather than from the record admission. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [226236, 226236], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-receipt-backed-by-receipt",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: receipt backed by receipt",
+      "measured": 11302,
+      "tolerance": 15000,
+      "budget": 26302,
+      "enforced": true,
+      "provenance": "The cheapest refusal in the island by an order of magnitude, and the row says why: the request grammar refuses a shard Mint that aliases the receipt Mint, and every caller must decode the request to derive its own Trading authority, so this one dies in the CALLER before a CPI is ever issued. A regression here that made it expensive would mean the refusal moved deeper into the chain. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [11302, 11302], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-one-atom-skew-coordinate-0",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: one-atom K_i skew at coordinate 0",
+      "measured": 313356,
+      "tolerance": 15000,
+      "budget": 328356,
+      "enforced": true,
+      "provenance": "Coordinate 0's backing skewed by exactly ONE shard atom. The full projection is built before prepare() compares the asset row's coefficient against the descriptor's, so a skew costs nearly a whole successful issue -- which is the point: the campaign basis [2, 3, 5] over 7 is pairwise coprime and coprime to the denominator so that a one-atom skew cannot be presented as a legitimate quantity at another coordinate, and the chain has to walk the whole frame to say so. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [313356, 313356], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-one-atom-skew-coordinate-1",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: one-atom K_i skew at coordinate 1",
+      "measured": 314120,
+      "tolerance": 15000,
+      "budget": 329120,
+      "enforced": true,
+      "provenance": "The same one-atom skew at coordinate 1. The 764-unit spread from coordinate 0 is the extra projection row walked before the mismatch is reached, not noise: both runs are byte-identical. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [314120, 314120], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-one-atom-skew-coordinate-2",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: one-atom K_i skew at coordinate 2",
+      "measured": 323884,
+      "tolerance": 15000,
+      "budget": 338884,
+      "enforced": true,
+      "provenance": "The same one-atom skew at coordinate 2, the last coordinate and therefore the most expensive of the three. Three separate transactions, so the coprime basis is exercised per coordinate rather than once. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [323884, 323884], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-under-configured-receipt-mint-issue",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: issue against a receipt Mint with only the Mint role",
+      "measured": 255972,
+      "tolerance": 15000,
+      "budget": 270972,
+      "enforced": true,
+      "provenance": "Decision 0011 s3b's under-configured founding: the receipt Mint carries the representation authority as its Mint authority and not as its permissioned-burn authority. parse_behavior_mint refuses it (ClaimsSbfError::Token, 0x5009) with ZERO Token-2022 CPIs issued, so this row is the cost of the behavior-profile read and everything before it. s3b predicted the failure would land at BurnReceipt with the descriptor already committed; it lands at the first issue instead, and this is what that costs. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [255972, 255972], band 0. Band 0, so the tolerance is this file's 15,000 floor."
+    },
+    {
+      "id": "structured-under-configured-receipt-mint-unwrap",
+      "campaign": "structured-v2-programtest",
+      "scope": "transaction",
+      "transaction": "claims rational-representation-v2: unwrap against a receipt Mint with only the Mint role",
+      "measured": 251184,
+      "tolerance": 15000,
+      "budget": 266184,
+      "enforced": true,
+      "provenance": "The consequence of the row above rather than a second finding: the issue committed nothing, so no representation replay exists to carry revision one and the unwrap is refused on Accounts (0x5001). BurnReceipt is never the thing that fails, because there is never anything to unwrap. Pinned 2026-08-27 by STRUCT-CAMP-2 from TWO seeded runs of the filtered structured campaign at one revision on one set of ELFs: draws [251184, 251184], band 0. Band 0, so the tolerance is this file's 15,000 floor."
     }
   ]
 }

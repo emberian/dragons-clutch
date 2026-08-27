@@ -265,6 +265,144 @@
       "outcome": "refused",
       "refusal": "claims/ClaimsSbfError::Identity",
       "note": "HOSTILE (decision 0008 section 4). The aggregate's persisted custody_context is overwritten with the UNHASHED founding action context, one SHA-256 short of the real namespace and the coordinate the funding source compartment uses; the founding's own state is untouched, so only the Market's CLAIM about where its Hoard lives moves. Refuses Identity (0x5002) with the Hoard, the recipient and the Custody replay byte-identical and no successful Custody transfer."
+    },
+    {
+      "label": "claims rational-representation-v2: family hostiles: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: family hostiles: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: single-role receipt Mint: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: single-role receipt Mint: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims rational-representation-v2: cross-schema substitution: exposure as descriptor",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, cross-family/cross-schema, direction one. The finalized CompositionExposureBundleV3 record is offered in the immutable RepresentationDescriptorV2's account slot. Refuses Identity (0x5002) at 185,950 CU; the campaign asserts a byte-identical resource snapshot."
+    },
+    {
+      "label": "claims rational-representation-v2: cross-schema substitution: descriptor as exposure",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, cross-family/cross-schema, direction two -- the SAME substitution the other way, because a family wire that refuses one direction and admits the other is not joined. The descriptor record is offered in the exposure record's slot. Refuses Identity (0x5002) at 185,949 CU."
+    },
+    {
+      "label": "claims rational-representation-v2: recipe substitution: permuted coefficients",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE. A same-width RepresentationDescriptorV2 whose coefficients are the canonical ones PERMUTED -- a valid record naming a recipe the composition does not state. Built by mutating the DERIVED preimage, so it is a near-miss of the real record rather than a hand-written seventh one. Refused twice for two reasons: host-side, require_coefficients_are_the_composition_root will not mint it (the join the live route lost when authenticate_exposure replaced authenticate_graph, decision 0011 s3d); on chain, Identity (0x5002) because the request names a descriptor_id that is the digest of other bytes."
+    },
+    {
+      "label": "claims rational-representation-v2: receipt backed by receipt",
+      "routes": [],
+      "program": "",
+      "outcome": "refused",
+      "note": "HOSTILE, and the campaign records WHERE it dies rather than claiming Claims caught it. Coordinate zero's asset row and account frame name the RECEIPT Mint, so a receipt would be backed by itself. RepresentationRequestV2::decode refuses those bytes outright (AccountAlias), and EVERY caller must decode the request to derive its own Trading authority (CallerAuthoritySeedsV1 over the request's parent_context) -- so the request can never acquire a signer and never reaches the Claims CPI at all. The test-only wrapper refuses at its own Instruction code (0x104000) at 11,302 CU. The founding-time half is proved separately in the same test: StructuredTermsV2::bind_shard_terms refuses a receipt Mint aliasing a shard Mint with DuplicateIdentity.",
+      "unnamed_refusal": {
+        "code": 1064960,
+        "reason": "RationalV2CallerError::Instruction, raised by the campaign's TEST-ONLY wrapper program, not by a first-party dClutch program. That is the honest depth: the wrapper decodes the request to derive its Trading caller authority exactly as a real caller must, so a request the grammar rejects can never acquire a signer and can never reach the Claims CPI. Recorded as unnamed because the wrapper's refusal band is test scaffolding and must not enter any program's taxonomy."
+      }
+    },
+    {
+      "label": "claims rational-representation-v2: one-atom K_i skew at coordinate 0",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Representation",
+      "note": "HOSTILE. Coordinate 0's backing skewed by exactly ONE shard atom. The callee recomputes K_i = S * c_i as asset.coefficient * header.quantity (plan.rs:263) and the campaign basis [2, 3, 5] over 7 is pairwise coprime and coprime to the denominator precisely so a one-atom skew at one coordinate cannot be presented as a legitimate quantity at another. Refuses Representation (0x5008) at 313,356 CU."
+    },
+    {
+      "label": "claims rational-representation-v2: one-atom K_i skew at coordinate 1",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Representation",
+      "note": "HOSTILE. The same one-atom skew at coordinate 1. Refuses Representation (0x5008) at 314,120 CU."
+    },
+    {
+      "label": "claims rational-representation-v2: one-atom K_i skew at coordinate 2",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Representation",
+      "note": "HOSTILE. The same one-atom skew at coordinate 2. Refuses Representation (0x5008) at 323,884 CU. All three coordinates are separate transactions, so the coprime basis is exercised per coordinate rather than once."
+    },
+    {
+      "label": "claims rational-representation-v2: the winning terminal redemption replayed",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Identity",
+      "note": "HOSTILE, double redeem. The identical winning redemption resubmitted at a LATER SLOT, so it carries a different blockhash and a different signature and the runtime's duplicate-signature dedup is not what stops it. Claims itself refuses Identity (0x5002) at 181,418 CU, having already consumed the representation replay's revision and the Custody replay's cursor; the settled state stays byte-identical."
+    },
+    {
+      "label": "claims rational-representation-v2: issue against a receipt Mint with only the Mint role",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Token",
+      "note": "HOSTILE, and it CORRECTS decision 0011 s3b. The receipt Mint carries the representation authority as its Mint authority and NOT as its permissioned-burn authority: s3b's under-configured founding, which the ruling predicted would let Issue commit and then fail at BurnReceipt 'at the Token program with the descriptor already committed'. Measured: parse_behavior_mint reads the receipt Mint's Token-2022 behavior profile on every action and requires the permissioned-burn authority present and pinned, so the FIRST IssueStructured refuses Token (0x5009) at 255,972 CU with ZERO Token-2022 CPIs issued. The two-role cost is real; its consequence is a founding that can never issue, not a representation that can never be unwound."
+    },
+    {
+      "label": "claims rational-representation-v2: unwrap against a receipt Mint with only the Mint role",
+      "routes": [
+        "claims/process_instruction",
+        "claims/rational_representation_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimsSbfError::Accounts",
+      "note": "The consequence of the row above, recorded for what it is rather than for what it looks like: the Issue committed nothing, so no representation replay exists to carry revision one and the unwrap is refused on Accounts (0x5001) at 251,184 CU. BurnReceipt is never the thing that fails, because there is never anything to unwrap."
     }
   ]
 }

@@ -1,0 +1,53 @@
+{
+  "campaign": "structured-v2-programtest",
+  "witnesses": [
+    {
+      "id": "structured-v2-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it."
+    },
+    {
+      "id": "structured-v2-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. No transaction in this island is unmeasured."
+    },
+    {
+      "id": "the-full-width-structured-frame-is-over-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"skew|receipt backed|cross-schema|recipe substitution|only the Mint role\")) | .wire_bytes] | max | tostring",
+      "expect": "1357",
+      "provenance": "THE MEASUREMENT THIS ISLAND EXISTS TO RECORD. Every Structured hostile rides the FULL-WIDTH frame, because RepresentationRequestV2::validate refuses IssueStructured/UnwrapStructured unless asset_count == outcome_count (request.rs:470-481). At K = 3 that frame is 1,357 bytes as a v0 message compiled against a real activated Address Lookup Table, against Solana's 1,232-byte PACKET_DATA_BYTES -- over by 125. The ALT is applied, not withheld: it is what takes the same frame from 2,594 down to 1,357. Decision 0011 s3b measured the executable ceiling at K = 3 from the RequestProfile artifact and called it hard; the packet caps the two full-width actions at K = 2, one coordinate lower, and nothing in the tree had measured it because the route had never been submitted at K = 3. This witness is deliberately an EQUALITY, not an inequality: an island whose only packet claim is 'still broken' would not notice the frame getting worse."
+    },
+    {
+      "id": "every-structured-v2-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this island claims is a program decision -- including receipt-backed-by-receipt, which is refused by the test-only wrapper because every caller must decode the request to derive its Trading authority, and which is bound as an unnamed_refusal for exactly that reason."
+    },
+    {
+      "id": "every-structured-v2-hostile-was-refused",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"skew|receipt backed|cross-schema|recipe substitution|only the Mint role\")) | select(.error == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "Eight Structured-family hostiles, and not one of them may commit: cross-schema substitution in BOTH directions (a family wire that refuses one direction and admits the other is not joined), a same-width descriptor whose recipe is the canonical one permuted, a receipt backed by itself, a one-atom K_i skew at each of the three coordinates, and the two actions against a receipt Mint configured in only one of its two required Token-2022 roles. The campaign additionally asserts a byte-identical resource snapshot after each; that assertion cannot be made from evidence, so it lives in the test and this witness covers the part the chain can say."
+    },
+    {
+      "id": "the-under-configured-receipt-mint-was-refused-before-any-token-cpi",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | test(\"issue against a receipt Mint with only the Mint role\")) | .logs[] | select(startswith(\"Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb invoke\"))] | length | tostring",
+      "expect": "0",
+      "provenance": "Decision 0011 s3b ruled that a founding configuring only the Mint authority would let IssueStructured COMMIT and then fail at BurnReceipt 'at the Token program with the descriptor already committed'. This is the measurement that corrects it: parse_behavior_mint reads the receipt Mint's Token-2022 behavior profile on every action and requires the permissioned-burn authority present and pinned to the representation authority, so the FIRST issue refuses ClaimsSbfError::Token (0x5009) with ZERO Token-2022 CPIs ever issued. Zero invoke lines is the whole claim: no receipt is ever minted against a Mint that could not burn it. The two-role cost stands; its consequence is a founding that can never issue, not a representation that can never be unwound."
+    },
+    {
+      "id": "the-structured-island-is-inside-its-cu-budgets",
+      "kind": "cu-budget",
+      "campaign": "structured-v2-programtest",
+      "provenance": "The budgets and their tolerances live in tools/gauntlet/CU_BUDGETS.json with their measurement dates and observed noise bands; this witness carries no number of its own. Every row was pinned from TWO seeded runs of this filtered campaign at one revision on one set of ELFs, and every row was band 0 -- byte-identical across both -- so each tolerance is the file's 15,000 floor rather than a measured band. The fixture seeds its keypairs (Keypair::new_from_array) and starts no validator, so the find_program_address bump-search noise that makes tier 1 non-deterministic does not reach here."
+    }
+  ]
+}
