@@ -100,6 +100,12 @@ type Profile = Readonly<{
   spans: readonly Span[];
 }>;
 
+/// Sole writable Trading obligation, and the Custody callee appended after it.
+/// The obligation is the last WRITE TARGET, not the last fixed coordinate.
+const DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 =
+  DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
+const DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4 = DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 + 1;
+
 const EXPECTED_SCENARIO_SPANS = Object.freeze([
   [5, 7, 0, 14, 0, 14, 14],
   [5, 8, 14, 14, 0, 14, 14],
@@ -108,8 +114,10 @@ const EXPECTED_SCENARIO_SPANS = Object.freeze([
   [25, 0, 56, 1, 1, 2, 1],
   [25, 11, 57, 14, 0, 14, 14],
   [25, 12, 71, 14, 0, 14, 14],
-  [26, 99, 85, 1, 0, 3, 1],
-  [26, DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4, 86, 1, 6, 6, 1],
+  // Both trailing spans insert after the Custody callee coordinate at 26, not
+  // after the obligation at 25.
+  [27, 99, 85, 1, 0, 3, 1],
+  [27, DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4, 86, 1, 6, 6, 1],
 ] as const);
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
@@ -335,8 +343,13 @@ function expectedScenarioProfile(lengths: readonly number[]): Uint8Array {
       const privileges = claims === 0 ? 1 : claims === 1 ? 2 : [13, 14, 16, 18].includes(claims) ? 4 : 0;
       const alias = new Map<number, number>([[2, 4], [4, 2], [8, 3]]).get(claims) ?? null;
       value = rule(privileges, 0, 0, alias === null ? 5 : 4, alias);
-    } else if (coordinate === DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 - 1) {
+    } else if (coordinate === DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4) {
       value = rule(2, 4, 192, 0, null, 8);
+    } else if (coordinate === DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4) {
+      // The release-selected Custody program the six Custody routes are invoked
+      // through: readonly executable, no effect permission, no asserted width,
+      // opaque prestate.
+      value = rule(4, 0, 0, 5);
     }
     putRule(output, header + coordinate * ACCOUNT_PROFILE_RULE_BYTES_V2, value);
   }

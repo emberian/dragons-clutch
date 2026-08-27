@@ -56,7 +56,7 @@ use super::{
 };
 
 /// Number of fixed base rules before protected spans are inserted.
-pub const DEALER_SCENARIO_PROFILE_FIXED_RULES_V4: usize = 26;
+pub const DEALER_SCENARIO_PROFILE_FIXED_RULES_V4: usize = 27;
 /// Number of canonical protected span entries.
 pub const DEALER_SCENARIO_PROFILE_SPANS_V4: usize = 9;
 /// Fourteen rules for each of six Custody frames, one Claims Position rule,
@@ -71,6 +71,17 @@ pub const DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4: usize = DYNAMIC_FIXED_SPAN_H
 
 const CLAIMS_START_V4: u16 = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3;
 const OBLIGATION_V4: u16 = CLAIMS_START_V4 + SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
+/// The release-selected Custody program the six Custody routes are invoked
+/// through.
+///
+/// A CPI's callee is not a member of its own account list and
+/// `CustodyFrameRoleV1` has no `CustodyProgram` variant, so none of the six
+/// optional Custody frames can carry it. `SignedDeltaFrameSpecV3` declares
+/// `ClaimsProgram` at its own relative 16, which is why the Claims route always
+/// resolved and the Custody routes never could. It is appended after the
+/// obligation, past every route span, so no earlier coordinate moved: the two
+/// trailing spans that used to insert at 26 now insert at 27.
+const CUSTODY_PROGRAM_V4: u16 = OBLIGATION_V4 + 1;
 const CLAIMS_LINKED_BASIS_OFFSET_V4: u16 = 2;
 const CLAIMS_PRODUCT_OFFSET_V4: u16 = 4;
 const CLAIMS_PORTFOLIO_OFFSET_V4: u16 = 8;
@@ -107,6 +118,8 @@ pub struct DealerScenarioLogicalFrameV4 {
     pub claims_positions_start: u32,
     /// Sole writable Trading obligation logical coordinate.
     pub obligation: u32,
+    /// Release-selected Custody program the Custody routes are invoked through.
+    pub custody_program: u32,
     /// First trailing readonly evidence coordinate after the obligation.
     pub evidence_start: u32,
     /// Exact request-projected trailing evidence width, zero through three.
@@ -185,7 +198,10 @@ pub fn dealer_scenario_logical_frame_v4(
             .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
     }
     let obligation = cursor;
-    cursor = obligation
+    let custody_program = obligation
+        .checked_add(1)
+        .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
+    cursor = custody_program
         .checked_add(1)
         .ok_or(DealerScenarioAccountProfileErrorV4::Geometry)?;
     let evidence_start = cursor;
@@ -210,6 +226,7 @@ pub fn dealer_scenario_logical_frame_v4(
         claims_fixed_start,
         claims_positions_start,
         obligation,
+        custody_program,
         evidence_start,
         evidence_count,
         scratch_start,
@@ -229,6 +246,7 @@ pub fn encode_dealer_scenario_account_profile_v4_atomic(
         || output.len() != DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4
         || usize::try_from(input.common_data_lengths[1]).ok() != Some(DEALER_CONFIG_BYTES_V4)
         || OBLIGATION_V4 != 25
+        || CUSTODY_PROGRAM_V4 != 26
         || DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 != 14
     {
         return Err(DealerScenarioAccountProfileErrorV4::Geometry);
@@ -330,6 +348,11 @@ fn fixed_rules(
             .map_err(|_| DealerScenarioAccountProfileErrorV4::Geometry)?,
         8,
     );
+    // Readonly executable, no effect permission, no asserted width: the loader
+    // that deployed it owns the record and the Registry activation cache, not
+    // this profile, is the sole authority on which program the Custody role
+    // selects.
+    *rule_mut(&mut rules, usize::from(CUSTODY_PROGRAM_V4))? = opaque(executable());
     Ok(rules)
 }
 
@@ -419,7 +442,7 @@ const fn dynamic_spans() -> [DynamicFixedSpanInputV2; DEALER_SCENARIO_PROFILE_SP
             14,
         ),
         span(
-            26,
+            27,
             DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4,
             85,
             1,
@@ -428,7 +451,7 @@ const fn dynamic_spans() -> [DynamicFixedSpanInputV2; DEALER_SCENARIO_PROFILE_SP
             1,
         ),
         span(
-            26,
+            27,
             DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
             86,
             1,
@@ -542,6 +565,11 @@ const fn writable() -> AccountPrivilegesV2 {
 }
 
 #[cfg(not(target_os = "solana"))]
+const fn executable() -> AccountPrivilegesV2 {
+    AccountPrivilegesV2::new(false, false, true)
+}
+
+#[cfg(not(target_os = "solana"))]
 const fn none() -> AccountEffectPermissionsV2 {
     AccountEffectPermissionsV2::new(false, false, false)
 }
@@ -613,23 +641,25 @@ mod tests {
     fn exact_widths_shift_claims_and_obligation_without_placeholders() {
         let bytes = profile();
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
+        // Every count is one higher than before the Custody callee coordinate
+        // existed, and no coordinate before it moved.
         let sparse = [14_u32, 0, 0, 0, 1, 0, 14, 3, 6];
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(16, &sparse),
-            Ok(64)
+            Ok(65)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(16, &sparse),
-            Ok(61)
+            Ok(62)
         );
         let full = [14_u32, 14, 14, 14, 2, 14, 14, 0, 6];
         assert_eq!(
             profile.logical_account_count_with_dynamic_spans(16, &full),
-            Ok(118)
+            Ok(119)
         );
         assert_eq!(
             profile.physical_account_count_with_dynamic_spans(16, &full),
-            Ok(115)
+            Ok(116)
         );
         let obligation = profile.rule(false, OBLIGATION_V4).expect("obligation");
         assert_eq!(
@@ -699,11 +729,12 @@ mod tests {
         assert_eq!(sparse.claims_fixed_start, 5);
         assert_eq!(sparse.claims_positions_start, 25);
         assert_eq!(sparse.obligation, 26);
-        assert_eq!(sparse.evidence_start, 27);
+        assert_eq!(sparse.custody_program, 27);
+        assert_eq!(sparse.evidence_start, 28);
         assert_eq!(sparse.evidence_count, 3);
-        assert_eq!(sparse.scratch_start, 30);
+        assert_eq!(sparse.scratch_start, 31);
         assert_eq!(sparse.scratch_count, 6);
-        assert_eq!(sparse.logical_account_count, 36);
+        assert_eq!(sparse.logical_account_count, 37);
 
         let dense = dealer_scenario_logical_frame_v4([14, 14, 14, 14, 2, 14, 14, 0, 6])
             .expect("dense frame");
@@ -711,11 +742,12 @@ mod tests {
         assert_eq!(dense.claims_fixed_start, 61);
         assert_eq!(dense.claims_positions_start, 81);
         assert_eq!(dense.obligation, 111);
-        assert_eq!(dense.evidence_start, 112);
+        assert_eq!(dense.custody_program, 112);
+        assert_eq!(dense.evidence_start, 113);
         assert_eq!(dense.evidence_count, 0);
-        assert_eq!(dense.scratch_start, 112);
+        assert_eq!(dense.scratch_start, 113);
         assert_eq!(dense.scratch_count, 6);
-        assert_eq!(dense.logical_account_count, 118);
+        assert_eq!(dense.logical_account_count, 119);
 
         let bytes = profile();
         let profile = AccountProfileV2::decode(&bytes).expect("decode");
