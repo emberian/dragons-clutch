@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **201** codes, with meanings taken
+The tables below carry all **209** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -64,6 +64,7 @@ from the source code's own documentation.
 | `0x5007` | `ClaimsSbfError::Receipt` | Receipt construction or post-state commitment failed. | `programs/dclutch-claims-sbf/src/lib.rs:176` |
 | `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | `programs/dclutch-claims-sbf/src/lib.rs:178` |
 | `0x5009` | `ClaimsSbfError::Token` | Token-2022 mint/account profile or CPI refused. | `programs/dclutch-claims-sbf/src/lib.rs:180` |
+| `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-claims-sbf/src/lib.rs:188` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::Instruction` | Instruction bytes were not the sole canonical V2 action. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:58` |
 | `0x5101` | `LiabilityBasisSbfErrorV2::Accounts` | Account count, order, privilege, owner, or alias checks refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:60` |
 | `0x5102` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:62` |
@@ -104,14 +105,14 @@ from the source code's own documentation.
 | `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:120` |
 | `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:122` |
 | `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:124` |
-| `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:72` |
-| `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:74` |
-| `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:76` |
-| `0x5203` | `SignedDeltaSbfErrorV3::ProductBasis` | Product graph, linked basis, semantic identity, or Core join refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:78` |
-| `0x5204` | `SignedDeltaSbfErrorV3::ClaimsState` | Aggregate or Position PDA, width, identity, or revision refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:80` |
-| `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:82` |
-| `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:84` |
-| `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:86` |
+| `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:95` |
+| `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:97` |
+| `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:99` |
+| `0x5203` | `SignedDeltaSbfErrorV3::ProductBasis` | Product graph, linked basis, semantic identity, or Core join refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:101` |
+| `0x5204` | `SignedDeltaSbfErrorV3::ClaimsState` | Aggregate or Position PDA, width, identity, or revision refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:103` |
+| `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:105` |
+| `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:107` |
+| `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:109` |
 | `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:117` |
 | `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:119` |
 | `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:121` |
@@ -156,6 +157,7 @@ from the source code's own documentation.
 | `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | `programs/dclutch-core-sbf/src/lib.rs:113` |
 | `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | `programs/dclutch-core-sbf/src/lib.rs:115` |
 | `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | `programs/dclutch-core-sbf/src/lib.rs:117` |
+| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:125` |
 
 ## custody
 
@@ -173,6 +175,7 @@ from the source code's own documentation.
 | `0x6009` | `CustodySbfError::Postcondition` | Exact CPI postcondition or checked balance arithmetic refused. | `programs/dclutch-custody-sbf/src/lib.rs:106` |
 | `0x600A` | `CustodySbfError::Commit` | Replay state could not be committed after all effects succeeded. | `programs/dclutch-custody-sbf/src/lib.rs:108` |
 | `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time.  The kernel has always distinguished this from [`Self::Replay`]; this program used to flatten both into it, so a projection refusing an early unwind reported "replay PDA, owner, bytes, or revision refused" - which is not what happened and is not what a reader needs to know. For a terminal whose entire safety property is that it refuses while the founding is still satisfiable, the refusal has to be able to say so. | `programs/dclutch-custody-sbf/src/lib.rs:117` |
+| `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-custody-sbf/src/lib.rs:125` |
 
 ## dealer
 
@@ -188,6 +191,7 @@ from the source code's own documentation.
 | `0x7007` | `DealerSbfError::Claims` | The canonical Claims child action or receipt refused. | `programs/dclutch-dealer-sbf/src/lib.rs:123` |
 | `0x7008` | `DealerSbfError::Custody` | A canonical Custody child transfer, receipt, or postcondition refused. | `programs/dclutch-dealer-sbf/src/lib.rs:125` |
 | `0x7009` | `DealerSbfError::Commit` | State data could not be borrowed or commit width changed. | `programs/dclutch-dealer-sbf/src/lib.rs:127` |
+| `0x700A` | `DealerSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-dealer-sbf/src/lib.rs:135` |
 
 ## dealer-accelerator
 
@@ -247,6 +251,7 @@ from the source code's own documentation.
 | `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | `programs/dclutch-registry-sbf/src/lib.rs:92` |
 | `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | `programs/dclutch-registry-sbf/src/lib.rs:94` |
 | `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | `programs/dclutch-registry-sbf/src/lib.rs:96` |
+| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-registry-sbf/src/lib.rs:104` |
 
 ## rent
 
@@ -263,6 +268,7 @@ from the source code's own documentation.
 | `0x2008` | `RentSbfError::Release` | Registry refused the current Core deployment or returned other bytes. | `programs/dclutch-rent-sbf/src/lib.rs:77` |
 | `0x2009` | `RentSbfError::Caller` | Current Core did not sign with the exact lifecycle-close authority. | `programs/dclutch-rent-sbf/src/lib.rs:79` |
 | `0x200A` | `RentSbfError::Closure` | Complete retirement evidence or the final close plan refused. | `programs/dclutch-rent-sbf/src/lib.rs:81` |
+| `0x200B` | `RentSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-rent-sbf/src/lib.rs:89` |
 
 ## resolution
 
@@ -288,6 +294,7 @@ from the source code's own documentation.
 | `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`.  Like `RelayedWindow`, and for the same reason: this is no answer rather than a wrong one, and the Market is still live. §12.3's first operator question. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:91` |
 | `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`.  §12.3's second operator question, and the one whose answer is an instruction: if the publication is too OLD, a pinned fixture has outlived its declared shelf life and must be recaptured — not widened. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:99` |
 | `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits.  §12.3's third operator question. Unlike the first two this one is not "come back later": nothing about waiting changes it. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:106` |
+| `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:114` |
 
 ## series-shadow
 
@@ -310,6 +317,7 @@ from the source code's own documentation.
 | `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:155` |
 | `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:157` |
 | `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:159` |
+| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:167` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |
