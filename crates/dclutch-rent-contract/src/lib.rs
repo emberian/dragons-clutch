@@ -56,22 +56,12 @@ pub enum Error {
     InvalidMagic,
     /// The encoded schema version is not implemented.
     UnsupportedSchema,
-    /// An instruction action discriminator is not defined in V1.
-    UnknownAction,
     /// Reserved bytes or reserved trailing bytes were not zero.
     NonCanonicalReservedBytes,
     /// A required authority or ordinary account key was the all-zero sentinel.
     ZeroAuthorityOrAccount,
-    /// An account did not have the exact role privileges required by V1.
-    InvalidAccountPrivilege,
-    /// A supplied System Program was not the canonical executable System Program.
-    InvalidSystemProgram,
     /// A supplied Rent account was not the canonical nonexecutable Rent sysvar.
     InvalidRentSysvar,
-    /// Authenticated wallet facts were not a data-empty System wallet.
-    InvalidSystemWallet,
-    /// Roles that must be distinct used the same account key.
-    AccountAlias,
     /// Creation was not funded by exactly the current Rent minimum.
     CreationFundingMismatch,
     /// A required nonzero requested withdrawal amount was zero.
