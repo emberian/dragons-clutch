@@ -308,9 +308,17 @@ The instruction measures **711 bytes** against the 1,232-byte legacy limit, whic
 is asserted: creating this cursor stands ahead of a redemption and must not
 require a published address-lookup table.
 
-**Terminal settlement's plan therefore gains an explicit create step**, emitted
-when the replay is absent. The mechanism is lazy creation; the plan makes it a
-step. The two options §6 offered are the same answer seen from two ends.
+**About "an explicit create step in terminal settlement's plan": there is no
+such plan to add it to.** `claims/terminal_settlement_v3::process` has no
+operator, no builder and no campaign anywhere in the tree — it is §5's blocked
+row, and a grep for its magic finds only the codec that defines it and the
+dispatcher that routes it. So the two options §6 offered are not alternatives:
+the mechanism is lazy creation, and the step is what a plan will have to open
+with once someone writes one. Recorded as an obligation on whoever does:
+**a terminal-settlement plan opens with the replay-creation instruction when the
+Claims-role replay is absent, and the same is true of any redemption builder,
+including the browser's.** The route is already exercised in that position by the
+campaign, which is the closest thing to a plan that exists.
 
 ### 7.4 Site inventory
 
