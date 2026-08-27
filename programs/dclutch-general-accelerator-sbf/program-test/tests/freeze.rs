@@ -5,31 +5,32 @@ use std::{vec, vec::Vec};
 use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    AcceleratorAckV2, AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2,
-    RequestTransportV2, ScratchPageKindV2, ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2,
-    ACCELERATOR_REQUEST_HEADER_BYTES_V2, SCRATCH_PAGE_HEADER_BYTES_V2,
+    ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
+    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
+    SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     hot_candidate_v3::{
-        general_hot_candidate_bank_len_v3, general_hot_scalar_count_v3, identity, scalar,
-        GENERAL_HOT_COMMON_IDENTITIES_V3,
+        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
+        general_hot_scalar_count_v3, identity, scalar,
     },
     local_state_v3::{
-        encode_general_local_state_v3_atomic, general_local_state_len_v3,
-        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3,
+        GeneralLocalStateHeaderV3, GeneralLocalStateKindV3, encode_general_local_state_v3_atomic,
+        general_local_state_len_v3,
     },
     runtime_selection::{
-        consider_verified_candidate_v2, RuntimeSelectionPhaseV2, RUNTIME_SELECTION_CURSOR_BYTES_V2,
+        RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionPhaseV2, consider_verified_candidate_v2,
     },
-    runtime_width::{verified_candidate_len, VerifiedCandidateHeaderV2, VerifiedCandidateV2},
+    runtime_width::{VerifiedCandidateHeaderV2, VerifiedCandidateV2, verified_candidate_len},
 };
 use dclutch_general_codec::{
-    successor_request_v2::ControllerRequestV2, Action, SelectionCriterion, SelectionPolicyV1,
-    MAX_SELECTION_CRITERIA,
+    Action, MAX_SELECTION_CRITERIA, SelectionCriterion, SelectionPolicyV1,
+    successor_request_v2::ControllerRequestV2,
 };
 use dclutch_general_config_contract::v3::{GeneralConfigV3, GeneralConfigV3Input};
+use dclutch_program_test_evidence::{TransactionEvidence, record};
 use solana_account::Account;
 use solana_program::{
     hash::hash,
@@ -345,9 +346,18 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     }
 }
 
+/// Submit one transaction, recording it for the census when the tier claims it.
+///
+/// `label` and `recorded` carry the same discipline as `lifecycle.rs`: this
+/// tier's fast lane is claimed at N=1 only, because at N=258 the frame does not
+/// fit a Solana packet and ProgramTest is not in a position to notice. The
+/// extent is measured here rather than assumed, exactly so a witness can compare
+/// it against the stated maximum.
 async fn submit(
     context: &mut ProgramTestContext,
     instruction: Instruction,
+    label: &str,
+    recorded: bool,
 ) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let transaction = Transaction::new_signed_with_payer(
@@ -356,10 +366,51 @@ async fn submit(
         &[&context.payer],
         blockhash,
     );
-    context
+    let packet_bytes = 1_usize
+        .checked_add(64)
+        .and_then(|prefix| prefix.checked_add(transaction.message_data().len()))
+        .expect("bounded transaction wire");
+    let signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .expect("a signed transaction has a signature")
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
-        .await
+        .await?;
+    if recorded {
+        let failure = processed
+            .result
+            .clone()
+            .err()
+            .map(|error| format!("{error:?}"));
+        let logs = processed
+            .metadata
+            .as_ref()
+            .map_or_else(Vec::new, |metadata| metadata.log_messages.clone());
+        let compute_units = processed
+            .metadata
+            .as_ref()
+            .map(|metadata| metadata.compute_units_consumed);
+        record(&TransactionEvidence {
+            label,
+            signature: &signature,
+            slot,
+            error: failure.as_deref(),
+            logs: &logs,
+            compute_units_consumed: compute_units,
+            wire_bytes: Some(packet_bytes),
+        })
+        .expect("campaign evidence must be writable when the gauntlet asked for it");
+    }
+    Ok(processed)
 }
 
 fn read_payload_scalar(payload: &[u8], coordinate: u32) -> u64 {
@@ -382,9 +433,14 @@ async fn real_sbf_freeze_accepts_runtime_widths_one_and_258() {
         let fixture = fixture(outcome_count, false);
         let request = AcceleratorRequestV2::decode(&fixture.request_bytes).expect("request decode");
         let mut context = fixture.test.start_with_context().await;
-        let processed = submit(&mut context, fixture.instruction)
-            .await
-            .expect("ProgramTest processing");
+        let processed = submit(
+            &mut context,
+            fixture.instruction,
+            &format!("general accelerator Freeze at runtime width {outcome_count}"),
+            outcome_count == 1,
+        )
+        .await
+        .expect("ProgramTest processing");
         assert!(
             processed.result.is_ok(),
             "real accelerator Freeze must commit"
@@ -416,9 +472,14 @@ async fn corrupted_scratch_page_refuses_without_mutating_selection() {
     let selection_key = SELECTION_STATE;
     let selection_before = fixture.selection_before;
     let mut context = fixture.test.start_with_context().await;
-    let processed = submit(&mut context, fixture.instruction)
-        .await
-        .expect("ProgramTest processing");
+    let processed = submit(
+        &mut context,
+        fixture.instruction,
+        "general accelerator Freeze refuses a corrupted scratch page at runtime width 1",
+        true,
+    )
+    .await
+    .expect("ProgramTest processing");
     assert!(processed.result.is_err(), "corrupted page must refuse");
     let selection_after = context
         .banks_client

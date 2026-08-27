@@ -7,11 +7,6 @@
       "owner": "TA-DLR (the campaign); frame blocker cleared by W2h, the allocator-coherence question is an owner decision"
     },
     {
-      "route": "general-accelerator/*",
-      "reason": "General accelerator, not part of the seven-role successor release set; no tier deploys it. A ProgramTest fast lane cannot substitute at the canonical runtime width: the seven-action campaign at programs/dclutch-general-accelerator-sbf/program-test measures six of the seven N=258 actions at 1,273-1,328 legacy-message bytes against Solana's 1,232-byte packet maximum, so TIERS.md's packet-serialisation clause fails there (docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md). At N=1 every packet is 745-866 bytes and that clause holds. Since ea4954a the emitter for such a lane exists (tools/gauntlet/program-test-evidence); what remains is record() in the campaign's submit, bindings.json, witnesses.json, and a run.sh stage -- and run.sh, census/src and tier2 were all under live edits by another lane when this entry was written, so the stage is a handoff rather than a collision. Flipping the row on validator evidence needs the accelerator deployed and reached through the real Trading Hot path, downstream of the Trading heap wall.",
-      "owner": "TA-GEN for the campaign and the N=1 emitter/bindings/witnesses; the gauntlet lane for the run.sh stage; W2h for the Hot path"
-    },
-    {
       "route": "series-shadow/*",
       "reason": "Shadow accelerator, not part of the seven-role successor release set; no tier deploys it. The workspace half of this entry is DISCHARGED: the callback authenticator now lives in crates/dclutch-shadow-accelerator-auth-v4, dclutch-series-shadow-sbf no longer depends on dclutch-trading-sbf at all, and the package is a root workspace member that builds under `cargo check --workspace --all-targets`. What remains is that no campaign drives the ELF.",
       "owner": "cycle-2 tranche A (WAVE.md), Series"

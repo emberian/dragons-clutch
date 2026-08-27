@@ -1676,6 +1676,7 @@ dependencies = [
  "dclutch-operator",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
+ "dclutch-program-test-evidence",
  "dclutch-record-contract",
  "dclutch-release-set-contract",
  "dclutch-request-profile-contract",
@@ -1867,6 +1868,10 @@ dependencies = [
  "solana-program",
  "solana-sdk-ids",
 ]
+
+[[package]]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-provider-transport-v3-operator"

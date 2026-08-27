@@ -1,0 +1,14 @@
+{
+  "fast_lane": {
+    "backing": "solana-program-test",
+    "finality": "ProgramTest has no finalized commitment. `slot` is the bank slot observed at submission; it orders the campaign and is NOT proof of finality. A validator tier is still owed, and for this family it is downstream of a General bundle reaching Trading's Hot path at all -- see docs/decisions/0010 §6 and GEN-HOT.",
+    "no_loader_v3_dependency": "Satisfied. The accelerator is stateless and readonly: it authenticates the instructions sysvar, the Trading program account's executable bit, and Trading-owned scratch pages by owner and digest. It reads no ProgramData, requires no SetAuthority transition, and reads no deployment slot. The two ELFs are added by ProgramTest at fixed addresses and nothing in the route inspects how they got there.",
+    "no_packet_limit_dependency": "Satisfied ONLY at runtime width 1, and the tier records nothing else. ProgramTest submits no packet, so this campaign serialises every transaction itself -- one short-vector signature count byte, one 64-byte signature, and the exact canonical message bytes -- and records the extent as wire_bytes for a witness to compare against Solana's stated 1,232-byte maximum. At N=1 the seven actions measure 745-867 bytes and the clause holds. At N=258 six of the seven measure 1,273-1,329 bytes and the clause FAILS, so those transactions run and are measured but are not recorded: folding one would record a route as executed on a frame no validator would accept. Flipping the row at the canonical runtime width needs the ALT/v0 route, and flipping it on validator evidence needs the accelerator deployed and reached through the real Trading Hot path.",
+    "compute_and_heap": "Satisfied. Both fixtures set the compute limit to exactly 1,400,000 and never adjust it; the BPF heap is the ProgramTest default 32,768 and no heap frame is requested anywhere in this campaign. No diagnostic budget is used. The widest recorded draw is 61,322 CU.",
+    "real_account_shapes": "Partially, and stated rather than claimed. Every account this route reads is either a Trading-owned scratch page whose shape the accelerator itself authenticates, the real instructions sysvar (loaded through solana_instructions_sysvar and required to be owned by the sysvar id), or an opaque readonly runtime account whose width the family's own AccountProfile declares. The route touches no Token-2022 mint, no System Program metadata and no upgradeable-loader account, so the three shapes that have historically differed between ProgramTest and Agave do not appear in it. That is a narrower statement than 'the account shapes are real' and it is the one this tier can defend.",
+    "compute_limit": 1400000,
+    "heap_bytes": 32768,
+    "packet_data_bytes": 1232,
+    "recorded_runtime_width": 1
+  }
+}

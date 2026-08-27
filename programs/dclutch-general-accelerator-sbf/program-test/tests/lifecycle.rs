@@ -65,6 +65,7 @@ use dclutch_general_config_contract::{
     root::GeneralRootV2,
     v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
+use dclutch_program_test_evidence::{TransactionEvidence, record};
 use solana_account::Account;
 use solana_program::{
     hash::hash,
@@ -104,6 +105,19 @@ struct RealSbfFixture {
     instruction: Instruction,
     request_bytes: Vec<u8>,
     observed_accounts: Vec<(Pubkey, Vec<u8>)>,
+    /// Census label for this transaction, and whether it is recorded.
+    ///
+    /// `recorded` is false at every runtime width but one, and that is the
+    /// fast-lane packet clause rather than thrift: six of the seven actions
+    /// serialise to 1,273-1,329 legacy bytes at N=258 against Solana's 1,232
+    /// maximum, and ProgramTest submits no packet, so a census row folded from
+    /// an N=258 transaction would be a route recorded as executed on a frame no
+    /// validator would accept. At N=1 every packet is 745-867 bytes and the
+    /// clause holds, so that is the width this tier claims. The N=258
+    /// transactions still run, and their measured extents are the evidence that
+    /// the clause fails there.
+    label: String,
+    recorded: bool,
 }
 
 struct TerminalFixture {
@@ -624,12 +638,25 @@ fn real_sbf_fixture(
         },
         request_bytes,
         observed_accounts,
+        // The label a census binding matches. It names the action and the
+        // width and nothing else: which DISPOSITION the accelerator returned is
+        // not a property the transaction has, because a semantic refusal comes
+        // back as a typed ack on a SUCCEEDING transaction, and binding on a
+        // disposition the census cannot see would be a label asserting
+        // something its own evidence does not carry.
+        label: format!(
+            "general accelerator {:?} at runtime width {width}",
+            controller.action
+        ),
+        recorded: width == 1,
     }
 }
 
 async fn submit(
     context: &mut ProgramTestContext,
     instruction: Instruction,
+    label: &str,
+    recorded: bool,
 ) -> Result<
     (
         solana_program_test::BanksTransactionResultWithMetadata,
@@ -652,10 +679,49 @@ async fn submit(
         .checked_add(64)
         .and_then(|prefix| prefix.checked_add(transaction.message_data().len()))
         .expect("bounded transaction wire");
+    let signature = transaction
+        .signatures
+        .first()
+        .copied()
+        .expect("a signed transaction has a signature")
+        .to_string();
+    let slot = context
+        .banks_client
+        .get_sysvar::<solana_program::clock::Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
+    if recorded {
+        let failure = processed
+            .result
+            .clone()
+            .err()
+            .map(|error| format!("{error:?}"));
+        let logs = processed
+            .metadata
+            .as_ref()
+            .map_or_else(Vec::new, |metadata| metadata.log_messages.clone());
+        let compute_units = processed
+            .metadata
+            .as_ref()
+            .map(|metadata| metadata.compute_units_consumed);
+        record(&TransactionEvidence {
+            label,
+            signature: &signature,
+            slot,
+            error: failure.as_deref(),
+            logs: &logs,
+            compute_units_consumed: compute_units,
+            // Measured, never assumed: ProgramTest submits no packet, so the
+            // tier serialises the transaction itself and records the extent for
+            // a witness to compare against the stated 1,232-byte maximum.
+            wire_bytes: Some(packet_bytes),
+        })
+        .expect("campaign evidence must be writable when the gauntlet asked for it");
+    }
     Ok((processed, instruction_accounts, packet_bytes))
 }
 
@@ -674,9 +740,14 @@ async fn execute(
         ContentId::new(hash(&fixture.request_bytes).to_bytes()).expect("request digest");
     let observed = fixture.observed_accounts;
     let mut context = fixture.test.start_with_context().await;
-    let (processed, instruction_accounts, packet_bytes) = submit(&mut context, fixture.instruction)
-        .await
-        .expect("ProgramTest processing");
+    let (processed, instruction_accounts, packet_bytes) = submit(
+        &mut context,
+        fixture.instruction,
+        &fixture.label,
+        fixture.recorded,
+    )
+    .await
+    .expect("ProgramTest processing");
     assert!(
         processed.result.is_ok(),
         "authenticated transport must execute: {:?}",

@@ -1,0 +1,61 @@
+{
+  "campaign": "general-accelerator-programtest",
+  "witnesses": [
+    {
+      "id": "every-recorded-transaction-fits-a-solana-packet",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes] | max | (. < 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's PACKET_DATA_SIZE is 1,232 bytes -- the 1,280-byte IPv6 minimum MTU less a 40-byte header and an 8-byte fragment header. ProgramTest submits no packet and therefore cannot enforce it; Found31 is the defect class that produced (docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md). So the campaign serialises each transaction itself and this witness compares the MEASURED extent against the stated limit. It is also what makes the tier's width restriction falsifiable: at N=258 this witness would fail on six of seven actions, which is why nothing at that width is recorded."
+    },
+    {
+      "id": "every-recorded-transaction-measured-its-own-extent",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A null wire_bytes says the campaign did not measure. That is honest, and it is NOT a claim that the frame fits -- but the witness above takes a max over the recorded values, and a max over a list with nulls dropped would silently exclude exactly the transactions nobody measured. This pins that there are none."
+    },
+    {
+      "id": "the-tier-recorded-only-the-runtime-width-it-claims",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select((.label | test(\"at runtime width 1$\")) | not)] | length | tostring",
+      "expect": "0",
+      "provenance": "The fast-lane packet clause is claimed at runtime width 1 and nowhere else. The campaign gates recording on the width rather than on a test name, so this witness is what stops a later test recording an N=258 transaction into a tier whose packet clause does not hold there. It reads the label the campaign emits from the authenticated ControllerRequestV2 and the width, not a hand-written string."
+    },
+    {
+      "id": "the-campaign-stayed-under-the-protocol-compute-ceiling",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction maximum, and the number both General fixtures pass to set_compute_max_units and never adjust. TIERS.md forbids satisfying a gate with a diagnostic budget, so the limit the campaign requests is the protocol one."
+    },
+    {
+      "id": "exactly-one-transaction-reached-a-program-error",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null)] | length | tostring",
+      "expect": "1",
+      "provenance": "The accelerator distinguishes TRANSPORT failure from a failure-atomic SEMANTIC refusal: a semantic refusal returns a typed refused AcceleratorAckV2 on a succeeding transaction, and only a transport failure raises a program error. Five of this campaign's hostile submissions are semantic and one -- the corrupted scratch page, whose whole-bank digest no longer matches the request -- is transport. If that distinction ever collapses, this number moves, and a campaign whose hostiles all started erroring would otherwise look exactly as green as one whose hostiles all started passing."
+    },
+    {
+      "id": "the-one-refusal-reached-the-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0xc003\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "0xC003 is GeneralAcceleratorSbfErrorV3::InvalidScratchBank, inside the band docs/decisions/0007 registers for this program (dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE, const-asserted in the program's own source). A refusal that reached a runtime error instead of the program's own taxonomy would satisfy the count above and mean something entirely different."
+    },
+    {
+      "id": "no-transaction-exceeds-the-runtime-cpi-depth",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].logs[] | capture(\"invoke \\\\[(?<depth>[0-9]+)\\\\]\") | .depth | tonumber] | max | (. <= 5) | tostring",
+      "expect": "true",
+      "provenance": "Solana's MAX_INSTRUCTION_STACK_DEPTH is 5. This campaign's shape is depth 2 -- the test caller at [1], the accelerator at [2] -- and the real Trading Hot path adds frames above it, so a campaign that quietly grew a level is worth seeing before that path is built."
+    },
+    {
+      "id": "the-tier-states-the-compute-and-heap-it-ran-under",
+      "kind": "evidence-jq",
+      "query": "[.fast_lane.compute_limit, .fast_lane.heap_bytes, .fast_lane.packet_data_bytes, .fast_lane.recorded_runtime_width] | tostring",
+      "expect": "[1400000,32768,1232,1]",
+      "provenance": "TIERS.md requires a ProgramTest-backed tier to state which of the four fast-lane conditions it meets, and direct/ established the habit of stating them inside the evidence document beside the numbers they qualify rather than in prose in a file nobody opens. These four are the ones that are numbers; the other clauses are prose in the same block, which a reader can find because this witness proves the block is there."
+    }
+  ]
+}
