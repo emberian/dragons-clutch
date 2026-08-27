@@ -28,7 +28,21 @@ use dclutch_capability_contract::{
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
-    CapabilityRootAccountV1, CapabilityRootHeaderV1, initialize_root_account_v1,
+    CapabilityRootAccountV1, CapabilityRootHeaderV1,
+    activation_registers_v2::{
+        ACTIVATION_ACCOUNT_PROFILE_IDENTITY_V2, ACTIVATION_ACTION_SCALAR_V2,
+        ACTIVATION_CAPABILITY_RELEASE_IDENTITY_V2, ACTIVATION_COMMON_IDENTITIES_V2,
+        ACTIVATION_COMMON_SCALARS_V2, ACTIVATION_CONFIG_IDENTITY_V2,
+        ACTIVATION_CONTEXT_IDENTITY_V2, ACTIVATION_CORE_PROGRAM_IDENTITY_V2,
+        ACTIVATION_EFFECT_SCHEMA_IDENTITY_V2, ACTIVATION_ENTRY_INDEX_SCALAR_V2,
+        ACTIVATION_FUNDING_COUNT_SCALAR_V2, ACTIVATION_GENERATION_SCALAR_V2,
+        ACTIVATION_MANIFEST_IDENTITY_V2, ACTIVATION_MARKET_IDENTITY_V2,
+        ACTIVATION_REGISTRY_PROGRAM_IDENTITY_V2, ACTIVATION_RELEASE_SET_IDENTITY_V2,
+        ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2, ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2,
+        ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2, ACTIVATION_ROOT_IDENTITY_V2,
+        ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+    },
+    initialize_root_account_v1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
 use dclutch_effect_kernel::v2::{
@@ -90,8 +104,6 @@ const SET_DESCRIPTOR_RAW: usize = 16;
 /// Its staging cursor.
 const SET_DESCRIPTOR_STAGING: usize = 17;
 
-const COMMON_SCALARS_V2: usize = 8;
-const COMMON_IDENTITIES_V2: usize = 12;
 const MAX_RUNTIME_SCALARS_V2: usize = 96;
 const MAX_RUNTIME_IDENTITIES_V2: usize = 32;
 const MAX_RUNTIME_ACCOUNTS_V2: usize = 64;
@@ -1043,8 +1055,8 @@ fn seed_common_registers(
     descriptor: CapabilityProgramV1<'_>,
     root: &Pubkey,
 ) -> Result<(), ProgramError> {
-    if scalars.len() < COMMON_SCALARS_V2
-        || identities.len() < COMMON_IDENTITIES_V2
+    if scalars.len() < ACTIVATION_COMMON_SCALARS_V2
+        || identities.len() < ACTIVATION_COMMON_IDENTITIES_V2
         || scalars.len() > MAX_RUNTIME_SCALARS_V2
         || identities.len() > MAX_RUNTIME_IDENTITIES_V2
         || descriptor.transition_program().scalar_count() as usize != scalars.len()
@@ -1052,39 +1064,85 @@ fn seed_common_registers(
     {
         return Err(TradingSbfError::Content.into());
     }
+    // The slots are named, not positional. They are the ABI a family's activation
+    // artifacts are authored against, so `activation_registers_v2` publishes them
+    // and this is the one writer.
     for (slot, value) in [
-        CoreEffectActionV1::ActivateCapability as u64,
-        envelope.generation(),
-        u64::from(request.selection().entry_index()),
-        u64::from(request.funding().funding_count()),
-        u64::from(envelope.role_request_bytes()),
-        u64::from(descriptor.root_state_bytes()),
-        envelope.expected_resource_a_revision(),
-        envelope.expected_resource_b_revision(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        *scalars.get_mut(slot).ok_or(TradingSbfError::Content)? = value;
+        (
+            ACTIVATION_ACTION_SCALAR_V2,
+            CoreEffectActionV1::ActivateCapability as u64,
+        ),
+        (ACTIVATION_GENERATION_SCALAR_V2, envelope.generation()),
+        (
+            ACTIVATION_ENTRY_INDEX_SCALAR_V2,
+            u64::from(request.selection().entry_index()),
+        ),
+        (
+            ACTIVATION_FUNDING_COUNT_SCALAR_V2,
+            u64::from(request.funding().funding_count()),
+        ),
+        (
+            ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2,
+            u64::from(envelope.role_request_bytes()),
+        ),
+        (
+            ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2,
+            u64::from(descriptor.root_state_bytes()),
+        ),
+        (
+            ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2,
+            envelope.expected_resource_a_revision(),
+        ),
+        (
+            ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2,
+            envelope.expected_resource_b_revision(),
+        ),
+    ] {
+        *scalars
+            .get_mut(usize::from(slot))
+            .ok_or(TradingSbfError::Content)? = value;
     }
     for (slot, value) in [
-        program_id.to_bytes(),
-        suffix.core_program.key.to_bytes(),
-        suffix.registry.key.to_bytes(),
-        envelope.release_set().to_bytes(),
-        envelope.market().to_bytes(),
-        envelope.context().to_bytes(),
-        request.selection().manifest().to_bytes(),
-        request.selection().capability_release().to_bytes(),
-        request.selection().config().to_bytes(),
-        descriptor.account_profile().to_bytes(),
-        descriptor.effect_schema().to_bytes(),
-        root.to_bytes(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        *identities.get_mut(slot).ok_or(TradingSbfError::Content)? = value;
+        (ACTIVATION_TRADING_PROGRAM_IDENTITY_V2, program_id.to_bytes()),
+        (
+            ACTIVATION_CORE_PROGRAM_IDENTITY_V2,
+            suffix.core_program.key.to_bytes(),
+        ),
+        (
+            ACTIVATION_REGISTRY_PROGRAM_IDENTITY_V2,
+            suffix.registry.key.to_bytes(),
+        ),
+        (
+            ACTIVATION_RELEASE_SET_IDENTITY_V2,
+            envelope.release_set().to_bytes(),
+        ),
+        (ACTIVATION_MARKET_IDENTITY_V2, envelope.market().to_bytes()),
+        (ACTIVATION_CONTEXT_IDENTITY_V2, envelope.context().to_bytes()),
+        (
+            ACTIVATION_MANIFEST_IDENTITY_V2,
+            request.selection().manifest().to_bytes(),
+        ),
+        (
+            ACTIVATION_CAPABILITY_RELEASE_IDENTITY_V2,
+            request.selection().capability_release().to_bytes(),
+        ),
+        (
+            ACTIVATION_CONFIG_IDENTITY_V2,
+            request.selection().config().to_bytes(),
+        ),
+        (
+            ACTIVATION_ACCOUNT_PROFILE_IDENTITY_V2,
+            descriptor.account_profile().to_bytes(),
+        ),
+        (
+            ACTIVATION_EFFECT_SCHEMA_IDENTITY_V2,
+            descriptor.effect_schema().to_bytes(),
+        ),
+        (ACTIVATION_ROOT_IDENTITY_V2, root.to_bytes()),
+    ] {
+        *identities
+            .get_mut(usize::from(slot))
+            .ok_or(TradingSbfError::Content)? = value;
     }
     Ok(())
 }

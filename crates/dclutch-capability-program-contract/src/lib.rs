@@ -78,6 +78,72 @@ pub const CAPABILITY_PROGRAM_MAX_RENT_LAMPORTS_V1: u64 = 9_966_720;
 
 const _: () = assert!(CAPABILITY_ROOT_PDA_DOMAIN_V1.len() <= 32);
 
+/// Register and account coordinates the family-neutral activation seam seeds.
+///
+/// A data-defined activation is three interpreted artifacts -- an
+/// `AccountProfileV1`, a transition `ProgramV2` and an `EffectProgramV2` -- that
+/// a family authors against registers the Trading outer fills in before any of
+/// them runs. Those coordinates are an ABI between the seam and every family's
+/// artifact author, and they are published here for the same reason
+/// `hot_v3::HOT_RUNTIME_*_COORDINATE_V3` is: an author who cannot name them
+/// writes the numbers down a second time, and the two authorities drift.
+///
+/// `programs/dclutch-trading-sbf/src/outer.rs::seed_common_registers` is the one
+/// writer and seeds exactly these slots.
+pub mod activation_registers_v2 {
+    /// Common scalar registers every activation profile must declare at least.
+    pub const ACTIVATION_COMMON_SCALARS_V2: usize = 8;
+    /// Common identity registers every activation profile must declare at least.
+    pub const ACTIVATION_COMMON_IDENTITIES_V2: usize = 12;
+
+    /// `CoreEffectActionV1::ActivateCapability` as a scalar.
+    pub const ACTIVATION_ACTION_SCALAR_V2: u16 = 0;
+    /// Market generation the envelope carries.
+    pub const ACTIVATION_GENERATION_SCALAR_V2: u16 = 1;
+    /// Manifest entry index the selection carries.
+    pub const ACTIVATION_ENTRY_INDEX_SCALAR_V2: u16 = 2;
+    /// Number of FundingState accounts the role request declares.
+    pub const ACTIVATION_FUNDING_COUNT_SCALAR_V2: u16 = 3;
+    /// Exact role-request width the envelope binds.
+    pub const ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2: u16 = 4;
+    /// Exact family root-tail width the descriptor declares.
+    pub const ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2: u16 = 5;
+    /// Expected Core resource-A revision.
+    pub const ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2: u16 = 6;
+    /// Expected Core resource-B revision.
+    pub const ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2: u16 = 7;
+
+    /// The executing Trading program.
+    pub const ACTIVATION_TRADING_PROGRAM_IDENTITY_V2: u16 = 0;
+    /// The authenticated Core program.
+    pub const ACTIVATION_CORE_PROGRAM_IDENTITY_V2: u16 = 1;
+    /// The Registry program the finalized records live under.
+    pub const ACTIVATION_REGISTRY_PROGRAM_IDENTITY_V2: u16 = 2;
+    /// Immutable execution release set the Market selected.
+    pub const ACTIVATION_RELEASE_SET_IDENTITY_V2: u16 = 3;
+    /// The Core Market this capability belongs to.
+    pub const ACTIVATION_MARKET_IDENTITY_V2: u16 = 4;
+    /// Caller-supplied Core effect context.
+    pub const ACTIVATION_CONTEXT_IDENTITY_V2: u16 = 5;
+    /// Capability manifest the selection names.
+    pub const ACTIVATION_MANIFEST_IDENTITY_V2: u16 = 6;
+    /// Capability release the selection names.
+    pub const ACTIVATION_CAPABILITY_RELEASE_IDENTITY_V2: u16 = 7;
+    /// Config record the selection names.
+    pub const ACTIVATION_CONFIG_IDENTITY_V2: u16 = 8;
+    /// AccountProfile the descriptor names.
+    pub const ACTIVATION_ACCOUNT_PROFILE_IDENTITY_V2: u16 = 9;
+    /// EffectProgram the descriptor names.
+    pub const ACTIVATION_EFFECT_SCHEMA_IDENTITY_V2: u16 = 10;
+    /// The composite capability root being created.
+    pub const ACTIVATION_ROOT_IDENTITY_V2: u16 = 11;
+
+    /// The composite capability root is always account coordinate zero.
+    pub const ACTIVATION_ROOT_ACCOUNT_V2: u16 = 0;
+    /// FundingState accounts follow the root, in role-request order.
+    pub const ACTIVATION_FIRST_FUNDING_ACCOUNT_V2: u16 = 1;
+}
+
 /// Stable refusal from the capability-program contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
