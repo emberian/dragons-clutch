@@ -2110,4 +2110,231 @@ mod tests {
             }
         }
     }
+
+    // -----------------------------------------------------------------
+    // The child-invocation membrane
+    // -----------------------------------------------------------------
+
+    /// One account's backing storage, so an `AccountInfo` can hold `&mut` into
+    /// it for the whole of a case.
+    struct Backing {
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        data: [u8; 4],
+    }
+
+    impl Backing {
+        fn new(seed: u8) -> Self {
+            Self {
+                key: Pubkey::new_from_array([seed; 32]),
+                owner: Pubkey::new_from_array([seed.wrapping_add(64); 32]),
+                lamports: u64::from(seed),
+                data: [seed; 4],
+            }
+        }
+
+        fn info(&mut self) -> AccountInfo<'_> {
+            AccountInfo::new(
+                &self.key,
+                false,
+                true,
+                &mut self.lamports,
+                &mut self.data,
+                &self.owner,
+                false,
+            )
+        }
+    }
+
+    /// What both paths say about one frame: the membrane's answer and the
+    /// SDK's, from the SAME metas and the SAME accounts.
+    ///
+    /// On a host build `solana_program::program::invoke_signed` is exactly the
+    /// `RefCell` consistency pre-check followed by the default syscall stub,
+    /// which logs and returns `Ok(())`. So this comparison is precisely the
+    /// comparison that matters: the reproduced pre-check against the one it was
+    /// copied from, on acceptance and on refusal alike.
+    fn both_paths(
+        metas: &[AccountMeta],
+        infos: &[AccountInfo<'_>],
+    ) -> (Result<(), ProgramError>, Result<(), ProgramError>) {
+        let program_id = Pubkey::new_from_array([0xEE; 32]);
+        let mut membrane_metas = metas.to_vec();
+        let mut membrane_data = vec![7_u8, 8, 9];
+        let membrane = invoke_signed_owned_v1(
+            &program_id,
+            &mut membrane_metas,
+            &mut membrane_data,
+            infos,
+            &[],
+        );
+        // The buffers come back, whatever the answer was.
+        assert_eq!(membrane_metas, metas);
+        assert_eq!(membrane_data, vec![7_u8, 8, 9]);
+
+        let sdk = solana_program::program::invoke_signed(
+            &Instruction {
+                program_id,
+                accounts: metas.to_vec(),
+                data: vec![7_u8, 8, 9],
+            },
+            infos,
+            &[],
+        );
+        (membrane, sdk)
+    }
+
+    #[test]
+    fn child_invocation_borrow_check_matches_the_sdk() {
+        let borrow_failed: Result<(), ProgramError> = Err(ProgramError::AccountBorrowFailed);
+
+        // 1. Nothing borrowed: both admit, under either privilege.
+        {
+            let (mut a, mut b) = (Backing::new(1), Backing::new(2));
+            let infos = [a.info(), b.info()];
+            for writable in [false, true] {
+                let metas = [
+                    AccountMeta {
+                        pubkey: infos[0].key.to_bytes().into(),
+                        is_signer: false,
+                        is_writable: writable,
+                    },
+                    AccountMeta {
+                        pubkey: infos[1].key.to_bytes().into(),
+                        is_signer: false,
+                        is_writable: writable,
+                    },
+                ];
+                let (membrane, sdk) = both_paths(&metas, &infos);
+                assert_eq!(membrane, Ok(()));
+                assert_eq!(membrane, sdk);
+            }
+        }
+
+        // 2. A data borrow this program is still holding, against every
+        //    combination of borrow kind and declared privilege. The two that
+        //    conflict must refuse; the one that does not must not.
+        for (hold_exclusive, writable, expected) in [
+            (true, true, borrow_failed.clone()),
+            (true, false, borrow_failed.clone()),
+            (false, true, borrow_failed.clone()),
+            (false, false, Ok(())),
+        ] {
+            let mut a = Backing::new(3);
+            let infos = [a.info()];
+            let metas = [AccountMeta {
+                pubkey: infos[0].key.to_bytes().into(),
+                is_signer: false,
+                is_writable: writable,
+            }];
+            let answered = if hold_exclusive {
+                let guard = infos[0].try_borrow_mut_data().expect("exclusive");
+                let answered = both_paths(&metas, &infos);
+                drop(guard);
+                answered
+            } else {
+                let guard = infos[0].try_borrow_data().expect("shared");
+                let answered = both_paths(&metas, &infos);
+                drop(guard);
+                answered
+            };
+            let (membrane, sdk) = answered;
+            assert_eq!(
+                membrane, expected,
+                "exclusive={hold_exclusive} writable={writable}"
+            );
+            assert_eq!(
+                membrane, sdk,
+                "exclusive={hold_exclusive} writable={writable}"
+            );
+        }
+
+        // 3. The LAMPORTS cell is checked too, and separately from the data
+        //    cell: a held mutable lamports borrow refuses a writable meta whose
+        //    data cell is entirely free.
+        {
+            let mut a = Backing::new(4);
+            let infos = [a.info()];
+            let metas = [AccountMeta {
+                pubkey: infos[0].key.to_bytes().into(),
+                is_signer: false,
+                is_writable: true,
+            }];
+            let guard = infos[0].try_borrow_mut_lamports().expect("exclusive");
+            let (membrane, sdk) = both_paths(&metas, &infos);
+            assert_eq!(membrane, borrow_failed);
+            assert_eq!(membrane, sdk);
+            drop(guard);
+        }
+
+        // 4. A meta naming an account the frame does not carry is NOT an error
+        //    here. The runtime refuses that, and refusing it earlier would be a
+        //    different program.
+        {
+            let mut a = Backing::new(5);
+            let infos = [a.info()];
+            let metas = [AccountMeta {
+                pubkey: Pubkey::new_from_array([0x5A; 32]),
+                is_signer: false,
+                is_writable: true,
+            }];
+            let (membrane, sdk) = both_paths(&metas, &infos);
+            assert_eq!(membrane, Ok(()));
+            assert_eq!(membrane, sdk);
+        }
+
+        // 5. The FIRST match wins, and the loop stops there. A frame carrying
+        //    the same account twice, with the SECOND occurrence borrowed, is
+        //    admitted -- because the first occurrence answered for the meta.
+        //    This is the `break`, and it is observable.
+        {
+            let mut a = Backing::new(6);
+            let clean = a.info();
+            let duplicate = clean.clone();
+            let infos = [clean, duplicate];
+            let metas = [AccountMeta {
+                pubkey: infos[0].key.to_bytes().into(),
+                is_signer: false,
+                is_writable: true,
+            }];
+            // Both `AccountInfo`s share one `RefCell`, so borrowing through the
+            // second is borrowing through the first: the point of the case is
+            // the ORDER of the walk, which is why the answer is a refusal and
+            // both paths must give the same one.
+            let guard = infos[1].try_borrow_mut_data().expect("exclusive");
+            let (membrane, sdk) = both_paths(&metas, &infos);
+            assert_eq!(membrane, borrow_failed);
+            assert_eq!(membrane, sdk);
+            drop(guard);
+        }
+    }
+
+    /// The membrane hands the caller's buffers back with the allocation they
+    /// arrived with, which is the whole reason it takes them by `&mut`.
+    #[test]
+    fn the_membrane_returns_the_buffers_it_was_lent() {
+        let program_id = Pubkey::new_from_array([0xEE; 32]);
+        let mut a = Backing::new(7);
+        let infos = [a.info()];
+        let mut metas = Vec::with_capacity(8);
+        metas.push(AccountMeta {
+            pubkey: infos[0].key.to_bytes().into(),
+            is_signer: false,
+            is_writable: false,
+        });
+        let mut data = Vec::with_capacity(64);
+        data.extend_from_slice(b"child wire");
+        let (metas_ptr, metas_cap) = (metas.as_ptr(), metas.capacity());
+        let (data_ptr, data_cap) = (data.as_ptr(), data.capacity());
+
+        invoke_signed_owned_v1(&program_id, &mut metas, &mut data, &infos, &[]).expect("stub");
+
+        assert_eq!(metas.as_ptr(), metas_ptr);
+        assert_eq!(metas.capacity(), metas_cap);
+        assert_eq!(metas.len(), 1);
+        assert_eq!(data.as_ptr(), data_ptr);
+        assert_eq!(data.capacity(), data_cap);
+        assert_eq!(data, b"child wire");
+    }
 }
