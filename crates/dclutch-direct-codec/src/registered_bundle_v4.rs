@@ -375,7 +375,7 @@ mod tests {
     use dclutch_realm_contract::REALM_BYTES;
     use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
     use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-    use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
+    use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
     use std::{vec, vec::Vec};
 
     use super::*;
@@ -395,12 +395,12 @@ mod tests {
         *output.get_mut(4).expect("basis") = basis_bytes;
         *output.get_mut(5).expect("maker") =
             u32::try_from(crate::successor::DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
-        *output.get_mut(7).expect("maker RentCredit") =
-            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit");
+        *output.get_mut(7).expect("lifecycle RentCredit") =
+            u32::try_from(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("RentCredit");
         *output.get_mut(8).expect("record") =
             u32::try_from(crate::successor::DIRECT_REGISTERED_RECORD_BYTES_V2).expect("record");
-        *output.get_mut(10).expect("record RentCredit") =
-            u32::try_from(RENT_CREDIT_BYTES_V1).expect("RentCredit");
+        *output.get_mut(10).expect("Rent program") =
+            u32::try_from(dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES).expect("Rent program");
         *output.get_mut(13).expect("Core") =
             u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core");
         *output.get_mut(14).expect("activation") =

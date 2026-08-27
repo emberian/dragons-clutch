@@ -46,14 +46,22 @@ use crate::{
 pub const DIRECT_REGISTERED_MAKER_ACCOUNT_V4: u16 = 5;
 /// Shared creation payer coordinate.
 pub const DIRECT_REGISTERED_PAYER_ACCOUNT_V4: u16 = 6;
-/// Maker replay RentCredit coordinate.
-pub const DIRECT_REGISTERED_MAKER_RENT_CREDIT_ACCOUNT_V4: u16 = 7;
+/// Sole lifecycle-scoped RentCredit coordinate.
+///
+/// A `LifecycleRentCreditV2` is keyed by Market and generation alone, so one
+/// credit serves the whole Market lifecycle and both creation plans name it.
+pub const DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4: u16 = 7;
 /// Registered record state coordinate.
 pub const DIRECT_REGISTERED_RECORD_ACCOUNT_V4: u16 = 8;
 /// Registered-record creation payer alias coordinate.
 pub const DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4: u16 = 9;
-/// Registered record RentCredit coordinate.
-pub const DIRECT_REGISTERED_RECORD_RENT_CREDIT_ACCOUNT_V4: u16 = 10;
+/// Executable Rent program that owns the lifecycle RentCredit.
+///
+/// The adapter authenticates the credit as a PDA of its own account owner and
+/// requires that owner to be present in the frame as an executable readonly
+/// account, so the Rent program is a coordinate of the profile. It is the slot
+/// the second per-account credit vacated.
+pub const DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4: u16 = 10;
 
 const RECIPE_COUNT: usize = 2;
 const MAKER_SEED_COUNT: usize = 5;
@@ -136,12 +144,15 @@ pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
         },
         LifecycleSeedInputV3::CanonicalBump,
     ];
+    // Both plans fund through the one lifecycle credit. There is exactly one
+    // `LifecycleRentCreditV2` per Market lifecycle, so `plan` no longer takes a
+    // rent-credit coordinate at all: naming it per plan is what let the profile
+    // declare two credits that were never two accounts on any chain.
     let plans = [
         plan(
             action,
             0,
             DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
-            DIRECT_REGISTERED_MAKER_RENT_CREDIT_ACCOUNT_V4,
             REGISTERED_SCALAR_MAKER_PRINCIPAL_OBSERVATION_V4,
             REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4,
         )?,
@@ -149,7 +160,6 @@ pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
             action,
             1,
             DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
-            DIRECT_REGISTERED_RECORD_RENT_CREDIT_ACCOUNT_V4,
             REGISTERED_SCALAR_RECORD_PRINCIPAL_OBSERVATION_V4,
             REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4,
         )?,
@@ -242,7 +252,6 @@ fn plan(
     action: DirectExecutionActionV3,
     recipe: u16,
     payer: u16,
-    rent_credit: u16,
     principal_observation: usize,
     beneficiary_observation: usize,
 ) -> Result<LifecyclePlanInputV3, DirectRegisteredStateArtifactErrorV4> {
@@ -251,7 +260,9 @@ fn plan(
         operation: LifecycleOperationInputV3::AuthenticateOrCreate,
         recipe,
         payer: Some(LifecycleAccountCoordinateV3::fixed(payer)),
-        rent_credit: Some(LifecycleAccountCoordinateV3::fixed(rent_credit)),
+        rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+            DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4,
+        )),
         principal: Some(LifecycleRegisterCoordinateV3::common(scalar(
             principal_observation,
         )?)),

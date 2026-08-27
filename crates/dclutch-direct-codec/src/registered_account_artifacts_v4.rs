@@ -34,7 +34,7 @@ use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_realm_contract::{REALM_BYTES, RealmLayoutV1};
 use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
-use dclutch_rent_contract::RENT_CREDIT_BYTES_V1;
+use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
 
 use crate::{
     registered_creation_artifacts_v4::{
@@ -43,8 +43,10 @@ use crate::{
         DIRECT_REGISTERED_CREATION_ITEM_IDENTITY_STRIDE_V4,
         DIRECT_REGISTERED_CREATION_ITEM_SCALAR_STRIDE_V4, REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4,
         REGISTERED_IDENTITY_CUSTODY_AUTHORITY_V4, REGISTERED_IDENTITY_CUSTODY_VAULT_V4,
-        REGISTERED_IDENTITY_LINKED_BASIS_V4, REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4,
-        REGISTERED_IDENTITY_MARKET_V4, REGISTERED_IDENTITY_MINT_V4, REGISTERED_IDENTITY_PAYER_V4,
+        REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4,
+        REGISTERED_IDENTITY_LIFECYCLE_RENT_PROGRAM_V4, REGISTERED_IDENTITY_LINKED_BASIS_V4,
+        REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4, REGISTERED_IDENTITY_MARKET_V4,
+        REGISTERED_IDENTITY_MINT_V4, REGISTERED_IDENTITY_PAYER_V4,
         REGISTERED_IDENTITY_PRODUCT_RECORD_V4, REGISTERED_IDENTITY_REALM_V4,
         REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4, REGISTERED_IDENTITY_RELEASE_SET_V4,
         REGISTERED_IDENTITY_SEMANTIC_BASIS_V4, REGISTERED_IDENTITY_SYSTEM_PROGRAM_V4,
@@ -58,9 +60,10 @@ use crate::{
         REGISTERED_SCALAR_ROOT_PHASE_V4, REGISTERED_SCALAR_SLOT_V4,
     },
     registered_state_artifacts_v4::{
-        DIRECT_REGISTERED_MAKER_ACCOUNT_V4, DIRECT_REGISTERED_MAKER_RENT_CREDIT_ACCOUNT_V4,
+        DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4,
+        DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4, DIRECT_REGISTERED_MAKER_ACCOUNT_V4,
         DIRECT_REGISTERED_PAYER_ACCOUNT_V4, DIRECT_REGISTERED_RECORD_ACCOUNT_V4,
-        DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4, DIRECT_REGISTERED_RECORD_RENT_CREDIT_ACCOUNT_V4,
+        DIRECT_REGISTERED_RECORD_PAYER_ACCOUNT_V4,
     },
     successor::{
         DIRECT_EXECUTION_CONFIG_BYTES_V1, DIRECT_MAKER_REPLAY_BYTES_V1,
@@ -100,7 +103,7 @@ const _: () = assert!(
 );
 
 const FIXED_ACCOUNTS: usize = DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4 as usize;
-const FIXED_OPERATIONS: usize = 33;
+const FIXED_OPERATIONS: usize = 35;
 const FIXED_DATA_PREDICATES: usize = 9;
 const SYSTEM_PROGRAM_ACCOUNT: u16 = 11;
 const REALM_ACCOUNT: u16 = 18;
@@ -306,17 +309,36 @@ fn rules(
             0,
         );
     }
-    for account in [
-        DIRECT_REGISTERED_MAKER_RENT_CREDIT_ACCOUNT_V4,
-        DIRECT_REGISTERED_RECORD_RENT_CREDIT_ACCOUNT_V4,
-    ] {
-        let rule = rule_mut(&mut output, usize::from(account))?;
-        rule.rule.privileges = writable;
-        rule.rule.effect_permissions = AccountEffectPermissionsV2::new(false, true, false);
-    }
-    rule_mut(&mut output, usize::from(SYSTEM_PROGRAM_ACCOUNT))?
-        .rule
-        .privileges = executable;
+    // One lifecycle-scoped RentCredit serves the whole Market lifecycle: a
+    // `LifecycleRentCreditV2` PDA is keyed by Market and generation alone, so
+    // the two per-account V1 credits this profile used to pin were never two
+    // accounts on chain. Coordinate 7 is that sole credit; the adapter requires
+    // it writable so a Close may credit it, and authenticates its 128 bytes,
+    // rent exemption, Market/release-set/generation binding, and PDA itself.
+    *rule_mut(
+        &mut output,
+        usize::from(DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4),
+    )? = exact(
+        writable,
+        AccountEffectPermissionsV2::new(false, true, false),
+        width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?,
+        0,
+    );
+    // The Rent program owns that credit. The adapter derives the credit from
+    // `account.owner` and then requires the owner to appear in the frame as an
+    // executable readonly account, so the Rent program is a coordinate here.
+    // Its record is a loader's business -- 36 bytes under the upgradeable
+    // loader, a whole ELF under a fixed loader -- so nothing pins its width.
+    *rule_mut(
+        &mut output,
+        usize::from(DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4),
+    )? = opaque(executable);
+    // The System Program is a chain-supplied builtin, not a protocol record: a
+    // live validator backs it with a NativeLoader account whose width is the
+    // validator's business (21 bytes under solana-program-test, 14 on Agave).
+    // The profile authenticates its identity through the trusted-builtin
+    // `require_key` below and asserts nothing about its bytes.
+    *rule_mut(&mut output, usize::from(SYSTEM_PROGRAM_ACCOUNT))? = opaque(executable);
     // The Custody program the three Custody routes are invoked through. Stated
     // opaque for the same reason the inline-ordinary topology states its own:
     // the loader that deployed it owns the record width, and the Registry
@@ -350,11 +372,21 @@ fn rules(
             let privileges = custody_privileges(account.privileges());
             let rule = rule_mut(&mut output, usize::from(start + local))?;
             rule.rule.privileges = privileges;
+            // A Token-2022 mint carrying extensions is not 82 bytes, an
+            // ImmutableOwner account is not 165, and a program record's width
+            // belongs to whichever loader deployed it. None of the three is
+            // Direct's to assert, and Custody -- the semantic owner -- already
+            // authenticates all three against the authenticated Realm, so the
+            // outer restatement was strictly weaker than the child's own check.
             if matches!(
                 frame
                     .data(local)
                     .map_err(|_| DirectRegisteredAccountArtifactErrorV4::Frame)?,
-                CustodyFrameDataV1::OpaqueData | CustodyFrameDataV1::CallerProgramData
+                CustodyFrameDataV1::OpaqueData
+                    | CustodyFrameDataV1::CallerProgramData
+                    | CustodyFrameDataV1::TokenMint
+                    | CustodyFrameDataV1::TokenAccount
+                    | CustodyFrameDataV1::TokenProgram
             ) {
                 *rule = opaque(privileges);
             }
@@ -500,6 +532,20 @@ fn operations()
             DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
             REGISTERED_IDENTITY_PAYER_V4,
         )?,
+        // The sole lifecycle credit, and the Rent program that owns it. Without
+        // these two the Transition's `identity_eq` pair compared the maker's
+        // SIGNED credit keys against registers nothing ever wrote -- an
+        // equality against zero that the request decoder's own nonzero check
+        // then made unsatisfiable. Nothing caught it because no registered
+        // creation has ever executed on a chain.
+        project_key(
+            DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4,
+            REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4,
+        )?,
+        project_key(
+            DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4,
+            REGISTERED_IDENTITY_LIFECYCLE_RENT_PROGRAM_V4,
+        )?,
         project_key(REALM_ACCOUNT, REGISTERED_IDENTITY_REALM_V4)?,
         project_identity(
             REALM_ACCOUNT,
@@ -556,11 +602,16 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifa
         || length_at(lengths, 4)? < width(BASIS_PREFIX_BYTES)?
         || length_at(lengths, 5)? != width(DIRECT_MAKER_REPLAY_BYTES_V1)?
         || length_at(lengths, 6)? != 0
-        || length_at(lengths, 7)? != width(RENT_CREDIT_BYTES_V1)?
+        || length_at(lengths, 7)? != width(LIFECYCLE_RENT_CREDIT_BYTES_V2)?
         || length_at(lengths, 8)? != width(DIRECT_REGISTERED_RECORD_BYTES_V2)?
         || length_at(lengths, 9)? != 0
-        || length_at(lengths, 10)? != width(RENT_CREDIT_BYTES_V1)?
-        || length_at(lengths, 11)? != 0
+        // Coordinates 10, 11 and 54 are chain-supplied programs -- the Rent
+        // program that owns the lifecycle credit, the System Program, and the
+        // release-selected Custody program the Custody routes are invoked
+        // through. A loader owns the first and third record's width and the
+        // validator owns the second's, so nothing here may pin any of them.
+        // Coordinates 15 and 16 stay pinned: the checked-release discipline
+        // requires those two to be Loader-v3 program records exactly.
         || length_at(lengths, 13)? != width(CORE_STATE_BYTES)?
         || length_at(lengths, 14)? != width(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?
         || length_at(lengths, 15)? != width(LOADER_V3_PROGRAM_BYTES)?
@@ -569,7 +620,6 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectRegisteredAccountArtifa
         || length_at(lengths, 19)? != 0
         || length_at(lengths, REPLAY_ACCOUNT as usize)? != 0
         || length_at(lengths, VAULT_ACCOUNT as usize)? != 0
-        || length_at(lengths, SOURCE_ACCOUNT as usize)? == 0
     {
         return Err(DirectRegisteredAccountArtifactErrorV4::Geometry);
     }
@@ -826,7 +876,8 @@ mod tests {
         encode_direct_registered_creation_lifecycle_v5_atomic,
     };
     use dclutch_account_profile_contract::{
-        lifecycle_v3::StateLifecyclePolicyV5, v2::FixedDataPredicateKindV2,
+        EFFECT_PERMISSION_CREDIT_LAMPORTS, lifecycle_v3::StateLifecyclePolicyV5,
+        v2::FixedDataPredicateKindV2,
     };
     use dclutch_custody_contract::{
         INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, OPEN_VAULT_ACCOUNT_COUNT_V1, TRANSFER_ACCOUNT_COUNT_V1,
@@ -846,9 +897,9 @@ mod tests {
             width(PORTFOLIO_HEADER_BYTES + 3 * PORTFOLIO_COEFFICIENT_BYTES).expect("portfolio");
         output[4] = 256;
         output[5] = width(DIRECT_MAKER_REPLAY_BYTES_V1).expect("maker");
-        output[7] = width(RENT_CREDIT_BYTES_V1).expect("maker RentCredit");
+        output[7] = width(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("lifecycle RentCredit");
         output[8] = width(DIRECT_REGISTERED_RECORD_BYTES_V2).expect("record");
-        output[10] = width(RENT_CREDIT_BYTES_V1).expect("record RentCredit");
+        output[10] = width(LOADER_V3_PROGRAM_BYTES).expect("Rent program");
         output[13] = width(CORE_STATE_BYTES).expect("Core Market");
         output[14] = width(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation");
         output[15] = width(LOADER_V3_PROGRAM_BYTES).expect("Registry");
@@ -875,19 +926,22 @@ mod tests {
         output
     }
 
-    fn emit() -> [u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4] {
-        let lengths = lengths();
+    fn emit_from(lengths: &[u32]) -> [u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4] {
         let mut scratch = [0_u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4];
         let mut output = [0_u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4];
         encode_direct_register_buy_account_profile_v4_atomic(
             DirectRegisterBuyAccountProfileInputV4 {
-                logical_data_lengths: &lengths,
+                logical_data_lengths: lengths,
             },
             &mut scratch,
             &mut output,
         )
         .expect("profile");
         output
+    }
+
+    fn emit() -> [u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4] {
+        emit_from(&lengths())
     }
 
     /// Every child role the EffectProgram routes to must be invocable.
@@ -986,6 +1040,124 @@ mod tests {
             .expect("lifecycle decode")
             .validate_account_profile(profile)
             .expect("profile/lifecycle join");
+    }
+
+    /// One credit at coordinate 7, the Rent program that owns it at 10, and a
+    /// System Program whose width belongs to the validator.
+    #[test]
+    fn the_profile_carries_one_v2_lifecycle_credit_its_rent_program_and_an_opaque_system() {
+        let bytes = emit();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile decode");
+
+        let credit = profile
+            .rule(false, DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4)
+            .expect("lifecycle RentCredit");
+        assert_eq!(credit.prestate(), AccountPrestateV2::Exact);
+        assert_eq!(
+            credit.data_length(),
+            width(LIFECYCLE_RENT_CREDIT_BYTES_V2).expect("credit width")
+        );
+        assert_eq!(credit.data_length(), 128);
+        assert_eq!(
+            credit.effect_permissions(),
+            EFFECT_PERMISSION_CREDIT_LAMPORTS
+        );
+        assert!(credit.route_privileges().writable());
+        assert!(!credit.route_privileges().signer());
+
+        for coordinate in [
+            DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4,
+            SYSTEM_PROGRAM_ACCOUNT,
+            DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4,
+        ] {
+            let rule = profile.rule(false, coordinate).expect("opaque program");
+            assert_eq!(
+                rule.prestate(),
+                AccountPrestateV2::AuthenticatedOpaqueReadonlyData,
+                "coordinate {coordinate} still pins a chain-supplied program's width"
+            );
+            assert!(rule.route_privileges().executable());
+            assert_eq!(rule.effect_permissions(), 0);
+        }
+    }
+
+    /// The V1 48-byte and legacy 64-byte credit geometries are exactly what the
+    /// adapter refused: it authenticates 128 bytes of `LifecycleRentCreditV2`.
+    #[test]
+    fn superseded_rent_credit_geometries_refuse_atomically() {
+        for hostile_width in [48_u32, 64] {
+            let mut hostile = lengths();
+            *hostile
+                .get_mut(usize::from(
+                    DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_ACCOUNT_V4,
+                ))
+                .expect("lifecycle RentCredit") = hostile_width;
+            let mut scratch = [0_u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4];
+            let mut output = [0x5a_u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4];
+            let before = output;
+            assert_eq!(
+                encode_direct_register_buy_account_profile_v4_atomic(
+                    DirectRegisterBuyAccountProfileInputV4 {
+                        logical_data_lengths: &hostile,
+                    },
+                    &mut scratch,
+                    &mut output,
+                ),
+                Err(DirectRegisteredAccountArtifactErrorV4::Geometry),
+                "RentCredit width {hostile_width}"
+            );
+            assert_eq!(output, before);
+        }
+    }
+
+    /// Everything a live chain owns the width of: the System Program's
+    /// NativeLoader record (21 bytes under `solana-program-test`, 14 on Agave),
+    /// a Rent program deployed under a fixed loader, a Token-2022 mint carrying
+    /// extensions, token accounts with `ImmutableOwner`, and the token program
+    /// itself. None of them is Direct's to assert, so none of them moves the
+    /// emitted profile.
+    #[test]
+    fn chain_owned_record_widths_do_not_change_profile_identity() {
+        let baseline = emit_from(&lengths());
+        // A live chain observes: a 21-byte NativeLoader System record under
+        // `solana-program-test` (14 on Agave), a fixed-loader Rent program and
+        // Custody program, a Token-2022 mint carrying extensions, an
+        // `ImmutableOwner` source account, and a whole token-program ELF.
+        let observed: &[(u16, u32)] = &[
+            (SYSTEM_PROGRAM_ACCOUNT, 21),
+            (
+                DIRECT_REGISTERED_LIFECYCLE_RENT_PROGRAM_ACCOUNT_V4,
+                1_141_117,
+            ),
+            (DIRECT_REGISTER_BUY_CUSTODY_PROGRAM_ACCOUNT_V4, 987_654),
+            (MINT_ACCOUNT, 278),
+            (TOKEN_PROGRAM_ACCOUNT, 1_048_576),
+            (SOURCE_ACCOUNT, 170),
+        ];
+        for system_width in [21_u32, 14] {
+            let mut real_chain = lengths();
+            for (coordinate, observed_width) in observed {
+                let width = if *coordinate == SYSTEM_PROGRAM_ACCOUNT {
+                    system_width
+                } else {
+                    *observed_width
+                };
+                *real_chain
+                    .get_mut(usize::from(*coordinate))
+                    .expect("observed coordinate") = width;
+            }
+            for (account, representative) in ROUTE_ALIASES {
+                let value = *real_chain
+                    .get(usize::from(*representative))
+                    .expect("representative");
+                *real_chain.get_mut(usize::from(*account)).expect("alias") = value;
+            }
+            assert_eq!(
+                baseline,
+                emit_from(&real_chain),
+                "System Program record of {system_width} bytes moved the profile"
+            );
+        }
     }
 
     #[test]

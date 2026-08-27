@@ -59,10 +59,10 @@ pub const REGISTERED_IDENTITY_MARKET_V4: usize = 4;
 pub const REGISTERED_IDENTITY_REQUEST_MAKER_RENT_CREDIT_V4: usize = 5;
 /// Record RentCredit account carried by the request.
 pub const REGISTERED_IDENTITY_REQUEST_RECORD_RENT_CREDIT_V4: usize = 6;
-/// Maker RentCredit account observed in the account profile.
-pub const REGISTERED_IDENTITY_MAKER_RENT_CREDIT_V4: usize = 7;
-/// Record RentCredit account observed in the account profile.
-pub const REGISTERED_IDENTITY_RECORD_RENT_CREDIT_V4: usize = 8;
+/// Sole lifecycle-scoped RentCredit observed in the account profile.
+pub const REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4: usize = 7;
+/// Rent program that owns the lifecycle credit, observed in the account profile.
+pub const REGISTERED_IDENTITY_LIFECYCLE_RENT_PROGRAM_V4: usize = 8;
 /// Signed collateral account.
 pub const REGISTERED_IDENTITY_COLLATERAL_REQUEST_V4: usize = 9;
 /// Authenticated routed source collateral account.
@@ -494,13 +494,17 @@ fn transition_instructions(
             identity(REGISTERED_IDENTITY_INTENT_MARKET_V4)?,
             identity(REGISTERED_IDENTITY_MARKET_V4)?,
         ),
+        // Both signed credit fields name the one lifecycle credit the profile
+        // observed. The wire still carries two, because collapsing it moves the
+        // signed registration request's width; requiring both to be the sole
+        // credit is what makes the maker unable to sign two of them.
         InstructionV3::identity_eq(
             identity(REGISTERED_IDENTITY_REQUEST_MAKER_RENT_CREDIT_V4)?,
-            identity(REGISTERED_IDENTITY_MAKER_RENT_CREDIT_V4)?,
+            identity(REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4)?,
         ),
         InstructionV3::identity_eq(
             identity(REGISTERED_IDENTITY_REQUEST_RECORD_RENT_CREDIT_V4)?,
-            identity(REGISTERED_IDENTITY_RECORD_RENT_CREDIT_V4)?,
+            identity(REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4)?,
         ),
         InstructionV3::identity_eq(
             identity(REGISTERED_IDENTITY_COLLATERAL_REQUEST_V4)?,
@@ -834,7 +838,7 @@ mod tests {
                     },
                 },
                 maker_rent_credit: id(7),
-                record_rent_credit: id(8),
+                record_rent_credit: id(7),
                 maker_rent_principal: 100,
                 record_rent_principal: 200,
             },
@@ -872,8 +876,8 @@ mod tests {
         let mut identities = [[0_u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4];
         identities[REGISTERED_IDENTITY_NATIVE_SIGNER_V4] = id(2);
         identities[REGISTERED_IDENTITY_MARKET_V4] = id(4);
-        identities[REGISTERED_IDENTITY_MAKER_RENT_CREDIT_V4] = id(7);
-        identities[REGISTERED_IDENTITY_RECORD_RENT_CREDIT_V4] = id(8);
+        identities[REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4] = id(7);
+        identities[REGISTERED_IDENTITY_LIFECYCLE_RENT_PROGRAM_V4] = id(8);
         identities[REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4] = id(10);
         set_scalar(&mut scalars, REGISTERED_SCALAR_ROOT_PHASE_V4, 0);
         set_scalar(&mut scalars, REGISTERED_SCALAR_SLOT_V4, 10);
