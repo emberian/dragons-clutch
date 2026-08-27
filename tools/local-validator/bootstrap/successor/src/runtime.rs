@@ -62,7 +62,7 @@ pub(crate) struct PublishedRecord {
     pub(crate) staging: Pubkey,
 }
 
-struct ValidatorChild {
+pub(crate) struct ValidatorChild {
     child: Child,
 }
 
@@ -165,8 +165,69 @@ fn append_program_args(command: &mut Command, label: &str, input: &RunProgramInp
         .arg(&input.attestation);
 }
 
+/// A live campaign that has reached an OPEN Market.
+///
+/// The guarded validator is still running, the ephemeral Core authority is
+/// still only in process memory, and every founding poststate is on chain.
+/// Dropping this kills the validator, which is why the founder key and the
+/// chain it founded on can only be used by a caller that holds the session:
+/// nothing here is ever persisted, so a second process cannot sign as the
+/// founder no matter what it reads off the ledger.
+pub(crate) struct OpenMarketSessionV1 {
+    /// Kept solely to own the child's lifetime; `Drop` kills the validator.
+    #[allow(dead_code)]
+    pub(crate) validator: ValidatorChild,
+    pub(crate) rpc: Rpc,
+    pub(crate) spec: SuccessorRunSpec,
+    /// The founding's checked plan. This binary is finished with it by the
+    /// time the session exists; a post-Open campaign is not.
+    #[allow(dead_code)]
+    pub(crate) plan: SuccessorPlan,
+    pub(crate) plan_sha256: String,
+    pub(crate) authority: Keypair,
+    pub(crate) validator_log: PathBuf,
+    pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
+    pub(crate) accounts: BTreeMap<String, crate::model::AccountEvidence>,
+    pub(crate) completed: Vec<String>,
+}
+
+impl OpenMarketSessionV1 {
+    /// Render the campaign's evidence document without ending the session.
+    pub(crate) fn evidence(&self) -> SuccessorRunEvidence {
+        SuccessorRunEvidence {
+            schema: RUN_EVIDENCE_SCHEMA_V2.into(),
+            rpc_url: self.rpc.url().into(),
+            ledger: self.spec.ledger.clone(),
+            validator_log: self.validator_log.display().to_string(),
+            plan_sha256: self.plan_sha256.clone(),
+            core_upgrade_authority_pubkey: self.authority.pubkey().to_string(),
+            private_key_persisted: false,
+            completed: self.completed.clone(),
+            transactions: self.transactions.clone(),
+            accounts: self.accounts.clone(),
+            remaining_execution_seam: crate::market::REMAINING_OPEN_SEAM.into(),
+        }
+    }
+}
+
 /// Own the complete authority lifetime and leave the ledger as evidence.
 pub(crate) fn execute(spec_path: &Path) -> Result<()> {
+    let session = found_through_open(spec_path)?;
+    let evidence = session.evidence();
+    write_evidence(Path::new(&session.spec.output), &evidence)?;
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&serde_json::to_vec_pretty(&evidence)?)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+/// Drive a fresh guarded validator from genesis to an OPEN Market.
+///
+/// This is the whole of the tier-1 campaign. It returns rather than writing,
+/// so that a longer campaign - one that lives the Market's life after Open -
+/// runs against the same validator, the same activation cache, and the same
+/// in-memory founder, instead of reconstructing a founding it cannot sign for.
+pub(crate) fn found_through_open(spec_path: &Path) -> Result<OpenMarketSessionV1> {
     validate_existing_canonical_file(spec_path, "--spec")?;
     let spec: SuccessorRunSpec = serde_json::from_slice(&fs::read(spec_path)?)?;
     validate_spec(&spec)?;
@@ -337,24 +398,18 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
         "proved late-failure atomic rollback".into(),
     ];
     completed.extend(market.completed);
-    let evidence = SuccessorRunEvidence {
-        schema: RUN_EVIDENCE_SCHEMA_V2.into(),
-        rpc_url: rpc.url().into(),
-        ledger: spec.ledger.clone(),
-        validator_log: validator_log.display().to_string(),
+    Ok(OpenMarketSessionV1 {
+        validator,
+        rpc,
+        spec,
+        plan,
         plan_sha256,
-        core_upgrade_authority_pubkey: authority.pubkey().to_string(),
-        private_key_persisted: false,
-        completed,
+        authority,
+        validator_log,
         transactions,
         accounts,
-        remaining_execution_seam: crate::market::REMAINING_OPEN_SEAM.into(),
-    };
-    write_evidence(Path::new(&spec.output), &evidence)?;
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&evidence)?)?;
-    stdout.write_all(b"\n")?;
-    Ok(())
+        completed,
+    })
 }
 
 fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArgs> {
