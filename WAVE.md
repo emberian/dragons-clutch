@@ -155,3 +155,17 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
   market, owner]` — no indexer needed); wizard = compose `/product-v2` →
   `/found` carrying compiled Product identity. The missing market *indexer*
   remains the one honest discovery gap.
+
+## THE DEMO CUT (organizing target as of 2026-08-26 late)
+
+External signal: direction clarity + a proof of concept is the near-term ask.
+The demo is: create → view → trade → resolve → redeem, on devnet, from a
+hosted page with a browser wallet. IN: one demo Realm (demo collateral mint,
+honest faucet), two SOL/USD range-protection markets on real devnet Pyth,
+Direct trading, resolution, redemption, portfolio. OUT of demo v1: General,
+Dealer, Series, Structured/Fractional/Rational surfaces, public creation
+wizard. Existing lanes W1c (Open) and W2c (Hot budget) ARE the demo path; DA
+prepares devnet deploy-and-recycle (deploy itself still requires ember's
+explicit named authorization); FD prepares the hosted demo frontend. Deep
+internal excellence work beyond the in-flight lanes is PAUSED in favor of the
+demo path until further notice.
