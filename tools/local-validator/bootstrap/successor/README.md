@@ -82,19 +82,20 @@ PDA, instruction frame, and next publication action.
 
 ## The current stopping point
 
-Measured on a real localhost validator on 2026-08-26, with **all seven real
-artifacts bound into the release set**, the campaign runs 46 finalized
-transactions in 747 seconds and **creates the Market**. Canonical Core Found31
-executes at **234,043** compute units, 16.7% of Solana's 1,400,000
-per-transaction maximum. Release-set activation is now one role per transaction;
-the worst of the five is Trading at **682,276** CU, 48.7% of the maximum.
+Measured on a real localhost validator, with **all seven real artifacts bound
+into the release set**, the campaign creates the Market through canonical Core
+Found31 and then **executes `DCLTPCB1`, the four-stage projected-Custody
+founding prestate**, at its own generation. Found31 costs **232,537**
+compute units, 16.6% of Solana's 1,400,000 per-transaction maximum.
+Release-set activation is one role per transaction; the worst of the five is
+Trading at **682,276** CU, 48.7% of the maximum.
 
-That is a change from the first campaign, which is worth stating plainly because
-this paragraph used to say the opposite. Found31 then exhausted the maximum
-outright, and five-role activation with the real artifacts could not execute at
-all, so the run had to bind Claims, Trading, Resolution, and Custody to distinct
-immutable deployments of the much smaller Registry ELF. Both causes were the
-same: on-chain hashing of whole ProgramData ELFs, about one compute unit per two
+Both of those numbers are a change from the first campaign, and this paragraph
+used to say the opposite. Found31 then exhausted the maximum outright, and
+five-role activation with the real artifacts could not execute at all, so the
+run had to bind Claims, Trading, Resolution, and Custody to distinct immutable
+deployments of the much smaller Registry ELF. Both causes were the same:
+on-chain hashing of whole ProgramData ELFs, about one compute unit per two
 bytes, with the ~1.0 MB Core ELF hashed twice inside one transaction. `c61376d`
 fixed it in two different ways, because the two sites needed opposite
 treatments. Recurring readers stopped re-deriving a digest that activation had
@@ -105,97 +106,80 @@ that a transaction hashes one artifact rather than five. Nothing was weakened;
 the fast path additionally requires the immutable policy and an absent live
 upgrade authority, which the hashing path never demanded on its own.
 
-**The Market is Found. It is not Open.** The campaign still stops where the
-measurement above stops; this runner has gained no new stage. The Open-last chain
-needs the atomic generic founding outer (`DCLTGMF1`,
-`programs/dclutch-trading-sbf/src/generic_market_founding_v1.rs`), which has the
-correct Lock -> Found/permit -> Realize -> Claims FoundingV5 -> Core Open-last
-order in one rollback domain.
+**The Market is Found, not Open — and at this revision no runner can open it.**
+That is a different sentence from the one this file carried before, which said
+the distance was a missing runner. It is not.
 
-**Every protocol gap on that path is now closed.** Four structural blockers were
-found by executing toward it, one under the next; all four are implemented, and
-none of them was implemented by weakening anything:
+## Why `DCLTGMF1` is not built here
 
-- the founding capability root — **implemented** (`728299a`,
+Core's generic Found stage and Claims `FoundingV5` require **the same account to
+be two different records**, so the founding outer's Lock → Found/permit →
+Realize → Claims → Open chain is unsatisfiable at this revision.
+
+Core authenticates the liability basis as a **Registry**-owned `ProductBasisV3`
+(magic `DCLTPAY3`, schema `GRADED_BASIS_RECORD_SCHEMA_ID_V3`, semantic domain
+`dclutch/product-basis/semantic/v3`) and writes that record's digest and
+semantic identity into the `ClaimsFoundingRequestV5` it commits to inside the
+one-shot permit. Claims then requires an account carrying **that same digest**
+which decodes as a legacy **Core**-owned `LinkedBasisRecordV2` (magic
+`DCLTLNK2`, schema `LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2`, semantic domain
+`dclutch/lbv2/semantic-id/v2`, length 224 or 248). Equal digests mean equal
+bytes, and no byte string is both records.
+
+This is a parallel legacy authority path, not a missing route, and it is already
+named as debt in the V3 reader's own module documentation
+(`crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs:12-17`): the remaining
+`LinkedBasisRecordV2` Claims consumers "must consume this V3 authentication
+result rather than add another basis decoder." Until `affine_batch_v2` does,
+building `DCLTGMF1` here would only produce a transaction that cannot succeed,
+and this runner does not ship stages that pretend. The full decomposition is in
+the W1e supersession of
+`docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.
+
+## What the campaign does reach
+
+Every protocol gap W1b, W1c, and W1d found on the *prestate* path is closed and
+now **executed**, not merely assemblable:
+
+- the founding capability root — derived, never created (`728299a`,
   `docs/decisions/0004-founding-capability-root.md`). Core derives the root
   address from the authenticated Market-selected capability manifest entry and
-  never persists or reads a root account at founding; ordinary activation still
-  creates it afterwards. Two accounts left the outer frame, so `DCLTGMF1` at
-  three funding states is **137** account references, not 139.
-- no live Trading route emitted the projected-Custody `Initialize`/`OpenHoard`
-  requests whose resulting state the Lock stage consumes — **implemented**
-  (`28d2da6`). `DCLTPCB1` drives both under their single-use
-  `ProjectedCustodyCallerSeedsV1` signers in one rollback domain. It also needed
-  `f30d087`: the caller PDA seed domain was thirty-five bytes against Solana's
-  thirty-two-byte cap, so **no projected-Custody transition could ever have
-  signed**, and the whole projected family was dead at runtime.
-- the Lock stage's funding source was not creatable — **implemented**
-  (`d3ba6a1`). `OpenSourceCompartment` is a projected-family Custody operation
-  that creates the normal `CustodyReplayV1` and the funded source Vault against
-  a **vacant** Market. `authenticate_market` is byte-for-byte untouched and is
-  not on that path: the new operation is admitted by the projected family's own
-  membrane plus `require_vacant_market`, which is the *inverse* of
-  `authenticate_market` rather than a relaxation of it.
-- **nothing in the protocol could create the FundingState prestate Core's Found
-  stage consumes** — **implemented** (`2fffe79`). The only allocator was the
-  Series ticket-consume path, which had no caller anywhere; and a host cannot
-  supply them at all, because they are program addresses owned by Trading, so no
-  signature for them exists. `DCLTPCB1` gained a fourth stage that stages them
-  from the manifest Core itself authenticated during the `ProjectFound`
-  projection, prepaid by the founding's payer, bound to the artifact's own
-  `funding_list_id`.
+  never persists or reads a root account at founding.
+- the projected replay and the Hoard vault (`28d2da6`), the funded source
+  compartment (`d3ba6a1`), and the capability `FundingState`s (`2fffe79`) — all
+  four staged by `DCLTPCB1` in one rollback domain, against a Market that does
+  not exist yet, without weakening normal Custody's live-Market membrane.
+- the liability basis the Product declares — published for the first time
+  (`4b12ee1`). It had never existed; Found31 does not read it and nothing
+  noticed.
 
-## What this runner still has to build
+The bootstrap stage runs two adversarial cases against the real chain, both
+asserting the whole four-stage domain leaves nothing behind: a well-formed but
+**non-terminal** projected-Custody request in the terminal slot, and a
+**reordered FundingState tail**, which additionally must roll a preceding
+transfer back to a fee-only debit. The tail is the manifest binding — reordering
+it derives an address the manifest entry at that position does not name.
 
-Two transactions, both requiring an address lookup table, and neither of them
-exists here yet. `publish_routing_table` (`src/market.rs`) is reusable verbatim
-for both. The complete index-by-index frame maps, all PDA seed orders, the wire
-layouts, and the exact rent facts are recorded in the W1d supersession section of
-`docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`; this is the summary.
+Four things the frame forced, recorded because each fails late and opaquely:
 
-**1. `DCLTPCB1`, the prestate bootstrap — 81 accounts** at the demo Market's
-three-entry manifest (`78 + funding_count`). Eight-byte instruction data, no
-payload. Two readonly raw-request accounts (the 400-byte founding artifact and
-the 768-byte terminal Lock request), the Custody program, a 42-account Initialize
-sub-frame whose tail is Core's own 31-account `ProjectFound` sub-frame, a
-15-account OpenHoard sub-frame, an 18-account OpenSourceCompartment sub-frame,
-then one FundingState account per manifest entry. Forty-nine distinct keys.
-
-**2. `DCLTGMF1`, the founding outer — 137 accounts.** Eight-byte instruction
-data. Four readonly raw-request accounts (400-byte founding artifact, 768-byte
-Lock, 768-byte Realize, 832-byte Claims request), then Lock (14), Found
-(`34 + funding_count + 15`), Realize (12), Claims (32), Open (23). Eleven
-distinct keys must be writable. **No account in the frame may be a
-transaction-level signer** — every stage's signer is a PDA signed by
-`invoke_signed` — so the fee payer must be a key that appears nowhere in it.
-
-Three things that are easy to get wrong and fail late:
-
-- `context_digest = sha256(b"dclutch:projected-hoard-context:v1" || found.context())`,
-  while `funding_source_context` is `found.context()` **undigested**. Both are
+- The founding runs at **its own generation**. Every projected-Custody stage
+  asserts the inverse of a live Market and Core's projection requires the Market
+  vacant, so the Found31 Market cannot be reused.
+- The **principal supplier is not the rent payer**: Custody requires the source
+  funder's owner to sign while non-writable, and the payer must be writable.
+  Privileges are per key, not per index.
+- The projection sub-frame's payer slot is a **rent-capacity witness** — a
+  distinct funded readonly key, because `parse_project` requires it unsigned and
+  unwritable while the kernel still debits the Market rent against its lamports.
+- `context_digest = sha256(b"dclutch:projected-hoard-context:v1" || context)`
+  while `funding_source_context` is that context **undigested**; both are
   caller-PDA seed inputs, so a wrong one produces an address for which no
   signature exists.
-- `projection_receipt_digest = sha256(ProjectFoundReceiptV1 bytes)`. The receipt
-  is a pure function of facts this runner already holds, so it is derivable
-  off-chain; it does not require simulating the CPI.
-- Claims `FoundingV5` allocates the aggregate, the founder Position, and the
-  admission with `System::allocate` + `assign` only. It never transfers
-  lamports. **This runner must pre-fund those three vacant program addresses**
-  to at least `rent.minimum_balance(width)` each, or the founding refuses inside
-  Claims. A plain System transfer does it; no protocol route is needed.
-
-And two request-shape pins: the terminal Lock carries `expected_revision = 3`
-and `funding_source_replay_revision = 1`, and the founding artifact carries
-`projected_resulting_revision = 5`.
-
-`REMAINING_OPEN_SEAM` in `src/market.rs` is rewritten by whoever adds those two
-stages; it still carries first-campaign prose this README has since corrected
-three times.
 
 Two earlier defects on that path were fixed at their semantic owners: the host
 Found/RentV2 projections refused the real System Program (`c25de27`), and the
 capability-root selection was a SHA-256 fixed point and so unsatisfiable for
 every well-formed artifact (`386f254`). The full decomposition, the measured
 per-role activation table, the current artifact digests, and the complete
-46-transaction transcript are in
+transcript are in
 `docs/evidence/GENERIC_FOUNDING_REACHABILITY_2026_08_26.md`.

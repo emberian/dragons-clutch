@@ -21,6 +21,22 @@ use crate::{
 
 const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 
+/// Exact heap frame every campaign transaction requests.
+///
+/// Solana gives a program 32 KiB of heap by default and its allocator is a
+/// bump allocator that never frees. The projected-Custody bootstrap drives
+/// four transitions from one frame, and each one allocates its own encoded
+/// request, CPI metas, and forwarded `AccountInfo` vector, so the peak is the
+/// sum rather than the maximum. Measured: it exhausts the default heap
+/// entering its third stage, after Initialize and OpenHoard have already
+/// succeeded, with 872,185 compute units still unspent - a heap failure
+/// wearing a compute failure's clothes.
+///
+/// Declaring the heap is what the instruction is for; it grants no authority
+/// and weakens no refusal. The program-side debt is real and separate, and is
+/// recorded against `projected_custody_bootstrap_v1` rather than hidden here.
+const LOCAL_PROTOCOL_HEAP_FRAME_BYTES: u32 = 256 * 1024;
+
 #[derive(Clone, Debug)]
 pub(crate) struct RpcAccount {
     pub(crate) lamports: u64,
@@ -624,7 +640,7 @@ impl Rpc {
 }
 
 fn bounded_instructions(instructions: &[Instruction]) -> Vec<Instruction> {
-    let mut bounded = Vec::with_capacity(instructions.len().saturating_add(1));
+    let mut bounded = Vec::with_capacity(instructions.len().saturating_add(2));
     let mut compute_limit_data = Vec::with_capacity(5);
     compute_limit_data.push(2);
     compute_limit_data.extend_from_slice(&LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT.to_le_bytes());
@@ -632,6 +648,14 @@ fn bounded_instructions(instructions: &[Instruction]) -> Vec<Instruction> {
         program_id: solana_sdk_ids::compute_budget::ID,
         accounts: Vec::new(),
         data: compute_limit_data,
+    });
+    let mut heap_frame_data = Vec::with_capacity(5);
+    heap_frame_data.push(1);
+    heap_frame_data.extend_from_slice(&LOCAL_PROTOCOL_HEAP_FRAME_BYTES.to_le_bytes());
+    bounded.push(Instruction {
+        program_id: solana_sdk_ids::compute_budget::ID,
+        accounts: Vec::new(),
+        data: heap_frame_data,
     });
     bounded.extend_from_slice(instructions);
     bounded
