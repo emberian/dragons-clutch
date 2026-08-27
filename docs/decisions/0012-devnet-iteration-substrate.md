@@ -16,7 +16,8 @@ this record's §4 map MISSED: `crates/dclutch-shadow-accelerator-auth-v4`
 carried its own unconditional authority refusal AND a silent hash fallback —
 without converting it the fast path was dead for Trading. Named debt: the
 CU claim (the life fits a mutable substrate) is argued and unit-tested, not
-end-to-end measured — DEPLOY-1 re-measures the 20-seed sweep.
+end-to-end measured — DEPLOY-1 re-measures the 20-seed sweep. **That debt is
+closed below: 20/20 on the mutable substrate, and the pin costs 73 CU.**
 
 **Closing sweep, same evening (lane POST-0012).** PIN-0012's spawnable
 leftovers are closed and two of them were worse than recorded.
@@ -51,13 +52,13 @@ leftovers are closed and two of them were worse than recorded.
   theorems that stated the opposite of this decision. `a7de18e5` makes library
   membership a lakefile glob so a new orphan is structurally impossible
   (93 → 120 jobs, zero red, zero `sorry`). See ledger M-64.
-- **The CU debt is NOT closed, and the reason is the interesting part.** The
-  20-seed sweep is now a real tier (`9db549ef`,
-  `tools/gauntlet/hot-cu/run-hot-cu.sh`) and measures HEAD at 20/20, mean
-  1,345,302 of 1,400,000. **That number cannot be evidence for this record's
-  claim.** `waist::release` builds every release `Immutable` and
-  `waist::immutable_programdata` writes the authority option as `None`, so
-  `slot_pinned_release_elf_digest_v1` always takes its `Immutable` arm — the
+- **The CU debt was NOT closed by that sweep, and the reason is the interesting
+  part.** The 20-seed sweep is now a real tier (`9db549ef`,
+  `tools/gauntlet/hot-cu/run-hot-cu.sh`) and measured HEAD at 20/20, mean
+  1,345,302 of 1,400,000. **That number could not be evidence for this record's
+  claim.** `waist::release` built every release `Immutable` and
+  `waist::immutable_programdata` wrote the authority option as `None`, so
+  `slot_pinned_release_elf_digest_v1` always took its `Immutable` arm — the
   arm delegated *unchanged* to `immutable_release_elf_digest_v1`, which never
   hashed anything. The `ExactAuthority` arm this decision exists to add was not
   constructible by the fixture at all, so the Hot tail never paid the hash it
@@ -65,10 +66,54 @@ leftovers are closed and two of them were worse than recorded.
   the pre-`0e34c036` sweep meaned 1,366,177 against this one's 1,345,302, and
   that ~20,875 gap is about fourteen bump iterations, inside M-61's ±46,000
   draw — a 700k effect could not have hidden there. Ledger M-63 records the
-  general form. Making the arm measurable (an `ExactAuthority` fixture
-  substrate, plus an `ImmutablePinned` control that isolates the M-61 redraw
-  from the real cost) is in flight and is what actually settles this record's
-  headline number.
+  general form.
+
+- **The CU debt is now CLOSED, and the number is 73 CU** (lane
+  POST-0012-EXACTAUTH, `d20837fd`/`57138ba8`/`49393605`). `FixtureSubstrateV1`
+  makes the `ExactAuthority` arm constructible — with an `ImmutablePinned`
+  control that runs the *identical* digest arm at a *different* release
+  identity, because the policy byte, the bound authority and the bound slot all
+  live inside `ArtifactReleaseV1::to_bytes` and therefore move every PDA the
+  Registry derives on chain. Three arms, one trading ELF
+  (`7facb8e58e45843f…`), one clean archive of `57138ba8`, seeds 0..19:
+
+  | arm | PASS | MEAN of 1,400,000 |
+  |---|---|---|
+  | `immutable` | 20/20 | 1,345,302 CU |
+  | `immutable-pinned` (control) | 20/20 | 1,353,477 CU |
+  | `slot-pinned` (this decision's arm) | 20/20 | 1,355,575 CU |
+
+  **The means are not the answer and reading them as one would have produced a
+  false null.** `slot-pinned − immutable` is +10,273 of mean; the control, which
+  executes the same code, is +8,175 of mean by itself, leaving a
+  difference-of-differences of +2,098 that is smaller than the redraw it sits
+  on. Because all three arms ran the same seeds against the same ELF, M-61's own
+  decomposition can be solved **per seed** instead of averaged over —
+  `delta = n × 1,500 + c`, where `c` is the constant and the only real quantity:
+
+  - control vs `immutable`: **c = 0** (exactly zero on 18 of 20 seeds, never
+    past 6 CU) — the method validating itself, with an 8,175 CU mean gap fully
+    accounted for as bump-search depth;
+  - `slot-pinned` vs `immutable`: **c = +73 CU**, on all twenty seeds (67…77).
+
+  So this record's headline holds, in the direction that matters: **the market
+  life fits on a mutable substrate, 20/20, and the slot pin costs 73 CU — 0.005%
+  of the ceiling — rather than a megabyte hash.** The pin is free.
+
+  **What is still argued, stated plainly.** The *~700,000 CU saving* is not
+  measured and cannot be by this instrument: no in-tree fixture constructs the
+  re-hash the saving is against, because the readers *refuse* a non-pinned
+  release rather than falling back to hashing (the one silent hash fallback,
+  in `dclutch-shadow-accelerator-auth-v4`, was converted by PIN-0012). The ~700k
+  remains an argument from ELF size. And the arms measure the **Hot tail on the
+  Direct profile**, which is the route SMOKE-0's W1 wall was about, not every
+  route in the market life. Two on-chain refusals accompany the number
+  (`tests/slot_pin_supersession.rs`): the pin holding executes the whole
+  canonical Direct Hot action, and the pin broken refuses with
+  `RegistryError::ReleaseSuperseded` (`0x100D`) after 51,574 CU, moving no
+  material state and never entering Trading — `refusals.md` also bands Trading's
+  `0x4007`, but on this route the Registry authenticates the role deployments
+  before it forwards, so `0x4007` is unreachable behind `0x100D`.
 
 A sharpening found in the tree itself while implementing: the contract
 already anticipated this design. `ArtifactReleaseV1::slot_mismatch_refusal`

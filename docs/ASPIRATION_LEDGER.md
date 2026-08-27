@@ -2930,11 +2930,14 @@ for a change, name the branch the change added and check the fixture can reach
 it.** A suite that cannot construct the case is not a suite that tested the case
 and passed. This one had a second tell nobody read -- the numbers did not move
 when the admission landed, which is what "the fast path was already free here"
-looks like from the outside. Structural fix in flight (a `FixtureSubstrateV1`
-with an `ExactAuthority` arm AND an `ImmutablePinned` control that isolates the
-M-61 redraw from the real cost, because the policy byte, bound authority and
-bound slot all live inside the bytes the artifact id hashes and therefore move
-every PDA seeded by it).
+looks like from the outside. Structural fix LANDED at `d20837fd`: a
+`FixtureSubstrateV1` with an `ExactAuthority` arm AND an `ImmutablePinned`
+control that isolates the M-61 redraw from the real cost, because the policy
+byte, bound authority and bound slot all live inside the bytes the artifact id
+hashes and therefore move every PDA seeded by it. Swept at `57138ba8` against
+one ELF: 20/20 on all three arms, means 1,345,302 / 1,353,477 / 1,355,575, and
+the answer is **73 CU** — see M-65 for how it was extracted, because the means
+alone said something else.
 
 **M-64 -- `lake build` was not a gate over the Lean library; it was a gate over
 whatever the root module happened to import.** `ProtocolInfrastructure.lean`
@@ -2958,6 +2961,39 @@ internally sound, not that its STATEMENT matches the Rust.
 `ProtocolInfrastructure` would have elaborated green for the whole period its
 two theorems were backwards. Those 40 newly-covered theorems are now auditable;
 they are not yet audited.
+
+**M-65 -- when two measurements share their randomness, PAIR them; averaging
+throws the answer away.** M-61 established that a per-seed CU figure is a
+bump-search lottery and that the reportable statistic is `PASS n/20` and the
+MEAN. Applied to the substrate arms, that rule alone produced a FALSE NULL.
+`slot-pinned` meaned 1,355,575 against `immutable`'s 1,345,302: +10,273. The
+`immutable-pinned` control -- same digest arm, same code, different release
+identity -- meaned 1,353,477, so +8,175 of that gap was redraw and the
+difference-of-differences was +2,098, smaller than the redraw it sat on. On the
+"report PASS and MEAN" rule the honest write-up is "no signal above the
+lottery", and decision 0012's headline number would have stayed argued.
+
+But the three arms ran **the same twenty seeds against the same ELF**, so seed
+*k* used the same fixture keys in every arm and the arms differ only by
+bump-search depth plus a constant. M-61's own decomposition -- `delta = n x 1500
++ c` -- can then be solved PER SEED rather than averaged over:
+
+    immutable-pinned - immutable   c = 0    (exactly 0 on 18/20, never past 6)
+    slot-pinned      - immutable   c = +73  (67..77 on all twenty seeds)
+
+The control's zero is the method certifying itself: identical code path,
+identical constant, an 8,175 CU mean gap fully explained as `n x 1500`. The
+answer to decision 0012 is **73 CU**, and it was recoverable exactly, on twenty
+independent seeds, from data whose means said `2,098 +/- a lot`.
+
+The general form, which is the row: **a lottery you cannot remove you can often
+CANCEL.** Before reporting "the effect is inside the noise", ask whether the two
+sides drew the SAME noise -- same seeds, same ELF, same fixture -- because if
+they did, the noise subtracts and the residual is the measurement. And state the
+scope with it: this pairing is valid only within one ELF and one seed set. Across
+revisions the ELFs differ, the lotteries are independent, the pairing is
+meaningless, and `PASS`/`MEAN` remains all there is. M-61 is not weakened; it is
+the rule for the case where the randomness is NOT shared.
 
 ---
 
