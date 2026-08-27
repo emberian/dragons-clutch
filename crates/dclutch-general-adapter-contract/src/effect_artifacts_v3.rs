@@ -44,8 +44,12 @@ use dclutch_effect_kernel::{
             RequestSpaceV3, RouteInputV3, ScalarCoordinateV3, encode_effect_program_v3_atomic,
         },
     },
+    v4::{
+        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_HEADER_BYTES_V4, ProgramV4,
+        encode_program_v4_atomic,
+    },
 };
-use dclutch_general_codec::Action;
+use dclutch_general_codec::{Action, CONTROLLER_REQUEST_BYTES};
 
 use crate::hot_candidate_v3::{
     GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
@@ -213,6 +217,8 @@ pub enum GeneralEffectArtifactErrorV3 {
     Custody,
     /// The generic EffectProgram encoder refused the complete artifact.
     Effect(dclutch_effect_kernel::v3::Error),
+    /// The V4 envelope encoder refused, or did not preserve its V3 base.
+    Envelope,
 }
 
 /// Result alias for General EffectProgram generation.
@@ -262,6 +268,78 @@ pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
         }
         Action::Close => PROTOCOL_POSITION_REQUEST_BYTES_V2 + 3 * CUSTODY_REQUEST_BYTES_V1,
     }
+}
+
+/// Return the exact finalized V4-envelope EffectProgram width for one action.
+///
+/// This is the width the RELEASE carries. The V3 program is the semantic body;
+/// the envelope is what the family-neutral Hot executor will decode.
+pub fn general_effect_program_bytes_v4(action: Action) -> Result<usize> {
+    EFFECT_HEADER_BYTES_V4
+        .checked_add(general_effect_program_bytes_v3(action)?)
+        .ok_or(GeneralEffectArtifactErrorV3::Geometry)
+}
+
+/// Emit one action-selected General EffectProgram in its V4 envelope.
+///
+/// **Why this exists.** `process_hot_execution_v3` accepts exactly one effect
+/// schema -- `dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4` -- and refuses
+/// anything else with `UnsupportedContent` at both
+/// `decode_sealed_effect_v4` and `decode_selected_effect_v4`. General emitted a
+/// bare V3 program, so **nothing General published could enter the Hot executor
+/// at all**, for any of the seven actions. That is not a General bug and not a
+/// Trading bug; it is a schema generation the family never crossed, and it was
+/// invisible because no General release had ever been executed through Hot.
+///
+/// The envelope is a pure extension: zero dynamic spans and zero borrowed
+/// ranges, which is exactly the condition `decode_selected_effect_v4` requires
+/// of a program whose register geometry comes from its V3 base. General's sole
+/// dynamic span is declared by its ACCOUNT PROFILE (the trailing Trading-owned
+/// scratch-page span), not by its effect, so there is nothing for the effect to
+/// carry here and a nonempty span list would be a second, disagreeing author.
+///
+/// It is not free: the envelope moves the effect digest, and the certificate,
+/// the admission, the strategy, the descriptor, the ProgramSet and the
+/// capability seal are all content-addressed on it. Those move together, in one
+/// batched regeneration.
+pub fn encode_general_effect_program_v4_atomic(
+    action: Action,
+    instruction_workspace: &mut [EffectInstructionV3],
+    template_workspace: &mut [u8],
+    base_scratch: &mut [u8],
+    base_output: &mut [u8],
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let envelope = general_effect_program_bytes_v4(action)?;
+    if scratch.len() != envelope || output.len() != envelope {
+        return Err(GeneralEffectArtifactErrorV3::Geometry);
+    }
+    encode_general_effect_program_v3_atomic(
+        action,
+        instruction_workspace,
+        template_workspace,
+        base_scratch,
+        base_output,
+    )?;
+    encode_program_v4_atomic(
+        base_output,
+        BorrowedRangePolicyV4::DisjointExactCoverage,
+        u32::try_from(CONTROLLER_REQUEST_BYTES)
+            .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
+        &[],
+        &[],
+        scratch,
+        output,
+    )
+    .map_err(|_| GeneralEffectArtifactErrorV3::Envelope)?;
+    // Encode then hostile-decode our own candidate, and prove the base survived
+    // the wrap byte for byte: the envelope must add a header and change nothing.
+    let decoded = ProgramV4::decode(output).map_err(|_| GeneralEffectArtifactErrorV3::Envelope)?;
+    if decoded.base().bytes() != base_output || decoded.span_count() != 0 {
+        return Err(GeneralEffectArtifactErrorV3::Envelope);
+    }
+    Ok(())
 }
 
 /// Return the exact finalized EffectProgram byte width for one action.

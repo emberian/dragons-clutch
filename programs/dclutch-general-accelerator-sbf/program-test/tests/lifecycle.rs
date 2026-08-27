@@ -13,9 +13,9 @@ use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
     collection_v1::{
-        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderV1,
-        MakerFundingV1, authenticate_batch_candidate_v1, authenticate_order_execution_v1,
-        general_order_len_v1,
+        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
+        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, authenticate_batch_candidate_v1,
+        authenticate_order_execution_v1, general_order_len_v1,
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
@@ -700,6 +700,11 @@ fn order_record(width: u32, batch_id: [u8; 32], spec: &OrderSpec) -> Vec<u8> {
         },
         &spec.receive,
         &spec.deliver,
+        GeneralOrderStateV1 {
+            phase: GeneralOrderPhaseV1::Placed,
+            admitted_slot: ADMISSION_SLOT,
+            released_slot: 0,
+        },
         &mut bytes,
     )
     .expect("order record");
@@ -737,10 +742,17 @@ fn execution_row(
         max_lots: header.max_lots,
         lots,
     };
-    let terms = authenticate_order_execution_v1(batch, order, execution)
-        .expect("execution row authenticates against its order record");
     let mut bytes = vec![0_u8; execution_len(width).expect("execution width")];
     ExecutionV2::encode_into(execution, &receive, &deliver, &mut bytes).expect("execution row");
+    // The row is authenticated as a whole record, tails included: the per-lot
+    // vectors are part of what the order record binds, so a header-only
+    // authentication could not see a substituted portfolio.
+    let terms = authenticate_order_execution_v1(
+        batch,
+        order,
+        ExecutionV2::decode(&bytes).expect("row decodes"),
+    )
+    .expect("execution row authenticates against its order record");
     (bytes, terms)
 }
 
