@@ -48,13 +48,14 @@ use dclutch_product_runtime_v2::{
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
-    AccountObservationV2, FinalizedRecordObservationV2, ProductCompilationInputV2,
-    compile_product_records_v2,
+    AccountObservationV2, CompiledProductRecordsV2, FinalizedRecordObservationV2,
+    ProductCompilationInputV2, compile_product_records_v2,
     found::{
         FinalizedReferenceObservationV2, FoundProjectionStateV2, FoundStateV2,
         build_found_instruction_v2, project_found_v2,
     },
     lifecycle_rent_v2::{LifecycleRentCreateStateV2, build_lifecycle_rent_create_v2},
+    publication::{RecordPublicationContentV1, derive_record_addresses_v1},
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -647,14 +648,35 @@ pub(crate) fn execute_found_market(
     })
 }
 
-fn publish_market_records(
-    rpc: &mut Rpc,
+/// Every record body one market input compiles to, before anything touches a
+/// chain.
+///
+/// One author for two consumers: `publish_market_records` publishes exactly
+/// these bytes, and `derive_founding_targets` digests exactly these bytes to
+/// know where the founding will land — so the detector and the executor cannot
+/// disagree about what the input means without one of them failing loudly.
+struct CompiledMarketBodiesV1 {
+    compiled: CompiledProductRecordsV2,
+    semantic_product_id: ProductContentId,
+    realm: Vec<u8>,
+    product: [u8; PRODUCT_RECORD_BYTES_V2],
+    domain: Vec<u8>,
+    portfolio: Vec<u8>,
+    source: Vec<u8>,
+    /// Empty means the material carries no recovery policy (the deliberate
+    /// §12.8 demo shape) and no recovery record is published.
+    recovery: Vec<u8>,
+    manifest: Vec<u8>,
+    product_digest: [u8; 32],
+    domain_digest: [u8; 32],
+}
+
+/// Compile one market input's record bodies, with no RPC and no side effects.
+fn compile_market_bodies(
     registry: Pubkey,
     input: &MarketRunInput,
     collateral_mint: Pubkey,
-    payer: &Keypair,
-    transactions: &mut Vec<TransactionEvidence>,
-) -> Result<(MarketRecords, ProductContentId)> {
+) -> Result<CompiledMarketBodiesV1> {
     let cuts = input
         .cuts
         .iter()
@@ -752,6 +774,47 @@ fn publish_market_records(
     })
     .map_err(|error| Error::new(format!("canonical collateral Realm: {error:?}")))?
     .to_bytes();
+    Ok(CompiledMarketBodiesV1 {
+        compiled,
+        semantic_product_id,
+        realm: realm.to_vec(),
+        product,
+        domain,
+        portfolio,
+        source: source.to_vec(),
+        recovery: recovery_bytes,
+        manifest,
+        product_digest,
+        domain_digest,
+    })
+}
+
+fn publish_market_records(
+    rpc: &mut Rpc,
+    registry: Pubkey,
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+    payer: &Keypair,
+    transactions: &mut Vec<TransactionEvidence>,
+) -> Result<(MarketRecords, ProductContentId)> {
+    let outcome_count = input
+        .cuts
+        .len()
+        .checked_add(2)
+        .ok_or_else(|| Error::new("Product outcome width overflow"))?;
+    let CompiledMarketBodiesV1 {
+        compiled,
+        semantic_product_id,
+        realm,
+        product,
+        domain,
+        portfolio,
+        source,
+        recovery: recovery_bytes,
+        manifest,
+        product_digest: _,
+        domain_digest,
+    } = compile_market_bodies(registry, input, collateral_mint)?;
 
     let hostile_wallet = Some(Pubkey::new_unique());
     let realm = publish_record(
@@ -937,6 +1000,160 @@ fn publish_market_records(
         },
         semantic_product_id,
     ))
+}
+
+/// Where one market input's founding lands on a chain, derived offline.
+///
+/// Everything here is a function of the plan, the input, and the collateral
+/// mint's public key — no RPC, no side effects. It exists so the campaign
+/// driver's founding stage can READ the chain before writing it: the bodies
+/// come from the same `compile_market_bodies` the publisher uses, and the
+/// identity completion is the same move `derive_founding_coordinates` makes,
+/// so the detector and the executor answer from one derivation.
+pub(crate) struct FoundingTargetsV1 {
+    pub(crate) collateral_mint: Pubkey,
+    /// The realm record's raw address — the first account the founding ever
+    /// publishes, so its existence separates "untouched" from "started".
+    pub(crate) realm_record: Pubkey,
+    /// The canonical Found31 Market at the input's own generation.
+    pub(crate) found31_market: Pubkey,
+    /// The DCLTGMF1 Market at generation + 1 — the one that ends Open, which
+    /// is the product of the whole founding.
+    pub(crate) open_market: Pubkey,
+    /// The abort-lane Market at generation + 2 (staged and unwound; its
+    /// existence mid-run still marks a founding in progress).
+    pub(crate) abort_market: Pubkey,
+    /// The Open Market's completed identity, for the poststate comparison.
+    pub(crate) open_market_identity: MarketIdentity,
+}
+
+pub(crate) fn derive_founding_targets(
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+) -> Result<FoundingTargetsV1> {
+    derive_founding_targets_inner(
+        pubkey(&plan.registry.program_id)?,
+        pubkey(&plan.core.program_id)?,
+        hex32(&plan.release_set_id)?,
+        input,
+        collateral_mint,
+    )
+}
+
+fn derive_founding_targets_inner(
+    registry: Pubkey,
+    core: Pubkey,
+    release_set: [u8; 32],
+    input: &MarketRunInput,
+    collateral_mint: Pubkey,
+) -> Result<FoundingTargetsV1> {
+    validate_market_input(input)?;
+    let bodies = compile_market_bodies(registry, input, collateral_mint)?;
+    let (realm_record, _, _) = derive_record_addresses_v1(
+        registry,
+        RecordPublicationContentV1 {
+            schema_release_id: REALM_SCHEMA_RELEASE_ID_V1,
+            content: &bodies.realm,
+        },
+    )
+    .map_err(|error| Error::new(format!("derive realm record address: {error:?}")))?;
+    let template = MarketIdentity {
+        market_id: identity([0xff; 32])?,
+        realm_id: identity(record_identity(&bodies.realm))?,
+        product_record: identity(bodies.product_digest)?,
+        product_id: identity(bodies.semantic_product_id.to_bytes())?,
+        resolution_policy: identity(record_identity(&bodies.source))?,
+        capability_manifest: identity(record_identity(&bodies.manifest))?,
+        selected_release_set: identity(release_set)?,
+        registry_program: identity(registry.to_bytes())?,
+        generation: input.generation,
+    };
+    let market_at = |generation: u64| -> Result<(Pubkey, MarketIdentity)> {
+        let seeded = MarketIdentity {
+            generation,
+            ..template
+        };
+        let market =
+            Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(seeded).as_slices(), &core).0;
+        // `market_id` is not one of the nine seeds, so the address is derived
+        // with a placeholder there and completed afterwards — required not to
+        // have moved, exactly as `derive_founding_coordinates` requires.
+        let completed = MarketIdentity {
+            market_id: identity_of(market.to_bytes())?,
+            ..seeded
+        };
+        if Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(completed).as_slices(), &core)
+            .0
+            != market
+        {
+            return Err(Error::new(
+                "the Market address moved when its own identity was completed",
+            ));
+        }
+        Ok((market, completed))
+    };
+    let (found31_market, _) = market_at(input.generation)?;
+    let (open_market, open_market_identity) =
+        market_at(PrestateLaneV1::Founding.generation(input)?)?;
+    let (abort_market, _) = market_at(PrestateLaneV1::SourceAbort.generation(input)?)?;
+    Ok(FoundingTargetsV1 {
+        collateral_mint,
+        realm_record,
+        found31_market,
+        open_market,
+        abort_market,
+        open_market_identity,
+    })
+}
+
+/// What the chain holds at one derived Open-Market coordinate.
+pub(crate) enum OpenMarketObservationV1 {
+    /// No account.
+    Absent,
+    /// The account is exactly the Open Market this input founds: Core-owned,
+    /// `STATE_BYTES` wide, `Phase::Open`, readiness consumed, identity equal —
+    /// the market-account core of `authenticate_open_market_poststate_v1`.
+    Open,
+    /// An account exists that is not that, described.
+    Other(String),
+}
+
+pub(crate) fn observe_open_market(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    targets: &FoundingTargetsV1,
+) -> Result<OpenMarketObservationV1> {
+    let core = pubkey(&plan.core.program_id)?;
+    let Some(account) = rpc.account(targets.open_market)? else {
+        return Ok(OpenMarketObservationV1::Absent);
+    };
+    if account.owner != core || account.executable || account.data.len() != STATE_BYTES {
+        return Ok(OpenMarketObservationV1::Other(format!(
+            "an account exists at the derived Market address {} that is not a Core Market: \
+             owner {}, {} bytes, executable {}",
+            targets.open_market,
+            account.owner,
+            account.data.len(),
+            account.executable
+        )));
+    }
+    let state = CoreState::decode(&account.data)
+        .map_err(|error| Error::new(format!("derived Market account state: {error:?}")))?;
+    if state.identity != targets.open_market_identity {
+        return Ok(OpenMarketObservationV1::Other(format!(
+            "a Core Market exists at {} whose identity is not the one this input derives",
+            targets.open_market
+        )));
+    }
+    if state.phase != Phase::Open || state.readiness != Readiness::Consumed {
+        return Ok(OpenMarketObservationV1::Other(format!(
+            "the Market at {} carries this input's identity but is not Open-with-consumed-\
+             readiness: phase {:?}, readiness {:?}",
+            targets.open_market, state.phase, state.readiness
+        )));
+    }
+    Ok(OpenMarketObservationV1::Open)
 }
 
 /// Publish one finalized address lookup table covering an oversized frame.
@@ -4241,6 +4458,40 @@ pub(crate) fn demo_market_input(registry: Pubkey) -> Result<MarketRunInput> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn founding_targets_derive_three_distinct_stable_markets_offline() {
+        let registry = Pubkey::new_unique();
+        let core = Pubkey::new_unique();
+        let release_set = [7_u8; 32];
+        let mint = Pubkey::new_unique();
+        let input = demo_market_input(registry).expect("demo market input");
+        let first = derive_founding_targets_inner(registry, core, release_set, &input, mint)
+            .expect("founding targets");
+        let second = derive_founding_targets_inner(registry, core, release_set, &input, mint)
+            .expect("founding targets again");
+        // Deterministic: the detector must read the same coordinates on every
+        // resumed run.
+        assert_eq!(first.open_market, second.open_market);
+        assert_eq!(first.realm_record, second.realm_record);
+        // Three generations, three distinct still-vacant PDAs.
+        assert_ne!(first.found31_market, first.open_market);
+        assert_ne!(first.open_market, first.abort_market);
+        assert_ne!(first.found31_market, first.abort_market);
+        // The completed identity round-trips to the same address, and its
+        // market_id is the address itself.
+        assert_eq!(
+            first.open_market_identity.market_id.to_bytes(),
+            first.open_market.to_bytes()
+        );
+        // The mint is inside the Realm body, so a different collateral mint is
+        // a different Realm record and a different Market.
+        let other_mint =
+            derive_founding_targets_inner(registry, core, release_set, &input, Pubkey::new_unique())
+                .expect("founding targets, other mint");
+        assert_ne!(other_mint.realm_record, first.realm_record);
+        assert_ne!(other_mint.open_market, first.open_market);
+    }
 
     #[test]
     fn cut_parser_refuses_noncanonical_integer_spellings() {

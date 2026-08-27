@@ -250,6 +250,10 @@ impl ObservedRoleV1 {
 pub(crate) struct CampaignArgsV1 {
     pub(crate) origin: ClusterOriginV1,
     pub(crate) plan_path: PathBuf,
+    /// The market input the founding stage founds — the run spec's `market`
+    /// block as its own JSON document. Optional because every earlier stage
+    /// runs without one; the founding stage refuses by name when it is absent.
+    pub(crate) market_path: Option<PathBuf>,
     pub(crate) evidence_path: Option<PathBuf>,
     pub(crate) keypairs: BTreeMap<String, [u8; 32]>,
     pub(crate) execute: bool,
@@ -442,6 +446,53 @@ pub(crate) fn initialize_state(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<St
             expected.len()
         ))
     })
+}
+
+/// Is this market input's founding already on the chain?
+///
+/// Complete is the market-account core of the executor's own
+/// `authenticate_open_market_poststate_v1`: the DCLTGMF1 Market exists at its
+/// derived address, Core-owned, Open, readiness consumed, identity equal.
+/// Partial is anything the founding creates short of that — and the executor
+/// REFUSES a partial founding rather than resuming into it, because the
+/// founding ladder is not idempotent past record publication and a half-founded
+/// market has real principal behind it. Absent means none of the derived
+/// accounts exist and the founding may run.
+pub(crate) fn founding_state(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &crate::model::MarketRunInput,
+    forge: &KeyForge,
+) -> Result<(StageStateV1, crate::market::FoundingTargetsV1)> {
+    let mint = forge.keypair(role::COLLATERAL_MINT).pubkey();
+    let targets = crate::market::derive_founding_targets(plan, input, mint)?;
+    let state = match crate::market::observe_open_market(rpc, plan, &targets)? {
+        crate::market::OpenMarketObservationV1::Open => StageStateV1::Complete,
+        crate::market::OpenMarketObservationV1::Other(detail) => StageStateV1::Conflict(detail),
+        crate::market::OpenMarketObservationV1::Absent => {
+            let mut present = Vec::new();
+            for (label, key) in [
+                ("collateral mint", targets.collateral_mint),
+                ("realm record", targets.realm_record),
+                ("Found31 Market", targets.found31_market),
+                ("abort-lane Market", targets.abort_market),
+            ] {
+                if rpc.account(key)?.is_some() {
+                    present.push(format!("{label} {key}"));
+                }
+            }
+            if present.is_empty() {
+                StageStateV1::Absent
+            } else {
+                StageStateV1::Partial(format!(
+                    "the Open Market does not exist at {} but this founding has started: {}",
+                    targets.open_market,
+                    present.join(", ")
+                ))
+            }
+        }
+    };
+    Ok((state, targets))
 }
 
 /// Does the release activation cache exist?
@@ -701,6 +752,17 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     let forge = KeyForge::persisted(args.keypairs.clone(), REQUIRED_ROLES)?;
     let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
 
+    // The market input, decoded and validated before any detector runs so a
+    // malformed input refuses before a single RPC call, not mid-ladder.
+    let market: Option<crate::model::MarketRunInput> = match &args.market_path {
+        None => None,
+        Some(path) => {
+            let input: crate::model::MarketRunInput = serde_json::from_slice(&fs::read(path)?)?;
+            crate::market::validate_market_input(&input)?;
+            Some(input)
+        }
+    };
+
     // Every detector, always, before anything is written. A stage that is
     // already complete is skipped; a stage in conflict stops the run.
     let (substrate, observed_roles) = substrate_state(&mut rpc, &plan)?;
@@ -708,6 +770,14 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     states.push((StageV1::Publication, publication_state(&mut rpc, &plan)?));
     states.push((StageV1::Initialize, initialize_state(&mut rpc, &plan)?));
     states.push((StageV1::Activation, activation_state(&mut rpc, &plan)?));
+    let founding_targets = match &market {
+        None => None,
+        Some(input) => {
+            let (state, targets) = founding_state(&mut rpc, &plan, input, &forge)?;
+            states.push((StageV1::Founding, state));
+            Some(targets)
+        }
+    };
 
     let wallet = wallet_arithmetic(&mut rpc, &plan, authority.pubkey())?;
     let pyth = match &args.origin {
@@ -769,6 +839,14 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
             "holds": ok,
             "observed": detail,
         })).collect::<Vec<_>>()),
+        "founding_targets": founding_targets.as_ref().map(|targets| json!({
+            "market_input": args.market_path.as_ref().map(|path| path.display().to_string()),
+            "collateral_mint": targets.collateral_mint.to_string(),
+            "realm_record": targets.realm_record.to_string(),
+            "found31_market": targets.found31_market.to_string(),
+            "open_market": targets.open_market.to_string(),
+            "abort_market": targets.abort_market.to_string(),
+        })),
         "deploy_ladder": deploy_ladder(&plan, &args.origin),
         "transport_policy": "driver traffic: paced RPC (SMOKE-0 §6.4 -- the founding ladder and \
                              life are RPC-shaped end to end). Buffer writes: TPU, via the solana \
@@ -788,20 +866,28 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     if !args.execute {
         return Ok(());
     }
-    execute_stages(&mut rpc, &plan, &authority, &states, args.through)
+    execute_stages(
+        &mut rpc,
+        &plan,
+        &authority,
+        &forge,
+        market.as_ref(),
+        &states,
+        args.through,
+    )
 }
 
 /// Advance the chain through the requested stages, skipping what is done.
 ///
-/// The forge is deliberately NOT a parameter yet. Every stage this function can
-/// execute signs with the Core authority alone; the founding is the one that
-/// needs the other roles, and it refuses below. Threading a forge through for a
-/// caller that does not exist would make the signature describe an intention
-/// rather than the code.
+/// The stages through activation sign with the Core authority alone; the
+/// founding is the one that needs the forge's other roles and the market
+/// input, and it refuses by name when the input is absent.
 fn execute_stages(
     rpc: &mut Rpc,
     plan: &SuccessorPlan,
     authority: &Keypair,
+    forge: &KeyForge,
+    market: Option<&crate::model::MarketRunInput>,
     states: &[(StageV1, StageStateV1)],
     through: StageV1,
 ) -> Result<()> {
@@ -865,14 +951,50 @@ fn execute_stages(
                 runtime::verify_activation(rpc, plan)?;
             }
             StageV1::Founding => {
-                return Err(Error::new(
-                    "the founding stage is not wired into the driver yet. `market::\
-                     execute_found_market` takes only (&mut Rpc, &plan, &market input, &authority, \
-                     &forge, &mut transactions) and is already origin-agnostic, so what it needs \
-                     is the run spec's `market` block reaching this entry -- the driver takes a \
-                     PLAN, and the market input lives in the SPEC. Naming this rather than \
-                     half-wiring it: a founding that fails midway costs real principal.",
-                ));
+                let Some(input) = market else {
+                    return Err(Error::new(
+                        "the founding stage needs a market input: pass --market ABSOLUTE_JSON \
+                         carrying the run spec's `market` block as its own document (the \
+                         `demo-market` subcommand prints the local-fixture shape). Every earlier \
+                         stage runs without one.",
+                    ));
+                };
+                if let StageStateV1::Partial(detail) = state {
+                    return Err(Error::new(format!(
+                        "this founding has STARTED on this chain and the driver will not write \
+                         into a half-founded market: {detail}. Record publication is \
+                         chain-deriving and re-verifies, but the collateral, credit and market \
+                         stages are one-shot, and a founding that fails midway has real \
+                         principal behind it. Inspect the named accounts; found again at a fresh \
+                         generation (a distinct, still-vacant Market PDA) with fresh \
+                         collateral-mint/collateral-wallet keypair files, or finish this one by \
+                         hand against the same input.",
+                    )));
+                }
+                let evidence = crate::market::execute_found_market(
+                    rpc,
+                    plan,
+                    input,
+                    authority,
+                    forge,
+                    &mut transactions,
+                )?;
+                // Detector == verifier: the same read that would have skipped
+                // this stage must pass now that it executed.
+                let (poststate, targets) = founding_state(rpc, plan, input, forge)?;
+                if poststate != StageStateV1::Complete {
+                    return Err(Error::new(format!(
+                        "the founding executed but its own detector does not read Complete \
+                         ({}): {}",
+                        poststate.label(),
+                        poststate.detail().unwrap_or("no detail")
+                    )));
+                }
+                eprintln!(
+                    "campaign stage founding: Open Market {} ({} steps)",
+                    targets.open_market,
+                    evidence.completed.len()
+                );
             }
         }
     }

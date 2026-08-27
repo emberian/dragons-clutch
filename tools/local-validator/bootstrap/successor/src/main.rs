@@ -107,6 +107,7 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut plan = None;
+    let mut market = None;
     let mut evidence = None;
     let mut through = None;
     let mut execute = false;
@@ -146,6 +147,10 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
             "--rpc-url" => &mut rpc_url,
             campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME => &mut acknowledgment,
             "--plan" => &mut plan,
+            // The run spec's `market` block as its own JSON document — the
+            // founding stage's input. Optional: every earlier stage runs
+            // without one, and the founding refuses by name when it is absent.
+            "--market" => &mut market,
             "--evidence" => &mut evidence,
             "--through" => &mut through,
             _ => {
@@ -163,6 +168,10 @@ fn run_campaign(arguments: Vec<String>) -> Result<()> {
     let args = campaign::CampaignArgsV1 {
         origin,
         plan_path: absolute(plan, "--plan")?,
+        market_path: match market {
+            None => None,
+            Some(path) => Some(absolute(Some(path), "--market")?),
+        },
         evidence_path: match evidence {
             None => None,
             Some(path) => Some(absolute(Some(path), "--evidence")?),
@@ -450,8 +459,9 @@ fn usage() {
     usage_supervisor();
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
-         ABSOLUTE_JSON --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... [--evidence ABSOLUTE_JSON] \
-         [--through STAGE] [--execute]\n\nThe campaign command is the EXTERNAL-CLUSTER driver. It \
+         ABSOLUTE_JSON [--market ABSOLUTE_JSON] --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... \
+         [--evidence ABSOLUTE_JSON] [--through STAGE] [--execute]\n\nThe campaign command is the \
+         EXTERNAL-CLUSTER driver. It \
          launches no validator, holds no ephemeral authority, and signs only with keypair files \
          you hold. Default is PREFLIGHT: the connection is opened read-only and a method \
          allowlist refuses anything that is not a read, so a preflight cannot write rather than \
