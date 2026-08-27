@@ -16,9 +16,6 @@
     "lib/directHotChain.ts\tDCLTCOR2",
     "lib/directHotChain.ts\tDCLTPRM2",
     "lib/directInlineV3.ts\tDCLTAP02",
-    "lib/economicSuccessor.ts\tDCLTECI1",
-    "lib/economicSuccessor.ts\tDCLTECO1",
-    "lib/economicSuccessor.ts\tDCLTRLS1",
     "lib/generalSuccessor.ts\tDCLTACT1",
     "lib/generalSuccessor.ts\tDCLTARF1",
     "lib/infrastructure.ts\tDCLTACT1",
@@ -95,7 +92,6 @@
     "lib/decoders.ts": 38,
     "lib/directCodec.ts": 18,
     "lib/directHotChain.ts": 36,
-    "lib/economicSuccessor.ts": 17,
     "lib/generalPlanV5.ts": 20,
     "lib/generalSuccessor.ts": 60,
     "lib/infrastructure.ts": 15,
@@ -107,7 +103,7 @@
     "lib/rationalTerminalChainV4.ts": 4,
     "lib/rationalTerminalHotV3.ts": 7,
     "lib/rationalTokenV2.ts": 35,
-    "lib/registeredDirect.ts": 9,
+    "lib/registeredDirect.ts": 6,
     "lib/releaseRegistry.ts": 54
   }
 }

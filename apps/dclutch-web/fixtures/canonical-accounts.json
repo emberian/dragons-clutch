@@ -1,6 +1,6 @@
 {
   "format": "dclutch-web/canonical-rust-fixtures/v1",
-  "status": "FROZEN. Its generator, apps/dclutch-web/fixtures/rust, was banished with the DCLTCAT1 stratum (it encoded CategoricalMarketV1 and PositionV1), and npm run fixtures:verify went with it. Nothing re-derives these bytes. This file exists only so lib/decoders.ts keeps a test while its DCLTCAT1 and Realm arms wait on the last live consumer, lib/economicSuccessor.ts, which is itself stratum and belongs to another lane. Delete this file, lib/decoders.test.ts, and those arms together.",
+  "status": "FROZEN, AND NOW UNBLOCKED. Its generator, apps/dclutch-web/fixtures/rust, was banished with the DCLTCAT1 stratum (it encoded CategoricalMarketV1 and PositionV1), and npm run fixtures:verify went with it. Nothing re-derives these bytes. It survived only because lib/decoders.ts's DCLTCAT1 and Realm arms still had one live consumer, lib/economicSuccessor.ts. That consumer was DELETED on 2026-08-27 (FABLE-ARCH P4). Nothing outside lib/decoders.test.ts now reaches those arms: delete this file, lib/decoders.test.ts, and the DCLTCAT1/Position arms together, in the lane that owns decoders.ts.",
   "programId": "7gyGAp71YXQRoxmFBaHxofQXAipvgHyBKPyxmdSJxyvz",
   "accounts": [
     {
