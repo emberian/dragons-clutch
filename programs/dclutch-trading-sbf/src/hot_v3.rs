@@ -1045,6 +1045,29 @@ fn authenticate_accelerator_context_v4<'accounts, 'info>(
     Ok(context)
 }
 
+/// Bind the accelerator's read-only frame to the top-level Hot instruction.
+///
+/// Every one of the [`HOT_FIXED_ACCOUNT_COUNT_V3`] common fixed accounts, the
+/// eight admitted-AOT strategy evidence accounts and this chunk's caller
+/// authority must be the account the top-level instruction named, at the
+/// position it named it, with the privileges it named -- so an accelerator
+/// cannot be handed a frame that differs from the one the Trading invocation
+/// was authorized against.
+///
+/// # The capability seal is bound here by address, and not by content
+///
+/// `frame.capability_seal` is compared against its meta below, the same as the
+/// other thirty-eight. Its *body* is not decoded on this path, and that is a
+/// decision rather than an omission: [`authenticate_capability_seal_v3`] exists
+/// to let the ordinary Hot path locate finalized records without re-deriving
+/// them, and the accelerator path does not take that shortcut. Every artifact
+/// a seal would have named is instead bound live by `borrow_finalized_record`
+/// and `borrow_finalized_record_at` in
+/// [`authenticate_accelerator_invocation_v4`], each of which re-derives the
+/// Registry address and requires `hash(bytes) == digest` before the bytes are
+/// read. The seal therefore adds no authority this path is missing; it is
+/// present because the accelerator carries the common Hot fixed frame ENTIRE,
+/// and "entire" is exactly what the comparison below has to mean.
 fn authenticate_accelerator_top_level_v4(
     frame: HotFrameV3<'_, '_>,
     strategy_evidence: &[AccountInfo<'_>],
@@ -1084,6 +1107,14 @@ fn authenticate_accelerator_top_level_v4(
             u32::try_from(observed.data().len()).map_err(|_| TradingSbfError::NativeSignature)?,
         )
         .map_err(|_| TradingSbfError::NativeSignature)?;
+        // `metas_range` REQUIRES all six outer-prefix metas to exist; the
+        // explicit `.take(5)` below then compares the five this frame can name.
+        // The sixth is the Registry continuation admission, which the read-only
+        // accelerator frame does not carry, so there is nothing here to compare
+        // it against -- `authenticate_hot_invocation_v3` binds it, against the
+        // admission account it derived. Deliberate, and spelled `.take(...)`
+        // rather than left to `zip`'s truncation, which is the shape that hid
+        // the missing capability-seal comparison in this same function.
         let outer = observed.metas_range(0, REGISTRY_CONTINUATION_OUTER_PREFIX_ACCOUNTS_V1)?;
         let expected_outer = [
             frame.activation_cache.key,
@@ -1157,8 +1188,21 @@ fn authenticate_accelerator_top_level_v4(
     };
     let (envelope, _) = HotExecutionEnvelopeV3::split_instruction(&hot_instruction)
         .map_err(|_| TradingSbfError::NativeSignature)?;
+    if strategy_evidence.len() != ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4 {
+        return Err(TradingSbfError::Content.into());
+    }
     let fixed_metas = observed.metas_range(fixed_start, HOT_FIXED_ACCOUNT_COUNT_V3)?;
-    let fixed_accounts = [
+    // Typed at the contract's own width, and NOT a bare array literal, because
+    // the loop below is a `zip` and `zip` truncates to the shorter side without
+    // a diagnostic. This array held thirty-eight entries against thirty-nine
+    // metas: `frame.capability_seal` was absent, so the meta at
+    // `HOT_CAPABILITY_SEAL_ACCOUNT_V3` was silently never compared, and every
+    // future account appended to the common fixed frame would have been skipped
+    // the same silent way. `ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4`'s note
+    // records the 38 -> 39 drift that already closed this path from both ends
+    // once; the annotation is what makes the third occurrence a compile error
+    // instead of a fourth authentication hole.
+    let fixed_accounts: [&AccountInfo<'_>; HOT_FIXED_ACCOUNT_COUNT_V3] = [
         frame.market,
         frame.root,
         frame.manifest_raw,
@@ -1197,6 +1241,7 @@ fn authenticate_accelerator_top_level_v4(
         frame.portfolio_staging,
         frame.linked_basis_raw,
         frame.linked_basis_staging,
+        frame.capability_seal,
     ];
     for (index, (meta, info)) in fixed_metas.iter().zip(fixed_accounts).enumerate() {
         let expected_writable =
@@ -9597,6 +9642,229 @@ mod tests {
             decode_accelerator_register_bank_v4(
                 request,
                 bank.get(..40).expect("bank holds at least 40 bytes")
+            )
+            .is_err()
+        );
+    }
+
+    /// The accelerator's read-only frame is bound to the top-level instruction
+    /// ENTIRE -- every fixed slot, the capability seal included.
+    ///
+    /// The loop this exercises is a `zip`, and `zip` truncates to the shorter
+    /// side without a diagnostic. Its array held thirty-eight entries against
+    /// thirty-nine metas, so `HOT_CAPABILITY_SEAL_ACCOUNT_V3` was silently
+    /// never compared: an accelerator could be handed a frame whose seal slot
+    /// was an account the authorized instruction never named, and this
+    /// authenticator ACCEPTED it. The seal is the account that survived that
+    /// gap, but it is not what this test asserts -- it walks EVERY index, so
+    /// the fortieth account is covered the day the frame grows one, which is
+    /// the drift that produced the hole in the first place (see
+    /// `ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4`).
+    ///
+    /// A positive baseline is load-bearing here. Three of this path's four
+    /// known defects survived precisely because the only test asserting them
+    /// asserted REFUSAL, and a function that can only refuse passes such a test
+    /// perfectly. So the substitutions below are differentials against an
+    /// invocation that genuinely succeeds.
+    #[test]
+    fn the_accelerator_top_level_frame_binds_every_fixed_meta_including_the_seal() {
+        use solana_instructions_sysvar::construct_instructions_data;
+        use solana_program::sysvar::instructions::{BorrowedAccountMeta, BorrowedInstruction};
+
+        fn info(
+            key: Pubkey,
+            owner: Pubkey,
+            executable: bool,
+            data: Vec<u8>,
+        ) -> AccountInfo<'static> {
+            // The accelerator frame is read-only by construction:
+            // `parse_accelerator_readonly` refuses any signer or writable slot.
+            AccountInfo::new(
+                Box::leak(Box::new(key)),
+                false,
+                false,
+                Box::leak(Box::new(0_u64)),
+                Box::leak(data.into_boxed_slice()),
+                Box::leak(Box::new(owner)),
+                executable,
+            )
+        }
+
+        let trading_program = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let mut keys = (0..HOT_FIXED_ACCOUNT_COUNT_V3)
+            .map(|_| Pubkey::new_unique())
+            .collect::<Vec<_>>();
+        let set = |keys: &mut Vec<Pubkey>, slot: usize, key: Pubkey| {
+            *keys.get_mut(slot).expect("Hot fixed slot inside the frame") = key;
+        };
+        set(&mut keys, HOT_TRADING_PROGRAM_ACCOUNT_V3, trading_program);
+        set(&mut keys, HOT_RENT_SYSVAR_ACCOUNT_V3, sysvar::rent::ID);
+        set(
+            &mut keys,
+            HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
+            sysvar::instructions::ID,
+        );
+        let key_at = |keys: &[Pubkey], slot: usize| {
+            *keys.get(slot).expect("Hot fixed slot inside the frame")
+        };
+
+        let envelope = HotExecutionEnvelopeV3::new(
+            1,
+            [0x31; 32],
+            key_at(&keys, HOT_MARKET_ACCOUNT_V3).to_bytes(),
+            7,
+            [0x32; 32],
+        )
+        .expect("envelope");
+        let mut hot_bytes = envelope.to_bytes().to_vec();
+        hot_bytes.push(9);
+
+        // Two scalars and one identity is a 48-byte bank: one inline chunk, so
+        // exactly one caller authority, which is what the frame supplies below.
+        let bank = vec![0x5a_u8; 48];
+        let content = |byte| ContentId::new([byte; 32]).expect("nonzero content");
+        let request = AcceleratorRequestV2::new(
+            RequestTransportV2::Inline,
+            content(1),
+            content(2),
+            content(3),
+            content(4),
+            ContentId::new(hash(&bank).to_bytes()).expect("bank digest"),
+            7,
+            2,
+            1,
+            0,
+            &bank,
+        )
+        .expect("inline request");
+        assert_eq!(request.chunk_count(), 1);
+
+        let strategy_keys = (0..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4)
+            .map(|_| Pubkey::new_unique())
+            .collect::<Vec<_>>();
+        let caller_key = Pubkey::new_unique();
+
+        // The canonical meta vector: the thirty-nine fixed slots, the eight
+        // strategy evidence accounts, then this chunk's caller authority. Only
+        // the root is writable on the ordinary (non-Registry) top level.
+        let sysvar_bytes = |meta_keys: &[Pubkey]| {
+            let mut metas = meta_keys
+                .iter()
+                .enumerate()
+                .map(|(index, key)| BorrowedAccountMeta {
+                    pubkey: key,
+                    is_signer: false,
+                    is_writable: index == HOT_ROOT_ACCOUNT_V3,
+                })
+                .collect::<Vec<_>>();
+            metas.extend(
+                strategy_keys
+                    .iter()
+                    .chain(core::iter::once(&caller_key))
+                    .map(|key| BorrowedAccountMeta {
+                        pubkey: key,
+                        is_signer: false,
+                        is_writable: false,
+                    }),
+            );
+            let borrowed = [BorrowedInstruction {
+                program_id: &trading_program,
+                accounts: metas,
+                data: &hot_bytes,
+            }];
+            let mut data = construct_instructions_data(&borrowed);
+            let end = data.len();
+            data.get_mut(end - 2..)
+                .expect("current instruction")
+                .copy_from_slice(&0_u16.to_le_bytes());
+            data
+        };
+
+        let canonical_sysvar = sysvar_bytes(&keys);
+        let fixed = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                let executable = matches!(
+                    index,
+                    HOT_CORE_PROGRAM_ACCOUNT_V3
+                        | HOT_TRADING_PROGRAM_ACCOUNT_V3
+                        | HOT_REGISTRY_PROGRAM_ACCOUNT_V3
+                );
+                let data = if index == HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3 {
+                    canonical_sysvar.clone()
+                } else {
+                    Vec::new()
+                };
+                info(*key, owner, executable, data)
+            })
+            .collect::<Vec<_>>();
+        let strategy_evidence = strategy_keys
+            .iter()
+            .map(|key| info(*key, owner, false, Vec::new()))
+            .collect::<Vec<_>>();
+        let caller_authority = info(caller_key, owner, false, Vec::new());
+
+        let frame = HotFrameV3::parse_accelerator_readonly(&trading_program, &fixed)
+            .expect("read-only accelerator frame");
+
+        // BASELINE, and it must be a success: everything below is a
+        // differential against it.
+        assert_eq!(
+            authenticate_accelerator_top_level_v4(
+                frame,
+                &strategy_evidence,
+                &caller_authority,
+                request,
+            )
+            .expect("canonical accelerator top level"),
+            hot_bytes
+        );
+
+        // Substituting ANY fixed meta must refuse. Before the array carried its
+        // thirty-ninth entry, index 38 -- the capability seal -- passed.
+        let unrelated = Pubkey::new_unique();
+        for index in 0..HOT_FIXED_ACCOUNT_COUNT_V3 {
+            let mut substituted = keys.clone();
+            set(&mut substituted, index, unrelated);
+            let bytes = sysvar_bytes(&substituted);
+            assert_eq!(bytes.len(), canonical_sysvar.len());
+            fixed
+                .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+                .expect("instructions sysvar slot inside the frame")
+                .try_borrow_mut_data()
+                .expect("instructions data")
+                .copy_from_slice(&bytes);
+            assert!(
+                authenticate_accelerator_top_level_v4(
+                    frame,
+                    &strategy_evidence,
+                    &caller_authority,
+                    request,
+                )
+                .is_err(),
+                "fixed meta {index} is not bound to the top-level instruction"
+            );
+            fixed
+                .get(HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3)
+                .expect("instructions sysvar slot inside the frame")
+                .try_borrow_mut_data()
+                .expect("instructions restore")
+                .copy_from_slice(&canonical_sysvar);
+        }
+
+        // The evidence vector is length-checked rather than zipped short: a
+        // caller handing over seven evidence accounts must refuse, not silently
+        // authenticate the seven it can see.
+        assert!(
+            authenticate_accelerator_top_level_v4(
+                frame,
+                strategy_evidence
+                    .get(..ADMITTED_ACCELERATOR_STRATEGY_EVIDENCE_COUNT_V4 - 1)
+                    .expect("short evidence vector"),
+                &caller_authority,
+                request,
             )
             .is_err()
         );
