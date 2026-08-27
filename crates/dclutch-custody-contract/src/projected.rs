@@ -2642,7 +2642,7 @@ mod tests {
         assert_eq!(
             state
                 .abort_source_and_close(request, id(61), expiry, 500, 0, 0, 40, 540, id(15), true)
-                .unwrap_err(),
+                .expect_err("the transition must refuse"),
             ProjectedCustodyError::Expiry
         );
 
@@ -2662,7 +2662,7 @@ mod tests {
                     id(15),
                     false
                 )
-                .unwrap_err(),
+                .expect_err("the transition must refuse"),
             ProjectedCustodyError::Expiry
         );
 
@@ -2683,7 +2683,7 @@ mod tests {
                         id(15),
                         true
                     )
-                    .unwrap_err(),
+                    .expect_err("the transition must refuse"),
                 ProjectedCustodyError::Expiry
             );
         }
@@ -2704,7 +2704,7 @@ mod tests {
                     id(15),
                     true
                 )
-                .unwrap_err(),
+                .expect_err("the transition must refuse"),
             ProjectedCustodyError::Expiry
         );
 
@@ -2725,7 +2725,7 @@ mod tests {
                         id(15),
                         true
                     )
-                    .unwrap_err(),
+                    .expect_err("the transition must refuse"),
                 ProjectedCustodyError::Expiry
             );
         }
@@ -2746,7 +2746,7 @@ mod tests {
                     id(99),
                     true
                 )
-                .unwrap_err(),
+                .expect_err("the transition must refuse"),
             ProjectedCustodyError::Expiry
         );
 
@@ -2799,7 +2799,7 @@ mod tests {
                         id(15),
                         true
                     )
-                    .unwrap_err(),
+                    .expect_err("the transition must refuse"),
                 ProjectedCustodyError::Expiry,
                 "{phase:?} must not reach the source abort"
             );
@@ -2824,7 +2824,7 @@ mod tests {
         assert_eq!(
             state
                 .refund_and_close(refund, id(61), expiry + 1, 500, 0, id(15), true)
-                .unwrap_err(),
+                .expect_err("the transition must refuse"),
             ProjectedCustodyError::Expiry
         );
 
@@ -2838,7 +2838,7 @@ mod tests {
         assert_eq!(
             state
                 .abort_open_and_close(abort_open, id(61), expiry + 1, 0, id(15), true)
-                .unwrap_err(),
+                .expect_err("the transition must refuse"),
             ProjectedCustodyError::Expiry
         );
 
