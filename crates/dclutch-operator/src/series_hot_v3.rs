@@ -9,7 +9,7 @@
 use crate::{
     Finality, Observation, ObservedAccount,
     direct_inline_v3::{CheckedHotOuterReleaseV3, ObservedAccountMetaV3},
-    foundation::{FinalizedRecordProof, authenticate_finalized_record, decode_clock, decode_rent},
+    observation::{FinalizedRecordProof, authenticate_finalized_record, decode_clock, decode_rent},
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,

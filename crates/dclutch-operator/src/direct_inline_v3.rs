@@ -7,7 +7,7 @@
 
 use crate::{
     Finality, Observation, ObservedAccount,
-    foundation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
+    observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
     product_graph_observation_v3::{
         AuthenticatedProductGraphObservationV3, FinalizedProductGraphAccountsV3,
         authenticate_product_graph_observation_v3,
