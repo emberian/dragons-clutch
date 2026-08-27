@@ -23,6 +23,11 @@ use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_ROOT_SCHEMA_OFFSET, CAPABILITY_PROGRAM_ROOT_STATE_BYTES_OFFSET,
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRootAccountV1,
     CapabilityRootHeaderV1,
+    set_v2::{
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
+        CapabilityProgramSetEntryV2, SelectorWidthV2, encode_program_set_v2,
+        encoded_program_set_bytes_v2,
+    },
 };
 use dclutch_effect_kernel::v2::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA;
 use dclutch_market_core_codec::{
@@ -47,10 +52,22 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
 };
+use dclutch_trading_sbf::TradingSbfError;
+use solana_program::instruction::InstructionError;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
+use solana_sdk::transaction::TransactionError;
 use solana_sdk_ids::system_program;
 use solana_transaction::Transaction;
+
+/// `TradingSbfError::Root`, the refusal the composite-root plan carries.
+const TRADING_ROOT_REFUSAL_CODE: u32 = TradingSbfError::Root as u32;
+/// `TradingSbfError::Content`, the refusal record and selection joins carry.
+const TRADING_CONTENT_REFUSAL_CODE: u32 = TradingSbfError::Content as u32;
+/// `TradingSbfError::UnsupportedContent`, the refusal an unadmitted schema carries.
+const TRADING_UNSUPPORTED_REFUSAL_CODE: u32 = TradingSbfError::UnsupportedContent as u32;
+/// Selector the family activation request carries, and the set entry's own.
+const FAMILY_ACTIVATION_SELECTOR: u32 = 1;
 
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x72; 32]);
@@ -58,7 +75,21 @@ const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x73; 32]);
 const WRONG_REGISTRY_ID: Pubkey = Pubkey::new_from_array([0x74; 32]);
 const GENERATION: u64 = 7;
 const ROOT_INITIAL_DUST: u64 = 1;
-const ROOT_TAIL_BYTES: usize = 8;
+/// Family root-tail width: one projected scalar then one projected identity.
+///
+/// The outer never decodes a family tail, so this fixture stands in for a real
+/// family root the only way the seam can observe one -- as the exact width the
+/// descriptor declares and the exact bytes the effect program's request buffer
+/// projects.
+const ROOT_TAIL_BYTES: usize = 40;
+/// Tail offset of the projected generation scalar (common scalar register 1).
+const TAIL_GENERATION_OFFSET: u32 = 0;
+/// Tail offset of the projected Market identity (common identity register 4).
+const TAIL_MARKET_OFFSET: u32 = 8;
+/// Common scalar register seeded with the Market generation.
+const GENERATION_SCALAR_REGISTER: u16 = 1;
+/// Common identity register seeded with the Market address.
+const MARKET_IDENTITY_REGISTER: u16 = 4;
 
 const PROFILE_RULE_BYTES: usize = 16;
 const PROFILE_OPERATION_BYTES: usize = 16;
@@ -72,7 +103,10 @@ struct Fixture {
     instruction: Instruction,
     root: Pubkey,
     funding: Pubkey,
+    /// Raw record the selection's `capability_release` names.
     descriptor_raw: Pubkey,
+    /// Raw record carrying the `CapabilityProgramV1` the seam actually runs.
+    activation_descriptor_raw: Pubkey,
     hostile_record: Pubkey,
     market: Pubkey,
     root_rent: u64,
@@ -83,6 +117,49 @@ struct Fixture {
 enum Campaign {
     Success,
     LateEffectRefusal,
+    /// Declares the tail width and projects nothing into it.
+    UnwrittenTail,
+    /// Projects the whole tail into a request buffer wider than the tail.
+    MismatchedTailWidth,
+    /// `capability_release` names a `CapabilityProgramSetV2`, not a descriptor.
+    ProgramSetRelease,
+    /// The selected set entry names a descriptor schema this seam cannot run.
+    ProgramSetWrongSchema,
+    /// No set entry admits the selector the family activation request carries.
+    ProgramSetMissingSelector,
+}
+
+impl Campaign {
+    /// Whether `capability_release` names a set rather than a flat descriptor.
+    const fn program_set(self) -> bool {
+        matches!(
+            self,
+            Self::ProgramSetRelease | Self::ProgramSetWrongSchema | Self::ProgramSetMissingSelector
+        )
+    }
+}
+
+/// One-entry `CapabilityProgramSetV2` naming the activation descriptor.
+///
+/// The selector is read from byte 0 of the family activation request, which is
+/// the same one-byte action the flat campaigns already send. A real family puts
+/// its activation action wherever its own request grammar puts an action.
+fn program_set(descriptor_id: ContentId, campaign: Campaign) -> Vec<u8> {
+    let schema = match campaign {
+        Campaign::ProgramSetWrongSchema => id(0x77),
+        _ => ContentId::new(CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1).expect("descriptor schema"),
+    };
+    let selector = match campaign {
+        Campaign::ProgramSetMissingSelector => FAMILY_ACTIVATION_SELECTOR + 1,
+        _ => FAMILY_ACTIVATION_SELECTOR,
+    };
+    let entry = CapabilityProgramSetEntryV2::new(
+        selector,
+        CapabilityDescriptorReferenceV2::new(schema, descriptor_id),
+    );
+    let mut output = vec![0_u8; encoded_program_set_bytes_v2(1).expect("set width")];
+    encode_program_set_v2(0, SelectorWidthV2::U8, &[entry], &mut output).expect("set bytes");
+    output
 }
 
 fn id(byte: u8) -> ContentId {
@@ -210,9 +287,15 @@ fn transition_program() -> Vec<u8> {
 }
 
 fn effect_program(campaign: Campaign) -> Vec<u8> {
-    let instruction_count = match campaign {
-        Campaign::Success => 1_u16,
-        Campaign::LateEffectRefusal => 2_u16,
+    // Instruction 0 is always the funding transfer. The two request writes that
+    // compose the family root tail follow it, except in `UnwrittenTail`. The late
+    // requirement, when present, is last so it runs after the transfer.
+    let tail_writes = u16::from(!matches!(campaign, Campaign::UnwrittenTail)) * 2;
+    let late = u16::from(matches!(campaign, Campaign::LateEffectRefusal));
+    let instruction_count = 1 + tail_writes + late;
+    let request_bytes = match campaign {
+        Campaign::MismatchedTailWidth => ROOT_TAIL_BYTES + 8,
+        _ => ROOT_TAIL_BYTES,
     };
     let mut output = vec![0_u8; 16 + usize::from(instruction_count) * 16];
     put(&mut output, 0, b"DCE2");
@@ -221,15 +304,33 @@ fn effect_program(campaign: Campaign) -> Vec<u8> {
     put_u16(&mut output, 8, PROFILE_ACCOUNT_COUNT);
     put_u16(&mut output, 10, SCALAR_COUNT);
     put_u16(&mut output, 12, IDENTITY_COUNT);
+    put_u16(
+        &mut output,
+        14,
+        u16::try_from(request_bytes).expect("request width"),
+    );
     // Transfer projected Funding Rent scalar[6] from FundingState to root.
     put_u16(&mut output, 18, 1);
     put_u16(&mut output, 20, 0);
     put_u16(&mut output, 22, 6);
-    if matches!(campaign, Campaign::LateEffectRefusal) {
+    let mut next = 32_usize;
+    if tail_writes != 0 {
+        // Tail[0..8] = the projected Market generation.
+        *output.get_mut(next).expect("request scalar opcode") = 4;
+        put_u16(&mut output, next + 6, GENERATION_SCALAR_REGISTER);
+        put_u32(&mut output, next + 8, TAIL_GENERATION_OFFSET);
+        next += 16;
+        // Tail[8..40] = the projected Market address.
+        *output.get_mut(next).expect("request identity opcode") = 5;
+        put_u16(&mut output, next + 6, MARKET_IDENTITY_REGISTER);
+        put_u32(&mut output, next + 8, TAIL_MARKET_OFFSET);
+        next += 16;
+    }
+    if late != 0 {
         // After the transfer, root lamports cannot still equal prestate scalar[7].
-        *output.get_mut(32).expect("late requirement opcode") = 3;
-        put_u16(&mut output, 34, 0);
-        put_u16(&mut output, 38, 7);
+        *output.get_mut(next).expect("late requirement opcode") = 3;
+        put_u16(&mut output, next + 2, 0);
+        put_u16(&mut output, next + 6, 7);
     }
     output
 }
@@ -438,6 +539,15 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         config_schema,
     );
     let descriptor_id = ContentId::new(hash(&descriptor).to_bytes()).expect("descriptor ID");
+    // For a set release the selection names the SET, and the descriptor is one of
+    // its entries; for a flat release the two identities are the same record.
+    let program_set_bytes = campaign
+        .program_set()
+        .then(|| program_set(descriptor_id, campaign));
+    let release_id = match &program_set_bytes {
+        Some(bytes) => ContentId::new(hash(bytes).to_bytes()).expect("release ID"),
+        None => descriptor_id,
+    };
     let config_id = ContentId::new(hash(&config).to_bytes()).expect("config ID");
     let amounts = FundingAmountsV1::new(
         CompartmentFundingV1::native_lamports(root_rent - ROOT_INITIAL_DUST)
@@ -452,7 +562,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     .expect("funding amounts");
     let entry = CapabilityEntryV1::new(
         kind,
-        descriptor_id,
+        release_id,
         config_id,
         capacity,
         root_schema,
@@ -467,9 +577,8 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     let mut manifest = vec![0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
     CapabilityManifestV1::encode_into(&[entry], &mut manifest).expect("manifest");
     let manifest_id = ContentId::new(hash(&manifest).to_bytes()).expect("manifest ID");
-    let selection =
-        CapabilityExecutionSelectionV1::new(0, manifest_id, kind, descriptor_id, config_id)
-            .expect("selection");
+    let selection = CapabilityExecutionSelectionV1::new(0, manifest_id, kind, release_id, config_id)
+        .expect("selection");
 
     let (release_set, cache_bytes) = activation_cache();
     let activation_cache = Pubkey::find_program_address(
@@ -579,6 +688,10 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
         descriptor,
     );
+    let release_record = match program_set_bytes {
+        Some(bytes) => add_record(&mut test, CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, bytes),
+        None => descriptor_record,
+    };
     let config_record = add_record(&mut test, config_schema.to_bytes(), config);
     let profile_record = add_record(&mut test, ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, profile);
     let effect_record = add_record(&mut test, EFFECT_PROGRAM_SCHEMA, effect);
@@ -643,14 +756,14 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     .expect("envelope");
     let mut instruction_data = envelope.encode().expect("envelope bytes").to_vec();
     instruction_data.extend_from_slice(&role_request);
-    let accounts = vec![
+    let mut accounts = vec![
         AccountMeta::new_readonly(caller_authority, false),
         AccountMeta::new(root, false),
         AccountMeta::new(funding, false),
         AccountMeta::new_readonly(manifest_raw, false),
         AccountMeta::new_readonly(market, false),
-        AccountMeta::new_readonly(descriptor_record.0, false),
-        AccountMeta::new_readonly(descriptor_record.1, false),
+        AccountMeta::new_readonly(release_record.0, false),
+        AccountMeta::new_readonly(release_record.1, false),
         AccountMeta::new_readonly(config_record.0, false),
         AccountMeta::new_readonly(config_record.1, false),
         AccountMeta::new_readonly(profile_record.0, false),
@@ -666,6 +779,12 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         AccountMeta::new_readonly(solana_sdk_ids::sysvar::rent::ID, false),
         AccountMeta::new_readonly(system_program::ID, false),
     ];
+    if campaign.program_set() {
+        // Family accounts 16 and 17: the descriptor the set entry names. A flat
+        // release carries neither, and its frame is byte-identical to before.
+        accounts.push(AccountMeta::new_readonly(descriptor_record.0, false));
+        accounts.push(AccountMeta::new_readonly(descriptor_record.1, false));
+    }
     (
         test,
         Fixture {
@@ -676,7 +795,8 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             },
             root,
             funding,
-            descriptor_raw: descriptor_record.0,
+            descriptor_raw: release_record.0,
+            activation_descriptor_raw: descriptor_record.0,
             hostile_record,
             market,
             root_rent,
@@ -712,35 +832,109 @@ async fn assert_rollback(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
     instruction: Instruction,
-) {
+) -> BanksClientError {
     let root_before = account(context, fixture.root).await;
     let funding_before = account(context, fixture.funding).await;
-    assert!(submit(context, instruction).await.is_err());
+    let error = submit(context, instruction)
+        .await
+        .expect_err("activation refuses");
     assert_eq!(account(context, fixture.root).await, root_before);
     assert_eq!(account(context, fixture.funding).await, funding_before);
+    error
+}
+
+/// The custom program code the refusal carried, so a test can name it.
+fn refusal_code(error: &BanksClientError) -> Option<u32> {
+    let transaction = match error {
+        BanksClientError::TransactionError(value) => value,
+        BanksClientError::SimulationError { err, .. } => err,
+        _ => return None,
+    };
+    match transaction {
+        TransactionError::InstructionError(_, InstructionError::Custom(code)) => Some(*code),
+        _ => None,
+    }
+}
+
+/// Submit one campaign and require the exact created root and funding poststate.
+async fn assert_activation_succeeds(context: &mut ProgramTestContext, fixture: &Fixture) {
+    submit(context, fixture.instruction.clone())
+        .await
+        .expect("activation succeeds");
+    let root = account(context, fixture.root).await;
+    assert_eq!(root.owner, TRADING_PROGRAM_ID);
+    assert_eq!(root.lamports, fixture.root_rent);
+    let descriptor_account = account(context, fixture.activation_descriptor_raw).await;
+    let descriptor = CapabilityProgramV1::decode(&descriptor_account.data).expect("descriptor");
+    let decoded = CapabilityRootAccountV1::decode(&root.data, descriptor).expect("root account");
+    assert_eq!(decoded.header().market(), fixture.market.to_bytes());
+    // The family tail is the effect program's projected request buffer, exactly.
+    // Before this was so, the seam wrote `vec![0; root_state_bytes]` and no family
+    // root -- General's or Direct's -- could be decoded out of what it created.
+    let mut expected_tail = vec![0_u8; ROOT_TAIL_BYTES];
+    put(&mut expected_tail, 0, &GENERATION.to_le_bytes());
+    put(&mut expected_tail, 8, &fixture.market.to_bytes());
+    assert_eq!(decoded.state(), expected_tail.as_slice());
+    let funding = account(context, fixture.funding).await;
+    assert_eq!(funding.lamports, fixture.funding_rent);
+    let funding = FundingStateV1::decode(&funding.data).expect("funding poststate");
+    assert_eq!(funding.status(), FundingStatus::Active);
+    assert!(funding.activation_slot() > 0);
+    assert_eq!(funding.remaining().rent().amount(), 0);
 }
 
 #[tokio::test]
 async fn common_outer_activates_root_and_funding_commit_last() {
     let (test, fixture) = build_fixture(Campaign::Success);
     let mut context = test.start_with_context().await;
-    submit(&mut context, fixture.instruction.clone())
-        .await
-        .expect("activation succeeds");
-    let root = account(&mut context, fixture.root).await;
-    assert_eq!(root.owner, TRADING_PROGRAM_ID);
-    assert_eq!(root.lamports, fixture.root_rent);
-    let descriptor_account = account(&mut context, fixture.descriptor_raw).await;
-    let descriptor = CapabilityProgramV1::decode(&descriptor_account.data).expect("descriptor");
-    let decoded = CapabilityRootAccountV1::decode(&root.data, descriptor).expect("root account");
-    assert_eq!(decoded.header().market(), fixture.market.to_bytes());
-    assert!(decoded.state().iter().all(|byte| *byte == 0));
-    let funding = account(&mut context, fixture.funding).await;
-    assert_eq!(funding.lamports, fixture.funding_rent);
-    let funding = FundingStateV1::decode(&funding.data).expect("funding poststate");
-    assert_eq!(funding.status(), FundingStatus::Active);
-    assert!(funding.activation_slot() > 0);
-    assert_eq!(funding.remaining().rent().amount(), 0);
+    assert_activation_succeeds(&mut context, &fixture).await;
+}
+
+/// A `CapabilityProgramSetV2` at `capability_release` activates the same root.
+///
+/// This is the generation `hot_v3` authenticates. Before it, the seam decoded
+/// the record at `selection.capability_release()` as a `CapabilityProgramV1`
+/// and nothing else, so a capability whose release is a selector table -- which
+/// is every V3/V4 family -- had no route that could create its root at all. The
+/// selection is a seed of the root PDA, so one selection could not satisfy both
+/// generations and the newer one simply had no door.
+///
+/// Nothing here is a kind branch: the release generation is read off the raw
+/// record's own PDA, and the descriptor the set names must still satisfy the
+/// same manifest-entry join the flat generation does.
+#[tokio::test]
+async fn a_program_set_release_activates_through_its_selected_descriptor() {
+    let (test, fixture) = build_fixture(Campaign::ProgramSetRelease);
+    let mut context = test.start_with_context().await;
+    assert_ne!(fixture.descriptor_raw, fixture.activation_descriptor_raw);
+    assert_eq!(fixture.instruction.accounts.len(), 23);
+    assert_activation_succeeds(&mut context, &fixture).await;
+}
+
+/// Reversion control for the set path, at both of its own joins.
+///
+/// `ProgramSetWrongSchema` is the case that matters most: a set entry naming a
+/// descriptor schema this seam cannot run is refused at the entry, before any
+/// account is read, so a hot-action `CapabilityProgramV4` can never arrive here
+/// as an activation descriptor. `ProgramSetMissingSelector` is the request-side
+/// half -- a family request selecting no entry refuses instead of defaulting.
+#[tokio::test]
+async fn a_set_entry_this_seam_cannot_run_or_cannot_select_refuses() {
+    for (campaign, expected) in [
+        (
+            Campaign::ProgramSetWrongSchema,
+            TRADING_UNSUPPORTED_REFUSAL_CODE,
+        ),
+        (
+            Campaign::ProgramSetMissingSelector,
+            TRADING_CONTENT_REFUSAL_CODE,
+        ),
+    ] {
+        let (test, fixture) = build_fixture(campaign);
+        let mut context = test.start_with_context().await;
+        let error = assert_rollback(&mut context, &fixture, fixture.instruction.clone()).await;
+        assert_eq!(refusal_code(&error).expect("custom refusal code"), expected);
+    }
 }
 
 #[tokio::test]
@@ -777,4 +971,27 @@ async fn late_effect_refusal_rolls_back_the_projected_transfer() {
     let (test, fixture) = build_fixture(Campaign::LateEffectRefusal);
     let mut context = test.start_with_context().await;
     assert_rollback(&mut context, &fixture, fixture.instruction.clone()).await;
+}
+
+/// Reversion control for the tail channel, both directions.
+///
+/// `UnwrittenTail` is the exact prior behaviour of this seam -- a declared tail
+/// width with nothing projected into it -- and it now refuses instead of
+/// creating a root no family can decode. `MismatchedTailWidth` projects the
+/// whole tail into a request buffer eight bytes wider than the descriptor's
+/// `root_state_bytes`, which the outer refuses rather than truncating.
+#[tokio::test]
+async fn a_tail_that_is_unwritten_or_the_wrong_width_refuses() {
+    for campaign in [Campaign::UnwrittenTail, Campaign::MismatchedTailWidth] {
+        let (test, fixture) = build_fixture(campaign);
+        let mut context = test.start_with_context().await;
+        let error = assert_rollback(&mut context, &fixture, fixture.instruction.clone()).await;
+        assert_eq!(
+            refusal_code(&error).expect("custom refusal code"),
+            TRADING_ROOT_REFUSAL_CODE
+        );
+        let root = account(&mut context, fixture.root).await;
+        assert_eq!(root.owner, system_program::ID);
+        assert!(root.data.is_empty());
+    }
 }

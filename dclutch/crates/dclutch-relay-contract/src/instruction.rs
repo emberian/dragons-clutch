@@ -1,6 +1,6 @@
 //! The relay instruction wire.
 //!
-//! Four fixed-prefix actions behind one magic.  Unlike the signed attestation
+//! Six fixed-prefix actions behind one magic.  Unlike the signed attestation
 //! wire — which is Lean-authored ABI because it is a *release identity* that two
 //! independent implementations must agree on byte-for-byte — this is adapter
 //! framing owned by the program that dispatches it, exactly as
@@ -30,6 +30,13 @@ pub const SEAL_RECORD_PREFIX_BYTES: usize = 32;
 pub const SEAL_RECORD_INSTRUCTION_BYTES: usize = SEAL_RECORD_PREFIX_BYTES + RELAYED_SEAL_BYTES;
 /// Exact `RetireRecord` instruction width.
 pub const RETIRE_RECORD_INSTRUCTION_BYTES: usize = 24;
+/// Exact `CommitDeadlineFailure` instruction width.
+pub const COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES: usize = 32;
+/// Fixed prefix before the inline account-set entries in `ConsumeRecord`.
+pub const CONSUME_RECORD_PREFIX_BYTES: usize = 112;
+/// Wire width of one inline account-set entry, identical to its contribution to
+/// the `account_set_id` preimage so the adapter re-derives rather than re-parses.
+pub const CONSUME_RECORD_ENTRY_BYTES: usize = crate::release::ACCOUNT_SET_ENTRY_PREIMAGE_BYTES;
 
 const ACTION_OFFSET: usize = 10;
 const HEADER_RESERVED_OFFSET: usize = 11;
@@ -47,6 +54,10 @@ pub enum RelayActionV1 {
     SealRecord = 3,
     /// Close the record into its pre-existing RentCredit beneficiary.
     RetireRecord = 4,
+    /// Interpret one sealed record into the Source's terminal result.
+    ConsumeRecord = 5,
+    /// Walk a silent market to its Product's pre-disclosed failure outcome.
+    CommitDeadlineFailure = 6,
 }
 
 impl RelayActionV1 {
@@ -56,6 +67,8 @@ impl RelayActionV1 {
             2 => Ok(Self::AppendObservation),
             3 => Ok(Self::SealRecord),
             4 => Ok(Self::RetireRecord),
+            5 => Ok(Self::ConsumeRecord),
+            6 => Ok(Self::CommitDeadlineFailure),
             _ => Err(Error::UnknownInstructionAction),
         }
     }
@@ -272,6 +285,150 @@ impl RetireRecordInstructionV1 {
     }
 }
 
+/// Fixed `ConsumeRecord` prefix; the pinned account-set entries follow it.
+///
+/// The entries ride in the instruction because the adapter has only the
+/// `account_set_id`, never the set itself, so position pinning was uncheckable
+/// on chain without them.  They are untrusted input that becomes authoritative
+/// exactly when their re-derived digest equals the identity the record and the
+/// adapter configuration already committed to.
+///
+/// The Product record and its result domain are deliberately absent: both are
+/// facts of the authenticated Market and its material, and a route that let a
+/// caller name them would be a route that let a caller choose the partition its
+/// own resolution is mapped through.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsumeRecordInstructionV1 {
+    generation: u64,
+    observed_slot: u64,
+    terminal_sequence: u64,
+    source_material_id: [u8; 32],
+    source_spec_id: [u8; 32],
+    entry_count: u16,
+}
+
+impl ConsumeRecordInstructionV1 {
+    /// Construct one consume request prefix.
+    pub fn new(
+        generation: u64,
+        observed_slot: u64,
+        terminal_sequence: u64,
+        source_material_id: [u8; 32],
+        source_spec_id: [u8; 32],
+        entry_count: u16,
+    ) -> Result<Self> {
+        if terminal_sequence == 0 {
+            // A terminal sequence names the certificate PDA; zero would let two
+            // resolutions of one Market collide at one address.
+            return Err(Error::InvalidRecordTransition);
+        }
+        if entry_count == 0 || usize::from(entry_count) > crate::MAX_RELAYED_ACCOUNTS_V1 {
+            return Err(Error::InvalidSetGeometry);
+        }
+        crate::require_nonzero(&source_material_id)?;
+        crate::require_nonzero(&source_spec_id)?;
+        Ok(Self {
+            generation,
+            observed_slot,
+            terminal_sequence,
+            source_material_id,
+            source_spec_id,
+            entry_count,
+        })
+    }
+
+    /// Encode the exact fixed prefix.
+    pub fn to_prefix_bytes(self) -> Result<[u8; CONSUME_RECORD_PREFIX_BYTES]> {
+        let mut out = base::<CONSUME_RECORD_PREFIX_BYTES>(RELAY_INSTRUCTION_MAGIC)?;
+        put(
+            &mut out,
+            ACTION_OFFSET,
+            &[RelayActionV1::ConsumeRecord.byte()],
+        )?;
+        put(&mut out, 16, &self.generation.to_le_bytes())?;
+        put(&mut out, 24, &self.observed_slot.to_le_bytes())?;
+        put(&mut out, 32, &self.terminal_sequence.to_le_bytes())?;
+        put(&mut out, 40, &self.entry_count.to_le_bytes())?;
+        put(&mut out, 48, &self.source_material_id)?;
+        put(&mut out, 80, &self.source_spec_id)?;
+        Ok(out)
+    }
+
+    /// The Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+    /// The finalized foreign slot the record is addressed by.
+    pub const fn observed_slot(self) -> u64 {
+        self.observed_slot
+    }
+    /// The exact positive terminal sequence naming the certificate.
+    pub const fn terminal_sequence(self) -> u64 {
+        self.terminal_sequence
+    }
+    /// The immutable Source material this resolution serves.
+    pub const fn source_material_id(self) -> [u8; 32] {
+        self.source_material_id
+    }
+    /// The Source specification naming the provider release.
+    pub const fn source_spec_id(self) -> [u8; 32] {
+        self.source_spec_id
+    }
+    /// The cardinality of the inline pinned account set.
+    pub const fn entry_count(self) -> u16 {
+        self.entry_count
+    }
+}
+
+/// Fixed `CommitDeadlineFailure` wire fields.
+///
+/// Deliberately the narrowest instruction in the family. The failure outcome is
+/// the Product's own and the deadline is the window's own, so there is nothing a
+/// caller could usefully say beyond which market generation and which terminal
+/// sequence — and in particular there is no provider, no record and no
+/// observation, which is the whole point: this route has to work when the
+/// relayer has stopped answering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CommitDeadlineFailureInstructionV1 {
+    generation: u64,
+    terminal_sequence: u64,
+}
+
+impl CommitDeadlineFailureInstructionV1 {
+    /// Construct one deadline-failure request.
+    pub fn new(generation: u64, terminal_sequence: u64) -> Result<Self> {
+        if terminal_sequence == 0 {
+            return Err(Error::InvalidRecordTransition);
+        }
+        Ok(Self {
+            generation,
+            terminal_sequence,
+        })
+    }
+
+    /// Encode the exact canonical bytes.
+    pub fn to_bytes(self) -> Result<[u8; COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES]> {
+        let mut out = base::<COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES>(RELAY_INSTRUCTION_MAGIC)?;
+        put(
+            &mut out,
+            ACTION_OFFSET,
+            &[RelayActionV1::CommitDeadlineFailure.byte()],
+        )?;
+        put(&mut out, 16, &self.generation.to_le_bytes())?;
+        put(&mut out, 24, &self.terminal_sequence.to_le_bytes())?;
+        Ok(out)
+    }
+
+    /// The Market generation.
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+    /// The exact positive terminal sequence naming the certificate.
+    pub const fn terminal_sequence(self) -> u64 {
+        self.terminal_sequence
+    }
+}
+
 /// Hostile-decoded closed relay instruction set.
 ///
 /// The two message-carrying variants hand back the message as a **borrowed**
@@ -288,6 +445,10 @@ pub enum RelayInstructionV1<'a> {
     SealRecord(SealRecordInstructionV1, &'a [u8]),
     /// Retire the record.
     RetireRecord(RetireRecordInstructionV1),
+    /// Consume a sealed record, with the pinned account-set entries following.
+    ConsumeRecord(ConsumeRecordInstructionV1, &'a [u8]),
+    /// Walk a silent market to its Product's pre-disclosed failure outcome.
+    CommitDeadlineFailure(CommitDeadlineFailureInstructionV1),
 }
 
 impl<'a> RelayInstructionV1<'a> {
@@ -351,6 +512,46 @@ impl<'a> RelayInstructionV1<'a> {
                     bytes, 16,
                 )?)))
             }
+            RelayActionV1::ConsumeRecord => {
+                require_zero(bytes, 42, 6)?;
+                let request = ConsumeRecordInstructionV1::new(
+                    u64_at(bytes, 16)?,
+                    u64_at(bytes, 24)?,
+                    u64_at(bytes, 32)?,
+                    crate::array(bytes, 48)?,
+                    crate::array(bytes, 80)?,
+                    u16_at(bytes, 40)?,
+                )?;
+                // The entry tail is exact: a caller cannot append a shadow entry
+                // the digest never covered, and cannot elide one either.
+                let width = CONSUME_RECORD_PREFIX_BYTES
+                    .checked_add(
+                        usize::from(request.entry_count())
+                            .checked_mul(CONSUME_RECORD_ENTRY_BYTES)
+                            .ok_or(Error::ArithmeticOverflow)?,
+                    )
+                    .ok_or(Error::ArithmeticOverflow)?;
+                if bytes.len() != width {
+                    return Err(Error::InvalidLength);
+                }
+                let entries = bytes
+                    .get(CONSUME_RECORD_PREFIX_BYTES..)
+                    .ok_or(Error::InvalidLength)?;
+                Ok(Self::ConsumeRecord(request, entries))
+            }
+            RelayActionV1::CommitDeadlineFailure => {
+                header(
+                    bytes,
+                    COMMIT_DEADLINE_FAILURE_INSTRUCTION_BYTES,
+                    RELAY_INSTRUCTION_MAGIC,
+                )?;
+                Ok(Self::CommitDeadlineFailure(
+                    CommitDeadlineFailureInstructionV1::new(
+                        u64_at(bytes, 16)?,
+                        u64_at(bytes, 24)?,
+                    )?,
+                ))
+            }
         }
     }
 }
@@ -406,6 +607,65 @@ mod tests {
         };
         assert_eq!(message.len(), RELAYED_SEAL_BYTES, "wrong variant or width");
         assert_eq!(message.first(), Some(&0xab));
+    }
+
+    #[test]
+    fn a_consume_instruction_carries_an_exact_entry_tail() {
+        let request = ConsumeRecordInstructionV1::new(7, 423_941_138, 1, [0x11; 32], [0x12; 32], 4)
+            .expect("consume");
+        let prefix = request.to_prefix_bytes().expect("prefix");
+        let width = CONSUME_RECORD_PREFIX_BYTES + 4 * CONSUME_RECORD_ENTRY_BYTES;
+        let mut wire = [0u8; CONSUME_RECORD_PREFIX_BYTES + 4 * CONSUME_RECORD_ENTRY_BYTES];
+        put(&mut wire, 0, &prefix).expect("prefix");
+        let decoded = RelayInstructionV1::decode(&wire).expect("decodes");
+        match decoded {
+            RelayInstructionV1::ConsumeRecord(seen, entries) => {
+                assert_eq!(seen, request);
+                assert_eq!(entries.len(), 4 * CONSUME_RECORD_ENTRY_BYTES);
+            }
+            _ => unreachable!("wrong variant"),
+        }
+
+        // One byte more or fewer than the declared entry count is refused, so a
+        // shadow entry cannot ride along outside the digest.
+        let mut grown = [0u8; CONSUME_RECORD_PREFIX_BYTES + 4 * CONSUME_RECORD_ENTRY_BYTES + 1];
+        put(&mut grown, 0, &prefix).expect("prefix");
+        assert_eq!(
+            RelayInstructionV1::decode(&grown),
+            Err(Error::InvalidLength)
+        );
+        let short = wire.get(..width - 1).expect("short");
+        assert_eq!(RelayInstructionV1::decode(short), Err(Error::InvalidLength));
+    }
+
+    #[test]
+    fn a_zero_terminal_sequence_or_empty_set_refuses_at_construction() {
+        assert_eq!(
+            ConsumeRecordInstructionV1::new(7, 1, 0, [0x11; 32], [0x12; 32], 4),
+            Err(Error::InvalidRecordTransition)
+        );
+        assert_eq!(
+            ConsumeRecordInstructionV1::new(7, 1, 1, [0x11; 32], [0x12; 32], 0),
+            Err(Error::InvalidSetGeometry)
+        );
+        assert_eq!(
+            ConsumeRecordInstructionV1::new(7, 1, 1, [0x11; 32], [0x12; 32], 9),
+            Err(Error::InvalidSetGeometry)
+        );
+    }
+
+    #[test]
+    fn the_deadline_failure_action_round_trips_and_refuses_a_zero_sequence() {
+        let request = CommitDeadlineFailureInstructionV1::new(7, 1).expect("request");
+        let bytes = request.to_bytes().expect("encode");
+        assert_eq!(
+            RelayInstructionV1::decode(&bytes),
+            Ok(RelayInstructionV1::CommitDeadlineFailure(request))
+        );
+        assert_eq!(
+            CommitDeadlineFailureInstructionV1::new(7, 0),
+            Err(Error::InvalidRecordTransition)
+        );
     }
 
     #[test]

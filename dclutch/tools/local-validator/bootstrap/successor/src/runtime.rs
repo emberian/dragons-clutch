@@ -23,7 +23,10 @@ use dclutch_product_runtime_v2_operator::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
-use dclutch_registry_svm::{REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1};
+use dclutch_registry_svm::{
+    LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View,
+    REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1, RegistryInstructionV1,
+};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionRoleV1, InitializeProtocolInfrastructureV1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
@@ -43,15 +46,45 @@ use crate::{
     Error, Result,
     model::{ProgramPin, RunProgramInput, SuccessorPlan, SuccessorRunEvidence, SuccessorRunSpec},
     plan::{
-        PrepareArgs, hex, hex32, loader_programdata_bytes, loader_programdata_bytes_after_revoke,
-        pubkey, validate_program_ids,
+        PrepareArgs, RoleDeploymentInputV1, RoleDeploymentsV1, hex, hex32,
+        loader_programdata_bytes, programdata_bytes_after_revoke, pubkey, validate_program_ids,
     },
     rpc::{Rpc, account_evidence, validate_loopback_url},
+    seed::{KeyForge, role},
 };
 
 const RUN_SPEC_SCHEMA_V2: &str = "dclutch-local-successor-run-spec-v2";
 const RUN_EVIDENCE_SCHEMA_V2: &str = "dclutch-local-successor-run-evidence-v2";
-const EXPECTED_RPC_URL: &str = "http://127.0.0.1:20890/";
+/// The historical origin, and still the default nothing has to ask for.
+///
+/// # Why this stopped being a constant
+///
+/// This used to be `EXPECTED_RPC_URL`, a hardcoded `http://127.0.0.1:20890/`
+/// that `validate_spec` required a run spec to equal exactly. That made a
+/// local-validator campaign a SINGLE GLOBAL SLOT on the machine: three lanes
+/// contending for one socket, losing six-minute races to each other, and a
+/// leaked validator blocking the whole repository's tier-1 path.
+///
+/// Nothing about the protocol wanted that. The origin is in no authenticated
+/// material — not in the keypair derivation (`seed.rs` reads the origin only to
+/// decide whether a seed is ADMISSIBLE, never to derive from it), not in a
+/// program address, not in a semantic release ID, not in an artifact
+/// attestation, not in the genesis plan. It was configuration wearing a
+/// constant's clothes.
+///
+/// What the constant DID buy is real and is kept: this process must talk to THE
+/// VALIDATOR IT STARTED and never to some other process that happens to answer
+/// on a loopback socket. That is now enforced by TELLING rather than by
+/// assuming — the spec's origin is passed down to the launcher as `--rpc-port`,
+/// the port is proved free before the launch, and the healthy RPC origin is
+/// compared back against the spec — instead of two sides independently
+/// believing in the same magic number.
+const DEFAULT_RPC_PORT: u16 = 20890;
+/// The launcher derives a 42-port block from its base (`BASE + 41` is the top
+/// of its dynamic range), so a base above this cannot be served at all.
+const MAX_RPC_PORT: u16 = 65_494;
+/// Below 1024 needs privileges the launcher deliberately never has.
+const MIN_RPC_PORT: u16 = 1024;
 const AUTHORITY_LAMPORTS: u64 = 5_000_000_000;
 const VALIDATOR_READY_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,12 +95,17 @@ pub(crate) struct PublishedRecord {
     pub(crate) staging: Pubkey,
 }
 
-struct ValidatorChild {
+pub(crate) struct ValidatorChild {
     child: Child,
 }
 
 impl ValidatorChild {
-    fn spawn(spec: &SuccessorRunSpec, plan: &SuccessorPlan, log_path: &Path) -> Result<Self> {
+    fn spawn(
+        spec: &SuccessorRunSpec,
+        plan: &SuccessorPlan,
+        log_path: &Path,
+        rpc_port: u16,
+    ) -> Result<Self> {
         if plan.core_bootstrap.upgrade_authority == Pubkey::default().to_string() {
             return Err(Error::new("refusing zero in-memory Core authority"));
         }
@@ -87,6 +125,25 @@ impl ValidatorChild {
         let mut command = Command::new(&spec.launcher);
         command
             .arg("start")
+            // TELL the launcher which origin to serve rather than trusting that
+            // both sides independently believe in the same magic number. The
+            // launcher derives its whole port block from this base.
+            .arg("--rpc-port")
+            .arg(rpc_port.to_string())
+            // Bind the validator's lifetime to THIS process, structurally.
+            //
+            // `Drop` below already kills the child, and it is not enough: a
+            // supervisor that is SIGKILLed never runs Drop, and the validator
+            // reparents to PID 1 and outlives everything. That is not a
+            // hypothetical -- on 2026-08-27 a finished campaign left a
+            // validator with PPID 1 holding the one port every tier-1 run
+            // needed, and the chain it held was unusable by anyone because the
+            // founder key had died with the supervisor's memory.
+            //
+            // Given this pid the launcher starts a watchdog before it execs,
+            // so the containment survives a signal this process cannot catch.
+            .arg("--supervisor-pid")
+            .arg(std::process::id().to_string())
             .arg("--ledger")
             .arg(&spec.ledger)
             .arg("--account-dir")
@@ -114,7 +171,7 @@ impl ValidatorChild {
         Ok(Self { child })
     }
 
-    fn wait_for_rpc(&mut self, plan: &SuccessorPlan) -> Result<Rpc> {
+    fn wait_for_rpc(&mut self, plan: &SuccessorPlan, rpc_url: &str) -> Result<Rpc> {
         let expected_programdata = pubkey(&plan.core.programdata_id)?;
         let expected_hash = &plan.core_bootstrap.genesis_programdata_sha256;
         let deadline = Instant::now() + VALIDATOR_READY_TIMEOUT;
@@ -128,16 +185,17 @@ impl ValidatorChild {
                     "successor validator exited before exact health: {status}"
                 )));
             }
-            if let Ok(mut rpc) = Rpc::connect(EXPECTED_RPC_URL)
+            if let Ok(mut rpc) = Rpc::connect(rpc_url)
                 && let Ok(account) = rpc.required_account(expected_programdata, "Core ProgramData")
                 && hex(&sha2::Sha256::digest(&account.data)) == *expected_hash
             {
                 return Ok(rpc);
             }
             if Instant::now() >= deadline {
-                return Err(Error::new(
-                    "successor validator did not expose the exact prepared Core ProgramData within 60 seconds",
-                ));
+                return Err(Error::new(format!(
+                    "successor validator at {rpc_url} did not expose the exact prepared Core \
+                     ProgramData within 60 seconds"
+                )));
             }
             thread::sleep(Duration::from_millis(250));
         }
@@ -165,14 +223,94 @@ fn append_program_args(command: &mut Command, label: &str, input: &RunProgramInp
         .arg(&input.attestation);
 }
 
+/// A live campaign that has reached an OPEN Market.
+///
+/// The guarded validator is still running, the ephemeral Core authority is
+/// still only in process memory, and every founding poststate is on chain.
+/// Dropping this kills the validator, which is why the founder key and the
+/// chain it founded on can only be used by a caller that holds the session:
+/// nothing here is ever persisted, so a second process cannot sign as the
+/// founder no matter what it reads off the ledger.
+pub(crate) struct OpenMarketSessionV1 {
+    /// Kept solely to own the child's lifetime; `Drop` kills the validator.
+    #[allow(dead_code)]
+    pub(crate) validator: ValidatorChild,
+    pub(crate) rpc: Rpc,
+    pub(crate) spec: SuccessorRunSpec,
+    /// The founding's checked plan. This binary is finished with it by the
+    /// time the session exists; a post-Open campaign is not.
+    #[allow(dead_code)]
+    pub(crate) plan: SuccessorPlan,
+    pub(crate) plan_sha256: String,
+    pub(crate) authority: Keypair,
+    pub(crate) validator_log: PathBuf,
+    pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
+    pub(crate) accounts: BTreeMap<String, crate::model::AccountEvidence>,
+    pub(crate) completed: Vec<String>,
+    /// The campaign's key source, kept so a post-Open campaign draws its keys
+    /// from the same forge and inherits the same reproducibility.
+    pub(crate) forge: KeyForge,
+}
+
+impl OpenMarketSessionV1 {
+    /// Render the campaign's evidence document without ending the session.
+    pub(crate) fn evidence(&self) -> SuccessorRunEvidence {
+        SuccessorRunEvidence {
+            schema: RUN_EVIDENCE_SCHEMA_V2.into(),
+            rpc_url: self.rpc.url().into(),
+            ledger: self.spec.ledger.clone(),
+            validator_log: self.validator_log.display().to_string(),
+            plan_sha256: self.plan_sha256.clone(),
+            core_upgrade_authority_pubkey: self.authority.pubkey().to_string(),
+            private_key_persisted: false,
+            // A seeded campaign persists no key either -- but its keys are
+            // REPRODUCIBLE from a seed somebody else holds, which is a
+            // different claim from "unreproducible", and the evidence has to
+            // make that difference visible rather than let one bool cover both.
+            keypair_derivation: self.forge.derivation_label().into(),
+            keypair_seed_sha256: self.forge.seed_sha256(),
+            completed: self.completed.clone(),
+            transactions: self.transactions.clone(),
+            accounts: self.accounts.clone(),
+            remaining_execution_seam: crate::market::REMAINING_OPEN_SEAM.into(),
+        }
+    }
+}
+
 /// Own the complete authority lifetime and leave the ledger as evidence.
-pub(crate) fn execute(spec_path: &Path) -> Result<()> {
+pub(crate) fn execute(spec_path: &Path, keypair_seed: Option<&str>) -> Result<()> {
+    let session = found_through_open(spec_path, keypair_seed)?;
+    let evidence = session.evidence();
+    write_evidence(Path::new(&session.spec.output), &evidence)?;
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&serde_json::to_vec_pretty(&evidence)?)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+/// Drive a fresh guarded validator from genesis to an OPEN Market.
+///
+/// This is the whole of the tier-1 campaign. It returns rather than writing,
+/// so that a longer campaign - one that lives the Market's life after Open -
+/// runs against the same validator, the same activation cache, and the same
+/// in-memory founder, instead of reconstructing a founding it cannot sign for.
+pub(crate) fn found_through_open(
+    spec_path: &Path,
+    keypair_seed: Option<&str>,
+) -> Result<OpenMarketSessionV1> {
     validate_existing_canonical_file(spec_path, "--spec")?;
     let spec: SuccessorRunSpec = serde_json::from_slice(&fs::read(spec_path)?)?;
     validate_spec(&spec)?;
-    ensure_rpc_port_free()?;
+    // The seed gate reads the SPEC's declared origin, and it runs before any
+    // key exists. `validate_spec` has already pinned that origin to the
+    // launcher's loopback one; the gate does not assume that, because a
+    // TEST-ONLY affordance whose safety depends on an unrelated check upstream
+    // is one refactor away from not being safe at all.
+    let forge = KeyForge::parse(keypair_seed, &spec.rpc_url)?;
+    let (rpc_url, rpc_port) = rpc_origin(&spec.rpc_url)?;
+    ensure_rpc_port_free(rpc_port)?;
 
-    let authority = Keypair::new();
+    let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
     let plan = crate::plan::prepare(prepare_args(&spec, authority.pubkey())?)?;
     validate_plan(&plan)?;
     if plan.core_bootstrap.upgrade_authority != authority.pubkey().to_string() {
@@ -183,13 +321,18 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
     let plan_bytes = fs::read(&spec.plan)?;
     let plan_sha256 = hex(&sha2::Sha256::digest(&plan_bytes));
     let validator_log = validator_log_path(&spec)?;
-    let mut validator = ValidatorChild::spawn(&spec, &plan, &validator_log)?;
-    let mut rpc = validator.wait_for_rpc(&plan)?;
-    if rpc.url() != EXPECTED_RPC_URL {
-        return Err(Error::new("healthy RPC origin changed after launch"));
+    let mut validator = ValidatorChild::spawn(&spec, &plan, &validator_log, rpc_port)?;
+    let mut rpc = validator.wait_for_rpc(&plan, &rpc_url)?;
+    if rpc.url() != rpc_url {
+        return Err(Error::new(format!(
+            "healthy RPC origin changed after launch: asked for {rpc_url}, answering on {}",
+            rpc.url()
+        )));
     }
 
-    let hostile = Keypair::new();
+    let observed_slots = observe_deployment_slots(&mut rpc, &plan)?;
+
+    let hostile = forge.keypair(role::HOSTILE_AUTHORITY);
     let mut transactions = vec![
         rpc.airdrop(
             "fund ephemeral Core authority",
@@ -202,6 +345,15 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
             AUTHORITY_LAMPORTS,
         )?,
     ];
+    let mut publication_steps: Vec<String> = Vec::new();
+    if plan.record_publication == "transaction" {
+        let count = publish_infrastructure_records(&mut rpc, &plan, &authority, &mut transactions)?;
+        publication_steps.push(format!(
+            "published {count} infrastructure record bodies as real Registry transactions -- \
+             nothing about the protocol existed at genesis"
+        ));
+    }
+
     let profile = pubkey(&plan.infrastructure_profile.address)?;
     if rpc.account(profile)?.is_some() {
         return Err(Error::new(
@@ -310,6 +462,7 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
         &plan,
         &spec.market,
         &authority,
+        &forge,
         &mut transactions,
     )?;
 
@@ -324,37 +477,118 @@ pub(crate) fn execute(spec_path: &Path) -> Result<()> {
         accounts.insert(label.into(), account_evidence(address, &account));
     }
     accounts.extend(market.accounts);
-    let mut completed = vec![
+    let mut completed: Vec<String> = vec![
         "generated one ephemeral Core authority in process memory".into(),
         "prepared exact public-key-only genesis plan".into(),
         "started and health-bound guarded localhost validator".into(),
+        observed_slots,
         "proved wrong-authority infrastructure refusal".into(),
+    ];
+    // Whatever the publication mode contributed happened after the chain was
+    // up and its deployment slots were read, and before the profile existed,
+    // so it belongs here in the order the chain saw it.
+    completed.splice(4..4, publication_steps);
+    completed.extend::<Vec<String>>(vec![
         "initialized exact Core Registry/Rent infrastructure profile".into(),
         "proved release activation refuses before Core revocation".into(),
         "revoked Core Loader-v3 upgrade authority to None".into(),
         "verified exact immutable Core ProgramData poststate".into(),
         "activated exact immutable five-role release set".into(),
         "proved late-failure atomic rollback".into(),
-    ];
+    ]);
     completed.extend(market.completed);
-    let evidence = SuccessorRunEvidence {
-        schema: RUN_EVIDENCE_SCHEMA_V2.into(),
-        rpc_url: rpc.url().into(),
-        ledger: spec.ledger.clone(),
-        validator_log: validator_log.display().to_string(),
+    Ok(OpenMarketSessionV1 {
+        validator,
+        rpc,
+        spec,
+        plan,
         plan_sha256,
-        core_upgrade_authority_pubkey: authority.pubkey().to_string(),
-        private_key_persisted: false,
-        completed,
+        authority,
+        validator_log,
         transactions,
         accounts,
-        remaining_execution_seam: crate::market::REMAINING_OPEN_SEAM.into(),
-    };
-    write_evidence(Path::new(&spec.output), &evidence)?;
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&evidence)?)?;
-    stdout.write_all(b"\n")?;
-    Ok(())
+        completed,
+        forge,
+    })
+}
+
+/// The seven role pins in the canonical launcher order.
+fn role_pins(plan: &SuccessorPlan) -> [(&'static str, &ProgramPin); 7] {
+    [
+        ("registry", &plan.registry),
+        ("core", &plan.core),
+        ("claims", &plan.claims),
+        ("trading", &plan.trading),
+        ("resolution", &plan.resolution),
+        ("custody", &plan.custody),
+        ("rent-credit", &plan.rent_credit),
+    ]
+}
+
+/// Read every role's deployment slot back off the live chain, before the first
+/// record body exists.
+///
+/// The plan decoded each slot out of a `ProgramData` account image and every
+/// minted body binds it; `ArtifactReleaseV1::authenticate_deployment` refuses
+/// `DeploymentSlotMismatch` on chain if that number is wrong. This step turns
+/// the plan's number into an observation *of this chain*, through the same
+/// `ProgramDataMetadataV3View` parse the contract itself runs — so a
+/// disagreement costs a refusal here, before rent is spent, instead of at
+/// activation.
+///
+/// It also waits out the Loader's own rule. A Loader V3 program becomes
+/// executable only *after* the slot it was deployed in, so a campaign whose
+/// programs claim slot `s` cannot invoke them until the chain is past `s`.
+/// That rule is invisible when every slot is zero, which is exactly why it was
+/// never enforced before.
+fn observe_deployment_slots(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<String> {
+    let mut highest = 0_u64;
+    let mut observed: Vec<String> = Vec::new();
+    for (label, pin) in role_pins(plan) {
+        let programdata = pubkey(&pin.programdata_id)?;
+        let account = rpc.required_account(programdata, label)?;
+        if account.owner != bpf_loader_upgradeable::ID || account.executable {
+            return Err(Error::new(format!(
+                "{label} ProgramData is not a nonexecutable Loader-v3 account"
+            )));
+        }
+        let view = ProgramDataMetadataV3View::parse(&account.data).map_err(|error| {
+            Error::new(format!(
+                "{label} ProgramData did not hostile-decode as Loader v3: {error:?}"
+            ))
+        })?;
+        if view.deployment_slot() != pin.deployment_slot {
+            return Err(Error::new(format!(
+                "{label} deployment slot on chain is {} but every minted release body binds {}",
+                view.deployment_slot(),
+                pin.deployment_slot
+            )));
+        }
+        if hex(&sha2::Sha256::digest(&account.data)) != pin.programdata_sha256 {
+            return Err(Error::new(format!(
+                "{label} ProgramData on chain is not the image its release was decoded from"
+            )));
+        }
+        highest = highest.max(view.deployment_slot());
+        observed.push(format!("{label}={}", view.deployment_slot()));
+    }
+    let deadline = Instant::now() + VALIDATOR_READY_TIMEOUT;
+    loop {
+        let current = rpc.finalized_slot()?;
+        if current > highest {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::new(format!(
+                "chain is still at slot {current} and no Loader-v3 program is executable until after slot {highest}"
+            )));
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Ok(format!(
+        "observed seven Loader-v3 deployment slots off the live chain and matched every minted release body: {}",
+        observed.join(" ")
+    ))
 }
 
 fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArgs> {
@@ -390,7 +624,27 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
         rent_credit_elf: PathBuf::from(&spec.rent_credit.elf_path),
         rent_credit_sha256: spec.rent_credit.elf_sha256.clone(),
         rent_credit_semantic_release_id: spec.rent_credit.semantic_release_id.clone(),
+        record_publication: match spec.record_publication.as_deref() {
+            None => crate::plan::RecordPublicationV1::Genesis,
+            Some(value) => crate::plan::RecordPublicationV1::parse(value)?,
+        },
+        deployments: RoleDeploymentsV1 {
+            registry: role_deployment_input(&spec.registry),
+            core: role_deployment_input(&spec.core),
+            claims: role_deployment_input(&spec.claims),
+            trading: role_deployment_input(&spec.trading),
+            resolution: role_deployment_input(&spec.resolution),
+            custody: role_deployment_input(&spec.custody),
+            rent_credit: role_deployment_input(&spec.rent_credit),
+        },
     })
+}
+
+fn role_deployment_input(input: &RunProgramInput) -> RoleDeploymentInputV1 {
+    RoleDeploymentInputV1 {
+        observed_programdata: input.observed_programdata.as_deref().map(PathBuf::from),
+        genesis_deployment_slot: input.genesis_deployment_slot.unwrap_or(0),
+    }
 }
 
 fn initialize_instruction(
@@ -538,6 +792,46 @@ pub(crate) fn record(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubke
         return Err(Error::new(format!("record {label} PDA mismatch")));
     }
     Ok((raw, staging))
+}
+
+/// Publish the nine infrastructure record bodies with real transactions.
+///
+/// This is the only path a cluster can take. A local validator can be handed
+/// finalized raw-record accounts at genesis; devnet cannot be handed anything.
+/// Every body here therefore goes through the same permissionless Registry
+/// `Begin -> Append -> Finalize` state machine that every market record uses,
+/// paying rent from `sponsor`, and each resulting account is required to land
+/// at exactly the coordinate the plan derived offline.
+///
+/// Order matters: Core's infrastructure initialization reads the Registry and
+/// Rent artifact records, and role activation reads the five role records plus
+/// the release set, so all nine must be finalized before either runs.
+fn publish_infrastructure_records(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    sponsor: &Keypair,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<usize> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let mut published = 0_usize;
+    for (label, pair) in &plan.records {
+        let expected_raw = pubkey(&pair.raw)?;
+        if rpc.account(expected_raw)?.is_some() {
+            return Err(Error::new(format!(
+                "record {label} already existed before its publication transaction"
+            )));
+        }
+        let schema = hex32(&pair.schema_id)?;
+        let body = decode_hex(&pair.body_hex)?;
+        let record = publish_record(rpc, registry, sponsor, schema, &body, None, transactions)?;
+        if record.raw != expected_raw || hex(&record.digest) != pair.content_sha256 {
+            return Err(Error::new(format!(
+                "published record {label} did not land at its derived coordinate"
+            )));
+        }
+        published += 1;
+    }
+    Ok(published)
 }
 
 pub(crate) fn publish_record(
@@ -842,12 +1136,7 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
         return Err(Error::new("unsupported successor run-spec schema"));
     }
     crate::market::validate_market_input(&spec.market)?;
-    let rpc = validate_loopback_url(&spec.rpc_url)?;
-    if rpc.as_str() != EXPECTED_RPC_URL {
-        return Err(Error::new(format!(
-            "successor launcher is pinned to exact RPC origin {EXPECTED_RPC_URL}"
-        )));
-    }
+    let _ = rpc_origin(&spec.rpc_url)?;
     validate_existing_canonical_file(Path::new(&spec.launcher), "launcher")?;
     for (label, input) in [
         ("registry", &spec.registry),
@@ -899,17 +1188,50 @@ fn validate_spec(spec: &SuccessorRunSpec) -> Result<()> {
     Ok(())
 }
 
-fn ensure_rpc_port_free() -> Result<()> {
-    let address: SocketAddr = "127.0.0.1:20890"
-        .parse()
-        .map_err(|error| Error::new(format!("internal RPC socket: {error}")))?;
+/// The campaign's own RPC origin, normalized, with the port it names.
+///
+/// One owner for "which origin is this run allowed to use". The host rule is
+/// unchanged and is `validate_loopback_url`'s: an explicit-port, credential-free
+/// loopback HTTP origin. On top of that this requires the host to be literal
+/// `127.0.0.1`, because that is the only interface the launcher binds — a spec
+/// naming `localhost` or `[::1]` would pass the loopback rule and then fail to
+/// reach a validator listening only on the dotted-quad.
+///
+/// The port is free to move; it is the thing that used to be pinned and is not
+/// authenticated anywhere. It is bounded by what the launcher's 42-port block
+/// can actually be derived from.
+fn rpc_origin(rpc_url: &str) -> Result<(String, u16)> {
+    let url = validate_loopback_url(rpc_url)?;
+    let host = url.host_str().unwrap_or_default();
+    if host != "127.0.0.1" {
+        return Err(Error::new(format!(
+            "successor RPC origin must be on 127.0.0.1, which is the only interface the \
+             launcher binds; the spec names {host}"
+        )));
+    }
+    let port = url
+        .port()
+        .ok_or_else(|| Error::new("successor RPC origin must name an explicit port"))?;
+    if !(MIN_RPC_PORT..=MAX_RPC_PORT).contains(&port) {
+        return Err(Error::new(format!(
+            "successor RPC port {port} is outside {MIN_RPC_PORT}-{MAX_RPC_PORT}; the launcher \
+             derives a 42-port block from it and the block must fit under 65535"
+        )));
+    }
+    Ok((url.as_str().to_owned(), port))
+}
+
+fn ensure_rpc_port_free(port: u16) -> Result<()> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
     match TcpStream::connect_timeout(&address, Duration::from_millis(250)) {
-        Ok(_) => Err(Error::new(
-            "refusing to launch while another process listens on 127.0.0.1:20890",
-        )),
+        Ok(_) => Err(Error::new(format!(
+            "refusing to launch while another process listens on 127.0.0.1:{port}. Pick a free \
+             base with the run spec's rpc_url: this campaign is no longer pinned to \
+             {DEFAULT_RPC_PORT} and N campaigns can share one machine on disjoint bases."
+        ))),
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(()),
         Err(error) => Err(Error::new(format!(
-            "could not prove successor RPC port is free: {error}"
+            "could not prove successor RPC port {port} is free: {error}"
         ))),
     }
 }
@@ -1009,12 +1331,41 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
         "rent_artifact_release",
         "pyth_release",
     ] {
-        let _ = record(plan, label)?;
+        let (raw, _) = record(plan, label)?;
+        let pair = &plan.records[label];
+        let body = decode_hex(&pair.body_hex)?;
+        if body.is_empty() || hex(&sha2::Sha256::digest(&body)) != pair.content_sha256 {
+            return Err(Error::new(format!(
+                "record {label} carries a body that is not the body its coordinate commits to"
+            )));
+        }
+        // Under transaction publication the record must NOT be at genesis: the
+        // whole point is that the chain, not the fixture, produced it.
+        if plan.record_publication == "transaction"
+            && plan
+                .genesis_accounts
+                .values()
+                .any(|account| account.address == raw.to_string())
+        {
+            return Err(Error::new(format!(
+                "record {label} was genesis-injected under transaction publication"
+            )));
+        }
     }
-    if plan.genesis_accounts.len() != 23 {
-        return Err(Error::new(
-            "infrastructure plan must contain fourteen Loader and nine finalized record accounts",
-        ));
+    let expected_accounts = match plan.record_publication.as_str() {
+        "genesis" => 23,
+        "transaction" => 14,
+        other => {
+            return Err(Error::new(format!(
+                "unknown record publication mode {other}"
+            )));
+        }
+    };
+    if plan.genesis_accounts.len() != expected_accounts {
+        return Err(Error::new(format!(
+            "infrastructure plan under {} publication must contain exactly {expected_accounts} genesis accounts",
+            plan.record_publication
+        )));
     }
     Ok(())
 }
@@ -1043,28 +1394,64 @@ fn validate_program_pin(
     if sha2::Sha256::digest(&elf).as_slice() != expected_elf {
         return Err(Error::new(format!("{label} ELF digest mismatch")));
     }
-    let expected_programdata = loader_programdata_bytes(&elf, bootstrap_authority);
     let genesis = plan
         .genesis_accounts
         .get(&format!("loader.{label}.programdata"))
         .ok_or_else(|| Error::new(format!("missing {label} ProgramData genesis pin")))?;
-    if genesis.data_sha256 != hex(&sha2::Sha256::digest(&expected_programdata)) {
+    if genesis.data_sha256 != pin.programdata_sha256 {
         return Err(Error::new(format!(
-            "{label} ProgramData header/ELF genesis hash mismatch"
+            "{label} genesis ProgramData is not the image its deployment facts were decoded from"
         )));
     }
-    if label == "core" {
-        let post_revoke = loader_programdata_bytes_after_revoke(
-            &elf,
-            bootstrap_authority.ok_or_else(|| Error::new("Core bootstrap authority was absent"))?,
-        );
-        if plan.core_bootstrap.post_revoke_programdata_sha256
-            != hex(&sha2::Sha256::digest(&post_revoke))
-        {
-            return Err(Error::new(
-                "Core post-revoke immutable ProgramData hash mismatch",
-            ));
+    if genesis.data_len != elf.len().saturating_add(LOADER_V3_PROGRAMDATA_METADATA_BYTES) {
+        return Err(Error::new(format!(
+            "{label} ProgramData width is not the Loader-v3 45-byte metadata plus its exact ELF"
+        )));
+    }
+    // Only a genesis install can be regenerated from `(elf, slot, authority)`.
+    // A real revoked account retains its former authority in bytes 13..45 and
+    // no triple reproduces that litter, which is exactly why an observed image
+    // is carried by digest instead of rebuilt.
+    match pin.deployment_source.as_str() {
+        "genesis-install" => {
+            let expected = loader_programdata_bytes(&elf, pin.deployment_slot, bootstrap_authority);
+            if genesis.data_sha256 != hex(&sha2::Sha256::digest(&expected)) {
+                return Err(Error::new(format!(
+                    "{label} ProgramData header/ELF genesis hash mismatch"
+                )));
+            }
+            if label == "core" {
+                let post_revoke = programdata_bytes_after_revoke(&expected)?;
+                if plan.core_bootstrap.post_revoke_programdata_sha256
+                    != hex(&sha2::Sha256::digest(&post_revoke))
+                {
+                    return Err(Error::new(
+                        "Core post-revoke immutable ProgramData hash mismatch",
+                    ));
+                }
+            }
         }
+        // An observed account's poststate is not reconstructible here, and it
+        // does not have to be: the supervisor reads the real ProgramData back
+        // off the chain after `SetAuthority(None)` and compares it against
+        // `post_revoke_programdata_sha256`, which is a stronger check than
+        // rebuilding the bytes this process already believes.
+        "observed-programdata-account" => {}
+        other => {
+            return Err(Error::new(format!(
+                "{label} names an unknown deployment source {other}"
+            )));
+        }
+    }
+    if label == "core"
+        && (bootstrap_authority.is_none()
+            || genesis.data_sha256 != plan.core_bootstrap.genesis_programdata_sha256
+            || plan.core_bootstrap.post_revoke_programdata_sha256
+                == plan.core_bootstrap.genesis_programdata_sha256)
+    {
+        return Err(Error::new(
+            "Core genesis ProgramData is not the authority-bearing pre-init observation",
+        ));
     }
     Ok(())
 }
@@ -1211,10 +1598,50 @@ mod tests {
     }
 
     #[test]
-    fn rpc_origin_is_the_launcher_fixed_loopback_origin() {
-        assert!(validate_loopback_url(EXPECTED_RPC_URL).is_ok());
-        assert!(validate_loopback_url("http://8.8.8.8:20890/").is_err());
-        assert!(validate_loopback_url("https://127.0.0.1:20890/").is_err());
+    fn the_rpc_origin_is_any_loopback_port_and_nothing_else() {
+        // The DEFAULT still resolves, byte for byte, so nothing that never
+        // asked for a port notices this became a parameter.
+        assert_eq!(
+            rpc_origin("http://127.0.0.1:20890/").expect("default origin"),
+            ("http://127.0.0.1:20890/".to_owned(), DEFAULT_RPC_PORT)
+        );
+        // And so does any other admissible base, which is the whole point: N
+        // campaigns on one machine instead of one global slot.
+        assert_eq!(
+            rpc_origin("http://127.0.0.1:31890/").expect("nonstandard origin"),
+            ("http://127.0.0.1:31890/".to_owned(), 31890)
+        );
+        assert_eq!(
+            rpc_origin(&format!("http://127.0.0.1:{MIN_RPC_PORT}/"))
+                .expect("the lowest admissible base")
+                .1,
+            MIN_RPC_PORT
+        );
+        assert_eq!(
+            rpc_origin(&format!("http://127.0.0.1:{MAX_RPC_PORT}/"))
+                .expect("the highest admissible base")
+                .1,
+            MAX_RPC_PORT
+        );
+
+        // What is NOT relaxed. The host rule is unchanged...
+        assert!(rpc_origin("http://8.8.8.8:20890/").is_err());
+        assert!(rpc_origin("https://127.0.0.1:20890/").is_err());
+        assert!(rpc_origin("http://127.0.0.1:20890/path").is_err());
+        assert!(rpc_origin("http://user@127.0.0.1:20890/").is_err());
+        assert!(rpc_origin("http://127.0.0.1/").is_err());
+        // ...and it is TIGHTER than validate_loopback_url alone, because the
+        // launcher binds 127.0.0.1 and nothing else. Both of these are honest
+        // loopback origins that no validator of ours would answer on.
+        assert!(validate_loopback_url("http://localhost:20890/").is_ok());
+        assert!(rpc_origin("http://localhost:20890/").is_err());
+        assert!(validate_loopback_url("http://[::1]:20890/").is_ok());
+        assert!(rpc_origin("http://[::1]:20890/").is_err());
+
+        // A base whose 42-port block would not fit under 65535 is refused
+        // here rather than by a launcher that has already spent a minute.
+        assert!(rpc_origin(&format!("http://127.0.0.1:{}/", MAX_RPC_PORT + 1)).is_err());
+        assert!(rpc_origin(&format!("http://127.0.0.1:{}/", MIN_RPC_PORT - 1)).is_err());
     }
 
     #[test]
@@ -1257,7 +1684,7 @@ mod tests {
         let mut elf = vec![0_u8; 64];
         elf[..4].copy_from_slice(b"\x7fELF");
         elf[48..52].copy_from_slice(&3_u32.to_le_bytes());
-        let genesis = loader_programdata_bytes(&elf, Some(authority.pubkey()));
+        let genesis = loader_programdata_bytes(&elf, 0, Some(authority.pubkey()));
         let body = serde_json::json!({
             "pubkey": programdata.to_string(),
             "account": {
@@ -1313,7 +1740,12 @@ mod tests {
         let observed = rpc
             .required_account(programdata, "revoked ProgramData")
             .expect("revoked ProgramData");
-        let expected = loader_programdata_bytes_after_revoke(&elf, authority.pubkey());
+        let expected = programdata_bytes_after_revoke(&loader_programdata_bytes(
+            &elf,
+            0,
+            Some(authority.pubkey()),
+        ))
+        .expect("revoke poststate");
         assert_eq!(observed.data, expected);
         let view = dclutch_registry_svm::ProgramDataV3View::parse(&observed.data)
             .expect("Registry parses real Loader poststate");
@@ -1402,6 +1834,8 @@ mod tests {
             rent_credit_elf: rent_elf,
             rent_credit_sha256: rent_sha,
             rent_credit_semantic_release_id: "17".repeat(32),
+            record_publication: crate::plan::RecordPublicationV1::Genesis,
+            deployments: RoleDeploymentsV1::default(),
         })
         .expect("prepare real-SBF infrastructure plan");
         validate_plan(&plan).expect("validate real-SBF plan");
@@ -1532,6 +1966,7 @@ mod tests {
             &plan,
             &market_input,
             &authority,
+            &KeyForge::random(),
             &mut publication_transactions,
         )
         .expect("real-SBF RentV2 and Found31 campaign");

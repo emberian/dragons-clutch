@@ -29,7 +29,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
+use crate::{
+    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    hot_v3::DowngradedEffectAccountsV3,
+};
 
 const CORE_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-core-receipt:v3";
 
@@ -56,7 +59,7 @@ pub fn preflight_core_route_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     family_request: &[u8],
     core_program: &AccountInfo<'_>,
@@ -89,7 +92,7 @@ pub fn execute_core_route_v3<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
@@ -177,7 +180,7 @@ fn prepare(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     family_request: &[u8],
     core_program: &AccountInfo<'_>,
@@ -277,16 +280,19 @@ fn prepare(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let start = usize::from(invocation.fixed_account_start);
     let end = start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    accounts
-        .get(start..end)
-        .map(Vec::from)
-        .ok_or_else(|| TradingSbfError::Content.into())
+    let mut output = Vec::new();
+    accounts.extend_window(
+        &mut output,
+        start,
+        end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+    )?;
+    Ok(output)
 }
 
 #[cfg(test)]

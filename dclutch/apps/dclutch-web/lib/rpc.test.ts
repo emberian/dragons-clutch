@@ -92,4 +92,36 @@ describe('bounded finalized RPC client', () => {
     await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(Uint8Array.from([1, 2, 3]))).resolves.toBe(signature);
     await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher).sendRawTransaction(new Uint8Array(1_233))).rejects.toThrow(/1..1232/);
   });
+
+  /**
+   * Every other case in this file INJECTS a fetcher, so the default path — the
+   * only one the product uses — was never executed here. It was broken:
+   * `this.fetcher(...)` called the ambient `fetch` with the client as receiver,
+   * which Chromium refuses outright. Measured against a live localhost
+   * validator on 2026-08-27: every read surface in the app answered
+   * `Refused: Failed to execute 'fetch' on 'Window': Illegal invocation`.
+   *
+   * The stub below enforces the browser's rule inside a runtime that does not,
+   * so the regression fails here instead of only on a chain.
+   */
+  it('calls the ambient fetch with a receiver a browser accepts', async () => {
+    const original = globalThis.fetch;
+    const seen: unknown[] = [];
+    globalThis.fetch = function browserFetch(this: unknown, _input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+      seen.push(this);
+      if (this !== undefined && this !== globalThis) {
+        throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+      }
+      const request = JSON.parse(String(init?.body)) as { method: string };
+      if (request.method === 'getVersion') return Promise.resolve(response({ 'solana-core': '4.0.2' }));
+      return Promise.resolve(response('EtWTRABZaYq6iMfeYKouRu166VU2xqa1'));
+    } as typeof fetch;
+    try {
+      await expect(new SolanaRpcClient('http://127.0.0.1:20890/').probe()).resolves.toMatchObject({ solanaCore: '4.0.2' });
+      expect(seen.length).toBe(2);
+      for (const receiver of seen) expect(receiver === undefined || receiver === globalThis).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
 });

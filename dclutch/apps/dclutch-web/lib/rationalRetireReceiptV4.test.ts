@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import { HOT_FIXED_ACCOUNT_COUNT_V3 } from './generated/directInlineV3';
 import {
+  RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2,
+  RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4,
+  RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4,
+  RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2,
   buildRationalRetireReceiptCandidateV4,
   decodeRationalRepresentationDescriptorV3,
   deriveRationalRetireReceiptChildDigestV4,
@@ -57,7 +61,7 @@ describe('compact Rational RetireReceipt V4', () => {
 
   it('encodes exact fixed400 family facts and derives a support-sensitive Claims child digest', async () => {
     const request = family();
-    expect(request).toHaveLength(400);
+    expect(request).toHaveLength(RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4);
     expect(new TextDecoder().decode(request.slice(0, 8))).toBe('DCRLHC04');
     expect(request[10]).toBe(3);
     expect(new DataView(request.buffer).getUint32(380, true)).toBe(0);
@@ -77,7 +81,7 @@ describe('compact Rational RetireReceipt V4', () => {
     const fixed = Array.from({ length: HOT_FIXED_ACCOUNT_COUNT_V3 }, (_, index) => Object.freeze({ address: address(40 + index), isSigner: false, isWritable: index === 1 }));
     const decoded = decodeRationalRepresentationDescriptorV3(descriptor(), bytes(21));
     const support = deriveRationalRetireReceiptSupportV4(address(30), bytes(21), decoded.support, address(31));
-    const claims = Array.from({ length: 20 + 4 * support.length }, (_, index) => Object.freeze({ address: address(90 + index), isSigner: false, isWritable: index === 12 || index === 14 }));
+    const claims = Array.from({ length: RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2 + RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2 * support.length }, (_, index) => Object.freeze({ address: address(90 + index), isSigner: false, isWritable: index === 12 || index === 14 }));
     const table = new AddressLookupTableAccount({
       key: new PublicKey(bytes(200)),
       state: { deactivationSlot: 18_446_744_073_709_551_615n, lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0, authority: undefined,
@@ -94,8 +98,8 @@ describe('compact Rational RetireReceipt V4', () => {
       refusal: 'EffectV4 pending',
     }) satisfies RationalRetireReceiptInspectionV4;
     const plan = buildRationalRetireReceiptCandidateV4(inspection, address(206));
-    expect(plan.outerBytes).toHaveLength(528);
-    expect(plan.accountCount).toBe(HOT_FIXED_ACCOUNT_COUNT_V3 + 20 + 4 * support.length);
+    expect(plan.outerBytes).toHaveLength(RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4);
+    expect(plan.accountCount).toBe(HOT_FIXED_ACCOUNT_COUNT_V3 + RATIONAL_LIFECYCLE_CLAIMS_COMMON_ACCOUNTS_V2 + RATIONAL_LIFECYCLE_VACANCY_ACCOUNTS_V2 * support.length);
     expect(plan.supportCount).toBe(3);
     expect(plan.loadedAddresses).toBeGreaterThan(0);
     expect(plan.wireBytes.length).toBeLessThanOrEqual(1232);

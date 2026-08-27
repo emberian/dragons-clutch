@@ -476,6 +476,76 @@ mod tests {
         assert!(market.privileges().writable());
     }
 
+    /// Each role program the child routes are invoked through is ONE PHYSICAL
+    /// ACCOUNT carried at THREE LOGICAL COORDINATES, and that is correct.
+    ///
+    /// `f680c9e` states, for the two Direct topologies, that a callee coordinate
+    /// may be neither an alias nor the representative of one, because
+    /// `hot_v3::downgraded_effect_accounts_v3` pushes one entry per LOGICAL
+    /// coordinate -- aliases included -- and `selected_role_program_v3` refuses
+    /// as hard on the second match as on none. This topology cannot satisfy
+    /// that invariant and should not try to: the Custody program is a member of
+    /// the Core Found suffix, the Claims founding frame AND the Core Open
+    /// suffix, because each of those three child programs genuinely needs it in
+    /// its own account list. Three frames naming one account is exactly what an
+    /// authenticated route alias is FOR. The same is true of the Claims program.
+    ///
+    /// So the layout is right and the executor's uniqueness test is at the wrong
+    /// granularity: it counts logical coordinates where it means physical
+    /// accounts. What this witness pins is the precondition a deduped lookup
+    /// needs and the layout owes -- for each role program, the set of logical
+    /// coordinates carrying it has exactly ONE representative, and that
+    /// representative is a readonly executable. A layout change that split a
+    /// role's program across two physical accounts would break the fix as
+    /// surely as the fix repairs the layout.
+    #[test]
+    fn each_role_program_is_one_physical_account_at_three_logical_coordinates() {
+        let bytes = encoded_profile();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile");
+        let funding = [7_u32];
+        let shift = usize::try_from(funding[0]).expect("funding width");
+        let count = profile
+            .logical_account_count_with_dynamic_spans(0, &funding)
+            .expect("expanded logical count");
+        // Both role programs sit past the FundingState span's insertion
+        // coordinate, so each base coordinate shifts by the funding width.
+        for (role, base, aliases) in [
+            ("Claims", 68_usize, [109_usize, 129]),
+            ("Custody", 70_usize, [115_usize, 131]),
+        ] {
+            let representative = base + shift;
+            let mut carriers = vec![];
+            for coordinate in 0..count {
+                if profile.representative_with_dynamic_spans(0, &funding, coordinate)
+                    == Ok(representative)
+                {
+                    carriers.push(coordinate);
+                }
+            }
+            let expected = vec![representative, aliases[0] + shift, aliases[1] + shift];
+            assert_eq!(carriers, expected, "{role} program carriers");
+            let privileges = profile
+                .route_privileges_with_dynamic_spans(0, &funding, representative)
+                .expect("representative privileges");
+            assert!(
+                privileges.executable() && !privileges.writable() && !privileges.signer(),
+                "{role} program representative is not a readonly executable"
+            );
+            // The aliases are privilege-free, so every entry the executor scans
+            // is the SAME readonly executable view of the SAME account.
+            for alias in aliases {
+                let rule = profile
+                    .rule(false, u16::try_from(alias).expect("alias coordinate"))
+                    .expect("alias rule");
+                assert_eq!(rule.privileges(), 0, "{role} alias {alias}");
+                assert_eq!(rule.effect_permissions(), 0, "{role} alias {alias}");
+            }
+        }
+        // The two roles are distinct physical accounts. A shared one would make
+        // both lookups resolve to the same program.
+        assert_ne!(68 + shift, 70 + shift);
+    }
+
     #[test]
     fn alias_width_substitution_refuses_before_encoding() {
         let mut lengths = [0_u32; FIXED_RULE_COUNT];

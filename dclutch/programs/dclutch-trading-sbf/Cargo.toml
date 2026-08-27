@@ -41,9 +41,6 @@ families = [
     "series-family",
     "dealer-family",
     "dep:dclutch-direct-codec",
-    "dep:dclutch-general-adapter-contract",
-    "dep:dclutch-general-codec",
-    "dep:dclutch-general-config-contract",
 ]
 # Test-only real-SBF profile that measures the common outer without linking
 # family modules whose separate physical adapters are still under review.
@@ -62,9 +59,6 @@ dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec", optional = 
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel", optional = true }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract" }
-dclutch-general-adapter-contract = { path = "../../crates/dclutch-general-adapter-contract", optional = true }
-dclutch-general-codec = { path = "../../crates/dclutch-general-codec", optional = true }
-dclutch-general-config-contract = { path = "../../crates/dclutch-general-config-contract", optional = true }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }

@@ -2,12 +2,42 @@
 # Fresh localhost successor release set + RentCredit + real-Pyth profile.
 set -euo pipefail
 
-readonly LAUNCHER_VERSION="1"
+readonly LAUNCHER_VERSION="2"
 readonly RECEIVER_ID="rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp"
 readonly ROUTER_ID="HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL"
-readonly RPC_PORT="20890"
-readonly FAUCET_PORT="20892"
-readonly GOSSIP_PORT="20893"
+
+# ------------------------------------------------------------------ the origin
+#
+# This launcher used to hardcode 127.0.0.1:20890 and every port around it, which
+# made a local-validator campaign a SINGLE GLOBAL SLOT on the machine: three
+# lanes contending for one socket, losing six-minute races to each other.
+# Nothing about the protocol wanted that. The origin is not in any authenticated
+# material — not in the keypair derivation (`seed.rs` reads the origin only to
+# decide whether a seed is ADMISSIBLE, never to derive from it), not in a
+# program address, not in a semantic release ID, not in an artifact attestation,
+# not in the genesis plan. It was configuration wearing a constant's clothes.
+#
+# So it is a parameter now, and the whole port block moves with it:
+#
+#     rpc     = BASE          faucet  = BASE + 2      gossip = BASE + 3
+#     dynamic = BASE+10 .. BASE+41
+#
+# BASE 20890 reproduces the historical block byte for byte, and is the default,
+# so every existing script and every reflex keeps working.
+#
+# What the old constant DID buy is real and is kept: the campaign must talk to
+# THE VALIDATOR IT STARTED, never to some other process that happens to answer
+# on a loopback socket. That is now enforced by telling rather than assuming --
+# the bootstrap passes `--rpc-port` down here and then checks the origin it gets
+# back, instead of both sides independently believing in the same magic number.
+readonly DEFAULT_RPC_PORT="20890"
+# Highest base whose block still fits under 65535 (BASE + 41).
+readonly MAX_RPC_PORT="65494"
+readonly MIN_RPC_PORT="1024"
+RPC_PORT=""
+FAUCET_PORT=""
+GOSSIP_PORT=""
+DYNAMIC_PORT_RANGE=""
 
 # Ticks per slot, which is the campaign's wall-clock cost and nothing else.
 #
@@ -33,7 +63,6 @@ readonly GOSSIP_PORT="20893"
 # admission needs its recent slot within 512 slots, which the runner satisfies
 # by deriving and creating in the same step.
 readonly TICKS_PER_SLOT="${DCLUTCH_TICKS_PER_SLOT:-16}"
-readonly DYNAMIC_PORT_RANGE="20900-20931"
 readonly MINT_PUBKEY="11111111111111111111111111111111"
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
@@ -44,6 +73,83 @@ SENTINEL_NAME=".dclutch-successor-validator-owner"
 PID_NAME="dclutch-successor-validator.pid"
 
 die() { printf 'dclutch-successor-validator: %s\n' "$*" >&2; exit 1; }
+
+# Derive the whole port block from one base. Sole owner of the offsets.
+set_port_block() {
+  local base=$1
+  [[ "$base" =~ ^[1-9][0-9]*$ ]] || die "RPC port must be a positive decimal: $base"
+  [[ "$base" -ge "$MIN_RPC_PORT" ]] || die "RPC port must be >= $MIN_RPC_PORT: $base"
+  [[ "$base" -le "$MAX_RPC_PORT" ]] || die "RPC port must be <= $MAX_RPC_PORT so the block ($base-$((base + 41))) fits: $base"
+  RPC_PORT="$base"
+  FAUCET_PORT=$((base + 2))
+  GOSSIP_PORT=$((base + 3))
+  DYNAMIC_PORT_RANGE="$((base + 10))-$((base + 41))"
+}
+
+# Precedence: `--rpc-port` flag, then DCLUTCH_RPC_PORT, then 20890. The flag
+# wins because a caller that passes it is coordinating two processes and must
+# not be silently overridden by an environment it did not set.
+resolve_start_port() {
+  local flag=${1-}
+  if [[ -n "$flag" ]]; then set_port_block "$flag"; return; fi
+  set_port_block "${DCLUTCH_RPC_PORT:-$DEFAULT_RPC_PORT}"
+}
+
+# A started ledger records its own origin in its profile. `status` and `stop`
+# read it back from there rather than re-deriving it, so a ledger started on a
+# nonstandard port is still addressable by a caller that knows only its path.
+port_from_profile() {
+  local ledger=$1 port
+  [[ -f "$ledger/$PROFILE_NAME" ]] || return 1
+  port=$(jq -r '.network.rpc_url | capture(":(?<port>[0-9]+)$") | .port' \
+    "$ledger/$PROFILE_NAME" 2>/dev/null) || return 1
+  [[ "$port" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$port"
+}
+
+
+# ------------------------------------------------------------- the watchdog
+#
+# The supervisor owns this validator's lifetime and kills it on Drop. That is
+# correct and it is not enough: a supervisor that is SIGKILLed -- a rate-limit
+# kill, a harness timeout, a `kill -9` on the wrong pid -- never runs Drop, and
+# the validator reparents to PID 1 and lives forever. That happened on
+# 2026-08-27: a finished campaign left a validator with PPID 1 holding the one
+# port every tier-1 run needed, with no bootstrap, launcher or gauntlet process
+# alive anywhere. Nothing could reach it either: the founder key existed only
+# in the dead supervisor's memory, so the chain it was holding was unusable by
+# anyone while blocking everyone.
+#
+# Containment has to be STRUCTURAL, not a caller remembering to be polite. This
+# runs before the exec, so `$$` is already the pid the validator will have --
+# exec preserves it. When the supervisor is gone, the validator goes.
+#
+# Pid reuse is the one hazard, and it is closed rather than narrowed: the
+# watchdog exits the moment its target stops being a solana-test-validator, and
+# it re-checks the command line immediately before signalling. It never sends a
+# signal to a pid it has not just confirmed.
+spawn_supervisor_watchdog() {
+  local supervisor=$1 target=$$
+  (
+    still_ours() {
+      local command_line
+      command_line=$(ps -o command= -p "$target" 2>/dev/null) || return 1
+      [[ "$command_line" == *"solana-test-validator"* ]]
+    }
+    while kill -0 "$supervisor" 2>/dev/null; do
+      still_ours || exit 0
+      sleep 1
+    done
+    still_ours || exit 0
+    kill -TERM "$target" 2>/dev/null || exit 0
+    for _ in $(seq 1 40); do
+      sleep 0.25
+      still_ours || exit 0
+    done
+    still_ours && kill -KILL "$target" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+}
 
 usage() {
   cat <<'EOF'
@@ -64,12 +170,26 @@ Usage:
     --custody-sha256 SHA256 --custody-attestation ABSOLUTE_JSON \
     --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF \
     --rent-credit-sha256 SHA256 --rent-credit-attestation ABSOLUTE_JSON \
-    [--foreground]
+    [--rpc-port PORT] [--supervisor-pid PID] [--foreground]
   dclutch-successor-validator status --ledger ABSOLUTE_DIR
   dclutch-successor-validator stop --ledger ABSOLUTE_DIR
 
-The profile binds only to 127.0.0.1 on ports 20890-20931. It never reads a
-Solana CLI configuration or caller wallet. The account directory must come
+The profile binds only to 127.0.0.1, on a 42-port block derived from one base:
+
+  rpc BASE   faucet BASE+2   gossip BASE+3   dynamic BASE+10..BASE+41
+
+--supervisor-pid names the process whose lifetime this validator is bound to.
+Given it, the validator is killed when that process dies EVEN IF the process is
+SIGKILLed and never runs its own cleanup -- which is how a finished campaign
+left a validator with PPID 1 holding the pinned port on 2026-08-27.
+
+BASE comes from --rpc-port, else $DCLUTCH_RPC_PORT, else 20890 -- so the default
+block is the historical 20890-20931 and N campaigns can run concurrently on one
+machine by choosing disjoint bases. `status` and `stop` read the base back out
+of the ledger's own profile, so a ledger is addressable by path alone.
+
+It never reads a Solana CLI configuration or caller wallet. The account
+directory must come
 from the successor prepare command and remains explicitly genesis evidence.
 Foreground mode preserves the validator as the launcher's process and is
 required for a same-process supervisor retaining the ephemeral Core authority
@@ -227,12 +347,20 @@ validate_plan() {
      .genesis_accounts["loader.rent-credit.programdata"].address == .rent_credit.programdata_id and
      .infrastructure_profile.registry_artifact_release_id == .registry.artifact_release_id and
      .infrastructure_profile.rent_artifact_release_id == .rent_credit.artifact_release_id and
-     .genesis_accounts["record.registry_artifact_release"].data_sha256 == .records.registry_artifact_release.content_sha256 and
-     .genesis_accounts["record.rent_artifact_release"].data_sha256 == .records.rent_artifact_release.content_sha256 and
      (.genesis_boundary | length == 2) and
      (.bootstrap_order | length == 5) and
      (.execution_blocker | type == "string" and length > 0) and
-     (.genesis_accounts | length == 23)' \
+     (if .record_publication == "transaction" then
+        # The deployable shape: genesis holds the seven programs and nothing
+        # else, and every record body arrives by transaction. Assert the
+        # absence positively rather than merely counting.
+        (.genesis_accounts | length == 14) and
+        (.genesis_accounts | keys | all(startswith("loader.")))
+      elif .record_publication == "genesis" then
+        (.genesis_accounts | length == 23) and
+        .genesis_accounts["record.registry_artifact_release"].data_sha256 == .records.registry_artifact_release.content_sha256 and
+        .genesis_accounts["record.rent_artifact_release"].data_sha256 == .records.rent_artifact_release.content_sha256
+      else false end)' \
     "$plan" >/dev/null || die "successor plan does not match exact account/artifact pins or hides its genesis boundary"
 }
 
@@ -284,9 +412,11 @@ write_profile() {
 }
 
 start() {
-  local ledger_arg='' account_dir_arg='' plan_arg='' registry_id='' registry_elf_arg='' registry_hash='' registry_attestation_arg='' core_id='' core_elf_arg='' core_hash='' core_attestation_arg='' claims_id='' claims_elf_arg='' claims_hash='' claims_attestation_arg='' trading_id='' trading_elf_arg='' trading_hash='' trading_attestation_arg='' resolution_id='' resolution_elf_arg='' resolution_hash='' resolution_attestation_arg='' custody_id='' custody_elf_arg='' custody_hash='' custody_attestation_arg='' rent_credit_id='' rent_credit_elf_arg='' rent_credit_hash='' rent_credit_attestation_arg='' foreground=0
+  local ledger_arg='' account_dir_arg='' plan_arg='' registry_id='' registry_elf_arg='' registry_hash='' registry_attestation_arg='' core_id='' core_elf_arg='' core_hash='' core_attestation_arg='' claims_id='' claims_elf_arg='' claims_hash='' claims_attestation_arg='' trading_id='' trading_elf_arg='' trading_hash='' trading_attestation_arg='' resolution_id='' resolution_elf_arg='' resolution_hash='' resolution_attestation_arg='' custody_id='' custody_elf_arg='' custody_hash='' custody_attestation_arg='' rent_credit_id='' rent_credit_elf_arg='' rent_credit_hash='' rent_credit_attestation_arg='' foreground=0 rpc_port_arg='' supervisor_pid_arg=''
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --rpc-port) rpc_port_arg=${2-}; shift 2 ;;
+      --supervisor-pid) supervisor_pid_arg=${2-}; shift 2 ;;
       --ledger) ledger_arg=${2-}; shift 2 ;;
       --account-dir) account_dir_arg=${2-}; shift 2 ;;
       --plan) plan_arg=${2-}; shift 2 ;;
@@ -324,6 +454,11 @@ start() {
   done
   [[ -n "$ledger_arg" && -n "$account_dir_arg" && -n "$plan_arg" && -n "$registry_id" && -n "$registry_elf_arg" && -n "$registry_hash" && -n "$registry_attestation_arg" && -n "$core_id" && -n "$core_elf_arg" && -n "$core_hash" && -n "$core_attestation_arg" && -n "$claims_id" && -n "$claims_elf_arg" && -n "$claims_hash" && -n "$claims_attestation_arg" && -n "$trading_id" && -n "$trading_elf_arg" && -n "$trading_hash" && -n "$trading_attestation_arg" && -n "$resolution_id" && -n "$resolution_elf_arg" && -n "$resolution_hash" && -n "$resolution_attestation_arg" && -n "$custody_id" && -n "$custody_elf_arg" && -n "$custody_hash" && -n "$custody_attestation_arg" && -n "$rent_credit_id" && -n "$rent_credit_elf_arg" && -n "$rent_credit_hash" && -n "$rent_credit_attestation_arg" ]] || die "start requires every plan and artifact pin"
   [[ "$foreground" -eq 1 ]] || die "start requires --foreground under a same-process in-memory Core-authority supervisor"
+  resolve_start_port "$rpc_port_arg"
+  if [[ -n "$supervisor_pid_arg" ]]; then
+    [[ "$supervisor_pid_arg" =~ ^[1-9][0-9]*$ ]] || die "--supervisor-pid must be a positive decimal pid: $supervisor_pid_arg"
+    kill -0 "$supervisor_pid_arg" 2>/dev/null || die "--supervisor-pid $supervisor_pid_arg is not a live process"
+  fi
   is_pubkey "$registry_id" || die "invalid Registry program ID"
   is_pubkey "$core_id" || die "invalid Core program ID"
   is_pubkey "$claims_id" || die "invalid Claims program ID"
@@ -414,6 +549,7 @@ start() {
   )
   if [[ "$foreground" -eq 1 ]]; then
     printf '%s\n' "$$" > "$ledger/$PID_NAME"
+    [[ -n "$supervisor_pid_arg" ]] && spawn_supervisor_watchdog "$supervisor_pid_arg"
     printf 'starting foreground validator at http://127.0.0.1:%s\nprofile: %s\n' "$RPC_PORT" "$ledger/$PROFILE_NAME"
     exec "$validator" "${validator_args[@]}"
   fi
@@ -440,6 +576,8 @@ status() {
   [[ $# -eq 2 && "$1" = "--ledger" ]] || die "usage: status --ledger ABSOLUTE_DIR"
   local ledger pid=''
   ledger=$(canonical_owned_ledger "$2")
+  require_command jq
+  set_port_block "$(port_from_profile "$ledger" || printf '%s' "$DEFAULT_RPC_PORT")"
   [[ -f "$ledger/$PID_NAME" ]] && pid=$(<"$ledger/$PID_NAME")
   if pid_is_ours "$ledger" "$pid" && rpc_ready; then
     printf '{"status":"ready","pid":%s,"rpc_url":"http://127.0.0.1:%s","profile":' "$pid" "$RPC_PORT"; json_string "$ledger/$PROFILE_NAME"; printf '}\n'
@@ -453,6 +591,8 @@ stop() {
   [[ $# -eq 2 && "$1" = "--ledger" ]] || die "usage: stop --ledger ABSOLUTE_DIR"
   local ledger pid
   ledger=$(canonical_owned_ledger "$2")
+  require_command jq
+  set_port_block "$(port_from_profile "$ledger" || printf '%s' "$DEFAULT_RPC_PORT")"
   [[ -f "$ledger/$PID_NAME" ]] || die "missing managed validator pid"
   pid=$(<"$ledger/$PID_NAME")
   pid_is_ours "$ledger" "$pid" || die "refusing stale or unrecognized pid"

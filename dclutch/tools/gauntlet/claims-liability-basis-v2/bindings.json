@@ -1,0 +1,109 @@
+{
+  "campaign": "claims-liability-basis-v2-programtest",
+  "note": "Real-ELF ProgramTest for the LiabilityBasisV2 (DCLLBX02) Claims route, at the shape the current tree has. Real Claims, Custody, Registry and Core ELFs plus a test-only forwarding caller, with the Product/basis records, activation cache, Core Market, Claims aggregate, Custody replay and token state INSTALLED directly, so the route is reachable with no Hot execution and no founding. TWO of this campaign's rows are refusals that used to be positive cases, and both are protocol truth rather than a fixture giving up: (a) the TerminalRedeem tag is retired -- 3f7017a moved Product V3 terminal settlement to rational_terminal_v3 and LiabilityBasisActionV2::new refuses the tag outright, so the positive case was DELETED and one executed refusal replaces it (modern redemption is covered by claims-rational-representation-v2 and is not duplicated here); (b) the SPLIT half of this route cannot execute at all -- 84b1426 made an external-source debit on the V1 CustodyRequestV1 wire an outright CustodySbfError::Instruction so a correct-looking balance delta cannot leave delegated spending authority behind, and liability_basis_v2 still composes exactly that shape, so real Custody refuses every DCLLBX02 split. What still executes is Merge, and the campaign drives the whole Claims->Custody->token composition through it. Repaired 2026-08-27 (LBFIX) from the blocked.json entry SN-REC left; that entry is now deleted.",
+  "bindings": [
+    {
+      "label": "claims liability-basis *: create lookup table",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table creation. No dClutch program is invoked. The route's 28-account frame does not fit a legacy message, so every campaign transaction rides a live v0 ALT."
+    },
+    {
+      "label": "claims liability-basis *: extend lookup table *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "Address Lookup Table extension. No dClutch program is invoked."
+    },
+    {
+      "label": "claims liability-basis lifecycle: merge against a substituted Product basis",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/LiabilityBasisSbfErrorV2::ProductLink",
+      "note": "HOSTILE. A finalized LinkedBasisRecordV2 with identical payoff semantics but a different Product instance is substituted for the canonical one. Refuses ProductLink (104) before any Custody CPI; the campaign asserts the aggregate, Position, Custody replay and both token accounts are byte-identical to their prestate."
+    },
+    {
+      "label": "claims liability-basis lifecycle: merge against a changed payoff basis",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/LiabilityBasisSbfErrorV2::ProductLink",
+      "note": "HOSTILE. A finalized record that keeps the canonical Product link but changes the ramp's right numerator, so its recomputed semantic basis id no longer matches the aggregate's. Refuses ProductLink (104); prestate byte-identical."
+    },
+    {
+      "label": "claims liability-basis lifecycle: the composed external-debit split refuses at Custody",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "custody/CustodySbfError::Instruction",
+      "note": "PROTOCOL TRUTH, not a hostile case. A fully canonical DCLLBX02 split: Claims authenticates its own request bytes against expected_custody_request_v2, signs the caller-authority PDA and issues the CPI, and real Custody refuses at the head of execute_transfer because source_compartment is External and V1 Transfer no longer carries external debits (84b1426; they belong on the DCLCUDQ2 delegated V2 wire). The refusal is credited to Custody's taxonomy because Custody raised it; Claims propagates it. The campaign asserts the whole prestate is byte-identical afterwards. This is why the campaign's positive lifecycle is built out of merges."
+    },
+    {
+      "label": "claims liability-basis lifecycle: caller refuses after a complete merge",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "unnamed_refusal": {
+        "code": 3,
+        "reason": "LiabilityBasisTestCallerError::DeliberateLateFailure, raised by the test-only forwarding caller at programs/dclutch-claims-sbf/test-programs/liability-basis-caller AFTER real Claims and real Custody both returned success. It is not a first-party refusal and must not be credited to one: code 3 collides numerically with unrelated first-party taxonomies."
+      },
+      "note": "ATOMICITY. Claims commits its candidate bytes and real Custody moves collateral, both log success, and only then does the wrapper refuse. The campaign asserts the aggregate, Position, Custody replay and both token accounts are byte-identical to their prestate, so the whole composition rolled back across two CPI boundaries."
+    },
+    {
+      "label": "claims liability-basis lifecycle: canonical merge commits",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The route executing: one complete set burned across every elementary claim, exactly SCALE collateral withdrawn from the Hoard vault to the owner's external account through a real Custody Transfer, and the aggregate, Position and Custody replay revisions all advanced by one."
+    },
+    {
+      "label": "claims liability-basis lifecycle: a second merge unwinds the aggregate to zero",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "A second merge against the committed poststate, taking supply and Position to zero and the Hoard vault to zero. Proves the revision and replay chain advances rather than the route only working once from an installed prestate."
+    },
+    {
+      "label": "claims liability-basis terminal: the retired TerminalRedeem tag refuses",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/LiabilityBasisSbfErrorV2::Instruction",
+      "note": "RETIRED TAG. Submitted against a TERMINAL Core Market -- the exact world the action was designed for -- and differing from an accepted action in exactly one wire byte, the kind discriminant, which the campaign derives from the production encoder rather than restating. Refuses Instruction (100) at decode, before any account is read. Product V3 terminal settlement is rational_terminal_v3's now."
+    },
+    {
+      "label": "claims liability-basis terminal: a merge against a terminal Market refuses",
+      "routes": [
+        "claims/process_instruction",
+        "claims/liability_basis_v2::process"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/LiabilityBasisSbfErrorV2::ProductLink",
+      "note": "The other half of the same fact: authenticate_open_core requires Phase::Open for both surviving kinds, so a terminal Market refuses a merge too (ProductLink, 104). Together with the row above this records that DCLLBX02 has NO action available once a Market is terminal, rather than leaving a reader to assume the merge would have worked."
+    }
+  ]
+}

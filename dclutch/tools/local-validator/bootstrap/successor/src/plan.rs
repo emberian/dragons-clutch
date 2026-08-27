@@ -14,6 +14,7 @@ use dclutch_registry_contract::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1,
 };
+use dclutch_registry_svm::ProgramDataV3View;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
     ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
@@ -68,10 +69,126 @@ pub(crate) struct PrepareArgs {
     pub(crate) custody_elf: PathBuf,
     pub(crate) custody_sha256: String,
     pub(crate) custody_semantic_release_id: String,
+    pub(crate) record_publication: RecordPublicationV1,
+    pub(crate) deployments: RoleDeploymentsV1,
     pub(crate) rent_credit_program: Pubkey,
     pub(crate) rent_credit_elf: PathBuf,
     pub(crate) rent_credit_sha256: String,
     pub(crate) rent_credit_semantic_release_id: String,
+}
+
+/// Where one role's deployment slot was read from.
+///
+/// The slot is **never** a number a caller hands the plan. It is hostile-decoded
+/// out of a Loader V3 `ProgramData` account image by exactly the
+/// [`ProgramDataV3View`] parse that `require_loader_linkage` runs on chain
+/// before building the `DeploymentObservationV1` that
+/// `ArtifactReleaseV1::authenticate_deployment` checks. One encoding, one
+/// reader, on both sides of the refusal. What a caller chooses is *which
+/// account image* that is, and this enum records which it chose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeploymentSourceV1 {
+    /// The image this plan materializes into the validator's `--account-dir`.
+    /// A genesis install has no deploy transaction, so its slot is a property
+    /// of the fixture: zero, unless a rehearsal deliberately asked for one.
+    GenesisInstall,
+    /// A real `ProgramData` account read off a cluster. This is the only
+    /// source a devnet or mainnet deployment can have, because the slot a
+    /// deploy lands in is unknowable until it has landed — a local deploy was
+    /// measured at slot 167 and its redeploy at 531.
+    ObservedAccount,
+}
+
+impl DeploymentSourceV1 {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::GenesisInstall => "genesis-install",
+            Self::ObservedAccount => "observed-programdata-account",
+        }
+    }
+}
+
+/// How one role's `ProgramData` account image is obtained.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RoleDeploymentInputV1 {
+    /// A complete `ProgramData` account body observed on a cluster, including
+    /// its Loader metadata and ELF tail. Present means the role's release is
+    /// minted from an observation.
+    pub(crate) observed_programdata: Option<PathBuf>,
+    /// The slot written into the genesis install this plan materializes, for a
+    /// local rehearsal that wants a nonzero slot exercised end to end. It is
+    /// refused together with `observed_programdata`: an observation is not
+    /// something a caller gets to overwrite.
+    pub(crate) genesis_deployment_slot: u64,
+}
+
+/// The seven roles' deployment sources.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RoleDeploymentsV1 {
+    pub(crate) registry: RoleDeploymentInputV1,
+    pub(crate) core: RoleDeploymentInputV1,
+    pub(crate) claims: RoleDeploymentInputV1,
+    pub(crate) trading: RoleDeploymentInputV1,
+    pub(crate) resolution: RoleDeploymentInputV1,
+    pub(crate) custody: RoleDeploymentInputV1,
+    pub(crate) rent_credit: RoleDeploymentInputV1,
+}
+
+/// One role's exact `ProgramData` account image and the facts decoded from it.
+#[derive(Clone, Debug)]
+struct RoleDeployment {
+    image: Vec<u8>,
+    deployment_slot: u64,
+    source: DeploymentSourceV1,
+}
+
+/// Read one role's `ProgramData` image and hostile-decode its deployment facts.
+///
+/// The ELF and the upgrade authority are checked against what this plan is
+/// going to authenticate with, so an observation that does not describe the
+/// pinned artifact is refused here rather than by a `DeploymentSlotMismatch`
+/// or `ElfDigestMismatch` on chain after the money is spent.
+fn role_deployment(
+    label: &str,
+    elf: &[u8],
+    upgrade_authority: Option<Pubkey>,
+    input: &RoleDeploymentInputV1,
+) -> Result<RoleDeployment> {
+    let (image, source) = match input.observed_programdata.as_deref() {
+        Some(path) => {
+            if input.genesis_deployment_slot != 0 {
+                return Err(Error::new(format!(
+                    "{label} may either observe a ProgramData account or fabricate a genesis deployment slot, not both"
+                )));
+            }
+            (fs::read(path)?, DeploymentSourceV1::ObservedAccount)
+        }
+        None => (
+            loader_programdata_bytes(elf, input.genesis_deployment_slot, upgrade_authority),
+            DeploymentSourceV1::GenesisInstall,
+        ),
+    };
+    let view = ProgramDataV3View::parse(&image).map_err(|error| {
+        Error::new(format!(
+            "{label} ProgramData is not a Loader-v3 account: {error:?}"
+        ))
+    })?;
+    if view.elf() != elf {
+        return Err(Error::new(format!(
+            "{label} ProgramData account carries a different ELF than the pinned artifact"
+        )));
+    }
+    if view.upgrade_authority() != upgrade_authority.map(|value| value.to_bytes()) {
+        return Err(Error::new(format!(
+            "{label} ProgramData account upgrade authority is not the one this plan authenticates against"
+        )));
+    }
+    let deployment_slot = view.deployment_slot();
+    Ok(RoleDeployment {
+        image,
+        deployment_slot,
+        source,
+    })
 }
 
 #[derive(Serialize)]
@@ -177,12 +294,14 @@ impl PlanWriter {
         Ok(())
     }
 
+    /// Materialize one role's Loader V3 pair from the exact `ProgramData`
+    /// image its release was decoded from, so the genesis account and the
+    /// authenticated release can never disagree about the deployment slot.
     fn upgradeable_program(
         &mut self,
         label: &str,
         program: Pubkey,
-        elf: &[u8],
-        upgrade_authority: Option<Pubkey>,
+        programdata_bytes: &[u8],
     ) -> Result<()> {
         let programdata = programdata(program);
         let mut program_bytes = [0_u8; 36];
@@ -196,13 +315,12 @@ impl PlanWriter {
             &program_bytes,
             true,
         )?;
-        let programdata_bytes = loader_programdata_bytes(elf, upgrade_authority);
         self.add(
             format!("loader.{label}.programdata"),
             programdata,
             bpf_loader_upgradeable::ID,
             Rent::default().minimum_balance(programdata_bytes.len()),
-            &programdata_bytes,
+            programdata_bytes,
             false,
         )
     }
@@ -213,6 +331,7 @@ impl PlanWriter {
         registry: Pubkey,
         schema: [u8; 32],
         content: &[u8],
+        publication: RecordPublicationV1,
     ) -> Result<RecordPair> {
         let digest = sha256_bytes(content);
         let raw =
@@ -222,20 +341,64 @@ impl PlanWriter {
             &registry,
         )
         .0;
-        self.add(
-            format!("record.{label}"),
-            raw,
-            registry,
-            Rent::default().minimum_balance(content.len()),
-            content,
-            false,
-        )?;
+        // The address derivation is identical either way -- a record's
+        // coordinate is a function of schema and content, never of how the
+        // bytes arrived. Only the writer differs.
+        if publication == RecordPublicationV1::Genesis {
+            self.add(
+                format!("record.{label}"),
+                raw,
+                registry,
+                Rent::default().minimum_balance(content.len()),
+                content,
+                false,
+            )?;
+        }
         Ok(RecordPair {
             raw: raw.to_string(),
             staging: staging.to_string(),
             schema_id: hex(&schema),
             content_sha256: hex(&digest),
+            body_hex: hex(content),
         })
+    }
+}
+
+/// Who writes the nine infrastructure record bodies.
+///
+/// `Genesis` injects them as finalized raw-record accounts in the validator's
+/// `--account-dir`. That is fast and is what every campaign to date has run,
+/// but **no cluster has a genesis you can write into**, so it is not a shape a
+/// devnet or mainnet deployment can ever take.
+///
+/// `Transaction` leaves them out of genesis entirely and makes the supervisor
+/// publish each one through the Registry's permissionless
+/// `Begin -> Append -> Finalize` path, paying real rent from a real wallet.
+/// This is the deployable shape, and running it is what makes a local campaign
+/// a rehearsal for a cluster rather than a demonstration on a substrate the
+/// cluster does not have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordPublicationV1 {
+    Genesis,
+    Transaction,
+}
+
+impl RecordPublicationV1 {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Genesis => "genesis",
+            Self::Transaction => "transaction",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self> {
+        match value {
+            "genesis" => Ok(Self::Genesis),
+            "transaction" => Ok(Self::Transaction),
+            other => Err(Error::new(format!(
+                "record publication must be genesis or transaction, not {other}"
+            ))),
+        }
     }
 }
 
@@ -272,25 +435,66 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         &args.rent_credit_sha256,
     )?;
 
+    // Observe first, mint second. Every role's deployment slot is decoded out
+    // of a ProgramData account image before a single release body exists,
+    // because a record's coordinate, the release-set digest, the activation
+    // PDA and the infrastructure profile are all downstream of that slot.
+    // §3.0 of the deploy runbook states the same ordering as a protocol fact:
+    // deploy -> revoke -> observe -> mint bodies -> publish.
+    let registry_deployment = role_deployment(
+        "Registry",
+        &registry_elf,
+        None,
+        &args.deployments.registry,
+    )?;
+    let core_deployment = role_deployment(
+        "Core",
+        &core_elf,
+        Some(args.core_bootstrap_upgrade_authority),
+        &args.deployments.core,
+    )?;
+    let claims_deployment =
+        role_deployment("Claims", &claims_elf, None, &args.deployments.claims)?;
+    let trading_deployment =
+        role_deployment("Trading", &trading_elf, None, &args.deployments.trading)?;
+    let resolution_deployment = role_deployment(
+        "Resolution",
+        &resolution_elf,
+        None,
+        &args.deployments.resolution,
+    )?;
+    let custody_deployment =
+        role_deployment("Custody", &custody_elf, None, &args.deployments.custody)?;
+    let rent_deployment = role_deployment(
+        "RentCredit",
+        &rent_elf,
+        None,
+        &args.deployments.rent_credit,
+    )?;
+
     let registry = release_facts(
         args.registry_program,
         hex32(&args.registry_semantic_release_id)?,
         hex32(&args.registry_sha256)?,
+        registry_deployment.deployment_slot,
     )?;
     let core = release_facts(
         args.core_program,
         hex32(&args.core_semantic_release_id)?,
         hex32(&args.core_sha256)?,
+        core_deployment.deployment_slot,
     )?;
     let claims = release_facts(
         args.claims_program,
         hex32(&args.claims_semantic_release_id)?,
         hex32(&args.claims_sha256)?,
+        claims_deployment.deployment_slot,
     )?;
     let trading = release_facts(
         args.trading_program,
         hex32(&args.trading_semantic_release_id)?,
         hex32(&args.trading_sha256)?,
+        trading_deployment.deployment_slot,
     )?;
     let resolution_semantic = hex32(&args.resolution_semantic_release_id)?;
     if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
@@ -302,16 +506,19 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         args.resolution_program,
         resolution_semantic,
         hex32(&args.resolution_sha256)?,
+        resolution_deployment.deployment_slot,
     )?;
     let custody = release_facts(
         args.custody_program,
         hex32(&args.custody_semantic_release_id)?,
         hex32(&args.custody_sha256)?,
+        custody_deployment.deployment_slot,
     )?;
     let rent = release_facts(
         args.rent_credit_program,
         hex32(&args.rent_credit_semantic_release_id)?,
         hex32(&args.rent_credit_sha256)?,
+        rent_deployment.deployment_slot,
     )?;
 
     let release_set = ExecutionReleaseSetV1::new(
@@ -345,27 +552,19 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     let provider_release_id = sha256_bytes(&provider_release_bytes);
 
     let mut writer = PlanWriter::new(args.account_dir.clone())?;
-    for (label, program, elf) in [
-        ("registry", args.registry_program, registry_elf.as_slice()),
-        ("claims", args.claims_program, claims_elf.as_slice()),
-        ("trading", args.trading_program, trading_elf.as_slice()),
-        (
-            "resolution",
-            args.resolution_program,
-            resolution_elf.as_slice(),
-        ),
-        ("custody", args.custody_program, custody_elf.as_slice()),
-        ("rent-credit", args.rent_credit_program, rent_elf.as_slice()),
+    for (label, program, deployment) in [
+        ("registry", args.registry_program, &registry_deployment),
+        ("claims", args.claims_program, &claims_deployment),
+        ("trading", args.trading_program, &trading_deployment),
+        ("resolution", args.resolution_program, &resolution_deployment),
+        ("custody", args.custody_program, &custody_deployment),
+        ("rent-credit", args.rent_credit_program, &rent_deployment),
+        ("core", args.core_program, &core_deployment),
     ] {
-        writer.upgradeable_program(label, program, elf, None)?;
+        writer.upgradeable_program(label, program, &deployment.image)?;
     }
-    writer.upgradeable_program(
-        "core",
-        args.core_program,
-        &core_elf,
-        Some(args.core_bootstrap_upgrade_authority),
-    )?;
 
+    let publication = args.record_publication;
     let mut records = BTreeMap::new();
     records.insert(
         "execution_release_set".into(),
@@ -374,6 +573,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             args.registry_program,
             EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
             &release_set_bytes,
+            publication,
         )?,
     );
     for (label, facts) in [
@@ -392,6 +592,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
                 args.registry_program,
                 ARTIFACT_RELEASE_SCHEMA_ID_V1,
                 &facts.release.to_bytes(),
+                publication,
             )?,
         );
     }
@@ -402,15 +603,22 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             args.registry_program,
             PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
             &provider_release_bytes,
+            publication,
         )?,
     );
 
     let plan = SuccessorPlan {
         schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
-        genesis_boundary: vec![
-            "Genesis fixtures are six immutable Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and finalized Registry record bodies.".into(),
-            "Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution are not genesis-prepared.".into(),
-        ],
+        genesis_boundary: match publication {
+            RecordPublicationV1::Genesis => vec![
+                "Genesis fixtures are six immutable Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and finalized Registry record bodies.".into(),
+                "Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution are not genesis-prepared.".into(),
+            ],
+            RecordPublicationV1::Transaction => vec![
+                "Genesis fixtures are six immutable Loader-v3 programs and one authority-bearing pre-init Core Loader-v3 program with the same exact ELF. Nothing else. No protocol state exists at genesis.".into(),
+                "Every infrastructure record body, Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution is a real transaction. This is the shape a cluster can reach.".into(),
+            ],
+        },
         bootstrap_order: vec![
             "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
             "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
@@ -420,26 +628,26 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         ],
         execution_blocker: "Infrastructure activation is executable in one supervised process. LifecycleRentCreditV2 and Found31 remain behind an explicit market-specific input bundle: finalized Realm, ProductV3 basis/result-domain, portfolio, resolution, execution-manifest, and lifecycle-policy records plus exact generation, immutable refund wallet, initial Hoard principal, and lifecycle-rent funding.".into(),
         account_dir: args.account_dir.display().to_string(),
-        registry: pin(&args, ProgramKind::Registry, registry),
-        core: pin(&args, ProgramKind::Core, core),
-        claims: pin(&args, ProgramKind::Claims, claims),
-        trading: pin(&args, ProgramKind::Trading, trading),
-        resolution: pin(&args, ProgramKind::Resolution, resolution),
-        custody: pin(&args, ProgramKind::Custody, custody),
-        rent_credit: pin(&args, ProgramKind::Rent, rent),
+        registry: pin(&args, ProgramKind::Registry, registry, &registry_deployment),
+        core: pin(&args, ProgramKind::Core, core, &core_deployment),
+        claims: pin(&args, ProgramKind::Claims, claims, &claims_deployment),
+        trading: pin(&args, ProgramKind::Trading, trading, &trading_deployment),
+        resolution: pin(
+            &args,
+            ProgramKind::Resolution,
+            resolution,
+            &resolution_deployment,
+        ),
+        custody: pin(&args, ProgramKind::Custody, custody, &custody_deployment),
+        rent_credit: pin(&args, ProgramKind::Rent, rent, &rent_deployment),
         activation: activation.to_string(),
         release_set_id: hex(&release_set_id),
         core_bootstrap: CoreBootstrapPin {
             upgrade_authority: args.core_bootstrap_upgrade_authority.to_string(),
-            genesis_programdata_sha256: hex(&sha256_bytes(&loader_programdata_bytes(
-                &core_elf,
-                Some(args.core_bootstrap_upgrade_authority),
-            ))),
-            post_revoke_programdata_sha256: hex(&sha256_bytes(
-                &loader_programdata_bytes_after_revoke(
-                &core_elf,
-                args.core_bootstrap_upgrade_authority,
-            ))),
+            genesis_programdata_sha256: hex(&sha256_bytes(&core_deployment.image)),
+            post_revoke_programdata_sha256: hex(&sha256_bytes(&programdata_bytes_after_revoke(
+                &core_deployment.image,
+            )?)),
             release_recognition_requires_revoke: true,
         },
         infrastructure_profile: InfrastructureProfilePin {
@@ -451,6 +659,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             rent_artifact_release_id: hex(rent.id.as_bytes()),
         },
         records,
+        record_publication: publication.as_str().into(),
         provider_release_id: hex(&provider_release_id),
         fixture_publish_time: FIXTURE_PUBLISH_TIME,
         genesis_accounts: writer.accounts,
@@ -476,7 +685,12 @@ enum ProgramKind {
     Rent,
 }
 
-fn pin(args: &PrepareArgs, kind: ProgramKind, facts: ReleaseFacts) -> ProgramPin {
+fn pin(
+    args: &PrepareArgs,
+    kind: ProgramKind,
+    facts: ReleaseFacts,
+    deployment: &RoleDeployment,
+) -> ProgramPin {
     let (program, elf, elf_sha, semantic) = match kind {
         ProgramKind::Registry => (
             args.registry_program,
@@ -529,6 +743,9 @@ fn pin(args: &PrepareArgs, kind: ProgramKind, facts: ReleaseFacts) -> ProgramPin
         semantic_release_id: semantic.clone(),
         artifact_release_id: hex(facts.id.as_bytes()),
         upgrade_authority: None,
+        deployment_slot: deployment.deployment_slot,
+        deployment_source: deployment.source.as_str().into(),
+        programdata_sha256: hex(&sha256_bytes(&deployment.image)),
     }
 }
 
@@ -536,6 +753,7 @@ fn release_facts(
     program: Pubkey,
     semantic_release: [u8; 32],
     elf_sha256: [u8; 32],
+    deployment_slot: u64,
 ) -> Result<ReleaseFacts> {
     let release = ArtifactReleaseV1::new(
         program_identity(program)?,
@@ -543,7 +761,7 @@ fn release_facts(
         programdata(program).to_bytes(),
         content_id(semantic_release)?,
         elf_sha256,
-        0,
+        deployment_slot,
         ArtifactUpgradePolicyV1::Immutable,
         None,
     )
@@ -636,6 +854,23 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
             ))
         })?;
     }
+    for (label, input) in [
+        ("Registry", &args.deployments.registry),
+        ("Core", &args.deployments.core),
+        ("Claims", &args.deployments.claims),
+        ("Trading", &args.deployments.trading),
+        ("Resolution", &args.deployments.resolution),
+        ("Custody", &args.deployments.custody),
+        ("RentCredit", &args.deployments.rent_credit),
+    ] {
+        if let Some(path) = input.observed_programdata.as_deref()
+            && (!path.is_absolute() || !path.is_file())
+        {
+            return Err(Error::new(format!(
+                "{label} observed ProgramData must be an existing absolute regular file"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -656,9 +891,14 @@ pub(crate) fn validate_program_ids(programs: &[Pubkey]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn loader_programdata_bytes(elf: &[u8], upgrade_authority: Option<Pubkey>) -> Vec<u8> {
+pub(crate) fn loader_programdata_bytes(
+    elf: &[u8],
+    deployment_slot: u64,
+    upgrade_authority: Option<Pubkey>,
+) -> Vec<u8> {
     let mut bytes = vec![0_u8; 45];
     bytes[..4].copy_from_slice(&3_u32.to_le_bytes());
+    bytes[4..12].copy_from_slice(&deployment_slot.to_le_bytes());
     if let Some(authority) = upgrade_authority {
         bytes[12] = 1;
         bytes[13..45].copy_from_slice(authority.as_ref());
@@ -671,13 +911,18 @@ pub(crate) fn loader_programdata_bytes(elf: &[u8], upgrade_authority: Option<Pub
 /// transition. Loader bincode overwrites the 13-byte serialized None state but
 /// does not clear the former 32-byte authority region before the fixed ELF
 /// offset. Those retained bytes are non-authoritative runtime residue.
-pub(crate) fn loader_programdata_bytes_after_revoke(
-    elf: &[u8],
-    prior_authority: Pubkey,
-) -> Vec<u8> {
-    let mut bytes = loader_programdata_bytes(elf, Some(prior_authority));
-    bytes[12] = 0;
-    bytes
+///
+/// This works from the account image rather than from `(elf, slot, authority)`
+/// precisely *because* of that residue: a real revoked account carries a former
+/// authority no triple can regenerate, so an observed poststate has to be
+/// derived from the observed prestate.
+pub(crate) fn programdata_bytes_after_revoke(image: &[u8]) -> Result<Vec<u8>> {
+    let mut bytes = image.to_vec();
+    match bytes.get_mut(12) {
+        Some(tag) => *tag = 0,
+        None => return Err(Error::new("ProgramData image is shorter than its metadata")),
+    }
+    Ok(bytes)
 }
 
 fn load_elf(label: &str, path: &Path, expected: &str) -> Result<Vec<u8>> {
@@ -760,7 +1005,7 @@ mod tests {
 
     #[test]
     fn immutable_loader_header_has_fixed_45_byte_none_padding() {
-        let bytes = loader_programdata_bytes(b"\x7fELFbody", None);
+        let bytes = loader_programdata_bytes(b"\x7fELFbody", 0, None);
         assert_eq!(bytes.len(), 53);
         assert_eq!(&bytes[..4], &3_u32.to_le_bytes());
         assert_eq!(&bytes[4..12], &0_u64.to_le_bytes());
@@ -772,8 +1017,8 @@ mod tests {
     #[test]
     fn pre_init_core_and_real_loader_revoke_differ_only_in_authority_tag() {
         let authority = Pubkey::new_unique();
-        let initial = loader_programdata_bytes(b"\x7fELFbody", Some(authority));
-        let revoked = loader_programdata_bytes_after_revoke(b"\x7fELFbody", authority);
+        let initial = loader_programdata_bytes(b"\x7fELFbody", 0, Some(authority));
+        let revoked = programdata_bytes_after_revoke(&initial).expect("revoke poststate");
         assert_eq!(initial.len(), revoked.len());
         assert_eq!(initial[12], 1);
         assert_eq!(&initial[13..45], authority.as_ref());
@@ -807,8 +1052,8 @@ mod tests {
     #[test]
     fn infrastructure_profile_binds_distinct_registry_and_rent_artifacts() {
         let registry =
-            release_facts(Pubkey::new_unique(), [1; 32], [2; 32]).expect("Registry release");
-        let rent = release_facts(Pubkey::new_unique(), [3; 32], [4; 32]).expect("Rent release");
+            release_facts(Pubkey::new_unique(), [1; 32], [2; 32], 0).expect("Registry release");
+        let rent = release_facts(Pubkey::new_unique(), [3; 32], [4; 32], 0).expect("Rent release");
         let profile = ProtocolInfrastructureProfileV1::new(registry.binding(), rent.binding())
             .expect("infrastructure profile");
         assert_eq!(profile.registry(), registry.binding());
@@ -826,8 +1071,15 @@ mod tests {
         assert!(hex32("00").is_err());
     }
 
-    #[test]
-    fn prepare_materializes_only_seven_loaders_and_nine_finalized_records() {
+    fn prepared_plan(publication: RecordPublicationV1) -> (SuccessorPlan, PathBuf) {
+        let (plan, root) = prepared_plan_with(publication, RoleDeploymentsV1::default());
+        (plan.expect("prepare infrastructure plan"), root)
+    }
+
+    fn prepared_plan_with(
+        publication: RecordPublicationV1,
+        deployments: RoleDeploymentsV1,
+    ) -> (Result<SuccessorPlan>, PathBuf) {
         let root =
             std::env::temp_dir().join(format!("dclutch-successor-plan-{}", Pubkey::new_unique()));
         fs::create_dir(&root).expect("create test root");
@@ -872,8 +1124,186 @@ mod tests {
             rent_credit_elf,
             rent_credit_sha256,
             rent_credit_semantic_release_id: hex(&[17; 32]),
-        })
-        .expect("prepare infrastructure plan");
+            record_publication: publication,
+            deployments,
+        });
+        (plan, root)
+    }
+
+    /// A ProgramData account body in the shape a real cluster leaves behind
+    /// after `set-upgrade-authority --final`: authority tag zero with the
+    /// former authority still sitting in bytes 13..45, and a nonzero slot.
+    fn revoked_account_image(elf: &[u8], slot: u64, former_authority: Pubkey) -> Vec<u8> {
+        programdata_bytes_after_revoke(&loader_programdata_bytes(
+            elf,
+            slot,
+            Some(former_authority),
+        ))
+        .expect("revoked account image")
+    }
+
+    fn write_observed(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+        fs::create_dir_all(root).expect("observation directory");
+        let path = root.join(name);
+        fs::write(&path, bytes).expect("write observed account");
+        path
+    }
+
+    fn test_elf(tag: u8) -> [u8; 5] {
+        [0x7f, b'E', b'L', b'F', tag]
+    }
+
+    /// Blocker A: an observed ProgramData account mints the slot it actually
+    /// carries, and the retained former-authority bytes a real revocation
+    /// leaves behind do not make it un-mintable.
+    #[test]
+    fn an_observed_programdata_account_mints_its_own_deployment_slot() {
+        let observations =
+            std::env::temp_dir().join(format!("dclutch-successor-obs-{}", Pubkey::new_unique()));
+        let former = Pubkey::new_unique();
+        let mut deployments = RoleDeploymentsV1::default();
+        deployments.registry.observed_programdata = Some(write_observed(
+            &observations,
+            "registry.bin",
+            &revoked_account_image(&test_elf(1), 488_712_345, former),
+        ));
+        deployments.claims.observed_programdata = Some(write_observed(
+            &observations,
+            "claims.bin",
+            &revoked_account_image(&test_elf(3), 488_712_401, former),
+        ));
+        let (plan, root) = prepared_plan_with(RecordPublicationV1::Transaction, deployments);
+        let plan = plan.expect("observed deployments prepare");
+
+        assert_eq!(plan.registry.deployment_slot, 488_712_345);
+        assert_eq!(
+            plan.registry.deployment_source,
+            "observed-programdata-account"
+        );
+        assert_eq!(plan.claims.deployment_slot, 488_712_401);
+        // Roles nobody observed keep the genesis-install shape, and say so.
+        assert_eq!(plan.trading.deployment_slot, 0);
+        assert_eq!(plan.trading.deployment_source, "genesis-install");
+
+        // The slot is in the record body the chain will authenticate against,
+        // at ArtifactReleaseV1's fixed offset 176.
+        let body =
+            hex32_bytes(&plan.records["registry_artifact_release"].body_hex).expect("record body");
+        assert_eq!(
+            u64::from_le_bytes(body[176..184].try_into().expect("slot bytes")),
+            488_712_345
+        );
+        // The retained authority survives into the genesis image byte for byte
+        // and the tag stays zero, which is the whole shape blocker B is about.
+        let genesis = &plan.genesis_accounts["loader.registry.programdata"];
+        assert_eq!(genesis.data_sha256, plan.registry.programdata_sha256);
+        assert_eq!(
+            genesis.data_sha256,
+            hex(&sha256_bytes(&revoked_account_image(
+                &test_elf(1),
+                488_712_345,
+                former
+            )))
+        );
+
+        fs::remove_dir_all(&root).expect("remove scoped test root");
+        fs::remove_dir_all(&observations).expect("remove observation root");
+    }
+
+    /// A deployment slot is load-bearing all the way down: moving one moves
+    /// that role's record coordinate, the release-set digest, and the
+    /// activation PDA. That is why §3.0 forces observe-then-mint.
+    #[test]
+    fn a_moved_deployment_slot_moves_every_coordinate_downstream_of_it() {
+        let observations =
+            std::env::temp_dir().join(format!("dclutch-successor-obs-{}", Pubkey::new_unique()));
+        let mut deployments = RoleDeploymentsV1::default();
+        deployments.core.genesis_deployment_slot = 531;
+        let (moved, moved_root) = prepared_plan_with(RecordPublicationV1::Transaction, deployments);
+        let moved = moved.expect("nonzero Core slot prepares");
+        let (zero, zero_root) = prepared_plan(RecordPublicationV1::Transaction);
+
+        assert_eq!(moved.core.deployment_slot, 531);
+        assert_eq!(moved.core.deployment_source, "genesis-install");
+        assert_ne!(
+            moved.records["core_artifact_release"].raw,
+            zero.records["core_artifact_release"].raw
+        );
+        assert_ne!(moved.release_set_id, zero.release_set_id);
+        assert_ne!(moved.activation, zero.activation);
+        // Registry and Rent were not moved, so the infrastructure profile is
+        // untouched -- the blast radius is exactly the roles that moved.
+        assert_eq!(
+            moved.infrastructure_profile.body_sha256,
+            zero.infrastructure_profile.body_sha256
+        );
+
+        fs::remove_dir_all(&moved_root).expect("remove scoped test root");
+        fs::remove_dir_all(&zero_root).expect("remove scoped test root");
+        let _ = fs::remove_dir_all(&observations);
+    }
+
+    /// Adversarial: an observation that does not describe the pinned artifact
+    /// is refused at plan time, not by a chain refusal after the rent is gone.
+    #[test]
+    fn a_dishonest_observed_programdata_account_is_refused() {
+        let observations =
+            std::env::temp_dir().join(format!("dclutch-successor-obs-{}", Pubkey::new_unique()));
+        let former = Pubkey::new_unique();
+
+        // Still mutable: the release claims Immutable/None and activation
+        // would refuse it on chain.
+        let mut live_authority = RoleDeploymentsV1::default();
+        live_authority.registry.observed_programdata = Some(write_observed(
+            &observations,
+            "live.bin",
+            &loader_programdata_bytes(&test_elf(1), 400, Some(former)),
+        ));
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, live_authority);
+        assert!(result.is_err(), "a live upgrade authority must refuse");
+        let _ = fs::remove_dir_all(&root);
+
+        // A different program's ELF under this role's name.
+        let mut wrong_elf = RoleDeploymentsV1::default();
+        wrong_elf.registry.observed_programdata = Some(write_observed(
+            &observations,
+            "wrong.bin",
+            &revoked_account_image(&test_elf(9), 400, former),
+        ));
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, wrong_elf);
+        assert!(result.is_err(), "a substituted ELF must refuse");
+        let _ = fs::remove_dir_all(&root);
+
+        // Not Loader-v3 shaped at all.
+        let mut garbage = RoleDeploymentsV1::default();
+        garbage.registry.observed_programdata =
+            Some(write_observed(&observations, "garbage.bin", &[0_u8; 64]));
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, garbage);
+        assert!(result.is_err(), "a non-Loader account must refuse");
+        let _ = fs::remove_dir_all(&root);
+
+        // An observation is not something a caller gets to overwrite.
+        let mut both = RoleDeploymentsV1::default();
+        both.registry.observed_programdata = Some(write_observed(
+            &observations,
+            "both.bin",
+            &revoked_account_image(&test_elf(1), 400, former),
+        ));
+        both.registry.genesis_deployment_slot = 7;
+        let (result, root) = prepared_plan_with(RecordPublicationV1::Transaction, both);
+        assert!(
+            result.is_err(),
+            "observing and fabricating a slot at once must refuse"
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        fs::remove_dir_all(&observations).expect("remove observation root");
+    }
+
+    #[test]
+    fn prepare_materializes_only_seven_loaders_and_nine_finalized_records() {
+        let (plan, root) = prepared_plan(RecordPublicationV1::Genesis);
+        assert_eq!(plan.record_publication, "genesis");
         assert_eq!(plan.genesis_accounts.len(), 23);
         assert_eq!(plan.records.len(), 9);
         assert!(
@@ -891,5 +1321,68 @@ mod tests {
             plan.rent_credit.artifact_release_id
         );
         fs::remove_dir_all(&root).expect("remove scoped test root");
+    }
+
+    /// The deployable shape: genesis carries the seven programs and nothing
+    /// else. Every record coordinate must be identical to the genesis-injected
+    /// plan's, because a record's address is a function of schema and content
+    /// and never of who wrote the bytes.
+    #[test]
+    fn transaction_publication_leaves_genesis_holding_only_the_seven_programs() {
+        let (genesis, genesis_root) = prepared_plan(RecordPublicationV1::Genesis);
+        let (transaction, transaction_root) = prepared_plan(RecordPublicationV1::Transaction);
+
+        assert_eq!(transaction.record_publication, "transaction");
+        assert_eq!(transaction.genesis_accounts.len(), 14);
+        assert_eq!(transaction.records.len(), 9);
+        assert!(
+            transaction
+                .genesis_accounts
+                .keys()
+                .all(|label| label.starts_with("loader."))
+        );
+
+        for (label, pair) in &transaction.records {
+            let genesis_pair = genesis
+                .records
+                .get(label)
+                .expect("both modes derive the same record set");
+            assert_eq!(pair.raw, genesis_pair.raw, "raw record moved for {label}");
+            assert_eq!(pair.staging, genesis_pair.staging);
+            assert_eq!(pair.content_sha256, genesis_pair.content_sha256);
+            assert_eq!(pair.body_hex, genesis_pair.body_hex);
+            // The carried body must be the body the coordinate commits to.
+            let body = hex32_bytes(&pair.body_hex).expect("record body hex");
+            assert_eq!(hex(&sha256_bytes(&body)), pair.content_sha256);
+            assert!(
+                !body.is_empty(),
+                "record {label} carried an empty body into transaction mode"
+            );
+        }
+
+        fs::remove_dir_all(&genesis_root).expect("remove scoped test root");
+        fs::remove_dir_all(&transaction_root).expect("remove scoped test root");
+    }
+
+    fn hex32_bytes(value: &str) -> Option<Vec<u8>> {
+        if !value.len().is_multiple_of(2) {
+            return None;
+        }
+        let bytes = value.as_bytes();
+        let mut out = Vec::with_capacity(value.len() / 2);
+        for pair in bytes.chunks_exact(2) {
+            let high = nibble(pair[0])?;
+            let low = nibble(pair[1])?;
+            out.push((high << 4) | low);
+        }
+        Some(out)
+    }
+
+    fn nibble(value: u8) -> Option<u8> {
+        match value {
+            b'0'..=b'9' => Some(value - b'0'),
+            b'a'..=b'f' => Some(value - b'a' + 10),
+            _ => None,
+        }
     }
 }

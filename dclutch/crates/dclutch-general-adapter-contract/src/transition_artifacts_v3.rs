@@ -7,6 +7,7 @@
 //! outcome width is compiled into an artifact.
 
 use dclutch_general_codec::Action;
+use dclutch_general_config_contract::GeneralLifecycleV2;
 use dclutch_transition_vm::v3::{
     HEADER_BYTES, INSTRUCTION_BYTES, IdentityRegisterV3, InstructionV3, ProgramGeometryV3,
     ProgramV3, ScalarRegisterV3, encode_program_atomic,
@@ -40,15 +41,18 @@ pub const GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3: InstructionV3 =
     InstructionV3::load_const(ScalarRegisterV3::common(0), 0);
 
 /// Return exact `(prelude, item, epilogue)` instruction counts.
+///
+/// Every prelude carries the two-instruction root-lifecycle conjunct added by
+/// [`append_common`], so all seven counts moved together when it landed.
 #[must_use]
 pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, usize, usize) {
     match action {
-        Action::Consider => (13, 1, 0),
-        Action::Freeze => (15, 1, 0),
-        Action::InitializeSettlement => (19, 2, 0),
-        Action::Collect | Action::Distribute => (17, 4, 0),
-        Action::Materialize => (14, 1, 0),
-        Action::Close => (23, 6, 0),
+        Action::Consider => (15, 1, 0),
+        Action::Freeze => (17, 1, 0),
+        Action::InitializeSettlement => (21, 2, 0),
+        Action::Collect | Action::Distribute => (19, 4, 0),
+        Action::Materialize => (16, 1, 0),
+        Action::Close => (25, 6, 0),
     }
 }
 
@@ -123,6 +127,20 @@ fn append_common(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
     };
     for instruction in [
         InstructionV3::load_const(s(scalar::ACTION)?, u64::from(action as u8)),
+        // The capability must still accept work. `ROOT_LIFECYCLE_OBSERVATION`
+        // is the AccountProfile's projection of the composite root's
+        // `GeneralRootV2` lifecycle byte; this pair is the only thing on the
+        // runtime-width path that reads it. An artifact that never projects it
+        // leaves the register at zero, which is not `Active`, so the omission
+        // refuses instead of passing.
+        InstructionV3::load_const(
+            s(scalar::ROOT_LIFECYCLE_ACTIVE)?,
+            u64::from(GeneralLifecycleV2::Active.tag()),
+        ),
+        InstructionV3::scalar_eq(
+            s(scalar::ROOT_LIFECYCLE_OBSERVATION)?,
+            s(scalar::ROOT_LIFECYCLE_ACTIVE)?,
+        ),
         InstructionV3::load_const(
             s(scalar::LOCAL_STATE_MAGIC)?,
             GeneralLocalStateLayoutV3::magic_u64(),
@@ -392,6 +410,8 @@ mod tests {
 
     use super::*;
 
+    const ACTIVE_LIFECYCLE: u64 = GeneralLifecycleV2::Active.tag() as u64;
+
     const ACTIONS: [Action; 7] = [
         Action::Consider,
         Action::Freeze,
@@ -440,64 +460,135 @@ mod tests {
         }
     }
 
+    /// Exact accepted Consider input bank at one runtime width.
+    ///
+    /// `lifecycle` is the observed capability-root lifecycle byte the
+    /// AccountProfile would have projected into
+    /// `scalar::ROOT_LIFECYCLE_OBSERVATION`.
+    fn consider_input_bank(
+        count: u32,
+        lifecycle: u64,
+    ) -> (std::vec::Vec<u64>, std::vec::Vec<[u8; 32]>) {
+        let scalar_count = usize::try_from(
+            GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
+        )
+        .expect("scalar width");
+        let mut input_scalars = vec![0_u64; scalar_count];
+        input_scalars[usize::try_from(scalar::OUTCOME_COUNT).expect("outcome register")] =
+            u64::from(count);
+        input_scalars[usize::try_from(scalar::ZERO).expect("persisted outcome width")] =
+            u64::from(count);
+        input_scalars[usize::try_from(scalar::STATE_BUMP).expect("bump")] = 7;
+        input_scalars[usize::try_from(scalar::PRIMARY_CANONICAL_BUMP).expect("canonical bump")] = 7;
+        input_scalars[usize::try_from(scalar::PRIMARY_RENT_PRINCIPAL).expect("rent principal")] = 1;
+        input_scalars[usize::try_from(scalar::SELECTION_REVISION).expect("revision")] = 1;
+        input_scalars[usize::try_from(scalar::ROOT_LIFECYCLE_OBSERVATION).expect("lifecycle")] =
+            lifecycle;
+        for item in 0..count {
+            let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
+            input_scalars[usize::try_from(base + item_scalar::OUTCOME).expect("item")] =
+                u64::from(item);
+        }
+        let mut input_identities = vec![
+            [0_u8; 32];
+            usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
+                .expect("identity width")
+        ];
+        input_identities[usize::try_from(identity::PRIMARY_OWNER).expect("owner")] = [9; 32];
+        input_identities[usize::try_from(identity::TRADING_PROGRAM).expect("program")] = [9; 32];
+        (input_scalars, input_identities)
+    }
+
+    fn fold(
+        program: ProgramV3<'_>,
+        count: u32,
+        input_scalars: &[u64],
+        input_identities: &[[u8; 32]],
+    ) -> Result<std::vec::Vec<u64>> {
+        let mut scalar_scratch = vec![0_u64; input_scalars.len()];
+        let mut scalar_output = vec![0_u64; input_scalars.len()];
+        let mut identity_scratch = vec![[0_u8; 32]; input_identities.len()];
+        let mut identity_output = vec![[0_u8; 32]; input_identities.len()];
+        execute_fold_atomic(
+            program,
+            count,
+            RegisterInput {
+                scalars: input_scalars,
+                identities: input_identities,
+            },
+            RegisterOutput {
+                scalars: &mut scalar_scratch,
+                identities: &mut identity_scratch,
+            },
+            RegisterOutput {
+                scalars: &mut scalar_output,
+                identities: &mut identity_output,
+            },
+        )
+        .map_err(GeneralTransitionArtifactErrorV3::Transition)?;
+        Ok(scalar_output)
+    }
+
     #[test]
     fn consider_fold_accepts_product_widths_one_and_258() {
         let bytes = artifact(Action::Consider);
         let program = ProgramV3::decode(&bytes).expect("decode");
         for count in [1_u32, 258] {
-            let scalar_count = usize::try_from(
-                GENERAL_HOT_COMMON_SCALARS_V3 + count * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3,
-            )
-            .expect("scalar width");
-            let mut input_scalars = vec![0_u64; scalar_count];
-            input_scalars[usize::try_from(scalar::OUTCOME_COUNT).expect("outcome register")] =
-                u64::from(count);
-            input_scalars[usize::try_from(scalar::ZERO).expect("persisted outcome width")] =
-                u64::from(count);
-            input_scalars[usize::try_from(scalar::STATE_BUMP).expect("bump")] = 7;
-            input_scalars
-                [usize::try_from(scalar::PRIMARY_CANONICAL_BUMP).expect("canonical bump")] = 7;
-            input_scalars
-                [usize::try_from(scalar::PRIMARY_RENT_PRINCIPAL).expect("rent principal")] = 1;
-            input_scalars[usize::try_from(scalar::SELECTION_REVISION).expect("revision")] = 1;
-            for item in 0..count {
-                let base = GENERAL_HOT_COMMON_SCALARS_V3 + item * GENERAL_HOT_ITEM_SCALAR_STRIDE_V3;
-                input_scalars[usize::try_from(base + item_scalar::OUTCOME).expect("item")] =
-                    u64::from(item);
-            }
-            let mut input_identities = vec![
-                [0_u8; 32];
-                usize::try_from(GENERAL_HOT_COMMON_IDENTITIES_V3)
-                    .expect("identity width")
-            ];
-            input_identities[usize::try_from(identity::PRIMARY_OWNER).expect("owner")] = [9; 32];
-            input_identities[usize::try_from(identity::TRADING_PROGRAM).expect("program")] =
-                [9; 32];
-            let mut scalar_scratch = vec![0_u64; scalar_count];
-            let mut scalar_output = vec![0_u64; scalar_count];
-            let mut identity_scratch = vec![[0_u8; 32]; input_identities.len()];
-            let mut identity_output = vec![[0_u8; 32]; input_identities.len()];
-            execute_fold_atomic(
-                program,
-                count,
-                RegisterInput {
-                    scalars: &input_scalars,
-                    identities: &input_identities,
-                },
-                RegisterOutput {
-                    scalars: &mut scalar_scratch,
-                    identities: &mut identity_scratch,
-                },
-                RegisterOutput {
-                    scalars: &mut scalar_output,
-                    identities: &mut identity_output,
-                },
-            )
-            .expect("runtime-width fold");
+            let (input_scalars, input_identities) = consider_input_bank(count, ACTIVE_LIFECYCLE);
+            let scalar_output = fold(program, count, &input_scalars, &input_identities)
+                .expect("runtime-width fold");
             assert_eq!(
                 scalar_output[usize::try_from(scalar::ACTION).expect("action")],
                 u64::from(Action::Consider as u8)
             );
+        }
+    }
+
+    /// U-003(a), executed on the emitted artifact rather than argued.
+    ///
+    /// The composite root's immutable header is byte-identical for a live and a
+    /// retired capability, so this conjunct is the only thing on the
+    /// runtime-width path that can tell them apart. Every General action carries
+    /// it, because it lives in the shared prelude.
+    #[test]
+    fn every_action_refuses_a_root_that_is_not_active() {
+        for action in ACTIONS {
+            let bytes = artifact(action);
+            let program = ProgramV3::decode(&bytes).expect("decode");
+            for count in [1_u32, 258] {
+                // Retiring, Retired, an unwritten register, and an unknown byte.
+                for lifecycle in [0_u64, 2, 3, 4, 255] {
+                    let (input_scalars, input_identities) = consider_input_bank(count, lifecycle);
+                    assert!(
+                        fold(program, count, &input_scalars, &input_identities).is_err(),
+                        "action {action:?} at width {count} accepted lifecycle {lifecycle}",
+                    );
+                }
+            }
+        }
+    }
+
+    /// The refusal is the lifecycle conjunct, not some other unmet prelude
+    /// requirement: the same bank at `Active` reaches the action-specific
+    /// conjuncts, which is where the other actions legitimately refuse.
+    #[test]
+    fn the_active_bank_passes_the_lifecycle_conjunct_for_every_action() {
+        for action in ACTIONS {
+            let bytes = artifact(action);
+            let program = ProgramV3::decode(&bytes).expect("decode");
+            let (mut input_scalars, input_identities) = consider_input_bank(1, ACTIVE_LIFECYCLE);
+            let observation =
+                usize::try_from(scalar::ROOT_LIFECYCLE_OBSERVATION).expect("lifecycle");
+            let active = fold(program, 1, &input_scalars, &input_identities);
+            input_scalars[observation] = u64::from(GeneralLifecycleV2::Retired.tag());
+            let retired = fold(program, 1, &input_scalars, &input_identities);
+            assert!(
+                retired.is_err(),
+                "action {action:?} accepted a retired root"
+            );
+            if action == Action::Consider {
+                assert!(active.is_ok(), "the Active Consider bank must accept");
+            }
         }
     }
 

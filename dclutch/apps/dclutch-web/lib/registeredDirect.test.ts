@@ -5,6 +5,7 @@ import {
   REGISTERED_CONTROLLER_EXAMPLE,
   REGISTERED_CREATE_EXAMPLE,
   REGISTERED_RETIRE_EXAMPLE,
+  REGISTERED_STATE_BYTES_VALUE,
   REGISTERED_STATE_EXAMPLE,
   REGISTERED_TERMINAL_CANCEL_EXAMPLE,
   REGISTERED_TERMINAL_EXPIRE_EXAMPLE,
@@ -25,6 +26,7 @@ import {
   encodeRegisteredRetireInstructionV1,
   encodeRegisteredIntentStateV1,
   encodeRegisteredTerminal,
+  REPLAY_STATE_BYTES,
   registeredBuyerReserve,
   registeredRetirementDelegation,
   scanRegisteredDirectStates,
@@ -130,13 +132,13 @@ describe('Lean-emitted registered Direct browser ABI', () => {
     const controllerProgram = key(67);
     const addresses = deriveRegisteredCreateAddresses(controllerProgram.toBase58(), key(4).toBase58(), 3n, key(5).toBase58(), 0n);
     expect(decodeMakerReplayObservationV1(null, addresses.controller)).toEqual({ exists: false, nextNonce: 0n });
-    const data = new Uint8Array(48);
+    const data = new Uint8Array(REPLAY_STATE_BYTES);
     data.set(Uint8Array.of(0x44, 0x43, 0x52, 0x50, 1, 0, 0, 0));
     data.set(addresses.controller.toBytes(), 8);
     new DataView(data.buffer).setBigUint64(40, 7n, true);
-    expect(decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: 48 }, addresses.controller)).toEqual({ exists: true, nextNonce: 7n });
+    expect(decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: REPLAY_STATE_BYTES }, addresses.controller)).toEqual({ exists: true, nextNonce: 7n });
     data[8] ^= 1;
-    expect(() => decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: 48 }, addresses.controller)).toThrow(/canonical controller/);
+    expect(() => decodeMakerReplayObservationV1({ data, executable: false, lamports: '1', owner: CLAIM_PROGRAM_ID.toBase58(), space: REPLAY_STATE_BYTES }, addresses.controller)).toThrow(/canonical controller/);
     expect(() => registeredBuyerReserve(2_000n, 1_000_001n, 25)).toThrow(/1e6 scale/);
   });
 
@@ -216,10 +218,10 @@ describe('Lean-emitted registered Direct browser ABI', () => {
       const request = JSON.parse(String(init?.body)) as { method: string };
       if (request.method === 'getProgramAccounts') return response({ context: { slot: 55 }, value: [{
         pubkey: canonical.address,
-        account: { data: [base64(bytes.slice(0, 16)), 'base64'], executable: false, lamports: 1, owner: CLAIM_PROGRAM_ID.toBase58(), space: 232 },
+        account: { data: [base64(bytes.slice(0, 16)), 'base64'], executable: false, lamports: 1, owner: CLAIM_PROGRAM_ID.toBase58(), space: REGISTERED_STATE_BYTES_VALUE },
       }] });
       if (request.method === 'getAccountInfo') return response({ context: { slot: 56 }, value: {
-        data: [base64(bytes), 'base64'], executable: false, lamports: 1, owner: CLAIM_PROGRAM_ID.toBase58(), space: 232,
+        data: [base64(bytes), 'base64'], executable: false, lamports: 1, owner: CLAIM_PROGRAM_ID.toBase58(), space: REGISTERED_STATE_BYTES_VALUE,
       } });
       throw new Error(`unexpected RPC method ${request.method}`);
     });
@@ -231,7 +233,7 @@ describe('Lean-emitted registered Direct browser ABI', () => {
   });
 
   it('refuses hostile widths, reserved bytes, stale sequence state, early expiry, and cross-Market pairing', () => {
-    expect(() => decodeRegisteredIntentStateV1(REGISTERED_STATE_EXAMPLE.slice(0, -1))).toThrow(/exactly 232/);
+    expect(() => decodeRegisteredIntentStateV1(REGISTERED_STATE_EXAMPLE.slice(0, -1))).toThrow(new RegExp(`exactly ${REGISTERED_STATE_BYTES_VALUE}`));
     const reserved = REGISTERED_STATE_EXAMPLE.slice();
     reserved[11] = 1;
     expect(() => decodeRegisteredIntentStateV1(reserved)).toThrow(/reserved/);

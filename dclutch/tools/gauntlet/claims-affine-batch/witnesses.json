@@ -1,0 +1,40 @@
+{
+  "campaign": "claims-affine-batch-programtest",
+  "witnesses": [
+    {
+      "id": "affine-batch-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it."
+    },
+    {
+      "id": "affine-batch-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign therefore serialises every transaction it submits and records the extent, and this witness checks the largest against the stated limit."
+    },
+    {
+      "id": "affine-batch-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured."
+    },
+    {
+      "id": "every-affine-batch-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this campaign claims -- named or unnamed_refusal -- is a program decision, so a bare runtime refusal appearing here would mean a hostile case stopped being about a program."
+    },
+    {
+      "id": "affine-batch-canonical-commits-exactly-once",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label == \"claims affine-batch: canonical batch commits\") | select(.error == null)] | length | tostring",
+      "expect": "1",
+      "provenance": "The canonical affine batch is the one transaction this campaign asserts must commit; every other labelled transaction is either ALT plumbing or a hostile case. This checks the runtime's own recorded outcome, not the campaign's own assertion of it."
+    }
+  ]
+}

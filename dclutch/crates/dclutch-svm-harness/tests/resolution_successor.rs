@@ -857,10 +857,15 @@ impl Fixture {
             capacity_id,
         );
         let source_spec_id = source_id(hash(&source.to_bytes()).to_bytes());
+        // The market sells a closed period, not one exact second. The upper
+        // bound stays at `PUBLISH_TIME` because `RECOVERY_TIME` and
+        // `EXHAUSTION_TIME` are `end + max_age_seconds` offsets from it; the
+        // false assumption this fixture carried was that the window has no
+        // width at all, which is the shape no real provider cadence can answer.
         let window = WindowSpecV1::new(
             source_spec_id,
             WindowKind::Terminal,
-            PUBLISH_TIME,
+            PUBLISH_TIME - 300,
             PUBLISH_TIME,
             10,
             2,

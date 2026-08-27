@@ -14,6 +14,9 @@ const sources = Object.freeze({
   rent: readFileSync(new URL('crates/dclutch-rent-contract/src/lib.rs', root), 'utf8'),
   lifecycleRent: readFileSync(new URL('crates/dclutch-rent-contract/src/lifecycle_v2.rs', root), 'utf8'),
   operator: readFileSync(new URL('crates/dclutch-product-runtime-v2-operator/src/found.rs', root), 'utf8'),
+  claimsState: readFileSync(new URL('crates/dclutch-claims-svm/src/liability_basis_state_v2.rs', root), 'utf8'),
+  claimsPosition: readFileSync(new URL('crates/dclutch-claims-svm/src/protocol_position_v2.rs', root), 'utf8'),
+  claimsFounding: readFileSync(new URL('crates/dclutch-claims-svm/src/founding_v5.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/coreFound.ts', import.meta.url);
 
@@ -98,6 +101,68 @@ for (const [source, name] of [
 ]) output += array(name, bytes(source, name));
 output += `export const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 = new TextEncoder().encode('${byteString('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2')}');\n`;
 output += array('LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2'));
+
+// ------------------------------------------------ the LIVE Core Market state
+// `crates/dclutch-market-core-codec/src/generated.rs` is itself emitted by
+// `formal/dclutch-semantics/EmitMarketCoreRust.lean`, so these coordinates
+// reach the browser from the Lean semantics through exactly one intermediate
+// artifact and are never retyped by hand. Everything the discovery, detail and
+// portfolio surfaces need to read a real Market is here.
+output += '\n';
+output += array('CORE_STATE_MAGIC', bytes('core', 'STATE_MAGIC'));
+for (const name of [
+  'STATE_VERSION_OFFSET', 'STATE_PHASE_OFFSET', 'STATE_READINESS_OFFSET', 'STATE_TERMINAL_WINNER_OFFSET',
+  'STATE_MARKET_ID_OFFSET', 'STATE_IDENTITY_REALM_OFFSET', 'STATE_PRODUCT_RECORD_OFFSET', 'STATE_PRODUCT_ID_OFFSET',
+  'STATE_RESOLUTION_POLICY_OFFSET', 'STATE_CAPABILITY_MANIFEST_OFFSET', 'STATE_SELECTED_RELEASE_SET_OFFSET',
+  'STATE_REGISTRY_PROGRAM_OFFSET', 'STATE_GENERATION_OFFSET', 'STATE_OUTSTANDING_CAPABILITIES_OFFSET',
+  'STATE_RENT_BENEFICIARY_OFFSET', 'STATE_TERMINAL_RECEIPT_OFFSET',
+]) output += `export const CORE_${name} = ${scalar('core', name)} as const;\n`;
+for (const name of [
+  'PHASE_FOUNDING_TAG', 'PHASE_OPEN_TAG', 'PHASE_TERMINAL_TAG', 'PHASE_RETIRING_TAG', 'PHASE_RETIRED_TAG',
+  'READINESS_PREPAID_TAG', 'READINESS_READY_TAG', 'READINESS_CONSUMED_TAG',
+]) output += `export const CORE_${name} = ${scalar('core', name)} as const;\n`;
+
+// ------------------------------------- the LIVE Claims LiabilityBasisV2 state
+// A Core Market root carries identity and lifecycle. The per-claim SUPPLY
+// vector and every owner's BALANCE vector live in Claims-owned LiabilityBasisV2
+// state, at PDAs derived from the Market and the owner. Without these the
+// browser can decode a Market and still have nothing true to say about its
+// economics.
+const aggregateSeed = byteString('claimsState', 'LIABILITY_BASIS_MARKET_SEED_V2');
+const foundingAggregateSeed = byteString('claimsFounding', 'CLAIMS_FOUNDING_AGGREGATE_SEED_V5');
+if (aggregateSeed !== foundingAggregateSeed) {
+  throw new Error(`the Claims aggregate seed domain has two spellings: ${aggregateSeed} vs ${foundingAggregateSeed}`);
+}
+output += '\n';
+output += array('LIABILITY_BASIS_MARKET_MAGIC_V2', bytes('claimsState', 'LIABILITY_BASIS_MARKET_MAGIC_V2'));
+output += array('LIABILITY_BASIS_POSITION_MAGIC_V2', bytes('claimsState', 'LIABILITY_BASIS_POSITION_MAGIC_V2'));
+for (const name of [
+  'LIABILITY_BASIS_STATE_VERSION_V2',
+  'LIABILITY_BASIS_MARKET_HEADER_BYTES_V2',
+  'LIABILITY_BASIS_POSITION_HEADER_BYTES_V2',
+]) output += `export const ${name} = ${scalar('claimsState', name)} as const;\n`;
+for (const name of [
+  'MARKET_CLAIM_COUNT_OFFSET', 'MARKET_REVISION_OFFSET', 'MARKET_LOGICAL_ID_OFFSET', 'MARKET_RELEASE_SET_OFFSET',
+  'MARKET_REGISTRY_OFFSET', 'MARKET_PRODUCT_OFFSET', 'MARKET_BASIS_OFFSET', 'MARKET_REALM_OFFSET',
+  'MARKET_CUSTODY_CONTEXT_OFFSET', 'MARKET_GENERATION_OFFSET',
+  'POSITION_CLAIM_COUNT_OFFSET', 'POSITION_REVISION_OFFSET', 'POSITION_MARKET_OFFSET', 'POSITION_OWNER_OFFSET',
+  'POSITION_BASIS_OFFSET', 'POSITION_RESERVED_OFFSET',
+]) output += `export const LIABILITY_BASIS_${name} = ${scalar('claimsState', name)} as const;\n`;
+output += `export const LIABILITY_BASIS_MARKET_SEED_V2 = new TextEncoder().encode('${aggregateSeed}');\n`;
+output += `export const LIABILITY_BASIS_POSITION_SEED_V2 = new TextEncoder().encode('${byteString('claimsPosition', 'PROTOCOL_POSITION_STATE_SEED_V2')}');\n`;
+
+// -------------------------------------------------------- the Realm record
+// A Market names its Realm by content identity, and on a live chain the
+// canonical body is a finalized Registry record rather than a Core account. The
+// browser reacquires it and re-hashes it, so it needs the body layout.
+output += '\n';
+output += array('REALM_MAGIC', bytes('realm', 'REALM_MAGIC'));
+output += `export const REALM_BYTES = ${scalar('realm', 'REALM_BYTES')} as const;\n`;
+output += `export const REALM_SCHEMA_VERSION = ${scalar('realm', 'REALM_SCHEMA_VERSION')} as const;\n`;
+for (const name of [
+  'REALM_MINT_AUTHORITY_POLICY_OFFSET', 'REALM_FREEZE_AUTHORITY_POLICY_OFFSET',
+  'REALM_TOKEN_PROGRAM_OFFSET', 'REALM_COLLATERAL_MINT_OFFSET', 'REALM_ADAPTER_RELEASE_ID_OFFSET',
+]) output += `export const ${name} = ${scalar('realm', name)} as const;\n`;
 
 if (process.argv.includes('--check')) {
   if (readFileSync(outputUrl, 'utf8') !== output) {

@@ -43,6 +43,7 @@ export const HOT_PORTFOLIO_RAW_ACCOUNT_V3 = 34 as const;
 export const HOT_PORTFOLIO_STAGING_ACCOUNT_V3 = 35 as const;
 export const HOT_LINKED_BASIS_RAW_ACCOUNT_V3 = 36 as const;
 export const HOT_LINKED_BASIS_STAGING_ACCOUNT_V3 = 37 as const;
+export const HOT_CAPABILITY_SEAL_ACCOUNT_V3 = 38 as const;
 export const BASIS_SCHEMA_V3 = 3 as const;
 export const BASIS_HEADER_BYTES_V3 = 256 as const;
 export const BASIS_WIDTH_OFFSET_V3 = 20 as const;

@@ -125,7 +125,16 @@ boundary machine-readable.
 
 ## Immutable multi-program successor profile
 
-`dclutch-successor-validator` uses a fresh ledger on RPC `20890` and requires
+`dclutch-successor-validator` uses a fresh ledger on RPC `20890` — or on the
+base `--rpc-port` / `$DCLUTCH_RPC_PORT` names, from which the whole block is
+derived (`faucet BASE+2`, `gossip BASE+3`, `dynamic BASE+10..BASE+41`; BASE
+20890 reproduces the historical `20890-20931` byte for byte). `status` and
+`stop` read the base back out of the ledger's own profile, so a ledger started
+on a nonstandard base is still addressable by path alone. Given
+`--supervisor-pid PID` the validator is bound to that process's lifetime and is
+killed when it dies **even if that process is SIGKILLed and never runs its own
+cleanup**, which is how a finished campaign once left a validator with PPID 1
+holding the pinned port. It requires
 separately attested, actual Registry, Core, Claims, Trading, Resolution,
 Custody, and RentCredit ELFs under seven pairwise-distinct program IDs. It also
 loads the committed real Pyth router and receiver ELFs. Unlike

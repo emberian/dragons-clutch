@@ -4,10 +4,18 @@
 //! finalized content records, and an interpreted account/effect profile. It
 //! does not dispatch on a capability kind. All physical mutation is projected
 //! first and committed only after the complete activation plan accepts.
+//!
+//! The created root is `CapabilityRootHeaderV1 || <family tail>`. The outer owns
+//! the header and never decodes the tail; the tail is exactly the effect
+//! program's projected request buffer, whose width the descriptor pins to
+//! `root_state_bytes`. That keeps the family's initial state an artifact the
+//! family authors and the Market's manifest entry binds, with no family decoder
+//! and no kind branch on this path.
 
 extern crate alloc;
 
 use alloc::{vec, vec::Vec};
+use core::cell::Ref;
 
 use dclutch_account_profile_contract::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
@@ -20,7 +28,22 @@ use dclutch_capability_contract::{
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
-    CapabilityRootAccountV1, CapabilityRootHeaderV1, initialize_root_account_v1,
+    CapabilityRootAccountV1, CapabilityRootHeaderV1,
+    activation_registers_v2::{
+        ACTIVATION_ACCOUNT_PROFILE_IDENTITY_V2, ACTIVATION_ACTION_SCALAR_V2,
+        ACTIVATION_CAPABILITY_RELEASE_IDENTITY_V2, ACTIVATION_COMMON_IDENTITIES_V2,
+        ACTIVATION_COMMON_SCALARS_V2, ACTIVATION_CONFIG_IDENTITY_V2,
+        ACTIVATION_CONTEXT_IDENTITY_V2, ACTIVATION_CORE_PROGRAM_IDENTITY_V2,
+        ACTIVATION_EFFECT_SCHEMA_IDENTITY_V2, ACTIVATION_ENTRY_INDEX_SCALAR_V2,
+        ACTIVATION_FUNDING_COUNT_SCALAR_V2, ACTIVATION_GENERATION_SCALAR_V2,
+        ACTIVATION_MANIFEST_IDENTITY_V2, ACTIVATION_MARKET_IDENTITY_V2,
+        ACTIVATION_REGISTRY_PROGRAM_IDENTITY_V2, ACTIVATION_RELEASE_SET_IDENTITY_V2,
+        ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2, ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2,
+        ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2, ACTIVATION_ROOT_IDENTITY_V2,
+        ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
+    },
+    initialize_root_account_v1,
+    set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
 use dclutch_effect_kernel::v2::{
     AccountInput, ProgramV2 as EffectProgramV2, ResolvedEffect, SCHEMA_RELEASE_ID,
@@ -58,8 +81,8 @@ use crate::{
     },
 };
 
-const DESCRIPTOR_RAW: usize = 0;
-const DESCRIPTOR_STAGING: usize = 1;
+const RELEASE_RAW: usize = 0;
+const RELEASE_STAGING: usize = 1;
 const CONFIG_RAW: usize = 2;
 const CONFIG_STAGING: usize = 3;
 const PROFILE_RAW: usize = 4;
@@ -74,14 +97,77 @@ const TRADING_PROGRAMDATA: usize = 12;
 const REGISTRY_PROGRAM: usize = 13;
 const RENT_SYSVAR: usize = 14;
 const SYSTEM_PROGRAM: usize = 15;
-const EFFECT_ACCOUNTS_START: usize = 16;
+/// Fixed authentication accounts every activation carries.
+const AUTHENTICATION_ACCOUNTS_V1: usize = 16;
+/// Selected activation descriptor, present only for a `ProgramSet` release.
+const SET_DESCRIPTOR_RAW: usize = 16;
+/// Its staging cursor.
+const SET_DESCRIPTOR_STAGING: usize = 17;
 
-const COMMON_SCALARS_V2: usize = 8;
-const COMMON_IDENTITIES_V2: usize = 12;
 const MAX_RUNTIME_SCALARS_V2: usize = 96;
 const MAX_RUNTIME_IDENTITIES_V2: usize = 32;
 const MAX_RUNTIME_ACCOUNTS_V2: usize = 64;
 const MAX_ROLE_REQUEST_BYTES_V2: usize = 2_048;
+
+/// Which generation of capability release `selection.capability_release()` names.
+///
+/// This is not a dispatch on a capability kind. It is a fact about one finalized
+/// record, decided the only way a raw record can be identified before it is read:
+/// its raw-record PDA is `[RAW_RECORD_PDA_SEED_V1, schema, digest]`, so the
+/// supplied account's own address says which schema the Registry finalized it
+/// under. Exactly one of the two derivations can match a given account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CapabilityReleaseGenerationV1 {
+    /// The record at `capability_release` IS the activation descriptor.
+    FlatDescriptor,
+    /// The record at `capability_release` is a `CapabilityProgramSetV2`, and the
+    /// activation descriptor is the entry its family request selects.
+    ProgramSet,
+}
+
+impl CapabilityReleaseGenerationV1 {
+    /// Extra finalized-record accounts this generation carries after the fixed 16.
+    const fn extra_accounts(self) -> usize {
+        match self {
+            Self::FlatDescriptor => 0,
+            Self::ProgramSet => 2,
+        }
+    }
+
+    /// Schema the record at `capability_release` is authenticated under.
+    const fn release_schema(self) -> [u8; 32] {
+        match self {
+            Self::FlatDescriptor => CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
+            Self::ProgramSet => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        }
+    }
+}
+
+/// Decide the release generation from the supplied raw record's own address.
+fn select_release_generation(
+    registry: &Pubkey,
+    release_raw: &AccountInfo<'_>,
+    capability_release: [u8; 32],
+) -> Result<CapabilityReleaseGenerationV1, ProgramError> {
+    for generation in [
+        CapabilityReleaseGenerationV1::FlatDescriptor,
+        CapabilityReleaseGenerationV1::ProgramSet,
+    ] {
+        let expected = Pubkey::find_program_address(
+            &[
+                RAW_RECORD_PDA_SEED_V1,
+                &generation.release_schema(),
+                &capability_release,
+            ],
+            registry,
+        )
+        .0;
+        if release_raw.key == &expected {
+            return Ok(generation);
+        }
+    }
+    Err(TradingSbfError::Content.into())
+}
 
 /// Execute one Core-signed, data-defined capability activation.
 #[inline(never)]
@@ -108,25 +194,45 @@ pub fn process_activation(
         )
         .map_err(|_| TradingSbfError::Content)?;
     let framed = TradingActivationAccountsV1::parse(accounts, request.funding())?;
-    let suffix = AuthenticatedSuffixV2::parse(program_id, framed.family_accounts())?;
+    let family_accounts = framed.family_accounts();
+    let capability_release = request.selection().capability_release().to_bytes();
+    let generation = select_release_generation(
+        get(family_accounts, REGISTRY_PROGRAM)?.key,
+        get(family_accounts, RELEASE_RAW)?,
+        capability_release,
+    )?;
+    let suffix = AuthenticatedSuffixV2::parse(program_id, family_accounts, generation)?;
     let market_state = authenticate_market_and_caller(program_id, &framed, &suffix, envelope)?;
     let rent = Rent::from_account_info(suffix.rent).map_err(|_| TradingSbfError::Content)?;
 
-    let descriptor_data = suffix
-        .descriptor_raw
+    let release_data = suffix
+        .release_raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     authenticate_finalized_record(
         suffix.registry.key,
-        suffix.descriptor_raw,
-        suffix.descriptor_staging,
+        suffix.release_raw,
+        suffix.release_staging,
         &rent,
-        CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
-        request.selection().capability_release().to_bytes(),
-        &descriptor_data,
+        generation.release_schema(),
+        capability_release,
+        &release_data,
     )?;
+    let set_descriptor_data = authenticate_set_descriptor(
+        &suffix,
+        generation,
+        &rent,
+        capability_release,
+        release_data.as_ref(),
+        request.family_request(),
+    )?;
+    let descriptor_data: &[u8] = match &set_descriptor_data {
+        Some(data) => data.as_ref(),
+        None => release_data.as_ref(),
+    };
+    let descriptor_id = content(hash(descriptor_data).to_bytes())?;
     let descriptor =
-        CapabilityProgramV1::decode(&descriptor_data).map_err(|_| TradingSbfError::Content)?;
+        CapabilityProgramV1::decode(descriptor_data).map_err(|_| TradingSbfError::Content)?;
     let root_bytes = descriptor
         .root_account_bytes()
         .map_err(|_| TradingSbfError::Root)?;
@@ -184,8 +290,13 @@ pub fn process_activation(
         request.selection().config().to_bytes(),
         &config_data,
     )?;
-    let descriptor =
-        authenticate_activation_program(context, &manifest_data, &descriptor_data, &config_data)?;
+    let descriptor = authenticate_activation_program(
+        context,
+        descriptor_id,
+        &manifest_data,
+        descriptor_data,
+        &config_data,
+    )?;
 
     let profile_data = suffix
         .profile_raw
@@ -291,7 +402,8 @@ pub fn process_activation(
     drop(effect_data);
     drop(profile_data);
     drop(config_data);
-    drop(descriptor_data);
+    drop(set_descriptor_data);
+    drop(release_data);
     drop(manifest_data);
 
     commit_activation(
@@ -312,8 +424,10 @@ pub fn process_activation(
 }
 
 struct AuthenticatedSuffixV2<'accounts, 'info> {
-    descriptor_raw: &'accounts AccountInfo<'info>,
-    descriptor_staging: &'accounts AccountInfo<'info>,
+    release_raw: &'accounts AccountInfo<'info>,
+    release_staging: &'accounts AccountInfo<'info>,
+    set_descriptor_raw: Option<&'accounts AccountInfo<'info>>,
+    set_descriptor_staging: Option<&'accounts AccountInfo<'info>>,
     config_raw: &'accounts AccountInfo<'info>,
     config_staging: &'accounts AccountInfo<'info>,
     profile_raw: &'accounts AccountInfo<'info>,
@@ -335,10 +449,23 @@ impl<'accounts, 'info> AuthenticatedSuffixV2<'accounts, 'info> {
     fn parse(
         program_id: &Pubkey,
         accounts: &'accounts [AccountInfo<'info>],
+        generation: CapabilityReleaseGenerationV1,
     ) -> Result<Self, ProgramError> {
+        let authentication_accounts = AUTHENTICATION_ACCOUNTS_V1
+            .checked_add(generation.extra_accounts())
+            .ok_or(TradingSbfError::Content)?;
+        let (set_descriptor_raw, set_descriptor_staging) = match generation {
+            CapabilityReleaseGenerationV1::FlatDescriptor => (None, None),
+            CapabilityReleaseGenerationV1::ProgramSet => (
+                Some(get(accounts, SET_DESCRIPTOR_RAW)?),
+                Some(get(accounts, SET_DESCRIPTOR_STAGING)?),
+            ),
+        };
         let value = Self {
-            descriptor_raw: get(accounts, DESCRIPTOR_RAW)?,
-            descriptor_staging: get(accounts, DESCRIPTOR_STAGING)?,
+            release_raw: get(accounts, RELEASE_RAW)?,
+            release_staging: get(accounts, RELEASE_STAGING)?,
+            set_descriptor_raw,
+            set_descriptor_staging,
             config_raw: get(accounts, CONFIG_RAW)?,
             config_staging: get(accounts, CONFIG_STAGING)?,
             profile_raw: get(accounts, PROFILE_RAW)?,
@@ -354,7 +481,7 @@ impl<'accounts, 'info> AuthenticatedSuffixV2<'accounts, 'info> {
             rent: get(accounts, RENT_SYSVAR)?,
             system: get(accounts, SYSTEM_PROGRAM)?,
             effect_accounts: accounts
-                .get(EFFECT_ACCOUNTS_START..)
+                .get(authentication_accounts..)
                 .ok_or(TradingSbfError::Content)?,
         };
         if value.trading_program.key != program_id
@@ -375,16 +502,81 @@ impl<'accounts, 'info> AuthenticatedSuffixV2<'accounts, 'info> {
         {
             return Err(TradingSbfError::Content.into());
         }
-        require_authentication_accounts_distinct(accounts)?;
+        require_authentication_accounts_distinct(accounts, authentication_accounts)?;
         Ok(value)
     }
 }
 
+/// Authenticate the activation descriptor a `ProgramSet` release selects.
+///
+/// A flat release IS its own activation descriptor and this returns `None`. A
+/// `CapabilityProgramSetV2` release is a selector table, so the descriptor is a
+/// second finalized record, named by the entry the family request selects and
+/// authenticated under the schema that entry states. Requiring
+/// `CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1` there is what keeps this seam
+/// family-neutral without acquiring a second descriptor decoder: a hot-action
+/// `CapabilityProgramV4` entry can never be presented here, because the raw
+/// record it names is finalized under a different schema and therefore lives at
+/// a different address.
+///
+/// The caller choosing the entry is the same trust structure the hot path
+/// already has, and it is bounded twice over: every entry is inside the set
+/// whose digest the Market's manifest binds, and `validate_selection` then
+/// requires the selected descriptor's kind, capacity profile, root schema and
+/// derivation policy to equal the manifest entry's own.
+fn authenticate_set_descriptor<'accounts, 'info>(
+    suffix: &AuthenticatedSuffixV2<'accounts, 'info>,
+    generation: CapabilityReleaseGenerationV1,
+    rent: &Rent,
+    capability_release: [u8; 32],
+    release_data: &[u8],
+    family_request: &[u8],
+) -> Result<Option<Ref<'accounts, &'accounts mut [u8]>>, ProgramError> {
+    let (raw, staging) = match generation {
+        CapabilityReleaseGenerationV1::FlatDescriptor => return Ok(None),
+        CapabilityReleaseGenerationV1::ProgramSet => (
+            suffix.set_descriptor_raw.ok_or(TradingSbfError::Content)?,
+            suffix
+                .set_descriptor_staging
+                .ok_or(TradingSbfError::Content)?,
+        ),
+    };
+    // `authenticate_finalized_record` already required `hash(release_data)` to be
+    // exactly `capability_release`, so the selected and authenticated set
+    // identities are the same value by construction.
+    let set = CapabilityProgramSetV2::decode_selected(
+        capability_release,
+        capability_release,
+        release_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let selected = set
+        .select_descriptor(family_request)
+        .map_err(|_| TradingSbfError::Content)?;
+    if selected.schema().to_bytes() != CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let data = raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    authenticate_finalized_record(
+        suffix.registry.key,
+        raw,
+        staging,
+        rent,
+        selected.schema().to_bytes(),
+        selected.program().to_bytes(),
+        data.as_ref(),
+    )?;
+    Ok(Some(data))
+}
+
 fn require_authentication_accounts_distinct(
     accounts: &[AccountInfo<'_>],
+    authentication_accounts: usize,
 ) -> Result<(), ProgramError> {
     let fixed = accounts
-        .get(..EFFECT_ACCOUNTS_START)
+        .get(..authentication_accounts)
         .ok_or(TradingSbfError::Content)?;
     for (index, account) in fixed.iter().enumerate() {
         if accounts
@@ -655,12 +847,23 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         root_header: CapabilityRootHeaderV1,
         descriptor: CapabilityProgramV1<'_>,
     ) -> Result<ActivationPlanV2, ProgramError> {
+        let root_state_bytes =
+            usize::try_from(descriptor.root_state_bytes()).map_err(|_| TradingSbfError::Root)?;
         if usize::from(effect.account_count()) != self.accounts.len()
             || effect.scalar_count() != profile.scalar_count()
             || effect.identity_count() != profile.identity_count()
             || usize::from(effect.request_bytes()) > MAX_ROLE_REQUEST_BYTES_V2
         {
             return Err(TradingSbfError::Content.into());
+        }
+        // The effect program's projected request buffer IS the family root tail.
+        // The activation outer never decodes a family root -- it has no family
+        // decoder and must not acquire one -- so the only family-neutral channel
+        // for the initial tail is an artifact the family already authors and the
+        // manifest entry already binds. Declaring a different width is refused
+        // rather than truncated or zero-padded.
+        if usize::from(effect.request_bytes()) != root_state_bytes {
+            return Err(TradingSbfError::Root.into());
         }
         let account_inputs = self
             .accounts
@@ -764,18 +967,20 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         if output_lamports.first().copied() != Some(root_rent) {
             return Err(TradingSbfError::Root.into());
         }
+        // An activation that projects no family state at all creates a root whose
+        // tail no family can decode -- every in-tree family root refuses all-zero
+        // at its magic. That is a bricked capability, not a successful activation,
+        // so it refuses here instead of committing.
+        if root_state_bytes != 0 && output_request.iter().all(|byte| *byte == 0) {
+            return Err(TradingSbfError::Root.into());
+        }
         let mut root_data = vec![
             0_u8;
             descriptor
                 .root_account_bytes()
                 .map_err(|_| TradingSbfError::Root)?
         ];
-        let tail = vec![
-            0_u8;
-            usize::try_from(descriptor.root_state_bytes())
-                .map_err(|_| TradingSbfError::Root)?
-        ];
-        initialize_root_account_v1(&mut root_data, root_header, descriptor, &tail)
+        initialize_root_account_v1(&mut root_data, root_header, descriptor, &output_request)
             .map_err(|_| TradingSbfError::Root)?;
         CapabilityRootAccountV1::decode(&root_data, descriptor)
             .map_err(|_| TradingSbfError::Root)?;
@@ -825,7 +1030,14 @@ fn require_activation_local_effects(
             ResolvedEffect::InvokeRole { enabled: true, .. } => {
                 return Err(TradingSbfError::UnsupportedContent.into());
             }
-            _ => {}
+            // A request write composes the family root tail; a lamport move and a
+            // balance requirement are the funding semantics. A disabled invoke is
+            // a no-op the projection already resolved away.
+            ResolvedEffect::WriteRequestScalar { .. }
+            | ResolvedEffect::WriteRequestIdentity { .. }
+            | ResolvedEffect::TransferLamports { .. }
+            | ResolvedEffect::RequireLamportsEq { .. }
+            | ResolvedEffect::InvokeRole { enabled: false, .. } => {}
         }
         index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
@@ -843,8 +1055,8 @@ fn seed_common_registers(
     descriptor: CapabilityProgramV1<'_>,
     root: &Pubkey,
 ) -> Result<(), ProgramError> {
-    if scalars.len() < COMMON_SCALARS_V2
-        || identities.len() < COMMON_IDENTITIES_V2
+    if scalars.len() < ACTIVATION_COMMON_SCALARS_V2
+        || identities.len() < ACTIVATION_COMMON_IDENTITIES_V2
         || scalars.len() > MAX_RUNTIME_SCALARS_V2
         || identities.len() > MAX_RUNTIME_IDENTITIES_V2
         || descriptor.transition_program().scalar_count() as usize != scalars.len()
@@ -852,39 +1064,85 @@ fn seed_common_registers(
     {
         return Err(TradingSbfError::Content.into());
     }
+    // The slots are named, not positional. They are the ABI a family's activation
+    // artifacts are authored against, so `activation_registers_v2` publishes them
+    // and this is the one writer.
     for (slot, value) in [
-        CoreEffectActionV1::ActivateCapability as u64,
-        envelope.generation(),
-        u64::from(request.selection().entry_index()),
-        u64::from(request.funding().funding_count()),
-        u64::from(envelope.role_request_bytes()),
-        u64::from(descriptor.root_state_bytes()),
-        envelope.expected_resource_a_revision(),
-        envelope.expected_resource_b_revision(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        *scalars.get_mut(slot).ok_or(TradingSbfError::Content)? = value;
+        (
+            ACTIVATION_ACTION_SCALAR_V2,
+            CoreEffectActionV1::ActivateCapability as u64,
+        ),
+        (ACTIVATION_GENERATION_SCALAR_V2, envelope.generation()),
+        (
+            ACTIVATION_ENTRY_INDEX_SCALAR_V2,
+            u64::from(request.selection().entry_index()),
+        ),
+        (
+            ACTIVATION_FUNDING_COUNT_SCALAR_V2,
+            u64::from(request.funding().funding_count()),
+        ),
+        (
+            ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2,
+            u64::from(envelope.role_request_bytes()),
+        ),
+        (
+            ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2,
+            u64::from(descriptor.root_state_bytes()),
+        ),
+        (
+            ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2,
+            envelope.expected_resource_a_revision(),
+        ),
+        (
+            ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2,
+            envelope.expected_resource_b_revision(),
+        ),
+    ] {
+        *scalars
+            .get_mut(usize::from(slot))
+            .ok_or(TradingSbfError::Content)? = value;
     }
     for (slot, value) in [
-        program_id.to_bytes(),
-        suffix.core_program.key.to_bytes(),
-        suffix.registry.key.to_bytes(),
-        envelope.release_set().to_bytes(),
-        envelope.market().to_bytes(),
-        envelope.context().to_bytes(),
-        request.selection().manifest().to_bytes(),
-        request.selection().capability_release().to_bytes(),
-        request.selection().config().to_bytes(),
-        descriptor.account_profile().to_bytes(),
-        descriptor.effect_schema().to_bytes(),
-        root.to_bytes(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        *identities.get_mut(slot).ok_or(TradingSbfError::Content)? = value;
+        (ACTIVATION_TRADING_PROGRAM_IDENTITY_V2, program_id.to_bytes()),
+        (
+            ACTIVATION_CORE_PROGRAM_IDENTITY_V2,
+            suffix.core_program.key.to_bytes(),
+        ),
+        (
+            ACTIVATION_REGISTRY_PROGRAM_IDENTITY_V2,
+            suffix.registry.key.to_bytes(),
+        ),
+        (
+            ACTIVATION_RELEASE_SET_IDENTITY_V2,
+            envelope.release_set().to_bytes(),
+        ),
+        (ACTIVATION_MARKET_IDENTITY_V2, envelope.market().to_bytes()),
+        (ACTIVATION_CONTEXT_IDENTITY_V2, envelope.context().to_bytes()),
+        (
+            ACTIVATION_MANIFEST_IDENTITY_V2,
+            request.selection().manifest().to_bytes(),
+        ),
+        (
+            ACTIVATION_CAPABILITY_RELEASE_IDENTITY_V2,
+            request.selection().capability_release().to_bytes(),
+        ),
+        (
+            ACTIVATION_CONFIG_IDENTITY_V2,
+            request.selection().config().to_bytes(),
+        ),
+        (
+            ACTIVATION_ACCOUNT_PROFILE_IDENTITY_V2,
+            descriptor.account_profile().to_bytes(),
+        ),
+        (
+            ACTIVATION_EFFECT_SCHEMA_IDENTITY_V2,
+            descriptor.effect_schema().to_bytes(),
+        ),
+        (ACTIVATION_ROOT_IDENTITY_V2, root.to_bytes()),
+    ] {
+        *identities
+            .get_mut(usize::from(slot))
+            .ok_or(TradingSbfError::Content)? = value;
     }
     Ok(())
 }

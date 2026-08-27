@@ -123,11 +123,25 @@ function parseAccount(value: unknown, field: string): RpcAccount {
   return Object.freeze({ data, executable: value.executable, lamports: String(lamports), owner, space });
 }
 
+/**
+ * The ambient `fetch`, called the way a browser requires.
+ *
+ * `fetch` is a `Window` method and Chromium enforces its receiver: storing the
+ * bare function on an instance and calling `this.fetcher(...)` invokes it with
+ * the client as `this` and every request dies with
+ * `Failed to execute 'fetch' on 'Window': Illegal invocation`. Node, jsdom and
+ * every injected test double are lenient about the receiver, so the defect is
+ * invisible to unit tests and fatal in the product. Read the ambient binding at
+ * call time rather than capturing it at construction, so a test that replaces
+ * `globalThis.fetch` afterwards is still the function that runs.
+ */
+const ambientFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
+
 export class SolanaRpcClient {
   readonly endpoint: string;
   private requestId = 0;
 
-  constructor(endpoint: string, private readonly fetcher: typeof fetch = fetch) {
+  constructor(endpoint: string, private readonly fetcher: typeof fetch = ambientFetch) {
     const url = new URL(endpoint);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('RPC endpoint must use http or https');
     this.endpoint = url.toString();

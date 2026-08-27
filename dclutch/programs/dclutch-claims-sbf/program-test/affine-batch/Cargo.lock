@@ -1531,16 +1531,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-seal-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-claims-affine-batch-program-test"
 version = "0.1.0"
 dependencies = [
  "dclutch-claims-svm",
  "dclutch-core-contract",
- "dclutch-liability-basis-v2-kernel",
  "dclutch-market-core-codec",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
+ "dclutch-program-test-evidence",
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
@@ -1558,25 +1563,55 @@ dependencies = [
 [[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-effect-kernel",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-rational-representation-v2-request-contract",
+ "dclutch-representation-composition-v3-kernel",
+]
 
 [[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
-name = "dclutch-liability-basis-v2-kernel"
+name = "dclutch-effect-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-market-core-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-release-set-contract",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-product-compiler"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
 name = "dclutch-product-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-payoff-v2-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-runtime-v2",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "dclutch-product-runtime-v2"
@@ -1595,16 +1630,46 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
  "dclutch-market-core-codec",
+ "dclutch-product-compiler",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
+ "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-source-contract",
  "solana-program",
  "solana-sdk-ids",
+]
+
+[[package]]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-rational-representation-v2-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-representation-composition-v3-kernel",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-lifecycle-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-token-svm",
+]
+
+[[package]]
+name = "dclutch-rational-representation-v2-request-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-token-svm",
 ]
 
 [[package]]
@@ -1624,6 +1689,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-registry-svm"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+ "dclutch-release-set-contract",
+]
+
+[[package]]
 name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
@@ -1633,6 +1706,13 @@ dependencies = [
 [[package]]
 name = "dclutch-rent-contract"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+]
+
+[[package]]
+name = "dclutch-representation-composition-v3-kernel"
+version = "0.1.0"
 
 [[package]]
 name = "dclutch-source-contract"
@@ -1641,6 +1721,10 @@ dependencies = [
  "dclutch-product-contract",
  "dclutch-product-runtime-v2",
 ]
+
+[[package]]
+name = "dclutch-token-svm"
+version = "0.1.0"
 
 [[package]]
 name = "defmt"

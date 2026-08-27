@@ -1805,6 +1805,18 @@ mod tests {
     use dclutch_account_profile_contract::lifecycle_v3::{
         Error as LifecycleErrorV3, StateLifecyclePolicyV5,
     };
+    use dclutch_account_profile_contract::v2::encode::{
+        AccountAliasInputV2, AccountPrivilegesV2, AccountRuleWithPrestateInputV2,
+    };
+    use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
+    use dclutch_general_adapter_contract::account_rules_v3::{
+        GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
+        general_account_profile_rule_v3, general_scratch_page_rule_v3,
+    };
+    use dclutch_general_adapter_contract::hot_candidate_v3::{
+        GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_scalar_count_v3,
+    };
+    use dclutch_general_adapter_contract::release_v3::GENERAL_ACTIONS_V3;
     use dclutch_general_adapter_contract::runtime_width::{
         SettlementCursorHeaderV2, SettlementPhaseV2, VerifiedCandidateHeaderV2,
         settlement_cursor_len, verified_candidate_len,
@@ -1878,6 +1890,177 @@ mod tests {
                 child_account_start: 8,
             },
         }
+    }
+
+    /// Exact General Hot frame geometry, derived only from semantic owners.
+    ///
+    /// No count here is copied from a campaign table. The fixed frame is
+    /// `HOT_FIXED_ACCOUNT_COUNT_V3` with exactly one writable account (the
+    /// composite root, per `validate_fixed_frame`); the strategy extras are
+    /// this module's own admitted-AOT constants plus the transport
+    /// `classify_bank_transport_v2` selects for General's own bank width; and
+    /// every runtime account, alias and privilege comes from General's own
+    /// `general_account_profile_rule_v3`.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct GeneralFrameGeometryV3 {
+        accounts: usize,
+        writable: usize,
+        signers: usize,
+        scratch_pages: usize,
+        physical_runtime: usize,
+    }
+
+    /// External account widths for the rule generator.
+    ///
+    /// The generator asserts these are nonzero and copies them into
+    /// `data_length`. A data width moves no account count, no privilege and no
+    /// alias, so it cannot move a packet size; these are plausible chain widths
+    /// and the geometry below is invariant under any other admissible set.
+    fn packet_neutral_widths() -> GeneralExternalAccountWidthsV3 {
+        GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 64,
+            result_domain: 96,
+            rent_sysvar: 17,
+            core_market: 512,
+            activation_cache: 256,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 256,
+            rent_credit: 64,
+        }
+    }
+
+    /// `AccountPrivilegesV2` is write-only in the encoder, so read it back by
+    /// the one comparison the type does support.
+    fn privilege_pair(rule: AccountRuleWithPrestateInputV2) -> (bool, bool) {
+        [false, true]
+            .into_iter()
+            .flat_map(|signer| {
+                [false, true].into_iter().flat_map(move |writable| {
+                    [false, true]
+                        .into_iter()
+                        .map(move |executable| (signer, writable, executable))
+                })
+            })
+            .find(|(signer, writable, executable)| {
+                rule.rule.privileges == AccountPrivilegesV2::new(*signer, *writable, *executable)
+            })
+            .map(|(signer, writable, _)| (signer, writable))
+            .expect("privilege tuple is one of eight")
+    }
+
+    fn general_scratch_pages_v3(outcome_count: u32) -> usize {
+        let scalars = general_hot_scalar_count_v3(outcome_count).expect("General scalar count");
+        match classify_bank_transport_v2(scalars, GENERAL_HOT_COMMON_IDENTITIES_V3)
+            .expect("bank transport")
+        {
+            BankTransportV2::AuthenticatedScratchPages { page_count, .. } => {
+                usize::try_from(page_count).expect("bounded page count")
+            }
+            BankTransportV2::InlineReturnData { .. } => 1,
+        }
+    }
+
+    fn general_frame_geometry_v3(action: Action, outcome_count: u32) -> GeneralFrameGeometryV3 {
+        let widths = packet_neutral_widths();
+        let pages = general_scratch_pages_v3(outcome_count);
+        let logical =
+            general_account_profile_fixed_count_v3(action).expect("General logical account count");
+        let (mut physical_runtime, mut writable, mut signers) = (0_usize, 1_usize, 0_usize);
+        for coordinate in 0..logical {
+            let rule =
+                general_account_profile_rule_v3(action, coordinate, widths).expect("General rule");
+            if matches!(rule.rule.alias, AccountAliasInputV2::Fixed(_)) {
+                // An alias is a second logical name for a physical account the
+                // frame already carries; it costs no transaction account.
+                continue;
+            }
+            physical_runtime += 1;
+            if usize::from(coordinate) < HOT_RUNTIME_LOGICAL_PREFIX_V3 {
+                // Root, config, Product, portfolio and linked basis are carried
+                // by the fixed frame and already counted there.
+                continue;
+            }
+            let (signer, is_writable) = privilege_pair(rule);
+            writable += usize::from(is_writable);
+            signers += usize::from(signer);
+        }
+        let (page_signer, page_writable) = privilege_pair(general_scratch_page_rule_v3());
+        physical_runtime += pages;
+        writable += pages * usize::from(page_writable);
+        signers += pages * usize::from(page_signer);
+        GeneralFrameGeometryV3 {
+            accounts: HOT_FIXED_ACCOUNT_COUNT_V3
+                + ADMITTED_AOT_FIXED_EXTRAS_V3
+                + pages
+                + (physical_runtime - HOT_RUNTIME_LOGICAL_PREFIX_V3),
+            writable,
+            signers,
+            scratch_pages: pages,
+            physical_runtime,
+        }
+    }
+
+    /// One General Hot instruction with the exact geometry of a real action.
+    ///
+    /// The keys are synthetic and the artifact digests are placeholders,
+    /// because neither can move a wire size: a packet is a function of the
+    /// account count, the static/looked-up split, the signer count and the
+    /// instruction data width, and every one of those is derived above.
+    fn real_frame_report(action: Action, outcome_count: u32) -> GeneralHotInstructionV3 {
+        let geometry = general_frame_geometry_v3(action, outcome_count);
+        let program_id = key(200);
+        let mut accounts = Vec::with_capacity(geometry.accounts);
+        let mut next = 0_u32;
+        let mut fresh = || {
+            next += 1;
+            let mut bytes = [0_u8; 32];
+            bytes[0] = 0x40;
+            bytes[1..5].copy_from_slice(&next.to_le_bytes());
+            Pubkey::new_from_array(bytes)
+        };
+        for index in 0..HOT_FIXED_ACCOUNT_COUNT_V3 {
+            let pubkey = if index == HOT_TRADING_PROGRAM_ACCOUNT_V3 {
+                program_id
+            } else {
+                fresh()
+            };
+            accounts.push(AccountMeta {
+                pubkey,
+                is_signer: false,
+                is_writable: index == HOT_ROOT_ACCOUNT_V3,
+            });
+        }
+        let strategy = ADMITTED_AOT_FIXED_EXTRAS_V3 + geometry.scratch_pages;
+        for _ in 0..strategy {
+            accounts.push(AccountMeta::new_readonly(fresh(), false));
+        }
+        let mut signers = geometry.signers;
+        let mut writable = geometry.writable - 1;
+        for _ in 0..(geometry.physical_runtime - HOT_RUNTIME_LOGICAL_PREFIX_V3) {
+            let is_signer = signers > 0;
+            signers = signers.saturating_sub(1);
+            let is_writable = writable > 0;
+            writable = writable.saturating_sub(1);
+            accounts.push(AccountMeta {
+                pubkey: fresh(),
+                is_signer,
+                is_writable,
+            });
+        }
+        assert_eq!(accounts.len(), geometry.accounts);
+        let mut instruction = report(outcome_count, 0);
+        instruction.action = action;
+        instruction.instruction = Instruction {
+            program_id,
+            accounts,
+            data: vec![0; HOT_FAMILY_REQUEST_OFFSET_V3 + CONTROLLER_REQUEST_BYTES_V2],
+        };
+        instruction.required_instruction_signers =
+            signer_keys(&instruction.instruction.accounts).expect("instruction signers");
+        instruction
     }
 
     fn lookup(report: &GeneralHotInstructionV3, payer: Pubkey) -> ObservedAccount {
@@ -2105,14 +2288,35 @@ mod tests {
         let order_count = u32::try_from(rows.len()).expect("manifest order count");
         let mut output =
             vec![0; settlement_manifest_len_v2(width, order_count).expect("manifest width")];
-        output[0..8].copy_from_slice(b"DCGMAN02");
-        output[8..10].copy_from_slice(&2_u16.to_le_bytes());
-        output[10] = 11;
-        output[12..16].copy_from_slice(&width.to_le_bytes());
-        output[16..20].copy_from_slice(&order_count.to_le_bytes());
-        output[20..24].copy_from_slice(&7_u32.to_le_bytes());
-        output[24..32].copy_from_slice(&2_u64.to_le_bytes());
-        output[32..64].copy_from_slice(&[51; 32]);
+        output
+            .get_mut(0..8)
+            .expect("manifest offset in bounds")
+            .copy_from_slice(b"DCGMAN02");
+        output
+            .get_mut(8..10)
+            .expect("manifest offset in bounds")
+            .copy_from_slice(&2_u16.to_le_bytes());
+        *output.get_mut(10).expect("manifest offset in bounds") = 11;
+        output
+            .get_mut(12..16)
+            .expect("manifest offset in bounds")
+            .copy_from_slice(&width.to_le_bytes());
+        output
+            .get_mut(16..20)
+            .expect("manifest offset in bounds")
+            .copy_from_slice(&order_count.to_le_bytes());
+        output
+            .get_mut(20..24)
+            .expect("manifest offset in bounds")
+            .copy_from_slice(&7_u32.to_le_bytes());
+        output
+            .get_mut(24..32)
+            .expect("manifest offset in bounds")
+            .copy_from_slice(&2_u64.to_le_bytes());
+        output
+            .get_mut(32..64)
+            .expect("manifest offset in bounds")
+            .copy_from_slice(&[51; 32]);
         let row_bytes =
             dclutch_general_adapter_contract::runtime_manifest::settlement_order_len_v2(width)
                 .expect("order width");
@@ -2120,27 +2324,67 @@ mod tests {
             rows.iter().copied().enumerate()
         {
             let row = 64 + ordinal * row_bytes;
-            output[row..row + 8].copy_from_slice(b"DCGORD02");
-            output[row + 8..row + 10].copy_from_slice(&2_u16.to_le_bytes());
-            output[row + 10] = 12;
-            output[row + 12..row + 16].copy_from_slice(&width.to_le_bytes());
-            output[row + 16..row + 20].copy_from_slice(&order_coordinate.to_le_bytes());
-            output[row + 20..row + 24].copy_from_slice(&source_page_index.to_le_bytes());
-            output[row + 24..row + 32].copy_from_slice(&9_u64.to_le_bytes());
-            output[row + 32..row + 64].copy_from_slice(&[51; 32]);
+            output
+                .get_mut(row..row + 8)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(b"DCGORD02");
+            output
+                .get_mut(row + 8..row + 10)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&2_u16.to_le_bytes());
+            *output.get_mut(row + 10).expect("manifest offset in bounds") = 12;
+            output
+                .get_mut(row + 12..row + 16)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&width.to_le_bytes());
+            output
+                .get_mut(row + 16..row + 20)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&order_coordinate.to_le_bytes());
+            output
+                .get_mut(row + 20..row + 24)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&source_page_index.to_le_bytes());
+            output
+                .get_mut(row + 24..row + 32)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&9_u64.to_le_bytes());
+            output
+                .get_mut(row + 32..row + 64)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&[51; 32]);
             let order_byte = u8::try_from(order_coordinate).expect("order identity");
-            output[row + 64..row + 96].copy_from_slice(&[order_byte; 32]);
-            output[row + 96..row + 128].copy_from_slice(&[72; 32]);
-            output[row + 128..row + 136].copy_from_slice(&3_u64.to_le_bytes());
-            output[row + 136..row + 144].copy_from_slice(&3_u64.to_le_bytes());
-            output[row + 152..row + 156].copy_from_slice(&source_execution_index.to_le_bytes());
+            output
+                .get_mut(row + 64..row + 96)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&[order_byte; 32]);
+            output
+                .get_mut(row + 96..row + 128)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&[72; 32]);
+            output
+                .get_mut(row + 128..row + 136)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&3_u64.to_le_bytes());
+            output
+                .get_mut(row + 136..row + 144)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&3_u64.to_le_bytes());
+            output
+                .get_mut(row + 152..row + 156)
+                .expect("manifest offset in bounds")
+                .copy_from_slice(&source_execution_index.to_le_bytes());
             let input_start = row + 160;
             let output_start = input_start + usize::try_from(width).expect("width") * 8;
             for index in 0..usize::try_from(width).expect("width") {
                 let offset = index * 8;
-                output[input_start + offset..input_start + offset + 8]
+                output
+                    .get_mut(input_start + offset..input_start + offset + 8)
+                    .expect("manifest offset in bounds")
                     .copy_from_slice(&3_u64.to_le_bytes());
-                output[output_start + offset..output_start + offset + 8]
+                output
+                    .get_mut(output_start + offset..output_start + offset + 8)
+                    .expect("manifest offset in bounds")
                     .copy_from_slice(&3_u64.to_le_bytes());
             }
         }
@@ -2220,6 +2464,122 @@ mod tests {
             assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
             assert_eq!(plan.outcome_count, outcome_count);
             assert_eq!(plan.lifecycle, report.lifecycle);
+        }
+    }
+
+    /// The packet witness the General campaign's own comment owes.
+    ///
+    /// `programs/dclutch-general-accelerator-sbf/program-test/tests/lifecycle.rs`
+    /// measures six of seven N=258 actions at 1,273-1,328 legacy bytes against
+    /// the 1,232-byte maximum, and excuses it with "the production operator
+    /// separately proves the same account set packet-safe through its exact
+    /// ALT-backed v0 plan". That plan is this one, and until now nothing ran a
+    /// real General account set through it: the fixture above fabricates
+    /// ninety-one metas and carries `outcome_count` as a label that moves no
+    /// geometry.
+    ///
+    /// This runs the real thing. Every account count, privilege and alias comes
+    /// from General's own `general_account_profile_rule_v3` and the transport
+    /// `classify_bank_transport_v2` selects; the instruction data is the exact
+    /// hot envelope plus the exact 64-byte controller request. The recorded
+    /// numbers are the wire this operator would actually submit.
+    #[test]
+    fn every_action_is_alt_packet_safe_at_the_canonical_runtime_width() {
+        let payer = key(250);
+        let blockhash = Hash::new_from_array([16; 32]);
+        for (action, accounts, wire) in [
+            (Action::Consider, 86, 664),
+            (Action::Freeze, 84, 660),
+            (Action::InitializeSettlement, 119, 920),
+            (Action::Collect, 114, 815),
+            (Action::Materialize, 112, 811),
+            (Action::Distribute, 114, 815),
+            (Action::Close, 113, 813),
+        ] {
+            let report = real_frame_report(action, 258);
+            assert_eq!(report.instruction.accounts.len(), accounts, "{action:?}");
+            let plan = compile_general_hot_v0(&report, payer, blockhash, &lookup(&report, payer))
+                .expect("packet-safe General action at the canonical width");
+            assert_eq!(plan.message.wire_bytes, wire, "{action:?}");
+            assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+            assert!(plan.message.loaded_addresses > 0);
+        }
+    }
+
+    /// The lookup table is what buys the margin, and the legacy wire is what
+    /// the campaign measured. Compiling the same account set with no table
+    /// refuses, so the ALT is load-bearing rather than decorative.
+    #[test]
+    fn the_same_account_set_without_a_table_is_not_packet_safe() {
+        let payer = key(250);
+        let report = real_frame_report(Action::InitializeSettlement, 258);
+        let inline = crate::versioned::compile_v0_message_with_optional_tables(
+            payer,
+            core::slice::from_ref(&report.instruction),
+            Hash::new_from_array([16; 32]),
+            observation(),
+            &[],
+        );
+        assert_eq!(inline, Err(crate::versioned::Error::PacketTooLarge));
+    }
+
+    /// The control: this derivation reproduces the real-ELF campaign exactly.
+    ///
+    /// `docs/evidence/GENERAL_ACCELERATOR_CAMPAIGN_2026_08_27.md` recorded the
+    /// instruction-account count of every N=258 action executed against the
+    /// real `dclutch_general_accelerator_sbf.so`. That frame is two harness
+    /// accounts (the request record and the accelerator program), then the
+    /// admitted fixed frame, then one account per *logical* profile
+    /// coordinate -- the accelerator reads an aliased coordinate as its own
+    /// readonly account, where the Trading Hot frame carries the physical
+    /// account once. Seven independent numbers, none of them derived from this
+    /// crate, and the profile generator reproduces all seven.
+    #[test]
+    fn the_derived_geometry_reproduces_the_executed_campaign_frame() {
+        for (action, campaign_accounts) in [
+            (Action::Consider, 47),
+            (Action::Freeze, 45),
+            (Action::InitializeSettlement, 103),
+            (Action::Collect, 84),
+            (Action::Materialize, 82),
+            (Action::Distribute, 84),
+            (Action::Close, 101),
+        ] {
+            let logical =
+                usize::from(general_account_profile_fixed_count_v3(action).expect("logical count"))
+                    + general_scratch_pages_v3(258);
+            assert_eq!(
+                2 + ADMITTED_RUNTIME_ACCOUNTS_START_V3 + logical,
+                campaign_accounts,
+                "{action:?}"
+            );
+        }
+        // Consider and Freeze alias nothing, so for those two the campaign
+        // frame and the Hot frame agree on the physical count as well.
+        for action in [Action::Consider, Action::Freeze] {
+            let geometry = general_frame_geometry_v3(action, 258);
+            assert_eq!(
+                usize::from(general_account_profile_fixed_count_v3(action).expect("count"))
+                    + geometry.scratch_pages,
+                geometry.physical_runtime,
+                "{action:?}"
+            );
+        }
+    }
+
+    /// N=1 and N=258 differ only by the scratch-page span, and both fit.
+    #[test]
+    fn the_runtime_width_moves_only_the_scratch_page_span() {
+        for action in GENERAL_ACTIONS_V3 {
+            let narrow = general_frame_geometry_v3(action, 1);
+            let wide = general_frame_geometry_v3(action, 258);
+            assert_eq!(
+                wide.accounts - narrow.accounts,
+                2 * (wide.scratch_pages - narrow.scratch_pages),
+                "{action:?} account width follows only the bank transport"
+            );
+            assert_eq!(narrow.signers, wide.signers);
+            assert_eq!(narrow.writable, wide.writable);
         }
     }
 
@@ -2377,7 +2737,9 @@ mod tests {
         );
 
         let mut substituted = verified;
-        substituted[32] ^= 1;
+        *substituted
+            .get_mut(32)
+            .expect("verified candidate byte exists") ^= 1;
         let candidate_substitution = settlement_state(
             Action::Collect,
             cursor,

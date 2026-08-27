@@ -14,6 +14,8 @@ tools/gauntlet/
   TIERS.md               this file
   run.sh                 build -> deploy -> campaign -> census, resumable
   blocked.json           NEVER-EXECUTED routes with reason + owning lane
+  CU_BUDGETS.json        per-transaction compute budgets; ONE file, ONE owner
+  CU_BUDGETS.md          what they catch, what they do not, how to re-pin
   census/                the route census tool (standalone cargo package)
   tier1/
     bindings.json        campaign transaction label -> census route
@@ -141,6 +143,43 @@ The three admissible provenance kinds, from `DESIGN.md`:
 Reading a value out of the code under test and asserting it equals itself is
 not a witness, however many lines it takes.
 
+### 4. A CU budget witness, if the tier's transactions are worth budgeting
+
+Compute is the one resource whose exhaustion is a hard refusal with no partial
+result, and it moves under a tier from OTHER lanes' work. `DCLTGMF1` went from
+84.6% to 91.3% of the 1,400,000 maximum in one evening from concurrent changes
+to Core, Claims and Trading, and nothing was watching.
+
+A tier opts in with **one** witness entry that carries no number of its own:
+
+```json
+{
+  "id": "the-golden-transactions-are-inside-their-cu-budgets",
+  "kind": "cu-budget",
+  "campaign": "tier1",
+  "provenance": "why these transactions are worth a budget, and what the independent value is"
+}
+```
+
+`campaign` is matched against the `campaign` field of entries in
+`tools/gauntlet/CU_BUDGETS.json`, which is where every number lives. **A tier
+does not carry a copy of a budget.** The witness expands to one row per budget
+entry, so an over-budget campaign names the transaction and the delta rather
+than saying the campaign got more expensive.
+
+Two things to read in `CU_BUDGETS.md` before adding budgets for a new campaign:
+
+- **These numbers are not deterministic.** Fresh keypairs per run move
+  `find_program_address` bump-search iteration counts, and each iteration is
+  1,500 CU. Measured bands range from 0 to 79,500 CU depending on the
+  transaction. Pin the HIGHEST draw you observed, over several runs, never one.
+- **A budget above 1,400,000 is refused.** That is deliberate: it is how the
+  file says out loud that a transaction has stopped fitting, rather than letting
+  someone widen a tolerance past the ceiling.
+
+A budget that matches no transaction in the campaign is red, on the same
+reasoning as a stale binding.
+
 ## The tiers that exist
 
 | tier | directory | backing | what it drives |
@@ -150,6 +189,18 @@ not a witness, however many lines it takes.
 | Claims/Custody | `claims-custody/` | `solana-program-test` | the protocol Position lifecycle, the composed Admit -> SparseNativeTransfer -> Close chain, and ordinary plus delegated Custody against real SPL Token and Token-2022 |
 | Dealer | `dealer/` | `solana-program-test` | the Dealer equity pool's rounding boundary |
 | Direct | `direct/` | `solana-program-test` | the stateless Direct V2 AOT accelerator |
+| Journey | `journey/` | localhost validator | JRNY-1: one Market's whole life, tier 1's founding continued in-process into post-Open collateral distribution to N holders, a holder ring, and rent recovery — under one conservation ledger |
+
+`journey/` is the first tier that is a **superset** of another rather than a
+sibling. It compiles the tier-1 producer's own source files into its binary by
+`#[path]` and calls `runtime::found_through_open`, so its evidence document
+carries every tier-1 transaction before its own. Two things follow, and both are
+in `journey/run-journey.sh` rather than in a second copy of anything: the
+bindings handed to `census observe` are tier 1's merged with the journey's at
+run time, and the shared witness evaluator is called twice against the same
+evidence with two different context files. A tier that continues another one
+should copy that shape; a tier that forks the other's bindings will discover the
+census failing on somebody else's change.
 
 **Numbered directories turned out to be a bad idea.** `tier<N>` is a global
 namespace with no allocator, and on 2026-08-27 three lanes claimed the same two
@@ -311,11 +362,19 @@ tools/gauntlet/run.sh --from campaign
 On hbox, `run.sh` routes every build through `swarm-build` automatically when it
 is on `PATH`. hbox is co-tenant with codex's HOL build; keep waves small.
 
-`--mode full` is a **single global slot per machine**: the successor launcher is
-pinned to `127.0.0.1:20890` and refuses to start while anything else listens
-there, whatever `--work` root you pass. Coordinate on the wave board before a
-full run, and never kill a `solana-test-validator` whose `--ledger` is not under
-your own `--work` root. `--mode census` needs no port and may run concurrently.
+`--mode full` **used to be a single global slot per machine** and is not any
+more. The launcher was pinned to `127.0.0.1:20890`; the origin is a parameter
+now, so `--rpc-port auto` (or an explicit base) lets N campaigns run at once on
+disjoint 42-port blocks. The default is still 20890, so two runs that both take
+the default still contend. Give each concurrent run its own `--work` root, and
+never kill a `solana-test-validator` whose `--ledger` is not under your own.
+`--mode census` needs no port and may run concurrently.
+
+A tier that starts a validator inherits two rules from this. It must take its
+origin from the same `--rpc-port`/`$DCLUTCH_GAUNTLET_RPC_PORT` parameter rather
+than writing a port down, and it must hold the ledger lock around
+`census observe`, which is a read-modify-write of a file every family runner
+defaults to sharing.
 
 And never edit `run.sh` while a run is in flight — bash reads a script
 incrementally by byte offset, so a mid-run edit makes it re-execute or skip a

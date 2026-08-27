@@ -41,7 +41,8 @@ function PositionEntry({ entry }: Readonly<{ entry: PortfolioEntryV1 }>) {
   return <article className={`portfolio-entry${position.status === 'refused' ? ' refused' : ''}`}>
     <MarketHeading market={market} address={entry.marketAddress} />
     <dl className="market-card-facts">
-      <div><dt>Derived Position address</dt><dd title={entry.positionAddress}>{shortAddressV1(entry.positionAddress, 8)}</dd></div>
+      <div><dt>Derived Claims aggregate</dt><dd title={entry.aggregateAddress ?? undefined}>{entry.aggregateAddress === null ? 'not derived' : shortAddressV1(entry.aggregateAddress, 8)}</dd></div>
+      <div><dt>Derived Position address</dt><dd title={entry.positionAddress ?? undefined}>{entry.positionAddress === null ? 'not derived' : shortAddressV1(entry.positionAddress, 8)}</dd></div>
       <div><dt>Finalized observed slot</dt><dd>{position.observedSlot}</dd></div>
       {market.status === 'decoded' && <div><dt>Market generation</dt><dd>{market.generation}</dd></div>}
       {market.status === 'decoded' && market.collateral.status === 'bound' && <div><dt>Collateral mint</dt><dd title={market.collateral.collateralMint}>{market.collateral.collateralMintShort}</dd></div>}
@@ -53,13 +54,13 @@ function PositionEntry({ entry }: Readonly<{ entry: PortfolioEntryV1 }>) {
     {position.status === 'absent' && <p className="market-empty">{position.note}</p>}
     {position.status === 'refused' && <p className="market-refusal">{position.reason}</p>}
     {position.status === 'held' && <>
-      <h4 className="detail-subhead">Owned outcome balances · ordered, raw u64</h4>
+      <h4 className="detail-subhead">Owned claim balances · ordered, raw u64</h4>
       <ol className="outcome-vector">
         {position.balances.map((amount, index) => (
-          <li key={index} className={position.claim.kind === 'redeemable' && position.claim.winningOutcome === index ? 'winning-outcome' : ''}>
-            <span>outcome {index}</span>
+          <li key={index} className={position.claim.kind === 'redeemable' && position.claim.winningClaim === index ? 'winning-outcome' : ''}>
+            <span>claim {index}</span>
             <strong>{amount}</strong>
-            {position.claim.kind === 'redeemable' && <small>{position.claim.winningOutcome === index ? `redeems ${position.claim.redeemableAtoms} collateral atoms` : 'redeems 0 collateral atoms'}</small>}
+            {position.claim.kind === 'redeemable' && <small>{position.claim.winningClaim === index ? `redeems ${position.claim.redeemableAtoms} collateral atoms` : 'redeems 0 collateral atoms'}</small>}
           </li>
         ))}
       </ol>
@@ -74,14 +75,12 @@ function PositionEntry({ entry }: Readonly<{ entry: PortfolioEntryV1 }>) {
         <p>{position.claim.note}</p>
       </div>}
       {position.claim.kind === 'unavailable' && <p className="market-capability-refusal"><span>no transition available</span>{position.claim.note}</p>}
-      <ul className="market-bindings">
-        {position.bindings.map((check) => (
-          <li key={check.label} className={check.ok ? 'check-pass' : 'check-fail'}>
-            <span aria-hidden="true">{check.ok ? '✓' : '×'}</span>
-            <div><strong>{check.label}</strong><small>{check.detail}</small></div>
-          </li>
-        ))}
-      </ul>
+      <dl className="market-card-facts">
+        <div><dt>Claims aggregate named by the Position</dt><dd title={position.aggregateAddress}>{shortAddressV1(position.aggregateAddress, 8)}</dd></div>
+        <div><dt>Position revision</dt><dd>{position.revision}</dd></div>
+        <div><dt>Claim width</dt><dd>{position.claimCount}</dd></div>
+        <div><dt>Liability basis</dt><dd title={position.liabilityBasisId}>{position.liabilityBasisId.slice(0, 16)}…</dd></div>
+      </dl>
     </>}
   </article>;
 }
@@ -90,6 +89,8 @@ export default function PortfolioWorkspace() {
   const directory = useWalletDirectoryV1();
   const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
   const [coreProgram, setCoreProgram] = useState('');
+  const [claimsProgram, setClaimsProgram] = useState('');
+  const [registryProgram, setRegistryProgram] = useState('');
   const [owner, setOwner] = useState('');
   const [addressList, setAddressList] = useState('');
   const [addOne, setAddOne] = useState('');
@@ -120,12 +121,14 @@ export default function PortfolioWorkspace() {
 
   async function read(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setState({ kind: 'loading', message: 'Deriving one Position address per named Market, then reading every derived address behind one finalized floor…' });
+    setState({ kind: 'loading', message: 'Deriving one Claims aggregate and one Position address per named Market, then reading every derived address behind one finalized floor…' });
     try {
       const client = new SolanaRpcClient(endpoint);
       const facts = await client.probe();
       const next = await inspectPortfolioV1(client, {
         coreProgramId: coreProgram,
+        claimsProgramId: claimsProgram === '' ? null : claimsProgram,
+        registryProgramId: registryProgram === '' ? null : registryProgram,
         owner: parsePortfolioOwnerV1(owner),
         marketAddresses: parseMarketAddressListV1(addressList),
       });
@@ -168,6 +171,8 @@ export default function PortfolioWorkspace() {
       <div className="direct-form-grid">
         <label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
         <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
+        <label><span>Claims program</span><input required value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
+        <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
         <label><span>Owner address · wallet or pasted</span><input required value={owner} onChange={(event) => setOwner(event.target.value.trim())} /></label>
       </div>
       <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={(address) => setOwner(address)} />

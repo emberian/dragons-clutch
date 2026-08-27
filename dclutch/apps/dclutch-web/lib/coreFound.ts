@@ -548,7 +548,11 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   }
   const rentSysvar = required(finalAccounts, RENT_SYSVAR_ID, 'Rent sysvar');
   const system = required(finalAccounts, SYSTEM_PROGRAM_ID, 'System Program');
-  if (rentSysvar.owner !== SYSVAR_OWNER_ID || rentSysvar.executable || rentSysvar.data.length !== 17 || system.owner !== NATIVE_LOADER_ID || !system.executable || system.data.length !== 0) throw new Error('Rent or System runtime account is not canonical');
+  // A real Agave observation of the System Program carries the 14-byte
+  // NativeLoader metadata body `system_program`; requiring emptiness refuses
+  // every read of a live cluster (measured 2026-08-27, same defect the Rust
+  // operators fixed in `770610c` / `c25de27`).
+  if (rentSysvar.owner !== SYSVAR_OWNER_ID || rentSysvar.executable || rentSysvar.data.length !== 17 || system.owner !== NATIVE_LOADER_ID || !system.executable) throw new Error('Rent or System runtime account is not canonical');
   const marketRent = await client.minimumBalanceForRentExemption(CORE_STATE_BYTES);
   const creditRent = await client.minimumBalanceForRentExemption(LIFECYCLE_RENT_CREDIT_BYTES_V2);
   const marketLamports = finalAccounts.get(market.toBase58())?.lamports ?? '0';

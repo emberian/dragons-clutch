@@ -9,6 +9,7 @@ import {
   CUSTODY_SCALAR_BASE_V3,
   CUSTODY_SCALAR_STRIDE_V3,
   DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3,
+  DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3,
   DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3,
   DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
   ACCOUNT_PROFILE_HEADER_BYTES_V2,
@@ -50,7 +51,10 @@ function canonicalContributeP0(): Readonly<{
   const laterStart = claimsStart + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
   const localStart = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + custody * DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3
     + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
-  const fixed = localStart + DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3;
+  // The release-selected Custody program the Custody routes are invoked
+  // through, appended past every route range and past both local write targets.
+  const custodyProgram = localStart + DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3;
+  const fixed = custodyProgram + DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3;
   const profile = new Uint8Array(ACCOUNT_PROFILE_HEADER_BYTES_V2 + fixed * ACCOUNT_PROFILE_RULE_BYTES_V2 + 3 * ACCOUNT_PROFILE_OPERATION_BYTES_V2);
   profile.set(ACCOUNT_PROFILE_MAGIC_V2);
   putU16(profile, 8, ACCOUNT_PROFILE_VERSION_V2);
@@ -76,11 +80,13 @@ function canonicalContributeP0(): Readonly<{
     const custodyOffset = firstCustody ? coordinate - DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3
       : laterCustody ? coordinate - laterStart : null;
     const claimsOffset = coordinate >= claimsStart && coordinate < laterStart ? coordinate - claimsStart : null;
-    const writable = coordinate === 0 || coordinate >= localStart
+    const local = coordinate >= localStart && coordinate < custodyProgram;
+    const writable = coordinate === 0 || local
       || (custodyOffset !== null && [8, 10, 11].includes(custodyOffset)) || claimsOffset === 1;
-    const executable = (custodyOffset !== null && [3, 4, 13].includes(custodyOffset))
+    const executable = coordinate === custodyProgram
+      || (custodyOffset !== null && [3, 4, 13].includes(custodyOffset))
       || (claimsOffset !== null && [13, 14, 16, 18].includes(claimsOffset));
-    putRule(profile, coordinate, (writable ? 2 : 0) | (executable ? 4 : 0), coordinate >= localStart ? 4 : 0, aliases.get(coordinate) ?? null);
+    putRule(profile, coordinate, (writable ? 2 : 0) | (executable ? 4 : 0), local ? 4 : 0, aliases.get(coordinate) ?? null);
   }
   const operations = ACCOUNT_PROFILE_HEADER_BYTES_V2 + fixed * ACCOUNT_PROFILE_RULE_BYTES_V2;
   const tradingIdentity = CUSTODY_IDENTITY_BASE_V3 + 4;

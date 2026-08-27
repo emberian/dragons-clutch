@@ -275,6 +275,7 @@ dependencies = [
 name = "dclutch-account-profile-contract"
 version = "0.1.0"
 dependencies = [
+ "dclutch-capability-seal-contract",
  "dclutch-effect-kernel",
  "dclutch-transition-vm",
 ]
@@ -298,6 +299,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-seal-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
@@ -316,6 +321,9 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-effect-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-execution-strategy-contract"
@@ -333,6 +341,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -346,6 +355,9 @@ dependencies = [
 [[package]]
 name = "dclutch-fractional-claim-kernel"
 version = "0.1.0"
+dependencies = [
+ "dclutch-representation-composition-v3-kernel",
+]
 
 [[package]]
 name = "dclutch-fractional-claims-kernel"
@@ -353,6 +365,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-claims-svm",
  "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
  "sha2",
 ]
 
@@ -417,6 +430,9 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-request-profile-contract"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "dclutch-token-svm"
@@ -425,6 +441,9 @@ version = "0.1.0"
 [[package]]
 name = "dclutch-transition-vm"
 version = "0.1.0"
+dependencies = [
+ "dclutch-capability-seal-contract",
+]
 
 [[package]]
 name = "der"

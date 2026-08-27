@@ -1,0 +1,41 @@
+{
+  "campaign": "journey",
+  "note": "JRNY-1's OWN transactions only. The journey submits every tier-1 transaction before these, and run-journey.sh merges tools/gauntlet/tier1/bindings.json in front of this file at run time rather than keeping a second copy of them — a copy would rot the first time tier 1 changed, and the census fails both an unbound transaction and a binding that matched nothing, so the rot would surface as a red run on someone else's change. Everything here happens after the Market is Open.",
+  "bindings": [
+    {
+      "label": "journey: open and fund synthetic holder *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "One transaction per synthetic holder: System create_account, Token-2022 InitializeAccount3, Token-2022 TransferChecked. No dClutch program is invoked, and saying so explicitly is the honest form — this is the COLLATERAL leg of post-Open life. Giving a holder outcome tokens is a Claims mutation and is the journey's named gap."
+    },
+    {
+      "label": "journey: holder-to-holder collateral transfer *",
+      "routes": [],
+      "program": "",
+      "outcome": "executed",
+      "note": "A ring of Token-2022 TransferChecked between holder wallets, each signed by the holding wallet. The founder is not a party to any of them: the conservation ledger's laws have to hold over movement the founding never authorised and cannot see. No dClutch program is invoked."
+    },
+    {
+      "label": "journey: sweeping past the rent floor refuses",
+      "routes": [
+        "rent/process_sweep_v2#Sweep",
+        "rent/process_instruction"
+      ],
+      "program": "rent",
+      "outcome": "refused",
+      "refusal": "rent/RentSbfError::Balance",
+      "note": "HOSTILE, and the half that matters. Sweep needs NO signature at all — three accounts, one of them a sysvar — so the only thing standing between the lifecycle credit and being drained below its own rent minimum is the checked balance plan. A sweep of exactly one lamport more than the surplus must refuse Balance (4), 'exact checked contract balance plan refused'. The producer additionally asserts the credit's lamports did not move."
+    },
+    {
+      "label": "journey: sweep lifecycle rent surplus to the refund wallet",
+      "routes": [
+        "rent/process_sweep_v2#Sweep",
+        "rent/process_instruction"
+      ],
+      "program": "rent",
+      "outcome": "executed",
+      "note": "Rent recovery, and the first execution of this route by any tier. The founding leaves SEVERAL lifecycle credits — one per projected-Custody prestate lane plus Found31's — and only the lane that actually closed accounts into its credit carries a surplus, so the stage discovers the credit by surplus rather than naming one. Sweep is the only route that moves that surplus back out while the Market is alive. The producer asserts the credit is left holding EXACTLY the rent minimum, that the refund wallet the credit's own bytes name gains exactly the surplus, and — because that wallet is NOT the fee payer here — that the payer's balance moved by exactly the fee and nothing else. Anything vaguer than that is a direction-of-travel observation rather than a check."
+    }
+  ]
+}

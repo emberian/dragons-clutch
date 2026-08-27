@@ -31,8 +31,8 @@ use dclutch_custody_contract::{
 };
 use dclutch_dealer_codec::{
     Action, CANDIDATE_BYTES, CandidateView, ClaimAction, CustodyRole, Inputs, MAX_OUTCOMES,
-    POLICY_BYTES, Plan, Policy, RECEIPT_BYTES, REQUEST_BYTES, ReleaseReceipt, Request, STATE_BYTES,
-    Side, State, interpret,
+    NowDisciplineV1, POLICY_BYTES, Plan, Policy, RECEIPT_BYTES, REQUEST_BYTES, ReleaseReceipt,
+    Request, STATE_BYTES, Side, State, interpret,
 };
 use dclutch_economic_slice_kernel::{
     Phase as ClaimsPhase, market_identity, market_outcome_count, market_phase,
@@ -43,7 +43,8 @@ use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase as Core
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_PDA_DOMAIN, RealmV1,
 };
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
     COption, ExactTransferProfileV1, PRODUCTION_ADAPTER_RELEASES, TokenAccount,
@@ -54,7 +55,7 @@ use solana_program::{
     entrypoint::ProgramResult,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, invoke_signed},
+    program::{get_return_data, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
     sysvar::SysvarSerialize,
@@ -351,7 +352,7 @@ fn authenticate_and_prepare(
     authenticate_named_accounts(program_id, accounts, policy)?;
     authenticate_actor(accounts, request)?;
     authenticate_clock(accounts, request)?;
-    let receipts = authenticate_roles(accounts)?;
+    let receipts = authenticate_roles(accounts, policy.release_set_id)?;
     authenticate_receipt_join(program_id, accounts, policy, receipts)?;
     let core = authenticate_core_market(accounts, policy, request, receipts)?;
     authenticate_token_accounts(accounts, policy, core)?;
@@ -550,15 +551,14 @@ fn authenticate_claims_accounts(
     let claims_program = frame.claims_program()?;
     let claims_programdata = frame.claims_programdata()?;
     let claims = accounts[claims_program].key;
-    let receipt = reauthenticate(
+    let receipt = authenticate_activated_role(
         accounts,
+        policy.release_set_id,
         ExecutionRoleV1::Claims,
         claims_program,
         claims_programdata,
     )?;
-    if receipt.execution_release_set_id().as_bytes() != &policy.release_set_id
-        || receipt.program().as_bytes() != &claims.to_bytes()
-    {
+    if receipt.program().as_bytes() != &claims.to_bytes() {
         return Err(DealerSbfError::Release.into());
     }
     let market_index = frame.claims_market()?;
@@ -1062,12 +1062,21 @@ fn read_token(accounts: &[AccountInfo<'_>], index: usize) -> Result<TokenAccount
     Ok(token)
 }
 
+/// Bind the request's `now` coordinate to the executing slot.
+///
+/// The expectation is DERIVED from [`Action::now_discipline`], the codec's
+/// single statement of which commands carry a slot in the Dealer semantics.
+/// Restating it here as a hand-listed exemption is what made `AddLiquidity`
+/// and `RemoveLiquidity` unreachable at every slot the chain can offer: their
+/// request shape requires `now == 0` and this check named only `Retire`, so no
+/// encoding satisfied both. A slot expectation may only ever be `0` or
+/// `clock.slot`; nothing else is representable.
 fn authenticate_clock(accounts: &[AccountInfo<'_>], request: Request) -> ProgramResult {
     let clock =
         Clock::from_account_info(&accounts[CLOCK_SYSVAR]).map_err(|_| DealerSbfError::Clock)?;
-    let expected = match request.action {
-        Action::Retire => 0,
-        _ => clock.slot,
+    let expected = match request.action.now_discipline() {
+        NowDisciplineV1::CanonicalZero => 0,
+        NowDisciplineV1::ExecutionSlot => clock.slot,
     };
     if request.now != expected {
         return Err(DealerSbfError::Clock.into());
@@ -1076,17 +1085,22 @@ fn authenticate_clock(accounts: &[AccountInfo<'_>], request: Request) -> Program
 }
 
 #[inline(never)]
-fn authenticate_roles(accounts: &[AccountInfo<'_>]) -> Result<RoleReceipts, ProgramError> {
+fn authenticate_roles(
+    accounts: &[AccountInfo<'_>],
+    release_set_id: [u8; 32],
+) -> Result<RoleReceipts, ProgramError> {
     Ok(RoleReceipts {
-        core: reauthenticate(
+        core: authenticate_activated_role(
             accounts,
+            release_set_id,
             ExecutionRoleV1::Core,
             CORE_PROGRAM,
             CORE_PROGRAMDATA,
         )?,
-        trading: authenticate_trading_controller_release(accounts)?,
-        custody: reauthenticate(
+        trading: authenticate_trading_controller_release(accounts, release_set_id)?,
+        custody: authenticate_activated_role(
             accounts,
+            release_set_id,
             ExecutionRoleV1::Custody,
             CUSTODY_PROGRAM,
             CUSTODY_PROGRAMDATA,
@@ -1102,57 +1116,48 @@ fn authenticate_roles(accounts: &[AccountInfo<'_>]) -> Result<RoleReceipts, Prog
 #[inline(never)]
 fn authenticate_trading_controller_release(
     accounts: &[AccountInfo<'_>],
+    release_set_id: [u8; 32],
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    reauthenticate(
+    authenticate_activated_role(
         accounts,
+        release_set_id,
         ExecutionRoleV1::Trading,
         TRADING_PROGRAM,
         TRADING_PROGRAMDATA,
     )
 }
 
+/// Authenticate one activated role directly out of the Registry-owned cache.
+///
+/// Dealer is reached as a child of a Registry continuation, where the Registry
+/// already sits at CPI depth one, so the `RegistryInstructionV1::Reauthenticate`
+/// invocation this replaced was reentrancy and Solana refused it before Dealer
+/// could do any work. The retired route has no fallback: every fact it returned
+/// is in the Registry-owned cache the frame already carries, and
+/// `dclutch-registry-activation-auth-v1` is the Registry's own code for reading
+/// it.
 #[inline(never)]
-fn reauthenticate(
+fn authenticate_activated_role(
     accounts: &[AccountInfo<'_>],
+    release_set_id: [u8; 32],
     role: ExecutionRoleV1,
     program_index: usize,
     programdata_index: usize,
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    let registry = &accounts[REGISTRY_PROGRAM];
-    let cache = &accounts[ACTIVATION_CACHE];
-    let program = &accounts[program_index];
-    let programdata = &accounts[programdata_index];
-    let instruction = Instruction {
-        program_id: *registry.key,
-        accounts: Vec::from([
-            AccountMeta::new_readonly(*cache.key, false),
-            AccountMeta::new_readonly(*program.key, false),
-            AccountMeta::new_readonly(*programdata.key, false),
-        ]),
-        data: RegistryInstructionV1::Reauthenticate(role)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            cache.clone(),
-            program.clone(),
-            programdata.clone(),
-            registry.clone(),
-        ],
-    )
-    .map_err(|_| DealerSbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(DealerSbfError::Release)?;
-    if producer != *registry.key {
-        return Err(DealerSbfError::Release.into());
-    }
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| DealerSbfError::Release)?;
-    if receipt.role() != role || receipt.program().as_bytes() != &program.key.to_bytes() {
-        return Err(DealerSbfError::Release.into());
-    }
-    Ok(receipt)
+    let registry = accounts
+        .get(REGISTRY_PROGRAM)
+        .ok_or(DealerSbfError::AccountFrame)?;
+    let cache = accounts
+        .get(ACTIVATION_CACHE)
+        .ok_or(DealerSbfError::AccountFrame)?;
+    let program = accounts
+        .get(program_index)
+        .ok_or(DealerSbfError::AccountFrame)?;
+    let programdata = accounts
+        .get(programdata_index)
+        .ok_or(DealerSbfError::AccountFrame)?;
+    authenticate_activated_role_v1(registry, cache, &release_set_id, role, program, programdata)
+        .map_err(|_| DealerSbfError::Release.into())
 }
 
 fn authenticate_receipt_join(

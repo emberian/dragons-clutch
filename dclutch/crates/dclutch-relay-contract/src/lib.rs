@@ -30,7 +30,13 @@
 // types below that consume it.
 #[allow(missing_docs)]
 mod generated_relayed_abi;
+// Likewise for the venue decoding-rules table: the emitter writes the layout
+// facts, and what each one means is documented in the Lean module that pins it
+// and in `decode`, which is the only consumer.
+#[allow(missing_docs)]
+mod generated_venue_rules;
 
+pub mod decode;
 pub mod frame;
 pub mod identity;
 pub mod instruction;
@@ -40,6 +46,7 @@ pub mod signature;
 pub mod wire;
 
 pub use generated_relayed_abi::*;
+pub use generated_venue_rules::*;
 
 /// Refusal returned by this crate's total parsers, constructors and evaluators.
 ///
@@ -131,6 +138,24 @@ pub enum Error {
     InvalidUpgradeAuthorityTag,
     /// The supplied output buffer did not have the required exact length.
     OutputLength,
+    /// The configuration selected an observable this adapter release has no
+    /// decoding rules for, or declared a scale the selected row does not carry.
+    UnknownObservable,
+    /// The observed venue account's `data_len` was outside the admitted set.
+    VenueLengthNotAdmitted,
+    /// The observed venue account carried another account type's discriminator.
+    VenueDiscriminatorMismatch,
+    /// The observed venue state was not one of the enumerated states.
+    UnenumeratedVenueState,
+    /// The observed venue body's fields contradicted one another.
+    IncoherentVenueBody,
+    /// The observed venue deployment was not the release-pinned one.
+    VenueDeploymentMismatch,
+    /// The clock position did not carry the observed cluster's own `Clock`.
+    ObservedClockMismatch,
+    /// The observation was admissible but did not satisfy the window's own
+    /// proposition, so it is no answer rather than a negative one.
+    WindowNotSatisfied,
 }
 
 /// Result alias for this crate.

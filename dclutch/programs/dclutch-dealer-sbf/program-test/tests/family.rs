@@ -33,7 +33,11 @@
     reason = "fixed-width fixture arrays with statically known extents"
 )]
 
-use std::{env, fs, vec::Vec};
+use std::{
+    env, fs,
+    sync::atomic::{AtomicUsize, Ordering},
+    vec::Vec,
+};
 
 use dclutch_dealer_codec::{
     Action, CANDIDATE_BYTES, CandidateInput, CurveBand, CurveInput, MAX_OUTCOMES, Phase, Policy,
@@ -476,13 +480,13 @@ fn activate_request(now: u64) -> Request {
     }
 }
 
-fn enter_terminal_request(now: u64) -> Request {
+fn enter_terminal_request() -> Request {
     Request {
         action: Action::EnterTerminal,
         side: Side::TakerBuys,
         outcome: 0,
         expected_state_revision: 1,
-        now,
+        now: 0,
         quantity: 0,
         expected_candidate_id: CANDIDATE_ID,
         // Terminal entry is permissionless but identity-bound: the request must
@@ -493,13 +497,13 @@ fn enter_terminal_request(now: u64) -> Request {
     }
 }
 
-fn unwind_request(now: u64) -> Request {
+fn unwind_request() -> Request {
     Request {
         action: Action::Unwind,
         side: Side::TakerBuys,
         outcome: 0,
         expected_state_revision: 1,
-        now,
+        now: 0,
         quantity: 1,
         expected_candidate_id: CANDIDATE_ID,
         actor_id: [0; 32],
@@ -508,8 +512,9 @@ fn unwind_request(now: u64) -> Request {
     }
 }
 
-/// Retirement is the one action bound to `now == 0` on BOTH sides: the request
-/// shape requires it and `authenticate_clock` exempts it from the slot binding.
+/// One of the five actions bound to `now == 0` on BOTH sides: its Lean command
+/// carries no slot, so the request shape requires zero and `authenticate_clock`
+/// derives the same expectation from `Action::now_discipline`.
 fn retire_request() -> Request {
     Request {
         action: Action::Retire,
@@ -608,6 +613,7 @@ async fn submit(
         wire_bytes: None,
     })
     .expect("campaign evidence must be writable when the gauntlet asked for it");
+    SUBMITTED.fetch_add(1, Ordering::Relaxed);
     Ok(Observed {
         accepted,
         code,
@@ -615,6 +621,14 @@ async fn submit(
         compute_units: compute_units.unwrap_or_default(),
     })
 }
+
+/// Transactions this campaign actually put on the chain.
+///
+/// Counted rather than written down: the printed total is what the census reads
+/// back, and a hand-maintained literal goes stale the first time a case is
+/// added -- which is exactly what happened when the two liquidity actions moved
+/// out of the unreachability witness and into the Registry loop.
+static SUBMITTED: AtomicUsize = AtomicUsize::new(0);
 
 /// Assert the chain reported exactly the named Dealer refusal, from inside the
 /// Dealer program, and report the compute the ledger recorded for it.
@@ -817,67 +831,75 @@ async fn real_dealer_elf_refuses_every_unauthenticated_family_request() {
     .expect("ProgramTest processing");
     refused(&observed, REFUSAL_CLOCK, "stale slot binding");
 
-    // ---- The AddLiquidity / RemoveLiquidity unreachability witness ---------
+    // ---- The padding slot, for every action whose transition reads none -----
     //
-    // These two transactions are the two halves of a contradiction, not two
-    // independent cases. `Request::validate_shape` requires `now == 0` for
-    // AddLiquidity and RemoveLiquidity; `authenticate_clock` requires
-    // `now == clock.slot` for every action except Retire. A transaction never
-    // executes in the genesis slot, so the two rules have no common solution
-    // and BOTH liquidity actions are unreachable through this adapter at every
-    // slot the chain can offer. Each half is asserted at its own refusal so the
-    // claim is executed rather than argued.
-    let observed = submit(
-        &mut context,
-        "dealer family refuses AddLiquidity at the shape-canonical now=0",
-        instruction(
-            common_metas(actor, &keys),
-            liquidity_request(Action::AddLiquidity, actor.to_bytes(), 0)
+    // This block was the AddLiquidity / RemoveLiquidity UNREACHABILITY witness
+    // and it is deliberately no longer that. The contradiction it recorded --
+    // `Request::validate_shape` requiring `now == 0` for the two liquidity
+    // actions while `authenticate_clock` required `now == clock.slot` for every
+    // action but `Retire`, so no slot the chain can offer satisfied both -- was
+    // closed by giving the rule one owner: `Action::now_discipline` in
+    // `dclutch-dealer-codec`, which both sides now read. The five commands that
+    // carry no slot in `DClutchSemantics.DealerLiquidity.Command`
+    // (`enterTerminal`, `unwind`, `retire`, `addLiquidity`, `removeLiquidity`)
+    // require canonical zero on BOTH sides; the three that do carry one are
+    // bound to the executing slot on both. The reachable halves moved into the
+    // Registry loop below. What stays here is the hostile direction: a client
+    // that puts a slot in a field the transition never reads.
+    for (label, mut wire) in [
+        (
+            "dealer family refuses RemoveLiquidity carrying a slot in its padding",
+            liquidity_request(Action::RemoveLiquidity, actor.to_bytes(), 0)
                 .to_bytes()
-                .expect("shape-canonical AddLiquidity")
+                .expect("shape-canonical RemoveLiquidity")
                 .to_vec(),
         ),
-    )
-    .await
-    .expect("ProgramTest processing");
-    refused(&observed, REFUSAL_CLOCK, "AddLiquidity at now=0");
-
-    let mut clock_bound_liquidity = liquidity_request(Action::RemoveLiquidity, actor.to_bytes(), 0)
-        .to_bytes()
-        .expect("shape-canonical RemoveLiquidity")
-        .to_vec();
-    // `to_bytes` refuses to encode the slot-bound form at all, so the wire
-    // bytes are patched directly: this is exactly what a client that satisfied
-    // `authenticate_clock` would have to put on the wire.
-    clock_bound_liquidity
-        .get_mut(REQUEST_NOW_OFFSET..REQUEST_NOW_OFFSET + 8)
-        .expect("request now field")
-        .copy_from_slice(&slot.to_le_bytes());
-    let observed = submit(
-        &mut context,
-        "dealer family refuses RemoveLiquidity at the clock-canonical now=slot",
-        instruction(common_metas(actor, &keys), clock_bound_liquidity),
-    )
-    .await
-    .expect("ProgramTest processing");
-    refused(
-        &observed,
-        REFUSAL_INSTRUCTION,
-        "RemoveLiquidity at now=clock.slot",
-    );
+        (
+            "dealer family refuses EnterTerminal carrying a slot in its padding",
+            enter_terminal_request()
+                .to_bytes()
+                .expect("shape-canonical EnterTerminal")
+                .to_vec(),
+        ),
+        (
+            "dealer family refuses Unwind carrying a slot in its padding",
+            unwind_request()
+                .to_bytes()
+                .expect("shape-canonical Unwind")
+                .to_vec(),
+        ),
+    ] {
+        // `to_bytes` refuses to encode the slot-bearing form at all, so the
+        // wire bytes are patched directly: this is exactly what a client that
+        // believed the old slot rule would have to put on the wire.
+        wire.get_mut(REQUEST_NOW_OFFSET..REQUEST_NOW_OFFSET + 8)
+            .expect("request now field")
+            .copy_from_slice(&slot.to_le_bytes());
+        let observed = submit(
+            &mut context,
+            label,
+            instruction(common_metas(actor, &keys), wire),
+        )
+        .await
+        .expect("ProgramTest processing");
+        refused(&observed, REFUSAL_INSTRUCTION, label);
+    }
 
     // ---- DealerSbfError::Release (5), through the real Registry ELF ---------
     //
-    // Every one of the eight canonical actions is driven here. Each has already
-    // passed instruction shape, the 23-account frame, Policy/Candidate/State
-    // identity, its own actor rule, and its own Clock rule, so reaching the
-    // Registry CPI is the deepest an action can go against a release set that
-    // was never activated. `Retire` is the only action whose Clock rule
-    // (`now == 0`) is satisfiable at a slot the chain can offer, which is
-    // exactly the asymmetry the two liquidity cases above prove is fatal to
-    // AddLiquidity and RemoveLiquidity.
+    // Each has already passed instruction shape, the 23-account frame,
+    // Policy/Candidate/State identity, its own actor rule, and its own Clock
+    // rule, so reaching the Registry CPI is the deepest an action can go
+    // against a release set that was never activated. AddLiquidity and
+    // RemoveLiquidity are here because the `now` rule now has one owner; before
+    // that they refused on the Clock at every slot the chain can offer, and
+    // this loop had five entries instead of seven.
     let mut deepest = 0_u64;
     for (label, request) in [
+        (
+            "dealer family drives ScheduleReplacement into the real Registry reauthentication",
+            schedule_request(actor.to_bytes(), slot),
+        ),
         (
             "dealer family drives Fill into the real Registry reauthentication",
             fill_request(slot),
@@ -888,15 +910,23 @@ async fn real_dealer_elf_refuses_every_unauthenticated_family_request() {
         ),
         (
             "dealer family drives EnterTerminal into the real Registry reauthentication",
-            enter_terminal_request(slot),
+            enter_terminal_request(),
         ),
         (
             "dealer family drives Unwind into the real Registry reauthentication",
-            unwind_request(slot),
+            unwind_request(),
         ),
         (
             "dealer family drives Retire into the real Registry reauthentication",
             retire_request(),
+        ),
+        (
+            "dealer family drives AddLiquidity into the real Registry reauthentication",
+            liquidity_request(Action::AddLiquidity, actor.to_bytes(), 0),
+        ),
+        (
+            "dealer family drives RemoveLiquidity into the real Registry reauthentication",
+            liquidity_request(Action::RemoveLiquidity, actor.to_bytes(), 0),
         ),
     ] {
         let observed = submit(
@@ -923,7 +953,8 @@ async fn real_dealer_elf_refuses_every_unauthenticated_family_request() {
          {REGISTRY_LABEL}={REGISTRY_PROGRAM_ID}"
     );
     std::eprintln!(
-        "dealer-family: 19 real-ELF transactions; deepest case (Dealer -> Registry CPI) consumed \
-         {deepest} compute units against the {COMPUTE_LIMIT} protocol ceiling"
+        "dealer-family: {} real-ELF transactions; deepest case (Dealer -> Registry CPI) consumed \
+         {deepest} compute units against the {COMPUTE_LIMIT} protocol ceiling",
+        SUBMITTED.load(Ordering::Relaxed)
     );
 }

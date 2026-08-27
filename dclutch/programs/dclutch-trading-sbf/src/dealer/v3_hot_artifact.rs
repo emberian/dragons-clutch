@@ -55,6 +55,18 @@ pub const DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3: u16 =
     dclutch_claims_svm::frame_spec_v1::SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
 /// Trading-owned state accounts committed after all child routes.
 pub const DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3: u16 = 2;
+/// The release-selected Custody program the Custody routes are invoked through.
+///
+/// A CPI's callee is not a member of its own account list, and
+/// `CustodyFrameRoleV1` has no `CustodyProgram` variant at all, so no Custody
+/// frame can carry it. The family-neutral Hot executor resolves a child route's
+/// callee by scanning the downgraded effect accounts for the key the Registry
+/// activation cache names for that role, so the topology has to declare exactly
+/// one coordinate for it or every Custody route refuses `Custom(1)` before any
+/// CPI. Claims needs no such coordinate: `SignedDeltaFrameSpecV3` declares
+/// `ClaimsProgram` inside its own frame, which is why only Custody was missing
+/// and why the defect stayed invisible.
+pub const DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3: u16 = 1;
 
 /// Transition register holding next obligation revision.
 pub const DEALER_EQUITY_OBLIGATION_REVISION_SCALAR_V3: u16 = 0;
@@ -570,8 +582,14 @@ pub fn encode_dealer_equity_effect_program_v3(
     let lp_account = obligation_account
         .checked_add(1)
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
-    let fixed_accounts = lp_account
+    // The Custody callee is appended past every route range, so nothing
+    // renumbers. It is an account the Effect never writes and no route names --
+    // only the executor's role lookup reads it.
+    let custody_program_account = lp_account
         .checked_add(1)
+        .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
+    let fixed_accounts = custody_program_account
+        .checked_add(DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3)
         .ok_or(DealerEquityArtifactErrorV3::Arithmetic)?;
     let mut instructions = Vec::with_capacity(
         slots
@@ -1083,6 +1101,155 @@ mod tests {
         output
     }
 
+    /// Every child role the equity Effect routes to has a program coordinate
+    /// the Hot executor can resolve it through.
+    ///
+    /// `selected_role_program_v3` resolves a child route's callee by scanning
+    /// the downgraded effect accounts for the key the Registry activation cache
+    /// names for that role, and accepts only a UNIQUE readonly executable
+    /// account. A route whose role has no such coordinate in the same topology
+    /// can never be invoked, whatever its own frame declares -- which is exactly
+    /// the state every equity Custody route was in. The roles come from the real
+    /// emitted Effect bytes and the privileges from the real emitted profile
+    /// bytes, so this is a witness rather than a mirror of either emitter.
+    #[test]
+    fn every_child_role_the_equity_routes_to_has_an_invocable_program_coordinate() {
+        let add_templates = [
+            delegated_template(transfer_template(
+                CompartmentV1::External,
+                CompartmentV1::TradingPrincipal,
+                22,
+            )),
+            canonical_template(transfer_template(
+                CompartmentV1::HoardPrincipal,
+                CompartmentV1::TradingPrincipal,
+                24,
+            )),
+        ];
+        let remove_templates = [
+            canonical_template(transfer_template(
+                CompartmentV1::TradingPrincipal,
+                CompartmentV1::HoardPrincipal,
+                22,
+            )),
+            canonical_template(transfer_template(
+                CompartmentV1::TradingPrincipal,
+                CompartmentV1::External,
+                24,
+            )),
+            canonical_template(transfer_template(
+                CompartmentV1::HoardPrincipal,
+                CompartmentV1::TradingPrincipal,
+                26,
+            )),
+        ];
+        // The Claims program is free: `SignedDeltaFrameSpecV3` declares it at
+        // relative 16 inside the Claims frame. Custody declares no such role, so
+        // its callee is the appended coordinate.
+        const CLAIMS_PROGRAM_RELATIVE: u16 = 16;
+        for action in [MultiLpActionV3::Add, MultiLpActionV3::Remove] {
+            for positions in 0..=2_u32 {
+                let templates: &[MultiLpCustodyRequestV3] = match action {
+                    MultiLpActionV3::Add => &add_templates,
+                    MultiLpActionV3::Remove => &remove_templates,
+                };
+                let width = dealer_equity_effect_program_bytes_v3(action, positions)
+                    .expect("artifact width");
+                let mut scratch = vec![0; width];
+                let mut output = vec![0; width];
+                encode_dealer_equity_effect_program_v3(
+                    action,
+                    positions,
+                    templates,
+                    &mut scratch,
+                    &mut output,
+                )
+                .expect("effect");
+                let effect = ProgramV3::decode(&output).expect("hostile decode");
+                let count = crate::dealer::v3_profile::dealer_equity_logical_account_count_v3(
+                    action, positions,
+                )
+                .expect("account count");
+                let lengths = vec![0_u32; usize::from(count)];
+                let profile_bytes =
+                    crate::dealer::v3_profile::encode_dealer_equity_account_profile_v3(
+                        crate::dealer::v3_profile::DealerEquityAccountProfileInputV3 {
+                            action,
+                            signed_position_count: positions,
+                            logical_data_lengths: &lengths,
+                        },
+                    )
+                    .expect("profile");
+                let profile =
+                    dclutch_account_profile_contract::v2::AccountProfileV2::decode(&profile_bytes)
+                        .expect("profile decode");
+                assert_eq!(profile.fixed_account_count(), effect.fixed_account_count());
+
+                let claims_program = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3
+                    + DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3
+                    + CLAIMS_PROGRAM_RELATIVE;
+                let custody_program = count - DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3;
+                let callees = [
+                    (FixedRole::Claims, claims_program),
+                    (FixedRole::Custody, custody_program),
+                ];
+                let mut route = 0_u16;
+                while route < effect.route_count() {
+                    let role = effect.route(route).expect("route").role();
+                    let coordinate = callees
+                        .iter()
+                        .find(|(named, _)| *named == role)
+                        .map(|(_, coordinate)| *coordinate)
+                        .expect("every routed role must name a callee coordinate");
+                    let rule = profile.rule(false, coordinate).expect("callee rule");
+                    assert!(
+                        rule.route_privileges().executable()
+                            && !rule.route_privileges().signer()
+                            && !rule.route_privileges().writable(),
+                        "{action:?}/P{positions} {role:?} callee at {coordinate} is not a readonly \
+                         executable"
+                    );
+                    assert_eq!(
+                        rule.effect_permissions(),
+                        0,
+                        "{action:?}/P{positions} {role:?} callee at {coordinate} carries an effect \
+                         permission"
+                    );
+                    assert_eq!(
+                        profile.representative(0, usize::from(coordinate)),
+                        Ok(usize::from(coordinate)),
+                        "{action:?}/P{positions} {role:?} callee at {coordinate} is an alias"
+                    );
+                    route += 1;
+                }
+                // An alias onto a callee is the SECOND way to refuse the same
+                // lookup: `downgraded_effect_accounts_v3` pushes one entry per
+                // logical coordinate, aliases included, so an aliased callee
+                // matches twice and `found.is_some()` refuses.
+                for coordinate in 0..count {
+                    let representative = profile
+                        .representative(0, usize::from(coordinate))
+                        .expect("representative");
+                    for (role, callee) in callees {
+                        assert!(
+                            coordinate == callee || representative != usize::from(callee),
+                            "{action:?}/P{positions} {role:?} callee at {callee} is aliased from \
+                             {coordinate} and would match twice"
+                        );
+                    }
+                }
+                assert_ne!(claims_program, custody_program);
+                // Appended past every route range, so adding it renumbered no
+                // frame: the last route still ends where it always did.
+                let last = effect.route(effect.route_count() - 1).expect("last route");
+                assert!(
+                    custody_program >= last.fixed_account_start() + last.fixed_account_count(),
+                    "the callee must sit past every route range"
+                );
+            }
+        }
+    }
+
     #[test]
     fn typed_p2_contribution_artifact_has_exact_routes_and_dependency() {
         let templates = [
@@ -1112,7 +1279,18 @@ mod tests {
         .expect("typed artifact");
         let program = ProgramV3::decode(&output).expect("hostile decode");
         assert_eq!(program.route_count(), 3);
-        assert_eq!(program.fixed_account_count(), 57);
+        // Derived, not written down: `hot_v3::authenticate_hot_artifacts` refuses
+        // unless the AccountProfile and the Effect agree on this width, so the
+        // Effect is asserted against the profile's own count rather than against
+        // a literal that can drift away from it.
+        assert_eq!(
+            program.fixed_account_count(),
+            crate::dealer::v3_profile::dealer_equity_logical_account_count_v3(
+                MultiLpActionV3::Add,
+                2
+            )
+            .expect("equity account count")
+        );
         assert_eq!(program.common_scalar_count(), 26);
         assert_eq!(program.common_identity_count(), 36);
         assert_eq!(program.fixed_operation_count(), 61);
@@ -1186,7 +1364,14 @@ mod tests {
         .expect("typed redemption artifact");
         let program = ProgramV3::decode(&output).expect("hostile decode");
         assert_eq!(program.route_count(), 4);
-        assert_eq!(program.fixed_account_count(), 69);
+        assert_eq!(
+            program.fixed_account_count(),
+            crate::dealer::v3_profile::dealer_equity_logical_account_count_v3(
+                MultiLpActionV3::Remove,
+                0
+            )
+            .expect("equity account count")
+        );
         assert_eq!(program.common_scalar_count(), 35);
         assert_eq!(program.common_identity_count(), 52);
         assert_eq!(program.fixed_operation_count(), 85);

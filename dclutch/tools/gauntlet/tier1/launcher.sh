@@ -47,12 +47,42 @@ REAL_LOCAL="$SOURCE_ROOT/tools/local-validator/dclutch-local-validator"
 FIXTURE_DIR="$SOURCE_ROOT/fixtures/pyth/local-upgraded-2026-08-22"
 PIN_FILE="$SOURCE_ROOT/tools/local-validator/fixture-sha256.txt"
 
+# --------------------------------------------------------- ticks per slot
+# The gauntlet pins the campaign's tick rate at ITS boundary, through the
+# launcher's own documented knob, rather than inheriting whatever default that
+# file happens to carry. `12347de` set the launcher default to 16 after the
+# measurement below; this line means a later change to that default cannot
+# silently cost the gauntlet twenty minutes a run without anyone noticing.
+#
+# What 16 changes is how long a slot takes and NOTHING ELSE. The campaign is
+# ~100 transactions submitted strictly in sequence, each waited to FINALIZED
+# before the next is derived from it, and that discipline is the campaign's
+# whole epistemic claim. At the stock 64 ticks a slot is 400 ms and the campaign
+# spends about twenty-five minutes waiting for a clock; at 16 it is 100 ms, the
+# same transactions in the same order under the same finality rule, in about a
+# quarter of the time. 16 and not 8: a validator that cannot keep up with its
+# own tick rate skips slots, and a skipped slot IS a semantic difference
+# underneath a campaign that reads finalized state.
+export DCLUTCH_TICKS_PER_SLOT="${DCLUTCH_TICKS_PER_SLOT:-16}"
+
 die() { printf 'gauntlet-launcher: %s\n' "$*" >&2; exit 1; }
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 
 for path in "$REAL_LAUNCHER" "$REAL_LOCAL" "$PIN_FILE"; do
     [ -f "$path" ] || die "missing $path"
 done
+
+# A knob only pins something if the thing it points at still reads it. If the
+# launcher stops honouring DCLUTCH_TICKS_PER_SLOT the export above becomes a
+# comment, and the failure mode is a campaign that quietly takes four times as
+# long -- exactly the kind of regression nobody reports because it looks like a
+# slow machine. Warn rather than refuse: this is W1d's file, the campaign is
+# still CORRECT at any tick rate, and a gauntlet that refuses to run over
+# somebody else's wall-clock choice would be worse than a slow one.
+grep -q 'DCLUTCH_TICKS_PER_SLOT' "$REAL_LAUNCHER" || {
+    echo "gauntlet-launcher: WARNING - $REAL_LAUNCHER no longer reads DCLUTCH_TICKS_PER_SLOT." >&2
+    echo "gauntlet-launcher: WARNING - the campaign is still correct, but expect it to take roughly four times as long." >&2
+}
 [ -d "$FIXTURE_DIR" ] || die "missing $FIXTURE_DIR"
 chmod +x "$REAL_LAUNCHER" "$REAL_LOCAL"
 

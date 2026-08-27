@@ -56,7 +56,9 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1,
-    ContextV1, CustodyReplayV1, CustodyRequestV1, DelegatedCustodyRequestV2, OperationV1,
+    ContextV1, CustodyReplayV1, CustodyRequestLayoutV1, CustodyRequestV1,
+    DELEGATED_CUSTODY_REQUEST_BYTES_V2, DelegatedCustodyRequestLayoutV2, DelegatedCustodyRequestV2,
+    OperationV1,
 };
 use dclutch_direct_codec::{
     execution_v3::{
@@ -67,8 +69,8 @@ use dclutch_direct_codec::{
         DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
     },
     successor::{
-        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DirectCoordinatesV1, DirectExecutionConfigV1,
-        DirectRootStateV1, MakerReplaySeedsV1,
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_FEE_DENOMINATOR_V1, DirectCoordinatesV1,
+        DirectExecutionConfigV1, DirectRootStateV1, MakerReplaySeedsV1,
     },
 };
 use dclutch_market_core_codec::{
@@ -184,6 +186,8 @@ pub struct DirectHotChainFixtureV5 {
     pub externally_installed_keys: Vec<Pubkey>,
     /// Exact keys expected to change only after every child succeeds.
     pub rollback_snapshot_keys: Vec<Pubkey>,
+    /// Canonical Core Market the request and every child request name.
+    pub market: Pubkey,
     /// Canonical mutable root account.
     pub root: Pubkey,
     /// Canonical Claims aggregate.
@@ -196,6 +200,9 @@ pub struct DirectHotChainFixtureV5 {
     pub custody_replay: Pubkey,
     /// Ordered source, destination, and untouched collateral token accounts.
     pub collateral_accounts: [Pubkey; 3],
+    /// The four declared Custody routes' caller authorities, in `CUSTODY_ROUTES_V3`
+    /// order: seller-terminal, seller-intermediate, fee-continuation, fee-sole.
+    pub custody_routes: [CustodyRouteAuthorityV3; 4],
     /// Canonical validated-artifact seal for the selected descriptor closure.
     pub capability_seal: Pubkey,
     /// Exact canonical seal body the on-chain seal outer must produce.
@@ -240,6 +247,11 @@ pub fn build_direct_hot_chain_fixture_v5(
         state.market,
         capability.buyer_maker,
     )?;
+    // Derived ONCE, here, and handed to both consumers: the coordinates the
+    // frame installs and the coordinates the fixture reports are the same four
+    // values by construction, not by two derivations agreeing.
+    let custody_routes =
+        custody_route_authorities(input, &product, &state, &capability, &realm, &request)?;
     let mut logical = logical_accounts(
         input,
         &rent,
@@ -250,6 +262,7 @@ pub fn build_direct_hot_chain_fixture_v5(
         &capability,
         &realm,
         &request,
+        &custody_routes,
     )?;
     let profile = AccountProfileV2::decode(&artifacts.bundle.account_profile)
         .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?;
@@ -334,12 +347,14 @@ pub fn build_direct_hot_chain_fixture_v5(
         accounts,
         externally_installed_keys,
         rollback_snapshot_keys,
+        market: state.market,
         root: capability.root,
         claims_market: state.claims_market,
         claims_positions: [state.positions[0].0, state.positions[1].0],
         maker_replays: [capability.seller_maker, capability.buyer_maker],
         custody_replay: realm.custody_replay,
         collateral_accounts: product.collateral_accounts,
+        custody_routes,
         capability_seal,
         capability_seal_bytes,
         descriptor_digest: artifacts.descriptor_id,
@@ -916,19 +931,178 @@ fn claims_request(
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)
 }
 
-fn custody_request(
+/// The four Custody routes the inline-ordinary Effect declares, in route order.
+///
+/// The routes are mutually exclusive by construction: the transition derives
+/// their enable registers from the combined fee, and exactly one of
+/// {`SellerTerminal`}, {`SellerIntermediate`, `FeeContinuation`}, {`FeeSole`}
+/// is enabled for any admitted fill. Every one of them nonetheless owns a
+/// distinct `CallerAuthority` coordinate in the ninety-one-wide logical vector
+/// (34, 48, 62, 76), because the seeds carry that route's own child-request
+/// digest, so the fixture has to state four distinct PDAs whichever one the
+/// scenario actually invokes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CustodyRouteV3 {
+    /// Route 1: the whole seller-net transfer, no fee to follow.
+    SellerTerminal,
+    /// Route 2: the seller-net transfer that leaves the fee still owed.
+    SellerIntermediate,
+    /// Route 3: the combined fee that continues route 2's atomic debit.
+    FeeContinuation,
+    /// Route 4: a fee with no seller-net leg at all.
+    FeeSole,
+}
+
+/// The declared route order, which is also the order of the four
+/// `CallerAuthority` coordinates 34, 48, 62 and 76.
+const CUSTODY_ROUTES_V3: [CustodyRouteV3; 4] = [
+    CustodyRouteV3::SellerTerminal,
+    CustodyRouteV3::SellerIntermediate,
+    CustodyRouteV3::FeeContinuation,
+    CustodyRouteV3::FeeSole,
+];
+
+/// One Custody route's caller-authority coordinate and the child-request digest
+/// that seeds it.
+///
+/// The digest is carried rather than recomputed because it is the only seed a
+/// reader cannot derive from the fixture's other public fields, and it is what
+/// makes the address auditable: the four seeds are the release set, the Market,
+/// `ExecutionRoleV1::Trading`, the request's own `context`, and this.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CustodyRouteAuthorityV3 {
+    /// The address `custody_composition_v3::prepare` will derive for this route.
+    pub authority: Pubkey,
+    /// SHA-256 of the exact request bytes the Effect projects for this route.
+    pub request_digest: [u8; 32],
+}
+
+/// The exact registers the transition derives for the scenario this fixture
+/// runs, named rather than inlined so the arithmetic is auditable against
+/// `crates/dclutch-direct-codec/src/ordinary_v3.rs`.
+///
+/// `gross = FILL * EXECUTION_PRICE / PRICE_SCALE`, `fee = gross * FEE_BPS /
+/// 10_000` (floor), `seller_net = gross - fee`, `buyer_debit = gross + fee`,
+/// `combined_fee = fee + fee`. The replay revisions then step once per enabled
+/// Custody route: `after_seller = CUSTODY_REVISION + terminal + intermediate`,
+/// `after_fee = after_seller + intermediate + fee_sole`.
+struct CustodyRegistersV3 {
+    seller_net: u64,
+    buyer_debit: u64,
+    combined_fee: u64,
+    after_seller: u64,
+    after_fee: u64,
+}
+
+fn custody_registers() -> Result<CustodyRegistersV3, DirectHotChainFixtureErrorV5> {
+    let gross = FILL
+        .checked_mul(EXECUTION_PRICE)
+        .and_then(|value| value.checked_div(PRICE_SCALE))
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    let fee = gross
+        .checked_mul(u64::from(FEE_BPS))
+        .and_then(|value| value.checked_div(u64::from(DIRECT_FEE_DENOMINATOR_V1)))
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    let seller_net = gross
+        .checked_sub(fee)
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    let buyer_debit = gross
+        .checked_add(fee)
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    let combined_fee = fee
+        .checked_add(fee)
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    // `select_zero` leaves the enable register at its loaded constant unless the
+    // tested register is zero. Reproduced here as the two booleans it computes.
+    let fee_nonzero = combined_fee != 0;
+    let seller_terminal = !fee_nonzero;
+    let intermediate = fee_nonzero && seller_net != 0;
+    let fee_sole = seller_net == 0 && fee_nonzero;
+    let after_seller = CUSTODY_REVISION
+        .checked_add(u64::from(seller_terminal))
+        .and_then(|value| value.checked_add(u64::from(intermediate)))
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    let after_fee = after_seller
+        .checked_add(u64::from(intermediate))
+        .and_then(|value| value.checked_add(u64::from(fee_sole)))
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    Ok(CustodyRegistersV3 {
+        seller_net,
+        buyer_debit,
+        combined_fee,
+        after_seller,
+        after_fee,
+    })
+}
+
+/// Reproduce one Custody route's projected child request exactly.
+///
+/// This is the request the Effect program writes into the projected request
+/// bank, not a description of it: every field is either a template constant the
+/// Effect never overwrites (`operation`, both compartments, `candidate`,
+/// `page_index`, the vault contexts, `payer`, `rent_refund`, `rent_lamports`)
+/// or the register `push_custody_request` writes at that offset. The Hot
+/// executor hashes exactly these bytes to seed the route's caller authority, so
+/// any drift here shows up as a `Release` refusal at
+/// `require_custody_frame_shape_v3` and nowhere earlier.
+///
+/// **The scalar registers are patched after encoding, deliberately.** A
+/// disabled route's projected request is a well-formed byte string and NOT
+/// necessarily a valid `DelegatedCustodyRequestV2`: with a zero fee, the two
+/// fee routes carry a zero amount and a zero allowance, which
+/// `DelegatedCustodyRequestV2::validate` refuses -- correctly, because a route
+/// that never executes is never decoded. The Hot executor still hashes those
+/// bytes to derive that route's caller-authority coordinate, so the fixture has
+/// to be able to state them. The identity fields come from the encoder, whose
+/// output is byte-identical to the projection; only the six scalars the
+/// transition derives are written at their layout offsets afterwards.
+fn custody_request_bytes(
+    route: CustodyRouteV3,
     input: DirectHotChainInputV5,
     product: &ProductFixture,
     state: &StateFixture,
     capability: &CapabilityFixture,
     realm: &RealmFixture,
     request: &[u8],
-) -> Result<DelegatedCustodyRequestV2, DirectHotChainFixtureErrorV5> {
-    let gross = FILL
-        .checked_mul(EXECUTION_PRICE)
-        .and_then(|value| value.checked_div(PRICE_SCALE))
-        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+) -> Result<[u8; DELEGATED_CUSTODY_REQUEST_BYTES_V2], DirectHotChainFixtureErrorV5> {
+    let registers = custody_registers()?;
     let parent = hash(request).to_bytes();
+    let seller_side = matches!(
+        route,
+        CustodyRouteV3::SellerTerminal | CustodyRouteV3::SellerIntermediate
+    );
+    let (destination_owner, destination) = if seller_side {
+        (input.makers[0], product.collateral_accounts[1])
+    } else {
+        (input.payer, product.collateral_accounts[2])
+    };
+    let (expected_revision, resulting_revision) = match route {
+        CustodyRouteV3::SellerTerminal | CustodyRouteV3::SellerIntermediate => {
+            (CUSTODY_REVISION, registers.after_seller)
+        }
+        CustodyRouteV3::FeeContinuation => (registers.after_seller, registers.after_fee),
+        CustodyRouteV3::FeeSole => (CUSTODY_REVISION, registers.after_fee),
+    };
+    let amount = if seller_side {
+        registers.seller_net
+    } else {
+        registers.combined_fee
+    };
+    let allowance_before = match route {
+        CustodyRouteV3::FeeContinuation => registers.combined_fee,
+        _ => registers.buyer_debit,
+    };
+    let allowance_after = match route {
+        CustodyRouteV3::SellerIntermediate => registers.combined_fee,
+        _ => 0,
+    };
+    // Placeholders that satisfy the delegated-allowance invariants for this
+    // route's flag combination; every one of them is overwritten below.
+    let (template_total, template_before, template_after, template_amount) = match route {
+        CustodyRouteV3::SellerIntermediate => (2, 2, 1, 1),
+        CustodyRouteV3::FeeContinuation => (2, 1, 0, 1),
+        _ => (1, 1, 0, 1),
+    };
     let custody = CustodyRequestV1 {
         operation: OperationV1::Transfer,
         caller_role: CallerRoleV1::Trading,
@@ -936,23 +1110,27 @@ fn custody_request(
         destination_compartment: CompartmentV1::External,
         release_set: input.release_set,
         market: state.market.to_bytes(),
-        realm: realm.realm.digest,
+        // `project_key(REALM_ACCOUNT, IDENTITY_REALM_V3)` projects the Realm
+        // ACCOUNT ADDRESS, not the finalized record digest. Seeding this field
+        // with the digest produced a request whose bytes -- and therefore whose
+        // caller-authority PDA -- no chain execution could ever reproduce.
+        realm: realm.realm.raw.to_bytes(),
         context: capability.buyer_maker.to_bytes(),
         caller_program: input.trading_program.to_bytes(),
         semantic: ContextV1 {
             candidate: [0; 32],
             source_owner: input.makers[1].to_bytes(),
-            destination_owner: input.makers[0].to_bytes(),
+            destination_owner: destination_owner.to_bytes(),
             order: parent,
             parent_request_digest: parent,
             order_nonce: 0,
             generation: GENERATION,
             page_index: 0,
             execution_index: 0,
-            transfer_index: 0,
+            transfer_index: u16::from(route == CustodyRouteV3::FeeContinuation),
         },
         source: product.collateral_accounts[0].to_bytes(),
-        destination: product.collateral_accounts[1].to_bytes(),
+        destination: destination.to_bytes(),
         source_vault_context: [0; 32],
         destination_vault_context: [0; 32],
         mint: realm.mint.to_bytes(),
@@ -961,23 +1139,93 @@ fn custody_request(
         rent_refund: [0; 32],
         expected_revision: CUSTODY_REVISION,
         resulting_revision: CUSTODY_REVISION + 1,
-        amount: gross,
+        amount: template_amount,
         rent_lamports: 0,
     };
-    let delegated = DelegatedCustodyRequestV2 {
+    let mut bytes = DelegatedCustodyRequestV2 {
         custody,
-        starts_atomic_debit: true,
-        terminal: true,
+        starts_atomic_debit: route != CustodyRouteV3::FeeContinuation,
+        terminal: route != CustodyRouteV3::SellerIntermediate,
         delegate_before: realm.custody_authority.to_bytes(),
-        delegate_after: [0; 32],
-        total_debit: gross,
-        allowance_before: gross,
-        allowance_after: 0,
-    };
-    delegated
-        .validate()
+        delegate_after: if route == CustodyRouteV3::SellerIntermediate {
+            realm.custody_authority.to_bytes()
+        } else {
+            [0; 32]
+        },
+        total_debit: template_total,
+        allowance_before: template_before,
+        allowance_after: template_after,
+    }
+    .encode()
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let base = DelegatedCustodyRequestLayoutV2::BASE;
+    for (offset, value) in [
+        (
+            base + CustodyRequestLayoutV1::EXPECTED_REVISION,
+            expected_revision,
+        ),
+        (
+            base + CustodyRequestLayoutV1::RESULTING_REVISION,
+            resulting_revision,
+        ),
+        (base + CustodyRequestLayoutV1::AMOUNT, amount),
+        (
+            DelegatedCustodyRequestLayoutV2::TOTAL_DEBIT,
+            registers.buyer_debit,
+        ),
+        (
+            DelegatedCustodyRequestLayoutV2::ALLOWANCE_BEFORE,
+            allowance_before,
+        ),
+        (
+            DelegatedCustodyRequestLayoutV2::ALLOWANCE_AFTER,
+            allowance_after,
+        ),
+    ] {
+        bytes
+            .get_mut(offset..offset + 8)
+            .ok_or(DirectHotChainFixtureErrorV5::Encoding)?
+            .copy_from_slice(&value.to_le_bytes());
+    }
+    Ok(bytes)
+}
+
+/// The `CallerAuthority` PDA the Hot executor derives for every Custody route.
+///
+/// `custody_composition_v3::prepare` is the authority for this derivation:
+/// the context seed is the request's own `context` field -- the buyer maker
+/// root the Effect projects into every Custody request -- and never the family
+/// request digest, which enters only as the fifth seed through the child
+/// request's hash.
+fn custody_route_authorities(
+    input: DirectHotChainInputV5,
+    product: &ProductFixture,
+    state: &StateFixture,
+    capability: &CapabilityFixture,
+    realm: &RealmFixture,
+    request: &[u8],
+) -> Result<[CustodyRouteAuthorityV3; 4], DirectHotChainFixtureErrorV5> {
+    let mut derived = [CustodyRouteAuthorityV3 {
+        authority: Pubkey::default(),
+        request_digest: [0; 32],
+    }; 4];
+    for (slot, route) in derived.iter_mut().zip(CUSTODY_ROUTES_V3) {
+        let bytes = custody_request_bytes(route, input, product, state, capability, realm, request)?;
+        let request_digest = hash(&bytes).to_bytes();
+        let seeds = CallerAuthoritySeedsV1::new(
+            core_content(input.release_set)?,
+            state.market.to_bytes(),
+            ExecutionRoleV1::Trading,
+            capability.buyer_maker.to_bytes(),
+            request_digest,
+        )
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
-    Ok(delegated)
+        *slot = CustodyRouteAuthorityV3 {
+            authority: Pubkey::find_program_address(&seeds.as_slices(), &input.trading_program).0,
+            request_digest,
+        };
+    }
+    Ok(derived)
 }
 
 struct FixedHotAccountsV5 {
@@ -1288,7 +1536,19 @@ fn logical_accounts(
     capability: &CapabilityFixture,
     realm: &RealmFixture,
     request: &[u8],
+    custody_routes: &[CustodyRouteAuthorityV3; 4],
 ) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
+    let custody_route_account = |index: usize| -> Result<ChainAccount, DirectHotChainFixtureErrorV5> {
+        Ok(external_empty(
+            custody_routes
+                .get(index)
+                .ok_or(DirectHotChainFixtureErrorV5::Encoding)?
+                .authority,
+            system_program::ID,
+            false,
+            false,
+        ))
+    };
     let mut logical = (0..usize::from(DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3))
         .map(|index| {
             ordinary(
@@ -1459,25 +1719,7 @@ fn logical_accounts(
         ),
     )?;
 
-    let custody = custody_request(input, product, state, capability, realm, request)?;
-    let custody_bytes = custody
-        .encode()
-        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
-    let custody_seeds = CallerAuthoritySeedsV1::new(
-        core_content(input.release_set)?,
-        state.market.to_bytes(),
-        ExecutionRoleV1::Trading,
-        hash(request).to_bytes(),
-        hash(&custody_bytes).to_bytes(),
-    )
-    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
-    let custody_authority =
-        Pubkey::find_program_address(&custody_seeds.as_slices(), &input.trading_program).0;
-    set(
-        &mut logical,
-        34,
-        external_empty(custody_authority, system_program::ID, false, false),
-    )?;
+    set(&mut logical, 34, custody_route_account(0)?)?;
     for (alias, representative) in [(35, 23), (36, 24), (37, 25), (38, 26), (39, 27)] {
         let value = logical
             .get(representative)
@@ -1551,15 +1793,12 @@ fn logical_accounts(
     )?;
     // Each child route's `CallerAuthority` is a distinct Trading PDA: its seeds
     // carry that route's own child-request digest, so two routes never share
-    // one. Coordinate 48 is the seller-intermediate Custody route's authority
-    // and is stated the same way 62 and 76 already are. Copying coordinate 34's
-    // authority here made two declared self-representatives one physical
-    // account, which `validate_accounts` refuses as `CrossItemAlias`.
-    set(
-        &mut logical,
-        48,
-        external_empty(key(0xb0), system_program::ID, false, false),
-    )?;
+    // one. Coordinates 48, 62 and 76 were literal `key(0xb0/0xb1/0xb2)` --
+    // distinct, which is all `validate_accounts` asks, and PDAs of nothing.
+    // Whichever route the fee makes live refuses at
+    // `require_custody_frame_shape_v3` against a placeholder, so the fixture
+    // states all four the way the runtime derives them.
+    set(&mut logical, 48, custody_route_account(1)?)?;
     for (alias, representative) in [
         (49, 23),
         (50, 24),
@@ -1606,16 +1845,8 @@ fn logical_accounts(
             .clone();
         set(&mut logical, alias, value)?;
     }
-    set(
-        &mut logical,
-        62,
-        external_empty(key(0xb1), system_program::ID, false, false),
-    )?;
-    set(
-        &mut logical,
-        76,
-        external_empty(key(0xb2), system_program::ID, false, false),
-    )?;
+    set(&mut logical, 62, custody_route_account(2)?)?;
+    set(&mut logical, 76, custody_route_account(3)?)?;
     // The four Custody routes are invoked through the Custody program the
     // activated release set selects, and the Hot executor resolves it by
     // scanning the effect accounts for that key. A Custody `Transfer` frame
@@ -1949,6 +2180,9 @@ mod tests {
             capability.buyer_maker,
         )
         .expect("realm");
+        let custody_routes =
+            custody_route_authorities(input, &product, &state, &capability, &realm, &request)
+                .expect("custody routes");
         logical_accounts(
             input,
             &rent,
@@ -1959,6 +2193,7 @@ mod tests {
             &capability,
             &realm,
             &request,
+            &custody_routes,
         )
         .expect("logical");
         let fixture = build_direct_hot_chain_fixture_v5(input).expect("chain fixture");
@@ -2110,6 +2345,105 @@ mod tests {
                 .iter()
                 .any(|value| value.key == input.claims_program && value.account.executable)
         );
+    }
+
+    /// The four Custody `CallerAuthority` coordinates are PDAs of their routes.
+    ///
+    /// Three of them were literal keys and the fourth was derived with the
+    /// family request digest where `custody_composition_v3::prepare` uses the
+    /// child request's own `context`. Distinctness alone is what
+    /// `validate_accounts` asks and it is what a placeholder already satisfied,
+    /// so the property that has to be pinned is that each coordinate is the
+    /// address the Hot executor will derive for that route: off the Trading
+    /// program, seeded by the release set, the Market, the Trading role, the
+    /// buyer maker root, and the SHA-256 of that route's projected request.
+    #[test]
+    fn each_custody_route_authority_is_the_pda_the_hot_executor_derives() {
+        let input = input();
+        let fixture = build_direct_hot_chain_fixture_v5(input).expect("chain fixture");
+        let routes = fixture.custody_routes;
+        for (index, route) in routes.iter().enumerate() {
+            assert!(
+                !routes
+                    .iter()
+                    .take(index)
+                    .any(|earlier| earlier.authority == route.authority),
+                "route {index} repeats an earlier route's caller authority"
+            );
+            // A PDA is off the ed25519 curve. Three of these coordinates were
+            // literal keys and could never satisfy that.
+            assert!(
+                !route.authority.is_on_curve(),
+                "route {index} is not a program address at all"
+            );
+            // Every authority is a real installed frame coordinate.
+            assert!(
+                fixture
+                    .accounts
+                    .iter()
+                    .any(|value| value.key == route.authority),
+                "route {index} authority is not an account in the frame"
+            );
+        }
+
+        // The seed rule, stated as the refusal it replaces: the context seed is
+        // the child request's own `context` -- the buyer maker root -- and the
+        // family request digest enters only through the request hash. Deriving
+        // the authority the way the fixture used to must produce a DIFFERENT
+        // address, or this test would pass over the bug it exists for.
+        let request = fixture
+            .hot_instruction
+            .data
+            .get(HOT_EXECUTION_ENVELOPE_BYTES_V3..)
+            .expect("family request");
+        // The buyer maker root: the `context` every projected Custody request
+        // carries, and therefore the fourth seed of every one of these PDAs.
+        let context = fixture.maker_replays[1].to_bytes();
+        let derive = |context: [u8; 32], digest: [u8; 32]| {
+            CallerAuthoritySeedsV1::new(
+                core_content(input.release_set).expect("release set"),
+                fixture.market.to_bytes(),
+                ExecutionRoleV1::Trading,
+                context,
+                digest,
+            )
+            .map(|seeds| Pubkey::find_program_address(&seeds.as_slices(), &input.trading_program).0)
+        };
+
+        for (index, route) in routes.iter().enumerate() {
+            // Positive: the reported address IS the context-seeded derivation,
+            // reproduced here from public fields only.
+            assert_eq!(
+                derive(context, route.request_digest).expect("context-seeded derivation"),
+                route.authority,
+                "route {index} is not the context-seeded address"
+            );
+            // Negative, and the sharpest one available: the derivation the
+            // fixture actually used before this fix -- the FAMILY request
+            // digest in the context seed, this route's own child-request hash
+            // still in the fifth. It is a well-formed seed order, so nothing
+            // refuses it; it simply lands somewhere else.
+            let hostile = derive(hash(request).to_bytes(), route.request_digest)
+                .expect("family-seeded derivation is well-formed");
+            assert!(
+                !routes.iter().any(|value| value.authority == hostile),
+                "route {index} was seeded by the family request, not by its own context"
+            );
+        }
+
+        // A zero context or a zero request digest is not a wrong address, it is
+        // no address: `CallerAuthoritySeedsV1` refuses the seed order outright,
+        // so neither can be what any coordinate holds.
+        for (context, digest) in [
+            ([0; 32], hash(request).to_bytes()),
+            (context, [0; 32]),
+            ([0; 32], [0; 32]),
+        ] {
+            assert!(
+                derive(context, digest).is_err(),
+                "a zero caller-authority coordinate was accepted"
+            );
+        }
     }
 
     #[test]

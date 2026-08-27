@@ -37,31 +37,6 @@
       "owner": "cycle-2 tranche A (WAVE.md)"
     },
     {
-      "route": "claims/affine_batch_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/affine-batch (tests/affine_batch_v2.rs).",
-      "owner": "cycle-2 tranche A, Claims"
-    },
-    {
-      "route": "claims/signed_delta_v3::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/fractional-signed-delta (tests/fractional_signed_delta.rs).",
-      "owner": "cycle-2 tranche A, Fractional"
-    },
-    {
-      "route": "claims/liability_basis_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/tests/liability_basis_v2_program_test.rs.",
-      "owner": "LB liability-basis-v2 lane"
-    },
-    {
-      "route": "claims/rational_representation_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs.",
-      "owner": "cycle-2 tranche A, Rational"
-    },
-    {
-      "route": "claims/rational_lifecycle_v2::process",
-      "reason": "A real-ELF ProgramTest for this route already exists and passes; it simply does not emit census evidence yet. Wiring it is one `dclutch-program-test-evidence::record` call at the campaign's submit site plus a bindings entry -- see tools/gauntlet/claims-custody/ for the shape. This entry is 'no campaign feeds the census yet', NOT 'the route cannot run'. Campaign: programs/dclutch-claims-sbf/program-test/rational-lifecycle (tests/lifecycle.rs).",
-      "owner": "cycle-2 tranche A, Rational"
-    },
-    {
       "route": "claims/terminal_settlement_v3::process",
       "reason": "No campaign drives it. The test caller exists (programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller) and the route needs no open Market and no Hot execution, so a ProgramTest can reach it -- the work is the prestate, not the wiring. Its 35-account frame is the SignedDeltaV3 fixed 20 plus one runtime Position plus fourteen terminal accounts, and authenticate_and_prepare requires, beyond what the shared Product/LBV2 fixture already builds: (a) a Core Market in a TERMINAL state -- `terminal_receipt` Some and `terminal_winner` below the Product outcome count -- where compile_product_lbv2_fixture_v2 builds Phase::Open with terminal_receipt None; (b) a finalized composition-exposure record and vacant staging cursor under COMPOSITION_EXPOSURE_SCHEMA_ID_V3 (dclutch-representation-composition-v3-kernel); (c) a finalized terminal-coordinate record and staging cursor under TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2 whose scenario matches the basis kind (CategoricalQ1 in the shared fixture); (d) the whole Custody leg -- a CustodyReplayV1, a Hoard token account, a recipient token account, the custody-authority PDA and a real token program, i.e. the fixture programs/dclutch-custody-sbf/tests/program_test.rs already builds; and (e) a Realm record plus staging cursor. Nothing here is structurally blocked; it is the union of two existing fixtures plus two record kinds nobody has compiled in a test yet.",
       "owner": "TA-CL claims/custody lane, next element"
@@ -77,9 +52,54 @@
       "owner": "cycle-2 tranche A, Claims"
     },
     {
-      "route": "resolution/*",
-      "reason": "The Resolution ELF IS bound into the five-role release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. Resolution routes need a Source/provider tier. NEVER-EXECUTED here means never executed by a TIER: the four RelayedMainnetStateV1 transport routes (process_create_record, process_append, process_seal, process_retire) and the two provider-resolution campaigns run green under ProgramTest against the compiled ELF -- crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs and resolution_core_v3_lifecycle.rs. What no tier drives is the same code on a validator, in a transaction, against genesis Loader-v3 accounts.",
+      "route": "resolution/core_effect::process_core_effect",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
       "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_create#CreateFund",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_verify#VerifyFundReady",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_admit#AdmitTerminal",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_close#CloseFund",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. This route runs green under ProgramTest against the compiled Core and Resolution ELFs in crates/dclutch-svm-harness/tests/resolution_core_v3_lifecycle.rs -- including, since 2026-08-27, an atomically founded Market reaching a terminal certificate through the real Pyth transport -- but that campaign emits no census evidence. Two separate things are missing and they should not be confused: the evidence wiring (a tools/gauntlet/ tier around the existing green campaign, the same shape as tools/gauntlet/resolution-relayed/, which is a few hours) and validator evidence (the same code in a transaction against genesis Loader-v3 accounts, which is the Source/provider tier).",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/provider_instruction_v3::process_provider_resolution_v3",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/provider_transport_v3::process_provider_transport_v3",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_submit#magic",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "resolution/process_reclaim#magic",
+      "reason": "The Resolution ELF IS bound into the release set and IS activated by tier 1, but tier 1 drives no resolution: it stops at Found. The Pyth provider transport runs green under ProgramTest against the compiled Registry and Resolution ELFs and the provenance-pinned local-validator projection of the captured receiver/router programs (crates/dclutch-svm-harness/tests/resolution_successor.rs, resolution_core_v3_lifecycle.rs), and emits no census evidence. Wiring it is the same shape as tools/gauntlet/resolution-relayed/. Validator evidence is the separate, larger Source/provider tier.",
+      "owner": "cycle-2 tranche A (WAVE.md), Source/provider"
+    },
+    {
+      "route": "trading/hot_v3::process_capability_seal_v1",
+      "reason": "RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. Three of those are already EXECUTED via tier1 as of `12347de` ('gauntlet: bind the founding transactions to the routes the census can now see'); this is the only one of the four that tier 1's local-validator bootstrap genuinely never drives -- grep confirms no `CapabilitySealRequestV1` construction anywhere under tools/local-validator. The route DOES have real-ELF green evidence: `the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects` and `a_seal_for_another_action_or_descriptor_never_lands_at_this_address` in programs/dclutch-trading-sbf/program-test/tests/registry_hot_continuation.rs submit a canonical CapabilitySealRequestV1 as its own self-contained transaction and it commits independently of the unrelated Hot-execution CU/emitter defects tracked below (DIRECT_FAMILY_CAMPAIGN_2026_08_27.md: 12/15 of that file's tests pass at HEAD, and the three failures are not the seal tests). SN-REC (2026-08-27) deliberately did NOT wire this: the only path to record()-instrumented evidence runs through `programs/dclutch-trading-sbf/program-test/direct-hot/src/waist.rs`'s `submit_v0`, whose narrow `Result<u64, RefusedExecution>` return carries no signature/slot and would need widening across every one of its many callers across multiple test files -- exactly the kind of shared-surface change the wave board says needs coordination, and `hot_v3.rs`/its direct-hot fixture are W2h/W2i/GEN-WIRE's live, actively-edited territory this evening. Wiring needs either a coordinated widening of that shared submit helper, or a standalone additive `submit_v0_with_evidence` beside it, plus a new bindings/witnesses/programs set and a run script -- none of which touches tier1, census, or any Claims file.",
+      "owner": "gauntlet owner (coordinate with whoever holds direct-hot/waist.rs and hot_v3.rs) for the wiring; the campaign itself already exists and passes"
     },
     {
       "route": "trading/hot_v3::process_hot_execution_v3",
@@ -192,14 +212,9 @@
       "owner": "UNASSIGNED \u2014 owner decision (delete V1, or state why both survive)"
     },
     {
-      "route": "rent/process_sweep_v2#Sweep",
-      "reason": "LifecycleRentCreditV2 Sweep. Tier 1 creates a V2 credit and stops at Found; nothing sweeps it. This is a missing tier stage, not a structural blocker \u2014 it should be the first thing a tier-1 extension adds.",
-      "owner": "FT (this lane's next slice)"
-    },
-    {
       "route": "rent/process_close_v2#Close",
-      "reason": "LifecycleRentCreditV2 Close. Same as Sweep: a missing tier stage, not a structural blocker.",
-      "owner": "FT (this lane's next slice)"
+      "reason": "LifecycleRentCreditV2 Close. JRNY-1 now executes the Sweep half of rent recovery, and Close is the other half: it is not a structural blocker either, it needs a RETIRED Market plus a Core close-authority signer, and no campaign reaches a retired Market yet. A tier that drives a Market to Terminal and retires it discharges this.",
+      "owner": "cycle-2 retirement (behind a terminal Market), then JRNY-1"
     },
     {
       "route": "registry/batch_v2::process",

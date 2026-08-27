@@ -25,7 +25,7 @@ use dclutch_rational_representation_v2_kernel::{
     StructuredProjectionV2,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_svm::batch_v2::{AuthenticatedRoleBatchReceiptV2, RoleBatchRequestV2};
+use dclutch_registry_svm::batch_v2::RoleBatchRequestV2;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_representation_composition_v3_kernel::{
     CompositionExposureBundleV3, RecordAdmissionV3,
@@ -37,8 +37,7 @@ use dclutch_token_svm::{
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, invoke_signed, set_return_data},
+    program::{invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -688,6 +687,19 @@ fn authenticate_execution_releases(
     authenticate_release_batch(base.registry, base.cache, header.release_set, &entries)
 }
 
+/// Authenticate this action's whole role set out of the Registry-owned cache.
+///
+/// This used to compose a `RoleBatchRequestV2` and CPI it into the Registry.
+/// Under a Registry continuation the Registry is already at CPI depth one, so
+/// the batch route was reentrancy exactly as the per-role one was, and it is
+/// retired with no fallback. Every fact the batch receipt carried per role is
+/// established here directly, against the same Registry-owned cache the
+/// receipt was derived from.
+///
+/// The canonical role ORDER is still owned by `RoleBatchRequestV2::new` --
+/// strictly ascending tags, which also forbids naming one role twice -- and
+/// that request is constructed and never sent, so the rule has one owner
+/// rather than a second copy that could drift from the Registry's.
 #[inline(never)]
 fn authenticate_release_batch<'info>(
     registry: &AccountInfo<'info>,
@@ -702,62 +714,21 @@ fn authenticate_release_batch<'info>(
         ContentId::new(hash(&bytes).to_bytes()).map_err(|_| ClaimsSbfError::Release)?
     };
     let roles = entries.iter().map(|entry| entry.0).collect::<Vec<_>>();
-    let request = RoleBatchRequestV2::new(
+    RoleBatchRequestV2::new(
         ContentId::new(release_set).map_err(|_| ClaimsSbfError::Release)?,
         cache_digest,
         &roles,
     )
     .map_err(|_| ClaimsSbfError::Release)?;
-    let request_bytes = request.to_bytes();
-    let mut metas = Vec::with_capacity(1 + entries.len() * 2);
-    let mut infos = Vec::with_capacity(2 + entries.len() * 2);
-    metas.push(AccountMeta::new_readonly(*cache.key, false));
-    infos.push(cache.clone());
-    for (_, program, programdata) in entries {
-        metas.push(AccountMeta::new_readonly(*program.key, false));
-        metas.push(AccountMeta::new_readonly(*programdata.key, false));
-        infos.push((*program).clone());
-        infos.push((*programdata).clone());
-    }
-    infos.push(registry.clone());
-    invoke(
-        &Instruction {
-            program_id: *registry.key,
-            accounts: metas,
-            data: request_bytes.to_vec(),
-        },
-        &infos,
-    )
-    .map_err(|_| ClaimsSbfError::Release)?;
-    let (producer, receipt_bytes) = get_return_data().ok_or(ClaimsSbfError::Release)?;
-    if producer != *registry.key {
-        return Err(ClaimsSbfError::Release.into());
-    }
-    let receipt = AuthenticatedRoleBatchReceiptV2::decode(&receipt_bytes)
-        .map_err(|_| ClaimsSbfError::Release)?;
-    let request_digest =
-        ContentId::new(hash(&request_bytes).to_bytes()).map_err(|_| ClaimsSbfError::Release)?;
-    if receipt.registry_program().to_bytes() != registry.key.to_bytes()
-        || receipt.activation_cache() != cache.key.to_bytes()
-        || receipt.activation_cache_digest() != cache_digest
-        || receipt.release_set_id().to_bytes() != release_set
-        || receipt.request_digest() != request_digest
-        || receipt.role_count() != request.role_count()
-        || receipt.role_mask() != request.role_mask()
-    {
-        return Err(ClaimsSbfError::Release.into());
-    }
-    for (index, (role, program, programdata)) in entries.iter().copied().enumerate() {
-        let observation = receipt
-            .observation(index)
-            .ok_or(ClaimsSbfError::Release)?
-            .map_err(|_| ClaimsSbfError::Release)?;
-        if observation.role() != role
-            || observation.program().to_bytes() != program.key.to_bytes()
-            || observation.programdata() != programdata.key.to_bytes()
-        {
-            return Err(ClaimsSbfError::Release.into());
-        }
+    for (role, program, programdata) in entries.iter().copied() {
+        crate::authenticate_activated_role(
+            registry,
+            cache,
+            role,
+            program,
+            programdata,
+            &release_set,
+        )?;
     }
     Ok(())
 }

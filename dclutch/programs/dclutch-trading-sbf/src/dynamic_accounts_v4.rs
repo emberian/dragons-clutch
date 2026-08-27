@@ -7,18 +7,58 @@
 
 use std::vec::Vec;
 
-use dclutch_account_profile_contract::v2::AccountProfileV2;
+use dclutch_account_profile_contract::v2::{AccountProfileV2, RouteAccountPrivilegesV2};
 use solana_program::{account_info::AccountInfo, program_error::ProgramError};
 
 use crate::TradingSbfError;
 
-/// Expand one exact physical representative slice into the Profile13 logical
+/// The physical account vector, addressed without being materialized.
+///
+/// Physical ordinals run injected-frame-accounts-then-supplied-suffix, and the
+/// two live in different places: the frame accounts are borrowed individually
+/// and the suffix is a slice of the instruction's own account vector.
+/// Concatenating them into one `Vec` just to hand this expansion a single slice
+/// charged the heap the entire physical width for a buffer that is dead the
+/// moment the logical vector exists -- and under an allocator whose `dealloc`
+/// is a no-op, dead still costs for the rest of the instruction.
+///
+/// This is the same slice, addressed in place. It owns nothing and allocates
+/// nothing; `len` and `get` are the only operations the expansion ever used.
+pub(crate) struct PhysicalAccountsV4<'a, 'accounts, 'info> {
+    injected: &'a [&'accounts AccountInfo<'info>],
+    supplied: &'accounts [AccountInfo<'info>],
+}
+
+impl<'a, 'accounts, 'info> PhysicalAccountsV4<'a, 'accounts, 'info> {
+    /// View the injected frame accounts followed by the supplied suffix.
+    pub(crate) const fn new(
+        injected: &'a [&'accounts AccountInfo<'info>],
+        supplied: &'accounts [AccountInfo<'info>],
+    ) -> Self {
+        Self { injected, supplied }
+    }
+
+    /// Total physical width.
+    pub(crate) const fn len(&self) -> usize {
+        self.injected.len().saturating_add(self.supplied.len())
+    }
+
+    /// The account at one physical ordinal, or `None` past the end.
+    pub(crate) fn get(&self, index: usize) -> Option<&'accounts AccountInfo<'info>> {
+        match self.injected.get(index) {
+            Some(account) => Some(account),
+            None => self.supplied.get(index.checked_sub(self.injected.len())?),
+        }
+    }
+}
+
+/// Expand one exact physical representative view into the Profile13 logical
 /// vector while preserving each representative's outer union privileges.
 pub(crate) fn expand_dynamic_physical_accounts_v4<'accounts, 'info>(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
     span_counts: &[u32],
-    physical_accounts: &[&'accounts AccountInfo<'info>],
+    physical_accounts: &PhysicalAccountsV4<'_, 'accounts, 'info>,
 ) -> Result<Vec<&'accounts AccountInfo<'info>>, ProgramError> {
     let logical_count = profile
         .logical_account_count_with_dynamic_spans(tail_count, span_counts)
@@ -51,11 +91,11 @@ pub(crate) fn expand_dynamic_physical_accounts_v4<'accounts, 'info>(
             .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
         let resolved = if !packs {
-            *physical_accounts
+            physical_accounts
                 .get(coordinate)
                 .ok_or(TradingSbfError::Content)?
         } else if representative == coordinate {
-            let resolved = *physical_accounts
+            let resolved = physical_accounts
                 .get(next)
                 .ok_or(TradingSbfError::Content)?;
             next = next.checked_add(1).ok_or(TradingSbfError::Content)?;
@@ -79,48 +119,36 @@ pub(crate) fn expand_dynamic_physical_accounts_v4<'accounts, 'info>(
     Ok(logical)
 }
 
-/// Clone the complete logical vector into route-local child views.
+/// The declared route privileges of one logical coordinate under dynamic spans.
 ///
 /// Every privilege in a child view comes from the representative coordinate --
 /// the semantic owner of the physical account's authenticated declaration --
 /// and never from an authenticated route alias, which the AccountProfile
 /// validator requires to be emitted privilege-free and therefore states
-/// nothing at all. A declaration is never turned into a meta the transaction
-/// did not grant, and executability is exact in both directions.
-pub(crate) fn downgrade_dynamic_child_accounts_v4<'info>(
+/// nothing at all.
+pub(crate) fn dynamic_declared_privileges_v4(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
     span_counts: &[u32],
-    logical_accounts: &[&AccountInfo<'info>],
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    let logical_count = profile
+    coordinate: usize,
+) -> Result<RouteAccountPrivilegesV2, ProgramError> {
+    let representative = profile
+        .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
+        .map_err(|_| TradingSbfError::Content)?;
+    profile
+        .route_privileges_with_dynamic_spans(tail_count, span_counts, representative)
+        .map_err(|_| TradingSbfError::Content.into())
+}
+
+/// Exact logical width of the dynamic-span account vector.
+pub(crate) fn dynamic_logical_account_count_v4(
+    profile: AccountProfileV2<'_>,
+    tail_count: u32,
+    span_counts: &[u32],
+) -> Result<usize, ProgramError> {
+    profile
         .logical_account_count_with_dynamic_spans(tail_count, span_counts)
-        .map_err(|_| TradingSbfError::Content)?;
-    if logical_accounts.len() != logical_count {
-        return Err(TradingSbfError::Content.into());
-    }
-    let mut downgraded = Vec::new();
-    downgraded
-        .try_reserve_exact(logical_count)
-        .map_err(|_| TradingSbfError::Content)?;
-    for (coordinate, physical) in logical_accounts.iter().enumerate() {
-        let representative = profile
-            .representative_with_dynamic_spans(tail_count, span_counts, coordinate)
-            .map_err(|_| TradingSbfError::Content)?;
-        let declared = profile
-            .route_privileges_with_dynamic_spans(tail_count, span_counts, representative)
-            .map_err(|_| TradingSbfError::Content)?;
-        if (declared.writable() && !physical.is_writable)
-            || declared.executable() != physical.executable
-        {
-            return Err(TradingSbfError::Content.into());
-        }
-        let mut logical = (*physical).clone();
-        logical.is_signer = declared.signer();
-        logical.is_writable = declared.writable();
-        downgraded.push(logical);
-    }
-    Ok(downgraded)
+        .map_err(|_| TradingSbfError::Content.into())
 }
 
 #[cfg(all(test, any(feature = "families", feature = "series-family")))]
@@ -196,30 +224,36 @@ mod tests {
         let profile = AccountProfileV2::decode(&bytes).expect("profile");
         let span_counts = [1_u32];
         let physical = physical_accounts(profile, span_counts[0]);
-        let physical_refs = physical.iter().collect::<Vec<_>>();
         assert_eq!(physical.len(), 65);
-        let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &physical_refs)
+        let view = PhysicalAccountsV4::new(&[], &physical);
+        let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
         assert_eq!(logical.len(), 158);
         assert_eq!(logical[18].key, logical[20].key);
         assert_eq!(logical[53].key, logical[137].key);
         assert!(logical[53].is_writable);
 
-        let child = downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical)
-            .expect("child views");
+        // The dynamic path is reached through the one entry point that owns
+        // it; `downgraded_effect_accounts_v3` dispatches on
+        // `uses_dynamic_fixed_spans` and runs the same whole-frame check.
+        let declared = crate::hot_v3::child_route_privileges_v3(profile, 0, &span_counts, &logical)
+            .expect("declared privileges");
+        let child =
+            crate::hot_v3::downgraded_effect_accounts_v3(&logical, &declared).expect("child views");
+        let at = |coordinate: usize| child.view(coordinate).expect("child view");
         // 18 is the Shared Market representative and owns every privilege fact
         // about the physical account. 20 is an authenticated route alias of it:
         // an alias is emitted privilege-free, so it states nothing, and a child
         // CPI meta built from the alias would silently hand the child program a
         // readonly view of an account the representative declares writable.
-        assert!(child[18].is_writable);
-        assert!(child[20].is_writable);
-        assert_eq!(child[18].key, child[20].key);
+        assert!(at(18).is_writable);
+        assert!(at(20).is_writable);
+        assert_eq!(at(18).key, at(20).key);
         // 53 and its alias 137 are readonly at the representative, so both
         // child views stay readonly: inheriting from the representative is not
         // a blanket upgrade.
-        assert!(!child[53].is_writable);
-        assert!(!child[137].is_writable);
+        assert!(!at(53).is_writable);
+        assert!(!at(137).is_writable);
     }
 
     /// A route view must never claim a privilege the transaction did not grant,
@@ -235,10 +269,12 @@ mod tests {
             .expect("shared market ordinal");
         assert!(physical[ordinal].is_writable, "representative is writable");
         physical[ordinal].is_writable = false;
-        let physical_refs = physical.iter().collect::<Vec<_>>();
-        let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &physical_refs)
+        let view = PhysicalAccountsV4::new(&[], &physical);
+        let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
-        assert!(downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical).is_err());
+        assert!(
+            crate::hot_v3::child_route_privileges_v3(profile, 0, &span_counts, &logical).is_err()
+        );
     }
 
     #[test]
@@ -248,10 +284,8 @@ mod tests {
         let span_counts = [1_u32];
         let mut physical = physical_accounts(profile, span_counts[0]);
         physical.pop();
-        let physical_refs = physical.iter().collect::<Vec<_>>();
-        assert!(
-            expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &physical_refs).is_err()
-        );
+        let view = PhysicalAccountsV4::new(&[], &physical);
+        assert!(expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view).is_err());
 
         let mut physical = physical_accounts(profile, span_counts[0]);
         let executable_coordinate = 8_usize;
@@ -259,9 +293,56 @@ mod tests {
             .physical_account_ordinal_with_dynamic_spans(0, &span_counts, executable_coordinate)
             .expect("executable ordinal");
         physical[ordinal].executable = false;
-        let physical_refs = physical.iter().collect::<Vec<_>>();
-        let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &physical_refs)
+        let view = PhysicalAccountsV4::new(&[], &physical);
+        let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
-        assert!(downgrade_dynamic_child_accounts_v4(profile, 0, &span_counts, &logical).is_err());
+        assert!(
+            crate::hot_v3::child_route_privileges_v3(profile, 0, &span_counts, &logical).is_err()
+        );
+    }
+
+    /// The split view addresses exactly the vector the concatenation produced.
+    ///
+    /// Production always supplies a nonempty injected prefix, so the seam that
+    /// matters is the boundary between the two pieces -- the ordinal where
+    /// `get` stops reading the frame accounts and starts subtracting into the
+    /// supplied suffix. Expanding across every possible split and requiring the
+    /// same logical vector each time pins that arithmetic, including the
+    /// degenerate all-injected and all-supplied ends.
+    #[test]
+    fn every_injected_suffix_split_addresses_the_same_physical_vector() {
+        let bytes = profile_bytes();
+        let profile = AccountProfileV2::decode(&bytes).expect("profile");
+        let span_counts = [1_u32];
+        let physical = physical_accounts(profile, span_counts[0]);
+        let joined = PhysicalAccountsV4::new(&[], &physical);
+        let expected = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &joined)
+            .expect("logical expansion");
+        let keys = expected
+            .iter()
+            .map(|account| *account.key)
+            .collect::<Vec<_>>();
+
+        for split in [0_usize, 1, 5, 32, physical.len()] {
+            let injected = physical
+                .get(..split)
+                .expect("injected prefix")
+                .iter()
+                .collect::<Vec<_>>();
+            let supplied = physical.get(split..).expect("supplied suffix");
+            let view = PhysicalAccountsV4::new(&injected, supplied);
+            assert_eq!(view.len(), physical.len(), "split {split} lost an account");
+            assert!(
+                view.get(physical.len()).is_none(),
+                "split {split} addressed past the end"
+            );
+            let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
+                .expect("logical expansion");
+            assert_eq!(
+                logical.iter().map(|a| *a.key).collect::<Vec<_>>(),
+                keys,
+                "split {split} produced a different logical vector"
+            );
+        }
     }
 }

@@ -818,7 +818,15 @@ impl SourceSpecV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum WindowKind {
-    /// One terminal target instant; the start and end must be identical.
+    /// A closed period answered by the first admissible observation in it.
+    ///
+    /// The window has real width. It used to be forced to one exact instant,
+    /// and that was never a semantic decision — it fell out of the constructor
+    /// and it made the profile unusable on a real provider: Pyth's devnet
+    /// SOL/USD feed publishes on a p50 cadence near five minutes, so a window
+    /// one second wide is answered only when a publication happens to land on
+    /// that second. A degenerate `start == end` remains legal and still means
+    /// an instant; it is now a market's choice rather than the type's demand.
     Terminal = 1,
     /// A closed interval sampled on a separately committed finite schedule.
     ScheduledInterval = 2,
@@ -851,6 +859,21 @@ pub struct WindowSpecV1 {
 
 impl WindowSpecV1 {
     /// Construct a terminal or scheduled interval window.
+    ///
+    /// Both kinds are closed intervals and both require `start <= end`. They
+    /// differ in whether a degenerate window is admissible: a terminal window
+    /// is answered by one observation, so a single instant is a coherent (if
+    /// usually impractical) thing to sell, while a scheduled interval carries a
+    /// finite schedule of at least two distinct sample times and a zero-width
+    /// interval could not hold one.
+    ///
+    /// `max_age_seconds` is a different clock and is not derivable from either
+    /// bound: `[start, end]` says what the observation must be *about*, and
+    /// `max_age_seconds` says how far behind this cluster's clock the
+    /// provider's publication may be. It also sets the liveness deadline —
+    /// `primary_deadline` is `end + max_age_seconds` — so a zero value would
+    /// make the honest-resolution deadline and the failure-walk deadline the
+    /// same second, and it is refused.
     pub fn new(
         source_spec_id: ContentId,
         kind: WindowKind,
@@ -864,7 +887,7 @@ impl WindowSpecV1 {
             return Err(Error::InvalidWindow);
         }
         match kind {
-            WindowKind::Terminal if start_unix_seconds != end_unix_seconds => {
+            WindowKind::Terminal if start_unix_seconds > end_unix_seconds => {
                 return Err(Error::InvalidWindow);
             }
             WindowKind::ScheduledInterval if start_unix_seconds >= end_unix_seconds => {
@@ -5704,10 +5727,23 @@ mod tests {
 
     #[test]
     fn schedule_time_and_statistic_shapes_refuse() {
+        // A terminal window with real width is the ordinary case, and both
+        // bounds survive the byte round trip so the width is a committed fact
+        // rather than a constructor convenience.
+        let wide = WindowSpecV1::new(id(1), WindowKind::Terminal, 4, 5, 1, 0, id(2))
+            .expect("a terminal window may have width");
+        assert_eq!(wide.start_unix_seconds(), 4);
+        assert_eq!(wide.end_unix_seconds(), 5);
+        assert_eq!(WindowSpecV1::decode(&wide.to_bytes()), Ok(wide));
+        // A degenerate terminal window stays legal: it is a market's choice.
+        assert!(WindowSpecV1::new(id(1), WindowKind::Terminal, 5, 5, 1, 0, id(2)).is_ok());
+        // Inverted is not a window under either reading.
         assert_eq!(
-            WindowSpecV1::new(id(1), WindowKind::Terminal, 4, 5, 1, 0, id(2)),
+            WindowSpecV1::new(id(1), WindowKind::Terminal, 6, 5, 1, 0, id(2)),
             Err(Error::InvalidWindow)
         );
+        // A scheduled interval carries at least two distinct sample times, so
+        // it alone still refuses a zero-width window.
         assert_eq!(
             WindowSpecV1::new(id(1), WindowKind::ScheduledInterval, 5, 5, 1, 0, id(2)),
             Err(Error::InvalidWindow)

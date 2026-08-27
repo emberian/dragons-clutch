@@ -30,6 +30,7 @@ use solana_program::{
 use crate::{
     TradingSbfError,
     child_receipt_v3::{ChildReceiptBankV3, ExpectedReceiptProvenanceV4},
+    hot_v3::DowngradedEffectAccountsV3,
     projected_core_composition_v4::AuthenticatedProjectedCorePrefixV4,
     projected_custody_composition_v4::AuthenticatedProjectedCustodyPrefixV4,
     projected_market_v2::ProjectedMarketExecutionV2,
@@ -128,7 +129,7 @@ pub(crate) fn execute_projected_realize_route_v4<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     custody_program: &AccountInfo<'info>,
     lock_prefix: &AuthenticatedProjectedCustodyPrefixV4,
@@ -204,7 +205,7 @@ fn prepare(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     custody_program: &AccountInfo<'_>,
     lock_prefix: &AuthenticatedProjectedCustodyPrefixV4,
@@ -374,17 +375,22 @@ fn validate_invocation(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let start = usize::from(invocation.fixed_account_start);
     let end = start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    let selected = accounts.get(start..end).ok_or(TradingSbfError::Content)?;
-    if selected.len() != REALIZE_ACCOUNT_COUNT_V4 {
+    let mut output = Vec::new();
+    accounts.extend_window(
+        &mut output,
+        start,
+        end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+    )?;
+    if output.len() != REALIZE_ACCOUNT_COUNT_V4 {
         return Err(TradingSbfError::Content.into());
     }
-    Ok(selected.to_vec())
+    Ok(output)
 }
 
 fn authenticate_prefix_join(

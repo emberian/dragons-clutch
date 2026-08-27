@@ -1,0 +1,47 @@
+{
+  "campaign": "claims-rational-lifecycle-programtest",
+  "witnesses": [
+    {
+      "id": "rational-lifecycle-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it -- the test itself asserts every one of the four commit CUs against this same bound."
+    },
+    {
+      "id": "rational-lifecycle-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign therefore serialises every transaction it submits over a real activated Address Lookup Table and records the extent, and this witness checks the largest against the stated limit."
+    },
+    {
+      "id": "rational-lifecycle-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured."
+    },
+    {
+      "id": "every-rational-lifecycle-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this campaign claims -- named or unnamed_refusal -- is a program decision, so a bare runtime refusal appearing here would mean a hostile case stopped being about a program."
+    },
+    {
+      "id": "all-four-lifecycle-stages-let-claims-return-before-their-late-refusal",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"claims rational-lifecycle: caller refuses after\")) | select(.error != null) | select([.logs[] | select(. == \"Program E3M3d7sy8ZKivUGxBexL9wxE7ebqzGWFqkdeFMedCJFS success\")] | length >= 1)] | length | tostring",
+      "expect": "4",
+      "provenance": "A rollback case is only evidence if the thing being rolled back actually happened. This asserts, from the runtime's own log, that each of the four late-refusal transactions the ledger records as FAILED contains at least one completed Claims invocation (E3M3d7sy8ZKivUGxBexL9wxE7ebqzGWFqkdeFMedCJFS is the claims program address pinned in tools/gauntlet/claims-rational-lifecycle/programs.json)."
+    },
+    {
+      "id": "the-canonical-token-2022-v11-elf-authenticated",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | endswith(\"commits\")) | .logs[] | select(. == \"Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb success\")] | length | tostring",
+      "expect": "8",
+      "provenance": "This campaign's Token-2022 fixture is the byte-for-byte canonical, cross-host-reproducible spl-token-2022 11.0.0 ELF pinned in programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance (SHA-256 e2acdfb750881462ad613a15cc9c54ae17ce066580e867e1e635fbdfe01f5697), authenticated at TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb -- Solana's real, deployed Token-2022 program address, which only the canonical artifact can occupy under the fixture's own digest check. This counts the runtime's own success logs for it across the four committing transactions (ActivateReceipt 2, ActivateCoordinate 3, RetireCoordinate 2, RetireReceipt 1 -- each Mint/account init or close CPI logs its own success line)."
+    }
+  ]
+}

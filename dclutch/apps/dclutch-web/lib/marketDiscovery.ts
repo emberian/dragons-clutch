@@ -7,38 +7,49 @@ import {
   type CapabilityActivationV1,
   type CapabilityFundingQuoteV1,
 } from './capabilityManifest';
+import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CORE_STATE_MAGIC, REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
 import {
-  classifyHeader,
-  crossCheckBindings,
-  decodeCoreAccount,
-  deriveRealmAddress,
-  verifyLocalBindings,
-  type AccountProjection,
-  type BindingCheck,
-  type DecodedProjection,
-  type FullAccountObservation,
-  type MarketPhase,
-  type MarketSettlement,
-  type RealmAuthorityPolicy,
-  type RequiredBackingBasis,
-} from './decoders';
-import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+  MARKET_HOARD_UNDERIVABLE_V1,
+  decodeClaimsAggregateV2,
+  decodeMarketCoreStateV2,
+  deriveClaimsAggregateAddressV2,
+  deriveMarketCoreAddressV2,
+  type MarketCorePhaseV2,
+  type MarketCoreReadinessV2,
+  type MarketCoreSettlementV2,
+} from './marketCoreV2';
+import { decodeRealmRecordV1, type RealmAuthorityPolicy } from './realmRecord';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import { type BindingCheck } from './decoders';
 
 /**
  * Market discovery: a bounded, finalized, chain-derived listing.
  *
  * Every value on a discovery card is decoded from a finalized account this
  * browser read, or the card says `REFUSED` and why. There is no volume, price,
- * odds, probability, APR, or aggregate: Hoard atoms are the Market's raw
- * collateral integer and are never presented as liquidity, TVL, or an amount
- * available to anyone. Capability badges come only from the Market's own
- * authenticated capability manifest.
+ * odds, probability, APR, or aggregate.
+ *
+ * Three facts about the real representation shape this module, and each was
+ * measured against a live chain rather than assumed:
+ *
+ *   1. A Market is `DCLTCOR2` — the Lean-emitted 352-byte Core state. It holds
+ *      identity and lifecycle only.
+ *   2. The per-claim SUPPLY vector is not in it. It lives in a Claims-owned
+ *      LiabilityBasisV2 aggregate at a PDA derived from the Market, so a card
+ *      without a Claims program says its liabilities are UNREAD rather than
+ *      showing an empty vector.
+ *   3. The Realm is not a Core account. It is a finalized Registry record whose
+ *      body hashes to the identity the Market committed to, reacquired and
+ *      re-hashed here the same way the capability manifest is.
+ *
+ * The Hoard has no honest place on this surface at all: see
+ * `MARKET_HOARD_UNDERIVABLE_V1`.
  */
 
 export const MARKET_DISCOVERY_MAX_ADDRESSES = 32;
 const RPC_ACCOUNT_BATCH = 32;
+const CORE_STATE_MAGIC_TEXT = new TextDecoder().decode(CORE_STATE_MAGIC);
 
 export type MarketProvenanceV1 =
   | Readonly<{ kind: 'chain'; observedSlot: string }>
@@ -84,25 +95,56 @@ export type MarketCollateralV1 =
     mintAuthorityPolicy: RealmAuthorityPolicy;
     freezeAuthorityPolicy: RealmAuthorityPolicy;
   }>
-  | Readonly<{ status: 'refused'; realmAddress: string | null; realmContentId: string; reason: string }>;
+  | Readonly<{ status: 'refused'; realmAddress: string | null; realmContentId: string; reason: string }>
+  | Readonly<{ status: 'unread'; realmContentId: string; reason: string }>;
+
+/** Which supply the collateral must cover at this phase. */
+export type RequiredBackingBasisV2 = 'maximum-claim-supply' | 'winning-claim-supply';
+
+/**
+ * A Market's liabilities, read where they actually live.
+ *
+ * `unread` is not `zero`. A card with no Claims program selected has not looked
+ * at any liability state and says so; it does not render an empty supply vector,
+ * which would read as "this Market has issued nothing".
+ */
+export type MarketLiabilityV1 =
+  | Readonly<{
+    status: 'bound';
+    observedSlot: string;
+    aggregateAddress: string;
+    claimsProgramId: string;
+    claimCount: number;
+    revision: string;
+    generation: string;
+    liabilityBasisId: string;
+    supplyAtoms: ReadonlyArray<string>;
+    requiredBackingAtoms: string;
+    requiredBackingBasis: RequiredBackingBasisV2;
+  }>
+  | Readonly<{ status: 'unread'; reason: string }>
+  | Readonly<{ status: 'refused'; aggregateAddress: string | null; reason: string }>;
+
+/** The Hoard, and the exact reason no reader can name it from a Market. */
+export type MarketHoardV1 = Readonly<{ status: 'not-derivable'; reason: string }>;
 
 /**
  * The immutable identities one Market root commits to, plus the exact artifact
- * profile its account bytes declare. These are content identities, not
- * addresses: a Market names what it is, and a reader reacquires each named
- * record from its own canonical authority.
+ * profile its account bytes declare.
  */
 export type MarketIdentityV1 = Readonly<{
   schemaMagic: string;
   schemaVersion: number;
-  categoricalProfile: number;
   accountBytes: number;
+  marketId: string;
   realmId: string;
+  productRecordId: string;
   productInstanceId: string;
-  claimBasisId: string;
   resolutionPolicyId: string;
   capabilityManifestId: string;
-  rentRefundAuthority: string;
+  selectedReleaseSetId: string;
+  registryProgram: string;
+  rentBeneficiary: string;
 }>;
 
 export type MarketDiscoveryCardV1 =
@@ -111,17 +153,15 @@ export type MarketDiscoveryCardV1 =
     address: string;
     provenance: MarketProvenanceV1;
     observedSlot: string;
-    phase: MarketPhase;
+    phase: MarketCorePhaseV2;
+    readiness: MarketCoreReadinessV2;
     generation: string;
-    outcomeCount: number;
-    hoardAtoms: string;
-    supplyAtoms: ReadonlyArray<string>;
-    requiredBackingAtoms: string;
-    requiredBackingBasis: RequiredBackingBasis;
-    outstandingChildren: string;
-    settlement: MarketSettlement;
+    outstandingCapabilities: string;
+    settlement: MarketCoreSettlementV2;
     identity: MarketIdentityV1;
     collateral: MarketCollateralV1;
+    liability: MarketLiabilityV1;
+    hoard: MarketHoardV1;
     capabilities: MarketCapabilityManifestV1;
     bindings: ReadonlyArray<BindingCheck>;
     refusal: null;
@@ -142,6 +182,7 @@ export type MarketEnumerationV1 =
 export type MarketDiscoveryV1 = Readonly<{
   coreProgramId: string;
   registryProgramId: string | null;
+  claimsProgramId: string | null;
   floorSlot: string;
   enumeration: MarketEnumerationV1;
   cards: ReadonlyArray<MarketDiscoveryCardV1>;
@@ -151,6 +192,7 @@ export type MarketDiscoveryV1 = Readonly<{
 export type MarketDiscoveryRequestV1 = Readonly<{
   coreProgramId: string;
   registryProgramId?: string | null;
+  claimsProgramId?: string | null;
   addresses: ReadonlyArray<string>;
   enumeration?: MarketEnumerationV1;
 }>;
@@ -164,6 +206,10 @@ function canonical(value: string, field: string): string {
   }
   if (key !== value) throw new Error(`${field} must be canonical base58 text`);
   return key;
+}
+
+function optional(value: string | null | undefined, field: string): string | null {
+  return value === undefined || value === null || value === '' ? null : canonical(value, field);
 }
 
 /** Parse a user-entered list of known Market addresses without guessing. */
@@ -183,6 +229,12 @@ function chunks<T>(values: ReadonlyArray<T>, width: number): T[][] {
   return output;
 }
 
+/** Does this account carry the live Core Market magic? */
+export function isCoreMarketHeaderV2(data: Uint8Array): boolean {
+  if (data.length < CORE_STATE_MAGIC.length) return false;
+  return CORE_STATE_MAGIC.every((byte, index) => data[index] === byte);
+}
+
 type EnumerationClient = Pick<SolanaRpcClient, 'programHeaders'>;
 
 /**
@@ -197,7 +249,7 @@ export async function enumerateCoreMarketAddressesV1(client: EnumerationClient, 
   try {
     const scan = await client.programHeaders(program);
     const addresses = scan.accounts
-      .filter((entry) => classifyHeader(entry.account.data) === 'Market')
+      .filter((entry) => isCoreMarketHeaderV2(entry.account.data))
       .map((entry) => entry.address)
       .sort((left, right) => left.localeCompare(right));
     const bounded = addresses.slice(0, MARKET_DISCOVERY_MAX_ADDRESSES);
@@ -207,7 +259,7 @@ export async function enumerateCoreMarketAddressesV1(client: EnumerationClient, 
       scanSlot: scan.slot,
       addresses: Object.freeze(bounded),
       scannedAccounts: scan.accounts.length,
-      note: `getProgramAccounts returned ${scan.accounts.length} finalized Core accounts at slot ${scan.slot}; ${addresses.length} carry the Market header${dropped > 0 ? `, of which ${dropped} exceed the ${MARKET_DISCOVERY_MAX_ADDRESSES}-Market listing bound and were not read` : ''}.`,
+      note: `getProgramAccounts returned ${scan.accounts.length} finalized Core accounts at slot ${scan.slot}; ${addresses.length} carry the ${CORE_STATE_MAGIC_TEXT} Market header${dropped > 0 ? `, of which ${dropped} exceed the ${MARKET_DISCOVERY_MAX_ADDRESSES}-Market listing bound and were not read` : ''}.`,
     });
   } catch (error) {
     return Object.freeze({
@@ -217,17 +269,6 @@ export async function enumerateCoreMarketAddressesV1(client: EnumerationClient, 
       note: 'This endpoint did not serve a bounded finalized getProgramAccounts scan. Enumerate from known Market addresses instead; dClutch has no index and this browser will not invent one.',
     });
   }
-}
-
-function observation(address: string, account: RpcAccount, observedSlot: string): FullAccountObservation {
-  return Object.freeze({
-    address,
-    owner: account.owner,
-    executable: account.executable,
-    lamports: account.lamports,
-    observedSlot,
-    data: account.data,
-  });
 }
 
 type DiscoveryClient = Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>;
@@ -245,6 +286,34 @@ async function readAccounts(
   return observed;
 }
 
+/**
+ * Reacquire one finalized Registry record by the content identity that names it.
+ *
+ * The record must exist at its derived PDA, be Registry-owned, have a vacant
+ * staging cursor, and hash to the identity that asked for it. Anything else is a
+ * refusal carrying its exact reason.
+ */
+async function finalizedRecordBody(
+  client: DiscoveryClient,
+  registryProgramId: string,
+  schema: Uint8Array,
+  identityHex: string,
+  floor: string,
+  field: string,
+): Promise<Readonly<{ address: string; data: Uint8Array; observedSlot: string }>> {
+  const digest = fromHex(identityHex, `${field} identity`);
+  const addresses = deriveFinalizedRecordAddressesV1(registryProgramId, schema, digest);
+  const batch = await client.multipleAccounts([addresses.record, addresses.staging], floor);
+  const record = batch.accounts.find((entry) => entry.address === addresses.record)?.account ?? null;
+  const staging = batch.accounts.find((entry) => entry.address === addresses.staging)?.account ?? null;
+  if (record === null) throw new Error(`${field} record ${addresses.record} is absent at finalized slot ${batch.slot}`);
+  if (record.owner !== registryProgramId || record.executable) throw new Error(`${field} record is not Registry-owned finalized data`);
+  if (staging !== null) throw new Error(`${field} staging cursor is still present; the record is not canonically final`);
+  const observedDigest = hex(await sha256(record.data));
+  if (observedDigest !== identityHex) throw new Error(`${field} bytes differ from the identity the Market committed to`);
+  return Object.freeze({ address: addresses.record, data: record.data, observedSlot: batch.slot });
+}
+
 async function authenticateCapabilityManifest(
   client: DiscoveryClient,
   registryProgramId: string,
@@ -252,16 +321,7 @@ async function authenticateCapabilityManifest(
   floor: string,
 ): Promise<MarketCapabilityManifestV1> {
   try {
-    const digest = fromHex(manifestIdHex, 'capability manifest identity');
-    const addresses = deriveFinalizedRecordAddressesV1(registryProgramId, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, digest);
-    const batch = await client.multipleAccounts([addresses.record, addresses.staging], floor);
-    const record = batch.accounts.find((entry) => entry.address === addresses.record)?.account ?? null;
-    const staging = batch.accounts.find((entry) => entry.address === addresses.staging)?.account ?? null;
-    if (record === null) throw new Error(`manifest record ${addresses.record} is absent at finalized slot ${batch.slot}`);
-    if (record.owner !== registryProgramId || record.executable) throw new Error('manifest record is not Registry-owned finalized data');
-    if (staging !== null) throw new Error('manifest staging cursor is still present; the record is not canonically final');
-    const observedDigest = hex(await sha256(record.data));
-    if (observedDigest !== manifestIdHex) throw new Error('manifest bytes differ from the identity the Market committed to');
+    const record = await finalizedRecordBody(client, registryProgramId, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, manifestIdHex, floor, 'capability manifest');
     const badges = decodeCapabilityManifestV1(record.data).map((entry) => {
       const kindId = hex(entry.kind);
       const recognized = recognizeCapabilityKindV1(entry.kind);
@@ -278,7 +338,7 @@ async function authenticateCapabilityManifest(
         funding: entry.funding,
       });
     });
-    return Object.freeze({ status: 'authenticated', manifestId: manifestIdHex, recordAddress: addresses.record, observedSlot: batch.slot, badges: Object.freeze(badges) });
+    return Object.freeze({ status: 'authenticated', manifestId: manifestIdHex, recordAddress: record.address, observedSlot: record.observedSlot, badges: Object.freeze(badges) });
   } catch (error) {
     return Object.freeze({
       status: 'refused',
@@ -288,44 +348,115 @@ async function authenticateCapabilityManifest(
   }
 }
 
-function collateralFrom(realm: DecodedProjection | null, realmAddress: string, realmContentId: string): MarketCollateralV1 {
-  if (realm === null || realm.semantics.kind !== 'Realm') {
-    return Object.freeze({ status: 'refused', realmAddress, realmContentId, reason: `Realm ${realmAddress} did not decode at this finalized floor; collateral identity is unbound.` });
+/**
+ * The collateral binding, authenticated from the Registry.
+ *
+ * A Market names its Realm by content identity. On a live chain the canonical
+ * Realm body is a finalized Registry record, not a Core account, so the Registry
+ * program is required to read it — without one the card says the collateral is
+ * UNREAD rather than claiming it is unbound.
+ */
+async function authenticateCollateral(
+  client: DiscoveryClient,
+  registryProgramId: string | null,
+  realmContentId: string,
+  floor: string,
+): Promise<MarketCollateralV1> {
+  if (registryProgramId === null) {
+    return Object.freeze({
+      status: 'unread',
+      realmContentId,
+      reason: 'No Registry program was selected, so this Market\'s Realm record was not reacquired and no collateral binding may be asserted from the Market root alone.',
+    });
   }
-  if (realm.semantics.contentDigest !== realmContentId) {
-    return Object.freeze({ status: 'refused', realmAddress, realmContentId, reason: 'decoded Realm content digest differs from the identity the Market committed to' });
+  try {
+    const record = await finalizedRecordBody(client, registryProgramId, REALM_SCHEMA_RELEASE_ID_V1, realmContentId, floor, 'Realm');
+    const realm = decodeRealmRecordV1(record.data);
+    return Object.freeze({
+      status: 'bound',
+      observedSlot: record.observedSlot,
+      realmAddress: record.address,
+      realmContentId,
+      collateralMint: realm.collateralMint,
+      collateralMintShort: shortAddressV1(realm.collateralMint),
+      tokenProgram: realm.tokenProgram,
+      adapterReleaseId: realm.adapterReleaseId,
+      mintAuthorityPolicy: realm.mintAuthorityPolicy,
+      freezeAuthorityPolicy: realm.freezeAuthorityPolicy,
+    });
+  } catch (error) {
+    return Object.freeze({
+      status: 'refused',
+      realmAddress: null,
+      realmContentId,
+      reason: error instanceof Error ? error.message : 'Realm record refused without a usable reason',
+    });
   }
-  // Every Realm field comes from the one canonical Realm decoder; this module
-  // does not restate a byte offset it does not own.
-  const semantics = realm.semantics;
-  return Object.freeze({
-    status: 'bound',
-    observedSlot: realm.observedSlot,
-    realmAddress,
-    realmContentId,
-    collateralMint: semantics.collateralMint,
-    collateralMintShort: shortAddressV1(semantics.collateralMint),
-    tokenProgram: semantics.tokenProgram,
-    adapterReleaseId: semantics.adapterReleaseId,
-    mintAuthorityPolicy: semantics.mintAuthorityPolicy,
-    freezeAuthorityPolicy: semantics.freezeAuthorityPolicy,
-  });
 }
+
+/** Read one Market's liability state from the Claims program that owns it. */
+async function readLiability(
+  client: DiscoveryClient,
+  claimsProgramId: string | null,
+  marketAddress: string,
+  marketGeneration: string,
+  settled: boolean,
+  floor: string,
+): Promise<MarketLiabilityV1> {
+  if (claimsProgramId === null) {
+    return Object.freeze({
+      status: 'unread',
+      reason: 'No Claims program was selected. A Market root carries no supply vector, so nothing about issued liabilities is asserted here — this is an unread section, not a Market with no claims.',
+    });
+  }
+  let aggregateAddress: string | null = null;
+  try {
+    aggregateAddress = deriveClaimsAggregateAddressV2(claimsProgramId, marketAddress);
+    const batch = await client.multipleAccounts([aggregateAddress], floor);
+    const account = batch.accounts[0]?.account ?? null;
+    if (account === null) throw new Error(`no Claims LiabilityBasisV2 aggregate exists at ${aggregateAddress} at finalized slot ${batch.slot}`);
+    if (account.owner !== claimsProgramId || account.executable) throw new Error('the derived aggregate address holds an account the selected Claims program does not own');
+    const aggregate = decodeClaimsAggregateV2(aggregateAddress, account.data);
+    if (aggregate.logicalMarket !== marketAddress) throw new Error(`the aggregate names Market ${aggregate.logicalMarket}, not ${marketAddress}`);
+    if (aggregate.generation !== marketGeneration) throw new Error(`the aggregate is at generation ${aggregate.generation} while the Market is at ${marketGeneration}; these are two incarnations and are not shown as one`);
+    return Object.freeze({
+      status: 'bound',
+      observedSlot: batch.slot,
+      aggregateAddress,
+      claimsProgramId,
+      claimCount: aggregate.claimCount,
+      revision: aggregate.revision,
+      generation: aggregate.generation,
+      liabilityBasisId: aggregate.liabilityBasisId,
+      supplyAtoms: aggregate.supplyAtoms,
+      requiredBackingAtoms: aggregate.maximumSupplyAtoms,
+      requiredBackingBasis: settled ? 'winning-claim-supply' : 'maximum-claim-supply',
+    });
+  } catch (error) {
+    return Object.freeze({
+      status: 'refused',
+      aggregateAddress,
+      reason: error instanceof Error ? error.message : 'Claims liability state refused without a usable reason',
+    });
+  }
+}
+
+const HOARD_V1: MarketHoardV1 = Object.freeze({ status: 'not-derivable', reason: MARKET_HOARD_UNDERIVABLE_V1 });
 
 /**
  * Read one finalized Market discovery listing.
  *
- * All Markets, their Realms, and their capability manifests are read behind a
- * single finalized floor slot so no card mixes observation epochs.
+ * All Markets, their Realm records, their liability aggregates and their
+ * capability manifests are read behind a single finalized floor slot so no card
+ * mixes observation epochs.
  */
 export async function inspectMarketDiscoveryV1(
   client: DiscoveryClient,
   request: MarketDiscoveryRequestV1,
 ): Promise<MarketDiscoveryV1> {
   const coreProgramId = canonical(request.coreProgramId, 'Core program');
-  const registryProgramId = request.registryProgramId === undefined || request.registryProgramId === null || request.registryProgramId === ''
-    ? null
-    : canonical(request.registryProgramId, 'Registry program');
+  const registryProgramId = optional(request.registryProgramId, 'Registry program');
+  const claimsProgramId = optional(request.claimsProgramId, 'Claims program');
   const addresses = Object.freeze([...new Set(request.addresses.map((address, index) => canonical(address, `Market address ${index + 1}`)))]);
   if (addresses.length > MARKET_DISCOVERY_MAX_ADDRESSES) {
     throw new Error(`discovery requested ${addresses.length} Markets, above the explicit ${MARKET_DISCOVERY_MAX_ADDRESSES}-Market browser bound`);
@@ -340,6 +471,7 @@ export async function inspectMarketDiscoveryV1(
     return Object.freeze({
       coreProgramId,
       registryProgramId,
+      claimsProgramId,
       floorSlot: floor,
       enumeration,
       cards: Object.freeze([]),
@@ -347,103 +479,82 @@ export async function inspectMarketDiscoveryV1(
     });
   }
 
-  const marketAccounts = await readAccounts(client, addresses, floor);
-  const marketProjections = new Map<string, AccountProjection>();
-  for (const address of addresses) {
-    const entry = marketAccounts.get(address);
-    if (entry === undefined || entry.account === null) {
-      marketProjections.set(address, Object.freeze({
-        status: 'refused', kind: 'Market', address, lamports: '0',
-        observedSlot: entry?.slot ?? floor, header: '',
-        reason: 'account is absent at the finalized observation floor',
-      }));
-      continue;
-    }
-    const projection = decodeCoreAccount(observation(address, entry.account, entry.slot), coreProgramId);
-    marketProjections.set(address, projection.status === 'decoded' ? await verifyLocalBindings(projection, coreProgramId) : projection);
-  }
-
-  const realmRequests = new Map<string, string>();
-  for (const projection of marketProjections.values()) {
-    if (projection.status !== 'decoded' || projection.semantics.kind !== 'Market') continue;
-    try {
-      realmRequests.set(projection.semantics.realmId, deriveRealmAddress(coreProgramId, projection.semantics.realmId));
-    } catch {
-      // A Market whose Realm identity will not derive is reported per card.
-    }
-  }
-  const realmAddresses = Object.freeze([...new Set(realmRequests.values())]);
-  const realmProjections = new Map<string, DecodedProjection>();
-  if (realmAddresses.length > 0) {
-    const realmAccounts = await readAccounts(client, realmAddresses, floor);
-    for (const address of realmAddresses) {
-      const entry = realmAccounts.get(address);
-      if (entry === undefined || entry.account === null) continue;
-      const projection = decodeCoreAccount(observation(address, entry.account, entry.slot), coreProgramId);
-      if (projection.status === 'decoded') realmProjections.set(address, await verifyLocalBindings(projection, coreProgramId));
-    }
-  }
-
-  const joined = crossCheckBindings([...marketProjections.values(), ...realmProjections.values()]);
-  const joinedMarkets = new Map(joined.filter((projection) => addresses.includes(projection.address)).map((projection) => [projection.address, projection]));
-
+  const observed = await readAccounts(client, addresses, floor);
   const cards: MarketDiscoveryCardV1[] = [];
   for (const address of addresses) {
-    const projection = joinedMarkets.get(address) ?? marketProjections.get(address);
-    if (projection === undefined || projection.status !== 'decoded' || projection.semantics.kind !== 'Market') {
-      const reason = projection !== undefined && projection.status === 'refused'
-        ? projection.reason
-        : 'account did not decode as one canonical Core Market';
-      cards.push(Object.freeze({
-        status: 'refused',
-        address,
-        provenance: Object.freeze({ kind: 'refused', reason }),
-        observedSlot: projection?.observedSlot ?? floor,
-        refusal: reason,
-      }));
+    const entry = observed.get(address);
+    if (entry === undefined || entry.account === null) {
+      const reason = 'account is absent at the finalized observation floor';
+      cards.push(Object.freeze({ status: 'refused', address, provenance: Object.freeze({ kind: 'refused', reason }), observedSlot: entry?.slot ?? floor, refusal: reason }));
       continue;
     }
-    const semantics = projection.semantics;
-    const realmAddress = realmRequests.get(semantics.realmId) ?? null;
-    const collateral = realmAddress === null
-      ? Object.freeze({ status: 'refused' as const, realmAddress: null, realmContentId: semantics.realmId, reason: 'Market Realm content identity did not derive one canonical Realm address' })
-      : collateralFrom(realmProjections.get(realmAddress) ?? null, realmAddress, semantics.realmId);
+    if (entry.account.owner !== coreProgramId || entry.account.executable) {
+      const reason = 'account owner differs from the selected Core program, or it is executable program data';
+      cards.push(Object.freeze({ status: 'refused', address, provenance: Object.freeze({ kind: 'refused', reason }), observedSlot: entry.slot, refusal: reason }));
+      continue;
+    }
+    let state;
+    try {
+      state = decodeMarketCoreStateV2(address, entry.account.data);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'the account did not decode as one canonical Core Market state';
+      cards.push(Object.freeze({ status: 'refused', address, provenance: Object.freeze({ kind: 'refused', reason }), observedSlot: entry.slot, refusal: reason }));
+      continue;
+    }
+
+    // The account must derive the address it was found at, from the identities
+    // it declares. `market_id` is not one of those seeds, so this is a real
+    // check and not a restatement.
+    const derived = deriveMarketCoreAddressV2(coreProgramId, entry.account.data);
+    const bindings: BindingCheck[] = [
+      Object.freeze({ label: 'Market PDA', ok: derived === address, detail: `identity seeds + generation ${state.identity.generation} → ${derived}` }),
+      Object.freeze({ label: 'Market self-identity', ok: state.marketId === address, detail: `state names ${state.marketId}` }),
+      Object.freeze({
+        label: 'Registry authority',
+        ok: registryProgramId === null || state.identity.registryProgram === registryProgramId,
+        detail: registryProgramId === null ? `Market selects Registry ${state.identity.registryProgram}; none was selected here` : `Market selects ${state.identity.registryProgram}`,
+      }),
+    ];
+
+    const collateral = await authenticateCollateral(client, registryProgramId, state.identity.realmId, floor);
+    const liability = await readLiability(client, claimsProgramId, address, state.identity.generation, state.settlement.status === 'terminal', floor);
     const capabilities: MarketCapabilityManifestV1 = registryProgramId === null
       ? Object.freeze({
         status: 'unread',
-        manifestId: semantics.capabilityManifestId,
+        manifestId: state.identity.capabilityManifestId,
         reason: 'No Registry program was selected, so this Market\'s capability manifest was not authenticated. No capability may be asserted from the Market root alone.',
       })
-      : await authenticateCapabilityManifest(client, registryProgramId, semantics.capabilityManifestId, floor);
+      : await authenticateCapabilityManifest(client, registryProgramId, state.identity.capabilityManifestId, floor);
+
     cards.push(Object.freeze({
       status: 'decoded',
       address,
-      provenance: Object.freeze({ kind: 'chain', observedSlot: projection.observedSlot }),
-      observedSlot: projection.observedSlot,
-      phase: semantics.phase,
-      generation: semantics.generation,
-      outcomeCount: semantics.outcomeCount,
-      hoardAtoms: semantics.hoardAtoms,
-      supplyAtoms: semantics.supply,
-      requiredBackingAtoms: semantics.requiredBackingAtoms,
-      requiredBackingBasis: semantics.requiredBackingBasis,
-      outstandingChildren: semantics.outstandingChildren,
-      settlement: semantics.settlement,
+      provenance: Object.freeze({ kind: 'chain', observedSlot: entry.slot }),
+      observedSlot: entry.slot,
+      phase: state.phase,
+      readiness: state.readiness,
+      generation: state.identity.generation,
+      outstandingCapabilities: state.outstandingCapabilities,
+      settlement: state.settlement,
       identity: Object.freeze({
-        schemaMagic: 'DCLTCAT1',
-        schemaVersion: semantics.schemaVersion,
-        categoricalProfile: semantics.categoricalProfile,
-        accountBytes: semantics.accountBytes,
-        realmId: semantics.realmId,
-        productInstanceId: semantics.productInstanceId,
-        claimBasisId: semantics.claimBasisId,
-        resolutionPolicyId: semantics.resolutionPolicyId,
-        capabilityManifestId: semantics.capabilityManifestId,
-        rentRefundAuthority: semantics.rentRefundAuthority,
+        schemaMagic: CORE_STATE_MAGIC_TEXT,
+        schemaVersion: state.version,
+        accountBytes: state.accountBytes,
+        marketId: state.marketId,
+        realmId: state.identity.realmId,
+        productRecordId: state.identity.productRecordId,
+        productInstanceId: state.identity.productInstanceId,
+        resolutionPolicyId: state.identity.resolutionPolicyId,
+        capabilityManifestId: state.identity.capabilityManifestId,
+        selectedReleaseSetId: state.identity.selectedReleaseSetId,
+        registryProgram: state.identity.registryProgram,
+        rentBeneficiary: state.rentBeneficiary,
       }),
       collateral,
+      liability,
+      hoard: HOARD_V1,
       capabilities,
-      bindings: projection.bindings,
+      bindings: Object.freeze(bindings),
       refusal: null,
     }));
   }
@@ -452,6 +563,7 @@ export async function inspectMarketDiscoveryV1(
   return Object.freeze({
     coreProgramId,
     registryProgramId,
+    claimsProgramId,
     floorSlot: floor,
     enumeration,
     cards: Object.freeze(cards),

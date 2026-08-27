@@ -17,7 +17,7 @@ The campaign itself is
 
 ## What it claims, and what it does not
 
-**Nineteen transactions, every one of them a refusal. This campaign claims NO
+**Twenty-three transactions, every one of them a refusal. This campaign claims NO
 executed row.** A route is EXECUTED in the census only on a succeeding
 transaction, and nothing here succeeds — `this-tier-claims-no-executed-row` in
 `witnesses.json` pins that to zero so a future change cannot flip a census row
@@ -51,22 +51,32 @@ with the persisted Dealer `State`. This campaign builds none of that and says
 so rather than approximating it. Those four codes, and the executed row, are
 the next increment.
 
-## A defect this campaign executes rather than argues
+## A defect this campaign executed, and then outlived
 
-`AddLiquidity` and `RemoveLiquidity` are **unreachable on-chain at every slot
-the chain can offer**, and two of the nineteen transactions are the two halves
-of the proof:
+`AddLiquidity` and `RemoveLiquidity` were **unreachable on-chain at every slot
+the chain can offer**, and two transactions were the two halves of the proof:
+`Request::validate_shape` required `now == 0` for both, `authenticate_clock`
+required `now == clock.slot` for every action but `Retire`, and no slot the
+chain can offer satisfies both. The witness that pinned it,
+`both-liquidity-actions-are-unreachable-at-every-offered-slot`, was written to
+fail the day the contradiction was fixed.
 
-| form | rule that admits it | rule that refuses it | observed |
-|---|---|---|---|
-| `now == 0` | `Request::validate_shape` | `authenticate_clock` wants `now == clock.slot` | `Clock` (4) |
-| `now == clock.slot` | `authenticate_clock` | `Request::validate_shape` wants `now == 0` | `Instruction` (0) |
+**It was fixed, and it is now two witnesses pointing the other way.** The rule
+has one owner: `Action::now_discipline` in `crates/dclutch-dealer-codec`, read
+by both the request shape and the adapter's Clock authentication. It follows the
+semantics rather than restating it — `DClutchSemantics.DealerLiquidity.Command`
+carries a slot inside `Replacement`, `Activation` and `Fill` and nowhere else,
+so those three bind `now == clock.slot` and the other five require canonical
+zero. `EnterTerminal` and `Unwind` moved into the zero class with the two
+liquidity actions; they had carried a slot no transition ever read.
 
-`Retire` is the only action the Clock check exempts from the slot binding, so it
-is the only one of the three `now == 0` actions that is reachable. The
-`both-liquidity-actions-are-unreachable-at-every-offered-slot` witness pins both
-halves and is expected to fail the day the contradiction is fixed. That is the
-point: it marks a defect, it does not specify one.
+- `both-liquidity-actions-reach-the-release-stage-at-a-real-slot` — both now
+  refuse at the Registry CPI (`Release`, 5) like the other five actions. A
+  reintroduced Clock disagreement shows up here as code 4.
+- `a-slot-in-the-padding-is-refused-at-decode` — a slot patched straight into
+  the wire bytes of RemoveLiquidity, EnterTerminal and Unwind refuses at decode
+  (`Instruction`, 0). Relaxing the padding rule instead would have admitted 2^64
+  encodings of the same liquidity adjustment, each with its own request digest.
 
 ## The fast-lane bar
 
@@ -87,7 +97,7 @@ satisfies. This one:
 - **1,400,000 compute and 32,768 heap, neither adjustable** — satisfied. The
   campaign sets `set_compute_max_units(1_400_000)` and never raises it; the heap
   is the SBF default and is never lifted. The deepest transaction consumed
-  19,502 units.
+  19,501 units.
 - **Real Agave account shapes** — PARTIALLY satisfied and this is the honest
   weak point. Policy, Candidate and State are real encoder output at real PDAs
   with real owners; the Realm, mint, custody-authority and vault slots carry

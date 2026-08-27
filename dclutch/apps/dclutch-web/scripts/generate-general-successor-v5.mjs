@@ -10,6 +10,7 @@ const sources = Object.freeze({
   selection: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_selection.rs', root), 'utf8'),
   runtime: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/runtime_width.rs', root), 'utf8'),
   custody: readFileSync(new URL('crates/dclutch-custody-contract/src/generated.rs', root), 'utf8'),
+  lib: readFileSync(new URL('crates/dclutch-general-adapter-contract/src/lib.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/generalSuccessorV5.ts', import.meta.url);
 const check = process.argv.includes('--check');
@@ -87,6 +88,10 @@ for (const [name, value] of [
   ['GENERAL_SELECTION_BYTES_V2', scalar('selection', 'RUNTIME_SELECTION_CURSOR_BYTES_V2')],
   ['GENERAL_SETTLEMENT_HEADER_BYTES_V2', scalar('runtime', 'SETTLEMENT_CURSOR_HEADER_BYTES_V2')],
   ['GENERAL_CUSTODY_RECEIPT_BYTES_V1', scalar('custody', 'CUSTODY_RECEIPT_BYTES_V1')],
+  ['GENERAL_CANDIDATE_BYTES', scalar('controller', 'CANDIDATE_BYTES')],
+  ['GENERAL_EXECUTION_BYTES', scalar('controller', 'EXECUTION_BYTES')],
+  ['GENERAL_PAGE_BYTES', scalar('controller', 'PAGE_BYTES')],
+  ['GENERAL_VERIFICATION_BYTES', scalar('lib', 'VERIFICATION_CURSOR_BYTES_V1')],
 ]) output += `export const ${name} = ${value} as const;\n`;
 for (const name of [
   'ENVELOPE_REQUEST_BYTES_OFFSET', 'ENVELOPE_RELEASE_SET_OFFSET', 'ENVELOPE_MARKET_OFFSET',

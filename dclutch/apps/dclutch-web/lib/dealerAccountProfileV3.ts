@@ -7,6 +7,7 @@ import {
   CUSTODY_SCALAR_BASE_V3,
   CUSTODY_SCALAR_STRIDE_V3,
   DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3,
+  DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3,
   DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3,
   DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
   DEALER_LP_CLOSE_ACCOUNT_COUNT_V3,
@@ -99,6 +100,12 @@ type Profile = Readonly<{
   spans: readonly Span[];
 }>;
 
+/// Sole writable Trading obligation, and the Custody callee appended after it.
+/// The obligation is the last WRITE TARGET, not the last fixed coordinate.
+const DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 =
+  DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
+const DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4 = DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 + 1;
+
 const EXPECTED_SCENARIO_SPANS = Object.freeze([
   [5, 7, 0, 14, 0, 14, 14],
   [5, 8, 14, 14, 0, 14, 14],
@@ -107,8 +114,10 @@ const EXPECTED_SCENARIO_SPANS = Object.freeze([
   [25, 0, 56, 1, 1, 2, 1],
   [25, 11, 57, 14, 0, 14, 14],
   [25, 12, 71, 14, 0, 14, 14],
-  [26, 99, 85, 1, 0, 3, 1],
-  [26, DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4, 86, 1, 6, 6, 1],
+  // Both trailing spans insert after the Custody callee coordinate at 26, not
+  // after the obligation at 25.
+  [27, 99, 85, 1, 0, 3, 1],
+  [27, DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4, 86, 1, 6, 6, 1],
 ] as const);
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
@@ -199,7 +208,12 @@ function expectedEquityProfile(route: Extract<DealerAccountProfileRouteV3, { kin
   const claimsCount = DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + shape.positions;
   const laterStart = claimsStart + claimsCount;
   const localStart = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + shape.custody * DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 + claimsCount;
-  const fixed = localStart + DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3;
+  // The release-selected Custody program the Custody routes are invoked
+  // through, appended past every route range. `CustodyFrameRoleV1` has no
+  // `CustodyProgram` variant, so no Custody frame can carry its own callee and
+  // the topology has to declare one coordinate for it.
+  const custodyProgram = localStart + DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3;
+  const fixed = custodyProgram + DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3;
   if (lengths.length !== fixed) throw new Error('Dealer equity logical data-length vector has the wrong action/P width');
   const bytes = ACCOUNT_PROFILE_HEADER_BYTES_V2 + fixed * ACCOUNT_PROFILE_RULE_BYTES_V2 + 3 * ACCOUNT_PROFILE_OPERATION_BYTES_V2;
   const output = profileHeader(TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE, fixed, 0, 3, shape.scalars, 0, shape.identities, 0, bytes);
@@ -216,7 +230,8 @@ function expectedEquityProfile(route: Extract<DealerAccountProfileRouteV3, { kin
     const writable = coordinate === 0 || coordinate === localStart || coordinate === localStart + 1
       || (offset !== null && [8, 10, 11].includes(offset))
       || claimsOffset === 1 || (claimsOffset !== null && claimsOffset >= DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3);
-    const executable = (offset !== null && [3, 4, 13].includes(offset))
+    const executable = coordinate === custodyProgram
+      || (offset !== null && [3, 4, 13].includes(offset))
       || (claimsOffset !== null && [13, 14, 16, 18].includes(claimsOffset));
     let alias: number | null = null;
     if (offset !== null && coordinate >= laterStart && [1, 2, 3, 4, 5, 6, 7, 9, 12, 13].includes(offset)) {
@@ -328,8 +343,13 @@ function expectedScenarioProfile(lengths: readonly number[]): Uint8Array {
       const privileges = claims === 0 ? 1 : claims === 1 ? 2 : [13, 14, 16, 18].includes(claims) ? 4 : 0;
       const alias = new Map<number, number>([[2, 4], [4, 2], [8, 3]]).get(claims) ?? null;
       value = rule(privileges, 0, 0, alias === null ? 5 : 4, alias);
-    } else if (coordinate === DEALER_SCENARIO_PROFILE_FIXED_RULES_V4 - 1) {
+    } else if (coordinate === DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4) {
       value = rule(2, 4, 192, 0, null, 8);
+    } else if (coordinate === DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4) {
+      // The release-selected Custody program the six Custody routes are invoked
+      // through: readonly executable, no effect permission, no asserted width,
+      // opaque prestate.
+      value = rule(4, 0, 0, 5);
     }
     putRule(output, header + coordinate * ACCOUNT_PROFILE_RULE_BYTES_V2, value);
   }
@@ -463,7 +483,8 @@ function requireProfileShape(profile: Profile, route: DealerAccountProfileRouteV
     const shape = equityShape(route.selector);
     const fixed = DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3
       + shape.custody * DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3
-      + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + shape.positions + DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3;
+      + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + shape.positions + DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3
+      + DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3;
     if (profile.artifact !== TRUSTED_ENVIRONMENT_ARTIFACT_PROFILE || profile.fixed !== fixed || profile.itemStride !== 0
         || profile.fixedOperations !== 3 || profile.itemOperations !== 0 || profile.commonScalars !== shape.scalars
         || profile.itemScalarStride !== 0 || profile.commonIdentities !== shape.identities || profile.itemIdentityStride !== 0

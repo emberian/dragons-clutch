@@ -51,7 +51,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign};
 use spl_token_2022_interface::instruction as token_instruction;
 
-use super::reauthenticate;
+use super::authenticate_activated_role;
 use crate::{
     liability_basis_v2::{LIABILITY_BASIS_MARKET_SEED_V2, MarketViewV2},
     protocol_position_v2,
@@ -526,8 +526,15 @@ fn authenticate_release<'accounts, 'info>(
     program: &'accounts AccountInfo<'info>,
     programdata: &'accounts AccountInfo<'info>,
 ) -> Result<(), ProgramError> {
-    let receipt = reauthenticate(common.registry, common.cache, role, program, programdata)
-        .map_err(|_| RationalLifecycleSbfErrorV2::Release)?;
+    let receipt = authenticate_activated_role(
+        common.registry,
+        common.cache,
+        role,
+        program,
+        programdata,
+        &release_set,
+    )
+    .map_err(|_| RationalLifecycleSbfErrorV2::Release)?;
     if receipt.execution_release_set_id().as_bytes() != &release_set {
         return Err(RationalLifecycleSbfErrorV2::Release.into());
     }

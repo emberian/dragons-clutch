@@ -934,16 +934,54 @@ pub fn loader_v3_program_account_data_v1(
     Ok(output)
 }
 
+/// What a Loader V3 `ProgramData` account says about its upgrade authority.
+///
+/// # Why this is three states and not an `Option`
+///
+/// Loader V3 serializes `Option<Pubkey>` into a FIXED 45-byte metadata region:
+/// a one-byte tag at 12 and a 32-byte key at `[13..45]`, with the ELF starting
+/// at 45 either way. `SetAuthority(Some -> None)` writes the shorter `None`
+/// state into that region **without clearing the key**, so a revoked program
+/// keeps its former authority sitting inert behind a zero tag for the rest of
+/// its life. Measured on Agave 4.0.2 (`DEVNET_DEMO_DEPLOY.md` §2.5): after
+/// `--final`, `tag=0` and `[13..45]` still held the deploy authority.
+///
+/// An `Option<[u8; 32]>` can say "mutable, authority A" and "immutable, never
+/// had one". It cannot say **"immutable, formerly A"** — which is the only
+/// shape a real deployed-then-revoked program is ever in. So every checked
+/// manifest built offline had a `programdata_account_sha256` that no devnet
+/// account could match, and the browser's byte-exact `authenticateDeployment`
+/// would refuse every role. That was §7 blocker B.
+///
+/// The reader side always understood this: `ProgramDataMetadataV3View::parse`
+/// reads tag 0 as `None` and never surfaces the residue, and
+/// `CheckedReleaseV1` records `upgrade_authority: None` for it while its
+/// account digest commits to the retained bytes. Only the CONSTRUCTOR could
+/// not express it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoaderV3AuthorityStateV1 {
+    /// Never authorized: tag `0`, `[13..45]` zero. A genesis install, or a
+    /// program deployed immutable from the start.
+    NeverAuthorized,
+    /// Revoked: tag `0`, `[13..45]` still holding the former authority. What
+    /// `SetAuthority(Some -> None)` actually leaves behind.
+    Revoked([u8; 32]),
+    /// Upgradeable: tag `1`, `[13..45]` holding the live authority.
+    Upgradeable([u8; 32]),
+}
+
 /// Construct the exact Loader V3 `ProgramData` account data for one ELF.
 ///
 /// The ELF begins at the loader's fixed 45-byte metadata boundary and the
 /// account is allocated to exactly that width; no extra allocation padding is
 /// emitted. Like [`loader_v3_program_account_data_v1`], these bytes are a
-/// prediction of a deployment, not an observation of one.
+/// prediction of a deployment, not an observation of one — with the exception
+/// that [`LoaderV3AuthorityStateV1::Revoked`] can only be filled in from an
+/// observation, because nothing offline knows which key a program used to have.
 pub fn loader_v3_programdata_account_data_v1(
     elf: &[u8],
     deployment_slot: u64,
-    upgrade_authority: Option<[u8; 32]>,
+    authority: LoaderV3AuthorityStateV1,
 ) -> Result<Vec<u8>> {
     validate_sbf_elf(elf)?;
     let length = LOADER_V3_PROGRAMDATA_METADATA_BYTES
@@ -963,18 +1001,23 @@ pub fn loader_v3_programdata_account_data_v1(
         LOADER_V3_PROGRAMDATA_SLOT_OFFSET_V1,
         &deployment_slot.to_le_bytes(),
     )?;
-    if let Some(authority) = upgrade_authority {
-        require_nonzero(&authority).map_err(|_| Error::NonCanonicalUpgradeAuthority)?;
+    // A zero key is refused in BOTH key-carrying states: the loader can never
+    // produce one (an authority is a real signer, and the all-zero address is
+    // the System Program), so accepting it would let a caller mint a shape the
+    // chain cannot hold. `NeverAuthorized` is how "no key" is spelled.
+    let (tag, key) = match authority {
+        LoaderV3AuthorityStateV1::NeverAuthorized => (0_u8, None),
+        LoaderV3AuthorityStateV1::Revoked(key) => (0_u8, Some(key)),
+        LoaderV3AuthorityStateV1::Upgradeable(key) => (1_u8, Some(key)),
+    };
+    if let Some(key) = key {
+        require_nonzero(&key).map_err(|_| Error::NonCanonicalUpgradeAuthority)?;
         write_at(
             &mut output,
             LOADER_V3_PROGRAMDATA_AUTHORITY_TAG_OFFSET_V1,
-            &[1],
+            &[tag],
         )?;
-        write_at(
-            &mut output,
-            LOADER_V3_PROGRAMDATA_AUTHORITY_OFFSET_V1,
-            &authority,
-        )?;
+        write_at(&mut output, LOADER_V3_PROGRAMDATA_AUTHORITY_OFFSET_V1, &key)?;
     }
     write_at(&mut output, LOADER_V3_PROGRAMDATA_METADATA_BYTES, elf)?;
     Ok(output)

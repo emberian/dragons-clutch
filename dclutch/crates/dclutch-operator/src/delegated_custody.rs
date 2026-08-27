@@ -212,10 +212,41 @@ mod tests {
             .expect("delegated instruction");
         assert_eq!(instruction.accounts.len(), 14);
         assert_eq!(instruction.data.len(), DELEGATED_CUSTODY_REQUEST_BYTES_V2);
-        assert_eq!(instruction.accounts[12].pubkey, authority);
-        assert!(instruction.accounts[0].is_signer);
-        assert!(instruction.accounts[8].is_writable);
-        assert!(instruction.accounts[10].is_writable);
-        assert!(instruction.accounts[11].is_writable);
+        assert_eq!(
+            instruction
+                .accounts
+                .get(12)
+                .expect("account slot exists")
+                .pubkey,
+            authority
+        );
+        assert!(
+            instruction
+                .accounts
+                .first()
+                .expect("account slot exists")
+                .is_signer
+        );
+        assert!(
+            instruction
+                .accounts
+                .get(8)
+                .expect("account slot exists")
+                .is_writable
+        );
+        assert!(
+            instruction
+                .accounts
+                .get(10)
+                .expect("account slot exists")
+                .is_writable
+        );
+        assert!(
+            instruction
+                .accounts
+                .get(11)
+                .expect("account slot exists")
+                .is_writable
+        );
     }
 }

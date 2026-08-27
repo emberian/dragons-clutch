@@ -148,6 +148,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const [endpoint, setEndpoint] = useState('http://127.0.0.1:8899');
   const [coreProgram, setCoreProgram] = useState('');
   const [registryProgram, setRegistryProgram] = useState('');
+  const [claimsProgram, setClaimsProgram] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No finalized state has been read for this Market address.' });
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
@@ -155,13 +156,14 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
 
   async function read(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setState({ kind: 'loading', message: 'Reading this Market, the Realm it commits to, and its capability manifest behind one finalized floor…' });
+    setState({ kind: 'loading', message: 'Reading this Market, the Realm record and capability manifest it commits to, and the Claims aggregate holding its liabilities, behind one finalized floor…' });
     try {
       const client = new SolanaRpcClient(endpoint);
       const facts = await client.probe();
       const next = await inspectMarketDetailV1(client, {
         coreProgramId: coreProgram,
         registryProgramId: registryProgram === '' ? null : registryProgram,
+        claimsProgramId: claimsProgram === '' ? null : claimsProgram,
         address,
       });
       setState({ kind: 'ready', detail: next, facts, message: next.reason });
@@ -174,6 +176,8 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     ?? Object.freeze({ kind: 'refused', reason: 'This Market has not been read at any finalized floor yet.' });
   const realmProvenance = detail?.realmProvenance
     ?? Object.freeze({ kind: 'refused' as const, reason: 'No Realm has been reacquired, because no Market has been read.' });
+  const liabilityProvenance = detail?.liabilityProvenance
+    ?? Object.freeze({ kind: 'refused' as const, reason: 'No Claims aggregate has been read, because no Market has been read.' });
   const capabilityProvenance = detail?.capabilityProvenance
     ?? Object.freeze({ kind: 'refused' as const, reason: 'No capability manifest has been authenticated, because no Market has been read.' });
 
@@ -211,6 +215,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
         <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
         <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
+        <label><span>Claims program · optional</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
       </div>
       <div className="direct-actions">
         <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading finalized Market state…' : 'Read this Market'}</button>
@@ -231,23 +236,25 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         : <>
           <dl className="detail-facts">
             <CopyableAddress label="Market address" address={decoded.address} />
-            <Fact label="Schema" value={`${decoded.identity.schemaMagic} · version ${decoded.identity.schemaVersion} · categorical profile ${decoded.identity.categoricalProfile}`} />
+            <Fact label="Schema" value={`${decoded.identity.schemaMagic} · version ${decoded.identity.schemaVersion}`} />
             <Fact label="Account width" value={`${decoded.identity.accountBytes} bytes, exact`} />
             <Fact label="Phase" value={decoded.phase} />
+            <Fact label="Founding readiness" value={decoded.readiness} />
             <Fact label="Generation" value={decoded.generation} />
-            <Fact label="Outcome count" value={String(decoded.outcomeCount)} />
-            <Fact label="Outstanding direct children" value={decoded.outstandingChildren} />
+            <Fact label="Outstanding capabilities" value={decoded.outstandingCapabilities} />
             <Fact label="Finalized observed slot" value={decoded.observedSlot} />
-            <Fact label="Rent refund authority" value={decoded.identity.rentRefundAuthority} />
+            <Fact label="Selected Registry program" value={decoded.identity.registryProgram} />
+            <Fact label="Rent beneficiary" value={decoded.identity.rentBeneficiary} />
           </dl>
           <p className="phase-meaning"><strong>{decoded.phase}</strong> {detail?.phaseMeaning}</p>
           <h3 className="detail-subhead">Immutable identities · content IDs, not addresses</h3>
           <dl className="detail-facts">
             <ContentId label="Realm" value={decoded.identity.realmId} />
+            <ContentId label="Product record" value={decoded.identity.productRecordId} />
             <ContentId label="Product instance" value={decoded.identity.productInstanceId} />
-            <ContentId label="Claim basis" value={decoded.identity.claimBasisId} />
             <ContentId label="Resolution policy" value={decoded.identity.resolutionPolicyId} />
             <ContentId label="Capability manifest" value={decoded.identity.capabilityManifestId} />
+            <ContentId label="Selected execution release set" value={decoded.identity.selectedReleaseSetId} />
           </dl>
           <ul className="market-bindings">
             {decoded.bindings.map((check) => (
@@ -262,38 +269,45 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Economics</h2><p>Raw u64 atoms as the Market persists them. The Hoard is this Market&apos;s exact collateral principal: it is not a balance available to anyone, and it is never fees, rent, bounty, insurance, work funding, reserve, or treasury capital.</p></div><SectionProvenance provenance={marketProvenance} /></header>
+      <header><span>02</span><div><h2>Economics</h2><p>Raw u64 atoms, read where the chain keeps them. A Core Market root carries no supply vector and no Hoard figure, so this section is not decoded from the Market at all: the per-claim supplies come from the Claims LiabilityBasisV2 aggregate this Market derives, and the Hoard is stated as underivable rather than guessed.</p></div><SectionProvenance provenance={liabilityProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No decoded economic state. A zero is a fact a read has to justify, so none is shown here.</p>
-        : <>
-          <div className="trade-v3-preview">
-            <div><span>Hoard atoms</span><strong>{decoded.hoardAtoms}</strong></div>
-            <div><span>Exact required backing</span><strong>{decoded.requiredBackingAtoms}</strong></div>
-            <div><span>Outcome count</span><strong>{decoded.outcomeCount}</strong></div>
-            <div><span>Settlement</span><strong>{decoded.settlement.status === 'resolved' ? decoded.settlement.route : 'none'}</strong></div>
-            <p>Required backing is measured against the {requiredBackingMeaningV1(decoded.requiredBackingBasis)}. The Hoard is checked against it on every read: a Market whose Hoard fell below it would be refused here, not displayed.</p>
-          </div>
-          <h3 className="detail-subhead">Per-outcome supply · ordered, raw u64</h3>
-          <ol className="outcome-vector">
-            {decoded.supplyAtoms.map((amount, index) => (
-              <li key={index} className={decoded.settlement.status === 'resolved' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
-                <span>outcome {index}</span>
-                <strong>{amount}</strong>
-                {decoded.settlement.status === 'resolved' && <small>{decoded.settlement.winner === index ? 'winning · pays one collateral atom per claim atom' : 'losing · pays zero'}</small>}
-              </li>
-            ))}
-          </ol>
-          <h3 className="detail-subhead">Settlement</h3>
-          {decoded.settlement.status === 'resolved'
-            ? <dl className="detail-facts">
-              <Fact label="State" value={decoded.settlement.label} />
-              <Fact label="Resolution route" value={decoded.settlement.route} />
-              <Fact label="Winning outcome" value={String(decoded.settlement.winner)} />
-              <Fact label="Terminal sequence" value={decoded.settlement.terminalSequence} />
-              <ContentId label="Resolution evidence ID" value={decoded.settlement.evidenceId} />
+        : decoded.liability.status !== 'bound'
+          ? <p className="market-capability-refusal"><span>{decoded.liability.status === 'unread' ? 'liabilities unread' : 'liabilities refused'}</span>{decoded.liability.reason}</p>
+          : <>
+            <div className="trade-v3-preview">
+              <div><span>Exact required backing</span><strong>{decoded.liability.requiredBackingAtoms}</strong></div>
+              <div><span>Claim count</span><strong>{decoded.liability.claimCount}</strong></div>
+              <div><span>Aggregate revision</span><strong>{decoded.liability.revision}</strong></div>
+              <div><span>Terminal receipt</span><strong>{decoded.settlement.status === 'terminal' ? 'accepted' : 'none'}</strong></div>
+              <p>Required backing is measured against the {requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}.</p>
+            </div>
+            <dl className="detail-facts">
+              <Fact label="Claims aggregate account" value={decoded.liability.aggregateAddress} />
+              <Fact label="Claims program" value={decoded.liability.claimsProgramId} />
+              <ContentId label="Liability basis" value={decoded.liability.liabilityBasisId} />
             </dl>
-            : <p className="market-hoard-note">The settlement summary is empty: no terminal truth has been written, so no outcome is winning and no claim can be redeemed. This is the account&apos;s own state, not a missing read.</p>}
-        </>}
+            <h3 className="detail-subhead">Per-claim supply · ordered, raw u64</h3>
+            <ol className="outcome-vector">
+              {decoded.liability.supplyAtoms.map((amount, index) => (
+                <li key={index} className={decoded.settlement.status === 'terminal' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
+                  <span>claim {index}</span>
+                  <strong>{amount}</strong>
+                  {decoded.settlement.status === 'terminal' && <small>{decoded.settlement.winner === index ? 'winning · pays one collateral atom per claim atom' : 'losing · pays zero'}</small>}
+                </li>
+              ))}
+            </ol>
+            <h3 className="detail-subhead">Hoard</h3>
+            <p className="market-capability-refusal"><span>not derivable</span>{decoded.hoard.reason}</p>
+            <h3 className="detail-subhead">Terminal settlement</h3>
+            {decoded.settlement.status === 'terminal'
+              ? <dl className="detail-facts">
+                <Fact label="State" value={decoded.settlement.label} />
+                <Fact label="Winning claim" value={String(decoded.settlement.winner)} />
+                <ContentId label="Terminal receipt ID" value={decoded.settlement.receiptId} />
+              </dl>
+              : <p className="market-hoard-note">No terminal receipt is written, so no claim is winning and no claim can be redeemed. This is the account&apos;s own state, not a missing read.</p>}
+          </>}
     </section>
 
     <section className="trade-v3-card">

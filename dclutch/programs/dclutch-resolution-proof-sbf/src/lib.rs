@@ -19,12 +19,17 @@ use solana_program::{
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 
 mod core_effect;
+/// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
+/// compartment a deadline-driven terminal spends.
+pub mod funded;
 mod provider_instruction_v3;
 mod provider_transport_v3;
-mod relay_transport_v1;
 /// Current-ABI real-provider evidence composition shared by fixed Core and
 /// data-defined Trading callers.
 pub mod provider_v3;
+mod relay_transport_v1;
+/// Current-ABI sealed relayed-record evidence composition.
+pub mod relay_v1;
 
 /// Stable Resolution controller refusal.
 #[repr(u32)]
@@ -60,6 +65,15 @@ pub enum ResolutionError {
     Arithmetic = 13,
     /// Canonical capability funding, typed custody, or exact bounty debit failed.
     Funding = 14,
+    /// The sealed relayed observation record was not consumable against this
+    /// Market's authenticated Source graph.
+    RelayedRecord = 15,
+    /// The relayed observation was admissible but did not satisfy the Product's
+    /// own window: it is no answer rather than a wrong one, and the market is
+    /// still live. Distinct from every "the bytes were wrong" refusal on
+    /// purpose, because "come back later" and "something is broken" are not the
+    /// same message to whoever is holding the position.
+    RelayedWindow = 16,
 }
 
 impl From<ResolutionError> for ProgramError {

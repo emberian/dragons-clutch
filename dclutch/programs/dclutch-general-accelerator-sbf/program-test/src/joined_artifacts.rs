@@ -8,12 +8,10 @@ use dclutch_account_profile_contract::v2::{
     DYNAMIC_FIXED_SPAN_ENTRY_BYTES, DYNAMIC_FIXED_SPAN_HEADER_BYTES, OPERATION_BYTES, RULE_BYTES,
     TrustedBuiltinIdentityV2, TrustedEnvironmentV2, TrustedIdentityEnvironmentV2,
     encode::{
-        AccountCoordinateV2, AccountOperationInputV2, IdentityCoordinateV2, RegisterGeometryV2,
-        ScalarCoordinateV2, encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
+        RegisterGeometryV2, encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic,
     },
 };
 use dclutch_capability_program_contract::{
-    hot_v3::HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
     set_v2::{
         CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
         encode_program_set_v2, encoded_program_set_bytes_v2,
@@ -34,13 +32,13 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_general_adapter_contract::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, general_account_profile_fixed_count_v3,
+        general_account_profile_operation_count_v3, general_account_profile_operation_v3,
         general_account_profile_rule_v3, general_scratch_page_rule_v3,
         general_scratch_page_span_v3,
     },
     artifacts_v3::{
         GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3, GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3,
-        GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3, GeneralArtifactBytesV3, GeneralArtifactSelectionV3,
-        authenticate_general_artifacts_v3,
+        GeneralArtifactBytesV3, GeneralArtifactSelectionV3, authenticate_general_artifacts_v3,
     },
     effect_artifacts_v3::{
         GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
@@ -49,12 +47,10 @@ use dclutch_general_adapter_contract::{
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
-        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, scalar,
+        GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity,
     },
-    local_state_v3::GeneralLocalStateLayoutV3,
     release_v3::GENERAL_ACTIONS_V3,
     state_artifacts_v3::{
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
         GeneralChildRentWidthsV5, encode_general_state_lifecycle_v5_atomic,
         general_state_lifecycle_bytes_v5,
     },
@@ -71,7 +67,6 @@ use dclutch_general_config_contract::v3::{
     GENERAL_CONFIG_SCHEMA_ID_V3, GeneralConfigV3, GeneralConfigV3Input,
 };
 use dclutch_general_config_contract::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_SCHEMA_ID_V2};
-use dclutch_product_runtime_v2::PORTFOLIO_COEFFICIENT_COUNT_OFFSET;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 use solana_program::hash::hash;
 
@@ -357,85 +352,15 @@ fn account_profile(
 ) -> Result<Vec<u8>, JoinedGeneralArtifactErrorV5> {
     let fixed_count = general_account_profile_fixed_count_v3(action)
         .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
-    let mut operations = vec![
-        AccountOperationInputV2::ProjectTailCountU32 {
-            account: AccountCoordinateV2::fixed(
-                u16::try_from(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-            destination: ScalarCoordinateV2::common(GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3),
-            data_offset: u32::try_from(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)
-                .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-        },
-        AccountOperationInputV2::ProjectDataU8 {
-            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
-            destination: ScalarCoordinateV2::common(
-                u16::try_from(scalar::PRIMARY_BUMP_OBSERVATION)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-            data_offset: GeneralLocalStateLayoutV3::bump(),
-        },
-        AccountOperationInputV2::ProjectDataU64 {
-            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
-            destination: ScalarCoordinateV2::common(
-                u16::try_from(scalar::PRIMARY_PRINCIPAL_OBSERVATION)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-            data_offset: GeneralLocalStateLayoutV3::rent_principal(),
-        },
-        AccountOperationInputV2::ProjectDataIdentity {
-            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
-            destination: IdentityCoordinateV2::common(
-                u16::try_from(identity::PRIMARY_BENEFICIARY_OBSERVATION)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-            data_offset: GeneralLocalStateLayoutV3::beneficiary(),
-        },
-    ];
-    // Every other action creates its primary state, so its lifecycle plan is
-    // what proves the account's owner. Close destroys that account instead:
-    // its rule is Exact, not LifecycleBound, and a debiting data-writing
-    // coordinate with no lifecycle creation must anchor its owner explicitly.
-    // The anchor is the trusted current executing program, so the profile
-    // itself refuses a settlement cursor owned by anything but this Trading
-    // Program before the transition is reached.
-    // Close also creates the terminal record at coordinate 6, and its plan's
-    // protected outputs are only sound when the profile itself observes that
-    // record's bump, rent principal and rent beneficiary. Without them the
-    // policy would name observation registers the profile never writes.
-    if action == Action::Close {
-        operations.push(AccountOperationInputV2::RequireOwner {
-            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
-            expected: IdentityCoordinateV2::common(
-                u16::try_from(identity::TRADING_PROGRAM)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-        });
-        operations.push(AccountOperationInputV2::ProjectDataU8 {
-            account: AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
-            destination: ScalarCoordinateV2::common(
-                u16::try_from(scalar::TERMINAL_BUMP_OBSERVATION)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-            data_offset: GeneralLocalStateLayoutV3::bump(),
-        });
-        operations.push(AccountOperationInputV2::ProjectDataU64 {
-            account: AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
-            destination: ScalarCoordinateV2::common(
-                u16::try_from(scalar::TERMINAL_PRINCIPAL_OBSERVATION)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-            data_offset: GeneralLocalStateLayoutV3::rent_principal(),
-        });
-        operations.push(AccountOperationInputV2::ProjectDataIdentity {
-            account: AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
-            destination: IdentityCoordinateV2::common(
-                u16::try_from(identity::TERMINAL_BENEFICIARY_OBSERVATION)
-                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
-            ),
-            data_offset: GeneralLocalStateLayoutV3::beneficiary(),
-        });
-    }
+    // The canonical operation list has one author: the same module that owns
+    // the account rules. It used to be written here and again in a contract-side
+    // test fixture, and nothing could compare the two.
+    let operations = (0..general_account_profile_operation_count_v3(action))
+        .map(|index| {
+            general_account_profile_operation_v3(action, index)
+                .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)
+        })
+        .collect::<Result<Vec<_>, JoinedGeneralArtifactErrorV5>>()?;
     let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
         .checked_add(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
         .and_then(|value| value.checked_add((usize::from(fixed_count) + 1) * RULE_BYTES))

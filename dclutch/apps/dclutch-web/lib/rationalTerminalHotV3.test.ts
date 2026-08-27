@@ -47,11 +47,11 @@ function gradedBasis(): Uint8Array {
 describe('Rational terminal Hot V3 codec', () => {
   it('encodes runtime-u32 terminal intent and specializes the exact child digest', async () => {
     const family = encodeRationalTerminalHotRequestV3(input());
-    expect(family).toHaveLength(648);
+    expect(family).toHaveLength(Abi.RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3);
     expect(family.slice(0, 8)).toEqual(Abi.RATIONAL_TERMINAL_HOT_MAGIC_V3);
     expect(family.slice(144, 176)).toEqual(new Uint8Array(32));
-    expect(new DataView(family.buffer).getUint32(472, true)).toBe(258);
-    expect(new DataView(family.buffer).getUint32(476, true)).toBe(257);
+    expect(new DataView(family.buffer).getUint32(Abi.REQUEST_OUTCOME_COUNT_OFFSET, true)).toBe(258);
+    expect(new DataView(family.buffer).getUint32(Abi.REQUEST_SELECTED_OUTCOME_OFFSET, true)).toBe(257);
     const specialized = await specializeRationalTerminalChildV2(family);
     expect(specialized.childRequest.slice(0, 8)).toEqual(Abi.REQUEST_MAGIC_V2);
     expect(specialized.childRequest.slice(144, 176)).toEqual(specialized.familyDigest);

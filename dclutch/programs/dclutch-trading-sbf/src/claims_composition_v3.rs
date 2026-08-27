@@ -50,7 +50,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
+use crate::{
+    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    hot_v3::DowngradedEffectAccountsV3,
+};
 
 /// Exact receipt returned by one canonical Claims route.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,7 +86,7 @@ pub fn execute_claims_route_v3<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
     prior_receipt: Option<&[u8]>,
@@ -255,18 +258,20 @@ fn invocation_request<'a>(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let mut output = Vec::new();
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    output.extend_from_slice(
-        accounts
-            .get(fixed_start..fixed_end)
+    accounts.extend_window(
+        &mut output,
+        fixed_start,
+        fixed_end
+            .checked_sub(fixed_start)
             .ok_or(TradingSbfError::Content)?,
-    );
+    )?;
     if invocation.kind == RouteKindV3::AffineOnce {
         let count = usize::from(invocation.item_account_count);
         let stride = usize::from(invocation.item_account_stride);
@@ -278,7 +283,11 @@ fn invocation_accounts<'info>(
                 .checked_add(index.checked_mul(stride).ok_or(TradingSbfError::Content)?)
                 .ok_or(TradingSbfError::Content)?;
             let end = start.checked_add(count).ok_or(TradingSbfError::Content)?;
-            output.extend_from_slice(accounts.get(start..end).ok_or(TradingSbfError::Content)?);
+            accounts.extend_window(
+                &mut output,
+                start,
+                end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+            )?;
             item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
         }
     } else if invocation.item_account_count != 0 || invocation.repeated_item_count != 0 {

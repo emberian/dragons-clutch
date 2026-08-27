@@ -90,8 +90,13 @@ pub const DEALER_SCENARIO_CLAIMS_ROUTE_V4: u16 = 4;
 /// Number of optional typed Custody routes.
 pub const DEALER_SCENARIO_CUSTODY_ROUTE_COUNT_V4: usize = 6;
 /// Base V3 fixed-account geometry before protected extensions.
+///
+/// Five common Hot coordinates, the canonical twenty-account Claims frame, the
+/// sole Trading-owned obligation, and the release-selected Custody program the
+/// six Custody routes are invoked through. The callee is last, so adding it
+/// renumbered nothing before it.
 pub const DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4: u16 =
-    DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + 1;
+    DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + 2;
 /// Runtime obligation outcome values occupy one scalar per Product item.
 pub const DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4: u16 = 1;
 /// No per-item identities are needed.
@@ -142,7 +147,18 @@ pub const DEALER_SCENARIO_OBLIGATION_IDENTITY_V4: u16 = 116;
 
 const DEALER_SCENARIO_CUSTODY_IDENTITY_BASE_V4: u16 = 1;
 const DEALER_SCENARIO_CUSTODY_IDENTITY_STRIDE_V4: u16 = 19;
-const DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4: u16 = DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4 - 1;
+/// The obligation is the LAST WRITE TARGET, not the last coordinate: the
+/// Custody callee follows it. Deriving this from the base count would have
+/// silently moved the Effect's only write target the moment the callee was
+/// appended, so it is stated from the frame that precedes it instead.
+const DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4: u16 =
+    DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3;
+const _: () = assert!(DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 == 25);
+/// The Custody callee coordinate, appended past the obligation.
+const DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4: u16 = DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 + 1;
+const _: () = assert!(
+    DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4 + 1 == DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4
+);
 const DEALER_SCENARIO_OBLIGATION_REVISION_OFFSET_V4: u32 = 16;
 const DEALER_SCENARIO_CUSTODY_BASE_SCALAR_FIELDS_V4: usize = 9;
 const DEALER_SCENARIO_CUSTODY_BASE_IDENTITY_FIELDS_V4: usize = 17;
@@ -1939,6 +1955,151 @@ mod tests {
         }
     }
 
+    /// Every child role the scenario Effect routes to has a program coordinate
+    /// the Hot executor can resolve it through.
+    ///
+    /// `selected_role_program_v3` resolves a child route's callee by scanning
+    /// the downgraded effect accounts for the key the Registry activation cache
+    /// names for that role, and accepts only a UNIQUE readonly executable
+    /// account. All six Custody routes were in the state Direct's four were in
+    /// before `10d5a8b`: `CustodyFrameRoleV1` has no `CustodyProgram` variant,
+    /// so none of the six optional Custody frames can carry its own callee and
+    /// the topology carried none anywhere. Claims resolved for free at its own
+    /// relative 16. The roles come from the real emitted Effect bytes and the
+    /// privileges from the real emitted profile bytes.
+    #[test]
+    fn every_child_role_the_scenario_routes_to_has_an_invocable_program_coordinate() {
+        use dclutch_account_profile_contract::v2::AccountProfileV2;
+
+        /// `SignedDeltaFrameSpecV3` declares the Claims program at this
+        /// relative coordinate inside its own frame, which is why the Claims
+        /// route has always had a callee and the Custody routes never did.
+        const CLAIMS_PROGRAM_RELATIVE_V4: u16 = 16;
+
+        use crate::dealer::v3_trade_profile::{
+            DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4, DealerScenarioAccountProfileInputV4,
+            encode_dealer_scenario_account_profile_v4_atomic,
+        };
+
+        const CLAIMS_PROGRAM_ACCOUNT: u16 =
+            DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 + CLAIMS_PROGRAM_RELATIVE_V4;
+
+        let templates = custody_templates();
+        let base_bytes = dealer_scenario_base_effect_program_bytes_v4().expect("base width");
+        let mut base_scratch = vec![0; base_bytes];
+        let mut base = vec![0; base_bytes];
+        encode_dealer_scenario_base_effect_program_v4(&templates, &mut base_scratch, &mut base)
+            .expect("base effect");
+        let effect = EffectProgramV3::decode(&base).expect("base decode");
+
+        let mut profile_scratch = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        let mut profile_bytes = vec![0_u8; DEALER_SCENARIO_ACCOUNT_PROFILE_BYTES_V4];
+        encode_dealer_scenario_account_profile_v4_atomic(
+            DealerScenarioAccountProfileInputV4 {
+                common_data_lengths: [
+                    0,
+                    u32::try_from(dclutch_dealer_codec::config_v4::DEALER_CONFIG_BYTES_V4)
+                        .expect("config width"),
+                    0,
+                    0,
+                    0,
+                ],
+            },
+            &mut profile_scratch,
+            &mut profile_bytes,
+        )
+        .expect("scenario profile");
+        let profile = AccountProfileV2::decode(&profile_bytes).expect("profile decode");
+        assert_eq!(
+            profile.fixed_account_count(),
+            DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4
+        );
+        assert_eq!(
+            effect.fixed_account_count(),
+            DEALER_SCENARIO_BASE_FIXED_ACCOUNTS_V4
+        );
+
+        let callees = [
+            (FixedRole::Claims, CLAIMS_PROGRAM_ACCOUNT),
+            (
+                FixedRole::Custody,
+                DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4,
+            ),
+        ];
+        let mut route = 0_u16;
+        while route < effect.route_count() {
+            let role = effect.route(route).expect("route").role();
+            let coordinate = callees
+                .iter()
+                .find(|(named, _)| *named == role)
+                .map(|(_, coordinate)| *coordinate)
+                .expect("every routed role must name a callee coordinate");
+            let rule = profile.rule(false, coordinate).expect("callee rule");
+            assert!(
+                rule.route_privileges().executable()
+                    && !rule.route_privileges().signer()
+                    && !rule.route_privileges().writable(),
+                "{role:?} callee at {coordinate} is not a readonly executable"
+            );
+            assert_eq!(
+                rule.effect_permissions(),
+                0,
+                "{role:?} callee at {coordinate} carries an effect permission"
+            );
+            assert_eq!(
+                rule.data_length(),
+                0,
+                "{role:?} callee at {coordinate} asserts a width the loader owns"
+            );
+            route += 1;
+        }
+        // An alias onto a callee is the SECOND way to refuse the same lookup:
+        // `downgraded_effect_accounts_v3` pushes one entry per LOGICAL
+        // coordinate, aliases included, so an aliased callee matches twice. The
+        // scan runs over the fully expanded vector -- every optional Custody
+        // frame present, both Position rows, all three evidence accounts -- so
+        // it sees the span rules too, not only the fixed base.
+        let spans = [14_u32, 14, 14, 14, 2, 14, 14, 3, 6];
+        let frame = crate::dealer::v3_trade_profile::dealer_scenario_logical_frame_v4(spans)
+            .expect("expanded frame");
+        let expanded = [
+            (
+                FixedRole::Claims,
+                frame.claims_fixed_start + u32::from(CLAIMS_PROGRAM_RELATIVE_V4),
+            ),
+            (FixedRole::Custody, frame.custody_program),
+        ];
+        let logical = profile
+            .logical_account_count_with_dynamic_spans(16, &spans)
+            .expect("expanded logical count");
+        assert_eq!(
+            u32::try_from(logical).expect("width"),
+            frame.logical_account_count
+        );
+        for coordinate in 0..logical {
+            let representative = profile
+                .representative_with_dynamic_spans(16, &spans, coordinate)
+                .expect("representative");
+            for (role, callee) in expanded {
+                let callee = usize::try_from(callee).expect("callee coordinate");
+                assert!(
+                    coordinate == callee || representative != callee,
+                    "{role:?} callee at {callee} is aliased from {coordinate} and would match twice"
+                );
+            }
+        }
+        assert_ne!(
+            CLAIMS_PROGRAM_ACCOUNT,
+            DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4
+        );
+        // Appended past the obligation, so the Effect's only write target did
+        // not move when the coordinate was added.
+        assert_eq!(
+            DEALER_SCENARIO_CUSTODY_PROGRAM_ACCOUNT_V4,
+            DEALER_SCENARIO_OBLIGATION_ACCOUNT_V4 + 1
+        );
+    }
+
     #[test]
     fn typed_base_effect_is_canonical_and_shifts_local_obligation() {
         let templates = custody_templates();
@@ -1979,7 +2140,11 @@ mod tests {
         scalars[usize::from(DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4)] = 2;
         scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4)] = 14;
         scalars[usize::from(DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4 + 4)] = 14;
-        assert_eq!(program.account_count(2, &scalars), Ok(56));
+        // One more than before the Custody callee coordinate existed, and the
+        // obligation write target below is UNMOVED at 55 -- which is the fact
+        // that matters, because the callee was appended after it rather than
+        // before.
+        assert_eq!(program.account_count(2, &scalars), Ok(57));
         assert!(matches!(
             program.resolved_fixed_effect(0, 2, &scalars, &identities),
             Ok(dclutch_effect_kernel::v3::ResolvedEffectV3::WriteScalar {

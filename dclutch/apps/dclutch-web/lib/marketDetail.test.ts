@@ -1,214 +1,160 @@
-import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import fixture from '../fixtures/canonical-accounts.json';
+import { LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
+import { sha256 } from './bytes';
+import { REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
 import {
   capabilityProvenanceV1,
   inspectMarketDetailV1,
+  liabilityProvenanceV1,
   marketPhaseMeaningV1,
   realmProvenanceV1,
   requiredBackingMeaningV1,
 } from './marketDetail';
 import { provenanceChipV1 } from './marketDiscovery';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
-const SYSTEM_PROGRAM = '11111111111111111111111111111111';
-
-function bytes(value: string): Uint8Array {
-  const pairs = value.match(/../g);
-  if (pairs === null || pairs.join('') !== value) throw new Error('fixture contains malformed hexadecimal bytes');
-  return Uint8Array.from(pairs, (pair) => Number.parseInt(pair, 16));
-}
-
-function fixtureAccount(kind: string): Readonly<{ address: string; data: Uint8Array }> {
-  const account = fixture.accounts.find((entry) => entry.kind === kind);
-  if (account === undefined) throw new Error(`fixture omitted ${kind}`);
-  return Object.freeze({ address: account.address, data: bytes(account.dataHex) });
-}
-
-const market = fixtureAccount('Market');
-const realm = fixtureAccount('Realm');
-const OUTCOMES = market.data[10];
-const SETTLEMENT_OFFSET = 256 + OUTCOMES * 8;
-
 /**
- * Market variants are produced by writing exact fields of the canonical Rust
- * fixture, never by inventing account bytes. Phase, Hoard, supply, and
- * settlement all live above the 32..200 identity window the Market PDA hashes,
- * so every derived address in the fixture stays correct.
+ * The detail projection over the chain the campaign actually produced.
+ *
+ * Variants are written into a copy of the live bytes. The Core V2 Market
+ * address is derived from the eight identities plus the generation at offsets
+ * 48..280, so mutating the phase byte at 10 or the terminal receipt at 320
+ * leaves every derived address in the fixture correct — which is what lets a
+ * terminal variant be tested without forging a whole account.
  */
-function marketVariant(mutate: (data: Uint8Array, view: DataView) => void): Uint8Array {
-  const data = new Uint8Array(market.data);
-  mutate(data, new DataView(data.buffer));
-  return data;
-}
 
-function resolvedMarket(winner: number, supply: ReadonlyArray<bigint>, hoard: bigint): Uint8Array {
-  return marketVariant((data, view) => {
-    data[200] = 2;
-    view.setBigUint64(248, hoard, true);
-    supply.forEach((amount, index) => view.setBigUint64(256 + index * 8, amount, true));
-    data[SETTLEMENT_OFFSET] = 1;
-    data[SETTLEMENT_OFFSET + 1] = 0;
-    data[SETTLEMENT_OFFSET + 2] = winner;
-    view.setBigUint64(SETTLEMENT_OFFSET + 8, BigInt(41), true);
-    data.fill(0x77, SETTLEMENT_OFFSET + 16, SETTLEMENT_OFFSET + 48);
-  });
-}
+const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+const CORE = LIVE.programs.core;
+const REGISTRY = LIVE.programs.registry;
+const CLAIMS = LIVE.programs.claims;
+const SLOT = '4711';
 
-function coreAccount(data: Uint8Array, owner = fixture.programId): RpcAccount {
-  return Object.freeze({ data, executable: false, lamports: '4242', owner, space: data.length });
-}
-
-function client(accounts: ReadonlyMap<string, RpcAccount>, slot = '4711'): SolanaRpcClient {
+function client(accounts: ReadonlyMap<string, RpcAccount>): SolanaRpcClient {
   return {
-    finalizedSlot: async () => slot,
+    finalizedSlot: async () => SLOT,
     multipleAccounts: async (addresses: ReadonlyArray<string>) => Object.freeze({
-      slot,
+      slot: SLOT,
       accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account: accounts.get(address) ?? null }))),
     }),
   } as unknown as SolanaRpcClient;
 }
 
-function chain(marketData: Uint8Array): Map<string, RpcAccount> {
-  return new Map<string, RpcAccount>([
-    [market.address, coreAccount(marketData)],
-    [realm.address, coreAccount(realm.data)],
+async function chain(marketData: Uint8Array = LIVE.market.data): Promise<Map<string, RpcAccount>> {
+  const accounts = new Map<string, RpcAccount>([
+    [LIVE.market.address, liveRpcAccount(LIVE.market, { data: marketData })],
+    [LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate)],
   ]);
+  const realm = deriveFinalizedRecordAddressesV1(REGISTRY, REALM_SCHEMA_RELEASE_ID_V1, await sha256(LIVE.realmRecord.data));
+  accounts.set(realm.record, liveRpcAccount(LIVE.realmRecord));
+  return accounts;
 }
+
+/** A copy of the live Market with a terminal receipt and a winning claim. */
+function terminalMarket(winner: number): Uint8Array {
+  // Core V2: phase@10, terminal winner@12, terminal receipt@320.
+  const withPhase = mutate(LIVE.market.data, 10, 2);
+  const withWinner = mutate(withPhase, 12, winner);
+  return mutate(withWinner, 320, new Uint8Array(32).fill(0x77));
+}
+
+const full = { coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS };
 
 describe('Market detail projection', () => {
   it('carries the immutable identities, the artifact profile, and an honest phase meaning', async () => {
-    const detail = await inspectMarketDetailV1(client(chain(market.data)), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
-    expect(detail.floorSlot).toBe('4711');
+    const detail = await inspectMarketDetailV1(client(await chain()), { ...full, address: LIVE.market.address });
+    expect(detail.floorSlot).toBe(SLOT);
     const card = detail.card;
     if (card.status !== 'decoded') throw new Error(card.refusal);
-    expect(card.phase).toBe('Founding');
-    expect(detail.phaseMeaning).toBe(marketPhaseMeaningV1('Founding'));
-    expect(detail.phaseMeaning).toMatch(/No claim has been issued/);
+    expect(card.phase).toBe('Open');
+    expect(detail.phaseMeaning).toBe(marketPhaseMeaningV1('Open'));
+    expect(detail.phaseMeaning).toMatch(/no claim can be redeemed/);
     expect(card.identity).toMatchObject({
-      schemaMagic: 'DCLTCAT1',
-      schemaVersion: 1,
-      categoricalProfile: 1,
-      accountBytes: market.data.length,
-      realmId: '3bda98b500c0de22309e1023ba42cc6cd5904eb9e09acfd0e94d04672bb15ba5',
-      productInstanceId: '02'.repeat(32),
-      claimBasisId: '03'.repeat(32),
-      resolutionPolicyId: '04'.repeat(32),
-      capabilityManifestId: '05'.repeat(32),
+      schemaMagic: 'DCLTCOR2',
+      schemaVersion: 2,
+      accountBytes: 352,
+      marketId: LIVE.market.address,
+      registryProgram: REGISTRY,
     });
-    expect(card.identity.rentRefundAuthority).toBe(new PublicKey(new Uint8Array(32).fill(0x08)).toBase58());
-    expect(provenanceChipV1(card.provenance)).toBe('CHAIN · finalized slot 4711');
+    for (const identity of [
+      card.identity.realmId, card.identity.productRecordId, card.identity.productInstanceId,
+      card.identity.resolutionPolicyId, card.identity.capabilityManifestId, card.identity.selectedReleaseSetId,
+    ]) expect(identity).toMatch(/^[0-9a-f]{64}$/);
+    expect(detail.claimsProgramId).toBe(CLAIMS);
   });
 
   it('states the exact required backing and the basis it is measured against', async () => {
-    const founding = await inspectMarketDetailV1(client(chain(market.data)), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
-    const empty = founding.card;
-    if (empty.status !== 'decoded') throw new Error(empty.refusal);
-    expect(empty.hoardAtoms).toBe('0');
-    expect(empty.requiredBackingAtoms).toBe('0');
-    expect(empty.requiredBackingBasis).toBe('maximum-outcome-supply');
-    expect(requiredBackingMeaningV1('maximum-outcome-supply')).toMatch(/largest outcome supply/);
-
-    // Unresolved: the Hoard must cover the largest outcome, because any
-    // outcome could still be the one that pays.
-    const open = await inspectMarketDetailV1(client(chain(marketVariant((data, view) => {
-      data[200] = 1;
-      view.setBigUint64(248, BigInt(90), true);
-      [BigInt(40), BigInt(90), BigInt(7)].forEach((amount, index) => view.setBigUint64(256 + index * 8, amount, true));
-    }))), { coreProgramId: fixture.programId, address: market.address });
+    const open = await inspectMarketDetailV1(client(await chain()), { ...full, address: LIVE.market.address });
     const openCard = open.card;
-    if (openCard.status !== 'decoded') throw new Error(openCard.refusal);
-    expect(openCard.phase).toBe('Open');
-    expect(openCard.supplyAtoms).toEqual(['40', '90', '7']);
-    expect(openCard.requiredBackingAtoms).toBe('90');
-    expect(openCard.requiredBackingBasis).toBe('maximum-outcome-supply');
+    if (openCard.status !== 'decoded' || openCard.liability.status !== 'bound') throw new Error('expected bound liabilities');
+    expect(openCard.liability.requiredBackingAtoms).toBe('500000000');
+    expect(openCard.liability.requiredBackingBasis).toBe('maximum-claim-supply');
+    expect(requiredBackingMeaningV1('maximum-claim-supply')).toMatch(/every claim could still be the one that pays/);
 
-    // Resolved: only the winning supply can still be paid.
-    const resolved = await inspectMarketDetailV1(client(chain(resolvedMarket(2, [BigInt(40), BigInt(90), BigInt(7)], BigInt(90)))), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
-    const resolvedCard = resolved.card;
-    if (resolvedCard.status !== 'decoded') throw new Error(resolvedCard.refusal);
-    expect(resolvedCard.phase).toBe('Resolved');
-    expect(resolvedCard.requiredBackingAtoms).toBe('7');
-    expect(resolvedCard.requiredBackingBasis).toBe('winning-outcome-supply');
-    expect(requiredBackingMeaningV1('winning-outcome-supply')).toMatch(/winning outcome supply/);
-    if (resolvedCard.settlement.status !== 'resolved') throw new Error('expected terminal settlement');
-    expect(resolvedCard.settlement).toMatchObject({ route: 'Occurrence', winner: 2, terminalSequence: '41' });
-    expect(resolved.phaseMeaning).toMatch(/one collateral atom per winning claim atom/);
+    const terminal = await inspectMarketDetailV1(client(await chain(terminalMarket(2))), { ...full, address: LIVE.market.address });
+    const terminalCard = terminal.card;
+    if (terminalCard.status !== 'decoded' || terminalCard.liability.status !== 'bound') throw new Error('expected bound liabilities');
+    expect(terminalCard.phase).toBe('Terminal');
+    expect(terminalCard.settlement).toMatchObject({ status: 'terminal', winner: 2 });
+    expect(terminalCard.liability.requiredBackingBasis).toBe('winning-claim-supply');
+    expect(requiredBackingMeaningV1('winning-claim-supply')).toMatch(/only winning claims can still be paid/);
   });
 
-  it('reports the Realm exactly as the Realm account decodes, never as Market hearsay', async () => {
-    const detail = await inspectMarketDetailV1(client(chain(market.data)), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
+  it('sources the supply vector from the Claims aggregate, never from the Market root', async () => {
+    const detail = await inspectMarketDetailV1(client(await chain()), { ...full, address: LIVE.market.address });
     const card = detail.card;
-    if (card.status !== 'decoded') throw new Error(card.refusal);
-    if (card.collateral.status !== 'bound') throw new Error(card.collateral.reason);
-    expect(card.collateral.realmAddress).toBe(realm.address);
-    expect(card.collateral.tokenProgram).toBe(new PublicKey(new Uint8Array(32).fill(0x0b)).toBase58());
-    expect(card.collateral.collateralMint).toBe(new PublicKey(new Uint8Array(32).fill(0x0c)).toBase58());
-    expect(card.collateral.adapterReleaseId).toBe('0d'.repeat(32));
+    if (card.status !== 'decoded' || card.liability.status !== 'bound') throw new Error('expected bound liabilities');
+    expect(card.liability.aggregateAddress).toBe(LIVE.claimsAggregate.address);
+    expect(card.liability.supplyAtoms).toEqual(['500000000', '500000000', '500000000', '500000000']);
+    expect(provenanceChipV1(liabilityProvenanceV1(card.liability))).toBe(`CHAIN · finalized slot ${SLOT}`);
+    // The Market bytes themselves hold no such vector; if the Claims aggregate
+    // is missing, the section refuses rather than falling back to the root.
+    const withoutAggregate = new Map(await chain());
+    withoutAggregate.delete(LIVE.claimsAggregate.address);
+    const blind = await inspectMarketDetailV1(client(withoutAggregate), { ...full, address: LIVE.market.address });
+    const blindCard = blind.card;
+    if (blindCard.status !== 'decoded') throw new Error(blindCard.refusal);
+    expect(blindCard.liability.status).toBe('refused');
+    expect(provenanceChipV1(blind.liabilityProvenance)).toBe('REFUSED');
+  });
+
+  it('reports the Realm exactly as its finalized record decodes, never as Market hearsay', async () => {
+    const detail = await inspectMarketDetailV1(client(await chain()), { ...full, address: LIVE.market.address });
+    const card = detail.card;
+    if (card.status !== 'decoded' || card.collateral.status !== 'bound') throw new Error('expected a bound Realm');
+    expect(card.collateral.realmContentId).toBe(card.identity.realmId);
+    expect(card.collateral.tokenProgram).toBe('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
     expect(card.collateral.mintAuthorityPolicy).toBe('Require absent');
-    expect(card.collateral.freezeAuthorityPolicy).toBe('Admit issuer control');
-    expect(realmProvenanceV1(card.collateral)).toEqual({ kind: 'chain', observedSlot: '4711' });
-    expect(provenanceChipV1(detail.realmProvenance)).toBe('CHAIN · finalized slot 4711');
+    expect(card.collateral.freezeAuthorityPolicy).toBe('Require absent');
+    expect(provenanceChipV1(realmProvenanceV1(card.collateral))).toBe(`CHAIN · finalized slot ${SLOT}`);
   });
 
   it('refuses every section a Registry-less read cannot authenticate, and says why', async () => {
-    const detail = await inspectMarketDetailV1(client(chain(market.data)), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
+    const detail = await inspectMarketDetailV1(client(await chain()), { coreProgramId: CORE, claimsProgramId: CLAIMS, address: LIVE.market.address });
     const card = detail.card;
     if (card.status !== 'decoded') throw new Error(card.refusal);
     expect(card.capabilities.status).toBe('unread');
-    expect(detail.capabilityProvenance.kind).toBe('refused');
-    expect(provenanceChipV1(detail.capabilityProvenance)).toBe('REFUSED');
-    expect(capabilityProvenanceV1(card.capabilities)).toEqual(detail.capabilityProvenance);
-    if (detail.capabilityProvenance.kind !== 'refused') throw new Error('expected a refusal');
-    expect(detail.capabilityProvenance.reason).toMatch(/No capability may be asserted from the Market root alone/);
-
-    // A Realm that is not present at the floor is a refusal with its reason,
-    // not a section that quietly renders blank.
-    const unbound = await inspectMarketDetailV1(client(new Map([[market.address, coreAccount(market.data)]])), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
-    const unboundCard = unbound.card;
-    if (unboundCard.status !== 'decoded') throw new Error(unboundCard.refusal);
-    expect(unboundCard.collateral.status).toBe('refused');
-    expect(unbound.realmProvenance.kind).toBe('refused');
-    if (unbound.realmProvenance.kind !== 'refused') throw new Error('expected a refusal');
-    expect(unbound.realmProvenance.reason).toMatch(/did not decode at this finalized floor/);
+    expect(card.collateral.status).toBe('unread');
+    expect(provenanceChipV1(capabilityProvenanceV1(card.capabilities))).toBe('REFUSED');
+    expect(provenanceChipV1(realmProvenanceV1(card.collateral))).toBe('REFUSED');
+    // Liabilities were still read: they need Claims, not Registry.
+    expect(card.liability.status).toBe('bound');
   });
 
   it('refuses the whole detail when the Market itself is absent or foreign', async () => {
-    const absent = await inspectMarketDetailV1(client(new Map()), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
+    const absent = await inspectMarketDetailV1(client(new Map()), { ...full, address: LIVE.market.address });
     expect(absent.card.status).toBe('refused');
-    expect(absent.phaseMeaning).toBeNull();
-    expect(absent.realmProvenance.kind).toBe('refused');
-    expect(absent.capabilityProvenance.kind).toBe('refused');
     expect(absent.reason).toMatch(/absent at the finalized observation floor/);
+    expect(absent.phaseMeaning).toBeNull();
+    expect(provenanceChipV1(absent.realmProvenance)).toBe('REFUSED');
+    expect(provenanceChipV1(absent.liabilityProvenance)).toBe('REFUSED');
 
-    const foreign = await inspectMarketDetailV1(client(new Map([[market.address, coreAccount(market.data, SYSTEM_PROGRAM)]])), {
-      coreProgramId: fixture.programId,
-      address: market.address,
-    });
-    const foreignCard = foreign.card;
-    if (foreignCard.status !== 'refused') throw new Error('expected a refusal');
-    expect(foreignCard.refusal).toMatch(/owner differs from the selected program ID/);
+    const foreign = await inspectMarketDetailV1(
+      client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market, { owner: SYSTEM_PROGRAM })]])),
+      { ...full, address: LIVE.market.address },
+    );
+    expect(foreign.card.status).toBe('refused');
+    expect(foreign.reason).toMatch(/owner differs from the selected Core program/);
   });
 });

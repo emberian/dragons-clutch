@@ -16,6 +16,7 @@ use dclutch_effect_kernel::{
 use super::{
     v3_composer::{MAX_DEALER_SCENARIO_CUSTODY_EFFECTS_V3, ScenarioAtomicPlanV3},
     v3_equity_operator::{DEALER_EQUITY_HEADER_BYTES_V3, DealerEquityRequestV3},
+    v3_hot_artifact::DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3,
     v3_multi_lp::{
         MAX_MULTI_LP_CUSTODY_EFFECTS_V3, MultiLpActionV3, MultiLpCustodyEffectV3,
         MultiLpCustodyRequestV3, MultiLpPlanV3, multi_lp_custody_digest_v3,
@@ -492,8 +493,13 @@ fn validate_equity_route_grammar(
             .checked_add(1)
             .ok_or(DealerRouteErrorV3::InvalidProgram)?;
     }
+    // The two local write targets, and then the release-selected Custody
+    // program the Custody routes above are invoked through. No route names the
+    // callee -- it is not a member of its own CPI's account list -- so the walk
+    // never reached it, but the total must still account for it.
     let expected_fixed_accounts = expected_start
         .checked_add(DEALER_LOCAL_STATE_ACCOUNT_COUNT_V3)
+        .and_then(|value| value.checked_add(DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3))
         .ok_or(DealerRouteErrorV3::InvalidProgram)?;
     if program.fixed_account_count() != expected_fixed_accounts {
         return Err(DealerRouteErrorV3::InvalidProgram);

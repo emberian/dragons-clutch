@@ -154,7 +154,8 @@ use crate::{
     },
     dispatch::TradingFamilyContextV1,
     dynamic_accounts_v4::{
-        downgrade_dynamic_child_accounts_v4, expand_dynamic_physical_accounts_v4,
+        PhysicalAccountsV4, dynamic_declared_privileges_v4, dynamic_logical_account_count_v4,
+        expand_dynamic_physical_accounts_v4,
     },
     execution_strategy_v2::{
         ADMITTED_AOT_STRATEGY_ACCOUNT_COUNT_V2, AuthenticatedExecutionStrategyV2,
@@ -299,6 +300,26 @@ fn hot_checkpoint(phase: &str) {
     );
 }
 
+/// Diagnostic-only allocation mark: label and bump position, no compute read.
+///
+/// A phase checkpoint answers "how much heap had this phase spent"; it cannot
+/// say which bank inside a phase spent it. Attributing the wall needs marks
+/// between individual allocations, and at that density the two extra syscalls
+/// `hot_checkpoint` makes are themselves the measurement's biggest cost. This
+/// logs one line: the label and the bump offset from the heap floor.
+///
+/// The subtraction between two consecutive marks is the exact charge of what
+/// lies between them, because the SBF bump allocator never frees.
+#[cfg(feature = "hot-cu-profile")]
+#[inline(never)]
+fn hot_heap_mark(label: &str) {
+    let probe = Vec::<u8>::with_capacity(1);
+    let position = probe.as_ptr() as usize;
+    let floor = solana_program::entrypoint::HEAP_START_ADDRESS as usize;
+    solana_program::log::sol_log(label);
+    solana_program::log::sol_log_64(position.saturating_sub(floor) as u64, 0, 0, 0, 0);
+}
+
 #[cfg(feature = "hot-cu-profile")]
 macro_rules! hot_cu_checkpoint {
     ($phase:literal) => {
@@ -309,6 +330,18 @@ macro_rules! hot_cu_checkpoint {
 #[cfg(not(feature = "hot-cu-profile"))]
 macro_rules! hot_cu_checkpoint {
     ($phase:literal) => {};
+}
+
+#[cfg(feature = "hot-cu-profile")]
+macro_rules! hot_heap_mark {
+    ($label:literal) => {
+        crate::hot_v3::hot_heap_mark(concat!("dclutch-hot-heap:", $label))
+    };
+}
+
+#[cfg(not(feature = "hot-cu-profile"))]
+macro_rules! hot_heap_mark {
+    ($label:literal) => {};
 }
 
 /// Shadow caller-authority PDA after six authenticated strategy extras.
@@ -2092,6 +2125,7 @@ fn execute_authenticated_hot_v3(
     // reports a zero lower bound, so the SBF bump allocator - which never frees
     // - is walked through the whole doubling ladder and charges several times
     // the live width for every fallible bank on this path.
+    hot_heap_mark!("runtime-accounts");
     let mut runtime_data = Vec::with_capacity(runtime_accounts.len());
     for account in &runtime_accounts {
         runtime_data.push(
@@ -2100,6 +2134,7 @@ fn execute_authenticated_hot_v3(
                 .map_err(|_| TradingSbfError::Content)?,
         );
     }
+    hot_heap_mark!("runtime-data");
     let tail_count = project_tail_count(account_profile, product_outcome_count)?;
     require_tail_count_agreement_v3(product_outcome_count, tail_count)?;
     // Representatives are resolved before the observation bank because the
@@ -2111,6 +2146,7 @@ fn execute_authenticated_hot_v3(
         &dynamic_spans.widths,
         runtime_accounts.len(),
     )?;
+    hot_heap_mark!("aliases");
     let projected_keys = Box::new(LogicalProjectionKeysV3 {
         selected_config: context.selection().config().to_bytes(),
         product_root: product_runtime.product_record.content_digest.to_bytes(),
@@ -2196,6 +2232,7 @@ fn execute_authenticated_hot_v3(
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent)?;
+    hot_heap_mark!("rent-quotes");
 
     let projected_request = project_account_and_request_registers_v3(
         invocation.current_instruction,
@@ -2217,6 +2254,7 @@ fn execute_authenticated_hot_v3(
         scalar_count,
         identity_count,
     )?;
+    hot_heap_mark!("request-registers");
     let request_output_scalars = projected_request.scalars;
     let request_output_identities = projected_request.identities;
     sealed_ownership
@@ -2247,8 +2285,10 @@ fn execute_authenticated_hot_v3(
     // the request output and the arena holds the other two, so nothing dead is
     // available to rent yet. It is handed to the replan later rather than
     // dropped.
+    hot_heap_mark!("preplan-arena");
     let preplan_output_scalars = vec![0_u64; scalar_count];
     let preplan_output_identities = vec![[0_u8; 32]; identity_count];
+    hot_heap_mark!("preplan-output");
     let preplanned_lifecycle = prepare_lifecycle_v4(
         program_id,
         envelope.market(),
@@ -2300,18 +2340,24 @@ fn execute_authenticated_hot_v3(
     } else {
         // The request-profile banks have been copied into the independently
         // prepared lifecycle batch, so they are dead here and are moved in as
-        // the fold's scratch. Moving them, rather than dropping them and
+        // the fold's output. Moving them, rather than dropping them and
         // cloning the input again, is what keeps the SBF caller frame from
         // retaining two register-bank owners across this noinline semantic
         // boundary and keeps the allocator from being asked for a pair it
-        // already handed out.
+        // already handed out. The fold's scratch is rented from the preplan
+        // arena, which is idle here between its two passes, so this phase
+        // allocates no register bank at all.
         execute_interpreted_transition_v3(
             transition,
             tail_count,
-            &preplanned_lifecycle.scalars,
-            &preplanned_lifecycle.identities,
-            request_output_scalars,
-            request_output_identities,
+            TransitionRegistersV3 {
+                input_scalars: &preplanned_lifecycle.scalars,
+                input_identities: &preplanned_lifecycle.identities,
+                scratch_scalars: &mut preplan_scratch.next_scalars,
+                scratch_identities: &mut preplan_scratch.next_identities,
+                output_scalars: request_output_scalars,
+                output_identities: request_output_identities,
+            },
         )?
     };
     hot_cu_checkpoint!("candidate");
@@ -2411,12 +2457,15 @@ fn execute_authenticated_hot_v3(
     // building a duplicate of it, so the table the commit executes is the one
     // the transition was handed and the replan reproduced.
     let lifecycle_plans = preplanned_plans;
-    let effect_accounts = downgraded_effect_accounts_v3(
+    // One byte per logical coordinate, decoded once, whole frame checked here.
+    let effect_privileges = child_route_privileges_v3(
         account_profile,
         tail_count,
         &dynamic_spans.widths,
         &runtime_accounts,
     )?;
+    let effect_accounts = downgraded_effect_accounts_v3(&runtime_accounts, &effect_privileges)?;
+    hot_heap_mark!("downgraded-effects");
     preflight_child_routes_v3(
         program_id,
         *frame,
@@ -2424,7 +2473,7 @@ fn execute_authenticated_hot_v3(
         tail_count,
         &transition_output_scalars,
         &transition_output_identities,
-        &effect_accounts,
+        effect_accounts,
         &output_requests,
         family_request,
         request_digest,
@@ -2434,6 +2483,7 @@ fn execute_authenticated_hot_v3(
         &aliases,
         locally_mutated.as_deref(),
     )?;
+    hot_cu_checkpoint!("preflight-children");
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
         execute_shadow_candidate_v3(ShadowCandidateViewV3 {
             program_id,
@@ -2472,7 +2522,7 @@ fn execute_authenticated_hot_v3(
         scalars: &transition_output_scalars,
         identities: &transition_output_identities,
         runtime_accounts: &runtime_accounts,
-        effect_accounts: &effect_accounts,
+        effect_accounts,
         request_bank: &output_requests,
         family_request,
         request_digest,
@@ -2509,7 +2559,7 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     scalars: &'a [u64],
     identities: &'a [[u8; 32]],
     runtime_accounts: &'a [&'accounts AccountInfo<'info>],
-    effect_accounts: &'a [AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'a, 'accounts, 'info>,
     request_bank: &'a [u8],
     family_request: &'a [u8],
     request_digest: [u8; 32],
@@ -2550,8 +2600,11 @@ fn commit_prepared_hot_result_v3(
         prepared.lifecycle_plans,
         prepared.runtime_accounts,
     )?;
+    hot_heap_mark!("lifecycle-creates");
     let child_execution_digest = execute_prepared_child_routes_v3(prepared)?;
+    hot_heap_mark!("children-executed");
     commit_prepared_post_children_v3(prepared)?;
+    hot_heap_mark!("post-children");
     let root_poststate = {
         let bytes = prepared
             .frame
@@ -2581,6 +2634,7 @@ fn execute_prepared_child_routes_v3(
         prepared.scalars,
         prepared.identities,
         prepared.effect_accounts,
+        prepared.aliases,
         prepared.request_bank,
         prepared.family_request,
         prepared.request_digest,
@@ -2931,26 +2985,72 @@ struct CandidateExecutionV3 {
     transcript_digest: [u8; 32],
 }
 
+/// Fold the interpreted transition without allocating a register bank.
+///
+/// The fold needs three pairs: the input it reads, a scratch pair, and the
+/// output pair it returns. All three already exist and none of them had to be
+/// allocated here.
+///
+/// - the input is the preplan's output, borrowed;
+/// - the *output* is the request-projection pair moved in. It was dead the
+///   moment the preplan copied it, it is exactly the right width, and the
+///   candidate's registers outlive this call -- so the pair that leaves as
+///   `CandidateExecutionV3` is the pair that arrived, not a fresh `to_vec` of
+///   the input;
+/// - the *scratch* is rented from the preplan arena, which is idle between the
+///   two `prepare_lifecycle_v4` passes this call sits between.
+///
+/// Renting the arena's working pair is sound rather than merely convenient:
+/// `prepare_lifecycle_v4` copies `output_scalars`/`output_identities` over all
+/// four arena working banks immediately before every use, so nothing it does
+/// can observe what this fold left in them. Previously this function rented one
+/// pair for scratch and then allocated a whole second pair for the output --
+/// which, on an allocator whose `dealloc` is a no-op, charged the heap a full
+/// pair while the rented one died here unrecoverably.
+/// The three register-bank pairs the fold runs on, named by their ROLE, which
+/// is the only thing distinguishing them: all three are the same width and two
+/// of them are borrowed from phases that are done with them.
+///
+/// Shaped like `ProjectionRegistersV2`, and for the same reason -- six
+/// same-typed banks passed positionally is six chances to transpose scratch and
+/// output, and the compiler catches none of them.
+struct TransitionRegistersV3<'a> {
+    input_scalars: &'a [u64],
+    input_identities: &'a [[u8; 32]],
+    /// The preplan arena's working pair, idle between the preplan and the replan.
+    scratch_scalars: &'a mut [u64],
+    scratch_identities: &'a mut [[u8; 32]],
+    /// The request-projection output pair, dead since the preplan copied it.
+    /// Returned as the candidate's registers rather than cloned from the input.
+    output_scalars: Vec<u64>,
+    output_identities: Vec<[u8; 32]>,
+}
+
 #[inline(never)]
 fn execute_interpreted_transition_v3(
     transition: TransitionProgramV3<'_>,
     tail_count: u32,
-    input_scalars: &[u64],
-    input_identities: &[[u8; 32]],
-    // The request-projection output pair, dead since the preplan copied it.
-    // Rented as the fold's scratch rather than cloned from the input again.
-    mut scratch_scalars: Vec<u64>,
-    mut scratch_identities: Vec<[u8; 32]>,
+    registers: TransitionRegistersV3<'_>,
 ) -> Result<CandidateExecutionV3, ProgramError> {
-    if scratch_scalars.len() != input_scalars.len()
+    let TransitionRegistersV3 {
+        input_scalars,
+        input_identities,
+        scratch_scalars,
+        scratch_identities,
+        mut output_scalars,
+        mut output_identities,
+    } = registers;
+    if output_scalars.len() != input_scalars.len()
+        || output_identities.len() != input_identities.len()
+        || scratch_scalars.len() != input_scalars.len()
         || scratch_identities.len() != input_identities.len()
     {
         return Err(TradingSbfError::Content.into());
     }
     scratch_scalars.copy_from_slice(input_scalars);
     scratch_identities.copy_from_slice(input_identities);
-    let mut output_scalars = input_scalars.to_vec();
-    let mut output_identities = input_identities.to_vec();
+    output_scalars.copy_from_slice(input_scalars);
+    output_identities.copy_from_slice(input_identities);
     execute_fold_atomic(
         transition,
         tail_count,
@@ -2959,8 +3059,8 @@ fn execute_interpreted_transition_v3(
             identities: input_identities,
         },
         RegisterOutput {
-            scalars: &mut scratch_scalars,
-            identities: &mut scratch_identities,
+            scalars: scratch_scalars,
+            identities: scratch_identities,
         },
         RegisterOutput {
             scalars: &mut output_scalars,
@@ -3023,9 +3123,11 @@ fn project_hot_effects_v3(
         lamports: observation.lamports(),
         data_len: observation.data().len(),
     }));
+    hot_heap_mark!("effects-account-inputs");
     apply_lifecycle_candidates_v3(lifecycle_plans, aliases, &mut account_inputs)?;
     let mut permissions =
         try_projection_bank_v3(&AccountPermission::read_only(), runtime_account_count)?;
+    hot_heap_mark!("effects-permissions");
     if account_profile.uses_dynamic_fixed_spans() {
         derive_effect_permissions_with_dynamic_spans(
             account_profile,
@@ -3052,13 +3154,35 @@ fn project_hot_effects_v3(
     {
         return Err(TradingSbfError::Content.into());
     }
+    hot_heap_mark!("effects-count-checked");
     let mut scratch_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
-    let mut effect_output_lamports = try_projection_bank_v3(&0_u64, effect_account_count)?;
+    // One lamport output bank, not two. The projection's own output bank was a
+    // separate `effect_account_count`-wide allocation whose entire contents were
+    // then copied into the prefix of the wider bank this function returns -- so
+    // on an allocator that never frees, the heap carried a whole second copy of
+    // the projected balances for the rest of the instruction to serve one
+    // `copy_from_slice`.
+    //
+    // The returned bank is built first and the projection writes straight into
+    // its prefix. Its incoming contents are not load-bearing in either
+    // direction: on success the kernel overwrites every entry of the output
+    // bank from the alias-resolved scratch bank, and on refusal it leaves the
+    // bank untouched and this function returns `Err`, so nothing downstream can
+    // observe the seed. Seeding it from `account_inputs` before the projection
+    // rather than after is the same value -- the projection takes `accounts` as
+    // a shared slice and cannot alter it.
+    let mut output_lamports: Vec<u64> = Vec::new();
+    output_lamports
+        .try_reserve_exact(account_inputs.len())
+        .map_err(|_| TradingSbfError::Content)?;
+    output_lamports.extend(account_inputs.iter().map(|account| account.lamports));
+    hot_heap_mark!("effects-lamport-banks");
     // One bank, not two. The projection's second request bank was written once,
     // at the end, as a verbatim copy of the first; on an allocator that never
     // frees that copy cost the full declared request width for the whole
     // instruction. The single bank carries the same bytes into preflight/CPI.
     let mut requests = try_projection_bank_v3(&0_u8, request_bytes)?;
+    hot_heap_mark!("effects-request-bank");
     project_effects_v4_atomic(
         effect.successor,
         tail_count,
@@ -3075,20 +3199,14 @@ fn project_hot_effects_v3(
                 .get(..effect_account_count)
                 .ok_or(TradingSbfError::Content)?,
             scratch_lamports: &mut scratch_lamports,
-            output_lamports: &mut effect_output_lamports,
+            output_lamports: output_lamports
+                .get_mut(..effect_account_count)
+                .ok_or(TradingSbfError::Content)?,
             requests: &mut requests,
         },
     )
     .map_err(|_| TradingSbfError::Transition)?;
-    let mut output_lamports: Vec<u64> = Vec::new();
-    output_lamports
-        .try_reserve_exact(account_inputs.len())
-        .map_err(|_| TradingSbfError::Content)?;
-    output_lamports.extend(account_inputs.iter().map(|account| account.lamports));
-    output_lamports
-        .get_mut(..effect_account_count)
-        .ok_or(TradingSbfError::Content)?
-        .copy_from_slice(&effect_output_lamports);
+    hot_heap_mark!("effects-projected");
     Ok(ProjectedEffectsV3 {
         lamports: output_lamports,
         requests,
@@ -3695,16 +3813,16 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
             return Err(TradingSbfError::Content.into());
         }
     }
-    let mut physical = Vec::with_capacity(physical_count);
-    physical.extend(injected);
-    physical.extend(supplied_suffix.iter());
+    // Addressed in place, never concatenated into a `Vec`. See
+    // [`PhysicalAccountsV4`]: the joined buffer was dead the moment the logical
+    // vector existed and still cost its full physical width for the rest of the
+    // instruction.
+    let physical = PhysicalAccountsV4::new(&injected, supplied_suffix);
+    if physical.len() != physical_count {
+        return Err(TradingSbfError::Content.into());
+    }
     if dynamic {
-        return expand_dynamic_physical_accounts_v4(
-            profile,
-            tail_count,
-            span_counts,
-            physical.as_slice(),
-        );
+        return expand_dynamic_physical_accounts_v4(profile, tail_count, span_counts, &physical);
     }
     // One forward sweep, not one prefix recount per coordinate: see
     // `expand_dynamic_physical_accounts_v4` for why the two maps are identical.
@@ -3717,9 +3835,9 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
             .representative(tail_count, coordinate)
             .map_err(|_| TradingSbfError::Content)?;
         let resolved = if !packs {
-            *physical.get(coordinate).ok_or(TradingSbfError::Content)?
+            physical.get(coordinate).ok_or(TradingSbfError::Content)?
         } else if representative == coordinate {
-            let resolved = *physical.get(next).ok_or(TradingSbfError::Content)?;
+            let resolved = physical.get(next).ok_or(TradingSbfError::Content)?;
             next = next.checked_add(1).ok_or(TradingSbfError::Content)?;
             resolved
         } else {
@@ -3741,38 +3859,177 @@ fn expand_runtime_accounts_v3<'accounts, 'info>(
     Ok(logical)
 }
 
+/// The child-CPI view of the logical account vector, materialised one window at
+/// a time instead of all at once.
+///
+/// Every consumer of this vector reads a CONTIGUOUS WINDOW of it -- one
+/// invocation's fixed span, plus its repeated item spans -- and copies that
+/// window into a `Vec` of its own before building the CPI. Nothing ever holds
+/// the whole thing, nothing mutates it, and every entry is a pure function of
+/// (physical account, representative's declared privileges). Materialising all
+/// of it up front therefore bought nothing and cost, measured on the canonical
+/// Registry-continuation Direct bundle at a 256 KiB diagnostic heap, **4,374
+/// bytes** -- 91 coordinates at 48 bytes plus the probe -- on an allocator whose
+/// `dealloc` is a no-op, so it stayed charged for the rest of the instruction
+/// while the windows that actually get used were allocated on top of it.
+///
+/// A window is still a `&[AccountInfo]` to the composition that receives it;
+/// only the 91-wide intermediate is gone.
+///
+/// # What did NOT become lazy
+///
+/// The whole-frame privilege check did not. `new` walks every coordinate and
+/// applies the same refusal the eager build did, materialising nothing: a
+/// declaration that is writable where the transaction is not, or whose
+/// executability disagrees with the account, refuses the instruction before any
+/// child runs -- not when some later route happens to gather that coordinate.
+/// Deferring that check would have quietly narrowed the refusal set to the
+/// coordinates a particular request touches, which is a different program.
+#[derive(Clone, Copy)]
+pub struct DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
+    logical: &'a [&'accounts AccountInfo<'info>],
+    declared: &'a [u8],
+}
+
+impl<'a, 'accounts, 'info> DowngradedEffectAccountsV3<'a, 'accounts, 'info> {
+    /// Logical width, which is the width the eager vector had.
+    pub const fn len(self) -> usize {
+        self.logical.len()
+    }
+
+    /// A frame with no coordinates at all, which no admitted profile produces.
+    pub const fn is_empty(self) -> bool {
+        self.logical.is_empty()
+    }
+
+    /// One coordinate's child view, from the privilege byte decoded once.
+    pub fn view(self, coordinate: usize) -> Result<AccountInfo<'info>, ProgramError> {
+        let declared = *self
+            .declared
+            .get(coordinate)
+            .ok_or(TradingSbfError::Content)?;
+        let mut logical = (*self
+            .logical
+            .get(coordinate)
+            .ok_or(TradingSbfError::Content)?)
+        .clone();
+        logical.is_signer = declared & DECLARED_SIGNER_V3 != 0;
+        logical.is_writable = declared & DECLARED_WRITABLE_V3 != 0;
+        Ok(logical)
+    }
+
+    /// How many coordinates in one window carry a given program.
+    ///
+    /// A key comparison only, so it reads the logical vector directly and
+    /// materialises nothing at all -- the privilege downgrade cannot change an
+    /// account's address.
+    pub fn count_program_in_window(
+        self,
+        start: usize,
+        count: usize,
+        program: &Pubkey,
+    ) -> Result<usize, ProgramError> {
+        let end = start.checked_add(count).ok_or(TradingSbfError::Content)?;
+        Ok(self
+            .logical
+            .get(start..end)
+            .ok_or(TradingSbfError::Content)?
+            .iter()
+            .filter(|account| account.key == program)
+            .count())
+    }
+
+    /// Append one contiguous window's child views to a caller-owned buffer.
+    ///
+    /// This is the only shape any consumer ever needed: each composition's
+    /// `invocation_accounts` was `output.extend_from_slice(accounts[a..b])` over
+    /// windows it computes from its own resolved invocation.
+    pub fn extend_window(
+        self,
+        output: &mut Vec<AccountInfo<'info>>,
+        start: usize,
+        count: usize,
+    ) -> Result<(), ProgramError> {
+        let end = start.checked_add(count).ok_or(TradingSbfError::Content)?;
+        if end > self.logical.len() {
+            return Err(TradingSbfError::Content.into());
+        }
+        output
+            .try_reserve(count)
+            .map_err(|_| TradingSbfError::Content)?;
+        let mut coordinate = start;
+        while coordinate < end {
+            output.push(self.view(coordinate)?);
+            coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+        }
+        Ok(())
+    }
+}
+
 #[inline(never)]
-fn downgraded_effect_accounts_v3<'info>(
+pub(crate) fn downgraded_effect_accounts_v3<'a, 'accounts, 'info>(
+    logical_accounts: &'a [&'accounts AccountInfo<'info>],
+    declared: &'a [u8],
+) -> Result<DowngradedEffectAccountsV3<'a, 'accounts, 'info>, ProgramError> {
+    if logical_accounts.len() != declared.len() {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(DowngradedEffectAccountsV3 {
+        logical: logical_accounts,
+        declared,
+    })
+}
+
+/// Declared-signer bit of a packed privilege byte.
+const DECLARED_SIGNER_V3: u8 = 1;
+/// Declared-writable bit of a packed privilege byte.
+const DECLARED_WRITABLE_V3: u8 = 2;
+
+/// Decode every logical coordinate's declared route privileges ONCE, and check
+/// the whole frame while doing it.
+///
+/// One byte per coordinate -- 91 of them on the canonical Direct bundle, plus
+/// the allocator's probe -- against the 4,368 bytes the materialised
+/// `AccountInfo` bank cost. Decoding on demand at gather time instead would
+/// allocate nothing at all, but every gathered coordinate would re-walk the
+/// profile's representative and route-privilege rules, and the two child-route
+/// walks gather most of the frame twice: measured at +51,329 CU against a
+/// budget with 87,406 left. A byte is the right size for a fact that is three
+/// bits wide.
+///
+/// The check is the whole-frame one the materialised bank performed, unchanged
+/// and still eager: a declaration writable where the transaction is not, or
+/// whose executability disagrees with the account, refuses the instruction here
+/// -- not when some later route happens to gather that coordinate.
+pub(crate) fn child_route_privileges_v3(
     profile: AccountProfileV2<'_>,
     tail_count: u32,
     span_counts: &[u32],
-    logical_accounts: &[&AccountInfo<'info>],
-) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
-    if profile.uses_dynamic_fixed_spans() {
-        return downgrade_dynamic_child_accounts_v4(
-            profile,
-            tail_count,
-            span_counts,
-            logical_accounts,
-        );
-    }
-    if !span_counts.is_empty() {
-        return Err(TradingSbfError::Content.into());
-    }
-    if logical_accounts.len()
-        != profile
+    logical_accounts: &[&AccountInfo<'_>],
+) -> Result<Vec<u8>, ProgramError> {
+    let dynamic = profile.uses_dynamic_fixed_spans();
+    let logical_count = if dynamic {
+        dynamic_logical_account_count_v4(profile, tail_count, span_counts)?
+    } else {
+        if !span_counts.is_empty() {
+            return Err(TradingSbfError::Content.into());
+        }
+        profile
             .logical_account_count(tail_count)
             .map_err(|_| TradingSbfError::Content)?
-    {
+    };
+    if logical_accounts.len() != logical_count {
         return Err(TradingSbfError::Content.into());
     }
-    let mut downgraded = Vec::new();
-    downgraded
-        .try_reserve_exact(logical_accounts.len())
+    let mut declared = Vec::new();
+    declared
+        .try_reserve_exact(logical_count)
         .map_err(|_| TradingSbfError::Content)?;
-    for (coordinate, account) in logical_accounts.iter().enumerate() {
-        downgraded.push(child_route_view_v3(
-            account,
+    let mut coordinate = 0_usize;
+    while coordinate < logical_count {
+        let privileges = if dynamic {
+            dynamic_declared_privileges_v4(profile, tail_count, span_counts, coordinate)?
+        } else {
             profile
                 .route_privileges(
                     tail_count,
@@ -3780,14 +4037,25 @@ fn downgraded_effect_accounts_v3<'info>(
                         .representative(tail_count, coordinate)
                         .map_err(|_| TradingSbfError::Content)?,
                 )
-                .map_err(|_| TradingSbfError::Content)?,
-        )?);
+                .map_err(|_| TradingSbfError::Content)?
+        };
+        require_child_route_privileges_v3(
+            logical_accounts
+                .get(coordinate)
+                .ok_or(TradingSbfError::Content)?,
+            privileges,
+        )?;
+        declared.push(
+            u8::from(privileges.signer())
+                .wrapping_mul(DECLARED_SIGNER_V3)
+                .wrapping_add(u8::from(privileges.writable()).wrapping_mul(DECLARED_WRITABLE_V3)),
+        );
+        coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(downgraded)
+    Ok(declared)
 }
 
-/// Build one child CPI view of a physical account from the privileges its
-/// semantic owner declares.
+/// Refuse a declared privilege the physical account cannot carry.
 ///
 /// An authenticated route alias declares no privileges of its own -- the
 /// AccountProfile validator's route-alias contract requires the producer to
@@ -3809,18 +4077,15 @@ fn downgraded_effect_accounts_v3<'info>(
 /// claims a signer Trading cannot produce seeds for still fails closed in the
 /// runtime. Executability is exact in both directions: it is a property of the
 /// account, never granted or suppressed by a route.
-fn child_route_view_v3<'info>(
-    account: &AccountInfo<'info>,
+fn require_child_route_privileges_v3(
+    account: &AccountInfo<'_>,
     declared: RouteAccountPrivilegesV2,
-) -> Result<AccountInfo<'info>, ProgramError> {
+) -> Result<(), ProgramError> {
     if (declared.writable() && !account.is_writable) || declared.executable() != account.executable
     {
         return Err(TradingSbfError::Content.into());
     }
-    let mut logical = account.clone();
-    logical.is_signer = declared.signer();
-    logical.is_writable = declared.writable();
-    Ok(logical)
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -4739,9 +5004,8 @@ fn prepare_lifecycle_v4<'a>(
                                 // exact seed bytes and checked it against this
                                 // exact account; `admit` refuses below unless
                                 // the state coordinate is the preplan's too.
-                                derived = Some(
-                                    *accounts.get(state).ok_or(TradingSbfError::Content)?.key,
-                                );
+                                derived =
+                                    Some(*accounts.get(state).ok_or(TradingSbfError::Content)?.key);
                                 bump
                             }
                         };
@@ -4943,8 +5207,7 @@ fn require_lifecycle_replan_agreement_v4(
     transition_scalars: &[u64],
     transition_identities: &[[u8; 32]],
 ) -> Result<(), ProgramError> {
-    if revalidated.scalars != transition_scalars
-        || revalidated.identities != transition_identities
+    if revalidated.scalars != transition_scalars || revalidated.identities != transition_identities
     {
         Err(TradingSbfError::Transition.into())
     } else {
@@ -5452,6 +5715,45 @@ fn apply_lifecycle_closes_v3(
     Ok(())
 }
 
+/// A heap-allocated `T` whose allocation REFUSES instead of aborting.
+///
+/// `Box::new` allocates infallibly: on an exhausted heap it aborts the whole
+/// invocation (`memory allocation failed` -> `ProgramFailedToComplete`), which
+/// rolls the transaction back but names nothing and reaches no refusal code.
+/// `Box::try_new` is unstable, so the fallible reservation goes through `Vec`,
+/// whose `try_reserve_exact` is stable, and `into_boxed_slice` does not
+/// reallocate at capacity equal to length. `Box<[T; 1]>` is that same
+/// allocation with a safe conversion available; `Box<[T]> -> Box<T>` is not.
+///
+/// This exists because the phase-8 boundary is where the heap actually runs
+/// out, and the composition decode is the first thing past it to allocate.
+struct HeapBoxV3<T>(Box<[T; 1]>);
+
+impl<T> HeapBoxV3<T> {
+    fn new(value: T) -> Result<Self, ProgramError> {
+        let mut storage = Vec::new();
+        storage
+            .try_reserve_exact(1)
+            .map_err(|_| TradingSbfError::Content)?;
+        storage.push(value);
+        Ok(Self(
+            storage
+                .into_boxed_slice()
+                .try_into()
+                .map_err(|_| TradingSbfError::Content)?,
+        ))
+    }
+}
+
+impl<T> core::ops::Deref for HeapBoxV3<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        let [value] = &*self.0;
+        value
+    }
+}
+
 #[cfg(any(
     feature = "families",
     feature = "series-family",
@@ -5467,18 +5769,19 @@ fn decode_claims_composition_boxed_v3<'request>(
     request_bank: &'request [u8],
     family_request: &'request [u8],
     parent: ClaimsCompositionParentV3,
-) -> Result<Box<ClaimsCompositionV3<'request>>, ProgramError> {
-    ClaimsCompositionV3::decode_selected_with_witness(
-        effect.base(),
-        tail_count,
-        scalars,
-        identities,
-        request_bank,
-        family_request,
-        parent,
+) -> Result<HeapBoxV3<ClaimsCompositionV3<'request>>, ProgramError> {
+    HeapBoxV3::new(
+        ClaimsCompositionV3::decode_selected_with_witness(
+            effect.base(),
+            tail_count,
+            scalars,
+            identities,
+            request_bank,
+            family_request,
+            parent,
+        )
+        .map_err(|_| TradingSbfError::Content)?,
     )
-    .map(Box::new)
-    .map_err(|_| TradingSbfError::Content.into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5490,7 +5793,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
     request_digest: [u8; 32],
@@ -5516,6 +5819,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     if locally_mutated.len() != aliases.len() {
         return Err(TradingSbfError::Content.into());
     }
+    hot_heap_mark!("pf-enter");
     #[cfg(any(
         feature = "families",
         feature = "series-family",
@@ -5540,55 +5844,49 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
+    hot_heap_mark!("pf-claims-composition");
+    hot_cu_checkpoint!("pf-composition");
+    // One decode of the activation cache for this whole walk, in ONE
+    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
+    // cost and why the decode does not live in this function's frame.
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = if claims_composition.is_some() {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            ExecutionRoleV1::Claims,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let selected_role_programs = selected_role_programs_v3(
+        frame,
+        effect_accounts,
+        aliases,
+        envelope.release_set(),
+        RequiredRolesV3 {
+            claims: claims_composition.is_some(),
+            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
+            resolution: has_active_role(
+                effect,
+                tail_count,
+                scalars,
+                identities,
+                FixedRole::Resolution,
+            )?,
+        },
+    )?;
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let custody_program =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)? {
-            Some(selected_role_program_v3(
-                frame,
-                effect_accounts,
-                ExecutionRoleV1::Custody,
-                envelope.release_set(),
-            )?)
-        } else {
-            None
-        };
+    let claims_program = selected_role_programs.claims;
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let custody_program = selected_role_programs.custody;
     #[cfg(feature = "families")]
-    let resolution_program = if has_active_role(
-        effect,
-        tail_count,
-        scalars,
-        identities,
-        FixedRole::Resolution,
-    )? {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            ExecutionRoleV1::Resolution,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let resolution_program = selected_role_programs.resolution;
 
+    hot_cu_checkpoint!("pf-role-programs");
     let mut route = 0_u16;
     while route < effect.route_count() {
         let count = effect
@@ -5599,6 +5897,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             let invocation = effect
                 .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
+            hot_heap_mark!("pf-invocation");
+            hot_cu_checkpoint!("pf-invocation-resolved");
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
@@ -5632,7 +5932,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         let composition = claims_composition
                             .as_deref()
                             .ok_or(TradingSbfError::Content)?;
-                        let selected = claims_program.ok_or(TradingSbfError::Release)?;
+                        let selected = claims_program.as_ref().ok_or(TradingSbfError::Release)?;
                         if invocation_index != 0
                             || !(composition.admit_route() == Some(route)
                                 || composition.mutation_route() == route
@@ -5669,7 +5969,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         identities,
                         effect_accounts,
                         request_bank,
-                        custody_program.ok_or(TradingSbfError::Release)?,
+                        custody_program.as_ref().ok_or(TradingSbfError::Release)?,
                         CustodyCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -5698,7 +5998,9 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         effect_accounts,
                         request_bank,
                         family_request,
-                        resolution_program.ok_or(TradingSbfError::Release)?,
+                        resolution_program
+                            .as_ref()
+                            .ok_or(TradingSbfError::Release)?,
                         ResolutionCompositionParentV3 {
                             release_set: envelope.release_set(),
                             market: envelope.market(),
@@ -5714,6 +6016,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
             }
+            hot_cu_checkpoint!("pf-invocation-preflighted");
             invocation_index = invocation_index
                 .checked_add(1)
                 .ok_or(TradingSbfError::Content)?;
@@ -5746,7 +6049,11 @@ fn execute_child_routes_v3<'accounts, 'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, 'accounts, 'info>,
+    // The per-logical-coordinate representative table `effect_accounts` was
+    // downgraded at. Only `selected_role_program_v3` reads it here, to tell one
+    // physical account named several times from several physical accounts.
+    aliases: &[usize],
     request_bank: &[u8],
     family_request: &[u8],
     request_digest: [u8; 32],
@@ -5755,7 +6062,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
     selected_capability_program: [u8; 32],
 ) -> Result<[u8; 32], ProgramError> {
     #[cfg(not(feature = "families"))]
-    let _ = (capability_program_set, selected_capability_program);
+    let _ = (capability_program_set, selected_capability_program, aliases);
     let mut execution = Box::new(ChildExecutionStateV3 {
         transcript: hashv(&[CHILD_EXECUTION_DIGEST_DOMAIN_V3, &request_digest]).to_bytes(),
         receipt_bank: ChildReceiptBankV3::new(),
@@ -5789,54 +6096,45 @@ fn execute_child_routes_v3<'accounts, 'info>(
         } else {
             None
         };
+    // One decode of the activation cache for this whole walk, in ONE
+    // out-of-line frame; see `SelectedRoleProgramsV3` for what asking per role
+    // cost and why the decode does not live in this function's frame.
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_program = if claims_composition.is_some() {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            ExecutionRoleV1::Claims,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let selected_role_programs = selected_role_programs_v3(
+        frame,
+        effect_accounts,
+        aliases,
+        envelope.release_set(),
+        RequiredRolesV3 {
+            claims: claims_composition.is_some(),
+            custody: has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)?,
+            resolution: has_active_role(
+                effect,
+                tail_count,
+                scalars,
+                identities,
+                FixedRole::Resolution,
+            )?,
+        },
+    )?;
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let custody_program =
-        if has_active_role(effect, tail_count, scalars, identities, FixedRole::Custody)? {
-            Some(selected_role_program_v3(
-                frame,
-                effect_accounts,
-                ExecutionRoleV1::Custody,
-                envelope.release_set(),
-            )?)
-        } else {
-            None
-        };
+    let claims_program = selected_role_programs.claims;
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let custody_program = selected_role_programs.custody;
     #[cfg(feature = "families")]
-    let resolution_program = if has_active_role(
-        effect,
-        tail_count,
-        scalars,
-        identities,
-        FixedRole::Resolution,
-    )? {
-        Some(selected_role_program_v3(
-            frame,
-            effect_accounts,
-            ExecutionRoleV1::Resolution,
-            envelope.release_set(),
-        )?)
-    } else {
-        None
-    };
+    let resolution_program = selected_role_programs.resolution;
 
     while execution.route < effect.route_count() {
         let route = execution.route;
@@ -5861,15 +6159,19 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Claims => claims_program.ok_or(TradingSbfError::Release)?,
+                    FixedRole::Claims => claims_program.as_ref().ok_or(TradingSbfError::Release)?,
                     #[cfg(any(
                         feature = "families",
                         feature = "series-family",
                         feature = "dealer-family"
                     ))]
-                    FixedRole::Custody => custody_program.ok_or(TradingSbfError::Release)?,
+                    FixedRole::Custody => {
+                        custody_program.as_ref().ok_or(TradingSbfError::Release)?
+                    }
                     #[cfg(feature = "families")]
-                    FixedRole::Resolution => resolution_program.ok_or(TradingSbfError::Release)?,
+                    FixedRole::Resolution => resolution_program
+                        .as_ref()
+                        .ok_or(TradingSbfError::Release)?,
                     #[cfg(not(feature = "families"))]
                     _ => return Err(TradingSbfError::UnsupportedContent.into()),
                 };
@@ -5964,12 +6266,12 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            claims_program.ok_or(TradingSbfError::Release)?,
+                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
                         )?;
                         (
                             FixedRole::Claims,
                             claims_receipt_digest_v3(receipt)?,
-                            claims_program.ok_or(TradingSbfError::Release)?,
+                            claims_program.as_ref().ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -5997,7 +6299,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect_accounts,
                             request_bank,
                             prior_receipt,
-                            custody_program.ok_or(TradingSbfError::Release)?,
+                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
                             CustodyCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6009,7 +6311,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Custody,
                             digest,
-                            custody_program.ok_or(TradingSbfError::Release)?,
+                            custody_program.as_ref().ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(any(
@@ -6034,7 +6336,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             request_bank,
                             family_request,
                             prior_receipt,
-                            resolution_program.ok_or(TradingSbfError::Release)?,
+                            resolution_program
+                                .as_ref()
+                                .ok_or(TradingSbfError::Release)?,
                             ResolutionCompositionParentV3 {
                                 release_set: envelope.release_set(),
                                 market: envelope.market(),
@@ -6049,7 +6353,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                         (
                             FixedRole::Resolution,
                             digest,
-                            resolution_program.ok_or(TradingSbfError::Release)?,
+                            resolution_program
+                                .as_ref()
+                                .ok_or(TradingSbfError::Release)?,
                         )
                     }
                     #[cfg(not(feature = "families"))]
@@ -6331,19 +6637,20 @@ fn require_no_common_projection_child_accounts_v3(
 ))]
 fn invocation_accounts_contain_program(
     invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
-    accounts: &[AccountInfo<'_>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     program: &Pubkey,
 ) -> Result<usize, ProgramError> {
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    let mut count = accounts
-        .get(fixed_start..fixed_end)
-        .ok_or(TradingSbfError::Content)?
-        .iter()
-        .filter(|account| account.key == program)
-        .count();
+    let mut count = accounts.count_program_in_window(
+        fixed_start,
+        fixed_end
+            .checked_sub(fixed_start)
+            .ok_or(TradingSbfError::Content)?,
+        program,
+    )?;
     let item_count = usize::from(invocation.item_account_count);
     let stride = usize::from(invocation.item_account_stride);
     let mut item = 0_u32;
@@ -6361,62 +6668,212 @@ fn invocation_accounts_contain_program(
             .checked_add(item_count)
             .ok_or(TradingSbfError::Content)?;
         count = count
-            .checked_add(
-                accounts
-                    .get(start..end)
-                    .ok_or(TradingSbfError::Content)?
-                    .iter()
-                    .filter(|account| account.key == program)
-                    .count(),
-            )
+            .checked_add(accounts.count_program_in_window(
+                start,
+                end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+                program,
+            )?)
             .ok_or(TradingSbfError::Content)?;
         item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(count)
 }
 
+/// Which child roles a walk will actually invoke.
 #[cfg(any(
     feature = "families",
     feature = "series-family",
     feature = "dealer-family"
 ))]
-fn selected_role_program_v3<'accounts, 'info>(
+#[derive(Clone, Copy)]
+struct RequiredRolesV3 {
+    claims: bool,
+    custody: bool,
+    resolution: bool,
+}
+
+/// The physical accounts carrying each child role this walk will invoke.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+struct SelectedRoleProgramsV3<'info> {
+    claims: Option<AccountInfo<'info>>,
+    custody: Option<AccountInfo<'info>>,
+    #[cfg(feature = "families")]
+    resolution: Option<AccountInfo<'info>>,
+}
+
+/// Resolve every child role's carrier from ONE decode of the activation cache.
+///
+/// `ActivatedExecutionReleaseSetViewV1::decode` is not cheap: it validates the
+/// whole projection, which decodes all five roles once and then decodes two
+/// more per pair for the ten aliasing comparisons. Asking it per role cost
+/// **58,035 CU for the three roles a Direct walk resolves** -- measured at the
+/// `pf-role-programs` checkpoint against a diagnostically lifted heap -- and
+/// the walk is made twice, in preflight and again in execution, so one
+/// account whose bytes cannot change between them was decoded six times.
+/// One decode per walk measures **37,317**: 20,718 CU per walk, 41,436 across
+/// the pair. The remainder is the carrier scan, which is per role by nature.
+///
+/// This is deliberately ONE out-of-line function rather than a value the walks
+/// hold. `execute_child_routes_v3` is against the SBPF v0 4,096-byte static
+/// frame bound: holding the three decoded addresses as a walk-local made
+/// `cargo build-sbf` report four frame-overwrite diagnostics on it. Here the
+/// addresses live in this function's frame and only the three `AccountInfo`
+/// handles the walk already held cross back.
+///
+/// The release-set identity is checked once, where it was checked per role
+/// before: every address returned is consumed for the release set the caller
+/// states, so one check covers all of them.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+#[inline(never)]
+fn selected_role_programs_v3<'info>(
     frame: HotFrameV3<'_, 'info>,
-    accounts: &'accounts [AccountInfo<'info>],
-    role: ExecutionRoleV1,
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
+    aliases: &[usize],
     release_set: [u8; 32],
-) -> Result<&'accounts AccountInfo<'info>, ProgramError> {
-    let cache = frame
-        .activation_cache
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Release)?;
-    let activated =
-        ActivatedExecutionReleaseSetViewV1::decode(&cache).map_err(|_| TradingSbfError::Release)?;
-    if activated
-        .execution_release_set_id()
-        .map_err(|_| TradingSbfError::Release)?
-        .to_bytes()
-        != release_set
-    {
+    required: RequiredRolesV3,
+) -> Result<SelectedRoleProgramsV3<'info>, ProgramError> {
+    let (claims, custody, resolution) = {
+        let cache = frame
+            .activation_cache
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Release)?;
+        let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache)
+            .map_err(|_| TradingSbfError::Release)?;
+        if activated
+            .execution_release_set_id()
+            .map_err(|_| TradingSbfError::Release)?
+            .to_bytes()
+            != release_set
+        {
+            return Err(TradingSbfError::Release.into());
+        }
+        let program = |role| -> Result<[u8; 32], ProgramError> {
+            Ok(activated
+                .role(role)
+                .map_err(|_| TradingSbfError::Release)?
+                .release()
+                .program()
+                .to_bytes())
+        };
+        (
+            required
+                .claims
+                .then(|| program(ExecutionRoleV1::Claims))
+                .transpose()?,
+            required
+                .custody
+                .then(|| program(ExecutionRoleV1::Custody))
+                .transpose()?,
+            required
+                .resolution
+                .then(|| program(ExecutionRoleV1::Resolution))
+                .transpose()?,
+        )
+    };
+    #[cfg(not(feature = "families"))]
+    let _ = resolution;
+    Ok(SelectedRoleProgramsV3 {
+        claims: claims
+            .map(|expected| resolve_role_carrier_v3(accounts, aliases, expected))
+            .transpose()?,
+        custody: custody
+            .map(|expected| resolve_role_carrier_v3(accounts, aliases, expected))
+            .transpose()?,
+        #[cfg(feature = "families")]
+        resolution: resolution
+            .map(|expected| resolve_role_carrier_v3(accounts, aliases, expected))
+            .transpose()?,
+    })
+}
+
+/// The one physical account in the downgraded logical vector carrying a role's
+/// activated program.
+///
+/// A role's callee must resolve to exactly one PHYSICAL account, not to exactly
+/// one logical coordinate. `downgraded_effect_accounts_v3` pushes one entry per
+/// logical coordinate, aliases included, and an `AuthenticatedRouteAlias` is
+/// downgraded with its representative's privileges rather than skipped -- so a
+/// program that several child frames legitimately name appears once per frame
+/// that names it. Three clones of one `AccountInfo` are one account named three
+/// times, and resolving it is unambiguous. The uniqueness test used to count
+/// logical coordinates where it meant physical accounts, which refused every
+/// topology whose callee is a member of a child frame: Series' three carriers
+/// of the Custody program, and Dealer's and General's new ones. Two DISTINCT
+/// physical accounts carrying the role's key stays refused, which is the case
+/// the test was written for.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+fn resolve_role_carrier_v3<'info>(
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
+    aliases: &[usize],
+    expected: [u8; 32],
+) -> Result<AccountInfo<'info>, ProgramError> {
+    // `accounts` is the downgraded LOGICAL vector and `aliases` is the
+    // per-logical-coordinate representative table built at the same registers.
+    // They are the same length by construction; the resolver refuses rather
+    // than assuming it, because an `aliases` longer than `accounts` would read
+    // as a silent short scan rather than as an error.
+    resolve_carrier_by_representative_v3(accounts.len(), aliases, expected, |coordinate| {
+        accounts.view(coordinate)
+    })
+}
+
+/// The dedup itself, over any per-coordinate child view.
+///
+/// Separated from the account source so the rule can be driven with hand-built
+/// frames: it is the rule, not the profile decoding, that this lane changed.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+fn resolve_carrier_by_representative_v3<'info>(
+    len: usize,
+    aliases: &[usize],
+    expected: [u8; 32],
+    view: impl Fn(usize) -> Result<AccountInfo<'info>, ProgramError>,
+) -> Result<AccountInfo<'info>, ProgramError> {
+    if len != aliases.len() {
         return Err(TradingSbfError::Release.into());
     }
-    let expected = activated
-        .role(role)
-        .map_err(|_| TradingSbfError::Release)?
-        .release()
-        .program()
-        .to_bytes();
-    drop(cache);
-    let mut found = None;
-    for account in accounts {
-        if account.key.to_bytes() == expected {
-            if found.is_some() || !account.executable || account.is_signer || account.is_writable {
+    let mut found: Option<(usize, AccountInfo<'info>)> = None;
+    let mut coordinate = 0_usize;
+    while coordinate < len {
+        let account = view(coordinate)?;
+        if account.key.to_bytes() != expected {
+            coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
+            continue;
+        }
+        // Per-account, and BEFORE the dedup: a carrier that arrived writable or
+        // signing is refused on its own terms, never absorbed into a
+        // representative that happens to be clean.
+        if !account.executable || account.is_signer || account.is_writable {
+            return Err(TradingSbfError::Release.into());
+        }
+        let representative = representative_v3(coordinate, aliases)?;
+        match found {
+            Some((seen, _)) if seen != representative => {
                 return Err(TradingSbfError::Release.into());
             }
-            found = Some(account);
+            Some(_) => {}
+            None => found = Some((representative, account)),
         }
+        coordinate = coordinate.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    found.ok_or_else(|| TradingSbfError::Release.into())
+    found
+        .map(|(_, account)| account)
+        .ok_or_else(|| TradingSbfError::Release.into())
 }
 
 #[cfg(any(
@@ -7005,6 +7462,7 @@ fn project_account_and_request_registers_v3<'artifact, 'accounts, 'info>(
     let mut scratch_identities = vec![[0_u8; 32]; identity_count];
     let mut next_scalars = vec![0_u64; scalar_count];
     let mut next_identities = vec![[0_u8; 32]; identity_count];
+    hot_heap_mark!("projection-three-pairs");
 
     let account_registers = ProjectionRegistersV2 {
         input_scalars: &current_scalars,
@@ -8916,16 +9374,21 @@ mod tests {
         assert_eq!(logical.len(), 7);
         assert_eq!(logical[4].key, logical[6].key);
 
-        let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
-            .expect("downgrade route views");
+        let declared =
+            child_route_privileges_v3(profile, 0, &[], &logical).expect("declared privileges");
+        let child =
+            downgraded_effect_accounts_v3(&logical, &declared).expect("downgrade route views");
         // Coordinate 6 is an authenticated route alias of the writable
         // representative 4. An alias is emitted privilege-free, so it states
         // nothing at all, and a child CPI meta built from the alias would hand
         // the child program a readonly view of an account its own authenticated
         // declaration states as writable.
-        assert!(child[4].is_writable);
-        assert!(child[6].is_writable);
-        assert_eq!(child[4].key, child[6].key);
+        assert!(child.view(4).expect("child view").is_writable);
+        assert!(child.view(6).expect("child view").is_writable);
+        assert_eq!(
+            child.view(4).expect("child view").key,
+            child.view(6).expect("child view").key
+        );
 
         // A declaration never becomes a writable meta for an account the
         // transaction did not include as writable.
@@ -8951,7 +9414,7 @@ mod tests {
             &withheld[5..],
         )
         .expect("expand physical representatives");
-        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &withheld_logical).is_err());
+        assert!(child_route_privileges_v3(profile, 0, &[], &withheld_logical).is_err());
         assert!(
             expand_runtime_accounts_v3(
                 profile,
@@ -9042,19 +9505,115 @@ mod tests {
         let program = account(true);
         let logical = [&plain, &program, &program];
 
-        let child = downgraded_effect_accounts_v3(profile, 0, &[], &logical)
+        let declared =
+            child_route_privileges_v3(profile, 0, &[], &logical).expect("declared privileges");
+        let child = downgraded_effect_accounts_v3(&logical, &declared)
             .expect("alias of an executable representative downgrades");
-        assert!(child[1].executable);
-        assert!(child[2].executable, "alias lost its physical executability");
-        assert_eq!(child[1].key, child[2].key);
-        assert!(!child[2].is_signer && !child[2].is_writable);
+        assert!(child.view(1).expect("child view").executable);
+        assert!(
+            child.view(2).expect("child view").executable,
+            "alias lost its physical executability"
+        );
+        assert_eq!(
+            child.view(1).expect("child view").key,
+            child.view(2).expect("child view").key
+        );
+        assert!(
+            !child.view(2).expect("child view").is_signer
+                && !child.view(2).expect("child view").is_writable
+        );
 
         // The representative's own executable bit is still checked against the
         // physical account, in both directions.
         let hostile = [&plain, &plain, &plain];
-        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &hostile).is_err());
+        assert!(child_route_privileges_v3(profile, 0, &[], &hostile).is_err());
         let inverted = [&program, &program, &program];
-        assert!(downgraded_effect_accounts_v3(profile, 0, &[], &inverted).is_err());
+        assert!(child_route_privileges_v3(profile, 0, &[], &inverted).is_err());
+    }
+
+    /// A role callee is resolved by PHYSICAL account, not by coordinate count.
+    ///
+    /// `d5aed77` pins the precondition this depends on against real emitted
+    /// profile bytes: for each role program the carrier set has exactly one
+    /// representative, that representative is a readonly executable, and every
+    /// other carrier is an alias emitted privilege-free. A layout that split a
+    /// role's program across two physical accounts would break this resolution
+    /// as surely as it repairs the aliased one, so both directions are pinned.
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    #[test]
+    fn a_role_callee_is_one_physical_account_however_many_frames_name_it() {
+        let account = |signer, writable, executable| {
+            let key = Box::leak(Box::new(Pubkey::new_unique()));
+            let owner = Box::leak(Box::new(Pubkey::new_unique()));
+            let lamports = Box::leak(Box::new(0_u64));
+            let data = Box::leak(Vec::new().into_boxed_slice());
+            AccountInfo::new(key, signer, writable, lamports, data, owner, executable)
+        };
+        let carrier = account(false, false, true);
+        let expected = carrier.key.to_bytes();
+        let other = account(false, false, false);
+        // Drives the dedup rule directly over hand-built child views: it is the
+        // rule this pins, not the profile decoding that produces the views.
+        let resolve = |frame: &[AccountInfo<'static>], aliases: &[usize]| {
+            resolve_carrier_by_representative_v3(frame.len(), aliases, expected, |index| {
+                frame
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| ProgramError::from(TradingSbfError::Content))
+            })
+        };
+
+        // The Series consume shape: three logical coordinates, one physical
+        // account, all readonly executable. Coordinates 1 and 3 are aliases of
+        // 0, so the representative table maps all three to 0. This refused
+        // before the dedup, and it is a layout a frame cannot avoid -- three
+        // different child programs each need the callee in their own list.
+        let series = [
+            carrier.clone(),
+            carrier.clone(),
+            other.clone(),
+            carrier.clone(),
+        ];
+        let aliases = [0, 0, 2, 0];
+        assert_eq!(
+            resolve(&series, &aliases)
+                .expect("one account named three times resolves")
+                .key,
+            carrier.key
+        );
+
+        // Two DISTINCT physical accounts carrying the role's key: still
+        // refused. Same key, but self-representatives at two coordinates, so
+        // nothing says which one the CPI is made through.
+        let ambiguous = [carrier.clone(), other.clone(), carrier.clone()];
+        assert!(resolve(&ambiguous, &[0, 1, 2]).is_err());
+
+        // An aliased carrier that arrived writable or signing is refused even
+        // though its representative is clean: the privilege check is per
+        // account and runs before the dedup, not after.
+        for hostile in [account(false, true, true), account(true, false, true)] {
+            let mut copy = hostile.clone();
+            copy.key = carrier.key;
+            let frame = [carrier.clone(), copy];
+            assert!(resolve(&frame, &[0, 0]).is_err());
+        }
+
+        // A non-executable carrier is refused, and a role nothing carries has
+        // no answer at all.
+        let inert = {
+            let mut value = other.clone();
+            value.key = carrier.key;
+            value
+        };
+        assert!(resolve(&[inert], &[0]).is_err());
+        assert!(resolve(&[other.clone()], &[0]).is_err());
+
+        // The alias table has to be the one this vector was downgraded at.
+        assert!(resolve(&series, &[0, 0, 2]).is_err());
     }
 
     #[test]
@@ -9431,7 +9990,11 @@ mod tests {
         );
     }
 
-    fn preplanned_invocation(state: usize, seed: u8, canonical: u8) -> PreparedLifecycleInvocationV3 {
+    fn preplanned_invocation(
+        state: usize,
+        seed: u8,
+        canonical: u8,
+    ) -> PreparedLifecycleInvocationV3 {
         PreparedLifecycleInvocationV3 {
             plan: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
                 state: [seed; 32],
@@ -9457,8 +10020,7 @@ mod tests {
         let prior = preplanned_invocation(1, 0x11, 0x63);
         let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         assert!(seeds.push(&[0x11, 0x11]).is_ok());
-        let mut diverged =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let mut diverged = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         assert!(diverged.push(&[0x11, 0x12]).is_err());
         // A seed of the right bytes but the wrong width is not the same seed.
         let mut short = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
@@ -9484,8 +10046,7 @@ mod tests {
             seeds: alloc::vec![alloc::vec![0x11, 0x11], alloc::vec![254, 254]],
             ..preplanned_invocation(1, 0x11, 0x63)
         };
-        let mut seeds =
-            LifecycleSeedsV4::new(Some(malformed.seeds.as_slice()), 2).expect("verify");
+        let mut seeds = LifecycleSeedsV4::new(Some(malformed.seeds.as_slice()), 2).expect("verify");
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
         assert!(seeds.pending_bump(&program).is_err());
     }
@@ -9505,8 +10066,7 @@ mod tests {
         // yields a collected vector: the two modes cannot be confused silently.
         assert!(seeds.exhausted().is_err());
         let prior = preplanned_invocation(1, 0x11, 0x63);
-        let verifying =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let verifying = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         assert!(verifying.collected().is_err());
     }
 
@@ -9519,8 +10079,7 @@ mod tests {
         let program = Pubkey::new_from_array([0x77; 32]);
         let agreeing = |state: usize, canonical: u8| {
             let sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
-            let mut seeds =
-                LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+            let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
             seeds.push(&[0x11, 0x11]).expect("first seed agrees");
             let LifecycleCanonicalBumpV4::Reused { bump } =
                 seeds.pending_bump(&program).expect("reused")
@@ -9528,11 +10087,9 @@ mod tests {
                 return Err(TradingSbfError::Content.into());
             };
             seeds.push(&[bump]).expect("bump agrees");
-            let mut bindings = LifecycleBindingsV4::new(
-                Some(prior.immutable_identity_bindings.as_slice()),
-                1,
-            )
-            .expect("verify");
+            let mut bindings =
+                LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
+                    .expect("verify");
             bindings
                 .push(PreparedImmutableIdentityBindingV4 {
                     data_offset: 16,
@@ -9603,8 +10160,7 @@ mod tests {
         let expected = alloc::vec![preplanned_invocation(1, 0x11, 0x63)];
         let prior = expected.first().expect("one preplanned invocation");
         let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
-        let mut seeds =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
         // The bump seed was never pushed.
         let mut bindings =
@@ -9622,8 +10178,7 @@ mod tests {
         );
         // And the mirror: every seed reached, no binding reached.
         let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
-        let mut seeds =
-            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
         seeds.push(&[254]).expect("bump agrees");
         let bindings =

@@ -313,9 +313,8 @@ fn require_pinned_immutable_deployment(
     programdata: &AccountInfo<'_>,
     release: ArtifactReleaseV1,
 ) -> Result<(), CoreSbfError> {
-    let (program_view, programdata_view_slot, observed_authority) =
-        require_loader_linkage(program, programdata, release)?;
-    let elf_digest = immutable_release_elf_digest_v1(release, observed_authority)
+    let linkage = require_loader_linkage(program, programdata, release)?;
+    let elf_digest = immutable_release_elf_digest_v1(release, linkage.upgrade_authority)
         .map_err(|_| CoreSbfError::Infrastructure)?;
     let observation = DeploymentObservationV1::new(
         program.key.to_bytes(),
@@ -324,9 +323,9 @@ fn require_pinned_immutable_deployment(
         programdata.key.to_bytes(),
         programdata.owner.to_bytes(),
         programdata.executable,
-        program_view,
+        linkage.programdata_link,
         bpf_loader_upgradeable::ID.to_bytes(),
-        programdata_view_slot,
+        linkage.deployment_slot,
         elf_digest,
         None,
     )
@@ -336,15 +335,22 @@ fn require_pinned_immutable_deployment(
         .map_err(|_| CoreSbfError::Infrastructure)
 }
 
+/// Loader V3 facts observed without hashing the ELF.
+struct LoaderLinkageV1 {
+    /// ProgramData link recorded by the Program account itself.
+    programdata_link: [u8; 32],
+    /// Deployment slot recorded by the ProgramData account.
+    deployment_slot: u64,
+    /// Upgrade authority the ProgramData account currently carries.
+    upgrade_authority: Option<[u8; 32]>,
+}
+
 /// Hostile-check Loader V3 shape and linkage without hashing the ELF.
-///
-/// Returns the ProgramData link recorded by the Program account, the observed
-/// deployment slot, and the observed upgrade authority.
 fn require_loader_linkage(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
     release: ArtifactReleaseV1,
-) -> Result<([u8; 32], u64, Option<[u8; 32]>), CoreSbfError> {
+) -> Result<LoaderLinkageV1, CoreSbfError> {
     if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
         || program.key.to_bytes() != release.program().to_bytes()
         || programdata.key.to_bytes() != release.programdata()
@@ -374,11 +380,11 @@ fn require_loader_linkage(
         .map_err(|_| CoreSbfError::Infrastructure)?;
     let programdata_view =
         ProgramDataV3View::parse(&programdata_bytes).map_err(|_| CoreSbfError::Infrastructure)?;
-    Ok((
-        link,
-        programdata_view.deployment_slot(),
-        programdata_view.upgrade_authority(),
-    ))
+    Ok(LoaderLinkageV1 {
+        programdata_link: link,
+        deployment_slot: programdata_view.deployment_slot(),
+        upgrade_authority: programdata_view.upgrade_authority(),
+    })
 }
 
 /// Observe a deployment by hashing its complete current ELF tail.

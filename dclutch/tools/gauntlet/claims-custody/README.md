@@ -101,10 +101,42 @@ Two further limits worth stating: warping slots is not the passage of time and
 nothing here pays a real fee market, and there is no concurrency, no fork and no
 replay of a real ledger.
 
-Compute figures from these campaigns vary by a few thousand units between runs —
-PDA bump-seed search cost depends on the addresses, and some addresses are
-per-run. Treat a number from this lane as a measurement with the 1,400,000 gate
-on top of it, not as a pinned constant.
+## Compute budgets
+
+Compute figures from these campaigns **used to** vary by a few thousand units
+between runs, because PDA bump-seed search cost depends on the addresses and the
+Custody fixture drew four of them from `Pubkey::new_unique()` — a
+process-global counter, read by two profile campaigns running concurrently, so
+the draw depended on thread interleaving.
+
+Those four now derive from a fixed seed hashed from
+`dclutch/gauntlet/claims-custody/custody-program-test/keypair-seed/v1`, with the
+profile label inside the derivation so the two campaigns still get distinct
+addresses. The Claims campaigns never drew a random address.
+
+**Seeding the four addresses was not enough, and the measurement is why we know.**
+Two runs at one revision: Claims agreed on all 15 transactions, Custody differed
+on **6 of 34**, every delta an exact multiple of 1,500. What was still random was
+not an address — it was `context.payer`, ProgramTest's own genesis mint keypair,
+which has no public knob to seed and which goes into `CustodyRequestV1.payer`
+and therefore into the replay and vault derivations. The campaign now signs with
+a SEEDED protocol payer and leaves `context.payer` as the FEE payer, where it
+enters no derivation. That is the same split `found_program_test.rs` uses.
+
+Both campaigns carry enforced CU budget rows in
+`tools/gauntlet/CU_BUDGETS.json` — see `CU_BUDGETS.md` for the tolerance rule
+and for the half of this that seeding does not fix.
+
+**Budgets name LITERAL transaction labels; bindings use wildcards.** A binding
+may say `custody *: open vault` because the census matches a family of
+transactions; a budget must match **exactly one** transaction or the evaluator
+returns `AMBIGUOUS`. So the budget rows name `custody legacy: open vault` and
+`custody token-2022: open vault` separately. When you add a transaction to these
+campaigns, the label you pass to the recorder is the string a budget will have
+to name.
+
+Even so, treat a number from this lane as a measurement with the 1,400,000 gate
+on top of it, not as a constant of the protocol.
 
 ## One protocol observation the campaign records rather than asserts
 

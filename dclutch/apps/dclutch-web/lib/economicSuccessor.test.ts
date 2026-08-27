@@ -2,6 +2,8 @@ import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ECONOMIC_FOUNDING_BYTES,
+  ECONOMIC_OPERATION_BYTES,
   ECONOMIC_PROJECTION_BYTES,
   buildEconomicOperationTransaction,
   decodeEconomicProjectionV1,
@@ -81,12 +83,12 @@ describe('physical economic successor browser boundary', () => {
       sourceHolder: key(5).toBase58(), destinationHolder: key(6).toBase58(), collateralMint: key(7).toBase58(),
       hoardAccount: key(10).toBase58(), outcomeCount: 3,
     });
-    expect(founding).toHaveLength(208);
+    expect(founding).toHaveLength(ECONOMIC_FOUNDING_BYTES);
     expect(new TextDecoder().decode(founding.slice(0, 8))).toBe('DCLTECI1');
     expect(founding[9]).toBe(0);
     expect(founding[13]).toBe(3);
     const operation = encodeEconomicOperationV1({ action: 'materialize', holder: 'destination', representation: 'materialized', outcome: 2, quantity: 4n, expectedRevision: 7n });
-    expect(operation).toHaveLength(32);
+    expect(operation).toHaveLength(ECONOMIC_OPERATION_BYTES);
     expect([...operation.slice(9, 13)]).toEqual([4, 0, 0, 2]);
     expect(new DataView(operation.buffer).getBigUint64(16, true)).toBe(4n);
     expect(new DataView(operation.buffer).getBigUint64(24, true)).toBe(7n);

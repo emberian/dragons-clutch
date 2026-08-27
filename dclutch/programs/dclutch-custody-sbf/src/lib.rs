@@ -26,12 +26,12 @@ use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
     RegistryContinuationRequestV1,
 };
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{
     AuthorityRole, COption, ExactTransferInput, ExactTransferProfileV1,
@@ -42,7 +42,7 @@ use solana_program::{
     entrypoint::ProgramResult,
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, invoke_signed, set_return_data},
+    program::{invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -303,37 +303,22 @@ fn authenticate_calling_release(
     let caller_program = account(accounts, CALLER_PROGRAM)?;
     let caller_programdata = account(accounts, CALLER_PROGRAMDATA)?;
     let role = registry_role(request.caller_role);
-    let instruction = Instruction {
-        program_id: *registry.key,
-        accounts: Vec::from([
-            AccountMeta::new_readonly(*cache.key, false),
-            AccountMeta::new_readonly(*caller_program.key, false),
-            AccountMeta::new_readonly(*caller_programdata.key, false),
-        ]),
-        data: RegistryInstructionV1::Reauthenticate(role)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            cache.clone(),
-            caller_program.clone(),
-            caller_programdata.clone(),
-            registry.clone(),
-        ],
+    // Read the Registry-owned activation cache; never CPI back into the
+    // Registry. Custody is reached at CPI depth three under a Registry
+    // continuation, where the Registry sits at depth one, so an invocation from
+    // here is reentrancy and the route could not execute at all. The cache
+    // account is Registry-owned at a Registry-derived address and carries the
+    // whole of what `Reauthenticate` would have returned.
+    let receipt = authenticate_activated_role_v1(
+        registry,
+        cache,
+        &request.release_set,
+        role,
+        caller_program,
+        caller_programdata,
     )
     .map_err(|_| CustodySbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(CustodySbfError::Release)?;
-    if producer != *registry.key {
-        return Err(CustodySbfError::Release.into());
-    }
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| CustodySbfError::Release)?;
-    if receipt.role() != role
-        || receipt.execution_release_set_id().as_bytes() != &request.release_set
-        || receipt.program().as_bytes() != &request.caller_program
-    {
+    if receipt.program().as_bytes() != &request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
     Ok(())

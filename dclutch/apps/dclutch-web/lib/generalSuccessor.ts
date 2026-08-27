@@ -8,16 +8,19 @@ import {
 
 import { ascii, hex, isZero, requireZero, slice, u16, u64 } from './bytes';
 import { PACKET_DATA_SIZE } from './directTransaction';
+import {
+  GENERAL_CANDIDATE_BYTES,
+  GENERAL_EXECUTION_BYTES,
+  GENERAL_PAGE_BYTES,
+  GENERAL_VERIFICATION_BYTES,
+} from './generated/generalSuccessorV5';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
-export const GENERAL_CANDIDATE_BYTES = 256;
-export const GENERAL_EXECUTION_BYTES = 368;
-export const GENERAL_PAGE_BYTES = 11_840;
+export { GENERAL_CANDIDATE_BYTES, GENERAL_EXECUTION_BYTES, GENERAL_PAGE_BYTES, GENERAL_VERIFICATION_BYTES };
 export const GENERAL_POLICY_BYTES = 64;
 export const GENERAL_SELECTION_BYTES = 128;
 export const GENERAL_SETTLEMENT_BYTES = 208;
 export const GENERAL_REQUEST_BYTES = 64;
-export const GENERAL_VERIFICATION_BYTES = 960;
 export const GENERAL_CERTIFICATE_BYTES = 416;
 export const GENERAL_ACTIVATION_BYTES = 1_288;
 export const GENERAL_MAX_OUTCOMES = 16;

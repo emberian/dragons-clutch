@@ -23,7 +23,10 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-use crate::{TradingSbfError, child_receipt_v3::append_receipt_dependency_v3};
+use crate::{
+    TradingSbfError, child_receipt_v3::append_receipt_dependency_v3,
+    hot_v3::DowngradedEffectAccountsV3,
+};
 
 const CUSTODY_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-custody-receipt:v3";
 const CUSTODY_REPLAY_FRAME_COORDINATE_V1: usize = 8;
@@ -53,7 +56,7 @@ pub fn preflight_custody_route_v3(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &[u8],
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
@@ -85,7 +88,7 @@ pub fn execute_custody_route_v3<'info>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'info>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     prior_receipt: Option<&[u8]>,
     custody_program: &AccountInfo<'info>,
@@ -192,7 +195,7 @@ fn prepare<'a>(
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    effect_accounts: &[AccountInfo<'_>],
+    effect_accounts: DowngradedEffectAccountsV3<'_, '_, '_>,
     request_bank: &'a [u8],
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
@@ -244,20 +247,7 @@ fn prepare<'a>(
     let (expected_authority, bump) =
         Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
     let child_accounts = invocation_accounts(invocation, effect_accounts)?;
-    if child_accounts
-        .first()
-        .is_none_or(|account| account.key != &expected_authority)
-        || child_accounts
-            .iter()
-            .filter(|account| account.key == custody_program.key)
-            .count()
-            != 1
-        || child_accounts
-            .get(CUSTODY_REPLAY_FRAME_COORDINATE_V1)
-            .is_none()
-    {
-        return Err(TradingSbfError::Release.into());
-    }
+    require_custody_frame_shape_v3(&child_accounts, custody_program.key, &expected_authority)?;
     Ok(PreparedCustodyInvocationV3 {
         invocation,
         request,
@@ -266,6 +256,62 @@ fn prepare<'a>(
         authority_seeds,
         bump,
     })
+}
+
+/// Refuse any Custody frame that is not the exact shape the child CPI needs.
+///
+/// **The callee is not a member of the frame.** A Custody `Transfer` FrameSpec
+/// declares `CallerProgram`/`CallerProgramData` -- Trading's -- and never names
+/// the Custody program itself, so the topology carries the callee at a
+/// family-owned coordinate past every route range (Direct's is 90) and
+/// [`execute_custody_route_v3`] appends it after the frame's metas.
+///
+/// This guard previously demanded the opposite: that the callee appear exactly
+/// ONCE INSIDE the fourteen-account frame. That condition was copied from the
+/// Claims check, where it holds only because a Claims sparse-native-transfer
+/// frame does declare `ClaimsProgram` at frame coordinate 16. No Custody frame
+/// has such a coordinate at any index, so the condition was unsatisfiable by
+/// construction and every Custody invocation refused here -- which is why no
+/// Custody child CPI had ever executed on this path.
+///
+/// Requiring absence is not a weakened refusal; it is the same fact stated for
+/// the topology that actually exists. The callee is authenticated against the
+/// activated release set by `selected_role_program_v3` before it reaches this
+/// module, and requiring it to be absent from the frame keeps the appended
+/// callee the only account in the invocation that can be it. A frame that
+/// smuggled the Custody program into a coordinate its FrameSpec declares as
+/// something else would hand the child a duplicate account under a role it does
+/// not hold; that is refused here rather than left to the child.
+///
+/// The three facts are checked separately and refuse distinctly. Fusing them
+/// into one `Release` is what made this cost a measurement run to diagnose: the
+/// refusal named no conjunct, so a frame carrying no callee at all and a frame
+/// whose caller authority was derived from the wrong seeds were the same error
+/// code.
+fn require_custody_frame_shape_v3(
+    child_accounts: &[AccountInfo<'_>],
+    custody_program: &Pubkey,
+    expected_authority: &Pubkey,
+) -> Result<(), ProgramError> {
+    if child_accounts
+        .iter()
+        .any(|account| account.key == custody_program)
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    if child_accounts
+        .get(CUSTODY_REPLAY_FRAME_COORDINATE_V1)
+        .is_none()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    if child_accounts
+        .first()
+        .is_none_or(|account| account.key != expected_authority)
+    {
+        return Err(TradingSbfError::Release.into());
+    }
+    Ok(())
 }
 
 fn decode_custody_request_v3(bytes: &[u8]) -> Result<CustodyRequestKindV3, ProgramError> {
@@ -348,18 +394,20 @@ fn invocation_request(
 
 fn invocation_accounts<'info>(
     invocation: ResolvedInvocationV3,
-    accounts: &[AccountInfo<'info>],
+    accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
 ) -> Result<Vec<AccountInfo<'info>>, ProgramError> {
     let mut output = Vec::new();
     let fixed_start = usize::from(invocation.fixed_account_start);
     let fixed_end = fixed_start
         .checked_add(usize::from(invocation.fixed_account_count))
         .ok_or(TradingSbfError::Content)?;
-    output.extend_from_slice(
-        accounts
-            .get(fixed_start..fixed_end)
+    accounts.extend_window(
+        &mut output,
+        fixed_start,
+        fixed_end
+            .checked_sub(fixed_start)
             .ok_or(TradingSbfError::Content)?,
-    );
+    )?;
     let item_count = usize::from(invocation.item_account_count);
     match invocation.kind {
         RouteKindV3::Once => {
@@ -375,11 +423,12 @@ fn invocation_accounts<'info>(
                 .item_account_start
                 .checked_add(item_count)
                 .ok_or(TradingSbfError::Content)?;
-            output.extend_from_slice(
-                accounts
-                    .get(invocation.item_account_start..end)
+            accounts.extend_window(
+                &mut output,
+                invocation.item_account_start,
+                end.checked_sub(invocation.item_account_start)
                     .ok_or(TradingSbfError::Content)?,
-            );
+            )?;
         }
         RouteKindV3::AffineOnce => {
             let stride = usize::from(invocation.item_account_stride);
@@ -397,7 +446,11 @@ fn invocation_accounts<'info>(
                 let end = start
                     .checked_add(item_count)
                     .ok_or(TradingSbfError::Content)?;
-                output.extend_from_slice(accounts.get(start..end).ok_or(TradingSbfError::Content)?);
+                accounts.extend_window(
+                    &mut output,
+                    start,
+                    end.checked_sub(start).ok_or(TradingSbfError::Content)?,
+                )?;
                 item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
             }
         }
@@ -409,6 +462,7 @@ fn invocation_accounts<'info>(
 mod tests {
     use dclutch_custody_contract::{
         ContextV1, DelegatedAllowanceObservationV2, OperationV1, ReceiptEvidenceV1,
+        TRANSFER_ACCOUNT_COUNT_V1,
     };
 
     use super::*;
@@ -556,5 +610,111 @@ mod tests {
                 Err(TradingSbfError::Content.into())
             );
         }
+    }
+
+    /// Build one frame of `keys` as writable non-signer accounts.
+    ///
+    /// The banks are supplied by the caller so each `AccountInfo` can hold a
+    /// distinct `&mut` into them for the frame's whole lifetime.
+    fn frame<'a>(
+        keys: &'a [Pubkey],
+        owner: &'a Pubkey,
+        lamports: &'a mut [u64],
+        data: &'a mut [[u8; 1]],
+    ) -> Vec<AccountInfo<'a>> {
+        keys.iter()
+            .zip(lamports.iter_mut())
+            .zip(data.iter_mut())
+            .map(|((key, lamport), bytes)| {
+                AccountInfo::new(
+                    key,
+                    false,
+                    true,
+                    lamport,
+                    bytes.as_mut_slice(),
+                    owner,
+                    false,
+                )
+            })
+            .collect()
+    }
+
+    const FRAME: usize = TRANSFER_ACCOUNT_COUNT_V1 as usize;
+
+    #[test]
+    fn a_custody_frame_carrying_its_own_callee_is_refused() {
+        let owner = Pubkey::new_from_array(id(0x20));
+        let authority = Pubkey::new_from_array(id(0x21));
+        let callee = Pubkey::new_from_array(id(0x22));
+        let filler = Pubkey::new_from_array(id(0x23));
+        // The canonical fourteen-account Transfer frame: caller authority at
+        // coordinate 0, replay reachable at coordinate 8, and no coordinate
+        // anywhere holding the callee.
+        let mut keys = [filler; FRAME];
+        keys[0] = authority;
+        let (mut lamports, mut data) = ([0_u64; FRAME], [[0_u8; 1]; FRAME]);
+        assert_eq!(
+            require_custody_frame_shape_v3(
+                &frame(&keys, &owner, &mut lamports, &mut data),
+                &callee,
+                &authority
+            ),
+            Ok(()),
+            "the shape the topology actually produces was refused"
+        );
+
+        // The callee smuggled into a coordinate whose FrameSpec role is
+        // something else. Before this, the OPPOSITE was required -- the callee
+        // had to be INSIDE the frame -- so every canonical frame refused and no
+        // Custody child CPI could ever run.
+        for coordinate in [1_usize, 8, FRAME - 1] {
+            let mut hostile = keys;
+            hostile[coordinate] = callee;
+            let (mut hl, mut hd) = ([0_u64; FRAME], [[0_u8; 1]; FRAME]);
+            assert_eq!(
+                require_custody_frame_shape_v3(
+                    &frame(&hostile, &owner, &mut hl, &mut hd),
+                    &callee,
+                    &authority
+                ),
+                Err(TradingSbfError::Content.into()),
+                "a frame carrying the callee at coordinate {coordinate} was admitted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_frame_and_a_wrong_caller_authority_refuse_distinctly() {
+        let owner = Pubkey::new_from_array(id(0x30));
+        let authority = Pubkey::new_from_array(id(0x31));
+        let callee = Pubkey::new_from_array(id(0x32));
+        let filler = Pubkey::new_from_array(id(0x33));
+
+        // Too short to reach the replay coordinate: Content, never Release.
+        const SHORT: usize = CUSTODY_REPLAY_FRAME_COORDINATE_V1;
+        let mut short = [filler; SHORT];
+        short[0] = authority;
+        let (mut sl, mut sd) = ([0_u64; SHORT], [[0_u8; 1]; SHORT]);
+        assert_eq!(
+            require_custody_frame_shape_v3(
+                &frame(&short, &owner, &mut sl, &mut sd),
+                &callee,
+                &authority
+            ),
+            Err(TradingSbfError::Content.into())
+        );
+
+        // Wide enough, no callee inside, but coordinate 0 is not the
+        // release-pinned caller authority: Release, and only Release.
+        let wrong = [filler; FRAME];
+        let (mut wl, mut wd) = ([0_u64; FRAME], [[0_u8; 1]; FRAME]);
+        assert_eq!(
+            require_custody_frame_shape_v3(
+                &frame(&wrong, &owner, &mut wl, &mut wd),
+                &callee,
+                &authority
+            ),
+            Err(TradingSbfError::Release.into())
+        );
     }
 }

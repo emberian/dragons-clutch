@@ -20,11 +20,13 @@ document, not an omission.
 programs/dclutch-general-accelerator-sbf/program-test/run-program-test.sh
 ```
 
-At `1619124`, with `dclutch_general_accelerator_sbf.so` built by
+At `bc5da76`, with `dclutch_general_accelerator_sbf.so` built by
 `cargo build-sbf` at SHA-256
-`46ad714bd475e046fa80a0a0c2ba3b154aae190ff1ee3e841e24261856aee343` and the test
+`f71fecbc162961a6528027c4352fc3b0f98ac2bc59cb88d67e26a605aa1a6dbb` and the test
 caller at `6358c4f506582eb1d79547d9823092adf4be465ab7ba28084c7c9cbf4f4cf9c3`.
-Both builds emit **zero SBF stack-frame diagnostics**.
+Both builds emit **zero SBF stack-frame diagnostics**. The accelerator digest
+moved from `46ad714b...` when the root-lifecycle conjunct landed; the caller,
+which authenticates no artifact, is byte-identical.
 
 ## What executes
 
@@ -65,30 +67,56 @@ and the exact canonical message bytes.
 
 | action | CU | accounts | legacy packet | scratch pages |
 |---|---:|---:|---:|---:|
-| `Consider` | 56,162 | 33 | 811 | 3 |
-| `Freeze` | 32,590 | 31 | 745 | 3 |
-| `InitializeSettlement` | 80,944 | 88 | 866 | 3 |
-| `Collect` | 56,473 / 57,655 / 57,678 | 69 | 847 | 3 |
-| `Materialize` | 52,674 | 67 | 813 | 3 |
-| `Distribute` | 56,425 / 57,630 / 57,661 | 69 | 847 | 3 |
-| `Close` | 60,840 | 86 | 832 | 3 |
+| `Consider` | 56,180 | 33 | 811 | 3 |
+| `Freeze` | 32,608 | 31 | 745 | 3 |
+| `InitializeSettlement` | 81,392 | 89 | 867 | 3 |
+| `Collect` | 56,924 / 58,106 / 58,129 | 70 | 848 | 3 |
+| `Materialize` | 53,125 | 68 | 814 | 3 |
+| `Distribute` | 56,876 / 58,112 / 58,081 | 70 | 848 | 3 |
+| `Close` | 61,290 | 87 | 833 | 3 |
 
 ### N = 258
 
 | action | CU | accounts | legacy packet | scratch pages |
 |---|---:|---:|---:|---:|
-| `Consider` | 528,630 | 47 | 1,273 | 17 |
-| `Freeze` | 65,001 | 45 | 1,207 | 17 |
-| `InitializeSettlement` | 617,698 | 102 | **1,328** | 17 |
-| `Collect` | 146,345 / 146,772 / 147,566 | 83 | 1,309 | 17 |
-| `Materialize` | 140,819 | 81 | 1,275 | 17 |
-| `Distribute` | 143,984 / 145,205 / 146,007 | 83 | 1,309 | 17 |
-| `Close` | 155,245 | 100 | 1,294 | 17 |
+| `Consider` | 528,648 | 47 | 1,273 | 17 |
+| `Freeze` | 65,019 | 45 | 1,207 | 17 |
+| `InitializeSettlement` | 618,229 | 103 | **1,329** | 17 |
+| `Collect` | 146,880 / 147,307 / 148,101 | 84 | 1,310 | 17 |
+| `Materialize` | 141,356 | 82 | 1,276 | 17 |
+| `Distribute` | 144,519 / 146,542 / 145,740 | 84 | 1,310 | 17 |
+| `Close` | 155,744 | 101 | 1,295 | 17 |
 
 Repeated rows are the three settlement orders the campaign drives, in order.
 
+**The CU column is no longer joint, and it has been re-taken.** The caveat this
+paragraph used to carry was that the run sat on a tree holding GEN-V3ACT's
+uncommitted `GENERAL_HOT_COMMON_SCALARS_V3` 88 -> 90. That work is committed
+(`37d873f`, and the conjunct it made room for in `2e890d4`), and every number
+above is from one clean run at that HEAD. The `accounts`, `legacy packet` and
+`scratch pages` columns did not move at all, which is the load-bearing part: two
+more scalars is sixteen more bytes of bank and it crossed no boundary.
+
+**What the root-lifecycle refusal costs is 16 CU per action.** Five actions at
+N=1 and four at N=258 moved by exactly +16 against the previous run, which is
+the price of one `ProjectDataU8`, one `load_const` and one `scalar_eq` in a
+shared prelude. `Materialize` at N=258 moved +18 and `Close` at N=258 moved
+**-20**; the repeated settlement rows cannot be compared positionally because
+the prior table's row order within an action is not recoverable. Neither
+outlier was chased: the worst action is 44% of the ceiling and no decision in
+this family turns on twenty compute units.
+
+**Re-measured after the Custody callee coordinate landed.** The five actions
+that route to Custody carry one more account than the tables above did when
+TA-GEN first wrote them, because the topology now declares the release-selected
+Custody program the Hot executor resolves those routes through; before that they
+could not be invoked at all. `Consider` and `Freeze` route to no child, carry no
+callee, and their account counts are unchanged -- their CU moved by exactly +2,
+the cost of the extra checked add in `general_effect_account_count_v3`. Every
+other delta is +1 account, +1 legacy byte, and a few hundred CU.
+
 **Compute is not this family's blocker.** The worst action at the canonical
-width is `InitializeSettlement` at 617,698 CU — 44% of the 1,400,000 ceiling,
+width is `InitializeSettlement` at 618,229 CU — 44% of the 1,400,000 ceiling,
 and that is the accelerator's own consumption inside a caller CPI, not the
 whole Trading transaction. The N=1 → N=258 growth is sublinear in every action
 except the two that fold the whole candidate (`Consider`, `Initialize`).
@@ -103,8 +131,8 @@ lane only when the tier states that **every** clause holds. One does not.
 > limit. Found31 is exactly this defect; it survived every fixture test.
 
 Solana's legacy packet maximum is **1,232 bytes**. **Six of the seven N=258
-actions exceed it** in this transport — 1,273, 1,275, 1,294, 1,309, 1,309 and
-1,328 bytes. Only `Freeze`, at 1,207, fits. The campaign submits a legacy
+actions exceed it** in this transport — 1,273, 1,276, 1,295, 1,310, 1,310 and
+1,329 bytes. Only `Freeze`, at 1,207, fits. The campaign submits a legacy
 message deliberately, so the accelerator can see every scratch page directly;
 the production operator's plan is ALT-backed v0, where the account keys do not
 ride inline. **That plan is not exercised here**, so this campaign cannot
@@ -135,10 +163,17 @@ lane is always *additional* evidence — a route whose only observation came fro
 one is recorded with that campaign name, and the report shows it. The Hot path
 is downstream of the Trading heap wall, which is not this family's to move.
 
-## Standing gap
+## Standing gap — CLOSED for construction, 2026-08-27
 
-The N=258 account sets need the ALT-backed v0 plan **measured**, not asserted.
-Until some campaign submits those six actions as v0 transactions and records
-their real wire size, the sentence "the production operator separately proves
-the same account set packet-safe" — which the suite's own comment carries — is
-a claim without a witness. It is the first thing a General tier should measure.
+The N=258 account sets needed the ALT-backed v0 plan **measured**, not
+asserted. `docs/evidence/GENERAL_ALT_PACKET_WITNESS_2026_08_27.md` measures it:
+all seven actions compile packet-safe through `compile_general_hot_v0`, widest
+918 of 1,232 bytes, and the same account set with no lookup table refuses
+`PacketTooLarge`. The derivation there reproduces every instruction-account
+count in the tables above, which is this campaign acting as its control.
+
+What that closes is the *construction* clause — the wire the operator would
+submit. It is not execution, and it does not make this campaign a fast lane:
+this campaign still submits legacy messages, so the tier clause it fails is
+still failed here. The N = 1 fast lane described above remains admissible and
+unbuilt.

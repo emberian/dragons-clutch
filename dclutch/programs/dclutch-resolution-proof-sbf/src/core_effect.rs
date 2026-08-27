@@ -416,7 +416,25 @@ fn authenticate_core(
     }
     match request.action {
         ResolutionCoreActionV1::CreateFund | ResolutionCoreActionV1::VerifyFundReady => {
-            if state.phase != CorePhase::Founding || state.readiness != CoreReadiness::Prepaid {
+            // Both founding routes, and only before a terminal receipt exists.
+            // `Founding + Prepaid` is the readiness ladder. `Open + Consumed`
+            // is the atomic founding, whose commit-last Open goes from the
+            // first straight to the second in one transition and therefore
+            // never passes the ladder; without this arm every atomically
+            // founded Market is permanently unresolvable, because this is the
+            // only route that creates a `SourceResolutionStateV2`.
+            //
+            // Deferring the Fund's physical creation past Open defers no
+            // decision: the manifest that names the resolution capability is a
+            // seed of the Market's own address, and every output account here
+            // is a derived address that must already be prepaid.
+            if state.terminal_receipt.is_some()
+                || !matches!(
+                    (state.phase, state.readiness),
+                    (CorePhase::Founding, CoreReadiness::Prepaid)
+                        | (CorePhase::Open, CoreReadiness::Consumed)
+                )
+            {
                 return Err(ResolutionError::MarketAuthority.into());
             }
         }

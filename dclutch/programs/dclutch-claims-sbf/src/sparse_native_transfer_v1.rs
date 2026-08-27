@@ -43,7 +43,7 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use super::reauthenticate;
+use super::authenticate_activated_role;
 
 /// Exact fixed account frame for one sparse transfer.
 pub const SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1: usize =
@@ -360,26 +360,29 @@ fn authenticate_releases(
 ) -> Result<(), ProgramError> {
     let input = request.input();
     let receipts = [
-        reauthenticate(
+        authenticate_activated_role(
             accounts.registry,
             accounts.cache,
             execution_role(input.caller_role),
             accounts.caller_program,
             accounts.caller_programdata,
+            &input.release_set,
         ),
-        reauthenticate(
+        authenticate_activated_role(
             accounts.registry,
             accounts.cache,
             ExecutionRoleV1::Claims,
             accounts.claims_program,
             accounts.claims_programdata,
+            &input.release_set,
         ),
-        reauthenticate(
+        authenticate_activated_role(
             accounts.registry,
             accounts.cache,
             ExecutionRoleV1::Core,
             accounts.core_program,
             accounts.core_programdata,
+            &input.release_set,
         ),
     ];
     for receipt in receipts {

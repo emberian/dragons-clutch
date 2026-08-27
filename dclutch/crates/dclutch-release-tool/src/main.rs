@@ -21,13 +21,14 @@ use dclutch_release_tool::{
     build_checked_capability_execution_from_bytes_v1, build_checked_execution_release_set,
     build_checked_infrastructure_v1, build_checked_release, build_checked_translation_validation,
     derive_execution_release_set, derive_protocol_infrastructure_profile_v1,
-    loader_v3_program_account_data_v1, loader_v3_programdata_account_data_v1,
+    LoaderV3AuthorityStateV1, loader_v3_program_account_data_v1,
+    loader_v3_programdata_account_data_v1,
     loader_v3_programdata_address_v1, verify_checked_capability_execution_v1,
     verify_checked_execution_release_set, verify_checked_infrastructure_v1, verify_checked_release,
     verify_checked_translation_validation,
 };
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]";
 
 fn main() -> ExitCode {
     match run() {
@@ -243,17 +244,39 @@ fn loader_accounts(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> 
     let elf = read_bytes(required(flags, "--elf")?)?;
     let deployment_slot = required_u64(flags, "--deployment-slot")?;
     let upgrade_authority = optional_hex32(flags, "--upgrade-authority")?;
+    // The third state. A program that was deployed mutable and then revoked to
+    // `--final` keeps its former authority at [13..45] behind a zero tag
+    // forever, and that is the ONLY shape a real devnet role can be in. An
+    // offline construction could not express it, so every checked manifest
+    // built for a real deployment carried a programdata_account_sha256 no
+    // account could match: DEVNET_DEMO_DEPLOY.md section 7 blocker B.
+    //
+    // It is a separate flag rather than a mode on --upgrade-authority because
+    // the two say opposite things about who can upgrade the program, and a
+    // caller must not be able to reach the wrong one by forgetting a boolean.
+    let revoked_authority = optional_hex32(flags, "--revoked-authority")?;
     let program_out = required(flags, "--program-out")?;
     let programdata_out = required(flags, "--programdata-out")?;
     let text_output = flags.remove("--text-out");
     require_no_flags(flags)?;
+    let authority = match (upgrade_authority, revoked_authority) {
+        (Some(_), Some(_)) => {
+            return Err(
+                "--upgrade-authority and --revoked-authority are mutually exclusive: a program \
+                 either can be upgraded by that key or used to be and no longer can"
+                    .to_owned(),
+            );
+        }
+        (Some(key), None) => LoaderV3AuthorityStateV1::Upgradeable(key),
+        (None, Some(key)) => LoaderV3AuthorityStateV1::Revoked(key),
+        (None, None) => LoaderV3AuthorityStateV1::NeverAuthorized,
+    };
 
     let programdata_id = loader_v3_programdata_address_v1(&program_id, &loader_program_id);
     let program =
         loader_v3_program_account_data_v1(&programdata_id).map_err(format_release_error)?;
-    let programdata =
-        loader_v3_programdata_account_data_v1(&elf, deployment_slot, upgrade_authority)
-            .map_err(format_release_error)?;
+    let programdata = loader_v3_programdata_account_data_v1(&elf, deployment_slot, authority)
+        .map_err(format_release_error)?;
     fs::write(&program_out, program)
         .map_err(|error| format!("failed writing {}: {error}", program_out.display()))?;
     fs::write(&programdata_out, &programdata)
@@ -270,6 +293,13 @@ fn loader_accounts(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> 
         "upgrade_authority",
         &upgrade_authority.map_or_else(|| "none".to_owned(), |value| hex(&value)),
     );
+    // APPENDED, never inserted: tools/release/checked-release-candidate.sh
+    // scrapes this projection line by line with `sed -n 's/^key=//p'`.
+    push_line(
+        &mut text,
+        "retained_revoked_authority",
+        &revoked_authority.map_or_else(|| "none".to_owned(), |value| hex(&value)),
+    );
     push_line(
         &mut text,
         "program_account_bytes",
@@ -284,7 +314,14 @@ fn loader_accounts(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> 
     push_line(
         &mut text,
         "evidence_class",
-        "predicted-loader-state-not-observed",
+        // A retained revoked authority cannot be predicted -- nothing offline
+        // knows which key a program used to have -- so a run that carries one
+        // is quoting an observation and must not claim otherwise.
+        if revoked_authority.is_some() {
+            "loader-state-carrying-an-observed-retained-authority"
+        } else {
+            "predicted-loader-state-not-observed"
+        },
     );
     write_text(text, text_output)
 }

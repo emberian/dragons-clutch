@@ -568,7 +568,20 @@ pub async fn submit_v0(
         // coordinate 38. The key itself is ALT-routed, but the continuation
         // carries the nested Hot account list twice, so the canonical packet
         // grew by exactly two index bytes: 1,224 -> 1,226 of the 1,232 limit.
-        assert_eq!(wire, 1_226, "transparent continuation wire changed");
+        //
+        // `10d5a8b` then appended the Custody callee at logical coordinate 90,
+        // taking the Direct profile from ninety fixed accounts to ninety-one.
+        // That is one more physical account in the same twice-carried list, so
+        // it is the same two index bytes again: 1,226 -> 1,228.
+        //
+        // !! FOUR BYTES OF MARGIN REMAIN !! Two more accounts appended to this
+        // profile overflow the canonical packet, and the failure is a hard
+        // refusal at `wire <= 1_232` above, not a partial result. This assertion
+        // is the tripwire that made the growth visible at all -- both increments
+        // reached it as a stale-pin failure before any execution, which is the
+        // behaviour to keep. The next coordinate added here needs a plan for the
+        // packet, not just a new number on this line.
+        assert_eq!(wire, 1_228, "transparent continuation wire changed");
     }
     let mut all_signers = vec![transaction_payer];
     all_signers.extend_from_slice(signers);

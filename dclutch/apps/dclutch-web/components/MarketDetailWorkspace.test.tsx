@@ -16,6 +16,7 @@ describe('Market detail route', () => {
     expect(html).toContain(ADDRESS);
     expect(html).toContain('Read this Market');
     expect(html).toContain('Registry program · optional');
+    expect(html).toContain('Claims program · optional');
   });
 
   it('carries a provenance chip and an explicit refusal on every section before any read', () => {
@@ -29,8 +30,10 @@ describe('Market detail route', () => {
   });
 
   it('states the Hoard and capability funding contracts it is held to', () => {
-    expect(html).toContain('exact collateral principal');
-    expect(html).toContain('it is never fees, rent, bounty, insurance, work funding, reserve, or treasury capital');
+    // The Hoard has no derivable account, and the surface says so before it is
+    // ever asked to show a number.
+    expect(html).toContain('the Hoard is stated as underivable rather than guessed');
+    expect(html).toContain('A Core Market root carries no supply vector and no Hoard figure');
     expect(html).toContain('seven segregated compartments with separate native-lamport and Realm-collateral totals, never merged into one number');
     expect(html).toContain('content identity');
   });
@@ -40,7 +43,7 @@ describe('Market detail route', () => {
     // that route name is not this surface's vocabulary and is excluded here.
     const withoutNav = html.replace(/<nav>[\s\S]*?<\/nav>/, '');
     const disclaimers = [
-      'The Hoard is this Market&#x27;s exact collateral principal: it is not a balance available to anyone, and it is never fees, rent, bounty, insurance, work funding, reserve, or treasury capital.',
+      'Raw u64 atoms, read where the chain keeps them. A Core Market root carries no supply vector and no Hoard figure, so this section is not decoded from the Market at all: the per-claim supplies come from the Claims LiabilityBasisV2 aggregate this Market derives, and the Hoard is stated as underivable rather than guessed.',
     ];
     let remainder = withoutNav;
     for (const disclaimer of disclaimers) {

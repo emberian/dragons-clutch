@@ -56,4 +56,21 @@ describe('immutable localhost successor checkpoint', () => {
     (promoted.evidence as Record<string, unknown>).checked_production_release_claimed = true;
     expect(() => decodeLocalSuccessorCheckpoint(promoted)).toThrow('must not claim production');
   });
+
+  it('accepts any loopback base, because the validator origin is a parameter and not a constant', () => {
+    const relocate = (rpcUrl: string) => {
+      const moved = structuredClone(checkpointJson) as unknown as Record<string, unknown>;
+      (moved.network as Record<string, unknown>).rpc_url = rpcUrl;
+      return moved;
+    };
+    // Campaigns now run concurrently on disjoint 42-port blocks, so a
+    // checkpoint captured from one of them is not a malformed checkpoint.
+    expect(decodeLocalSuccessorCheckpoint(relocate('http://127.0.0.1:31890/')).network.rpc_url).toBe('http://127.0.0.1:31890/');
+    expect(decodeLocalSuccessorCheckpoint(relocate('http://127.0.0.1:20890/')).network.rpc_url).toBe('http://127.0.0.1:20890/');
+    // What the gate is actually for is unchanged: a checkpoint can only ever
+    // point the browser at a validator on this machine.
+    for (const hostile of ['https://127.0.0.1:20890/', 'http://example.com:20890/', 'http://8.8.8.8:20890/', 'http://localhost:20890/', 'http://127.0.0.1/']) {
+      expect(() => decodeLocalSuccessorCheckpoint(relocate(hostile))).toThrow('loopback explicit-port profile');
+    }
+  });
 });

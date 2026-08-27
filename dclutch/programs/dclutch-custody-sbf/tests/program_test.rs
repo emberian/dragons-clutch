@@ -49,7 +49,7 @@ use solana_program::{
 use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::{Transaction, versioned::VersionedTransaction};
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
@@ -63,6 +63,73 @@ const RECIPIENT: [u8; 32] = [0x43; 32];
 const GENERATION: u64 = 7;
 const DEPOSIT: u64 = 100;
 const TOTAL_EXTERNAL_DEBIT: u64 = 105;
+
+/// Preimage of this campaign's fixed fixture-key seed.
+///
+/// Hashed from this string rather than written down as an opaque 32-byte
+/// constant, so what is pinned is a sentence somebody can check. Changing it
+/// moves every fixture address below and every compute-unit number this
+/// campaign produces, which is a re-pin of `tools/gauntlet/CU_BUDGETS.json`.
+const FIXTURE_SEED_PREIMAGE_V1: &[u8] =
+    b"dclutch/gauntlet/claims-custody/custody-program-test/keypair-seed/v1";
+
+/// Domain separator for the per-role derivation below.
+const FIXTURE_KEY_DOMAIN_V1: &[u8] = b"dclutch/gauntlet/claims-custody/fixture-key/v1";
+
+/// Role names. Part of the derivation, so they live in one place.
+const ROLE_PAYER: &str = "protocol-payer";
+const ROLE_MINT: &str = "collateral-mint";
+const ROLE_EXTERNAL_SOURCE: &str = "external-source";
+const ROLE_EXTERNAL_DESTINATION: &str = "external-destination";
+const ROLE_RENT_REFUND: &str = "rent-refund-beneficiary";
+
+/// A deterministic fixture address for one role under one token profile.
+///
+/// # Why this exists
+///
+/// These four addresses came from `Pubkey::new_unique()`, which reads a
+/// PROCESS-GLOBAL counter. The two profile campaigns run concurrently in one
+/// binary, so the value each drew depended on thread interleaving; a different
+/// address changes how many iterations `find_program_address` needs to find an
+/// off-curve bump, and each iteration is one `sol_create_program_address`
+/// syscall at 1,500 CU. A CU budget cannot have a useful tolerance against
+/// that. See `tools/gauntlet/CU_BUDGETS.md`.
+///
+/// ```text
+/// seed    = SHA-256(FIXTURE_SEED_PREIMAGE_V1)
+/// address = SHA-256(FIXTURE_KEY_DOMAIN_V1 || 0 || seed || 0 || profile || 0 || role || 0)
+/// ```
+///
+/// The profile label is IN the derivation: the two campaigns must not share a
+/// mint or a vault counterparty just because they now share a seed.
+///
+/// No safety gate, unlike the successor bootstrap's `--keypair-seed`: nothing
+/// here is a signing key and none of these addresses exists outside a
+/// `solana-program-test` bank inside one test process.
+fn fixture_pubkey(profile: Profile, role: &str) -> Pubkey {
+    Pubkey::new_from_array(fixture_key_material(profile, role))
+}
+
+/// A deterministic fixture SIGNER for one role under one token profile.
+///
+/// Every 32-byte string is a valid ed25519 secret seed, so this is total.
+fn fixture_keypair(profile: Profile, role: &str) -> Keypair {
+    Keypair::new_from_array(fixture_key_material(profile, role))
+}
+
+fn fixture_key_material(profile: Profile, role: &str) -> [u8; 32] {
+    let seed = hash(FIXTURE_SEED_PREIMAGE_V1).to_bytes();
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(FIXTURE_KEY_DOMAIN_V1);
+    preimage.push(0);
+    preimage.extend_from_slice(&seed);
+    preimage.push(0);
+    preimage.extend_from_slice(profile.label().as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(role.as_bytes());
+    preimage.push(0);
+    hash(&preimage).to_bytes()
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Profile {
@@ -116,6 +183,17 @@ struct Fixture {
     external_source: Pubkey,
     external_destination: Pubkey,
     rent_refund: Pubkey,
+    /// The PROTOCOL payer, which is not the transaction fee payer.
+    ///
+    /// `CustodyRequestV1.payer` goes into the replay and vault derivations, so
+    /// whatever key sits here decides how many `find_program_address`
+    /// iterations the campaign pays for -- 1,500 CU each. `context.payer` is
+    /// ProgramTest's own genesis mint keypair, freshly random every run and
+    /// with no knob to seed it, and using it here was the last thing keeping
+    /// six of this campaign's thirty-four transactions nondeterministic after
+    /// the four fixture addresses were seeded. It stays the FEE payer, where
+    /// it enters no derivation; this one signs alongside it.
+    payer: Keypair,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -350,7 +428,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
     .0;
     add_protocol_account(&mut test, activation_cache, REGISTRY_PROGRAM_ID, cache_data);
 
-    let mint = Pubkey::new_unique();
+    let mint = fixture_pubkey(profile, ROLE_MINT);
     let token_program = profile.token_program();
     let adapter = *PRODUCTION_ADAPTER_RELEASES
         .get(profile.release_index())
@@ -435,14 +513,27 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
         &CUSTODY_PROGRAM_ID,
     )
     .0;
-    let external_source = Pubkey::new_unique();
-    let external_destination = Pubkey::new_unique();
+    let external_source = fixture_pubkey(profile, ROLE_EXTERNAL_SOURCE);
+    let external_destination = fixture_pubkey(profile, ROLE_EXTERNAL_DESTINATION);
     // The rent-refund beneficiary is deliberately NOT the transaction payer.
     // CustodyFrameSpecV1 gives `RentRefund` WRITABLE, non-signer privileges, and
     // the SVM reports the fee payer as a signer in every instruction it appears
     // in, so a campaign that refunds to the payer can never satisfy the frame.
-    let rent_refund = Pubkey::new_unique();
+    let rent_refund = fixture_pubkey(profile, ROLE_RENT_REFUND);
     add_protocol_account(&mut test, rent_refund, system_program::ID, Vec::new());
+    // The protocol payer, funded at genesis so it can pay rent for the replay
+    // and the vault. See `Fixture::payer` for why it is not `context.payer`.
+    let protocol_payer = fixture_keypair(profile, ROLE_PAYER);
+    test.add_account(
+        protocol_payer.pubkey(),
+        Account {
+            lamports: 10_000_000_000,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
     add_protocol_account(
         &mut test,
         external_source,
@@ -479,6 +570,7 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
             external_source,
             external_destination,
             rent_refund,
+            payer: protocol_payer,
         },
     )
 }
@@ -902,11 +994,15 @@ async fn create_live_lookup_table(
 
 async fn submit(
     context: &mut ProgramTestContext,
+    fixture: &Fixture,
     instruction: Instruction,
     lookup: &AddressLookupTableAccount,
     label: &str,
 ) -> Result<(bool, u64), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
+    // The FEE payer stays ProgramTest's genesis mint keypair; the PROTOCOL
+    // payer signs alongside it. The fee payer enters no derivation, which is
+    // why it is allowed to be the one key here nothing can seed.
     let payer = context.payer.pubkey();
     // Every Custody frame but CloseReplay and InitializeReplay is past Solana's
     // legacy packet maximum with its keys inline -- the delegated wire by 178
@@ -920,8 +1016,30 @@ async fn submit(
         )
         .expect("v0 message"),
     );
-    let transaction =
-        VersionedTransaction::try_new(message, &[&context.payer]).expect("transaction");
+    // Sign with exactly the keys this message requires and no others.
+    //
+    // The delegated frames do not carry the protocol payer at all -- their
+    // authority is the delegate -- so handing `try_new` a fixed pair would be
+    // `TooManySigners` on every one of them. Reading the requirement off the
+    // compiled message instead of asserting it keeps the two wrapper shapes
+    // from needing two submit paths.
+    let required = usize::from(message.header().num_required_signatures);
+    let signer_keys = message
+        .static_account_keys()
+        .get(..required)
+        .unwrap_or_default()
+        .to_vec();
+    let mut signers: Vec<&Keypair> = Vec::new();
+    for key in &signer_keys {
+        if *key == context.payer.pubkey() {
+            signers.push(&context.payer);
+        } else if *key == fixture.payer.pubkey() {
+            signers.push(&fixture.payer);
+        } else {
+            panic!("no keypair for required signer {key}");
+        }
+    }
+    let transaction = VersionedTransaction::try_new(message, &signers).expect("transaction");
     let signature = transaction
         .signatures
         .first()
@@ -990,7 +1108,7 @@ fn token_amount(account: &Account) -> u64 {
 async fn campaign(profile: Profile) {
     let (test, fixture) = fixture(profile);
     let mut context = test.start_with_context().await;
-    let payer = context.payer.pubkey();
+    let payer = fixture.payer.pubkey();
     let step = |name: &str| format!("custody {}: {name}", profile.label());
     let addresses = campaign_addresses(&fixture);
     let lookup = AddressLookupTableAccount {
@@ -1000,6 +1118,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, initialize_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(&fixture, initialize_request(&fixture, payer), payer, false),
         &lookup,
         &step("initialize replay"),
@@ -1010,6 +1129,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, open_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(&fixture, open_request(&fixture, payer), payer, false),
         &lookup,
         &step("open vault"),
@@ -1027,6 +1147,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, early_close_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(
             &fixture,
             close_replay_request(&fixture, 2),
@@ -1043,6 +1164,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, legacy_external_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(
             &fixture,
             external_transfer_request(&fixture, 2),
@@ -1059,6 +1181,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, external_cu) = submit(
         &mut context,
+        &fixture,
         delegated_wrapper_instruction(
             &fixture,
             delegated_request(
@@ -1087,6 +1210,7 @@ async fn campaign(profile: Profile) {
     wrong_delegate.amount = 1;
     let (accepted, delegate_cu) = submit(
         &mut context,
+        &fixture,
         delegated_wrapper_instruction(
             &fixture,
             delegated_request(&fixture, wrong_delegate, 1, 1),
@@ -1112,6 +1236,7 @@ async fn campaign(profile: Profile) {
     let before_late_failure = after_external.clone();
     let (accepted, late_failure_cu) = submit(
         &mut context,
+        &fixture,
         delegated_wrapper_instruction(&fixture, terminal_deposit, true),
         &lookup,
         &step("caller refuses after the token effect"),
@@ -1127,6 +1252,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, deposit_cu) = submit(
         &mut context,
+        &fixture,
         delegated_wrapper_instruction(&fixture, terminal_deposit, false),
         &lookup,
         &step("delegated terminal deposit"),
@@ -1150,6 +1276,7 @@ async fn campaign(profile: Profile) {
     let stale = deposit_request(&fixture, 3, 1);
     let (accepted, stale_cu) = submit(
         &mut context,
+        &fixture,
         delegated_wrapper_instruction(&fixture, delegated_request(&fixture, stale, 1, 1), false),
         &lookup,
         &step("delegated transfer at a stale replay revision"),
@@ -1163,6 +1290,7 @@ async fn campaign(profile: Profile) {
     substituted_source_owner.semantic.source_owner = [0x99; 32];
     let (accepted, source_owner_cu) = submit(
         &mut context,
+        &fixture,
         delegated_wrapper_instruction(
             &fixture,
             delegated_request(&fixture, substituted_source_owner, 1, 1),
@@ -1180,6 +1308,7 @@ async fn campaign(profile: Profile) {
     substituted_destination_owner.semantic.destination_owner = [0x99; 32];
     let (accepted, destination_owner_cu) = submit(
         &mut context,
+        &fixture,
         delegated_wrapper_instruction(
             &fixture,
             delegated_request(&fixture, substituted_destination_owner, 5, 5),
@@ -1198,6 +1327,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, withdraw_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(&fixture, withdraw_request(&fixture, 4), payer, false),
         &lookup,
         &step("transfer vault to external destination"),
@@ -1212,6 +1342,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, close_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(&fixture, close_request(&fixture), payer, false),
         &lookup,
         &step("close vault"),
@@ -1238,6 +1369,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, close_stale_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(
             &fixture,
             close_replay_request(&fixture, 5),
@@ -1259,6 +1391,7 @@ async fn campaign(profile: Profile) {
     foreign.caller_role = CallerRoleV1::Claims;
     let (accepted, foreign_close_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(&fixture, foreign, payer, false),
         &lookup,
         &step("close replay under a foreign caller role"),
@@ -1273,6 +1406,7 @@ async fn campaign(profile: Profile) {
 
     let (accepted, close_replay_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(
             &fixture,
             close_replay_request(&fixture, 6),
@@ -1300,6 +1434,7 @@ async fn campaign(profile: Profile) {
     reopen.resulting_revision = 8;
     let (accepted, reopen_cu) = submit(
         &mut context,
+        &fixture,
         wrapper_instruction(&fixture, reopen, payer, false),
         &lookup,
         &step("open vault after the replay is closed"),

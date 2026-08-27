@@ -216,3 +216,71 @@ tail >=39,521 vs 32,768) + first-ever phase-8+ child CPI territory (W2i lane).
 URGENT unowned->now owned: DCLTGMF1 CU grew 84.6%->91.3% of ceiling in one
 evening from unrelated changes; CU-BUDGET lane adds checked-in budgets.
 The monolith is fully deleted (legacy copy removed; git history only).
+
+## Post-cook plan (ember, 2026-08-27 — after current lanes land)
+
+- Devnet budget is now 55 SOL (was 45).
+- 1. ADDRESS every item the returning lanes name (standing rule: reports'
+  named items get actioned, not archived).
+- 2. THE FABLE REVIEW WAVE: Fable-tier reviewers over the scar tissue —
+  derpage hunt, "omg I can't believe we're doing that" audit, cross-cutting
+  design coherence — after this swarmcycle + followups cook.
+- 3. GIT-MESSAGE ACTION SCAN: sweep all commit messages for named-but-unactioned
+  items (queued/flagged/deferred/not-done claims) and cross-check each against
+  reality; everything named gets actioned or explicitly retired.
+- 4. THE PUBLIC FACE (audited 2026-08-27, all "no"): Pages currently ships the
+  gen-1 microsite verbatim (manual dispatch, honestly labeled). Needed:
+  protocol reference manual, user guide, trader guide, operator guide, Pages
+  building + shipping the real frontend, and the dragons-clutch wrapper tidy
+  (= the graft: dclutch becomes the current tree; gen-1 handoff docs and
+  stale site retired to history).
+
+## Doctrine amendment (ember, 2026-08-27): CUT THE KNOT
+
+Naming a blocker is not a deliverable; it was triage for an era of silent
+walls, and that era is over. Default: CUT — fix it, decide it, delete it, even
+across "someone else's" seam; commit; let the swarm heal any breakage (git and
+the gates are the safety net). Yield back a blocker ONLY for a genuine
+authority decision (trust surface, principal, deploy, scope) — and then as a
+question with a recommended answer, not an inventory row.
+
+## Fable-wave agenda seeds (from FD3, 2026-08-27)
+
+- TWO live Market representations on chain: DCLTCAT1 (native Realm/Position
+  family, own Rust fixture generator) alongside DCLTCOR2 Core state — one
+  truth or a second authority? Architecture-coherence question for the Fable
+  reviewers, NOT a quick knife.
+- The Hoard vault has no chain-derivable address (namespaced by caller-chosen
+  founding context) — frontend refuses-with-reason today; decide whether the
+  context belongs in a discoverable record.
+
+- DCLLBX02 (liability-basis V2 route): campaign green + census EXECUTED, but
+  its ONLY issuance path (Split) composes an External source compartment that
+  Custody refuses by design (84b1426), and nothing on chain finalizes its
+  record type (CL's earlier finding). Live route or superseded second truth?
+  Fable-wave architecture call; the candidate fix (compose the DCLCUDQ2
+  delegated V2 wire in liability_basis_v2.rs) is real protocol work either way.
+- Relayer daemon slice note: consumption (1,534 B) and full-body append
+  (1,377 B) exceed legacy packets — witnessed by label in the relayed tier;
+  the daemon must build v0/ALT for those two when it goes live. The failure
+  walk deliberately stays legacy-fitting (991 B) — it must never depend on an
+  ALT a silent operator never published.
+
+## Next-dispatch queue (at W2k's yield)
+
+- GEN-ART: public encode modules for the three artifact generations
+  (AccountProfileV1 / transition ProgramV2 / EffectProgramV2) in their owning
+  crates (effect-kernel shared with W2k — hence queued, not parallel), then
+  General's own activation artifacts from GEN-V3ACT-r's board design, then the
+  zombie refusal EXECUTED through the real runtime path (reachable as a
+  refusal even before phase-8 success). build_general_hot_instruction_v3
+  finally gets its caller.
+- Small batch: core-sbf tests.rs:141 packet claim (13 accounts narrow);
+  resume-validator.sh unsupervised exec; family runners' shared ledger.json
+  defaults; --keep-elf stale diagnostics re-stamp.
+
+- Dead-vocabulary web tests (SN4): ECONOMIC_* width tests assert a banished
+  wire schema; PRODUCT_EVALUATOR/ADMISSION account counts describe
+  instructions NO program implements. Delete-or-succeed decisions for the
+  Fable wave (what else in apps/dclutch-web speaks to programs that no longer
+  exist?).

@@ -1710,3 +1710,288 @@ keeps the §4 message budget where it was.
 
 Executable evidence: `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`
 against the compiled Core and Resolution ELFs.
+
+## 12. The consumer (RELAY-CONSUME lane, 2026-08-27)
+
+§11 rehomed the transport. This section records the route that *reads* what the
+transport carries, the four amendments building it forced, and the one thing it
+could not finish and why. It amends §4, §6 and §10; the wire, the corpus and the
+transport refusals are unchanged.
+
+Executable evidence: `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs`,
+fourteen tests against the compiled Core and Resolution ELFs. The honest
+consumption costs **154,766 CU** (*measured*, `ProgramTest`), about eleven
+percent of the ceiling.
+
+### 12.1 Where the decoding rules actually live
+
+§4.10 says `decoding_rules_id` carries "every layout fact, offset, sentinel,
+scale, and rounding boundary". The implementation splits that in two, and the
+split is forced rather than convenient.
+
+`RelayedAdapterConfigV1.observable_selector` — a field §4.3 already specified and
+nothing had ever selected with — names one row of a **decoding-rules table**
+authored in
+`formal/dclutch-semantics/DClutchSemantics/RelayedVenueDecodingRulesV1.lean` and
+emitted to `crates/dclutch-relay-contract/src/generated_venue_rules.rs`. The
+table is code, pinned by `ProviderReleaseV1.adapter_release_id`. The row is data,
+pinned by `decoding_rules_id`. This is exactly how `PythAdapterConfigV1`'s
+`feed_id` and `exponent` select a row of a codec the adapter carries.
+
+The alternative was widening the 80-byte configuration to inline a venue grammar,
+which would change `decoding_rules_id` for **every** existing row and defeat the
+§4.10 tripwire the identity exists to arm. §4.10's assertion is unaffected and
+still executed by
+`two_disjoint_relayer_key_sets_share_one_decoding_rules_identity`.
+
+### 12.2 The pinned account set had to become an instruction input
+
+The adapter holds an `account_set_id` and has never held the set. Until this
+lane, nothing on chain could check that position two really is the venue account
+owned by the venue program — the relayer asserted a position index in a signed
+message and that was the end of it. `AccountObservationV1::require_pinned_position`
+existed with no caller.
+
+`ConsumeRecord` therefore carries the entries inline, in a wire form byte-identical
+to their contribution to the `account_set_id` preimage. They are untrusted caller
+input that becomes authoritative exactly when the re-derived digest equals the
+identity the record and the configuration both already committed to. The tail
+width is exact in both directions, so no shadow entry rides outside the digest
+and none is elided.
+
+### 12.3 A terminal window has width, and how wide it has to be
+
+**Superseded 2026-08-27.** This section used to record that
+`WindowSpecV1::new` refused `start != end` for `WindowKind::Terminal`, that a
+terminal window was therefore a single second, and that the relayed consumer had
+consequently dropped its lower window bound because "requiring a read of another
+cluster to land on one exact second is not a bound, it is a route nothing can
+pass". Both halves of that are gone. Terminal now requires only `start <= end`
+(*verified-from-source*, `dclutch-source-contract`), and `require_window_admits`
+enforces `[start, end]` again at both edges.
+
+The defect the old text described as a constraint was the reason to fix the
+constraint. A market that can only be answered on one exact second is answered
+essentially never, so on a real cluster every terminal market walked to its
+failure outcome instead of resolving — and the fixtures could not see it,
+because each of them chose its window to match its own observation.
+
+#### How wide
+
+Devnet SOL/USD publishes on a **measured** p50 near **313 s** between
+publications (lane measurement, 2026-08-27). Modelling publications as a
+Poisson process of that mean rate — an approximation, since Pyth publishes on
+price movement and confidence thresholds rather than on a timer, which makes the
+real process more regular near the median and heavier in the tail — a window of
+width `W` seconds contains at least one publication with probability about
+`1 - exp(-W / 313)` (*provisional*):
+
+| `W` | shape | P(at least one publication) |
+| --- | --- | --- |
+| 1 s | the old forced shape | ~0.3% |
+| 300 s | one cadence | ~62% |
+| 600 s | two cadences | ~85% |
+| 1,250 s | four cadences | ~98% |
+| 1,800 s | 30 minutes | ~99.7% |
+
+So the operative guidance for a terminal Pyth market on devnet is a window of
+**at least four cadences (~21 minutes), and 30 minutes for a market that should
+not fail for provider reasons**. The failure walk is not a bug at any of these
+widths — it is the pre-disclosed outcome when the provider really was silent —
+but it should be reached because nothing published, not because the market asked
+an unanswerable question.
+
+`max_age_seconds` is a separate budget and must cover *submission* latency, not
+publication cadence: it bounds `now - publication_time` at the moment a keeper
+submits, and it also sets the deadline `end + max_age`. A window wide enough to
+be published into is useless if no keeper can get the transaction landed inside
+`max_age` of that publication.
+
+#### The two clocks and the two edges
+
+The window says whether an observation is **about the period the market sold**;
+`require_observation_freshness` (relayed) and the `max_age`/`max_future_skew`
+band (Pyth) say whether it is one this cluster will still **act on**. A fresh
+observation of the wrong week and a stale observation of the right one must both
+refuse, and they now refuse differently: the Pyth join reports a window miss as
+`InvalidObservationSchedule` and a clock miss as `InvalidPublicationTime`,
+matching the split `NormalizedProviderEvidenceV1::validate` already made. The
+admitted span is `[max(start, now - max_age), min(end, now + skew)]`.
+
+The two edges of the window are also different refusals. Below `start` the
+observation is about a period the market had not started selling; above `end` it
+is **late** — the exact case a provider cadence straddling the deadline
+produces, and the one that must refuse rather than answer a closed question with
+a later price.
+
+#### Exactly one answer
+
+A window with width admits more than one observation, so "one answer" stopped
+being a consequence of arithmetic and became a property to prove. The rule is
+that the **first admissible observation terminalizes**: the transition
+single-writes the phase (`resolve_primary_from_authenticated_domain` refuses
+anywhere but `Primary`), so every later observation refuses without being
+inspected. `formal/dclutch-semantics`'s `checkEvidence_ok_is_admissible`,
+`two_admissible_observations_cannot_both_terminalize`, and
+`exhaust_requires_the_window_to_have_closed` are the machine-checked statement
+of that rule against the model the emitters share.
+
+Two deadlines still coincide by construction and the campaign still records it:
+the walk's `primary_deadline` is `window.end + window.max_age`, and the
+configuration's own `max_observation_age_seconds` is the same grace, so the last
+second an observation may resolve a market and the first second the failure walk
+may take it are adjacent, with no gap where neither route can act.
+
+### 12.4 `SourceSpecV1.adapter_config_id` names the venue's pinned deployment
+
+§10.2 left the V1 material's inline adapter-config slot as "a canonical
+placeholder". For the relayed family the Source spec's `adapter_config_id` now
+names the venue's `ArtifactReleaseV1`, which makes "which third-party deployment
+is this market about" a founding-time content identity inside the authenticated
+chain rather than an argument the caller supplies. P-B (§6.2 of the chain-state
+dossier) is executed from there: `authenticate_deployment` compares `elf_digest`,
+`deployment_slot` and upgrade authority by exact equality against a deployment
+reconstructed from the attested Loader V3 bodies.
+
+### 12.5 The refusal table
+
+| What went wrong | Named refusal | Where it is decided |
+| --- | --- | --- |
+| Frame count, privilege, or an alias | `AccountFrame` (0) | `validate_relay_frame_v1` |
+| Instruction bytes, entry tail width, entry key/owner/width | `Instruction` (1) | `RelayInstructionV1::decode`, `decode_account_set_entry_v1` |
+| Record custody, slot-seeded address, Source-state address | `OutputState` (2) | `authenticate_consumable_record`, `authenticate_source_state_account` |
+| Market owner, derived address, phase, generation, policy | `MarketAuthority` (3) | `authenticate_market` |
+| A raw record's PDA, owner, digest, rent, or staging vacancy | `FinalizedRecord` (4) | `authenticate_record` |
+| Activation cache does not name this Resolution release | `ResolutionRelease` (5) | `authenticate_market` |
+| Source graph links, access profile, window kind, coordinate/unit vs Product | `SourceMaterial` (7) / `ProductDomain` (8) | `authenticate_graph`, `plan_relayed_resolution_v1` |
+| Product record, result domain, portfolio, outcome count | `ProductDomain` (8) | `authenticate_product_runtime_v2` |
+| Provider family or transport profile is not this family | `ProviderRelease` (9) | `consume_source_records` |
+| Account-set digest, pinned position, venue deployment, venue length, venue discriminator, incoherent body, unenumerated state, foreign clock, staleness, skew | `ProviderObservation` (10) | `interpret_sealed_record_v1` |
+| Certificate construction or a Source transition | `Transition` (12) | `plan_relayed_resolution_v1` |
+| **Record not sealed, not quorate, not bound to this Market, or already consumed** | **`RelayedRecord` (15)** | `require_consumable` |
+| **Observed state is pre-terminal, or past the Product's window** | **`RelayedWindow` (16)** | `read_dbc_graduation`, `require_window_admits` |
+
+The last row is the load-bearing one and it is why the code is new. A
+pre-terminal pool is *no answer*, not a wrong one: the bytes were fine, the
+quorum was real, the venue was the pinned one, and the market's own question does
+not have an answer yet. Telling a position holder "come back later" and
+"something is broken" through one code is the flattening the route census already
+caught once elsewhere.
+
+### 12.6 The graduation proposition, and why the demo Product has one ordinary cell
+
+Only `MigrationProgress::CreatedPool` resolves. A terminal-window graduation
+proposition can only ever be *proved* by graduation; "it did not graduate" is
+proved by the deadline passing, which is the funded walk of §4.8 landing on the
+Product's own failure selector.
+
+So the demo Product's `ResultDomainV2` has **zero cuts**: one ordinary region
+("graduated by the deadline") plus the explicit failure region ("no graduation
+proved by the deadline"). A domain with a cut at `CreatedPool` would carry an
+ordinary cell nothing could ever select, and a partition with a dead cell mints
+liabilities against an outcome that cannot happen. The mapping machinery is real
+and unchanged — the adapter hands the Product the `MigrationProgress`
+discriminant itself at exponent zero, so a Product carving the same observable
+differently needs no adapter change — this particular Product just has one thing
+it can prove.
+
+**The user-visible consequence must be in the Product, not discovered at
+resolution:** for a v1 graduation market, "the relayer went silent", "the venue
+was upgraded" and "it never graduated" all land on the same pre-disclosed
+failure outcome.
+
+### 12.7 The liveness walk: executed
+
+§4.8's headline property — **a silent relayer cannot make a market unresolvable,
+only drive it to a pre-disclosed outcome, along a bounded, prepaid,
+permissionless path that pays whoever walks it** — is executable against the real
+compiled Resolution ELF. `a_silent_relayer_cannot_make_the_market_unresolvable`
+in `crates/dclutch-svm-harness/tests/relayed_mainnet_state.rs` walks a market no
+relayer answered for to a terminal `ResolutionFailure` certificate and credits
+the walker, and four sibling cases refuse the ways it could be abused.
+
+Every clause of that sentence is an account or a check rather than a claim:
+
+- **Silent.** The frame carries no record, no provider release, no adapter
+  configuration, no key set and no venue. Twenty-two positions, and nothing in
+  them is the relayer's, so the route runs in exactly the world the relayer has
+  abandoned. The instruction itself carries a generation and a terminal sequence
+  and nothing else — even the Source material identity is read out of the
+  Resolution-owned Source state and then compared against the Market's own
+  resolution policy.
+- **Bounded.** `exhaust_after_primary_deadline` refuses strictly before
+  `window.end + window.max_age`, both of them the market's own founding-time
+  content, so the walk cannot end a market early. The deadline and the last
+  second an observation may resolve the market are adjacent by construction
+  (§12.3), with no gap in which neither route can act.
+- **Pre-disclosed.** The selector is `ResultDomainV2::failure_selector()`, the
+  Product's own explicit failure region. The certificate carries `route = 0` and
+  `provider_evidence = 0`, which is the whole content of the claim that no
+  provider stands behind this terminal.
+- **Prepaid, and pays whoever walks it.** The bounty is the capability
+  manifest's own quote, debited from the explicit-failure `FundingState` the
+  market escrowed at founding. Nobody chooses what the walk pays at walk time.
+
+The compartment is identified by *configuration*, not by account position: the
+explicit-failure entry is the one whose manifest entry configures this market's
+own Source material, exactly the binding `core_effect`'s
+`authenticate_funding_entries` established when the three compartments were
+created. Presenting the exhaustion compartment instead — a real, Active,
+correctly-owned `FundingState` of the same market at its own correct address —
+is refused by that comparison, and the campaign executes it.
+
+The prepayment rule stayed a rule rather than becoming a special case:
+
+> `ResolutionCertificateV2::validate_shape` refuses a `ResolutionFailure` whose
+> `funding_allocation` is zero or whose `work_paid` is zero.
+
+`an_unfunded_failure_certificate_cannot_exist` still executes that refusal, and
+it is now the constraint's witness rather than a blocker's: it is what would
+fail if the Lean-owned schema were ever loosened to let a route mint a bounty
+nobody paid. The walk plans and *encodes* before it commits, so a certificate
+the schema would refuse never reaches an account and no lamport has moved when
+it is refused.
+
+The walk is one transition rather than three, and that is a consequence rather
+than a simplification. The V1 shape was `FailNext` per recovery leg, then
+`Exhaust`, then `CommitFailure` — six funded transitions worst case. That shape
+belongs to a market that *bought* named alternative sources, and
+`exhaust_after_primary_deadline` refuses any material carrying a recovery policy
+precisely because skipping paid-for legs would take an outcome away from the
+holders who paid for them. For a market with no policy the whole walk is
+`Primary → Exhausted → FailureCommitted`: one debit, one certificate, and no
+intermediate `Exhausted` certificate, because there is no intermediate moment a
+third party could act on.
+
+### 12.8 What the demo Product still needs, as a record set
+
+For one real DBC graduation market, in dependency order:
+
+1. `ArtifactReleaseV1` for `dbcij3LWUppWqq96dh6gJWwBifmcGfLSB5D4DuSMaqN`, with the
+   **mainnet** `deployment_slot`, the SHA-256 of the deployed ELF tail, and
+   `ExactAuthority` with the observed upgrade authority. All four are one
+   `getAccountInfo` on `HUfnSSiJxgspQm6C1rkqv6L3XgVtn7AESApgCQpCXCYh` away and none
+   has been read.
+2. `RelayerKeySetV1`, n = 1, m = 1, over the daemon's disclosed attestation key.
+3. `RelayedAdapterConfigV1` with `observable_selector = 0`, `raw_exponent = 0`,
+   `max_observation_age_seconds` from a **measured** devnet/mainnet clock-skew
+   profile (§4.7 is unmeasured), `max_cluster_skew_seconds` strictly below it, and
+   `account_set_id` over the four pinned positions with the chosen pool's pubkey.
+4. `ProviderReleaseV1` binding family, extension, key set, `decoding_rules_id`,
+   and the record transport profile.
+5. `SourceSpecV1` with `access_profile = RelayedObservationRecord`, `domain_id`
+   and `unit_id` **equal to the Product domain's** coordinate and result unit, and
+   `adapter_config_id` = the venue release digest (§12.4).
+6. `WindowSpecV1`, `Terminal`, `start = end =` the market deadline, `max_age`
+   equal to the configuration's staleness bound (§12.3).
+7. `StatisticSpecV1`, `TerminalSample`, one sample, `ExactRational`.
+8. `SourceMaterialV2` naming the Product record, the spec, the window, the
+   statistic, **no recovery policy**, and the V2 failure-policy release.
+9. Product Runtime V2: a `ResultDomainV2` with **zero cuts**, a two-coefficient
+   `PortfolioV2`, and the `ProductRecordV2` root (§12.6).
+
+Still missing beyond the record set, in order of what would stop a demo first: a
+measured two-clock skew profile; the daemon actually running and publishing
+(§4.11 is specification only); and a `RecoveryMaterialSlotV1` that admits a
+relayed source, without which §4.8's "degrades to a named alternative source"
+remains false (§10.5) — the walk itself is no longer on this list (§12.7).

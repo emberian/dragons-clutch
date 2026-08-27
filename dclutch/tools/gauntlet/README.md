@@ -41,21 +41,52 @@ working tree.
 | `runs/<stamp>/ledger/` | the validator ledger, kept as evidence |
 | `elf/*.so` | the seven SBF artifacts under test, digest-pinned |
 
-## One run at a time, machine-wide
+## Concurrent runs, on disjoint port blocks
 
-The successor launcher is pinned to the exact RPC origin `http://127.0.0.1:20890/`
-and refuses to start while anything else listens there. That makes a full
-gauntlet run a **single global slot on the machine**: two lanes cannot run
-`--mode full` concurrently, whatever `--work` roots they pass.
+This used to say "one run at a time, machine-wide", and it was true: the
+launcher was pinned to `http://127.0.0.1:20890/` and refused to start while
+anything else listened there, so two lanes could not run `--mode full`
+concurrently whatever `--work` roots they passed.
 
-`run.sh` preflights the port and refuses with
+The origin is a parameter now. It is in no authenticated material — not in the
+keypair derivation, not in a program address, not in a semantic release ID, not
+in an artifact attestation, not in the genesis plan — so moving it moves nothing
+a budget row or a witness reads, and it is deliberately not in the campaign
+stamp: changing it must not cost a 13-minute re-run.
 
-    gauntlet: 127.0.0.1:20890 is occupied; the successor launcher is pinned to that origin
+```sh
+tools/gauntlet/run.sh --mode full                    # 20890, as it always was
+tools/gauntlet/run.sh --mode full --rpc-port auto    # a free 42-port block
+tools/gauntlet/run.sh --mode full --rpc-port 31890   # a base you chose
+```
 
-rather than letting the launcher time out sixty seconds later. If you see it,
-another lane is mid-campaign — check the wave board before killing anything, and
-never kill a `solana-test-validator` whose `--ledger` is not under your own
-`--work` root.
+The launcher derives its whole block from that base — `rpc BASE`,
+`faucet BASE+2`, `gossip BASE+3`, `dynamic BASE+10..BASE+41` — and BASE 20890
+reproduces the historical `20890-20931` block byte for byte, so nothing that
+never asked for a port notices.
+
+`auto` is resolved at the **campaign** stage, not at argument parse: a base
+chosen at parse time is six minutes of SBF builds away from being used, and it
+scans a band below the kernel's ephemeral range, because the ephemeral range is
+the one the kernel also hands to every ordinary outbound connection. Both halves
+are measured — the first parallel attempt drew ephemeral `49952` at parse time
+and found it occupied when it got there.
+
+Two campaigns sharing a `--work` root still collide on everything else in it, so
+give each run its own. And `census observe` is a read-modify-write of one
+`ledger.json` that every family runner defaults to; both runners take an atomic
+lock around the fold, so concurrent campaigns serialise there rather than losing
+each other's observations.
+
+If a port you asked for is occupied, `run.sh` refuses before the launcher's
+sixty-second timeout with
+
+    gauntlet: 127.0.0.1:20890 is occupied. Pass --rpc-port auto to take a free base instead.
+
+Still never kill a `solana-test-validator` whose `--ledger` is not under your
+own `--work` root. A validator started by a campaign is now bound to its
+supervisor's lifetime and dies with it even if the supervisor is SIGKILLed, so
+a leaked one should no longer be something you find.
 
 `--mode census` needs no chain and no port; run it freely and concurrently.
 

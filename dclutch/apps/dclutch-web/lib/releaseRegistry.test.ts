@@ -64,21 +64,30 @@ type RoleFixture = Readonly<{
 /// One role's complete checked release plus the exact Loader-v3 accounts it
 /// claims, all derived from one seed so no two roles share a program, a
 /// ProgramData, or an ELF digest.
-async function roleFixture(seed: number): Promise<RoleFixture> {
+async function roleFixture(seed: number, revoked = false): Promise<RoleFixture> {
   const loader = new PublicKey(UPGRADEABLE_LOADER_ID); const programKey = new PublicKey(publicKey(seed));
   const programData = PublicKey.findProgramAddressSync([programKey.toBytes()], loader)[0];
   const programBytes = new Uint8Array(36); new DataView(programBytes.buffer).setUint32(0, 2, true); programBytes.set(programData.toBytes(), 4);
   const programDataBytes = new Uint8Array(109); new DataView(programDataBytes.buffer).setUint32(0, 3, true); putU64(programDataBytes, 4, 81n);
-  programDataBytes[12] = 1; programDataBytes.set(new PublicKey(publicKey(93)).toBytes(), 13); programDataBytes.fill(seed, 45);
+  // A REVOKED program is not a program with a cleared authority field. Loader
+  // V3 serializes `ProgramData { slot, None }` as thirteen bytes over a
+  // forty-five byte header, so the old key stays inert at 13..45 behind a zero
+  // tag. Modelling revocation as all-zero authority bytes is what let the
+  // browser call every real revoked program noncanonical.
+  programDataBytes[12] = revoked ? 0 : 1; programDataBytes.set(new PublicKey(publicKey(93)).toBytes(), 13); programDataBytes.fill(seed, 45);
   const elf = programDataBytes.slice(45);
   const metadata = ['revision-1', 'rustc 1', 'solana 1', 'cargo-build-sbf 1', 'sbf-solana-solana', 'cargo build-sbf', 'offline-check'].map(text);
   const manifestLength = 388 + metadata.reduce((sum, value) => sum + value.length, 0);
   const checked = new Uint8Array(manifestLength); checked.set(new TextEncoder().encode('DCLTREL1')); const view = new DataView(checked.buffer);
-  view.setUint16(8, 1, true); checked[10] = 0; checked[11] = 1; checked[12] = 1; checked[13] = 1; view.setUint32(16, manifestLength, true);
+  // Semantic kind 2 is `unowned`: no first-party contract decodes a role-program
+  // release preimage, so it is the ONLY honest kind for these seven programs and
+  // the only one the release pipeline emits for them.
+  view.setUint16(8, 1, true); checked[10] = 2; checked[11] = 1; checked[12] = revoked ? 0 : 1; checked[13] = 1; view.setUint32(16, manifestLength, true);
   putU64(checked, 20, 16n); putU64(checked, 28, 64n); putU64(checked, 36, 36n); putU64(checked, 44, 109n); putU64(checked, 52, 81n); putU64(checked, 60, 45n);
   checked.set(await sha256(elf), 68); checked.fill(seed + 100, 100, 132); checked.set(await sha256(programBytes), 132); checked.set(await sha256(programDataBytes), 164);
   checked.set(programKey.toBytes(), 196); checked.set(programData.toBytes(), 228); checked.set(loader.toBytes(), 260);
-  checked.set(new PublicKey(publicKey(93)).toBytes(), 292); checked.fill(8, 324, 356); checked.fill(9, 356, 388);
+  if (!revoked) checked.set(new PublicKey(publicKey(93)).toBytes(), 292);
+  checked.fill(8, 324, 356); checked.fill(9, 356, 388);
   let offset = 388; for (const value of metadata) { checked.set(value, offset); offset += value.length; }
   const decoded = await decodeCheckedReleaseV1(checked);
   return Object.freeze({
@@ -116,7 +125,9 @@ function expectedCacheBytes(releaseSetId: Uint8Array, roles: Readonly<Record<Reg
 
 async function sevenProgramFixture(): Promise<Fixture> {
   const registry = publicKey(REGISTRY_PROGRAM_SEED); const rentProgram = publicKey(RENT_PROGRAM_SEED); const payer = publicKey(31);
-  const built = await Promise.all(REGISTRY_ROLES.map((role) => roleFixture(ROLE_PROGRAM_SEEDS[role])));
+  // Core is REVOKED, exactly as the successor bootstrap requires before its
+  // release is recognized. Every other role is genesis-immutable.
+  const built = await Promise.all(REGISTRY_ROLES.map((role) => roleFixture(ROLE_PROGRAM_SEEDS[role], role === 'core')));
   const roles = Object.freeze(Object.fromEntries(REGISTRY_ROLES.map((role, index) => [role, built[index]])) as Record<RegistryRole, RoleFixture>);
 
   const releaseSet = new Uint8Array(EXECUTION_RELEASE_SET_BYTES); releaseSet.set(new TextEncoder().encode('DCLTRLS1'));
@@ -138,7 +149,10 @@ async function sevenProgramFixture(): Promise<Fixture> {
   const accounts = new Map<string, RpcAccount>([
     [payer, account(SYSTEM_PROGRAM_ID, false, new Uint8Array(0), '1000000000')],
     [registry, account(UPGRADEABLE_LOADER_ID, true, registryProgramBytes)],
-    [SYSTEM_PROGRAM_ID, account(NATIVE_LOADER_ID, true, new Uint8Array(0))],
+    // A real Agave observation carries the NativeLoader metadata body, not an
+    // empty one. The old fixture modelled it as vacant and hid a check that
+    // refused every live cluster.
+    [SYSTEM_PROGRAM_ID, account(NATIVE_LOADER_ID, true, new TextEncoder().encode('system_program'))],
     [RENT_SYSVAR_ID, account(SYSVAR_OWNER_ID, false, rentSysvar)],
   ]);
   const releasePdas = deriveFinalizedRecordAddressesV1(registry, EXECUTION_RELEASE_SET_SCHEMA_ID_V1, releaseSetId);
@@ -168,6 +182,104 @@ function client(accounts: ReadonlyMap<string, RpcAccount>) {
     latestBlockhash: async () => Object.freeze({ slot: '900', blockhash: publicKey(32), lastValidBlockHeight: '1000' }),
   };
 }
+
+describe('the four things a real chain refuted', () => {
+  /**
+   * Each case below pins a defect that could only be seen by pointing the
+   * browser at a running validator. Every one of them refused an HONEST read,
+   * and every one was invisible from this file because the fixture repeated the
+   * same wrong assumption the code made.
+   */
+
+  it('accepts the `unowned` semantic kind the seven role programs must use', async () => {
+    const fixture = await sevenProgramFixture();
+    const decoded = await decodeCheckedReleaseV1(fixture.roles.trading.checked);
+    expect(decoded.semanticKind).toBe('unowned');
+    const capability = new Uint8Array(fixture.roles.trading.checked); capability[10] = 0;
+    expect((await decodeCheckedReleaseV1(capability)).semanticKind).toBe('capability');
+    const undefinedKind = new Uint8Array(fixture.roles.trading.checked); undefinedKind[10] = 3;
+    await expect(decodeCheckedReleaseV1(undefinedKind)).rejects.toThrow(/unsupported semantic, Loader, or authority kind/);
+  });
+
+  it('pins every runtime address as a real 32-byte key', () => {
+    for (const [name, value] of [
+      ['UPGRADEABLE_LOADER_ID', UPGRADEABLE_LOADER_ID], ['SYSTEM_PROGRAM_ID', SYSTEM_PROGRAM_ID],
+      ['NATIVE_LOADER_ID', NATIVE_LOADER_ID], ['RENT_SYSVAR_ID', RENT_SYSVAR_ID], ['SYSVAR_OWNER_ID', SYSVAR_OWNER_ID],
+    ] as const) {
+      // SYSVAR_OWNER_ID was six characters short and decoded to nothing at all;
+      // it was only ever compared as a string, so no read ever noticed.
+      const key = new PublicKey(value);
+      expect(key.toBytes().length, name).toBe(32);
+      expect(key.toBase58(), name).toBe(value);
+    }
+  });
+
+  it('reads a Core whose upgrade authority was revoked the way Loader V3 revokes it', async () => {
+    const fixture = await sevenProgramFixture();
+    const observed = fixture.roles.core.programDataAccount.data;
+    expect(observed[12]).toBe(0);
+    // The old authority is still sitting there. That is what revocation looks
+    // like, and the plan must be buildable over it.
+    expect(observed.slice(13, 45).some((byte) => byte !== 0)).toBe(true);
+    const plan = await prepareRegistryActivation(client(fixture.accounts) as never, {
+      registryProgram: fixture.registry, payer: fixture.payer,
+      multiprogram: fixture.multiprogram, checkedReleases: fixture.checked, computeUnitLimit: 1_400_000,
+    });
+    expect(plan.packets).toHaveLength(REGISTRY_ROLES.length);
+    // An undefined tag is still refused; only the retained bytes are tolerated.
+    const broken = new Map(fixture.accounts);
+    const forged = new Uint8Array(observed); forged[12] = 2;
+    broken.set(fixture.roles.core.programData, account(UPGRADEABLE_LOADER_ID, false, forged));
+    await expect(prepareRegistryActivation(client(broken) as never, {
+      registryProgram: fixture.registry, payer: fixture.payer,
+      multiprogram: fixture.multiprogram, checkedReleases: fixture.checked, computeUnitLimit: 1_400_000,
+    })).rejects.toThrow(/upgrade-authority tag is undefined/);
+  });
+
+  it('reads the System Program as a real cluster serves it', async () => {
+    const fixture = await sevenProgramFixture();
+    expect(fixture.accounts.get(SYSTEM_PROGRAM_ID)?.data.length).toBe(14);
+    await expect(prepareRegistryActivation(client(fixture.accounts) as never, {
+      registryProgram: fixture.registry, payer: fixture.payer,
+      multiprogram: fixture.multiprogram, checkedReleases: fixture.checked, computeUnitLimit: 1_400_000,
+    })).resolves.toBeTruthy();
+    // Key, owner and the executable bit are still load-bearing.
+    const foreign = new Map(fixture.accounts);
+    foreign.set(SYSTEM_PROGRAM_ID, account(UPGRADEABLE_LOADER_ID, true, new TextEncoder().encode('system_program')));
+    await expect(prepareRegistryActivation(client(foreign) as never, {
+      registryProgram: fixture.registry, payer: fixture.payer,
+      multiprogram: fixture.multiprogram, checkedReleases: fixture.checked, computeUnitLimit: 1_400_000,
+    })).rejects.toThrow(/System Program runtime account is not canonical/);
+  });
+
+  it('never asks one RPC call for more than one role Loader pair', async () => {
+    const fixture = await sevenProgramFixture();
+    const batches: ReadonlyArray<string>[] = [];
+    const recording = {
+      ...client(fixture.accounts),
+      multipleAccounts: async (addresses: ReadonlyArray<string>) => {
+        batches.push(addresses);
+        return Object.freeze({
+          slot: '900',
+          accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account: fixture.accounts.get(address) ?? null }))),
+        });
+      },
+    };
+    await prepareRegistryActivation(recording as never, {
+      registryProgram: fixture.registry, payer: fixture.payer,
+      multiprogram: fixture.multiprogram, checkedReleases: fixture.checked, computeUnitLimit: 1_400_000,
+    });
+    // Five ProgramData bodies are the five whole ELFs. Measured on a real
+    // release set they are about 4.3 MB raw and over the 4 MiB response bound
+    // once base64-framed, so they may never share one call.
+    const loaderAddresses = new Set(REGISTRY_ROLES.flatMap((role) => [fixture.roles[role].program, fixture.roles[role].programData]));
+    for (const batch of batches) {
+      const programData = batch.filter((address) => REGISTRY_ROLES.some((role) => fixture.roles[role].programData === address));
+      expect(programData.length).toBeLessThanOrEqual(1);
+    }
+    expect(batches.flat().filter((address) => loaderAddresses.has(address)).length).toBe(loaderAddresses.size);
+  });
+});
 
 describe('checked Registry release workspace', () => {
   it('joins five full manifests over seven distinct programs, with Core not the Registry', async () => {

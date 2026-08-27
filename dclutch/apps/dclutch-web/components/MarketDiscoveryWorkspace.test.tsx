@@ -13,6 +13,7 @@ describe('Market discovery route', () => {
     expect(html).toContain('Enumerate Markets from the Core program');
     expect(html).toContain('Read finalized Market discovery');
     expect(html).toContain('Registry program · optional');
+    expect(html).toContain('Claims program · optional');
     expect(html).toContain('dClutch publishes no index');
   });
 
@@ -32,12 +33,13 @@ describe('Market discovery route', () => {
 
   it('presents raw atoms and never a market-data metric', () => {
     expect(html).toContain('raw u64 atoms');
-    expect(html).toContain('Hoard principal is never liquidity or TVL');
+    expect(html).toContain('supplies come from the Claims aggregate, never from the root');
     expect(html).toContain('No volume · no odds · no probability · no yield');
     // Market-data vocabulary may appear only inside the sentences that refuse it.
     const disclaimers = [
       'There is no volume, price, odds, probability, or yield here, because none of those are facts this chain persists.',
-      'Hoard principal is never liquidity or TVL',
+      'Claims program · optional',
+      'supplies come from the Claims aggregate, never from the root',
       'No volume · no odds · no probability · no yield',
     ];
     let remainder = html;

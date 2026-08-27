@@ -1,4 +1,41 @@
-//! Real-ELF ProgramTest evidence for LiabilityBasisV2 Claims/Custody execution.
+//! Real-ELF ProgramTest evidence for the LiabilityBasisV2 (`DCLLBX02`) Claims
+//! route, at the shape the current tree actually has.
+//!
+//! Two cases here are REFUSALS that used to be positive cases. Both refusals
+//! are current protocol truth, and neither is a weakened assertion standing in
+//! for an unfinished repair:
+//!
+//! - **`TerminalRedeem` is retired.** `3f7017a` moved Product V3 terminal
+//!   settlement to `rational_terminal_v3`, and `LiabilityBasisActionV2::new`
+//!   now refuses the tag unconditionally, as does
+//!   `LiabilityBasisActionKindV2::decode` on the wire byte. The positive case
+//!   is DELETED rather than adapted, and one executed refusal stands in its
+//!   place. Modern redemption already has real-ELF coverage in
+//!   `rational_representation_v2_program_test.rs`
+//!   (`real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic`,
+//!   `real_sbf_losing_terminal_burns_raw_shards_without_custody_payout`) and a
+//!   census campaign in `tools/gauntlet/claims-rational-representation-v2`;
+//!   this file does not duplicate it.
+//!
+//! - **The `Split` half of this route cannot execute.** `84b1426` made an
+//!   external-source debit on the V1 Custody wire an outright refusal
+//!   (`dclutch-custody-sbf`, `execute_transfer`: `CustodySbfError::Instruction`)
+//!   so that a correct-looking balance delta cannot leave delegated spending
+//!   authority behind; external debits belong on the `DCLCUDQ2` delegated V2
+//!   wire. `liability_basis_v2` still composes `OperationV1::Transfer` with
+//!   `CompartmentV1::External` as the source for a split, so real Custody
+//!   refuses every `DCLLBX02` split. The campaign submits the canonical split
+//!   and records that refusal instead of pretending the route deposits.
+//!
+//! What still executes is `Merge`, so the campaign drives the whole
+//! Claims -> Custody -> token composition through it: two hostile finalized
+//! basis substitutions, a late child refusal that must roll a completed Custody
+//! transfer back, and two committing merges that unwind the aggregate to zero.
+//! The aggregate therefore starts with supply already installed, because with
+//! the split retired at the Custody boundary nothing in this route can mint it.
+//!
+//! Every expected value is computed from production constants, encoders and
+//! kernel planners; none is read back from a run.
 
 use std::{env, fs, path::PathBuf, vec::Vec};
 
@@ -6,7 +43,8 @@ use dclutch_claims_sbf::liability_basis_v2::{
     LIABILITY_BASIS_ACCOUNT_COUNT_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_SCHEMA_RELEASE_ID_V2, LiabilityBasisActionInputV2, LiabilityBasisActionKindV2,
     LiabilityBasisActionV2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
-    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_liability_basis_market_v2,
+    LiabilityBasisSbfErrorV2, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
+    encode_liability_basis_market_v2,
     encode_liability_basis_position_v2, encode_terminal_coordinate_v2,
 };
 use dclutch_claims_sbf::protocol_position_v2::{
@@ -26,7 +64,7 @@ use dclutch_economic_slice_kernel::{
 };
 use dclutch_liability_basis_v2_kernel::product_claims::{
     AdmittedBasisV2, CAPPED_RAMP_BASIS_BYTES_V2, CappedRampBasisInputV2, ClaimsCandidateV2,
-    ContentIdV2, LINKED_CAPPED_RAMP_BASIS_BYTES_V2, TerminalResultV2, encode_capped_ramp_basis_v2,
+    ContentIdV2, LINKED_CAPPED_RAMP_BASIS_BYTES_V2, encode_capped_ramp_basis_v2,
     encode_linked_basis_record_v2,
 };
 use dclutch_market_core_codec::{
@@ -37,6 +75,7 @@ use dclutch_product_contract::{
     capacity::CapacityProfileId,
     product::{InstanceV1, InstanceV1Input, PRODUCT_INSTANCE_SCHEMA_RELEASE_ID_V1},
 };
+use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
@@ -82,6 +121,18 @@ const SCALE: u64 = 10;
 const CLAIM_COUNT: u32 = 2;
 const BASIS_SEMANTIC_ID_DOMAIN_V2: &[u8] = b"dclutch/lbv2/semantic-id/v2";
 const CANDIDATE_DIGEST_DOMAIN_V2: [u8; 27] = *b"dclutch/lbv2/candidate/v2\0\0";
+/// Total collateral the fixture Mint has issued, split between the owner's
+/// external account and the Hoard vault.
+const MINT_SUPPLY: u64 = 100;
+/// Installed aggregate supply and Position balance, one entry per claim.
+///
+/// `AdmittedBasisV2`'s solvency rule is `max(supply) * SCALE <= hoard`, so
+/// three complete sets at `SCALE` ten pin [`INITIAL_HOARD`] at exactly the
+/// maximum pre-resolution liability: the prestate is fully collateralised and
+/// not over-collateralised.
+const INITIAL_CLAIMS: [u64; CLAIM_COUNT as usize] = [3, 3];
+/// Hoard-principal balance backing [`INITIAL_CLAIMS`]: `3 * SCALE`.
+const INITIAL_HOARD: u64 = INITIAL_CLAIMS[0] * SCALE;
 
 struct Artifacts {
     claims: Vec<u8>,
@@ -93,7 +144,6 @@ struct Artifacts {
 
 struct Fixture {
     owner: Keypair,
-    terminal: bool,
     release_set: [u8; 32],
     realm_id: [u8; 32],
     context_id: [u8; 32],
@@ -113,8 +163,6 @@ struct Fixture {
     product_raw: Pubkey,
     product_staging: Pubkey,
     core_market: Pubkey,
-    coordinate_raw: Pubkey,
-    coordinate_staging: Pubkey,
     activation_cache: Pubkey,
     claims_programdata: Pubkey,
     custody_programdata: Pubkey,
@@ -627,8 +675,12 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
     );
     assert_eq!(product_digest, basis.product_id);
 
+    // No live LiabilityBasisV2 action reads a terminal coordinate any more --
+    // the tag that did is retired. The record is still finalized so that a
+    // terminal Core state can carry a real `terminal_receipt` digest rather
+    // than an invented one; nothing else consumes it here.
     let coordinate = encode_terminal_coordinate_v2(1, 2).expect("terminal coordinate");
-    let (coordinate_raw, coordinate_staging, coordinate_digest) = add_finalized_record(
+    let (_, _, coordinate_digest) = add_finalized_record(
         &mut test,
         TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
         &coordinate,
@@ -712,7 +764,11 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
         owner: owner.pubkey().to_bytes(),
         basis_id: basis.semantic_id,
     };
-    let initial_claims = if terminal { [3, 3] } else { [0, 0] };
+    // Both worlds start with supply and a matching Hoard balance. Splitting is
+    // how this route used to mint supply, and real Custody refuses every split
+    // it composes (see the module doc), so an installed prestate is the only
+    // honest way to reach a merge at all.
+    let initial_claims = INITIAL_CLAIMS;
     add_account(
         &mut test,
         market,
@@ -784,9 +840,9 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
     )
     .0;
     let external = Pubkey::new_from_array(if terminal { [0xc6; 32] } else { [0xc5; 32] });
-    let initial_hoard = if terminal { 30 } else { 0 };
-    let initial_external = 100 - initial_hoard;
-    add_account(&mut test, mint, token_program, mint_data(100));
+    let initial_hoard = INITIAL_HOARD;
+    let initial_external = MINT_SUPPLY - initial_hoard;
+    add_account(&mut test, mint, token_program, mint_data(MINT_SUPPLY));
     add_account(
         &mut test,
         external,
@@ -838,7 +894,6 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
         test,
         Fixture {
             owner,
-            terminal,
             release_set,
             realm_id,
             context_id,
@@ -858,8 +913,6 @@ fn fixture(terminal: bool) -> (ProgramTest, Fixture, StateModel) {
             product_raw,
             product_staging,
             core_market,
-            coordinate_raw,
-            coordinate_staging,
             activation_cache,
             claims_programdata: programdata_address(CLAIMS_PROGRAM_ID),
             custody_programdata: programdata_address(CUSTODY_PROGRAM_ID),
@@ -892,43 +945,36 @@ fn plan(
     state: StateModel,
     kind: LiabilityBasisActionKindV2,
     quantity: u64,
-    claim_index: u32,
 ) -> (ClaimsCandidateV2, [u64; 2], [u64; 2]) {
     let basis = admitted_basis(fixture);
     let mut supplies = [0; 2];
     let mut balances = [0; 2];
-    let candidate = match kind {
-        LiabilityBasisActionKindV2::Split => basis.plan_split_into(
+    let planned = match kind {
+        LiabilityBasisActionKindV2::Split => Some(basis.plan_split_into(
             &state.supplies,
             &state.balances,
             quantity,
             state.hoard,
             &mut supplies,
             &mut balances,
-        ),
-        LiabilityBasisActionKindV2::Merge => basis.plan_merge_into(
+        )),
+        LiabilityBasisActionKindV2::Merge => Some(basis.plan_merge_into(
             &state.supplies,
             &state.balances,
             quantity,
             state.hoard,
             &mut supplies,
             &mut balances,
-        ),
-        LiabilityBasisActionKindV2::TerminalRedeem => basis.plan_terminal_redeem_into(
-            TerminalResultV2::RationalCoordinate {
-                numerator: 1,
-                denominator: 2,
-            },
-            claim_index,
-            &state.supplies,
-            &state.balances,
-            quantity,
-            state.hoard,
-            &mut supplies,
-            &mut balances,
-        ),
-    }
-    .expect("pure Claims candidate");
+        )),
+        // The kernel still exposes `plan_terminal_redeem_into`, but no
+        // LiabilityBasisV2 action can reach it: `LiabilityBasisActionV2::new`
+        // refuses the tag. Planning one here would be a fixture inventing a
+        // transition the program will not perform.
+        LiabilityBasisActionKindV2::TerminalRedeem => None,
+    };
+    let candidate = planned
+        .expect("TerminalRedeem is retired; encode it with retired_terminal_redeem_data")
+        .expect("pure Claims candidate");
     (candidate, supplies, balances)
 }
 
@@ -937,11 +983,14 @@ fn build_action(
     state: StateModel,
     kind: LiabilityBasisActionKindV2,
     quantity: u64,
-    claim_index: u32,
     basis_raw: Pubkey,
     basis_staging: Pubkey,
 ) -> BuiltAction {
-    let (candidate, supplies, balances) = plan(fixture, state, kind, quantity, claim_index);
+    let (candidate, supplies, balances) = plan(fixture, state, kind, quantity);
+    // Production requires a canonical zero claim index for both live kinds and
+    // refuses anything else at construction; the field exists only for the
+    // retired terminal tag.
+    let claim_index = 0;
     let action = LiabilityBasisActionV2::new(LiabilityBasisActionInputV2 {
         kind,
         custody_present: true,
@@ -1053,16 +1102,12 @@ fn build_action(
         &CLAIMS_PROGRAM_ID,
     )
     .0;
-    let coordinate = if fixture.terminal {
-        fixture.coordinate_raw
-    } else {
-        CORE_PROGRAM_ID
-    };
-    let coordinate_staging = if fixture.terminal {
-        fixture.coordinate_staging
-    } else {
-        CORE_PROGRAM_ID
-    };
+    // `authenticate_open_core` requires both terminal-coordinate slots to be
+    // the Core program's own address for Split and Merge -- the only two kinds
+    // that can be built at all. There is no longer a shape in which they carry
+    // a record.
+    let coordinate = CORE_PROGRAM_ID;
+    let coordinate_staging = CORE_PROGRAM_ID;
     let metas = vec![
         AccountMeta::new_readonly(fixture.owner.pubkey(), true),
         AccountMeta::new(fixture.market, false),
@@ -1161,7 +1206,22 @@ fn u64_at(bytes: &[u8], offset: usize) -> u64 {
     )
 }
 
-async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction) -> u64 {
+const PACKET_DATA_BYTES: usize = 1_232;
+
+/// The extent of a legacy or v0 message once signed, checked against Solana's
+/// packet maximum. `solana-program-test` submits no packet and cannot enforce
+/// this itself -- Found31 was ten bytes over and survived every fixture test --
+/// so the campaign measures it directly.
+fn wire_extent(signatures: usize, message: &[u8]) -> usize {
+    let extent = 1 + signatures * 64 + message.len();
+    assert!(
+        extent <= PACKET_DATA_BYTES,
+        "the transaction serialises to {extent} bytes, past Solana's {PACKET_DATA_BYTES}-byte packet maximum"
+    );
+    extent
+}
+
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) -> u64 {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -1173,20 +1233,46 @@ async fn process_legacy(context: &mut ProgramTestContext, instruction: Instructi
         &[&context.payer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed ALT transaction")
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await
         .expect("ALT lifecycle processing");
-    assert!(processed.result.is_ok(), "ALT lifecycle must commit");
-    processed
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, units) = processed
         .metadata
-        .map_or(0, |metadata| metadata.compute_units_consumed)
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    assert!(accepted, "ALT lifecycle must commit");
+    units
 }
 
 async fn create_live_lookup_table(
     context: &mut ProgramTestContext,
     instructions: &[Instruction],
+    label_prefix: &str,
 ) -> (Pubkey, Vec<Pubkey>) {
     let payer = context.payer.pubkey();
     let fixture_signer = fixture_signer(instructions);
@@ -1213,11 +1299,17 @@ async fn create_live_lookup_table(
         .warp_to_slot(clock.slot + 1)
         .expect("recent ALT slot");
     let (create, table) = create_lookup_table(payer, payer, clock.slot);
-    process_legacy(context, create).await;
-    for chunk in addresses.chunks(20) {
+    process_legacy(
+        context,
+        create,
+        &format!("{label_prefix}: create lookup table"),
+    )
+    .await;
+    for (index, chunk) in addresses.chunks(20).enumerate() {
         process_legacy(
             context,
             extend_lookup_table(table, payer, Some(payer), chunk.to_vec()),
+            &format!("{label_prefix}: extend lookup table {index}"),
         )
         .await;
     }
@@ -1246,6 +1338,7 @@ async fn submit_v0(
     instruction: Instruction,
     table: Pubkey,
     addresses: &[Pubkey],
+    label: &str,
 ) -> Result<(bool, Vec<String>), BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
@@ -1262,15 +1355,42 @@ async fn submit_v0(
     );
     let transaction = VersionedTransaction::try_new(message, &[&context.payer, &fixture.owner])
         .expect("signed v0 transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .ok_or(BanksClientError::ClientError("unsigned transaction"))?
+        .to_string();
+    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
-    let logs = processed
+    let accepted = processed.result.is_ok();
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
         .metadata
-        .map(|metadata| metadata.log_messages)
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
         .unwrap_or_default();
-    Ok((processed.result.is_ok(), logs))
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Ok((accepted, logs))
 }
 
 async fn assert_model(context: &mut ProgramTestContext, fixture: &Fixture, state: StateModel) {
@@ -1290,63 +1410,245 @@ async fn assert_model(context: &mut ProgramTestContext, fixture: &Fixture, state
         state.custody_revision
     );
     assert_eq!(token_amount(&actual.hoard), state.hoard);
-    assert_eq!(token_amount(&actual.external), 100 - state.hoard);
+    assert_eq!(token_amount(&actual.external), MINT_SUPPLY - state.hoard);
 }
 
+/// The custom program error the runtime reported last, which is the one the
+/// whole transaction failed with.
+///
+/// Read exactly the way the census reads it
+/// (`tools/gauntlet/census/src/ledger.rs`, `reported_custom_code`), so a case
+/// asserting a code here and a binding asserting one there cannot disagree
+/// about which of several nested refusals counted.
+fn reported_custom_code(logs: &[String]) -> Option<u32> {
+    const MARKER: &str = "custom program error: 0x";
+    logs.iter().rev().find_map(|line| {
+        let index = line.find(MARKER)?;
+        let digits: String = line
+            .get(index + MARKER.len()..)?
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .collect();
+        u32::from_str_radix(&digits, 16).ok()
+    })
+}
+
+/// The single encoded byte `LiabilityBasisActionV2` uses for the action kind.
+///
+/// Derived rather than restated: two actions differing only in `kind` are run
+/// through the production encoder and the sole differing index is taken. The
+/// offset itself is private to `liability_basis_v2.rs`, and a copy of it here
+/// would be a mirror that survives the layout moving.
+fn action_kind_offset() -> usize {
+    let template = |kind| LiabilityBasisActionInputV2 {
+        kind,
+        custody_present: true,
+        expected_market_revision: 0,
+        expected_position_revision: 0,
+        quantity: 1,
+        claim_index: 0,
+        expected_custody_revision: 0,
+        request_nonce: 0,
+    };
+    let split = LiabilityBasisActionV2::new(template(LiabilityBasisActionKindV2::Split))
+        .expect("canonical split action")
+        .to_bytes();
+    let merge = LiabilityBasisActionV2::new(template(LiabilityBasisActionKindV2::Merge))
+        .expect("canonical merge action")
+        .to_bytes();
+    let differing: Vec<usize> = split
+        .iter()
+        .zip(merge.iter())
+        .enumerate()
+        .filter_map(|(index, (left, right))| (left != right).then_some(index))
+        .collect();
+    assert_eq!(
+        differing.len(),
+        1,
+        "two actions differing only in kind must differ in exactly one encoded byte"
+    );
+    differing.first().copied().expect("the action kind byte")
+}
+
+/// Instruction data carrying the retired `TerminalRedeem` tag.
+///
+/// The tag cannot be built through `LiabilityBasisActionV2::new` at all, which
+/// is precisely the fact under test, so the canonical encoding of an accepted
+/// action is taken from production and its kind byte -- and only its kind byte
+/// -- is set to the retired discriminant. Everything else on the wire stays
+/// exactly what the program accepts, so the refusal is attributable to the tag.
+fn retired_terminal_redeem_data(accepted: &Instruction) -> Vec<u8> {
+    let offset = action_kind_offset();
+    let mut data = accepted.data.clone();
+    let byte = data.get_mut(offset).expect("encoded action kind");
+    assert_ne!(
+        *byte,
+        LiabilityBasisActionKindV2::TerminalRedeem as u8,
+        "the accepted action must not already carry the retired tag"
+    );
+    *byte = LiabilityBasisActionKindV2::TerminalRedeem as u8;
+    data
+}
+
+/// `CustodySbfError::Instruction`, the refusal real Custody raises for an
+/// external-source debit arriving on the V1 `CustodyRequestV1` wire.
+///
+/// Stated rather than imported: `dclutch-custody-sbf` is a second program
+/// crate and this campaign has no business taking a code dependency on one to
+/// read a discriminant. Provenance:
+/// `programs/dclutch-custody-sbf/src/lib.rs`, `CustodySbfError::Instruction =
+/// 0`, raised at the head of `execute_transfer` whenever
+/// `request.source_compartment == CompartmentV1::External`. The census checks
+/// the same code against the enumerated Custody taxonomy rather than against
+/// this constant (`tools/gauntlet/claims-liability-basis-v2/bindings.json`).
+const CUSTODY_INSTRUCTION_REFUSAL: u32 = 0;
+
 #[tokio::test]
-async fn real_sbf_liability_basis_lifecycle_and_hostile_joins_are_atomic() {
+async fn real_sbf_liability_basis_merge_lifecycle_and_hostile_joins_are_atomic() {
     let (test, fixture, initial) = fixture(false);
     let mut context = test.start_with_context().await;
+
     let canonical = build_action(
         &fixture,
         initial,
-        LiabilityBasisActionKindV2::Split,
-        3,
-        0,
+        LiabilityBasisActionKindV2::Merge,
+        1,
         fixture.linked_basis_raw,
         fixture.linked_basis_staging,
     );
-    assert_eq!(canonical.request.amount, 30);
+    assert_eq!(
+        canonical.request.amount, SCALE,
+        "one complete set withdraws exactly SCALE collateral"
+    );
+    assert_eq!(
+        canonical.request.source_compartment,
+        CompartmentV1::HoardPrincipal,
+        "a merge debits the Hoard, which is the compartment the V1 wire still carries"
+    );
+    assert_eq!(
+        canonical.request.destination_compartment,
+        CompartmentV1::External
+    );
+    let unwind = build_action(
+        &fixture,
+        canonical.after,
+        LiabilityBasisActionKindV2::Merge,
+        2,
+        fixture.linked_basis_raw,
+        fixture.linked_basis_staging,
+    );
+    assert_eq!(unwind.after.supplies, [0, 0]);
+    assert_eq!(unwind.after.hoard, 0);
+
     let wrong_product = build_action(
         &fixture,
         initial,
-        LiabilityBasisActionKindV2::Split,
-        3,
-        0,
+        LiabilityBasisActionKindV2::Merge,
+        1,
         fixture.other_product_basis_raw,
         fixture.other_product_basis_staging,
     );
     let changed_payoff = build_action(
         &fixture,
         initial,
-        LiabilityBasisActionKindV2::Split,
-        3,
-        0,
+        LiabilityBasisActionKindV2::Merge,
+        1,
         fixture.changed_payoff_basis_raw,
         fixture.changed_payoff_basis_staging,
     );
+
+    // The split this route composes is the one real Custody refuses. It is
+    // built canonically -- Claims accepts the request bytes and signs the CPI
+    // -- so what the case records is a Custody boundary refusal, not a Claims
+    // one.
+    let retired_split = build_action(
+        &fixture,
+        initial,
+        LiabilityBasisActionKindV2::Split,
+        3,
+        fixture.linked_basis_raw,
+        fixture.linked_basis_staging,
+    );
+    assert_eq!(
+        retired_split.request.source_compartment,
+        CompartmentV1::External,
+        "a split still debits External on the V1 wire, which is the refused shape"
+    );
+
     let instructions = [
         canonical.direct.clone(),
         canonical.wrapper.clone(),
+        unwind.direct.clone(),
         wrong_product.direct.clone(),
         changed_payoff.direct.clone(),
+        retired_split.direct.clone(),
     ];
-    let (table, addresses) = create_live_lookup_table(&mut context, &instructions).await;
+    let (table, addresses) =
+        create_live_lookup_table(&mut context, &instructions, "claims liability-basis lifecycle")
+            .await;
     let before = snapshot(&mut context, &fixture).await;
-    for hostile in [wrong_product.direct, changed_payoff.direct] {
-        let (accepted, _) = submit_v0(&mut context, &fixture, hostile, table, &addresses)
-            .await
-            .expect("hostile transaction");
-        assert!(
-            !accepted,
-            "hostile finalized basis substitution must refuse"
+
+    for (hostile, label) in [
+        (
+            wrong_product.direct,
+            "claims liability-basis lifecycle: merge against a substituted Product basis",
+        ),
+        (
+            changed_payoff.direct,
+            "claims liability-basis lifecycle: merge against a changed payoff basis",
+        ),
+    ] {
+        let (accepted, logs) =
+            submit_v0(&mut context, &fixture, hostile, table, &addresses, label)
+                .await
+                .expect("hostile transaction");
+        assert!(!accepted, "hostile finalized basis substitution must refuse");
+        assert_eq!(
+            reported_custom_code(&logs),
+            Some(LiabilityBasisSbfErrorV2::ProductLink as u32),
+            "a substituted finalized basis is a Product-link refusal: {logs:#?}"
         );
         assert_eq!(snapshot(&mut context, &fixture).await, before);
     }
 
-    let (accepted, logs) = submit_v0(&mut context, &fixture, canonical.wrapper, table, &addresses)
-        .await
-        .expect("late rollback transaction");
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        &fixture,
+        retired_split.direct,
+        table,
+        &addresses,
+        "claims liability-basis lifecycle: the composed external-debit split refuses at Custody",
+    )
+    .await
+    .expect("retired split transaction");
+    assert!(
+        !accepted,
+        "an external-source debit on the V1 Custody wire must refuse"
+    );
+    assert!(
+        logs.iter().any(|log| log
+            == &format!(
+                "Program {CUSTODY_PROGRAM_ID} failed: custom program error: {CUSTODY_INSTRUCTION_REFUSAL:#x}"
+            )),
+        "real Custody must be the program that refuses the split: {logs:#?}"
+    );
+    assert_eq!(
+        reported_custom_code(&logs),
+        Some(CUSTODY_INSTRUCTION_REFUSAL),
+        "the refusal Claims propagates is Custody's own"
+    );
+    assert_eq!(snapshot(&mut context, &fixture).await, before);
+
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        &fixture,
+        canonical.wrapper,
+        table,
+        &addresses,
+        "claims liability-basis lifecycle: caller refuses after a complete merge",
+    )
+    .await
+    .expect("late rollback transaction");
     assert!(!accepted, "test wrapper must deliberately refuse late");
     assert!(
         logs.iter()
@@ -1360,60 +1662,106 @@ async fn real_sbf_liability_basis_lifecycle_and_hostile_joins_are_atomic() {
     );
     assert_eq!(snapshot(&mut context, &fixture).await, before);
 
-    let (accepted, _) = submit_v0(&mut context, &fixture, canonical.direct, table, &addresses)
-        .await
-        .expect("split transaction");
-    assert!(accepted, "real split composition must commit");
-    assert_model(&mut context, &fixture, canonical.after).await;
-
-    let merge = build_action(
-        &fixture,
-        canonical.after,
-        LiabilityBasisActionKindV2::Merge,
-        1,
-        0,
-        fixture.linked_basis_raw,
-        fixture.linked_basis_staging,
-    );
-    let (merge_table, merge_addresses) =
-        create_live_lookup_table(&mut context, std::slice::from_ref(&merge.direct)).await;
-    let (accepted, _) = submit_v0(
+    let (accepted, logs) = submit_v0(
         &mut context,
         &fixture,
-        merge.direct,
-        merge_table,
-        &merge_addresses,
+        canonical.direct,
+        table,
+        &addresses,
+        "claims liability-basis lifecycle: canonical merge commits",
     )
     .await
     .expect("merge transaction");
-    assert!(accepted, "real merge composition must commit");
-    assert_model(&mut context, &fixture, merge.after).await;
+    assert!(accepted, "real merge composition must commit: {logs:#?}");
+    assert_model(&mut context, &fixture, canonical.after).await;
+
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        &fixture,
+        unwind.direct,
+        table,
+        &addresses,
+        "claims liability-basis lifecycle: a second merge unwinds the aggregate to zero",
+    )
+    .await
+    .expect("unwind transaction");
+    assert!(accepted, "the unwinding merge must commit: {logs:#?}");
+    assert_model(&mut context, &fixture, unwind.after).await;
 }
 
+/// The retired terminal tag, and the fact that nothing replaces it here.
+///
+/// Both cases run against a TERMINAL Core Market -- the exact world the
+/// retired action was designed for -- so neither refusal can be dismissed as a
+/// wrong-phase accident of the fixture. Product V3 terminal settlement now
+/// belongs entirely to `rational_terminal_v3`, whose real-ELF coverage lives in
+/// `rational_representation_v2_program_test.rs`; this case exists to record
+/// that `DCLLBX02` has no terminal action at all, not to re-test redemption.
 #[tokio::test]
-async fn real_sbf_terminal_ramp_uses_exact_complement_and_custody() {
+async fn real_sbf_retired_terminal_redeem_and_terminal_merge_both_refuse() {
     let (test, fixture, initial) = fixture(true);
     let mut context = test.start_with_context().await;
-    let terminal = build_action(
+
+    let merge = build_action(
         &fixture,
         initial,
-        LiabilityBasisActionKindV2::TerminalRedeem,
-        2,
-        0,
+        LiabilityBasisActionKindV2::Merge,
+        1,
         fixture.linked_basis_raw,
         fixture.linked_basis_staging,
     );
-    assert_eq!(terminal.request.amount, 10, "floor(10/2) times two claims");
+    let mut retired = merge.direct.clone();
+    retired.data = retired_terminal_redeem_data(&merge.direct);
+    assert_eq!(
+        retired.data.len(),
+        merge.direct.data.len(),
+        "the retired tag differs from an accepted action in exactly one byte"
+    );
+
+    let instructions = [merge.direct.clone(), retired.clone()];
     let (table, addresses) =
-        create_live_lookup_table(&mut context, std::slice::from_ref(&terminal.direct)).await;
-    let (accepted, logs) = submit_v0(&mut context, &fixture, terminal.direct, table, &addresses)
-        .await
-        .expect("terminal transaction");
-    assert!(accepted, "real terminal composition must commit: {logs:#?}");
-    assert_model(&mut context, &fixture, terminal.after).await;
-    assert_eq!(terminal.after.supplies, [1, 3]);
-    assert_eq!(terminal.after.balances, [1, 3]);
-    assert_eq!(terminal.after.hoard, 20);
+        create_live_lookup_table(&mut context, &instructions, "claims liability-basis terminal")
+            .await;
+    let before = snapshot(&mut context, &fixture).await;
+
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        &fixture,
+        retired,
+        table,
+        &addresses,
+        "claims liability-basis terminal: the retired TerminalRedeem tag refuses",
+    )
+    .await
+    .expect("retired terminal transaction");
+    assert!(!accepted, "the retired terminal tag must refuse");
+    assert_eq!(
+        reported_custom_code(&logs),
+        Some(LiabilityBasisSbfErrorV2::Instruction as u32),
+        "a retired action tag is refused as an instruction, at decode: {logs:#?}"
+    );
+    assert_eq!(snapshot(&mut context, &fixture).await, before);
+
+    let (accepted, logs) = submit_v0(
+        &mut context,
+        &fixture,
+        merge.direct,
+        table,
+        &addresses,
+        "claims liability-basis terminal: a merge against a terminal Market refuses",
+    )
+    .await
+    .expect("terminal merge transaction");
+    assert!(
+        !accepted,
+        "Split and Merge both require an OPEN Core Market"
+    );
+    assert_eq!(
+        reported_custom_code(&logs),
+        Some(LiabilityBasisSbfErrorV2::ProductLink as u32),
+        "a non-Open phase is a Product-link refusal: {logs:#?}"
+    );
+    assert_eq!(snapshot(&mut context, &fixture).await, before);
 }
 
 struct ProtocolFixture {
@@ -1830,7 +2178,12 @@ async fn real_sbf_protocol_position_admission_is_zero_atomic_and_release_bound()
         wrong_market.clone(),
         wrong_owner.clone(),
     ];
-    let (table, addresses) = create_live_lookup_table(&mut context, &instructions).await;
+    let (table, addresses) = create_live_lookup_table(
+        &mut context,
+        &instructions,
+        "claims protocol-position admission",
+    )
+    .await;
     let before = protocol_snapshot(&mut context, &fixture).await;
 
     for hostile in [wrong_release, wrong_market, wrong_owner] {

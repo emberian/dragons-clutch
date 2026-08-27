@@ -20,15 +20,15 @@ use dclutch_market_core_codec::{
     CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity,
     MarketCoreStateSeedsV2, Phase as CorePhase, Role, STATE_BYTES,
 };
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     account_info::AccountInfo,
     entrypoint,
     entrypoint::ProgramResult,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, invoke_signed, set_return_data},
+    program::{invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -901,26 +901,30 @@ fn authenticate_releases(
         CallerRole::Core => ExecutionRoleV1::Core,
         CallerRole::Trading => ExecutionRoleV1::Trading,
     };
-    let caller = reauthenticate(
+    let release_set_id = plan.release_set_id();
+    let caller = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         caller_role,
         accounts.caller_program,
         accounts.caller_programdata,
+        &release_set_id,
     )?;
-    let claims = reauthenticate(
+    let claims = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         ExecutionRoleV1::Claims,
         accounts.claims_program,
         accounts.claims_programdata,
+        &release_set_id,
     )?;
-    let core = reauthenticate(
+    let core = authenticate_activated_role(
         accounts.registry,
         accounts.cache,
         ExecutionRoleV1::Core,
         accounts.core_program,
         accounts.core_programdata,
+        &release_set_id,
     )?;
     for receipt in [caller, claims, core] {
         if receipt.execution_release_set_id().as_bytes() != &plan.release_set_id() {
@@ -930,44 +934,32 @@ fn authenticate_releases(
     Ok(())
 }
 
-pub(crate) fn reauthenticate<'info>(
-    registry: &AccountInfo<'info>,
-    cache: &AccountInfo<'info>,
+/// Authenticate one activated role directly out of the Registry-owned cache.
+///
+/// This route used to CPI `RegistryInstructionV1::Reauthenticate`. Under a
+/// Registry continuation the Registry sits at CPI depth one and Claims runs at
+/// three, so that invocation was reentrancy: Solana refused it after Claims had
+/// spent 16,033 CU and before it did any work, which made every child of a
+/// Registry-entered continuation unreachable for every family.
+///
+/// There is no fallback path and there must not be one. The fact the Registry
+/// would have returned is written in a Registry-OWNED account at a
+/// Registry-DERIVED address that this frame already carries, and
+/// `dclutch-registry-activation-auth-v1` is literally the code the Registry's
+/// own handler runs on it. `release_set_id` is the activation generation this
+/// action executes under; the cache address is derived from it, so a cache
+/// belonging to another release set -- another Market's, included -- is refused
+/// before a byte of it is read.
+pub(crate) fn authenticate_activated_role(
+    registry: &AccountInfo<'_>,
+    cache: &AccountInfo<'_>,
     role: ExecutionRoleV1,
-    program: &AccountInfo<'info>,
-    programdata: &AccountInfo<'info>,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    release_set_id: &[u8; 32],
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    let instruction = Instruction {
-        program_id: *registry.key,
-        accounts: Vec::from([
-            AccountMeta::new_readonly(*cache.key, false),
-            AccountMeta::new_readonly(*program.key, false),
-            AccountMeta::new_readonly(*programdata.key, false),
-        ]),
-        data: RegistryInstructionV1::Reauthenticate(role)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            cache.clone(),
-            program.clone(),
-            programdata.clone(),
-            registry.clone(),
-        ],
-    )
-    .map_err(|_| ClaimsSbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(ClaimsSbfError::Release)?;
-    if producer != *registry.key {
-        return Err(ClaimsSbfError::Release.into());
-    }
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| ClaimsSbfError::Release)?;
-    if receipt.role() != role || receipt.program().as_bytes() != &program.key.to_bytes() {
-        return Err(ClaimsSbfError::Release.into());
-    }
-    Ok(receipt)
+    authenticate_activated_role_v1(registry, cache, release_set_id, role, program, programdata)
+        .map_err(|_| ClaimsSbfError::Release.into())
 }
 
 fn authenticate_economic_accounts(

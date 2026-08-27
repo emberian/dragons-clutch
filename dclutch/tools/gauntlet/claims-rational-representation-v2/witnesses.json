@@ -1,0 +1,47 @@
+{
+  "campaign": "claims-rational-representation-v2-programtest",
+  "witnesses": [
+    {
+      "id": "rational-representation-v2-fits-the-compute-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].compute_units_consumed | select(. != null)] | max | (. <= 1400000) | tostring",
+      "expect": "true",
+      "provenance": "Solana's per-transaction MAX_COMPUTE_UNIT_LIMIT is 1,400,000 compute units. It is the chain's limit, not ours. The campaign sets ProgramTest's ceiling to exactly that value and never raises it."
+    },
+    {
+      "id": "rational-representation-v2-fits-the-packet-maximum",
+      "kind": "evidence-jq",
+      "query": "[.transactions[].wire_bytes | select(. != null)] | max | (. <= 1232) | tostring",
+      "expect": "true",
+      "provenance": "Solana's legacy packet maximum is 1,232 bytes (PACKET_DATA_BYTES). ProgramTest submits no packet and cannot enforce it, so a frame past the limit survives a fast lane untouched -- Found31 was ten bytes over and survived every fixture test in the tree. This campaign serialises every transaction it submits over a real activated Address Lookup Table and records the extent (the test's own PACKET_LIMIT constant); this witness checks the largest against Solana's stated limit independently."
+    },
+    {
+      "id": "rational-representation-v2-measured-every-transaction",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.wire_bytes == null)] | length | tostring",
+      "expect": "0",
+      "provenance": "A `wire_bytes` of null says the campaign did not measure, which is honest but is not a claim that the frame fits. This asserts that no transaction in this campaign is unmeasured."
+    },
+    {
+      "id": "every-rational-representation-v2-refusal-reached-a-programs-own-taxonomy",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.error != null) | select([.logs[] | select(contains(\"custom program error: 0x\"))] | length == 0)] | length | tostring",
+      "expect": "0",
+      "provenance": "The Solana runtime reports a privilege, frame, or account refusal it decides ITSELF as a bare InstructionError with no `custom program error:` log line; that line appears only when a program returned ProgramError::Custom. Every refusal this campaign claims -- named or unnamed_refusal -- is a program decision, so a bare runtime refusal appearing here would mean a hostile case stopped being about a program."
+    },
+    {
+      "id": "the-canonical-token-2022-v11-elf-authenticated",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | endswith(\"commits\")) | .logs[] | select(. == \"Program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb success\")] | length | tostring",
+      "expect": "11",
+      "provenance": "This campaign's Token-2022 fixture is the byte-for-byte canonical, cross-host-reproducible spl-token-2022 11.0.0 ELF pinned in programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance (SHA-256 e2acdfb750881462ad613a15cc9c54ae17ce066580e867e1e635fbdfe01f5697), authenticated at TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb -- Solana's real, deployed Token-2022 program address, which only the canonical artifact can occupy under the fixture's own digest check. This counts the runtime's own success logs for it across the six committing transactions (IssueStructured 3, UnwrapStructured 3, Denominate 1, Reconstitute 1, winning terminal 2, losing terminal 1 -- each mint/transfer/burn CPI logs its own success line)."
+    },
+    {
+      "id": "the-late-refusal-let-claims-custody-and-token-run-first",
+      "kind": "evidence-jq",
+      "query": ".transactions[] | select(.label == \"claims rational-representation-v2: caller refuses after a complete terminal redemption\") | (if .error == null then \"committed\" else ([.logs[] | select(. == \"Program GCkWCknJ46pyPNHC9DPjTxedvjLHYJUVioxe7X5o6xa4 success\")] | length | tostring) end)",
+      "expect": "1",
+      "provenance": "A rollback case is only evidence if the thing being rolled back actually happened. This asserts, from the runtime's own log, that a transaction the ledger records as FAILED contains a completed Claims invocation (which itself only returns after real Custody and real Token-2022 both succeeded, per the terminal redemption's own account frame). The `if .error == null` guard makes a campaign that accidentally let the transaction commit fail this witness rather than pass it."
+    }
+  ]
+}

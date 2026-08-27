@@ -57,10 +57,10 @@ pub mod direct_inline_v3;
 pub mod direct_successor;
 /// Chain-derived unsigned Realm and Market foundation workflows.
 pub mod foundation;
+/// Chain-derived General V3 capability activation planning.
+pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.
 pub mod general_hot_v3;
-/// Chain-derived unsigned General physical-controller workflows.
-pub mod general_physical;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
 /// Lifecycle-scoped RentCredit creation, sweeping, and close evidence.
@@ -1046,10 +1046,13 @@ mod tests {
             capacity_id,
         );
         let primary_source_id = source_id(hash(&source.to_bytes()).to_bytes());
+        // Width, not an instant. The upper bound stays where it was because
+        // the failure walk's deadline is `end + max_age`; what this fixture
+        // must stop asserting is that a terminal window is one second wide.
         let window = WindowSpecV1::new(
             primary_source_id,
             WindowKind::Terminal,
-            10,
+            1,
             10,
             10,
             2,

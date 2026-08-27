@@ -1,0 +1,48 @@
+{
+  "campaign": "journey",
+  "note": "Evaluated by the SHARED tools/gauntlet/tier1/check-witnesses.sh, called a second time with the journey transcript as its CONTEXT file. Tier 1's own witness set runs first against the same evidence with the bootstrap plan as context; the evaluator takes one context file, so two calls is the supported shape and forking it would not be. `plan-jq` therefore reads the TRANSCRIPT here.",
+  "witnesses": [
+    {
+      "id": "collateral-closes-against-the-token-programs-own-supply",
+      "kind": "plan-jq",
+      "query": "[.observations[] | select(.tracked_collateral != .mint_supply)] | length | tostring",
+      "expect": "0",
+      "provenance": "SPL Token and Token-2022 maintain `Mint.supply` as the sum of every token account's `amount`; the founding revokes the mint authority immediately after minting (SetAuthority MintTokens -> None), so the supply is frozen for the whole journey. The equality is therefore against the TOKEN PROGRAM's accounting, which is a second implementation the protocol does not control, and not against any dClutch belief. A dClutch defect that moved an atom into an account this journey does not name would leave the tracked sum short of a supply that did not change."
+    },
+    {
+      "id": "the-hoard-backs-the-worst-outcome-at-the-published-claim-unit",
+      "kind": "plan-jq",
+      "query": "[.observations[].verdicts[] | select(.law == \"L4\" and .status == \"violated\")] | length | tostring",
+      "expect": "0",
+      "provenance": "crates/dclutch-market-contract/src/market.rs: 'Each state cell owns one native claim. A complete set contains exactly one unit of every cell claim and is backed by one Hoard collateral atom.' The claim unit the law multiplies by is read from the Registry's published linked ProductBasisV3 record (`payout_scale`), NOT from the Hoard divided by the outstanding supply — deriving it from the founding poststate would make this assert that the founding equals itself."
+    },
+    {
+      "id": "no-conservation-law-was-violated-at-any-boundary",
+      "kind": "plan-jq",
+      "query": ".conservation_verdict",
+      "expect": "conserved",
+      "provenance": "The six laws are stated in tools/gauntlet/journey/src/ledger.rs with their sources: L1/L2 against the token program's frozen supply, L3 against the Claims aggregate's own liability record versus the Positions it owes, L4 against the written complete-set invariant above, L5 against each stage's DECLARED delta stated before the stage runs, L6 against the rent a closed account carried. A law that cannot apply at a boundary records itself `inapplicable` with a reason and is counted, so this cannot go green by a law quietly ceasing to apply."
+    },
+    {
+      "id": "one-finalized-holder-transaction-per-declared-holder",
+      "kind": "evidence-jq",
+      "query": "[.transactions[] | select(.label | startswith(\"journey: open and fund synthetic holder\")) | select(.error == null)] | length | tostring",
+      "expect_from": ".holder_count | tostring",
+      "provenance": "A cross-check between two independent derivations: the load knob the campaign was invoked with, carried in the transcript, against the chain's own count of finalized error-free transactions carrying that label. Neither side reads the other. A holder that failed to open, or a retry that opened two, moves one side and not the other."
+    },
+    {
+      "id": "the-atomic-founding-leaves-an-admissible-resolution-prestate",
+      "kind": "plan-jq",
+      "query": "[.markets[] | select(.label == \"founding_market\")] | .[0] | \"\\(.phase)+\\(.readiness)+\\(.terminal_receipt)\"",
+      "expect": "Open+Consumed+false",
+      "provenance": "The prestate an atomic founding leaves, pinned on chain. DCLTGMF1's commit-last stage is `open_series_market` (crates/dclutch-market-core-codec/src/generated.rs:922), which goes Founding+Prepaid -> Open+Consumed in ONE transition and never passes through Ready, so the Market this journey founds is Open, Consumed, and carries no terminal receipt. That combination USED to be a dead end: the only route that creates the SourceResolutionStateV2 every terminal receipt consumes admitted Founding+Prepaid alone, which made every atomically founded Market permanently unresolvable, and the first run of this tier reported exactly that. `edfcb24` admitted the second prestate and `60a2101` walked it end to end against the compiled ELFs. The gate is now `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386): (Founding, Prepaid) OR (Open, Consumed), and refused outright once a terminal receipt exists. So this witness now pins the OPPOSITE fact from the one it was written for -- the founded Market sits on an admissible resolution prestate -- and the `false` in the expected value is what keeps it admissible rather than already spent."
+    },
+    {
+      "id": "the-found31-market-is-the-second-resolution-prestate",
+      "kind": "plan-jq",
+      "query": "[.markets[] | select(.label == \"found31_market\")] | .[0] | \"\\(.phase)+\\(.readiness)\"",
+      "expect": "Founding+Prepaid",
+      "provenance": "The same gate read the other way. `resolution_fund_prestate_admissible` (programs/dclutch-core-sbf/src/resolution.rs:386) admits (Founding, Prepaid) as well as (Open, Consumed), and this campaign leaves exactly one Market of the first kind on the same ledger -- the canonical Found31 Market, which the atomic founding does not consume. A Source/provider tier therefore has BOTH admissible prestates sitting on one ledger and needs no new campaign to reach either; it needs this one. The witness pins that the prestate is really there, so the claim does not decay into a plan."
+    }
+  ]
+}

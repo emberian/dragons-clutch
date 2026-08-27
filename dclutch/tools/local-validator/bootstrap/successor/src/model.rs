@@ -10,6 +10,19 @@ pub(crate) struct RunProgramInput {
     pub(crate) elf_sha256: String,
     pub(crate) semantic_release_id: String,
     pub(crate) attestation: String,
+    /// Additive and optional. A complete Loader V3 `ProgramData` account body
+    /// observed on a cluster: present, the role's release is minted from that
+    /// observation and its deployment slot is decoded out of it. This is the
+    /// deploy-day shape.
+    #[serde(default)]
+    pub(crate) observed_programdata: Option<String>,
+    /// Additive and optional, and **local rehearsal only**. The slot written
+    /// into the genesis install this plan materializes, so a local campaign can
+    /// exercise a nonzero deployment slot end to end instead of the zero a
+    /// genesis install would otherwise have. It is refused together with
+    /// `observed_programdata`: an observation is not a caller's to overwrite.
+    #[serde(default)]
+    pub(crate) genesis_deployment_slot: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -30,6 +43,13 @@ pub(crate) struct SuccessorRunSpec {
     pub(crate) custody: RunProgramInput,
     pub(crate) rent_credit: RunProgramInput,
     pub(crate) market: MarketRunInput,
+    /// Additive and optional: absent means `"genesis"`, which is exactly the
+    /// behaviour every v2 spec written before this field had. `"transaction"`
+    /// removes the nine infrastructure record bodies from genesis and makes
+    /// the supervisor publish them on chain, which is the only shape a real
+    /// cluster can reach.
+    #[serde(default)]
+    pub(crate) record_publication: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -67,6 +87,19 @@ pub(crate) struct ProgramPin {
     pub(crate) semantic_release_id: String,
     pub(crate) artifact_release_id: String,
     pub(crate) upgrade_authority: Option<String>,
+    /// The slot this role's `ArtifactReleaseV1` binds, hostile-decoded out of a
+    /// Loader V3 `ProgramData` account image by the same reader the on-chain
+    /// `authenticate_deployment` uses. Never a caller-supplied number.
+    pub(crate) deployment_slot: u64,
+    /// `"genesis-install"` or `"observed-programdata-account"`. A genesis
+    /// install has no deploy transaction and so no slot to observe; only the
+    /// second value describes a shape a cluster can be in.
+    pub(crate) deployment_source: String,
+    /// SHA-256 of the exact `ProgramData` account image the slot was decoded
+    /// from. For an observed account this is the only carrier of the retained
+    /// former-authority bytes, which no `(elf, slot, authority)` triple
+    /// regenerates.
+    pub(crate) programdata_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -75,6 +108,12 @@ pub(crate) struct RecordPair {
     pub(crate) staging: String,
     pub(crate) schema_id: String,
     pub(crate) content_sha256: String,
+    /// The complete record body. Under `record_publication = "genesis"` this
+    /// duplicates what the account file already holds; under `"transaction"`
+    /// it is the only carrier of the bytes, because nothing writes them at
+    /// genesis and the supervisor has to publish them through Registry
+    /// `Begin -> Append -> Finalize` like any other record.
+    pub(crate) body_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -125,6 +164,10 @@ pub(crate) struct SuccessorPlan {
     pub(crate) core_bootstrap: CoreBootstrapPin,
     pub(crate) infrastructure_profile: InfrastructureProfilePin,
     pub(crate) records: BTreeMap<String, RecordPair>,
+    /// `"genesis"` or `"transaction"`. Devnet has no genesis, so the
+    /// transaction mode is the one a real deployment can actually reach; the
+    /// genesis mode exists because it is what every campaign to date has run.
+    pub(crate) record_publication: String,
     pub(crate) provider_release_id: String,
     pub(crate) fixture_publish_time: i64,
     pub(crate) genesis_accounts: BTreeMap<String, GenesisAccountPin>,
@@ -162,6 +205,18 @@ pub(crate) struct SuccessorRunEvidence {
     pub(crate) plan_sha256: String,
     pub(crate) core_upgrade_authority_pubkey: String,
     pub(crate) private_key_persisted: bool,
+    /// `"random-per-run"` or `"seeded-deterministic"`.
+    ///
+    /// `private_key_persisted` answers "did this tool write a key to disk", and
+    /// the answer is always no. It does NOT answer "can anyone else produce
+    /// these keys", and under `--keypair-seed` the answer to that becomes yes.
+    /// The two claims are separate fields because collapsing them would let a
+    /// seeded run read as an unreproducible one.
+    pub(crate) keypair_derivation: String,
+    /// SHA-256 of the seed, absent for a random campaign. The digest, not the
+    /// seed: enough to say which seed produced a run's compute-unit numbers,
+    /// not enough to sign as it.
+    pub(crate) keypair_seed_sha256: Option<String>,
     pub(crate) completed: Vec<String>,
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,

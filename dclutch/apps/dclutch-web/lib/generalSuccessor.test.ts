@@ -3,7 +3,9 @@ import { PublicKey } from '@solana/web3.js';
 
 import {
   GENERAL_CANDIDATE_BYTES,
+  GENERAL_EXECUTION_BYTES,
   GENERAL_PAGE_BYTES,
+  GENERAL_VERIFICATION_BYTES,
   buildGeneralOuterTransaction,
   buildGeneralActionRequest,
   decodeGeneralCandidateV1,
@@ -99,14 +101,14 @@ describe('generated General browser profile', () => {
   });
 
   it('decodes the 960-byte verification cursor and places the row coordinate at byte 60', () => {
-    const bytes = new Uint8Array(960); bytes.set(new TextEncoder().encode('DCGVERF1')); new DataView(bytes.buffer).setUint16(8, 1, true); bytes.set(candidateBytes(), 16);
+    const bytes = new Uint8Array(GENERAL_VERIFICATION_BYTES); bytes.set(new TextEncoder().encode('DCGVERF1')); new DataView(bytes.buffer).setUint16(8, 1, true); bytes.set(candidateBytes(), 16);
     expect(decodeGeneralVerificationV1(bytes)).toMatchObject({ nextPage: 0, revision: 0n, hasCurrentOrder: false });
     const request = encodeGeneralRequestV1('collect', 9n, '01'.repeat(32), 3, 7);
     expect(request[60]).toBe(7); expect([...request.slice(61)]).toEqual([0, 0, 0]);
   });
 
   it('refuses ungrouped rows and fixed-width arithmetic overflow', () => {
-    const unordered = pageBytes(); unordered[11] = 2; unordered.set(unordered.slice(64, 64 + 368), 64 + 368); fillId(unordered, 64 + 368, 3);
+    const unordered = pageBytes(); unordered[11] = 2; unordered.set(unordered.slice(64, 64 + GENERAL_EXECUTION_BYTES), 64 + GENERAL_EXECUTION_BYTES); fillId(unordered, 64 + GENERAL_EXECUTION_BYTES, 3);
     expect(previewGeneralCandidate(decodeGeneralCandidateV1(candidateBytes()), [decodeGeneralPageV1(unordered)]).refusal).toMatch(/globally grouped/);
     const overflow = pageBytes(); putU64(overflow, 64 + 112, 18_446_744_073_709_551_615n);
     expect(previewGeneralCandidate(decodeGeneralCandidateV1(candidateBytes()), [decodeGeneralPageV1(overflow)]).refusal).toMatch(/fixed-width/);

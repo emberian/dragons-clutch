@@ -71,7 +71,11 @@ def profile (action : Action) : Profile := {
   -- The common Strategy bank has one stable geometry for all action-selected
   -- programs. Request projection fills only the action's coordinates; account
   -- projection and Transition own the remaining values.
-  commonScalars := 88
+  -- Coordinates 88 and 89 are the root-lifecycle conjunct: 88 is the
+  -- AccountProfile-projected capability-root lifecycle byte and 89 is the
+  -- Transition-owned Active constant. Neither is request-projected, because a
+  -- caller may not state whether the capability it is acting on is still live.
+  commonScalars := 90
   itemScalarStride := 6
   commonIdentities := 40
   itemIdentityStride := 0
@@ -111,10 +115,17 @@ theorem freeze_has_no_candidate_projection :
           operation.requestOffset = 24 ∧ operation.immediate = 32) := by native_decide
 
 theorem row_actions_project_runtime_coordinates :
-    (profile .consider).commonScalars = 88 ∧
-      (profile .collect).commonScalars = 88 ∧
-      (profile .distribute).commonScalars = 88 ∧
+    (profile .consider).commonScalars = 90 ∧
+      (profile .collect).commonScalars = 90 ∧
+      (profile .distribute).commonScalars = 90 ∧
       (profile .consider).itemScalarStride = 6 := by native_decide
+
+/-- No action's request may write the root-lifecycle conjunct at 88 or 89. -/
+theorem no_action_request_projects_the_root_lifecycle_conjunct :
+    actions.all fun action =>
+      (profile action).fixedOperations.all
+        (fun operation => operation.register ≠ 88 ∧ operation.register ≠ 89) := by
+  native_decide
 
 theorem settlement_rows_alone_project_manifest_order :
     ((profile .collect).fixedOperations.any
