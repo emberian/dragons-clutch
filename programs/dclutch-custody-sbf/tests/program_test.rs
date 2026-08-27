@@ -1016,8 +1016,30 @@ async fn submit(
         )
         .expect("v0 message"),
     );
-    let transaction = VersionedTransaction::try_new(message, &[&context.payer, &fixture.payer])
-        .expect("transaction");
+    // Sign with exactly the keys this message requires and no others.
+    //
+    // The delegated frames do not carry the protocol payer at all -- their
+    // authority is the delegate -- so handing `try_new` a fixed pair would be
+    // `TooManySigners` on every one of them. Reading the requirement off the
+    // compiled message instead of asserting it keeps the two wrapper shapes
+    // from needing two submit paths.
+    let required = usize::from(message.header().num_required_signatures);
+    let signer_keys = message
+        .static_account_keys()
+        .get(..required)
+        .unwrap_or_default()
+        .to_vec();
+    let mut signers: Vec<&Keypair> = Vec::new();
+    for key in &signer_keys {
+        if *key == context.payer.pubkey() {
+            signers.push(&context.payer);
+        } else if *key == fixture.payer.pubkey() {
+            signers.push(&fixture.payer);
+        } else {
+            panic!("no keypair for required signer {key}");
+        }
+    }
+    let transaction = VersionedTransaction::try_new(message, &signers).expect("transaction");
     let signature = transaction
         .signatures
         .first()
