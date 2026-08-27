@@ -1,6 +1,8 @@
 import { AddressLookupTableAccount, PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import * as Abi from './generated/rationalTerminalHotV3';
+import { HOT_EXECUTION_ENVELOPE_BYTES_V3, HOT_FIXED_ACCOUNT_COUNT_V3 } from './generated/directInlineV3';
 import {
   buildRationalOpenCandidateV4,
   rationalOpenClaimsMetasV4,
@@ -70,7 +72,7 @@ describe('chain-derived Rational open V4', () => {
       generation: 3n, quantity: 2n, denominator: 10n, expectedReceiptSupply: 0n,
       outcomeCount: 3, selectedOutcome: 1, assets: rows,
     });
-    const fixed = Array.from({ length: 38 }, (_, index) => Object.freeze({
+    const fixed = Array.from({ length: HOT_FIXED_ACCOUNT_COUNT_V3 }, (_, index) => Object.freeze({
       address: index === 0 ? market : address(120 + index), isSigner: false, isWritable: index === 1,
     }));
     const physical = [
@@ -91,7 +93,7 @@ describe('chain-derived Rational open V4', () => {
       executionStatus: 'blocked' as const, refusal: 'checked common Hot release pending',
     }) satisfies RationalOpenChainInspectionV4;
     const candidate = buildRationalOpenCandidateV4(inspection, address(234));
-    expect(candidate.outerBytes).toHaveLength(128 + 648);
+    expect(candidate.outerBytes).toHaveLength(HOT_EXECUTION_ENVELOPE_BYTES_V3 + Abi.REQUEST_HEADER_BYTES_V2 + Abi.ASSET_BYTES_V2);
     expect(candidate.logicalClaimsAccounts).toBe(36);
     expect(candidate.physicalClaimsAccounts).toBe(31);
     expect(candidate.loadedAddresses).toBeGreaterThan(0);

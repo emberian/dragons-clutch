@@ -37,7 +37,7 @@ describe('Rational open Hot V3 / CapabilityV4 compiler', () => {
       expectedCustodyPositionRevision: 13n, assets: [asset(14)],
     };
     const compiled = await compileRationalOpenHotV3(input);
-    expect(compiled.familyBytes).toHaveLength(Abi.RATIONAL_TERMINAL_HOT_REQUEST_BYTES_V3);
+    expect(compiled.familyBytes).toHaveLength(Abi.REQUEST_HEADER_BYTES_V2 + Abi.ASSET_BYTES_V2);
     expect(new TextDecoder().decode(compiled.familyBytes.slice(0, 8))).toBe('DCRROH03');
     expect(compiled.childRequest.slice(0, 8)).toEqual(Abi.REQUEST_MAGIC_V2);
     expect(compiled.childRequest.slice(Abi.REQUEST_PARENT_CONTEXT_OFFSET, Abi.REQUEST_PARENT_CONTEXT_OFFSET + 32)).toEqual(compiled.familyDigest);
