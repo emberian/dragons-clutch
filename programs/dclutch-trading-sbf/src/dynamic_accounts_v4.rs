@@ -229,9 +229,14 @@ mod tests {
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
         assert_eq!(logical.len(), 158);
-        assert_eq!(logical[18].key, logical[20].key);
-        assert_eq!(logical[53].key, logical[137].key);
-        assert!(logical[53].is_writable);
+        let logical_at = |coordinate: usize| {
+            logical
+                .get(coordinate)
+                .expect("logical coordinate inside the expanded frame")
+        };
+        assert_eq!(logical_at(18).key, logical_at(20).key);
+        assert_eq!(logical_at(53).key, logical_at(137).key);
+        assert!(logical_at(53).is_writable);
 
         // The dynamic path is reached through the one entry point that owns
         // it; `downgraded_effect_accounts_v3` dispatches on
@@ -267,8 +272,17 @@ mod tests {
         let ordinal = profile
             .physical_account_ordinal_with_dynamic_spans(0, &span_counts, 18)
             .expect("shared market ordinal");
-        assert!(physical[ordinal].is_writable, "representative is writable");
-        physical[ordinal].is_writable = false;
+        assert!(
+            physical
+                .get(ordinal)
+                .expect("representative ordinal inside the physical frame")
+                .is_writable,
+            "representative is writable"
+        );
+        physical
+            .get_mut(ordinal)
+            .expect("representative ordinal inside the physical frame")
+            .is_writable = false;
         let view = PhysicalAccountsV4::new(&[], &physical);
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");
@@ -292,7 +306,10 @@ mod tests {
         let ordinal = profile
             .physical_account_ordinal_with_dynamic_spans(0, &span_counts, executable_coordinate)
             .expect("executable ordinal");
-        physical[ordinal].executable = false;
+        physical
+            .get_mut(ordinal)
+            .expect("executable ordinal inside the physical frame")
+            .executable = false;
         let view = PhysicalAccountsV4::new(&[], &physical);
         let logical = expand_dynamic_physical_accounts_v4(profile, 0, &span_counts, &view)
             .expect("logical expansion");

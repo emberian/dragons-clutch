@@ -675,25 +675,33 @@ mod tests {
                 Vec::new(),
             ));
         }
-        accounts[STATE] = account(
+        *accounts
+            .get_mut(STATE)
+            .expect("state slot inside the frame") = account(
             Pubkey::new_from_array(id(61)),
             custody,
             100,
             replay.to_bytes().expect("replay").to_vec(),
         );
-        accounts[RENT_CREDIT] = account(
+        *accounts
+            .get_mut(RENT_CREDIT)
+            .expect("rent credit slot inside the frame") = account(
             Pubkey::new_from_array(request.rent_credit),
             Pubkey::new_from_array(request.rent_program),
             200,
             vec![62; 32],
         );
-        accounts[HOARD] = account(
+        *accounts
+            .get_mut(HOARD)
+            .expect("Hoard slot inside the frame") = account(
             Pubkey::new_from_array(request.hoard_vault),
             Pubkey::new_from_array(request.token_program),
             300,
             hoard_data.clone(),
         );
-        accounts[MARKET] = account(
+        *accounts
+            .get_mut(MARKET)
+            .expect("Market slot inside the frame") = account(
             Pubkey::new_from_array(request.market),
             Pubkey::new_from_array(request.core_program),
             400,
@@ -767,14 +775,22 @@ mod tests {
         );
 
         let (prepared, accounts, custody, receipt) = result_fixture();
-        accounts[STATE].try_borrow_mut_data().expect("replay data")[16] ^= 1;
+        *accounts
+            .get(STATE)
+            .expect("state slot inside the frame")
+            .try_borrow_mut_data()
+            .expect("replay data")
+            .get_mut(16)
+            .expect("replay byte inside the state data") ^= 1;
         assert_eq!(
             authenticate_result(&prepared, &accounts, custody, custody, receipt),
             Err(TradingSbfError::Transition.into())
         );
 
         let (prepared, accounts, custody, receipt) = result_fixture();
-        **accounts[RENT_CREDIT]
+        **accounts
+            .get(RENT_CREDIT)
+            .expect("rent credit slot inside the frame")
             .try_borrow_mut_lamports()
             .expect("rent lamports") += 1;
         assert_eq!(
@@ -783,14 +799,26 @@ mod tests {
         );
 
         let (prepared, accounts, custody, receipt) = result_fixture();
-        accounts[MARKET].try_borrow_mut_data().expect("market data")[0] ^= 1;
+        *accounts
+            .get(MARKET)
+            .expect("Market slot inside the frame")
+            .try_borrow_mut_data()
+            .expect("market data")
+            .first_mut()
+            .expect("market data is non-empty") ^= 1;
         assert_eq!(
             authenticate_result(&prepared, &accounts, custody, custody, receipt),
             Err(TradingSbfError::Transition.into())
         );
 
         let (prepared, accounts, custody, receipt) = result_fixture();
-        accounts[HOARD].try_borrow_mut_data().expect("Hoard data")[0] ^= 1;
+        *accounts
+            .get(HOARD)
+            .expect("Hoard slot inside the frame")
+            .try_borrow_mut_data()
+            .expect("Hoard data")
+            .first_mut()
+            .expect("Hoard data is non-empty") ^= 1;
         assert_eq!(
             authenticate_result(&prepared, &accounts, custody, custody, receipt),
             Err(TradingSbfError::Transition.into())
