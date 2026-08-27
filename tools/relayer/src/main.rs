@@ -25,8 +25,8 @@ use dclutch_relayer::skew::measure_skew;
 use dclutch_relayer::submit::require_submission_admitted;
 use dclutch_relayer::txn::{
     ComputeBudget, RelayFrameAddresses, RelayInstructionPlan, append_observation_instruction,
-    build_relay_transaction_plan, derive_record_address, message_bytes, seal_record_instruction,
-    serialize_transaction, sign_transaction,
+    build_relay_transaction_plan, derive_record_address, message_bytes, require_packet_fit,
+    seal_record_instruction, serialize_transaction, sign_transaction,
 };
 use solana_message::AddressLookupTableAccount;
 
@@ -53,6 +53,23 @@ enum Command {
     ShowConfig(ConfigArgs),
     /// Observe, sign, and write artifacts.
     Run(RunArgs),
+    /// Submit the append and seal routes from a dry-run artifact directory.
+    ///
+    /// The observation record for the artifact's `(market, generation,
+    /// account_set_id, observed_slot)` must already exist: record creation is
+    /// the keeper's act, and the record's address is seeded by the observed
+    /// slot, so in a fresh deployment the honest order is observe (dry run),
+    /// create the record for that slot, then submit these exact recorded
+    /// bytes.  Re-submitting the recorded observation is the §4.11 rule
+    /// applied across processes: re-sign, never re-observe.
+    SubmitArtifacts(SubmitArtifactsArgs),
+    /// Push the publication log to a local public-serve directory.
+    ///
+    /// This is the file-target half of §4.11's publication requirement: it
+    /// refuses to overwrite a divergent public copy (append-only or nothing),
+    /// and writes a `LATEST.json` a verifier can poll.  Serving the directory
+    /// is the operator's act; no external service is contacted here.
+    PublishLog(PublishLogArgs),
     /// Measure the maximum |a_now - b_now| between two clusters' Clock sysvars.
     MeasureSkew(SkewArgs),
 }
@@ -85,6 +102,26 @@ struct RunArgs {
     /// How many cycles to run; 0 runs until interrupted.
     #[arg(long, default_value_t = 1)]
     cycles: u32,
+}
+
+#[derive(Args)]
+struct SubmitArtifactsArgs {
+    /// Path to the TOML configuration.
+    #[arg(long)]
+    config: PathBuf,
+    /// One dry-run slot directory: `<output_dir>/artifacts/<set>/slot-<N>/`.
+    #[arg(long)]
+    slot_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct PublishLogArgs {
+    /// Path to the TOML configuration.
+    #[arg(long)]
+    config: PathBuf,
+    /// The directory whose contents will be served publicly.
+    #[arg(long)]
+    to: PathBuf,
 }
 
 #[derive(Args)]
@@ -123,6 +160,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Command::Keygen(args) => keygen(&args),
         Command::ShowConfig(args) => show_config(&args),
         Command::Run(args) => run(&args).await,
+        Command::SubmitArtifacts(args) => submit_artifacts(&args).await,
+        Command::PublishLog(args) => publish_log(&args),
         Command::MeasureSkew(args) => skew(&args).await,
     }
 }
@@ -257,11 +296,30 @@ async fn run(args: &RunArgs) -> Result<()> {
     let signer = AttestationSigner::load(&config.attestation_keypair_path, home().as_deref())?;
     println!("attestation signer: {}", signer.public_key_base58());
 
+    let rehearsal_observed_genesis = config
+        .rehearsal_attested_cluster_id
+        .map(|_| config.expected_genesis_hash);
+    if let Some(attested) = config.rehearsal_attested_cluster_id {
+        eprintln!(
+            "REHEARSAL TWIN: reading loopback cluster {} while attesting AS IF it were {}. Every \
+             artifact and publication line is labelled; nothing produced here is an observation \
+             of the claimed cluster.",
+            base58(&config.expected_genesis_hash),
+            base58(&attested)
+        );
+    }
     let mut watchers: Vec<SetWatcher> = config
         .account_sets
         .iter()
         .cloned()
-        .map(|set| SetWatcher::new(set, config.expected_genesis_hash, config.body_page_bytes))
+        .map(|set| {
+            SetWatcher::new(
+                set,
+                config.attested_cluster_id(),
+                rehearsal_observed_genesis,
+                config.body_page_bytes,
+            )
+        })
         .collect();
 
     let mut cycle_index = 0u32;
@@ -330,6 +388,7 @@ fn publish(log: &PublicationLog, cycle: &ObservationCycle) -> Result<()> {
             &position.message_bytes,
             &cycle.signer,
             &position.signature,
+            cycle.rehearsal_observed_genesis.as_ref(),
         )?;
     }
     log.record(
@@ -341,6 +400,7 @@ fn publish(log: &PublicationLog, cycle: &ObservationCycle) -> Result<()> {
         &cycle.seal_bytes,
         &cycle.signer,
         &cycle.seal_signature,
+        cycle.rehearsal_observed_genesis.as_ref(),
     )
 }
 
@@ -411,14 +471,55 @@ fn prepare_submission(config: &Config) -> Result<Submitter> {
     })
 }
 
+/// One complete signed observation set, however it reached this process —
+/// straight from an in-process observation cycle, or read back from a dry-run
+/// artifact directory whose signatures were re-verified.
+struct SignedObservationSet {
+    account_set_id: [u8; ID_BYTES],
+    observed_slot: u64,
+    signer: [u8; ID_BYTES],
+    /// `(set_index, exact message bytes, signature)`, in set order.
+    attestations: Vec<(u16, Vec<u8>, [u8; 64])>,
+    seal_bytes: [u8; dclutch_relay_contract::RELAYED_SEAL_BYTES],
+    seal_signature: [u8; 64],
+}
+
+impl SignedObservationSet {
+    fn from_cycle(cycle: &ObservationCycle) -> Self {
+        Self {
+            account_set_id: cycle.account_set_id,
+            observed_slot: cycle.observed_slot,
+            signer: cycle.signer,
+            attestations: cycle
+                .positions
+                .iter()
+                .map(|position| {
+                    (
+                        position.set_index,
+                        position.message_bytes.clone(),
+                        position.signature,
+                    )
+                })
+                .collect(),
+            seal_bytes: cycle.seal_bytes,
+            seal_signature: cycle.seal_signature,
+        }
+    }
+}
+
 impl Submitter {
     async fn submit_cycle(&self, cycle: &ObservationCycle) -> Result<()> {
+        self.submit_signed_set(&SignedObservationSet::from_cycle(cycle))
+            .await
+    }
+
+    async fn submit_signed_set(&self, set: &SignedObservationSet) -> Result<()> {
         let (record, _bump) = derive_record_address(
             self.relay_program_id,
             self.market,
             self.generation,
-            cycle.account_set_id,
-            cycle.observed_slot,
+            set.account_set_id,
+            set.observed_slot,
         );
         let addresses = RelayFrameAddresses {
             worker: self.fee_payer.public_key(),
@@ -428,27 +529,28 @@ impl Submitter {
             relayer_key_set_staging_vacancy: self.relayer_key_set_staging_vacancy,
         };
 
-        for position in &cycle.positions {
+        for (set_index, message_bytes, signature) in &set.attestations {
             let plan = append_observation_instruction(
                 self.relay_program_id,
                 &addresses,
                 self.generation,
-                cycle.observed_slot,
-                &position.message_bytes,
+                set.observed_slot,
+                message_bytes,
             )?;
-            let signature = self.send(&plan, &cycle.signer, &position.signature).await?;
-            println!("  appended position {} in {signature}", position.set_index);
+            let context = format!("append position {set_index}");
+            let signature = self.send(&context, &plan, &set.signer, signature).await?;
+            println!("  appended position {set_index} in {signature}");
         }
 
         let plan = seal_record_instruction(
             self.relay_program_id,
             &addresses,
             self.generation,
-            cycle.observed_slot,
-            &cycle.seal_bytes,
+            set.observed_slot,
+            &set.seal_bytes,
         )?;
         let signature = self
-            .send(&plan, &cycle.signer, &cycle.seal_signature)
+            .send("seal", &plan, &set.signer, &set.seal_signature)
             .await?;
         println!("  sealed in {signature}");
         Ok(())
@@ -456,6 +558,7 @@ impl Submitter {
 
     async fn send(
         &self,
+        context: &str,
         plan: &RelayInstructionPlan,
         attestation_signer: &[u8; ID_BYTES],
         attestation_signature: &[u8; 64],
@@ -478,8 +581,252 @@ impl Submitter {
         let fee_payer_signature = self.fee_payer.sign(&bytes);
         let transaction = sign_transaction(built.message, fee_payer_signature);
         let wire = serialize_transaction(&transaction)?;
+        // Refuse an unsendable wire BEFORE it reaches an RPC node: the two
+        // known oversized frames in this family (the full-body VirtualPool
+        // append and the consumption) must ride the Market ALT, and this is
+        // where a missing table is reported as itself rather than as an
+        // opaque RPC refusal.
+        let routed = self
+            .lookup_tables
+            .iter()
+            .map(|table| table.addresses.len())
+            .sum();
+        require_packet_fit(context, &wire, routed)?;
         self.rpc.send_transaction(&base64_encode(&wire)).await
     }
+}
+
+/// Submit the append and seal routes from one dry-run artifact directory.
+async fn submit_artifacts(args: &SubmitArtifactsArgs) -> Result<()> {
+    let config = Config::load(&args.config, home().as_deref())?;
+    let submitter = prepare_submission(&config)?;
+
+    let manifest_path = args.slot_dir.join("manifest.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .map_err(|source| RelayerError::io(&manifest_path, source))?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_text)
+        .map_err(|source| RelayerError::Serialization(source.to_string()))?;
+    if manifest.get("artifact_schema").and_then(|v| v.as_str())
+        != Some("dclutch.relayer.dry-run.v1")
+    {
+        return Err(RelayerError::config(format!(
+            "{} does not carry artifact_schema dclutch.relayer.dry-run.v1",
+            manifest_path.display()
+        )));
+    }
+    let set_name = manifest
+        .get("set_name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RelayerError::config("manifest has no set_name"))?;
+    let account_set_id = dclutch_relayer::id32::parse_id32(
+        "manifest.account_set_id_hex",
+        manifest
+            .get("account_set_id_hex")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    )?;
+    let observed_slot = manifest
+        .get("observed_slot")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| RelayerError::config("manifest has no observed_slot"))?;
+    let signer = dclutch_relayer::id32::parse_id32(
+        "manifest.attestation_signer_pubkey_hex",
+        manifest
+            .get("attestation_signer_pubkey_hex")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    )?;
+    if manifest.get("rehearsal_twin").is_some_and(|v| !v.is_null()) {
+        eprintln!(
+            "REHEARSAL ARTIFACTS: these attestations claim a cluster a loopback twin stood in \
+             for. The submission gate already refuses public endpoints for them."
+        );
+    }
+
+    // The artifact's set must be one this config still derives identically:
+    // the pinned ordered positions are the authority for what may be attested,
+    // and a drifted config must refuse rather than submit under an old pin.
+    let configured = config
+        .account_sets
+        .iter()
+        .find(|set| set.name == set_name)
+        .ok_or_else(|| {
+            RelayerError::config(format!(
+                "this config watches no account set named {set_name:?}"
+            ))
+        })?;
+    if configured.account_set_id != account_set_id {
+        return Err(RelayerError::config(format!(
+            "the artifact's account_set_id {} does not match the one this config derives for set \
+             {:?}; the pinned positions have drifted since this observation was taken",
+            dclutch_relayer::id32::to_hex(&account_set_id),
+            set_name
+        )));
+    }
+
+    let positions = manifest
+        .get("positions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| RelayerError::config("manifest has no positions"))?;
+    let mut attestations = Vec::with_capacity(positions.len());
+    for position in positions {
+        let set_index = u16::try_from(
+            position
+                .get("set_index")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| RelayerError::config("position has no set_index"))?,
+        )
+        .map_err(|_| RelayerError::config("set_index does not fit in a u16"))?;
+        let message_file = position
+            .get("message_file")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| RelayerError::config("position has no message_file"))?;
+        let message_path = args.slot_dir.join(message_file);
+        let message_bytes = std::fs::read(&message_path)
+            .map_err(|source| RelayerError::io(&message_path, source))?;
+        let signature_file = position
+            .get("signature_file")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| RelayerError::config("position has no signature_file"))?;
+        let signature_path = args.slot_dir.join(signature_file);
+        let signature_bytes = std::fs::read(&signature_path)
+            .map_err(|source| RelayerError::io(&signature_path, source))?;
+        let signature: [u8; 64] = signature_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| RelayerError::config("a signature file is not exactly 64 bytes"))?;
+
+        // Everything below is re-derived from the exact bytes on disk, not
+        // trusted from the manifest: the signature must verify against the
+        // named signer, and the message must decode as an attestation of this
+        // exact set at this exact slot at this exact position.
+        if !dclutch_relayer::keys::verify_detached(&signer, &message_bytes, &signature) {
+            return Err(RelayerError::config(format!(
+                "attestation {set_index}: the recorded signature does not verify against the \
+                 recorded message and signer; refusing to submit bytes that would be refused \
+                 on chain"
+            )));
+        }
+        let decoded = dclutch_relay_contract::wire::AttestationMessageV1::decode(&message_bytes)
+            .map_err(|error| RelayerError::wire("recorded attestation", error))?;
+        if decoded.account_set_id() != account_set_id
+            || decoded.observed_slot() != observed_slot
+            || decoded.set_index() != set_index
+        {
+            return Err(RelayerError::config(format!(
+                "attestation {set_index}: the recorded message does not attest this artifact's \
+                 own set and slot"
+            )));
+        }
+        attestations.push((set_index, message_bytes, signature));
+    }
+    attestations.sort_by_key(|(set_index, _, _)| *set_index);
+
+    let seal_path = args.slot_dir.join("seal.bin");
+    let seal_bytes_vec =
+        std::fs::read(&seal_path).map_err(|source| RelayerError::io(&seal_path, source))?;
+    let seal_bytes: [u8; dclutch_relay_contract::RELAYED_SEAL_BYTES] = seal_bytes_vec
+        .as_slice()
+        .try_into()
+        .map_err(|_| RelayerError::config("seal.bin is not exactly the seal width"))?;
+    let seal_sig_path = args.slot_dir.join("seal.sig");
+    let seal_sig_vec =
+        std::fs::read(&seal_sig_path).map_err(|source| RelayerError::io(&seal_sig_path, source))?;
+    let seal_signature: [u8; 64] = seal_sig_vec
+        .as_slice()
+        .try_into()
+        .map_err(|_| RelayerError::config("seal.sig is not exactly 64 bytes"))?;
+    if !dclutch_relayer::keys::verify_detached(&signer, &seal_bytes, &seal_signature) {
+        return Err(RelayerError::config(
+            "the recorded seal signature does not verify against the recorded seal and signer",
+        ));
+    }
+    let decoded_seal = dclutch_relay_contract::wire::ObservationSetSealV1::decode(&seal_bytes)
+        .map_err(|error| RelayerError::wire("recorded seal", error))?;
+    if decoded_seal.account_set_id() != account_set_id
+        || decoded_seal.observed_slot() != observed_slot
+    {
+        return Err(RelayerError::config(
+            "the recorded seal does not seal this artifact's own set and slot",
+        ));
+    }
+
+    println!(
+        "submitting recorded observation of set {:?} at slot {observed_slot}: {} attestation(s) \
+         and one seal",
+        set_name,
+        attestations.len()
+    );
+    submitter
+        .submit_signed_set(&SignedObservationSet {
+            account_set_id,
+            observed_slot,
+            signer,
+            attestations,
+            seal_bytes,
+            seal_signature,
+        })
+        .await
+}
+
+/// Push the publication log to a local public-serve directory.
+fn publish_log(args: &PublishLogArgs) -> Result<()> {
+    let config = Config::load(&args.config, home().as_deref())?;
+    let source = config.output_dir.join("publication_log.jsonl");
+    let bytes =
+        std::fs::read(&source).map_err(|source_error| RelayerError::io(&source, source_error))?;
+
+    std::fs::create_dir_all(&args.to)
+        .map_err(|source_error| RelayerError::io(&args.to, source_error))?;
+    let destination = args.to.join("publication_log.jsonl");
+    if destination.exists() {
+        let published = std::fs::read(&destination)
+            .map_err(|source_error| RelayerError::io(&destination, source_error))?;
+        if bytes.len() < published.len() || bytes.get(..published.len()) != Some(&published[..]) {
+            return Err(RelayerError::config(format!(
+                "{} is not a prefix of the local log; a published history is append-only, and a \
+                 divergent copy means one of the two was rewritten. Refusing to overwrite the \
+                 public copy — resolve which history is real first",
+                destination.display()
+            )));
+        }
+    }
+    let staging = args.to.join("publication_log.jsonl.tmp");
+    std::fs::write(&staging, &bytes)
+        .map_err(|source_error| RelayerError::io(&staging, source_error))?;
+    std::fs::rename(&staging, &destination)
+        .map_err(|source_error| RelayerError::io(&destination, source_error))?;
+
+    let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
+    let digest = dclutch_relayer::derive::sha256(&bytes);
+    let latest = serde_json::json!({
+        "schema": "dclutch.relayer.publication-push.v1",
+        "log_file": "publication_log.jsonl",
+        "lines": lines,
+        "byte_len": bytes.len(),
+        "sha256_hex": to_hex(&digest),
+        "updated_wall_unix_seconds": dclutch_relayer::publog::wall_unix_seconds(),
+    });
+    let latest_path = args.to.join("LATEST.json");
+    let text = serde_json::to_string_pretty(&latest)
+        .map_err(|source_error| RelayerError::Serialization(source_error.to_string()))?;
+    std::fs::write(&latest_path, text)
+        .map_err(|source_error| RelayerError::io(&latest_path, source_error))?;
+
+    println!(
+        "pushed {} lines ({} bytes, sha256 {}) to {}",
+        lines,
+        bytes.len(),
+        to_hex(&digest),
+        destination.display()
+    );
+    println!(
+        "serve {} statically (any static host works); a verifier fetches LATEST.json, then the \
+         log, and checks each line's signature against the pinned relayer key set and each \
+         attested account against the observed cluster",
+        args.to.display()
+    );
+    Ok(())
 }
 
 async fn skew(args: &SkewArgs) -> Result<()> {

@@ -31,6 +31,17 @@ expected_genesis_hash = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
 
 request_timeout_seconds = 30
 
+# REHEARSAL ONLY. Uncomment to observe a LOOPBACK twin validator while
+# attesting as if it were the cluster named here (the on-chain adapter pins
+# the observed cluster in its release, so a local rehearsal has no other way
+# to exercise the real routes). With this table present: every observed
+# endpoint must be loopback, allow_public_submission is refused outright, and
+# every artifact and publication-log line carries a rehearsal label with both
+# identities. Nothing produced under it is an observation of the claimed
+# cluster.
+# [observed_cluster.rehearsal_twin]
+# attested_cluster_id = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+
 [keys]
 # The release identity.  Generate it with `dclutch-relayer keygen --out <path>`.
 # The daemon refuses any path inside ~/.config, ~/.ssh, or a .config/solana

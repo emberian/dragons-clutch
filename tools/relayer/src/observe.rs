@@ -142,12 +142,17 @@ pub struct ObservationCycle {
     pub primary_endpoint_host: String,
     /// How many paged body reads this cycle performed.
     pub paged_reads: u32,
+    /// REHEARSAL ONLY: the real genesis hash of the loopback twin that was
+    /// read, when `observed_cluster_id` is an identity the twin stands in
+    /// for. `None` outside a rehearsal.
+    pub rehearsal_observed_genesis: Option<[u8; ID_BYTES]>,
 }
 
 /// One watched set's state across cycles.
 pub struct SetWatcher {
     config: AccountSetConfig,
     observed_cluster_id: [u8; ID_BYTES],
+    rehearsal_observed_genesis: Option<[u8; ID_BYTES]>,
     body_page_bytes: usize,
     tail_cache: HashMap<([u8; ID_BYTES], u64), [u8; ID_BYTES]>,
     deployment_slots: HashMap<[u8; ID_BYTES], u64>,
@@ -159,11 +164,13 @@ impl SetWatcher {
     pub fn new(
         config: AccountSetConfig,
         observed_cluster_id: [u8; ID_BYTES],
+        rehearsal_observed_genesis: Option<[u8; ID_BYTES]>,
         body_page_bytes: usize,
     ) -> Self {
         Self {
             config,
             observed_cluster_id,
+            rehearsal_observed_genesis,
             body_page_bytes,
             tail_cache: HashMap::new(),
             deployment_slots: HashMap::new(),
@@ -386,6 +393,7 @@ impl SetWatcher {
             cross_check_raw,
             primary_endpoint_host: primary.host().to_owned(),
             paged_reads,
+            rehearsal_observed_genesis: self.rehearsal_observed_genesis,
         })
     }
 
@@ -739,6 +747,7 @@ mod tests {
         SetWatcher::new(
             config,
             dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1,
+            None,
             256 * 1024,
         )
     }

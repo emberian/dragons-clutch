@@ -190,6 +190,14 @@ pub fn build_manifest(cycle: &ObservationCycle) -> serde_json::Value {
         "set_digest_hex": to_hex(&cycle.set_digest),
         "attestation_signer_pubkey_base58": base58(&cycle.signer),
         "attestation_signer_pubkey_hex": to_hex(&cycle.signer),
+        // REHEARSAL LABEL. When present, the observed cluster was a loopback
+        // twin and every attestation in this directory CLAIMS a cluster it
+        // did not read. Anything consuming these artifacts must carry the
+        // label forward; dropping it converts a rehearsal into a lie.
+        "rehearsal_twin": cycle.rehearsal_observed_genesis.map(|genesis| serde_json::json!({
+            "attested_cluster_id_base58": base58(&cycle.observed_cluster_id),
+            "observed_twin_genesis_base58": base58(&genesis),
+        })),
         "positions": positions,
         "seal": {
             "message_file": "seal.bin",
@@ -255,6 +263,7 @@ mod tests {
             cross_check_raw: Vec::new(),
             primary_endpoint_host: "127.0.0.1".to_owned(),
             paged_reads: 0,
+            rehearsal_observed_genesis: None,
         }
     }
 

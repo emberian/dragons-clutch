@@ -68,6 +68,14 @@ dclutch-relayer run --config relayer.toml --dry-run --cycles 1
 # Additionally submit. Subject to the loopback gate above.
 dclutch-relayer run --config relayer.toml --submit --cycles 1
 
+# Submit the append and seal routes from a dry-run artifact directory whose
+# record has since been created. Same endpoint gate as `run --submit`.
+dclutch-relayer submit-artifacts --config relayer.toml \
+    --slot-dir ./out/artifacts/dbc-graduation/slot-423941138
+
+# Push the publication log to a local directory meant for static serving.
+dclutch-relayer publish-log --config relayer.toml --to ./public
+
 # Read-only: sample two clusters' Clock sysvars and report max |a - b|.
 dclutch-relayer measure-skew --endpoint-a URL --endpoint-b URL \
     --samples 12 --interval-seconds 30 --out-dir ./skew
@@ -95,6 +103,7 @@ default is exactly the quiet wrong this family exists to prevent.
 | `observed_cluster.rpc_endpoints` | first is primary, the rest are cross-checks |
 | `observed_cluster.expected_genesis_hash` | base58 or hex; verified at startup |
 | `observed_cluster.request_timeout_seconds` | per-request HTTP timeout |
+| `observed_cluster.rehearsal_twin.attested_cluster_id` | REHEARSAL ONLY: attest as if the loopback twin were this cluster; labels every output, forces loopback everywhere, refuses public submission |
 | `keys.attestation_keypair_path` | the release identity |
 | `keys.fee_payer_keypair_path` | optional, hot and replaceable, must be a different file |
 | `submit.endpoint` | optional; loopback unless explicitly authorized |
@@ -208,10 +217,20 @@ that this is the entire mitigation for "the relayer can lie": an attestation
 nobody can check against mainnet is a trust assumption; one that is published is
 a falsifiable claim.
 
-**Pushing this log to a public location is not implemented.** It is a separately
-authorized act. Until it is done, this daemon does not satisfy §4.11's
-publication requirement, and saying otherwise would be the claim the requirement
-exists to prevent.
+**The push has a local file target**: `publish-log --to <dir>` copies the log
+into a directory meant to be served statically, refusing to overwrite a public
+copy that is not a byte-prefix of the local log (append-only or nothing), and
+writes a `LATEST.json` carrying the line count, byte length and SHA-256 so a
+verifier can poll for growth and detect a rewritten history. The layout is:
+
+```text
+<dir>/publication_log.jsonl   the log, verbatim, append-only across pushes
+<dir>/LATEST.json             {lines, byte_len, sha256_hex, updated_wall_unix_seconds}
+```
+
+Actually SERVING that directory from a public location is still a separately
+authorized act, and until a release names one, this daemon satisfies §4.11's
+publication requirement only up to that boundary.
 
 ## Submission
 
@@ -234,11 +253,26 @@ because a blockhash aged out would silently change the fact being attested.
 Only the **append** and **seal** routes are built. Record creation and
 retirement are not, so the observation record must already exist for the
 `(market, generation, account_set_id, observed_slot)` being submitted. The
-daemon says so at startup when `--submit` is passed.
+daemon says so at startup when `--submit` is passed. Because the record's
+address is seeded by the observed slot, a fresh deployment cannot create the
+record before the observation exists — the honest order is `run --dry-run`,
+create the record for the observed slot, then `submit-artifacts` on that slot
+directory, which re-verifies every recorded signature and message against the
+manifest before building anything. Re-submitting the recorded bytes is the
+re-sign-never-re-observe rule applied across processes.
+
+Every built wire is measured against Solana's 1,232-byte packet maximum
+before it reaches an RPC node. The relayed tier measured the full-body
+VirtualPool append at 1,377 bytes on a bare message, so that frame only fits
+when `submit.address_lookup_table` names a Market ALT covering the frame's
+non-signer addresses; an oversized wire is refused with that instruction
+rather than surfacing as an opaque RPC error after the observation was
+already signed. The deadline failure walk is not this daemon's wire and stays
+legacy-fitting by design.
 
 ## Tests
 
-Offline, no network. `cargo test` runs 78 tests, including one integration test
+Offline, no network. `cargo test` runs 83 tests, including one integration test
 that stands up a loopback mock RPC and drives a complete cycle: batch read,
 pinned-prefix truncation, three-page tail digest, fold, encode/sign/verify round
 trip through the wire crate's own decoder, seal, artifact directory and

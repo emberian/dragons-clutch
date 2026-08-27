@@ -68,6 +68,24 @@ struct RawObservedCluster {
     expected_genesis_hash: String,
     #[serde(default = "default_request_timeout_seconds")]
     request_timeout_seconds: u64,
+    rehearsal_twin: Option<RawRehearsalTwin>,
+}
+
+/// REHEARSAL ONLY: observe a loopback twin, attest as if it were another
+/// cluster.
+///
+/// The relayed family's on-chain adapter pins the observed cluster in its
+/// release (`RelayedMainnetStateV1` observes mainnet-beta and nothing else),
+/// so a local rehearsal that exercises the real daemon against a local
+/// mainnet-twin validator must sign attestations *claiming* the pinned
+/// cluster while *reading* the twin. That is a fabrication, and this table is
+/// where it is made explicit instead of quiet: every endpoint must be
+/// loopback, public submission is refused outright, and every artifact and
+/// publication-log line is labelled with both identities.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRehearsalTwin {
+    attested_cluster_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,6 +274,9 @@ pub struct Config {
     pub rpc_endpoints: Vec<String>,
     /// The genesis hash the observed cluster must report.
     pub expected_genesis_hash: [u8; ID_BYTES],
+    /// REHEARSAL ONLY: the cluster identity attestations claim, when the
+    /// observed cluster is a loopback twin standing in for it.
+    pub rehearsal_attested_cluster_id: Option<[u8; ID_BYTES]>,
     /// The release-identity signing key.
     pub attestation_keypair_path: PathBuf,
     /// The hot, replaceable fee payer.
@@ -328,6 +349,47 @@ impl Config {
             ));
         }
 
+        let rehearsal_attested_cluster_id = match &raw.observed_cluster.rehearsal_twin {
+            None => None,
+            Some(twin) => {
+                let attested = parse_id32(
+                    "observed_cluster.rehearsal_twin.attested_cluster_id",
+                    &twin.attested_cluster_id,
+                )?;
+                if is_zero(&attested) {
+                    return Err(RelayerError::config(
+                        "rehearsal_twin.attested_cluster_id must not be all zero",
+                    ));
+                }
+                if attested == expected_genesis_hash {
+                    return Err(RelayerError::config(
+                        "rehearsal_twin.attested_cluster_id equals expected_genesis_hash; a twin \
+                         claims a DIFFERENT cluster than it is, so an equal value means this is \
+                         not a rehearsal — delete the table instead",
+                    ));
+                }
+                for endpoint in &raw.observed_cluster.rpc_endpoints {
+                    if !is_loopback_url(endpoint) {
+                        return Err(RelayerError::config(format!(
+                            "rehearsal_twin requires every observed_cluster endpoint to be \
+                             loopback, but {endpoint:?} is not: attesting a real public cluster's \
+                             bytes under a different cluster identity would manufacture lies \
+                             about that cluster, not a rehearsal"
+                        )));
+                    }
+                }
+                if let Some(submit) = &raw.submit
+                    && submit.allow_public_submission
+                {
+                    return Err(RelayerError::config(
+                        "rehearsal_twin and submit.allow_public_submission are mutually \
+                         exclusive: rehearsal attestations must never reach a public cluster",
+                    ));
+                }
+                Some(attested)
+            }
+        };
+
         let attestation_keypair_path =
             expand_tilde(Path::new(&raw.keys.attestation_keypair_path), home);
         require_safe_keypair_path(&attestation_keypair_path, home)?;
@@ -358,9 +420,14 @@ impl Config {
             )));
         }
 
+        // The set identity binds the cluster the attestations CLAIM. Outside a
+        // rehearsal that is the cluster actually read; under a rehearsal twin
+        // it is the attested identity, exactly as the on-chain adapter will
+        // re-derive it.
+        let attested_cluster_id = rehearsal_attested_cluster_id.unwrap_or(expected_genesis_hash);
         let mut account_sets = Vec::with_capacity(raw.account_sets.len());
         for set in &raw.account_sets {
-            account_sets.push(resolve_account_set(set, expected_genesis_hash)?);
+            account_sets.push(resolve_account_set(set, attested_cluster_id)?);
         }
         for (index, set) in account_sets.iter().enumerate() {
             if account_sets
@@ -389,6 +456,7 @@ impl Config {
             request_timeout: Duration::from_secs(raw.observed_cluster.request_timeout_seconds),
             rpc_endpoints: raw.observed_cluster.rpc_endpoints.clone(),
             expected_genesis_hash,
+            rehearsal_attested_cluster_id,
             attestation_keypair_path,
             fee_payer_keypair_path,
             submit,
@@ -405,6 +473,23 @@ impl Config {
     pub fn cross_check_endpoints(&self) -> &[String] {
         self.rpc_endpoints.get(1..).unwrap_or(&[])
     }
+
+    /// The cluster identity every signed message claims.
+    ///
+    /// Outside a rehearsal this is the observed cluster's own genesis hash;
+    /// under a rehearsal twin it is the identity the twin stands in for.
+    pub fn attested_cluster_id(&self) -> [u8; ID_BYTES] {
+        self.rehearsal_attested_cluster_id
+            .unwrap_or(self.expected_genesis_hash)
+    }
+}
+
+/// Whether a URL names a loopback host, under the submission gate's own rule.
+fn is_loopback_url(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    crate::submit::is_local_host(parsed.host_str().unwrap_or(""))
 }
 
 fn resolve_account_set(
@@ -734,6 +819,79 @@ admitted_data_lens = [40]
         let config = load(&text).expect("config");
         let submit = config.submit.expect("submit");
         assert!(!submit.allow_public_submission);
+    }
+
+    #[test]
+    fn a_rehearsal_twin_moves_the_attested_identity_and_the_set_derivation() {
+        let devnet = base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1);
+        let plain = load(&minimal("")).expect("config");
+        let text = minimal("").replace(
+            "expected_genesis_hash = \"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d\"",
+            &format!(
+                "expected_genesis_hash = \"{devnet}\"\n\n\
+                 [observed_cluster.rehearsal_twin]\n\
+                 attested_cluster_id = \"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d\"",
+            ),
+        );
+        let twin = load(&text).expect("rehearsal config");
+        assert_eq!(
+            twin.attested_cluster_id(),
+            dclutch_relay_contract::SOLANA_MAINNET_GENESIS_HASH_V1
+        );
+        assert_eq!(
+            twin.expected_genesis_hash,
+            dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1
+        );
+        // The set identity binds the CLAIMED cluster, so the rehearsal derives
+        // the same pin the honest mainnet observer would.
+        assert_eq!(
+            twin.account_sets.first().expect("set").account_set_id,
+            plain.account_sets.first().expect("set").account_set_id,
+        );
+    }
+
+    #[test]
+    fn a_rehearsal_twin_that_claims_the_cluster_it_reads_refuses() {
+        let text = format!(
+            "{}\n[observed_cluster.rehearsal_twin]\n\
+             attested_cluster_id = \"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d\"\n",
+            minimal("")
+        );
+        assert!(load(&text).is_err(), "a twin of itself is not a rehearsal");
+    }
+
+    #[test]
+    fn a_rehearsal_twin_refuses_a_public_observed_endpoint() {
+        let text = format!(
+            "{}\n[observed_cluster.rehearsal_twin]\n\
+             attested_cluster_id = \"{}\"\n",
+            minimal("").replace(
+                "rpc_endpoints = [\"http://127.0.0.1:8899\"]",
+                "rpc_endpoints = [\"https://api.mainnet-beta.solana.com\"]",
+            ),
+            base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
+        );
+        assert!(
+            load(&text).is_err(),
+            "attesting a real public cluster's bytes under another identity must refuse"
+        );
+    }
+
+    #[test]
+    fn a_rehearsal_twin_refuses_public_submission_outright() {
+        let text = format!(
+            "{}\n[observed_cluster.rehearsal_twin]\n\
+             attested_cluster_id = \"{}\"\n\n\
+             [submit]\nendpoint = \"https://api.devnet.solana.com\"\n\
+             allow_public_submission = true\n\
+             relay_program_id = \"11111111111111111111111111111112\"\n\
+             market = \"11111111111111111111111111111113\"\ngeneration = 1\n\
+             relayer_key_set = \"11111111111111111111111111111114\"\n\
+             relayer_key_set_staging_vacancy = \"11111111111111111111111111111115\"\n",
+            minimal(""),
+            base58(&dclutch_relay_contract::SOLANA_DEVNET_GENESIS_HASH_V1),
+        );
+        assert!(load(&text).is_err());
     }
 
     #[test]
