@@ -1207,6 +1207,14 @@ fn close_aborted_source_projection<'info>(
     program_id: &Pubkey,
 ) -> Result<(), ProgramError> {
     let rent_before = rent_credit.lamports();
+    // ORDER IS load-bearing. `close_state_to_rent_credit` zeroes an account's
+    // lamports and assigns it to the System program by hand; every token
+    // closure is a CPI. Interleaving them fails the runtime's own
+    // before-and-after balance check at the CPI boundary with
+    // `UnbalancedInstruction`, which names no conjunct and no account. The two
+    // terminals that existed never met this because each performs its single
+    // manual close last. This one closes four accounts, so it does every CPI
+    // first and every by-hand close afterwards.
     close_specific_vault_to_rent_credit(
         source,
         authority,
@@ -1216,7 +1224,6 @@ fn close_aborted_source_projection<'info>(
         program_id,
         request.funding_source_vault,
     )?;
-    close_state_to_rent_credit(source_replay, rent_credit, program_id)?;
     close_vault_to_rent_credit(
         hoard,
         authority,
@@ -1225,6 +1232,7 @@ fn close_aborted_source_projection<'info>(
         request,
         program_id,
     )?;
+    close_state_to_rent_credit(source_replay, rent_credit, program_id)?;
     close_state_to_rent_credit(account(accounts, STATE)?, rent_credit, program_id)?;
     let expected = rent_before
         .checked_add(request.funding_source_vault_rent_lamports)
