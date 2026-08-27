@@ -32,6 +32,11 @@ usage: tools/gauntlet/relayed-vertical/run-relayed-vertical.sh [options]
   --keypair-seed HEX    the producer's TEST-ONLY loopback-only determinism
                         switch (default: none; the relayer key is fresh per
                         run either way, because it is founding content)
+  --census              fold this run's evidence into the shared census ledger
+                        (needs a census inventory; tier 1's bindings are merged
+                        in front of this tier's, exactly as the journey does)
+  --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger the
+                        census fold reads (default: /private/tmp/dclutch-gauntlet)
 USAGE
 }
 
@@ -49,6 +54,8 @@ WORKTREE=0
 RPC_PORT="auto"
 WORK="/private/tmp/dclutch-relayed-vertical"
 KEYPAIR_SEED="none"
+CENSUS=0
+GAUNTLET_WORK="/private/tmp/dclutch-gauntlet"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -59,11 +66,36 @@ while [ $# -gt 0 ]; do
         --rpc-port) RPC_PORT="${2:?}"; shift 2 ;;
         --work) WORK="${2:?}"; shift 2 ;;
         --keypair-seed) KEYPAIR_SEED="${2:?}"; shift 2 ;;
+        --census) CENSUS=1; shift ;;
+        --gauntlet-work) GAUNTLET_WORK="${2:?}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1" ;;
     esac
 done
 case "$WALK" in success|failure|both) ;; *) die "--walk must be success, failure or both" ;; esac
+
+ledger_lock() {
+    local lock="$1.lock" waited=0
+    while ! mkdir "$lock" 2>/dev/null; do
+        if [ "$waited" -ge 300 ]; then
+            local holder=""
+            [ -f "$lock/pid" ] && holder="$(cat "$lock/pid" 2>/dev/null || true)"
+            echo "ledger lock at $lock held for over 5 minutes by pid ${holder:-unknown}; breaking it" >&2
+            rm -rf "$lock"
+            continue
+        fi
+        [ "$waited" = 0 ] && echo "waiting for the ledger lock at $lock" >&2
+        sleep 1
+        waited=$((waited + 1))
+    done
+    printf '%s\n' "$$" > "$lock/pid"
+    LEDGER_LOCK_HELD="$lock"
+}
+ledger_unlock() {
+    [ -n "${LEDGER_LOCK_HELD:-}" ] && rm -rf "$LEDGER_LOCK_HELD"
+    LEDGER_LOCK_HELD=""
+}
+trap ledger_unlock EXIT
 
 for tool in git jq shasum python3 cargo solana-test-validator cargo-build-sbf; do
     command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
@@ -314,6 +346,23 @@ run_walk() {
     say "witnesses ($walk)"
     "$GAUNTLET/tier1/check-witnesses.sh" "$SCRIPT_DIR/witnesses.json" \
         "$run/evidence.json" "$run/transcript.json"
+
+    if [ "$CENSUS" = 1 ]; then
+        say "census fold ($walk)"
+        local inventory="$GAUNTLET_WORK/out/inventory.json"
+        local census_ledger="$GAUNTLET_WORK/out/ledger.json"
+        [ -f "$inventory" ] || die "--census needs $inventory; run 'tools/gauntlet/run.sh --mode census' first"
+        jq '{registry:.registry.program_id, core:.core.program_id, claims:.claims.program_id,
+             trading:.trading.program_id, resolution:.resolution.program_id,
+             custody:.custody.program_id, rent:.rent_credit.program_id}'             "$run/plan.json" > "$run/programs.json"
+        jq -s '{campaign: "relayed-vertical",
+                note: ("Relayed vertical. Tier 1'"'"'s bindings are merged in at run time because " +
+                       "the vertical submits every tier-1 transaction before its own; one copy."),
+                bindings: (.[0].bindings + .[1].bindings)}'             "$GAUNTLET/tier1/bindings.json" "$SCRIPT_DIR/bindings.json" > "$run/bindings.json"
+        ledger_lock "$census_ledger"
+        cargo run --quiet --manifest-path "$GAUNTLET/census/Cargo.toml" -- observe             --inventory "$inventory"             --ledger "$census_ledger"             --bindings "$run/bindings.json"             --programs "$run/programs.json"             --evidence "$run/evidence.json"
+        ledger_unlock
+    fi
 
     say "$walk walk transcript summary"
     jq -r '
