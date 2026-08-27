@@ -1,5 +1,14 @@
 # Project method
 
+> **Supersession notice (2026-08-27):** the "planned first slices" list below
+> is cycle-0 intent; every slice on it has since executed, been superseded, or
+> been re-scoped by the live swarmcycle plan. The method sections (one
+> workstream, vertical slices, delegation shape) remain current practice. This
+> banner is the only edit; the rest of the document is unchanged and may
+> narrate other superseded decisions too. See `WAVE.md` for the live cycle
+> plan and `docs/ASPIRATION_LEDGER.md` (M-21) for the full staleness
+> accounting.
+
 dClutch changes both the architecture and how the work is conducted.
 
 ## One workstream

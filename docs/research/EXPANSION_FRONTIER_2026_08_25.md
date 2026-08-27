@@ -1,5 +1,12 @@
 # Expansion frontier after the omission review — 2026-08-25
 
+> **Supersession notice (2026-08-27):** two days stale against a fast-moving
+> tree; several of the "current safe profiles" and prototype choices named
+> below have since moved (some lifted, some superseded, some deleted). This
+> banner is the only edit. Cross-check any specific claim against `WAVE.md`
+> before relying on it, and see `docs/ASPIRATION_LEDGER.md` (M-21) for the
+> full staleness accounting.
+
 Status: active product/theory and implementation direction. This document
 reopens conservative prototype choices without weakening the named invariants.
 It is not release, deployment, or formal-verification evidence.

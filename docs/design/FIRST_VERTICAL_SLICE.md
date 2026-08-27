@@ -1,5 +1,15 @@
 # First vertical slice
 
+> **Supersession notice (2026-08-27):** this is the most orphaned document in
+> the tree — no status header, no date, no evidence pointer, and none of the
+> nine acceptance conditions below carries a status claim. The target
+> lifecycle (compile -> create -> split -> authenticate Pyth -> resolve ->
+> redeem -> retain terminal root) reaches step 3 in the live tree; treat
+> everything below as a historical target statement, not current status. This
+> banner is the only edit. See `WAVE.md` for where the lifecycle actually
+> stands and `docs/ASPIRATION_LEDGER.md` (M-21) for the full staleness
+> accounting.
+
 The first end-to-end slice proves the smallest useful dClutch market without
 introducing a venue, mock provider, or optional wrapper.
 
