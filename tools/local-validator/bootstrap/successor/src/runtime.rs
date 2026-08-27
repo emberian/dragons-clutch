@@ -263,6 +263,15 @@ pub(crate) fn found_through_open(spec_path: &Path) -> Result<OpenMarketSessionV1
             AUTHORITY_LAMPORTS,
         )?,
     ];
+    let mut publication_steps: Vec<String> = Vec::new();
+    if plan.record_publication == "transaction" {
+        let count = publish_infrastructure_records(&mut rpc, &plan, &authority, &mut transactions)?;
+        publication_steps.push(format!(
+            "published {count} infrastructure record bodies as real Registry transactions -- \
+             nothing about the protocol existed at genesis"
+        ));
+    }
+
     let profile = pubkey(&plan.infrastructure_profile.address)?;
     if rpc.account(profile)?.is_some() {
         return Err(Error::new(
@@ -385,18 +394,23 @@ pub(crate) fn found_through_open(spec_path: &Path) -> Result<OpenMarketSessionV1
         accounts.insert(label.into(), account_evidence(address, &account));
     }
     accounts.extend(market.accounts);
-    let mut completed = vec![
+    let mut completed: Vec<String> = vec![
         "generated one ephemeral Core authority in process memory".into(),
         "prepared exact public-key-only genesis plan".into(),
         "started and health-bound guarded localhost validator".into(),
         "proved wrong-authority infrastructure refusal".into(),
+    ];
+    // Whatever the publication mode contributed happened before the profile
+    // existed, so it belongs here in the order the chain saw it.
+    completed.splice(2..2, publication_steps);
+    completed.extend::<Vec<String>>(vec![
         "initialized exact Core Registry/Rent infrastructure profile".into(),
         "proved release activation refuses before Core revocation".into(),
         "revoked Core Loader-v3 upgrade authority to None".into(),
         "verified exact immutable Core ProgramData poststate".into(),
         "activated exact immutable five-role release set".into(),
         "proved late-failure atomic rollback".into(),
-    ];
+    ]);
     completed.extend(market.completed);
     Ok(OpenMarketSessionV1 {
         validator,
@@ -445,6 +459,10 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
         rent_credit_elf: PathBuf::from(&spec.rent_credit.elf_path),
         rent_credit_sha256: spec.rent_credit.elf_sha256.clone(),
         rent_credit_semantic_release_id: spec.rent_credit.semantic_release_id.clone(),
+        record_publication: match spec.record_publication.as_deref() {
+            None => crate::plan::RecordPublicationV1::Genesis,
+            Some(value) => crate::plan::RecordPublicationV1::parse(value)?,
+        },
     })
 }
 
@@ -593,6 +611,46 @@ pub(crate) fn record(plan: &SuccessorPlan, label: &str) -> Result<(Pubkey, Pubke
         return Err(Error::new(format!("record {label} PDA mismatch")));
     }
     Ok((raw, staging))
+}
+
+/// Publish the nine infrastructure record bodies with real transactions.
+///
+/// This is the only path a cluster can take. A local validator can be handed
+/// finalized raw-record accounts at genesis; devnet cannot be handed anything.
+/// Every body here therefore goes through the same permissionless Registry
+/// `Begin -> Append -> Finalize` state machine that every market record uses,
+/// paying rent from `sponsor`, and each resulting account is required to land
+/// at exactly the coordinate the plan derived offline.
+///
+/// Order matters: Core's infrastructure initialization reads the Registry and
+/// Rent artifact records, and role activation reads the five role records plus
+/// the release set, so all nine must be finalized before either runs.
+fn publish_infrastructure_records(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    sponsor: &Keypair,
+    transactions: &mut Vec<crate::model::TransactionEvidence>,
+) -> Result<usize> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let mut published = 0_usize;
+    for (label, pair) in &plan.records {
+        let expected_raw = pubkey(&pair.raw)?;
+        if rpc.account(expected_raw)?.is_some() {
+            return Err(Error::new(format!(
+                "record {label} already existed before its publication transaction"
+            )));
+        }
+        let schema = hex32(&pair.schema_id)?;
+        let body = decode_hex(&pair.body_hex)?;
+        let record = publish_record(rpc, registry, sponsor, schema, &body, None, transactions)?;
+        if record.raw != expected_raw || hex(&record.digest) != pair.content_sha256 {
+            return Err(Error::new(format!(
+                "published record {label} did not land at its derived coordinate"
+            )));
+        }
+        published += 1;
+    }
+    Ok(published)
 }
 
 pub(crate) fn publish_record(
@@ -1064,12 +1122,41 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
         "rent_artifact_release",
         "pyth_release",
     ] {
-        let _ = record(plan, label)?;
+        let (raw, _) = record(plan, label)?;
+        let pair = &plan.records[label];
+        let body = decode_hex(&pair.body_hex)?;
+        if body.is_empty() || hex(&sha2::Sha256::digest(&body)) != pair.content_sha256 {
+            return Err(Error::new(format!(
+                "record {label} carries a body that is not the body its coordinate commits to"
+            )));
+        }
+        // Under transaction publication the record must NOT be at genesis: the
+        // whole point is that the chain, not the fixture, produced it.
+        if plan.record_publication == "transaction"
+            && plan
+                .genesis_accounts
+                .values()
+                .any(|account| account.address == raw.to_string())
+        {
+            return Err(Error::new(format!(
+                "record {label} was genesis-injected under transaction publication"
+            )));
+        }
     }
-    if plan.genesis_accounts.len() != 23 {
-        return Err(Error::new(
-            "infrastructure plan must contain fourteen Loader and nine finalized record accounts",
-        ));
+    let expected_accounts = match plan.record_publication.as_str() {
+        "genesis" => 23,
+        "transaction" => 14,
+        other => {
+            return Err(Error::new(format!(
+                "unknown record publication mode {other}"
+            )));
+        }
+    };
+    if plan.genesis_accounts.len() != expected_accounts {
+        return Err(Error::new(format!(
+            "infrastructure plan under {} publication must contain exactly {expected_accounts} genesis accounts",
+            plan.record_publication
+        )));
     }
     Ok(())
 }
@@ -1457,6 +1544,7 @@ mod tests {
             rent_credit_elf: rent_elf,
             rent_credit_sha256: rent_sha,
             rent_credit_semantic_release_id: "17".repeat(32),
+            record_publication: crate::plan::RecordPublicationV1::Genesis,
         })
         .expect("prepare real-SBF infrastructure plan");
         validate_plan(&plan).expect("validate real-SBF plan");

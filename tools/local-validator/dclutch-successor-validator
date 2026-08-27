@@ -227,12 +227,20 @@ validate_plan() {
      .genesis_accounts["loader.rent-credit.programdata"].address == .rent_credit.programdata_id and
      .infrastructure_profile.registry_artifact_release_id == .registry.artifact_release_id and
      .infrastructure_profile.rent_artifact_release_id == .rent_credit.artifact_release_id and
-     .genesis_accounts["record.registry_artifact_release"].data_sha256 == .records.registry_artifact_release.content_sha256 and
-     .genesis_accounts["record.rent_artifact_release"].data_sha256 == .records.rent_artifact_release.content_sha256 and
      (.genesis_boundary | length == 2) and
      (.bootstrap_order | length == 5) and
      (.execution_blocker | type == "string" and length > 0) and
-     (.genesis_accounts | length == 23)' \
+     (if .record_publication == "transaction" then
+        # The deployable shape: genesis holds the seven programs and nothing
+        # else, and every record body arrives by transaction. Assert the
+        # absence positively rather than merely counting.
+        (.genesis_accounts | length == 14) and
+        (.genesis_accounts | keys | all(startswith("loader.")))
+      elif .record_publication == "genesis" then
+        (.genesis_accounts | length == 23) and
+        .genesis_accounts["record.registry_artifact_release"].data_sha256 == .records.registry_artifact_release.content_sha256 and
+        .genesis_accounts["record.rent_artifact_release"].data_sha256 == .records.rent_artifact_release.content_sha256
+      else false end)' \
     "$plan" >/dev/null || die "successor plan does not match exact account/artifact pins or hides its genesis boundary"
 }
 

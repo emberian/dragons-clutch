@@ -146,6 +146,7 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     let mut rent_credit_elf = None;
     let mut rent_credit_sha256 = None;
     let mut rent_credit_semantic_release = None;
+    let mut record_publication = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -183,6 +184,9 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             "--rent-credit-elf" => &mut rent_credit_elf,
             "--rent-credit-sha256" => &mut rent_credit_sha256,
             "--rent-credit-semantic-release-id" => &mut rent_credit_semantic_release,
+            // Optional. Absent is `genesis`, which is byte-for-byte what this
+            // subcommand did before the flag existed.
+            "--record-publication" => &mut record_publication,
             _ => return Err(Error::new(format!("unknown prepare argument: {argument}"))),
         };
         if slot.replace(value).is_some() {
@@ -242,6 +246,10 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             rent_credit_semantic_release,
             "--rent-credit-semantic-release-id",
         )?,
+        record_publication: match record_publication.as_deref() {
+            None => plan::RecordPublicationV1::Genesis,
+            Some(value) => plan::RecordPublicationV1::parse(value)?,
+        },
     };
     let path = args.plan_path.clone();
     let prepared = plan::prepare(args)?;
@@ -282,6 +290,6 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration."
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_ELF --registry-sha256 SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_ELF --core-sha256 SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_ELF --claims-sha256 SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_ELF --trading-sha256 SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_ELF --resolution-sha256 SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_ELF --custody-sha256 SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_ELF --rent-credit-sha256 SHA256 --rent-credit-semantic-release-id SHA256 [--record-publication genesis|transaction]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration."
     );
 }

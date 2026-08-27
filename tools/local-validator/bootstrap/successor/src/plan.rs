@@ -68,6 +68,7 @@ pub(crate) struct PrepareArgs {
     pub(crate) custody_elf: PathBuf,
     pub(crate) custody_sha256: String,
     pub(crate) custody_semantic_release_id: String,
+    pub(crate) record_publication: RecordPublicationV1,
     pub(crate) rent_credit_program: Pubkey,
     pub(crate) rent_credit_elf: PathBuf,
     pub(crate) rent_credit_sha256: String,
@@ -213,6 +214,7 @@ impl PlanWriter {
         registry: Pubkey,
         schema: [u8; 32],
         content: &[u8],
+        publication: RecordPublicationV1,
     ) -> Result<RecordPair> {
         let digest = sha256_bytes(content);
         let raw =
@@ -222,20 +224,64 @@ impl PlanWriter {
             &registry,
         )
         .0;
-        self.add(
-            format!("record.{label}"),
-            raw,
-            registry,
-            Rent::default().minimum_balance(content.len()),
-            content,
-            false,
-        )?;
+        // The address derivation is identical either way -- a record's
+        // coordinate is a function of schema and content, never of how the
+        // bytes arrived. Only the writer differs.
+        if publication == RecordPublicationV1::Genesis {
+            self.add(
+                format!("record.{label}"),
+                raw,
+                registry,
+                Rent::default().minimum_balance(content.len()),
+                content,
+                false,
+            )?;
+        }
         Ok(RecordPair {
             raw: raw.to_string(),
             staging: staging.to_string(),
             schema_id: hex(&schema),
             content_sha256: hex(&digest),
+            body_hex: hex(content),
         })
+    }
+}
+
+/// Who writes the nine infrastructure record bodies.
+///
+/// `Genesis` injects them as finalized raw-record accounts in the validator's
+/// `--account-dir`. That is fast and is what every campaign to date has run,
+/// but **no cluster has a genesis you can write into**, so it is not a shape a
+/// devnet or mainnet deployment can ever take.
+///
+/// `Transaction` leaves them out of genesis entirely and makes the supervisor
+/// publish each one through the Registry's permissionless
+/// `Begin -> Append -> Finalize` path, paying real rent from a real wallet.
+/// This is the deployable shape, and running it is what makes a local campaign
+/// a rehearsal for a cluster rather than a demonstration on a substrate the
+/// cluster does not have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecordPublicationV1 {
+    Genesis,
+    Transaction,
+}
+
+impl RecordPublicationV1 {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Genesis => "genesis",
+            Self::Transaction => "transaction",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Result<Self> {
+        match value {
+            "genesis" => Ok(Self::Genesis),
+            "transaction" => Ok(Self::Transaction),
+            other => Err(Error::new(format!(
+                "record publication must be genesis or transaction, not {other}"
+            ))),
+        }
     }
 }
 
@@ -366,6 +412,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         Some(args.core_bootstrap_upgrade_authority),
     )?;
 
+    let publication = args.record_publication;
     let mut records = BTreeMap::new();
     records.insert(
         "execution_release_set".into(),
@@ -374,6 +421,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             args.registry_program,
             EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
             &release_set_bytes,
+            publication,
         )?,
     );
     for (label, facts) in [
@@ -392,6 +440,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
                 args.registry_program,
                 ARTIFACT_RELEASE_SCHEMA_ID_V1,
                 &facts.release.to_bytes(),
+                publication,
             )?,
         );
     }
@@ -402,15 +451,22 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             args.registry_program,
             PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
             &provider_release_bytes,
+            publication,
         )?,
     );
 
     let plan = SuccessorPlan {
         schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
-        genesis_boundary: vec![
-            "Genesis fixtures are six immutable Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and finalized Registry record bodies.".into(),
-            "Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution are not genesis-prepared.".into(),
-        ],
+        genesis_boundary: match publication {
+            RecordPublicationV1::Genesis => vec![
+                "Genesis fixtures are six immutable Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and finalized Registry record bodies.".into(),
+                "Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution are not genesis-prepared.".into(),
+            ],
+            RecordPublicationV1::Transaction => vec![
+                "Genesis fixtures are six immutable Loader-v3 programs and one authority-bearing pre-init Core Loader-v3 program with the same exact ELF. Nothing else. No protocol state exists at genesis.".into(),
+                "Every infrastructure record body, Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution is a real transaction. This is the shape a cluster can reach.".into(),
+            ],
+        },
         bootstrap_order: vec![
             "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
             "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
@@ -451,6 +507,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             rent_artifact_release_id: hex(rent.id.as_bytes()),
         },
         records,
+        record_publication: publication.as_str().into(),
         provider_release_id: hex(&provider_release_id),
         fixture_publish_time: FIXTURE_PUBLISH_TIME,
         genesis_accounts: writer.accounts,
@@ -826,8 +883,7 @@ mod tests {
         assert!(hex32("00").is_err());
     }
 
-    #[test]
-    fn prepare_materializes_only_seven_loaders_and_nine_finalized_records() {
+    fn prepared_plan(publication: RecordPublicationV1) -> (SuccessorPlan, PathBuf) {
         let root =
             std::env::temp_dir().join(format!("dclutch-successor-plan-{}", Pubkey::new_unique()));
         fs::create_dir(&root).expect("create test root");
@@ -872,8 +928,16 @@ mod tests {
             rent_credit_elf,
             rent_credit_sha256,
             rent_credit_semantic_release_id: hex(&[17; 32]),
+            record_publication: publication,
         })
         .expect("prepare infrastructure plan");
+        (plan, root)
+    }
+
+    #[test]
+    fn prepare_materializes_only_seven_loaders_and_nine_finalized_records() {
+        let (plan, root) = prepared_plan(RecordPublicationV1::Genesis);
+        assert_eq!(plan.record_publication, "genesis");
         assert_eq!(plan.genesis_accounts.len(), 23);
         assert_eq!(plan.records.len(), 9);
         assert!(
@@ -891,5 +955,68 @@ mod tests {
             plan.rent_credit.artifact_release_id
         );
         fs::remove_dir_all(&root).expect("remove scoped test root");
+    }
+
+    /// The deployable shape: genesis carries the seven programs and nothing
+    /// else. Every record coordinate must be identical to the genesis-injected
+    /// plan's, because a record's address is a function of schema and content
+    /// and never of who wrote the bytes.
+    #[test]
+    fn transaction_publication_leaves_genesis_holding_only_the_seven_programs() {
+        let (genesis, genesis_root) = prepared_plan(RecordPublicationV1::Genesis);
+        let (transaction, transaction_root) = prepared_plan(RecordPublicationV1::Transaction);
+
+        assert_eq!(transaction.record_publication, "transaction");
+        assert_eq!(transaction.genesis_accounts.len(), 14);
+        assert_eq!(transaction.records.len(), 9);
+        assert!(
+            transaction
+                .genesis_accounts
+                .keys()
+                .all(|label| label.starts_with("loader."))
+        );
+
+        for (label, pair) in &transaction.records {
+            let genesis_pair = genesis
+                .records
+                .get(label)
+                .expect("both modes derive the same record set");
+            assert_eq!(pair.raw, genesis_pair.raw, "raw record moved for {label}");
+            assert_eq!(pair.staging, genesis_pair.staging);
+            assert_eq!(pair.content_sha256, genesis_pair.content_sha256);
+            assert_eq!(pair.body_hex, genesis_pair.body_hex);
+            // The carried body must be the body the coordinate commits to.
+            let body = hex32_bytes(&pair.body_hex).expect("record body hex");
+            assert_eq!(hex(&sha256_bytes(&body)), pair.content_sha256);
+            assert!(
+                !body.is_empty(),
+                "record {label} carried an empty body into transaction mode"
+            );
+        }
+
+        fs::remove_dir_all(&genesis_root).expect("remove scoped test root");
+        fs::remove_dir_all(&transaction_root).expect("remove scoped test root");
+    }
+
+    fn hex32_bytes(value: &str) -> Option<Vec<u8>> {
+        if !value.len().is_multiple_of(2) {
+            return None;
+        }
+        let bytes = value.as_bytes();
+        let mut out = Vec::with_capacity(value.len() / 2);
+        for pair in bytes.chunks_exact(2) {
+            let high = nibble(pair[0])?;
+            let low = nibble(pair[1])?;
+            out.push((high << 4) | low);
+        }
+        Some(out)
+    }
+
+    fn nibble(value: u8) -> Option<u8> {
+        match value {
+            b'0'..=b'9' => Some(value - b'0'),
+            b'a'..=b'f' => Some(value - b'a' + 10),
+            _ => None,
+        }
     }
 }

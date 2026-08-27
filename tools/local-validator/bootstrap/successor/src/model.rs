@@ -30,6 +30,13 @@ pub(crate) struct SuccessorRunSpec {
     pub(crate) custody: RunProgramInput,
     pub(crate) rent_credit: RunProgramInput,
     pub(crate) market: MarketRunInput,
+    /// Additive and optional: absent means `"genesis"`, which is exactly the
+    /// behaviour every v2 spec written before this field had. `"transaction"`
+    /// removes the nine infrastructure record bodies from genesis and makes
+    /// the supervisor publish them on chain, which is the only shape a real
+    /// cluster can reach.
+    #[serde(default)]
+    pub(crate) record_publication: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -75,6 +82,12 @@ pub(crate) struct RecordPair {
     pub(crate) staging: String,
     pub(crate) schema_id: String,
     pub(crate) content_sha256: String,
+    /// The complete record body. Under `record_publication = "genesis"` this
+    /// duplicates what the account file already holds; under `"transaction"`
+    /// it is the only carrier of the bytes, because nothing writes them at
+    /// genesis and the supervisor has to publish them through Registry
+    /// `Begin -> Append -> Finalize` like any other record.
+    pub(crate) body_hex: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -125,6 +138,10 @@ pub(crate) struct SuccessorPlan {
     pub(crate) core_bootstrap: CoreBootstrapPin,
     pub(crate) infrastructure_profile: InfrastructureProfilePin,
     pub(crate) records: BTreeMap<String, RecordPair>,
+    /// `"genesis"` or `"transaction"`. Devnet has no genesis, so the
+    /// transaction mode is the one a real deployment can actually reach; the
+    /// genesis mode exists because it is what every campaign to date has run.
+    pub(crate) record_publication: String,
     pub(crate) provider_release_id: String,
     pub(crate) fixture_publish_time: i64,
     pub(crate) genesis_accounts: BTreeMap<String, GenesisAccountPin>,
