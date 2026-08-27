@@ -118,6 +118,7 @@ pub(crate) struct HolderV1 {
 pub(crate) fn admit_open_market(
     rpc: &mut Rpc,
     addresses: &MarketAddressesV1,
+    evidence: &BTreeMap<String, AccountEvidence>,
     ledger: &mut ConservationLedgerV1,
 ) -> Result<(u64, u8)> {
     let market = rpc.required_account(addresses.founding_market, "founded Market")?;
@@ -174,6 +175,32 @@ pub(crate) fn admit_open_market(
     ] {
         ledger.watch(label, address);
     }
+
+    // L1 is only as total as the set of accounts it names, so the set is
+    // DISCOVERED rather than hand-listed: every address the founding recorded
+    // is re-read live, and any that is a live token account for this Mint joins
+    // the collateral partition. A hand-listed set silently narrows the law
+    // every time the founding grows an account; this one refuses to.
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+    for (label, recorded) in evidence {
+        let address = pubkey(&recorded.address)?;
+        if address == addresses.founder_wallet || address == addresses.hoard {
+            continue;
+        }
+        let Some(account) = rpc.account(address)? else {
+            ledger.watch(label, address);
+            continue;
+        };
+        let is_collateral = account.owner == token_program
+            && TokenAccount::parse(&account.data)
+                .map(|parsed| parsed.mint == addresses.mint.to_bytes())
+                .unwrap_or(false);
+        if is_collateral {
+            ledger.track_token_account(label, address);
+        } else {
+            ledger.watch(label, address);
+        }
+    }
     Ok((claim_unit_atoms, decimals))
 }
 
@@ -212,13 +239,19 @@ pub(crate) fn distribute_collateral(
     // The founder keeps a share too: a distribution that empties the founder is
     // a different scenario, and a journey that only ever tests the boundary
     // case is not testing the ordinary one.
+    //
+    // `share` is legitimately ZERO on the campaign as it stands, and that is a
+    // finding rather than a misconfiguration. The founding runs its projected-
+    // Custody prestate ladder TWICE -- once for the founding lane, once for the
+    // source-abort lane -- and each lane locks `initial_collateral_atoms / 2`.
+    // Two lanes therefore consume the entire supply: half ends in the Hoard,
+    // and half is refunded by the abort to a token account owned by an
+    // ephemeral beneficiary key the campaign never persists. The founder's own
+    // wallet ends at exactly zero. When that happens the holders are still
+    // opened -- they are the prestate the distribution needs and N stays a real
+    // knob over the ledger's census -- and the stage says plainly that it had
+    // nothing to send.
     let share = founder_before / u64::from(holder_count).saturating_add(1);
-    if share == 0 {
-        return Err(Error::new(format!(
-            "{founder_before} collateral atoms cannot be split across {holder_count} holders and \
-             the founder; raise the founding collateral or lower --holders"
-        )));
-    }
 
     let mut holders = Vec::with_capacity(holder_count as usize);
     let mut compute_units = 0_u64;
@@ -230,11 +263,7 @@ pub(crate) fn distribute_collateral(
         let mut initialize = Vec::with_capacity(33);
         initialize.push(INITIALIZE_ACCOUNT_3);
         initialize.extend_from_slice(owner.pubkey().as_ref());
-        let mut transfer = Vec::with_capacity(10);
-        transfer.push(TRANSFER_CHECKED);
-        transfer.extend_from_slice(&share.to_le_bytes());
-        transfer.push(decimals);
-        let instructions = [
+        let mut instructions = vec![
             create_account(
                 &payer.pubkey(),
                 &token.pubkey(),
@@ -250,7 +279,13 @@ pub(crate) fn distribute_collateral(
                 ],
                 data: initialize,
             },
-            Instruction {
+        ];
+        if share > 0 {
+            let mut transfer = Vec::with_capacity(10);
+            transfer.push(TRANSFER_CHECKED);
+            transfer.extend_from_slice(&share.to_le_bytes());
+            transfer.push(decimals);
+            instructions.push(Instruction {
                 program_id: token_program,
                 accounts: vec![
                     AccountMeta::new(addresses.founder_wallet, false),
@@ -259,8 +294,8 @@ pub(crate) fn distribute_collateral(
                     AccountMeta::new_readonly(payer.pubkey(), true),
                 ],
                 data: transfer,
-            },
-        ];
+            });
+        }
         let evidence = rpc.send_with_signers(
             &format!("journey: open and fund synthetic holder {index}"),
             &instructions,
@@ -292,18 +327,41 @@ pub(crate) fn distribute_collateral(
         });
     }
 
+    let (outcome, note) = if share > 0 {
+        (
+            "executed",
+            format!(
+                "{holder_count} synthetic holders opened a Token-2022 collateral account and \
+                 received {share} atoms each from the founder's remaining {founder_before}. \
+                 Collateral only: acquiring outcome tokens is a Claims mutation and is this \
+                 journey's named gap."
+            ),
+        )
+    } else {
+        (
+            "blocked",
+            format!(
+                "{holder_count} synthetic holders opened a Token-2022 collateral account and \
+                 received NOTHING, because the founder's wallet holds {founder_before} atoms. \
+                 The campaign runs its projected-Custody prestate ladder twice -- founding lane \
+                 and source-abort lane -- and each locks initial_collateral_atoms/2, so the two \
+                 together consume the entire supply: half is in the Hoard and half was refunded \
+                 by the abort into a token account owned by an ephemeral beneficiary key the \
+                 campaign never persists. Nobody can spend it, this journey included. That is a \
+                 CAMPAIGN shape, not a protocol defect -- in a real deployment the abort \
+                 beneficiary is a user's own key -- but it means post-Open collateral movement \
+                 needs a founding that does not lock the whole supply."
+            ),
+        )
+    };
     Ok((
         holders,
         StageReportV1 {
             stage: "post-open life: collateral distribution".into(),
-            outcome: "executed".into(),
+            outcome: outcome.into(),
             transactions: submitted,
             compute_units,
-            note: format!(
-                "{holder_count} synthetic holders opened a Token-2022 collateral account and \
-                 received {share} atoms each from the founder. Collateral only: acquiring outcome \
-                 tokens is a Claims mutation and is this journey's named gap."
-            ),
+            note,
         },
     ))
 }

@@ -131,6 +131,27 @@ Whether that is a defect in the atomic founding or a deliberate split between
 tier's. What the tier can say is that nobody had noticed the two paths do not
 meet.
 
+### The campaign locks the entire collateral supply, and strands half of it
+
+Not a protocol defect — a **campaign shape**, and worth writing down because it
+is invisible until something tries to spend afterwards. The founding runs its
+projected-Custody prestate ladder twice, once for the founding lane and once for
+the source-abort lane, and each lane locks `initial_collateral_atoms / 2`. Two
+lanes therefore consume the supply exactly: half ends in the Hoard, and half is
+refunded by the abort into a token account owned by an ephemeral beneficiary key
+the campaign never persists. **The founder's own wallet ends at exactly zero,
+and nobody can spend the refunded half — this journey included.**
+
+In a real deployment the abort beneficiary is a user's own key, so nothing is
+lost there. But post-Open collateral movement needs a founding that does not
+lock the whole supply, so the distribution stage opens its holders and reports
+`blocked` with nothing to send. The conservation ledger is what makes this
+visible rather than confusing: L1 stays green because the ledger DISCOVERS its
+collateral partition by re-reading every address the founding named and keeping
+the ones that are live token accounts for this Mint. A hand-listed partition
+would have shown a 500,000,000-atom hole and sent someone hunting a bug in the
+protocol.
+
 ## Files
 
 ```

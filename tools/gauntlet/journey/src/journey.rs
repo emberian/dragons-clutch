@@ -76,7 +76,7 @@ pub(crate) fn execute(
 
     let mut ledger = ConservationLedgerV1::new(addresses.mint);
     let (claim_unit_atoms, decimals) =
-        stages::admit_open_market(&mut session.rpc, &addresses, &mut ledger)?;
+        stages::admit_open_market(&mut session.rpc, &addresses, &session.accounts, &mut ledger)?;
     ledger.observe(&mut session.rpc, "founding through Open", 0)?;
 
     let mut stages = vec![StageReportV1 {
