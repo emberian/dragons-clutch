@@ -136,10 +136,18 @@ Three consequences for this repository, all actionable and none of them this
 lane's to execute:
 
 1. `docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md` pins a receiver ABI identity
-   captured from upstream commit `f50a3faf…`. That is the **legacy**
-   generation. It remains valid as local fixture evidence — it was never a
-   cluster release claim — but no production release row may be derived from it
-   for either cluster now.
+   captured from upstream commit `f50a3faf…`. **Corrected 2026-08-27 (PY lane,
+   verified-on-chain): that identity is the _upgraded_ generation, not the
+   legacy one.** Its `receiver.so` and `router.so` are byte-identical to the
+   live upgraded receiver and Wormhole receiver on *both* clusters, and its
+   recorded devnet `ProgramData` digests still reproduce the live devnet
+   accounts exactly. The 2026-08-22 capture named the upgraded program IDs and
+   took the upgraded binaries; the cutover made that generation canonical
+   without changing those bytes. Nothing in the ABI moved, and the
+   `pyth_price_route` campaign passes unmodified against the new generation.
+   The operative caution survives for a different reason: that file pins a
+   **lab** `Config` (`05038cf7…`) which exists on neither cluster, so no
+   production release row may be derived from it for either cluster.
 2. The legacy binaries **differ between clusters**: devnet's legacy receiver was
    redeployed 2026-08-25T14:38:48Z while mainnet's still carried a
    2025-03-16 binary, and the two clusters' legacy Wormhole-receiver
@@ -147,6 +155,23 @@ lane's to execute:
    (verified-on-chain). The upgraded generation, by contrast, has **identical**
    `ProgramData` sizes on both clusters, deployed 2026-05-05. Any pinned Pyth
    release must therefore be pinned **per cluster**, never assumed shared.
+
+   **Sharpened 2026-08-27 (PY lane, verified-on-chain).** For the upgraded
+   generation the size identity understates one thing and overstates another.
+   The binaries are not merely the same size, they are **byte-identical** —
+   receiver, Wormhole receiver and push oracle all hash the same on both
+   clusters. But the *accounts* are still not interchangeable, and the reason
+   is the 45-byte Loader V3 header, not the binary: deployment slot differs
+   (417,825,233/260/281 on mainnet-beta against 460,336,290/311/332 on devnet)
+   and so does the **upgrade authority** (`6oXTdojyfDS8m5VtTaYB9xRCxpKGSvKJFndLUPV3V3wT`
+   against `upg8KLALUN7ByDHiBu4wEbMDTC6UnSVFSYfTyGfXuzr`). The complete
+   `ProgramData` body digest therefore differs per cluster, as does the receiver
+   `Config` digest (`governance_authority` differs) and the `GuardianSet[0]`
+   account digest (`creation_time` differs by 104 s). So per-cluster pinning is
+   forced even where one ABI serves both clusters. Executable form:
+   `crates/dclutch-svm-harness/tests/pyth_upgraded_generation.rs` rebuilds all
+   six observed `ProgramData` bodies from one shared copy of each ELF plus six
+   committed per-cluster headers.
 3. Mainnet's legacy Wormhole receiver was upgraded at 2026-08-26T16:00:49Z.
    Under policy P-B, a live market pinned to its pre-upgrade `elf_digest` would
    have walked to its failure outcome yesterday. That is not a criticism of
@@ -183,9 +208,14 @@ $101.325000 (mainnet, 01:44:24Z) — the same real series.
 > 19-guardian strict-majority threshold ten.
 
 That framing is now stale. The guardian set backing Pyth on both clusters is
-**index 0, five keys, `expiration_time = 0`, byte-identical across devnet and
-mainnet-beta**, and guardian sets 1 through 5 have already been closed
-(verified-on-chain). The migration reached mainnet at 2026-08-26T16:02:14Z and
+**index 0, five keys, `expiration_time = 0`**, with **identical key material**
+across devnet and mainnet-beta, and guardian sets 1 through 5 have already been
+closed (verified-on-chain). *Corrected 2026-08-27 (PY lane): the key material
+is identical, the **accounts are not byte-identical**. `creation_time` is
+1778014551 on mainnet-beta and 1778014447 on devnet — 104 seconds apart — so
+the two accounts hash differently (`97d00e13…` against `8f11fb97…`). An adapter
+that binds a complete guardian-set account digest is cluster-specific; only the
+five keys are shared.* The migration reached mainnet at 2026-08-26T16:02:14Z and
 devnet 9 minutes 34 seconds later. Bridge config on both clusters and both
 program generations: `guardian_set_index = 0`, `fee = 0`.
 
@@ -201,7 +231,12 @@ both belong in the Product, not in a footnote:
 - The comparison the evidence file forbids is no longer the relevant one.
   `minimum_signatures = 3` and the guardian-set cardinality 5 are now the same
   quorum question, and the file's quorum-distinction paragraph should be
-  revisited by its owner.
+  revisited by its owner. **Done 2026-08-27**: see
+  `docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md` §Supersession. Three is exactly
+  the strict majority of five, so the receiver's own policy value and
+  `PythReleaseV1`'s strict-majority rule now coincide; they did not under the
+  nineteen-key set. The lab fixture's 5-of-19 is a *lab* shape and is not a
+  scaled model of the live 3-of-5.
 
 ### 2.5 Devnet is cranked ~20–100× slower than mainnet, by a different pusher
 
@@ -211,6 +246,33 @@ Measured over the last twelve updates to each account (verified-on-chain):
 | --- | --- | --- |
 | inter-update gaps | 310, 311, 311, 313, 314, 314, 315, 315, 316, 318 s | 0, 0, 2, 3, 6, 6, 9, 9, 9, 9, 10 s |
 | sole fee payer | `4p16wya1Vw2u9w22oah4yXQgySb6eWKRRLMsEXCreish` | `9F6ApEtzkHVdZXzsury6BYmyEh4pahDBxuhNLaGC6saC` |
+
+**Superseded 2026-08-27 (PY lane), and the tail is the whole finding.**
+Re-measured with `getSignaturesForAddress` over a much longer window,
+successful transactions only, distinct block times:
+
+| | devnet | mainnet |
+| --- | --- | --- |
+| window | 170.42 h (7.10 d) | 12.21 h |
+| gaps (n) | 1,997 | 7,017 |
+| min / p50 / p90 / p99 | 1 / 313 / 321 / 325 s | 1 / 7 / 9 / 13 s |
+| **max observed gap** | **4,784 s (1 h 19 m 44 s)** | **21 s** |
+| mean | 307.2 s | 6.3 s |
+
+The n = 12 sample had the central tendency right — its 310–318 s brackets the
+p50 of 313 s — and **missed the tail entirely**. The single largest devnet gap
+ran 2026-08-25T08:42:02Z → 10:01:46Z; the next largest was 354 s, so it was one
+discrete outage rather than drift. The **≥ 400 s** devnet budget recommended
+below would have refused every read for 79 consecutive minutes two days before
+this document was written.
+
+Two corrections to the row above. The devnet payer is confirmed
+(`4p16wya1…`, 12/12 in a fresh sample). Mainnet is **not** a sole payer: a
+sample of the most recent 12 postings found
+`9F6ApEtzkHVdZXzsury6BYmyEh4pahDBxuhNLaGC6saC` (9/12) *and*
+`9uFDvq24JQ8SzbFuQ5opBDfNy2NoCxUJCHdSapBxLufF` (3/12). That is a liveness
+difference in mainnet's favour, and it is a sample of 12 rather than an
+enumeration of the pusher set.
 
 Pyth's documentation states a 1-minute-heartbeat / 0.5%-deviation policy for
 sponsored feeds and states that sponsored feeds cover "Solana mainnet and
@@ -223,11 +285,18 @@ Two design consequences:
 - Any devnet majors Product must set `WindowSpecV1.max_age_seconds` from this
   measurement, not from the documentation. A 30-second staleness bound — the
   value in Pyth's own integration example — would reject essentially every
-  devnet read. Budget **≥ 400 s** on devnet and make it a Product parameter, so
-  that the same Product compiled against mainnet can tighten it to seconds.
-  *measured-profile, provisional*: one observation window is not a bound; the
-  first slice must re-measure over a longer period and report the maximum
-  observed gap.
+  devnet read. **Revised 2026-08-27**: budget from the measured *maximum*, not
+  the median. The ≥ 400 s figure originally written here came from a
+  median-shaped sample and is refuted by the 4,784 s gap above; a devnet
+  `max_age_seconds` below roughly 5,000 s must be justified against that
+  outage, not against the 313 s cadence. Make it a Product parameter so the
+  same Product compiled against mainnet can tighten it to seconds.
+  *measured-profile, provisional*: 170 hours is still a finite window and still
+  not a bound. The lifting plan is **continuous observation with a running
+  maximum**, not a longer one-off measurement — a second re-measurement would
+  reproduce the same class of error. Until that exists, treat provider silence
+  as an expected state served by the funded permissionless failure path of
+  §4.8, not as an anomaly a staleness constant can absorb.
 - The devnet pusher is a single third-party key we do not control. The
   guardian signature means it cannot forge a price; it fully controls **which
   signed update gets posted and when**, so freshness is a consumer-side
@@ -1139,7 +1208,7 @@ daemon could invent.
 
 | Product | What the claim is *about* | Transport | What blocks it |
 | --- | --- | --- | --- |
-| SOL/USD range and tail protection | the price of a major asset | **T-1**, Pyth devnet, upgraded generation | nothing structural; needs the §2.5 staleness re-measurement and a release pinned to the post-cutover generation |
+| SOL/USD range and tail protection | the price of a major asset | **T-1**, Pyth devnet, upgraded generation | nothing structural; the §2.5 re-measurement is **done** (max gap 4,784 s, not ~315 s) and the upgraded ABI is **unchanged**, so what remains is minting the two per-cluster release rows and setting `max_age_seconds` from the measured maximum |
 | BTC/ETH/USDC equivalents | same | **T-1** | confirm each feed is in the sponsored set on devnet and re-measure its cadence separately |
 | Meteora DBC graduation on mainnet | a specific mainnet account's discrete state | **T-3**, record profile, `Terminal` + `TerminalSample` | the family itself (§6) |
 | pump.fun graduation on mainnet | same | **T-3**, a *second* `decoding_rules_id` under the same `provider_family_id` | lands after DBC; requires disclosing that the pinned ELF binds an unpublished artifact |
@@ -1272,9 +1341,12 @@ Listed explicitly rather than filled in with plausible values.
 3. **Devnet↔mainnet `Clock` skew.** No measurement exists. §4.7's
    `max_cluster_skew_seconds` is *provisional* with the measurement as its
    lifting plan.
-4. **Devnet Pyth cadence beyond one window.** The 310–318 s figure is
-   *measured-profile* over twelve consecutive updates in a single observation
-   window. It is not a bound, and no maximum-gap measurement exists.
+4. **Devnet Pyth cadence beyond one window.** *Partially lifted 2026-08-27
+   (PY lane).* Re-measured over 1,997 gaps in a 170.42 h window: p50 313 s,
+   p99 325 s, **max 4,784 s**. A maximum-gap measurement now exists and it is
+   an order of magnitude above the cadence. Still not a bound — a finite window
+   never is — and the residual omission is now **continuous** observation with
+   a running maximum rather than another one-off sample. See §2.5.
 5. **Whether devnet sponsored feeds other than SOL/USD share that cadence.**
    Only SOL/USD was sampled; BTC, ETH and USDC accounts were confirmed to exist
    and decode, not to be cranked at any particular rate.
@@ -1344,6 +1416,21 @@ are reproduced here with their targets.
 | 33 | mainnet-beta | `getAccountInfo` | `6YLGQQEweF82hbPSWCSeJqifWyT8Pm4QXa3mWSLwjYSh` | 396 B, 19 keys (§3.2) |
 | 34 | devnet | `getAccountInfo` | `dxZtypiKT5D9LYzdPxjvSZER9MgYfeRVU5qpMTMTRs4` | **36 B, 1 key** (§3.2) |
 | 35–36 | both | `getMultipleAccounts` dataSlice(0,36) | `EFaNWErqAtVWufdNb7yofSHHfWFos843DFpu4JBw24at` | shim deployed on both (§3.6) |
+
+PY lane, 2026-08-27T02:02:16Z–02:09:54Z, 80 read-only calls (43 mainnet-beta,
+37 devnet). Complete log with targets:
+`fixtures/pyth/upgraded-2026-08-26/RPC_READS.md`.
+
+| # | Cluster | Method | Target | Result used in |
+| --- | --- | --- | --- | --- |
+| 37–38 | both | `getGenesisHash` | — | cluster identity re-confirmed, matches reads 1–2 |
+| 39–40 | both | `getMultipleAccounts` dataSlice(0,45) | `HDw2E7…`, `rec2HH…`, `pyt2F4…`, `7AviUf…` | upgraded Program accounts byte-identical across clusters (§2.2) |
+| 41–42 | both | `getMultipleAccounts` dataSlice(0,45) | upgraded `ProgramData` ×3 | per-cluster slot **and upgrade authority** (§2.2) |
+| 43–72 | both | `getAccountInfo` paged dataSlice | upgraded `ProgramData` ×3, complete bodies | all three ELFs **byte-identical across clusters**; lab fixture ELFs equal them (§2.2) |
+| 73–74 | both | `getBlockTime` | 417825233, 460336290 | both generations deployed 2026-05-05 (§2.2) |
+| 75–76 | both | `getMultipleAccounts` | `Config`, `GuardianSet[0]`, bridge config, `7AviUf…` | 5 keys, `creation_time` differs 104 s; `governance_authority` differs (§2.4) |
+| 77–78 | both | `getSignaturesForAddress` ×16 pages | `7AviUf…` | cadence over 170 h devnet / 12 h mainnet; max gap 4,784 s (§2.5) |
+| 79–80 | both | `getTransaction` ×24 | recent postings | mainnet is **not** a sole payer (§2.5) |
 
 Non-Solana HTTP probes, liveness only:
 `hermes.pyth.network/v2/updates/price/latest` → **401**;

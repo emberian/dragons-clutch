@@ -2,6 +2,20 @@
 //!
 //! Both provider campaigns consume these exact bytes and Loader observations;
 //! this module is the sole test owner of the captured provider truth.
+//!
+//! Generation: the two ELFs are the **upgraded** Pyth Core generation and were
+//! byte-identical to the live receiver and Wormhole receiver on `mainnet-beta`
+//! and `devnet` when last measured (2026-08-27, see
+//! `fixtures/pyth/upgraded-2026-08-26/PROVENANCE.md`). The Loader observations
+//! below reconstruct **devnet's** ProgramData accounts specifically — slot and
+//! upgrade authority are per cluster even though the ELF is not.
+//!
+//! Everything else here is lab, not cluster: the Config admits a synthetic
+//! source (chain 1, emitter `[0x01; 32]`) with fee 1 and
+//! `minimum_signatures = 5`, and the guardian set is nineteen synthetic
+//! upstream keys. The live generation admits one Pythnet source with fee 0,
+//! `minimum_signatures = 3`, and five Pyth keys. The lab's 5-of-19 is a lab
+//! shape, not a scaled model of the live 3-of-5.
 
 use std::str::FromStr;
 
@@ -511,7 +525,7 @@ pub async fn initialize_real_providers(
         &[],
     )
     .await
-    .expect("captured router ELF accepts the pinned 19-guardian initialization");
+    .expect("captured router ELF accepts the pinned synthetic 19-guardian lab initialization");
     let guardians = observed(context, provider.guardian_set)
         .await
         .expect("router GuardianSet zero exists");
@@ -616,7 +630,7 @@ pub async fn initialize_real_providers(
         &[],
     )
     .await
-    .expect("captured router ELF cryptographically verifies the pinned 13-of-19 VAA");
+    .expect("captured router ELF cryptographically verifies the pinned 13-of-19 lab VAA");
     let verified = observed(context, encoded.pubkey())
         .await
         .expect("verified EncodedVaa persists");

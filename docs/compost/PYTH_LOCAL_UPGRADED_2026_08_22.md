@@ -2,7 +2,7 @@
 
 ## Decision
 
-dClutch accepts ten immutable fixture files from Dragon's Clutch as
+dClutch accepts eleven immutable fixture files from Dragon's Clutch as
 non-production test evidence. No Dragon's Clutch Rust source, Source/Feed
 account, action router, instruction-sysvar parser, or workflow graph crosses
 the repository boundary.
@@ -45,8 +45,9 @@ future SBF program will own account authority, CPI ordering, and rollback.
 
 | File | SHA-256 |
 | --- | --- |
-| `PROVENANCE.md` | `636e590b02585c98e55ad8603bf06d03c7df2426a1816958f8eae2dffca2fd87` |
+| `PROVENANCE.md` | `2ac2344d5c5a2b0470349fcce305a23218ece64343277ae83f5d8c897481c874` |
 | `UPSTREAM_LICENSE` | `814162e3e1ec1c02ab68400bf98859ad73af3d67e19c026e98426a91085973a1` |
+| `guardian-set-0.account.hex` | `f1b139a3e279943758a39da80a64a0115a5c7d11640bc8579eee9256f77ec146` |
 | `price-update.account` | `e5435e5b2e54d6083a9d1230e33f0635f6c74eb9db62899cfbb559f99c798a2b` |
 | `receiver-config.account` | `05038cf707afceac3df1aae735b096344ad639506b00f1db0ac1c084d6b645aa` |
 | `receiver-initialize.data` | `d9c80906af92f99a0c8441f4463186056b1c12cb990999acfa198a46ec62729f` |
@@ -74,3 +75,55 @@ the captured router and receiver ELFs, require the full 134-byte price update,
 and prove that a dClutch refusal after provider CPI rolls back provider and
 dClutch writes atomically. Those tests are fresh implementations and may not
 copy the old harness.
+
+## Amendments
+
+### 2026-08-27 — digest drift corrected, and the fixture dated against the clusters
+
+Two record errors, both in this file rather than in the bytes:
+
+1. `PROVENANCE.md` was amended after transplant to document
+   `guardian-set-0.account.hex`, and this file still recorded the pre-amendment
+   digest `636e590b02585c98e55ad8603bf06d03c7df2426a1816958f8eae2dffca2fd87`.
+   The table now records the current digest, which is the one
+   `crates/dclutch-svm-harness/tests/support/pyth_provider.rs` has been
+   enforcing all along. No fixture byte changed.
+2. The eleventh file, `guardian-set-0.account.hex`, was missing from the table
+   and from the "ten files" count. Both are corrected.
+
+Separately, a bounded public-RPC observation on 2026-08-27 dated these bytes
+against the live clusters. The result matters for how this fixture is
+described:
+
+- `receiver.so` and `router.so` are **byte-identical to the live upgraded
+  receiver and Wormhole receiver on both `mainnet-beta` and `devnet`**, after
+  the 2026-08-26T16:00:49Z Pyth Core cutover. The directory name
+  `local-upgraded-` is accurate and was accurate before the cutover: this
+  capture named the upgraded program IDs and took the upgraded binaries.
+  Nothing in the ABI moved and the adapter needed no change.
+- The devnet `ProgramData` complete-body digests and deployment slots recorded
+  in `PROVENANCE.md` still reproduce the live devnet accounts exactly.
+
+What is **not** cluster-real in this directory, and must keep being labelled
+synthetic:
+
+| file | status |
+| --- | --- |
+| `receiver.so`, `router.so` | real, and currently live on both clusters |
+| `receiver-config.account` | **lab only** — chain 1 / emitter `[0x01; 32]`, fee 1, `minimum_signatures = 5`; the live Config admits Pythnet, fee 0, `minimum_signatures = 3` |
+| `guardian-set-0.account.hex` | **lab only** — nineteen synthetic upstream guardians; the live set is five Pyth keys |
+| `signed.vaa`, `receiver-post-update.data`, `price-update.account` | **lab only** — synthetic feed `[0x2a; 32]`, no asset meaning |
+| `router-initialize.data`, `receiver-initialize.data` | **lab only** — the initialization that produced the lab Config and guardian set |
+
+The lab's 5-of-19 quorum is a lab shape. It is not a scaled model of the live
+3-of-5 and must not be described as one. What the fixture proves is that the
+real router ELF performs real signature verification and that dClutch rolls
+back atomically around a successful provider post.
+
+The cluster-observed counterpart is `fixtures/pyth/upgraded-2026-08-26/`, which
+holds the third program of the generation (the push oracle, whose id change
+moved every per-feed account address), the per-cluster `ProgramData` headers,
+and the live `Config`, `GuardianSet[0]`, bridge config and SOL/USD accounts on
+both clusters. It deliberately does **not** duplicate `receiver.so` or
+`router.so`; the byte equality is the recorded fact instead. See
+`docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md` §Supersession.
