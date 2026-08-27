@@ -2265,6 +2265,7 @@ fn execute_authenticated_hot_v3(
         &rent,
         &aliases,
         profile_join,
+        None,
         &mut preplan_scratch,
         preplan_output_scalars,
         preplan_output_identities,
@@ -2395,18 +2396,21 @@ fn execute_authenticated_hot_v3(
         &rent,
         &aliases,
         profile_join,
+        Some(&preplanned_plans),
         &mut preplan_scratch,
         replan_output_scalars,
         replan_output_identities,
     )?;
     require_lifecycle_replan_agreement_v4(
-        &preplanned_plans,
         &revalidated_lifecycle,
         &transition_output_scalars,
         &transition_output_identities,
     )?;
     hot_cu_checkpoint!("effect-lifecycle-replan");
-    let lifecycle_plans = revalidated_lifecycle.plans;
+    // The replan agreed with this table invocation by invocation rather than
+    // building a duplicate of it, so the table the commit executes is the one
+    // the transition was handed and the replan reproduced.
+    let lifecycle_plans = preplanned_plans;
     let effect_accounts = downgraded_effect_accounts_v3(
         account_profile,
         tail_count,
@@ -4180,6 +4184,307 @@ struct PreparedLifecycleBatchV4 {
     identities: Vec<[u8; 32]>,
 }
 
+/// Where one prepared lifecycle invocation goes.
+///
+/// # Why the preparation runs twice, and what the second run actually has to do
+///
+/// `prepare_lifecycle_v4` is a pure function of its artifacts, the accounts,
+/// and one pair of register banks. The preplan evaluates it at the **request**
+/// registers and hands the resulting plan table to the transition. The replan
+/// evaluates it at the **transition's own output** registers, and the pair of
+/// them assert a fixed point: the transition's outputs must reproduce the plan
+/// table the transition was given, and must be unchanged by the lifecycle
+/// projection applied to them. That is not redundancy - a transition that
+/// rewrote a coordinate the plan reads would otherwise execute against a plan
+/// nobody ever validated - and there is no way to answer it except by
+/// evaluating the function at the transition's outputs.
+///
+/// What the second evaluation does **not** have to do is build a second copy of
+/// an answer it is only going to compare. So it does not: the replan verifies
+/// against the preplan's table as it goes and allocates nothing per invocation,
+/// where before it allocated a fresh plan vector, a `Vec<Vec<u8>>` of seeds and
+/// a `Vec<&[u8]>` of slices per invocation, and a binding vector - on an
+/// allocator whose `dealloc` is a no-op, all of it charged against
+/// total-ever-allocated for the lifetime of the instruction.
+///
+/// The one derivation it also skips is named at [`LifecycleSeedsV4::pending_bump`].
+enum LifecycleBatchSinkV4<'a> {
+    /// The preplan: collect the table the transition will be handed.
+    Collect(Vec<PreparedLifecycleInvocationV3>),
+    /// The replan: reproduce the table the preplan already produced.
+    Verify {
+        expected: &'a [PreparedLifecycleInvocationV3],
+        next: usize,
+    },
+}
+
+impl<'a> LifecycleBatchSinkV4<'a> {
+    /// Reserve the exact table width the plan declares.
+    fn new(
+        expected: Option<&'a [PreparedLifecycleInvocationV3]>,
+        planned: usize,
+    ) -> Result<Self, ProgramError> {
+        match expected {
+            None => {
+                // Exact capacity: the plan table declares how many invocations
+                // the batch has, so the output bank does not walk the
+                // allocator's doubling ladder.
+                let mut output = Vec::new();
+                output
+                    .try_reserve_exact(planned)
+                    .map_err(|_| TradingSbfError::Content)?;
+                Ok(Self::Collect(output))
+            }
+            Some(expected) => {
+                if expected.len() != planned {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                Ok(Self::Verify { expected, next: 0 })
+            }
+        }
+    }
+
+    /// The already-prepared invocation this ordinal must reproduce, if verifying.
+    fn expected(&self) -> Result<Option<&'a PreparedLifecycleInvocationV3>, ProgramError> {
+        match self {
+            Self::Collect(_) => Ok(None),
+            Self::Verify { expected, next } => Ok(Some(
+                expected.get(*next).ok_or(TradingSbfError::Transition)?,
+            )),
+        }
+    }
+
+    /// Admit one complete invocation, or refuse it against the preplan's.
+    fn admit(
+        &mut self,
+        plan: StateLifecyclePlanV3,
+        state: usize,
+        payer: Option<usize>,
+        rent_credit: Option<usize>,
+        seeds: LifecycleSeedsV4<'_>,
+        bindings: LifecycleBindingsV4<'_>,
+    ) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(output) => {
+                output.push(PreparedLifecycleInvocationV3 {
+                    plan,
+                    state,
+                    payer,
+                    rent_credit,
+                    seeds: seeds.collected()?,
+                    immutable_identity_bindings: bindings.collected()?,
+                });
+                Ok(())
+            }
+            Self::Verify { expected, next } => {
+                let prior = expected.get(*next).ok_or(TradingSbfError::Transition)?;
+                // Seeds and bindings were compared element by element as they
+                // were materialized; what is left is that every element was in
+                // fact reached.
+                seeds.exhausted()?;
+                bindings.exhausted()?;
+                if prior.plan != plan
+                    || prior.state != state
+                    || prior.payer != payer
+                    || prior.rent_credit != rent_credit
+                {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                *next = next.checked_add(1).ok_or(TradingSbfError::Transition)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// The collected table, or an empty one when this pass only verified.
+    fn finish(self, planned: usize) -> Result<Vec<PreparedLifecycleInvocationV3>, ProgramError> {
+        match self {
+            Self::Collect(output) => {
+                if output.len() != planned {
+                    return Err(TradingSbfError::Content.into());
+                }
+                Ok(output)
+            }
+            Self::Verify { expected, next } => {
+                if next != expected.len() {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                // The table this pass agreed with is the caller's own; handing
+                // back a duplicate of it is the allocation this pass exists to
+                // not make.
+                Ok(Vec::new())
+            }
+        }
+    }
+}
+
+/// One invocation's canonical seed vector, collected or verified.
+enum LifecycleSeedsV4<'a> {
+    Collect(Vec<Vec<u8>>),
+    Verify {
+        expected: &'a [Vec<u8>],
+        next: usize,
+    },
+}
+
+/// Where one invocation's canonical bump came from.
+enum LifecycleCanonicalBumpV4 {
+    /// Derived here, against the seeds this pass materialized.
+    Derived { address: Pubkey, bump: u8 },
+    /// Taken from the preplan's derivation over byte-identical seeds.
+    Reused { bump: u8 },
+}
+
+impl<'a> LifecycleSeedsV4<'a> {
+    fn new(expected: Option<&'a [Vec<u8>]>, seed_count: u8) -> Result<Self, ProgramError> {
+        match expected {
+            None => Ok(Self::Collect(Vec::with_capacity(usize::from(seed_count)))),
+            Some(expected) => {
+                if expected.len() != usize::from(seed_count) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                Ok(Self::Verify { expected, next: 0 })
+            }
+        }
+    }
+
+    /// Admit one materialized seed, or refuse it against the preplan's.
+    fn push(&mut self, bytes: &[u8]) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(seeds) => {
+                seeds.push(bytes.to_vec());
+                Ok(())
+            }
+            Self::Verify { expected, next } => {
+                if expected.get(*next).map(Vec::as_slice) != Some(bytes) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                *next = next.checked_add(1).ok_or(TradingSbfError::Transition)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// The canonical bump for the seeds pushed so far.
+    ///
+    /// The preplan derives it. **The replan does not**, and this is the one
+    /// recomputation the second pass skips outright:
+    /// [`Pubkey::try_find_program_address`] is a pure function of the seed
+    /// bytes and the program id, every one of those bytes has just been
+    /// compared byte-for-byte against the seeds the preplan derived from, and a
+    /// divergence in any of them refuses at [`Self::push`] before this is ever
+    /// reached. Re-running the SHA-256 ladder can only reproduce a value the
+    /// caller already holds, at a syscall per attempt.
+    ///
+    /// The address is not reconstructed either: the preplan checked its own
+    /// derivation against the state account's key, so the caller reads it off
+    /// that account, and the caller has already required the state coordinate
+    /// to be the preplan's.
+    fn pending_bump(&self, program_id: &Pubkey) -> Result<LifecycleCanonicalBumpV4, ProgramError> {
+        match self {
+            Self::Collect(seeds) => {
+                let seed_slices = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                let (address, bump) =
+                    Pubkey::try_find_program_address(seed_slices.as_slice(), program_id)
+                        .ok_or(TradingSbfError::Content)?;
+                Ok(LifecycleCanonicalBumpV4::Derived { address, bump })
+            }
+            Self::Verify { expected, next } => {
+                let [bump] = expected
+                    .get(*next)
+                    .ok_or(TradingSbfError::Transition)?
+                    .as_slice()
+                else {
+                    return Err(TradingSbfError::Transition.into());
+                };
+                Ok(LifecycleCanonicalBumpV4::Reused { bump: *bump })
+            }
+        }
+    }
+
+    fn collected(self) -> Result<Vec<Vec<u8>>, ProgramError> {
+        match self {
+            Self::Collect(seeds) => Ok(seeds),
+            Self::Verify { .. } => Err(TradingSbfError::Transition.into()),
+        }
+    }
+
+    fn exhausted(&self) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(_) => Err(TradingSbfError::Transition.into()),
+            Self::Verify { expected, next } => {
+                if *next == expected.len() {
+                    Ok(())
+                } else {
+                    Err(TradingSbfError::Transition.into())
+                }
+            }
+        }
+    }
+}
+
+/// One invocation's immutable identity bindings, collected or verified.
+enum LifecycleBindingsV4<'a> {
+    Collect(Vec<PreparedImmutableIdentityBindingV4>),
+    Verify {
+        expected: &'a [PreparedImmutableIdentityBindingV4],
+        next: usize,
+    },
+}
+
+impl<'a> LifecycleBindingsV4<'a> {
+    fn new(
+        expected: Option<&'a [PreparedImmutableIdentityBindingV4]>,
+        count: u16,
+    ) -> Result<Self, ProgramError> {
+        match expected {
+            None => Ok(Self::Collect(Vec::with_capacity(usize::from(count)))),
+            Some(expected) => {
+                if expected.len() != usize::from(count) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                Ok(Self::Verify { expected, next: 0 })
+            }
+        }
+    }
+
+    fn push(&mut self, binding: PreparedImmutableIdentityBindingV4) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(output) => {
+                output.push(binding);
+                Ok(())
+            }
+            Self::Verify { expected, next } => {
+                if expected.get(*next) != Some(&binding) {
+                    return Err(TradingSbfError::Transition.into());
+                }
+                *next = next.checked_add(1).ok_or(TradingSbfError::Transition)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn collected(self) -> Result<Vec<PreparedImmutableIdentityBindingV4>, ProgramError> {
+        match self {
+            Self::Collect(output) => Ok(output),
+            Self::Verify { .. } => Err(TradingSbfError::Transition.into()),
+        }
+    }
+
+    fn exhausted(&self) -> Result<(), ProgramError> {
+        match self {
+            Self::Collect(_) => Err(TradingSbfError::Transition.into()),
+            Self::Verify { expected, next } => {
+                if *next == expected.len() {
+                    Ok(())
+                } else {
+                    Err(TradingSbfError::Transition.into())
+                }
+            }
+        }
+    }
+}
+
 /// Rewrite one coordinate's planned lamport balance.
 ///
 /// Only the balance moves while a lifecycle batch is planned, so the candidate
@@ -4295,6 +4600,10 @@ fn prepare_lifecycle_v4<'a>(
     rent: &Rent,
     aliases: &[usize],
     profile_join: ValidatedProfileJoinV3<'_>,
+    // `None` on the preplan, which collects the table. `Some` on the replan,
+    // which reproduces it: see [`LifecycleBatchSinkV4`] for why the second
+    // evaluation is not redundant and why it allocates nothing.
+    expected: Option<&[PreparedLifecycleInvocationV3]>,
     scratch: &mut LifecyclePreplanScratchV4,
     // Rented, never allocated. Both preplan passes want a working copy of the
     // register banks they were handed, and on an allocator that never frees a
@@ -4339,8 +4648,6 @@ fn prepare_lifecycle_v4<'a>(
     let plan_count = policy
         .action_plan_count(action)
         .map_err(|_| TradingSbfError::Content)?;
-    // Exact capacity: the plan table declares how many invocations the batch
-    // has, so the output bank does not walk the allocator's doubling ladder.
     let mut planned = 0_usize;
     let mut counted = 0_u16;
     while counted < plan_count {
@@ -4358,10 +4665,7 @@ fn prepare_lifecycle_v4<'a>(
             .ok_or(TradingSbfError::Content)?;
         counted = counted.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    let mut output = Vec::new();
-    output
-        .try_reserve_exact(planned)
-        .map_err(|_| TradingSbfError::Content)?;
+    let mut sink = LifecycleBatchSinkV4::new(expected, planned)?;
     let mut ordinal = 0_u16;
     while ordinal < plan_count {
         let selected = policy
@@ -4386,6 +4690,7 @@ fn prepare_lifecycle_v4<'a>(
             {
                 return Err(TradingSbfError::Content.into());
             }
+            let prior = sink.expected()?;
             let indices = selected
                 .project_account_indices(account_profile, tail_count, item)
                 .map_err(|_| TradingSbfError::Content)?;
@@ -4403,7 +4708,8 @@ fn prepare_lifecycle_v4<'a>(
             let seed_count = selected
                 .seed_count()
                 .map_err(|_| TradingSbfError::Content)?;
-            let mut seeds = Vec::with_capacity(usize::from(seed_count));
+            let mut seeds =
+                LifecycleSeedsV4::new(prior.map(|prior| prior.seeds.as_slice()), seed_count)?;
             let mut derived = None;
             let mut canonical_bump = None;
             let mut seed = 0_u8;
@@ -4416,18 +4722,29 @@ fn prepare_lifecycle_v4<'a>(
                         if canonical_bump.is_some() {
                             return Err(TradingSbfError::Content.into());
                         }
-                        seeds.push(value.as_slice().to_vec());
+                        seeds.push(value.as_slice())?;
                     }
                     LifecycleSeedInputValueV3::CanonicalBump => {
                         if seed.checked_add(1) != Some(seed_count) || canonical_bump.is_some() {
                             return Err(TradingSbfError::Content.into());
                         }
-                        let seed_slices = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
-                        let (address, bump) =
-                            Pubkey::try_find_program_address(seed_slices.as_slice(), program_id)
-                                .ok_or(TradingSbfError::Content)?;
-                        seeds.push(vec![bump]);
-                        derived = Some(address);
+                        let bump = match seeds.pending_bump(program_id)? {
+                            LifecycleCanonicalBumpV4::Derived { address, bump } => {
+                                derived = Some(address);
+                                bump
+                            }
+                            LifecycleCanonicalBumpV4::Reused { bump } => {
+                                // The preplan derived this address from these
+                                // exact seed bytes and checked it against this
+                                // exact account; `admit` refuses below unless
+                                // the state coordinate is the preplan's too.
+                                derived = Some(
+                                    *accounts.get(state).ok_or(TradingSbfError::Content)?.key,
+                                );
+                                bump
+                            }
+                        };
+                        seeds.push(&[bump])?;
                         canonical_bump = Some(bump);
                     }
                 }
@@ -4503,11 +4820,20 @@ fn prepare_lifecycle_v4<'a>(
                 },
             )
             .map_err(|_| TradingSbfError::Content)?;
-            let immutable_identity_bindings = prepare_immutable_identity_bindings_v4(
+            let binding_count = selected
+                .immutable_identity_binding_count()
+                .map_err(|_| TradingSbfError::Content)?;
+            let mut immutable_identity_bindings = LifecycleBindingsV4::new(
+                prior.map(|prior| prior.immutable_identity_bindings.as_slice()),
+                binding_count,
+            )?;
+            absorb_immutable_identity_bindings_v4(
                 selected,
                 account_profile,
                 item,
                 next_identities,
+                binding_count,
+                &mut immutable_identity_bindings,
             )?;
             match plan {
                 StateLifecyclePlanV3::Authenticate(_) => {}
@@ -4531,14 +4857,14 @@ fn prepare_lifecycle_v4<'a>(
                     }
                 }
             }
-            output.push(PreparedLifecycleInvocationV3 {
+            sink.admit(
                 plan,
                 state,
                 payer,
                 rent_credit,
                 seeds,
                 immutable_identity_bindings,
-            });
+            )?;
             output_scalars.copy_from_slice(next_scalars);
             output_identities.copy_from_slice(next_identities);
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
@@ -4546,22 +4872,25 @@ fn prepare_lifecycle_v4<'a>(
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(PreparedLifecycleBatchV4 {
-        plans: output,
+        plans: sink.finish(planned)?,
         scalars: output_scalars,
         identities: output_identities,
     })
 }
 
-fn prepare_immutable_identity_bindings_v4(
+/// Materialize one invocation's immutable identity bindings into `output`.
+///
+/// Streaming rather than returning a vector: the replan's `output` compares
+/// each binding against the preplan's and keeps nothing, so on the second pass
+/// this allocates zero.
+fn absorb_immutable_identity_bindings_v4(
     selected: dclutch_account_profile_contract::lifecycle_v3::SelectedLifecycleV3<'_>,
     profile: AccountProfileV2<'_>,
     item: Option<u32>,
     identities: &[[u8; 32]],
-) -> Result<Vec<PreparedImmutableIdentityBindingV4>, ProgramError> {
-    let count = selected
-        .immutable_identity_binding_count()
-        .map_err(|_| TradingSbfError::Content)?;
-    let mut output = Vec::with_capacity(usize::from(count));
+    count: u16,
+    output: &mut LifecycleBindingsV4<'_>,
+) -> Result<(), ProgramError> {
     let mut ordinal = 0_u16;
     while ordinal < count {
         let binding = selected
@@ -4590,23 +4919,30 @@ fn prepare_immutable_identity_bindings_v4(
         output.push(PreparedImmutableIdentityBindingV4 {
             data_offset: binding.data_offset(),
             canonical,
-        });
+        })?;
         ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(output)
+    Ok(())
 }
 
+/// Require the transition's own outputs to be a fixed point of the lifecycle
+/// projection.
+///
+/// The other half of the agreement - that the replan reproduces the preplan's
+/// plan table - is decided invocation by invocation inside the replan itself,
+/// at [`LifecycleBatchSinkV4::admit`], so it refuses at the first divergence
+/// instead of after building a whole second table to compare. What is left here
+/// is the half that is about the transition rather than the plan: the registers
+/// the replan projects out of the transition's outputs must be those outputs.
+///
+/// The preplan's own register banks are rented out to the replan by the time
+/// this runs and were never part of this agreement.
 fn require_lifecycle_replan_agreement_v4(
-    // The preplan's own register banks are rented out to the replan by the time
-    // the two batches are compared, and were never part of this agreement:
-    // only the plan table is, and the replan's registers against the transition.
-    preplanned_plans: &[PreparedLifecycleInvocationV3],
     revalidated: &PreparedLifecycleBatchV4,
     transition_scalars: &[u64],
     transition_identities: &[[u8; 32]],
 ) -> Result<(), ProgramError> {
-    if preplanned_plans != revalidated.plans.as_slice()
-        || revalidated.scalars != transition_scalars
+    if revalidated.scalars != transition_scalars
         || revalidated.identities != transition_identities
     {
         Err(TradingSbfError::Transition.into())
@@ -9098,6 +9434,210 @@ mod tests {
                 &aliases,
             ),
             Ok(false)
+        );
+    }
+
+    fn preplanned_invocation(state: usize, seed: u8, canonical: u8) -> PreparedLifecycleInvocationV3 {
+        PreparedLifecycleInvocationV3 {
+            plan: StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+                state: [seed; 32],
+                data_bytes: 64,
+                lamports: 1,
+                bump: 254,
+            }),
+            state,
+            payer: None,
+            rent_credit: None,
+            seeds: alloc::vec![alloc::vec![seed, seed], alloc::vec![254]],
+            immutable_identity_bindings: alloc::vec![PreparedImmutableIdentityBindingV4 {
+                data_offset: 16,
+                canonical: [canonical; 32],
+            }],
+        }
+    }
+
+    /// A replan that materializes a different seed byte refuses at that seed,
+    /// before it can reach a derivation it is no longer entitled to reuse.
+    #[test]
+    fn a_replan_seed_that_differs_from_the_preplan_refuses() {
+        let prior = preplanned_invocation(1, 0x11, 0x63);
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(seeds.push(&[0x11, 0x11]).is_ok());
+        let mut diverged =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(diverged.push(&[0x11, 0x12]).is_err());
+        // A seed of the right bytes but the wrong width is not the same seed.
+        let mut short = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(short.push(&[0x11]).is_err());
+        // And a table of a different seed width never opens at all.
+        assert!(LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 3).is_err());
+    }
+
+    /// The replan reuses the preplan's bump rather than deriving it, and takes
+    /// it from the preplan's own final seed.
+    #[test]
+    fn the_replan_reuses_the_preplan_bump_and_refuses_a_malformed_one() {
+        let prior = preplanned_invocation(1, 0x11, 0x63);
+        let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        let program = Pubkey::new_from_array([0x77; 32]);
+        assert!(matches!(
+            seeds.pending_bump(&program).expect("reused bump"),
+            LifecycleCanonicalBumpV4::Reused { bump: 254 }
+        ));
+        // A preplan whose final seed is not a single bump byte is not a bump.
+        let malformed = PreparedLifecycleInvocationV3 {
+            seeds: alloc::vec![alloc::vec![0x11, 0x11], alloc::vec![254, 254]],
+            ..preplanned_invocation(1, 0x11, 0x63)
+        };
+        let mut seeds =
+            LifecycleSeedsV4::new(Some(malformed.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        assert!(seeds.pending_bump(&program).is_err());
+    }
+
+    /// The preplan derives the bump for real; the two modes are not
+    /// interchangeable in either direction.
+    #[test]
+    fn the_preplan_derives_and_never_borrows_a_verified_answer() {
+        let mut seeds = LifecycleSeedsV4::new(None, 2).expect("collect");
+        seeds.push(&[0x11, 0x11]).expect("collected");
+        let program = Pubkey::new_from_array([0x77; 32]);
+        assert!(matches!(
+            seeds.pending_bump(&program).expect("derived"),
+            LifecycleCanonicalBumpV4::Derived { .. }
+        ));
+        // A collecting cursor is never "exhausted", and a verifying one never
+        // yields a collected vector: the two modes cannot be confused silently.
+        assert!(seeds.exhausted().is_err());
+        let prior = preplanned_invocation(1, 0x11, 0x63);
+        let verifying =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        assert!(verifying.collected().is_err());
+    }
+
+    /// Every difference the replan can produce in one invocation refuses, and
+    /// the plan table it agrees with is never a duplicate it allocated.
+    #[test]
+    fn a_replan_invocation_that_differs_anywhere_refuses() {
+        let expected = alloc::vec![preplanned_invocation(1, 0x11, 0x63)];
+        let prior = expected.first().expect("one preplanned invocation");
+        let program = Pubkey::new_from_array([0x77; 32]);
+        let agreeing = |state: usize, canonical: u8| {
+            let sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
+            let mut seeds =
+                LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+            seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+            let LifecycleCanonicalBumpV4::Reused { bump } =
+                seeds.pending_bump(&program).expect("reused")
+            else {
+                return Err(TradingSbfError::Content.into());
+            };
+            seeds.push(&[bump]).expect("bump agrees");
+            let mut bindings = LifecycleBindingsV4::new(
+                Some(prior.immutable_identity_bindings.as_slice()),
+                1,
+            )
+            .expect("verify");
+            bindings
+                .push(PreparedImmutableIdentityBindingV4 {
+                    data_offset: 16,
+                    canonical: [canonical; 32],
+                })
+                .map(|()| (sink, seeds, bindings, state))
+        };
+        // The faithful replan is admitted and hands back no second table.
+        let (mut sink, seeds, bindings, state) = agreeing(1, 0x63).expect("faithful bindings");
+        sink.admit(prior.plan, state, None, None, seeds, bindings)
+            .expect("faithful replan agrees");
+        assert!(sink.finish(1).expect("verified").is_empty());
+        // A different state coordinate refuses.
+        let (mut sink, seeds, bindings, _) = agreeing(1, 0x63).expect("faithful bindings");
+        assert!(
+            sink.admit(prior.plan, 2, None, None, seeds, bindings)
+                .is_err()
+        );
+        // A different payer coordinate refuses.
+        let (mut sink, seeds, bindings, state) = agreeing(1, 0x63).expect("faithful bindings");
+        assert!(
+            sink.admit(prior.plan, state, Some(4), None, seeds, bindings)
+                .is_err()
+        );
+        // A different plan refuses.
+        let (mut sink, seeds, bindings, state) = agreeing(1, 0x63).expect("faithful bindings");
+        assert!(
+            sink.admit(
+                StateLifecyclePlanV3::Authenticate(AuthenticateStatePlanV3 {
+                    state: [0x11; 32],
+                    data_bytes: 64,
+                    lamports: 2,
+                    bump: 254,
+                }),
+                state,
+                None,
+                None,
+                seeds,
+                bindings,
+            )
+            .is_err()
+        );
+        // A different immutable identity binding refuses at the binding.
+        assert!(agreeing(1, 0x64).is_err());
+    }
+
+    /// A replan table of the wrong width, or one that stops early, refuses.
+    #[test]
+    fn a_replan_table_of_the_wrong_width_refuses() {
+        let expected = alloc::vec![
+            preplanned_invocation(1, 0x11, 0x63),
+            preplanned_invocation(3, 0x21, 0x64),
+        ];
+        assert!(LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).is_err());
+        assert!(LifecycleBatchSinkV4::new(Some(expected.as_slice()), 3).is_err());
+        // Two invocations were declared; admitting none is not agreement.
+        let sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 2).expect("verify");
+        assert!(sink.finish(2).is_err());
+        // Nor is a preplan that collected fewer rows than it declared.
+        let sink = LifecycleBatchSinkV4::new(None, 2).expect("collect");
+        assert!(sink.finish(2).is_err());
+    }
+
+    /// Seeds and bindings the replan never reached are not agreement either:
+    /// a short walk must refuse rather than pass by silence.
+    #[test]
+    fn a_replan_that_skips_a_seed_or_a_binding_refuses() {
+        let expected = alloc::vec![preplanned_invocation(1, 0x11, 0x63)];
+        let prior = expected.first().expect("one preplanned invocation");
+        let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
+        let mut seeds =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        // The bump seed was never pushed.
+        let mut bindings =
+            LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
+                .expect("verify");
+        bindings
+            .push(PreparedImmutableIdentityBindingV4 {
+                data_offset: 16,
+                canonical: [0x63; 32],
+            })
+            .expect("binding agrees");
+        assert!(
+            sink.admit(prior.plan, 1, None, None, seeds, bindings)
+                .is_err()
+        );
+        // And the mirror: every seed reached, no binding reached.
+        let mut sink = LifecycleBatchSinkV4::new(Some(expected.as_slice()), 1).expect("verify");
+        let mut seeds =
+            LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+        seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+        seeds.push(&[254]).expect("bump agrees");
+        let bindings =
+            LifecycleBindingsV4::new(Some(prior.immutable_identity_bindings.as_slice()), 1)
+                .expect("verify");
+        assert!(
+            sink.admit(prior.plan, 1, None, None, seeds, bindings)
+                .is_err()
         );
     }
 
