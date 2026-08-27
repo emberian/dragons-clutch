@@ -484,8 +484,53 @@ pub fn validate_series_consume_invocation_v3<'a>(
     Ok(SeriesConsumeInvocationV3 {
         core_request,
         witness,
-        base_request_digest: hashv(&[core_request, witness]).to_bytes(),
+        base_request_digest: series_base_request_digest_v3(core_request, Some(witness))
+            .ok_or(SeriesArtifactErrorV3::Geometry)?,
     })
+}
+
+/// Domain for the Series base child-request commitment.
+pub(crate) const SERIES_BASE_REQUEST_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:series-base-request:v3";
+
+/// Commit one Series child request and its optional borrowed witness.
+///
+/// Domain ‖ 0x00 ‖ presence tag ‖ u32_le(request len) ‖ u32_le(witness len) ‖
+/// request ‖ witness. The lengths sit ahead of the data so the preimage can
+/// only be read back one way.
+///
+/// It was two expressions, in two files, and both were unframed: `hashv([
+/// request, witness])` where a witness existed and a bare `hash(request)` where
+/// none did. `hashv` concatenates its parts and frames nothing, so that
+/// committed only to `request ‖ witness` — every other split of the same bytes
+/// digests identically, and because the witnessless arm was a plain hash of the
+/// request, it collided with the witnessed arm for EVERY pair that spells the
+/// same buffer. The two arms could not be told apart at all.
+///
+/// The single definition is deliberate: two copies of a preimage convention is
+/// how the two copies came to disagree with the rest of the protocol.
+///
+/// `None` on a length that will not fit a `u32`, so each caller raises its own
+/// family error rather than this one guessing which is in scope.
+pub(crate) fn series_base_request_digest_v3(
+    request: &[u8],
+    witness: Option<&[u8]>,
+) -> Option<[u8; 32]> {
+    let presence = [0_u8, u8::from(witness.is_some())];
+    let request_len = u32::try_from(request.len()).ok()?.to_le_bytes();
+    let witness_len = u32::try_from(witness.map_or(0, <[u8]>::len))
+        .ok()?
+        .to_le_bytes();
+    Some(
+        hashv(&[
+            SERIES_BASE_REQUEST_DIGEST_DOMAIN_V3,
+            &presence,
+            &request_len,
+            &witness_len,
+            request,
+            witness.unwrap_or(&[]),
+        ])
+        .to_bytes(),
+    )
 }
 
 /// Bind the terminal Expire Core route to one exact permit request and proof.
@@ -1477,6 +1522,46 @@ mod tests {
         transition_output
     }
 
+    /// The base request digest must commit to the SPLIT, not just the bytes.
+    ///
+    /// This is the test the two call sites never had. The digest was
+    /// `hashv([request, witness])` with a bare `hash(request)` where no witness
+    /// existed, and every assertion anyone wrote about it recomputed that same
+    /// expression — so it could not fail whatever the expression was. Each case
+    /// below fails against the old form and passes against the framed one.
+    #[test]
+    fn the_base_request_digest_separates_every_split_of_the_same_bytes() {
+        let joined = b"REQUESTWITNESS";
+        let digest = |request: &[u8], witness: Option<&[u8]>| {
+            series_base_request_digest_v3(request, witness).expect("digest")
+        };
+
+        // Moving the boundary between request and witness must move the digest.
+        // Unframed, both of these hashed exactly `REQUESTWITNESS`.
+        assert_ne!(
+            digest(b"REQUEST", Some(b"WITNESS")),
+            digest(b"REQUESTWIT", Some(b"NESS"))
+        );
+
+        // A witnessless request must not collide with the pair that spells it.
+        // Unframed, the `None` arm WAS `hash(request)`, so this was an equality.
+        assert_ne!(digest(joined, None), digest(b"REQUEST", Some(b"WITNESS")));
+
+        // Absent and present-but-empty are different facts about the route.
+        assert_ne!(digest(joined, None), digest(joined, Some(b"")));
+
+        // And the framing must not have cost discrimination anywhere: equal
+        // inputs still agree, and a one-byte change still moves the digest.
+        assert_eq!(
+            digest(b"REQUEST", Some(b"WITNESS")),
+            digest(b"REQUEST", Some(b"WITNESS"))
+        );
+        assert_ne!(
+            digest(b"REQUEST", Some(b"WITNESS")),
+            digest(b"REQUESU", Some(b"WITNESS"))
+        );
+    }
+
     #[test]
     fn every_series_action_joins_one_exact_program_set_bundle() {
         for action in [
@@ -1546,7 +1631,8 @@ mod tests {
         );
         assert_eq!(
             selected.base_request_digest,
-            hashv(&[selected.core_request, selected.witness]).to_bytes()
+            series_base_request_digest_v3(selected.core_request, Some(selected.witness))
+                .expect("base request digest")
         );
 
         let mut padded = fixture.request.clone();
