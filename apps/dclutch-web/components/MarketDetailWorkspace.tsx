@@ -189,6 +189,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       <nav>
         <Link className="active" href="/markets">Markets</Link>
         <Link href="/portfolio">Portfolio</Link>
+        <Link href="/activity">Activity</Link>
         <Link href="/create">Create</Link>
         <Link href="/trade">Trade</Link>
         <Link href="/liquidity">Liquidity</Link>

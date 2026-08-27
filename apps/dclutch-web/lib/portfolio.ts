@@ -144,7 +144,7 @@ export function portfolioClaimV1(market: MarketDiscoveryCardV1, balances: Readon
       winningClaim: winner,
       redeemableAtoms: redeemable,
       perClaimAtoms: Object.freeze(balances.map((amount, index) => (index === winner ? amount : '0'))),
-      note: `Claim ${winner} is frozen as winning. A winning claim pays exactly one collateral atom per claim atom; every losing claim pays zero, and those atoms are shown as zero rather than hidden.`,
+      note: `Claim ${winner} is frozen as winning. Under a categorical Q=1 basis a winning claim pays exactly one collateral atom per claim atom; a graded basis pays its own exact per-claim rate from the ProductBasisV3 record, which this surface has not read — the chain settles the payout either way. Every losing claim pays zero, and those atoms are shown as zero rather than hidden.`,
     });
   }
   if (market.phase === 'Open') {

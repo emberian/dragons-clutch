@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { FormEvent, useState } from 'react';
 
-import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
+import RedeemFlow from '@/components/RedeemFlow';
+import WalletDirectory, { useWalletDirectoryV1, type WalletDirectoryHandleV1 } from '@/components/WalletDirectory';
 import {
   enumerateCoreMarketAddressesV1,
   parseMarketAddressListV1,
@@ -36,7 +37,15 @@ function MarketHeading({ market, address }: Readonly<{ market: MarketDiscoveryCa
   </div>;
 }
 
-function PositionEntry({ entry }: Readonly<{ entry: PortfolioEntryV1 }>) {
+type RedeemContextV1 = Readonly<{
+  endpoint: string;
+  claimsProgramId: string;
+  custodyProgramId: string;
+  registryProgramId: string;
+  directory: WalletDirectoryHandleV1;
+}>;
+
+function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; redeem: RedeemContextV1 }>) {
   const { position, market } = entry;
   return <article className={`portfolio-entry${position.status === 'refused' ? ' refused' : ''}`}>
     <MarketHeading market={market} address={entry.marketAddress} />
@@ -60,7 +69,7 @@ function PositionEntry({ entry }: Readonly<{ entry: PortfolioEntryV1 }>) {
           <li key={index} className={position.claim.kind === 'redeemable' && position.claim.winningClaim === index ? 'winning-outcome' : ''}>
             <span>claim {index}</span>
             <strong>{amount}</strong>
-            {position.claim.kind === 'redeemable' && <small>{position.claim.winningClaim === index ? `redeems ${position.claim.redeemableAtoms} collateral atoms` : 'redeems 0 collateral atoms'}</small>}
+            {position.claim.kind === 'redeemable' && <small>{position.claim.winningClaim === index ? `winning · ${position.claim.redeemableAtoms} atoms admitted to redemption` : 'losing · pays zero'}</small>}
           </li>
         ))}
       </ol>
@@ -70,10 +79,18 @@ function PositionEntry({ entry }: Readonly<{ entry: PortfolioEntryV1 }>) {
         <p>{position.claim.note}</p>
       </div>}
       {position.claim.kind === 'redeemable' && <div className="portfolio-claim">
-        <span>Redeemable collateral atoms</span>
+        <span>Winning-claim atoms admitted to redemption</span>
         <strong>{position.claim.redeemableAtoms}</strong>
         <p>{position.claim.note}</p>
       </div>}
+      {position.claim.kind === 'redeemable' && <RedeemFlow
+        endpoint={redeem.endpoint}
+        marketAddress={entry.marketAddress}
+        claimsProgramId={redeem.claimsProgramId}
+        custodyProgramId={redeem.custodyProgramId}
+        registryProgramId={redeem.registryProgramId}
+        directory={redeem.directory}
+      />}
       {position.claim.kind === 'unavailable' && <p className="market-capability-refusal"><span>no transition available</span>{position.claim.note}</p>}
       <dl className="market-card-facts">
         <div><dt>Claims aggregate named by the Position</dt><dd title={position.aggregateAddress}>{shortAddressV1(position.aggregateAddress, 8)}</dd></div>
@@ -91,6 +108,7 @@ export default function PortfolioWorkspace() {
   const [coreProgram, setCoreProgram] = useState('');
   const [claimsProgram, setClaimsProgram] = useState('');
   const [registryProgram, setRegistryProgram] = useState('');
+  const [custodyProgram, setCustodyProgram] = useState('');
   const [owner, setOwner] = useState('');
   const [addressList, setAddressList] = useState('');
   const [addOne, setAddOne] = useState('');
@@ -144,6 +162,7 @@ export default function PortfolioWorkspace() {
       <nav>
         <Link href="/markets">Markets</Link>
         <Link className="active" href="/portfolio">Portfolio</Link>
+        <Link href="/activity">Activity</Link>
         <Link href="/create">Create</Link>
         <Link href="/trade">Trade</Link>
         <Link href="/liquidity">Liquidity</Link>
@@ -173,6 +192,7 @@ export default function PortfolioWorkspace() {
         <label><span>Core program</span><input required value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
         <label><span>Claims program</span><input required value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
         <label><span>Registry program · optional</span><input value={registryProgram} onChange={(event) => setRegistryProgram(event.target.value.trim())} /></label>
+        <label><span>Custody program · optional, required to redeem</span><input value={custodyProgram} onChange={(event) => setCustodyProgram(event.target.value.trim())} /></label>
         <label><span>Owner address · wallet or pasted</span><input required value={owner} onChange={(event) => setOwner(event.target.value.trim())} /></label>
       </div>
       <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={(address) => setOwner(address)} />
@@ -204,7 +224,7 @@ export default function PortfolioWorkspace() {
         </div>
         {portfolio.entries.length === 0
           ? <p className="market-empty">{portfolio.reason}</p>
-          : <div className="market-card-grid">{portfolio.entries.map((entry) => <PositionEntry key={entry.marketAddress} entry={entry} />)}</div>}
+          : <div className="market-card-grid">{portfolio.entries.map((entry) => <PositionEntry key={entry.marketAddress} entry={entry} redeem={{ endpoint, claimsProgramId: claimsProgram, custodyProgramId: custodyProgram, registryProgramId: registryProgram, directory }} />)}</div>}
       </>}
     </section>
 

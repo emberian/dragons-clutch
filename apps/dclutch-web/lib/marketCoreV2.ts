@@ -260,7 +260,10 @@ export function decodeMarketCoreStateV2(address: string, bytes: Uint8Array): Mar
     : Object.freeze({
       status: 'terminal',
       label: 'terminal receipt accepted',
-      winner: bytes[CORE_STATE_TERMINAL_WINNER_OFFSET],
+      // The Rust codec writes terminal_winner as a u32; reading one byte was
+      // correct only because outcomes are capped at 16, and it silently
+      // discarded the upper three bytes instead of decoding them.
+      winner: u32(bytes, CORE_STATE_TERMINAL_WINNER_OFFSET),
       receiptId: hex(receipt),
     });
   // A phase and a receipt are two facts and must agree; a Market claiming a
