@@ -54,8 +54,9 @@ use dclutch_general_adapter_contract::{
     local_state_v3::GeneralLocalStateLayoutV3,
     release_v3::GENERAL_ACTIONS_V3,
     state_artifacts_v3::{
-        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GeneralChildRentWidthsV5,
-        encode_general_state_lifecycle_v5_atomic, general_state_lifecycle_bytes_v5,
+        GENERAL_PRIMARY_STATE_ACCOUNT_V3, GENERAL_TERMINAL_STATE_ACCOUNT_V3,
+        GeneralChildRentWidthsV5, encode_general_state_lifecycle_v5_atomic,
+        general_state_lifecycle_bytes_v5,
     },
     transition_artifacts_v3::{
         GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3, encode_general_transition_program_v3_atomic,
@@ -195,10 +196,7 @@ pub fn build_joined_general_artifacts_v5(
     validate_input(input)?;
     let mut actions = Vec::with_capacity(GENERAL_ACTIONS_V3.len());
     for action in GENERAL_ACTIONS_V3 {
-        let generated = action_artifacts(input, action);
-        #[cfg(test)]
-        std::eprintln!("joined-artifact action={action:?} result={:?}", generated.as_ref().map(|_| ()));
-        actions.push(generated?);
+        actions.push(action_artifacts(input, action)?);
     }
     let entries = actions
         .iter()
@@ -251,11 +249,8 @@ pub fn build_joined_general_artifacts_v5(
     for action in GENERAL_ACTIONS_V3 {
         let (selection, bytes) = output.selected(action)?;
         let request = canonical_request(action)?;
-        let authenticated =
-            authenticate_general_artifacts_v3(selection, bytes, &request, input.outcome_count);
-        #[cfg(test)]
-        std::eprintln!("joined-admission action={action:?} result={authenticated:?}");
-        authenticated.map_err(|_| JoinedGeneralArtifactErrorV5::Admission)?;
+        authenticate_general_artifacts_v3(selection, bytes, &request, input.outcome_count)
+            .map_err(|_| JoinedGeneralArtifactErrorV5::Admission)?;
     }
     Ok(output)
 }
@@ -265,38 +260,12 @@ fn action_artifacts(
     action: Action,
 ) -> Result<JoinedGeneralActionArtifactsV5, JoinedGeneralArtifactErrorV5> {
     let account_profile = account_profile(input.external_widths, action)?;
-    #[cfg(test)]
-    std::eprintln!("  account-profile ok");
     let lifecycle_policy = lifecycle(input, action)?;
-    #[cfg(test)]
-    {
-        let profile = dclutch_account_profile_contract::v2::AccountProfileV2::decode(
-            &account_profile,
-        );
-        let policy = dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePolicyV5::decode_selected(
-            digest(&lifecycle_policy),
-            digest(&lifecycle_policy),
-            &lifecycle_policy,
-        );
-        std::eprintln!(
-            "  lifecycle action={action:?} decode={:?} validate={:?}",
-            policy.as_ref().map(|_| ()),
-            policy
-                .as_ref()
-                .ok()
-                .zip(profile.as_ref().ok())
-                .map(|(policy, profile)| policy.validate_account_profile(*profile))
-        );
-    }
     let request_profile =
         dclutch_general_adapter_contract::specialization::general_request_profile_bytes_v1(action)
             .to_vec();
     let transition = transition(action)?;
-    #[cfg(test)]
-    std::eprintln!("  transition ok");
     let effect = effect(action)?;
-    #[cfg(test)]
-    std::eprintln!("  effect ok");
     let certificate = ExecutionStrategyCertificateV2::new(
         content(digest(&account_profile))?,
         content(dclutch_request_profile_contract::SCHEMA_RELEASE_ID)?,
@@ -388,7 +357,7 @@ fn account_profile(
 ) -> Result<Vec<u8>, JoinedGeneralArtifactErrorV5> {
     let fixed_count = general_account_profile_fixed_count_v3(action)
         .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
-    let operations = [
+    let mut operations = vec![
         AccountOperationInputV2::ProjectTailCountU32 {
             account: AccountCoordinateV2::fixed(
                 u16::try_from(HOT_RUNTIME_PORTFOLIO_COORDINATE_V3)
@@ -423,6 +392,50 @@ fn account_profile(
             data_offset: GeneralLocalStateLayoutV3::beneficiary(),
         },
     ];
+    // Every other action creates its primary state, so its lifecycle plan is
+    // what proves the account's owner. Close destroys that account instead:
+    // its rule is Exact, not LifecycleBound, and a debiting data-writing
+    // coordinate with no lifecycle creation must anchor its owner explicitly.
+    // The anchor is the trusted current executing program, so the profile
+    // itself refuses a settlement cursor owned by anything but this Trading
+    // Program before the transition is reached.
+    // Close also creates the terminal record at coordinate 6, and its plan's
+    // protected outputs are only sound when the profile itself observes that
+    // record's bump, rent principal and rent beneficiary. Without them the
+    // policy would name observation registers the profile never writes.
+    if action == Action::Close {
+        operations.push(AccountOperationInputV2::RequireOwner {
+            account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+            expected: IdentityCoordinateV2::common(
+                u16::try_from(identity::TRADING_PROGRAM)
+                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
+            ),
+        });
+        operations.push(AccountOperationInputV2::ProjectDataU8 {
+            account: AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
+            destination: ScalarCoordinateV2::common(
+                u16::try_from(scalar::TERMINAL_BUMP_OBSERVATION)
+                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
+            ),
+            data_offset: GeneralLocalStateLayoutV3::bump(),
+        });
+        operations.push(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
+            destination: ScalarCoordinateV2::common(
+                u16::try_from(scalar::TERMINAL_PRINCIPAL_OBSERVATION)
+                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
+            ),
+            data_offset: GeneralLocalStateLayoutV3::rent_principal(),
+        });
+        operations.push(AccountOperationInputV2::ProjectDataIdentity {
+            account: AccountCoordinateV2::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
+            destination: IdentityCoordinateV2::common(
+                u16::try_from(identity::TERMINAL_BENEFICIARY_OBSERVATION)
+                    .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?,
+            ),
+            data_offset: GeneralLocalStateLayoutV3::beneficiary(),
+        });
+    }
     let bytes = DYNAMIC_FIXED_SPAN_HEADER_BYTES
         .checked_add(DYNAMIC_FIXED_SPAN_ENTRY_BYTES)
         .and_then(|value| value.checked_add((usize::from(fixed_count) + 1) * RULE_BYTES))
@@ -430,17 +443,6 @@ fn account_profile(
         .ok_or(JoinedGeneralArtifactErrorV5::Input)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    #[cfg(test)]
-    for coordinate in 0..fixed_count {
-        let rule = general_account_profile_rule_v3(action, coordinate, widths)
-            .map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
-        if !matches!(
-            rule.rule.alias,
-            dclutch_account_profile_contract::v2::encode::AccountAliasInputV2::SelfCoordinate
-        ) {
-            std::eprintln!("  alias action={action:?} coordinate={coordinate} rule={rule:?}");
-        }
-    }
     let common_scalars = u16::try_from(GENERAL_HOT_COMMON_SCALARS_V3)
         .map_err(|_| JoinedGeneralArtifactErrorV5::Input)?;
     let item_scalar_stride = u16::try_from(GENERAL_HOT_ITEM_SCALAR_STRIDE_V3)
@@ -472,8 +474,6 @@ fn account_profile(
         &mut scratch,
         &mut output,
     );
-    #[cfg(test)]
-    std::eprintln!("  profile encode action={action:?} result={encoded:?}");
     encoded.map_err(|_| JoinedGeneralArtifactErrorV5::Encoding)?;
     Ok(output)
 }
@@ -600,9 +600,6 @@ mod tests {
         claims_programdata_prefix: 45,
         core_programdata_prefix: 45,
         realm_record: 112,
-        token_mint: 82,
-        token_account: 165,
-        token_program: 36,
         rent_credit: 48,
     };
 
