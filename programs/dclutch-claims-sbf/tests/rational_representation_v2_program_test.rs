@@ -9,6 +9,7 @@
 
 use std::{env, fs, path::PathBuf, vec::Vec};
 
+use dclutch_claims_sbf::ClaimsSbfError;
 use dclutch_claims_sbf::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
     TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_liability_basis_market_v2,
@@ -16,6 +17,7 @@ use dclutch_claims_sbf::liability_basis_v2::{
 };
 use dclutch_claims_svm::{
     CallerRole,
+    liability_basis_state_v2::LiabilityBasisMarketLayoutV2,
     product_basis_terminal_v3::{
         ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
         encode_product_basis_terminal_signed_delta_v3,
@@ -84,7 +86,7 @@ use dclutch_representation_composition_v3_kernel::{
     encode_composition_exposure_v3_atomic,
 };
 use dclutch_token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount};
-use solana_account::Account;
+use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
 };
@@ -3054,4 +3056,164 @@ async fn real_sbf_losing_terminal_burns_raw_shards_without_custody_payout() {
         accepted.wire_bytes,
         accepted.compute_units,
     );
+}
+
+/// The persisted namespace is the ONLY thing that names the Hoard, so what
+/// happens when it is wrong is the whole safety question.
+///
+/// The Claims aggregate's `custody_context` is now the sole persisted owner of
+/// the Market's Custody namespace: `terminal_settlement_v3`,
+/// `rational_terminal_v3`, `liability_basis_v2` and the operator all derive the
+/// Hoard Vault, the replay and the caller PDA from it and none of them assumes
+/// the Market address any more. That makes the field load-bearing, and a
+/// load-bearing field earns an adversarial case.
+///
+/// In every case below the founding's own state is untouched -- the Hoard holds
+/// its principal at
+/// `SHA-256(PROJECTED_HOARD_CONTEXT_DOMAIN_V1 || FOUNDING_ACTION_CONTEXT_V1)`
+/// and the live replay sits beside it -- and only the aggregate's claim about
+/// where that is moves. A substituted namespace must refuse and move nothing;
+/// it must never reach some other compartment's money.
+async fn a_substituted_custody_namespace_refuses(
+    substitute: fn(&Fixture) -> [u8; 32],
+    label: &str,
+) {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let substituted = substitute(&fixture);
+    let positive = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::RedeemTerminal,
+        0,
+        false,
+        None,
+        None,
+    );
+    let payer = context.payer.pubkey();
+    let addresses = lookup_addresses(
+        payer,
+        fixture.actor.pubkey(),
+        std::slice::from_ref(&positive),
+    );
+    let (table, _) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: substituted custody namespace",
+    )
+    .await;
+
+    let honest = observed(&mut context, fixture.aggregate).await;
+    assert_ne!(
+        substituted, fixture.custody_context,
+        "a substitution that is not a substitution proves nothing"
+    );
+    let mut lying = honest.clone();
+    lying
+        .data
+        .get_mut(
+            LiabilityBasisMarketLayoutV2::CUSTODY_CONTEXT
+                ..LiabilityBasisMarketLayoutV2::CUSTODY_CONTEXT + 32,
+        )
+        .expect("aggregate custody-context field")
+        .copy_from_slice(&substituted);
+    context.set_account(&fixture.aggregate, &AccountSharedData::from(lying));
+    let before = snapshot(&mut context, &fixture).await;
+
+    let result = submit_v0(
+        &mut context,
+        &fixture,
+        positive,
+        table,
+        &addresses,
+        &format!("claims rational-representation-v2: custody namespace substituted with {label}"),
+    )
+    .await
+    .expect("substituted-namespace transaction");
+    assert!(
+        !result.accepted,
+        "a Market that lies about its Custody namespace must not redeem: {:#?}",
+        result.logs
+    );
+    assert!(
+        result.logs.iter().any(|log| log
+            == &format!(
+                "Program {CLAIMS_PROGRAM_ID} failed: custom program error: {:#x}",
+                ClaimsSbfError::Identity as u32
+            )),
+        "the refusal must be Claims' own identity join, not an incidental failure: {:#?}",
+        result.logs
+    );
+    let after = snapshot(&mut context, &fixture).await;
+    assert_account_content_eq(
+        after.hoard.as_ref().expect("Hoard"),
+        before.hoard.as_ref().expect("pre Hoard"),
+    );
+    assert_account_content_eq(
+        after.recipient.as_ref().expect("recipient"),
+        before.recipient.as_ref().expect("pre recipient"),
+    );
+    assert_account_content_eq(
+        after.custody_replay.as_ref().expect("Custody replay"),
+        before.custody_replay.as_ref().expect("pre Custody replay"),
+    );
+    assert_eq!(
+        token_amount(after.hoard.as_ref().expect("Hoard")),
+        INITIAL_HOARD_ATOMS,
+        "the founding's principal must still be exactly where the founding left it"
+    );
+    assert!(
+        !result
+            .logs
+            .iter()
+            .any(|log| log == &format!("Program {CUSTODY_PROGRAM_ID} success")),
+        "a substituted namespace must not reach a successful Custody transfer: {:#?}",
+        result.logs
+    );
+}
+
+/// The coordinate every payout route assumed before this campaign.
+///
+/// `FoundingV5` wrote `request.market()` into `custody_context` while the same
+/// instruction had already authenticated the founding's real namespace, so an
+/// aggregate saying "Market address" is exactly the state the tree used to
+/// produce. It must now refuse rather than redeem against a Hoard that is not
+/// the founded one.
+#[tokio::test]
+async fn the_market_address_is_not_a_custody_namespace() {
+    a_substituted_custody_namespace_refuses(
+        |fixture| fixture.market.to_bytes(),
+        "the Market address",
+    )
+    .await;
+}
+
+/// A different founding's namespace, offered to this Market.
+///
+/// `GenericFoundingRequestV1::context` is caller-owned, so a second founding is
+/// a second 32 bytes and nothing more. The Vault seeds pin `market` and
+/// `release_set` either side of the context, so this cannot reach another
+/// Market's principal -- but it must not be allowed to name a compartment of
+/// THIS Market that the founding never funded either.
+#[tokio::test]
+async fn another_foundings_namespace_is_not_this_markets() {
+    a_substituted_custody_namespace_refuses(
+        |_| hashv(&[PROJECTED_HOARD_CONTEXT_DOMAIN_V1, &[0x70; 32]]).to_bytes(),
+        "a second founding's context digest",
+    )
+    .await;
+}
+
+/// The founding's own action context, unhashed.
+///
+/// The namespace is the DIGEST, not the context: `open_hoard` derives the Vault
+/// under `SHA-256(domain || context)` and the raw context names the Settlement
+/// funding-source compartment instead. Off by one hash is off by a whole
+/// compartment, and this is the case that says so.
+#[tokio::test]
+async fn the_unhashed_founding_context_is_not_the_namespace() {
+    a_substituted_custody_namespace_refuses(
+        |_| FOUNDING_ACTION_CONTEXT_V1,
+        "the raw founding action context",
+    )
+    .await;
 }
