@@ -20,6 +20,7 @@
 
 mod action;
 mod child_request;
+mod descriptor;
 mod lowering;
 
 pub use action::{
@@ -33,6 +34,11 @@ pub use child_request::{
     bind_structured_child_descriptor_v2, encode_structured_child_representation_v2,
     structured_child_effect_order_v2, structured_child_lifecycle_action_v2,
     structured_child_request_bytes_v2, structured_child_token_style_v2, structured_child_wire_v2,
+};
+pub use descriptor::{
+    StructuredDescriptorAuthorityV2, StructuredRepresentationDescriptorV2,
+    decode_derived_structured_descriptor_v2, derive_structured_representation_descriptor_v2,
+    structured_child_descriptor_from_derivation_v2,
 };
 pub use lowering::{
     StructuredHotProfileV2, lower_structured_hot_effects_v2, lower_structured_hot_rent_close_v2,
