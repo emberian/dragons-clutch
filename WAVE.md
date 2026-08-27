@@ -786,3 +786,15 @@ ember's explicit go.
   wave's convergence. Every rung is laid: GeneralTransitionV3.lean (first-run
   byte-identical), the four state envelopes, the OpenBatch root-write answer
   at common_rule's coordinate-0 arm. Evidence: GENERAL_TRIPLES_2026_08_27.md.
+
+## DEPLOY-1 queue (triggers: PIN-0012 + DIAG-82 green)
+
+The durable devnet deploy and the first market living there. Charter =
+decision 0012's substrate (mutable + slot-pin, ~31.7 SOL parked) deployed
+via the runbook's TPU path, then DRIVER's two honestly-open wirings: the
+founding stage (spec-vs-plan — execute_found_market is origin-agnostic
+already; wire the market input into the driver's plan without half-wiring
+principal) and the journey runner externalized onto the driver's persisted
+per-role forge. Then: the three-market exchange per the DEVNET-SMOKE
+charter (SMOKE-1), web pointed at devnet, the ledger against the public
+chain. Cost basis measured: deploy ~31.7 parked + 0.0287 activation + dust.
