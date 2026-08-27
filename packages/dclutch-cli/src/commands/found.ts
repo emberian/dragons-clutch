@@ -63,7 +63,19 @@ export async function found(context: CliContext, io: Io, env: NodeJS.ProcessEnv)
 
   io.out(`founding via ${binary}`);
   io.out(`  spec ${absoluteSpec}`);
-  const result = spawnSync(binary, args, { stdio: ['ignore', 'inherit', 'inherit'] });
+  // The producer pins its launcher to one exact RPC origin via
+  // $DCLUTCH_RPC_PORT (default 20890). The spec already names the origin, so
+  // derive the pin from the spec instead of making the caller repeat it.
+  const childEnv: NodeJS.ProcessEnv = { ...env };
+  const rpcUrl = typeof spec === 'object' && spec !== null ? (spec as Record<string, unknown>).rpc_url : undefined;
+  if (typeof rpcUrl === 'string' && childEnv.DCLUTCH_RPC_PORT === undefined) {
+    const port = new URL(rpcUrl).port;
+    if (port !== '') {
+      childEnv.DCLUTCH_RPC_PORT = port;
+      io.out(`  rpc port ${port} (derived from the spec's rpc_url)`);
+    }
+  }
+  const result = spawnSync(binary, args, { stdio: ['ignore', 'inherit', 'inherit'], env: childEnv });
   if (result.status !== 0) {
     io.err(`bootstrap run exited ${result.status ?? 'by signal'}`);
     return result.status ?? 1;
