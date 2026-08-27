@@ -21,7 +21,7 @@ pub const RELAY_INSTRUCTION_MAGIC: [u8; 8] = *b"DCLTRIX1";
 /// Shared relay instruction header width.
 pub const RELAY_INSTRUCTION_HEADER_BYTES: usize = 16;
 /// Exact `CreateRecord` instruction width.
-pub const CREATE_RECORD_INSTRUCTION_BYTES: usize = 144;
+pub const CREATE_RECORD_INSTRUCTION_BYTES: usize = 136;
 /// Fixed prefix before the inline attestation message in `AppendObservation`.
 pub const APPEND_OBSERVATION_PREFIX_BYTES: usize = 40;
 /// Fixed prefix before the inline seal message in `SealRecord`.
@@ -29,7 +29,7 @@ pub const SEAL_RECORD_PREFIX_BYTES: usize = 32;
 /// Exact `SealRecord` instruction width.
 pub const SEAL_RECORD_INSTRUCTION_BYTES: usize = SEAL_RECORD_PREFIX_BYTES + RELAYED_SEAL_BYTES;
 /// Exact `RetireRecord` instruction width.
-pub const RETIRE_RECORD_INSTRUCTION_BYTES: usize = 32;
+pub const RETIRE_RECORD_INSTRUCTION_BYTES: usize = 24;
 
 const ACTION_OFFSET: usize = 10;
 const HEADER_RESERVED_OFFSET: usize = 11;
@@ -39,7 +39,7 @@ const HEADER_RESERVED_BYTES: usize = 5;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum RelayActionV1 {
-    /// Create one observation record as a direct Market child.
+    /// Create one observation record under the Resolution role.
     CreateRecord = 1,
     /// Append one authenticated observation at the next position.
     AppendObservation = 2,
@@ -70,7 +70,6 @@ impl RelayActionV1 {
 pub struct CreateRecordInstructionV1 {
     generation: u64,
     observed_slot: u64,
-    expected_market_child_count: u64,
     set_count: u16,
     seal_threshold: u8,
     pda_bump: u8,
@@ -90,7 +89,6 @@ impl CreateRecordInstructionV1 {
     pub fn new(
         generation: u64,
         observed_slot: u64,
-        expected_market_child_count: u64,
         set_count: u16,
         seal_threshold: u8,
         pda_bump: u8,
@@ -108,7 +106,6 @@ impl CreateRecordInstructionV1 {
         Ok(Self {
             generation,
             observed_slot,
-            expected_market_child_count,
             set_count,
             seal_threshold,
             pda_bump,
@@ -141,16 +138,11 @@ impl CreateRecordInstructionV1 {
         )?;
         put(&mut out, 16, &self.generation.to_le_bytes())?;
         put(&mut out, 24, &self.observed_slot.to_le_bytes())?;
-        put(
-            &mut out,
-            32,
-            &self.expected_market_child_count.to_le_bytes(),
-        )?;
-        put(&mut out, 40, &self.set_count.to_le_bytes())?;
-        put(&mut out, 42, &[self.seal_threshold, self.pda_bump])?;
-        put(&mut out, 48, &self.source_material_id)?;
-        put(&mut out, 80, &self.source_spec_id)?;
-        put(&mut out, 112, &self.rent_beneficiary)?;
+        put(&mut out, 32, &self.set_count.to_le_bytes())?;
+        put(&mut out, 34, &[self.seal_threshold, self.pda_bump])?;
+        put(&mut out, 40, &self.source_material_id)?;
+        put(&mut out, 72, &self.source_spec_id)?;
+        put(&mut out, 104, &self.rent_beneficiary)?;
         Ok(out)
     }
 
@@ -161,10 +153,6 @@ impl CreateRecordInstructionV1 {
     /// The finalized foreign slot the record is seeded by.
     pub const fn observed_slot(self) -> u64 {
         self.observed_slot
-    }
-    /// The Market direct-child count the caller believes it is registering into.
-    pub const fn expected_market_child_count(self) -> u64 {
-        self.expected_market_child_count
     }
     /// The cardinality of the pinned ordered set.
     pub const fn set_count(self) -> u16 {
@@ -258,16 +246,12 @@ impl SealRecordInstructionV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetireRecordInstructionV1 {
     generation: u64,
-    expected_market_child_count: u64,
 }
 
 impl RetireRecordInstructionV1 {
     /// Construct one retire request.
-    pub const fn new(generation: u64, expected_market_child_count: u64) -> Self {
-        Self {
-            generation,
-            expected_market_child_count,
-        }
+    pub const fn new(generation: u64) -> Self {
+        Self { generation }
     }
 
     /// Encode the exact canonical bytes.
@@ -279,21 +263,12 @@ impl RetireRecordInstructionV1 {
             &[RelayActionV1::RetireRecord.byte()],
         )?;
         put(&mut out, 16, &self.generation.to_le_bytes())?;
-        put(
-            &mut out,
-            24,
-            &self.expected_market_child_count.to_le_bytes(),
-        )?;
         Ok(out)
     }
 
     /// The Market generation.
     pub const fn generation(self) -> u64 {
         self.generation
-    }
-    /// The Market direct-child count the caller believes it is decrementing.
-    pub const fn expected_market_child_count(self) -> u64 {
-        self.expected_market_child_count
     }
 }
 
@@ -327,17 +302,16 @@ impl<'a> RelayInstructionV1<'a> {
                     CREATE_RECORD_INSTRUCTION_BYTES,
                     RELAY_INSTRUCTION_MAGIC,
                 )?;
-                require_zero(bytes, 44, 4)?;
+                require_zero(bytes, 36, 4)?;
                 Ok(Self::CreateRecord(CreateRecordInstructionV1::new(
                     u64_at(bytes, 16)?,
                     u64_at(bytes, 24)?,
-                    u64_at(bytes, 32)?,
-                    u16_at(bytes, 40)?,
-                    one(bytes, 42)?,
-                    one(bytes, 43)?,
-                    crate::array(bytes, 48)?,
-                    crate::array(bytes, 80)?,
-                    crate::array(bytes, 112)?,
+                    u16_at(bytes, 32)?,
+                    one(bytes, 34)?,
+                    one(bytes, 35)?,
+                    crate::array(bytes, 40)?,
+                    crate::array(bytes, 72)?,
+                    crate::array(bytes, 104)?,
                 )?))
             }
             RelayActionV1::AppendObservation => {
@@ -373,10 +347,9 @@ impl<'a> RelayInstructionV1<'a> {
                     RETIRE_RECORD_INSTRUCTION_BYTES,
                     RELAY_INSTRUCTION_MAGIC,
                 )?;
-                Ok(Self::RetireRecord(RetireRecordInstructionV1::new(
-                    u64_at(bytes, 16)?,
-                    u64_at(bytes, 24)?,
-                )))
+                Ok(Self::RetireRecord(RetireRecordInstructionV1::new(u64_at(
+                    bytes, 16,
+                )?)))
             }
         }
     }
@@ -391,7 +364,6 @@ mod tests {
         let create = CreateRecordInstructionV1::new(
             7,
             423_941_138,
-            3,
             4,
             1,
             254,
@@ -406,7 +378,7 @@ mod tests {
             Ok(RelayInstructionV1::CreateRecord(create))
         );
 
-        let retire = RetireRecordInstructionV1::new(7, 4);
+        let retire = RetireRecordInstructionV1::new(7);
         let bytes = retire.to_bytes().expect("encode");
         assert_eq!(
             RelayInstructionV1::decode(&bytes),
@@ -438,7 +410,7 @@ mod tests {
 
     #[test]
     fn an_unknown_action_refuses() {
-        let mut bytes = RetireRecordInstructionV1::new(1, 1)
+        let mut bytes = RetireRecordInstructionV1::new(1)
             .to_bytes()
             .expect("encode");
         put(&mut bytes, ACTION_OFFSET, &[9]).expect("action");
@@ -450,7 +422,7 @@ mod tests {
 
     #[test]
     fn a_nonzero_header_reserved_span_refuses() {
-        let mut bytes = RetireRecordInstructionV1::new(1, 1)
+        let mut bytes = RetireRecordInstructionV1::new(1)
             .to_bytes()
             .expect("encode");
         put(&mut bytes, HEADER_RESERVED_OFFSET, &[1]).expect("reserved");
@@ -484,15 +456,15 @@ mod tests {
     #[test]
     fn a_seal_threshold_outside_the_key_set_bound_refuses_at_construction() {
         assert_eq!(
-            CreateRecordInstructionV1::new(1, 1, 0, 4, 0, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
+            CreateRecordInstructionV1::new(1, 1, 4, 0, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
             Err(Error::NonCanonicalKeySet)
         );
         assert_eq!(
-            CreateRecordInstructionV1::new(1, 1, 0, 4, 6, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
+            CreateRecordInstructionV1::new(1, 1, 4, 6, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
             Err(Error::NonCanonicalKeySet)
         );
         assert_eq!(
-            CreateRecordInstructionV1::new(1, 1, 0, 0, 1, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
+            CreateRecordInstructionV1::new(1, 1, 0, 1, 255, [0x11; 32], [0x12; 32], [0x13; 32]),
             Err(Error::InvalidSetGeometry)
         );
     }

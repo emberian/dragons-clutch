@@ -13,7 +13,6 @@ dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
-dclutch-source-contract = { path = "../dclutch-source-contract" }
 
 [lints]
 workspace = true

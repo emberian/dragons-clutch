@@ -20,7 +20,6 @@
 //! written **last**, so a partially written record can never advertise a more
 //! advanced phase than its contents.
 
-use dclutch_source_contract::MarketChildDeltaV1;
 
 use crate::{
     ADDRESS_BYTES, Error, MAX_RELAYED_ACCOUNTS_V1, RELAYED_RECORD_ACCOUNT_SET_ID_OFFSET,
@@ -412,8 +411,15 @@ pub fn validate_relayed_observation_record_bytes_v1(bytes: &[u8]) -> Result<()> 
 ///
 /// `seed_digest` is `SHA-256` of [`crate::release::encode_set_digest_seed_preimage_v1`],
 /// computed by the caller: this crate hashes nothing.  Every fallible check
-/// completes before the caller-owned output changes, and the Market child-count
-/// delta is the last of them.
+/// completes before the caller-owned output changes.
+///
+/// The record is **not** a Market child and no child-count delta is returned.
+/// It is transport held under the Resolution role, created and reclaimed by
+/// whoever pays for it, exactly like the provider-update lifecycle account
+/// beside it; the successor `CoreState`'s counter is Core-owned and Resolution
+/// has no write authority over it.  What bounds creation is the record's own
+/// address: it is seeded by the observed slot, so one set at one slot has one
+/// place to live, and the worker who creates it funds it.
 #[allow(clippy::too_many_arguments)]
 pub fn create_relayed_observation_record_into_v1(
     output: &mut [u8],
@@ -423,9 +429,7 @@ pub fn create_relayed_observation_record_into_v1(
     seal_threshold: u8,
     seed_digest: [u8; 32],
     created_unix_seconds: i64,
-    expected_market_child_count: u64,
-    authenticated_market_child_count: u64,
-) -> Result<MarketChildDeltaV1> {
+) -> Result<()> {
     if output.len() != relayed_observation_record_bytes_v1(set_count)? {
         return Err(Error::InvalidLength);
     }
@@ -438,11 +442,6 @@ pub fn create_relayed_observation_record_into_v1(
     if created_unix_seconds <= 0 {
         return Err(Error::NonCanonicalRecord);
     }
-    let delta = MarketChildDeltaV1::register(
-        expected_market_child_count,
-        authenticated_market_child_count,
-    )
-    .map_err(|error| Error::MarketChildDelta { error })?;
 
     output.fill(0);
     put(output, 0, &RELAYED_RECORD_MAGIC)?;
@@ -508,8 +507,7 @@ pub fn create_relayed_observation_record_into_v1(
         output,
         RELAYED_RECORD_PHASE_OFFSET,
         &[RelayedRecordPhaseV1::Collecting.byte()],
-    )?;
-    Ok(delta)
+    )
 }
 
 /// The immutable identity every route re-checks against the persisted record.
@@ -745,9 +743,7 @@ pub fn retire_relayed_observation_in_place_v1(
     bytes: &mut [u8],
     generation: u64,
     current_unix_seconds: i64,
-    expected_market_child_count: u64,
-    authenticated_market_child_count: u64,
-) -> Result<MarketChildDeltaV1> {
+) -> Result<()> {
     {
         let view = RelayedObservationRecordViewV1::decode(bytes)?;
         if view.generation()? != generation {
@@ -760,17 +756,11 @@ pub fn retire_relayed_observation_in_place_v1(
             return Err(Error::NonCanonicalRecord);
         }
     }
-    let delta = MarketChildDeltaV1::retire(
-        expected_market_child_count,
-        authenticated_market_child_count,
-    )
-    .map_err(|error| Error::MarketChildDelta { error })?;
     put(
         bytes,
         RELAYED_RECORD_PHASE_OFFSET,
         &[RelayedRecordPhaseV1::Retired.byte()],
-    )?;
-    Ok(delta)
+    )
 }
 
 #[cfg(test)]
@@ -823,8 +813,6 @@ mod tests {
                 threshold,
                 SEED_DIGEST,
                 CREATED,
-                3,
-                3,
             )
             .expect("create");
             Self { bytes }
@@ -1330,24 +1318,12 @@ mod tests {
     fn retirement_is_legal_from_every_live_phase_and_is_terminal() {
         let mut collecting = Record::create(1);
         assert!(
-            retire_relayed_observation_in_place_v1(
-                &mut collecting.bytes,
-                GENERATION,
-                CREATED,
-                4,
-                4
-            )
-            .is_ok()
+            retire_relayed_observation_in_place_v1(&mut collecting.bytes, GENERATION, CREATED)
+                .is_ok()
         );
         assert_eq!(collecting.view().phase(), Ok(RelayedRecordPhaseV1::Retired));
         assert_eq!(
-            retire_relayed_observation_in_place_v1(
-                &mut collecting.bytes,
-                GENERATION,
-                CREATED,
-                4,
-                4
-            ),
+            retire_relayed_observation_in_place_v1(&mut collecting.bytes, GENERATION, CREATED),
             Err(Error::InvalidRecordTransition)
         );
 
@@ -1363,55 +1339,41 @@ mod tests {
         .expect("seal");
         consume_relayed_observation_in_place_v1(&mut consumed.bytes).expect("consume");
         assert!(
-            retire_relayed_observation_in_place_v1(&mut consumed.bytes, GENERATION, CREATED, 4, 4)
+            retire_relayed_observation_in_place_v1(&mut consumed.bytes, GENERATION, CREATED)
                 .is_ok()
         );
     }
 
     #[test]
-    fn a_child_count_mismatch_leaves_the_record_bytes_unchanged() {
+    fn retiring_under_the_wrong_generation_refuses_and_changes_nothing() {
         let mut record = Record::create(1);
         let before = record.bytes;
-        assert!(matches!(
-            retire_relayed_observation_in_place_v1(&mut record.bytes, GENERATION, CREATED, 4, 5),
-            Err(Error::MarketChildDelta { .. })
-        ));
+        assert_eq!(
+            retire_relayed_observation_in_place_v1(&mut record.bytes, GENERATION + 1, CREATED),
+            Err(Error::RecordBindingMismatch)
+        );
         assert_eq!(record.bytes, before, "a refused retirement changed bytes");
     }
 
     #[test]
-    fn retiring_under_the_wrong_generation_refuses() {
-        let mut record = Record::create(1);
+    fn a_creation_that_refuses_writes_nothing() {
+        // The buffer starts non-zero so that "wrote nothing" is distinguishable
+        // from "wrote zeroes": `create` fills before it writes, and a refusal
+        // must happen strictly before that fill.
+        let mut bytes = [0xa5u8; 1432];
         assert_eq!(
-            retire_relayed_observation_in_place_v1(
-                &mut record.bytes,
-                GENERATION + 1,
-                CREATED,
-                4,
-                4
-            ),
-            Err(Error::RecordBindingMismatch)
-        );
-    }
-
-    #[test]
-    fn a_creation_whose_child_count_disagrees_writes_nothing() {
-        let mut bytes = [0u8; 1432];
-        assert!(matches!(
             create_relayed_observation_record_into_v1(
                 &mut bytes,
                 binding(),
                 BENEFICIARY,
                 SET_SIZE,
-                1,
+                0,
                 SEED_DIGEST,
                 CREATED,
-                3,
-                4,
             ),
-            Err(Error::MarketChildDelta { .. })
-        ));
-        assert!(bytes.iter().all(|byte| *byte == 0));
+            Err(Error::NonCanonicalKeySet)
+        );
+        assert!(bytes.iter().all(|byte| *byte == 0xa5));
     }
 
     #[test]

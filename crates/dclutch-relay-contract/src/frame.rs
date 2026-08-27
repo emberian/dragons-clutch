@@ -19,14 +19,30 @@ use crate::{ADDRESS_BYTES, Error, Result};
 pub enum RelayAccountNameV1 {
     /// The permissionless worker paying for and signing the transaction.
     Worker,
-    /// The owning Market root.
+    /// The owning Core Market state.
     Market,
+    /// The Core Program the Market state is owned by and derived under.
+    CoreProgram,
+    /// The Registry-owned activation cache for the Market's release set.
+    RegistryActivation,
     /// The observation record being created, appended to, sealed or retired.
     Record,
     /// The raw immutable `SourceMaterialV2` record.
     SourceMaterial,
     /// The finalized staging vacancy proving the material record is immutable.
     SourceMaterialStagingVacancy,
+    /// The raw immutable `SourceSpecV1` record the material names.
+    SourceSpec,
+    /// The finalized staging vacancy proving the spec record is immutable.
+    SourceSpecStagingVacancy,
+    /// The raw immutable `ProviderReleaseV1` record the spec names.
+    ProviderRelease,
+    /// The finalized staging vacancy proving the release record is immutable.
+    ProviderReleaseStagingVacancy,
+    /// The raw immutable `WindowSpecV1` record the material names.
+    WindowSpec,
+    /// The finalized staging vacancy proving the window record is immutable.
+    WindowSpecStagingVacancy,
     /// The raw immutable `RelayerKeySetV1` record.
     RelayerKeySet,
     /// The finalized staging vacancy proving the key set is immutable.
@@ -80,7 +96,9 @@ const fn role(name: RelayAccountNameV1, signer: bool, writable: bool) -> RelayAc
 
 const WORKER: RelayAccountRoleV1 = role(RelayAccountNameV1::Worker, true, true);
 const MARKET_READ: RelayAccountRoleV1 = role(RelayAccountNameV1::Market, false, false);
-const MARKET_WRITE: RelayAccountRoleV1 = role(RelayAccountNameV1::Market, false, true);
+const CORE_PROGRAM: RelayAccountRoleV1 = role(RelayAccountNameV1::CoreProgram, false, false);
+const ACTIVATION: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::RegistryActivation, false, false);
 const RECORD: RelayAccountRoleV1 = role(RelayAccountNameV1::Record, false, true);
 const MATERIAL: RelayAccountRoleV1 = role(RelayAccountNameV1::SourceMaterial, false, false);
 const MATERIAL_STAGE: RelayAccountRoleV1 = role(
@@ -88,6 +106,18 @@ const MATERIAL_STAGE: RelayAccountRoleV1 = role(
     false,
     false,
 );
+const SPEC: RelayAccountRoleV1 = role(RelayAccountNameV1::SourceSpec, false, false);
+const SPEC_STAGE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::SourceSpecStagingVacancy, false, false);
+const PROVIDER: RelayAccountRoleV1 = role(RelayAccountNameV1::ProviderRelease, false, false);
+const PROVIDER_STAGE: RelayAccountRoleV1 = role(
+    RelayAccountNameV1::ProviderReleaseStagingVacancy,
+    false,
+    false,
+);
+const WINDOW: RelayAccountRoleV1 = role(RelayAccountNameV1::WindowSpec, false, false);
+const WINDOW_STAGE: RelayAccountRoleV1 =
+    role(RelayAccountNameV1::WindowSpecStagingVacancy, false, false);
 const KEY_SET: RelayAccountRoleV1 = role(RelayAccountNameV1::RelayerKeySet, false, false);
 const KEY_SET_STAGE: RelayAccountRoleV1 = role(
     RelayAccountNameV1::RelayerKeySetStagingVacancy,
@@ -107,18 +137,32 @@ const CLOCK: RelayAccountRoleV1 = role(RelayAccountNameV1::ClockSysvar, false, f
 const INSTRUCTIONS: RelayAccountRoleV1 = role(RelayAccountNameV1::InstructionsSysvar, false, false);
 const SYSTEM: RelayAccountRoleV1 = role(RelayAccountNameV1::SystemProgram, false, false);
 
-/// Exact record-creation and Market-registration frame.
+/// Exact record-creation frame.
 ///
 /// Every raw record rides with the finalized staging vacancy that proves it is
-/// immutable, which is the discipline `dclutch-sbf` already enforces for the
-/// Source material.  `ProviderReleaseV1` needs no slot: it is carried inline by
-/// the authenticated `SourceMaterialViewV1`.
-pub const CREATE_RECORD_FRAME_V1: [RelayAccountRoleV1; 13] = [
+/// immutable, which is the discipline every successor route already enforces
+/// for the Source material.
+///
+/// The Market is **read-only**. The successor `CoreState` is Core-owned, the
+/// record is not one of its children, and Resolution holds no write authority
+/// over it; the join this frame makes is a read.  `SourceSpecV1`,
+/// `ProviderReleaseV1` and `WindowSpecV1` each take their own slot because the
+/// compact V2 material names them by content identity rather than carrying them
+/// inline the way the retired V1 material did.
+pub const CREATE_RECORD_FRAME_V1: [RelayAccountRoleV1; 21] = [
     WORKER,
-    MARKET_WRITE,
+    MARKET_READ,
+    CORE_PROGRAM,
+    ACTIVATION,
     RECORD,
     MATERIAL,
     MATERIAL_STAGE,
+    SPEC,
+    SPEC_STAGE,
+    PROVIDER,
+    PROVIDER_STAGE,
+    WINDOW,
+    WINDOW_STAGE,
     KEY_SET,
     KEY_SET_STAGE,
     CONFIG,
@@ -159,9 +203,13 @@ pub const SEAL_RECORD_FRAME_V1: [RelayAccountRoleV1; 8] = [
     CLOCK,
 ];
 
-/// Exact retirement, Market decrement and RentCredit closure frame.
+/// Exact retirement and RentCredit closure frame.
+///
+/// The Market is present and read-only: the record's own persisted binding is
+/// what says which Market it belongs to, and this position is where that claim
+/// is checked against a real account rather than taken on the record's word.
 pub const RETIRE_RECORD_FRAME_V1: [RelayAccountRoleV1; 4] =
-    [WORKER, MARKET_WRITE, RECORD, CREDIT_WRITE];
+    [WORKER, MARKET_READ, RECORD, CREDIT_WRITE];
 
 /// Closed exact account-frame selector.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -232,15 +280,15 @@ pub fn validate_relay_frame_v1(
 mod tests {
     use super::*;
 
-    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 13] {
+    fn frame(kind: RelayFrameKindV1) -> [RelayAccountPrivilegeV1; 21] {
         let roles = relay_frame_roles_v1(kind);
         let mut built = [RelayAccountPrivilegeV1 {
             key: [0; 32],
             is_signer: false,
             is_writable: false,
-        }; 13];
+        }; 21];
         for (index, expected) in roles.iter().enumerate() {
-            let slot = built.get_mut(index).expect("within thirteen");
+            let slot = built.get_mut(index).expect("within twenty-one");
             let mut key = [0u8; 32];
             let first = key.get_mut(0).expect("first byte");
             *first = u8::try_from(index).expect("small") + 1;
@@ -288,6 +336,9 @@ mod tests {
 
     #[test]
     fn a_writable_market_where_a_readonly_one_belongs_refuses() {
+        // Every route reads the Market and none writes it. A frame that asks
+        // for it writable is asking Resolution for an authority over Core state
+        // that the role does not have.
         let mut built = frame(RelayFrameKindV1::AppendObservation);
         built.get_mut(1).expect("market").is_writable = true;
         let exact = built

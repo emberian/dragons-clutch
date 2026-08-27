@@ -131,11 +131,6 @@ pub enum Error {
     InvalidUpgradeAuthorityTag,
     /// The supplied output buffer did not have the required exact length.
     OutputLength,
-    /// The Market direct-child count delta refused.
-    MarketChildDelta {
-        /// Exact source-contract refusal.
-        error: dclutch_source_contract::Error,
-    },
 }
 
 /// Result alias for this crate.
