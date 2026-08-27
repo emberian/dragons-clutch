@@ -1,0 +1,49 @@
+{
+  "format": "dclutch-web/live-open-market/v1",
+  "note": "Finalized account bytes copied verbatim off a local successor-campaign validator. Not devnet or mainnet evidence.",
+  "sourceRun": "tools/gauntlet/run.sh --mode full (successor campaign), local validator 127.0.0.1:20890",
+  "observedFloorSlot": "11020",
+  "programs": {
+    "registry": "87syw3eBN6nrXYT5RkkRSBKcRbciD1sg5X3R3hu7mh7e",
+    "core": "2rJGzuF2AduNJCc2td1y87ApUk8NhiCUGhsKCNRqhd8o",
+    "claims": "9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6",
+    "trading": "H3yrZV5ekNATUhhydami88bahXYtrP5fZig31LEU8UM8",
+    "resolution": "EBH6zun6a9PRcQtAaSHjTCArqUd8ArRGMciRHmJFu34x",
+    "custody": "7H6H9NabHSQtLVpiAaMKgmuRV5VVWD5VPGzpFYNGDbiD",
+    "rent": "2gUDaLHEAdfs44vDWyjj3cCkJDVTEjrBPntDKHQxD9U8"
+  },
+  "founder": "AVPy5zFJGDSFhcRpYWeqdSjhSbygPPcVH2qL6Cp3ScaA",
+  "accounts": {
+    "market": {
+      "address": "4fQNy8k7G7bZ9cak6pb2VnigV2F5fbhs7YnYFWQ2LQYH",
+      "owner": "2rJGzuF2AduNJCc2td1y87ApUk8NhiCUGhsKCNRqhd8o",
+      "lamports": "3340800",
+      "dataHex": "44434c54434f52320200010200000000366990e3371252ec2ddc5043650029775a5f841cdb5105addbea5feeed9449fa632c1f76f09491f39b197d8f67f61a922dee326941d8e663834fc1ed917f776084815c54152c9b2a818f4098b978aa546fdf7cec20a2beff8924d193b6bf0f6e91e00e29a823c91e48e63681870e16f7868fbf783010aabc078ad9501124ddc8c5912ada2e5bde3d319cf037f2343008d86c17223cff4909134b094334e856527dc55519e971550586f4b69ef3386131791cdfc3e2a401667798f3234d4507117bf16a5995d23f1ef33d14278fcb0bca1a01a1367c0a34c8bc3470cef07f7faf69c4f03ae5aa5e46ba9ee68773cd023cfa5d93bec12a7e6ccc7a40efebf2e3e1020000000000000000000000000000000de63f9530c9d17522fcd5f40b76fc47a3c3243c62637ff21b0370892a7d6a970000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "claimsAggregate": {
+      "address": "CUWKSsNsuKsRjSRUJzmERh4gRc6b4XSmWiFBcsVh4Kgj",
+      "owner": "9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6",
+      "lamports": "2895360",
+      "dataHex": "44434c4c424d303202000000040000000100000000000000366990e3371252ec2ddc5043650029775a5f841cdb5105addbea5feeed9449fa7bf16a5995d23f1ef33d14278fcb0bca1a01a1367c0a34c8bc3470cef07f7faf69c4f03ae5aa5e46ba9ee68773cd023cfa5d93bec12a7e6ccc7a40efebf2e3e191e00e29a823c91e48e63681870e16f7868fbf783010aabc078ad9501124ddc846e2988b98a7b1e7528588651cdf4a55b77632c694a77708d89c67df28ec3dde632c1f76f09491f39b197d8f67f61a922dee326941d8e663834fc1ed917f7760366990e3371252ec2ddc5043650029775a5f841cdb5105addbea5feeed9449fa02000000000000000065cd1d000000000065cd1d000000000065cd1d000000000065cd1d00000000"
+    },
+    "founderPosition": {
+      "address": "129CAcrmwk33Aw8c4b2jCZQaRPVCjgSBVaefkYUyVzGC",
+      "owner": "9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6",
+      "lamports": "2004480",
+      "dataHex": "44434c4c4250303202000000040000000100000000000000aa7c6356bea119546c2b1b94663bc12ff7494b8020e6b637ec5369d25719b6008cff69f2c52cbb8a65d88cbd1dcf756a86e25a11d4fb4af46a4233f97b90841746e2988b98a7b1e7528588651cdf4a55b77632c694a77708d89c67df28ec3dde00000000000000000065cd1d000000000065cd1d000000000065cd1d000000000065cd1d00000000"
+    },
+    "realmRecord": {
+      "address": "6EuGAck8c9Bp8hosnoEhgmvAwG7CWf3b3miffps1Qvgh",
+      "owner": "87syw3eBN6nrXYT5RkkRSBKcRbciD1sg5X3R3hu7mh7e",
+      "lamports": "1670400",
+      "dataHex": "44434c54524c4d31010000000000000006ddf6e1ee758fde18425dbce46ccddab61afc4d83b90d27febdf928d8a18bfc3eb8ac33b8d1ece382c3d4b5350ea6267266db10bce326ed2ad694ecdca3ccda228c14f9e501f86138d3f19e5ea815af628c0adf499dc6a93dd8cb185c870e29"
+    },
+    "hoardVault": {
+      "address": "8JdqNuFojqCfKXyrF8kdffpgcTok8G1aoWe1ZAnzN8aB",
+      "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+      "lamports": "2039280",
+      "dataHex": "3eb8ac33b8d1ece382c3d4b5350ea6267266db10bce326ed2ad694ecdca3ccda5c0129cd41975d54ca643ddbb8725f58ac49b85b6b008db3caf93ada2a217d590065cd1d00000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "sourceRevision": "3b0c58839b78f556bb36ecb706334ed0712bcc09"
+}
