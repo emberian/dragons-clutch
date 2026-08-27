@@ -112,6 +112,16 @@ construction belong outside the kernel in explicitly named adapters.
   concrete decision, deletion, test, or queued implementation owner.
 - Do not preserve parallel legacy/current authority paths. When a successor is
   accepted, delete the superseded path in the same convergence cycle.
+- Banishing a program, crate, or route is not finished at the Rust boundary.
+  In the SAME commit, sweep every non-Rust consumer for the deleted thing's
+  vocabulary -- `apps/dclutch-web` above all, because a browser that mirrors a
+  wire by hand becomes its LAST AUTHORITY the moment its owner is deleted, and
+  nothing goes red. Grep the magics, the seed domains, the widths, the account
+  counts, and the routes; delete or re-source each hit, and say in the message
+  which cuts the banishment unblocked for other lanes. `npm run abi:coverage`
+  lists what the browser still states in its own words; every generated module
+  carries an `abi:*:verify` that `npm test` runs, so a surface with neither is
+  a surface with no authority behind it.
 - Every fixed bound is labeled as mathematical, chain-derived, measured-profile,
   or provisional. Provisional bounds require a lifting plan.
 - Add adversarial tests with each invariant or parser. Do not weaken a refusal
