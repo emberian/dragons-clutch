@@ -40,6 +40,7 @@
 pub mod artifacts;
 pub mod bundle;
 pub mod frame;
+pub mod general;
 pub mod registers;
 pub mod routes;
 
