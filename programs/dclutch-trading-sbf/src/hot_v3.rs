@@ -2372,7 +2372,7 @@ fn execute_authenticated_hot_v3(
     let output_lamports = projected_effects.lamports;
     let output_requests = projected_effects.requests;
 
-    require_local_effect_discipline_v5(
+    let locally_mutated = require_local_effect_discipline_v5(
         &preplanned_plans,
         effect,
         tail_count,
@@ -2432,6 +2432,7 @@ fn execute_authenticated_hot_v3(
         context.selection().capability_release().to_bytes(),
         selected_program.to_bytes(),
         &aliases,
+        locally_mutated.as_deref(),
     )?;
     let strategy_execution_digest = if let Some(caller_authority) = shadow_caller_authority {
         execute_shadow_candidate_v3(ShadowCandidateViewV3 {
@@ -4979,6 +4980,15 @@ fn require_lifecycle_replan_agreement_v4(
 /// coverage against one and register identity against the other is the same
 /// conjunction written in the other order - and the agreement still refuses
 /// first-class if they ever disagree.
+///
+/// The third question rides along for the same reason: when the Effect has
+/// child routes at all, every route's accounts must be disjoint from what the
+/// local effects mutate, and deciding that needs one `bool` per representative
+/// folded out of exactly these resolved operations. Asking it in its own walk
+/// cost a further **108,759 CU** on the canonical Direct bundle - a third of a
+/// million compute units, across the three walks, to resolve one program three
+/// times. Returns `None` when the Effect declares no route, which is precisely
+/// when the answer has no consumer.
 #[inline(never)]
 fn require_local_effect_discipline_v5(
     plans: &[PreparedLifecycleInvocationV3],
@@ -4987,7 +4997,7 @@ fn require_local_effect_discipline_v5(
     scalars: &[u64],
     identities: &[[u8; 32]],
     aliases: &[usize],
-) -> Result<(), ProgramError> {
+) -> Result<Option<Vec<bool>>, ProgramError> {
     let mut binding_count = 0_usize;
     for prepared in plans {
         binding_count = binding_count
@@ -4999,6 +5009,15 @@ fn require_local_effect_discipline_v5(
         .try_reserve_exact(binding_count)
         .map_err(|_| TradingSbfError::Transition)?;
     written.resize(binding_count, false);
+    let mut locally_mutated = if effect.route_count() == 0 {
+        None
+    } else {
+        let mut bank = Vec::new();
+        bank.try_reserve_exact(aliases.len())
+            .map_err(|_| TradingSbfError::Content)?;
+        bank.resize(aliases.len(), false);
+        Some(bank)
+    };
 
     let mut fixed = 0_u16;
     while fixed < effect.fixed_operation_count() {
@@ -5007,6 +5026,9 @@ fn require_local_effect_discipline_v5(
             .map_err(|_| TradingSbfError::Transition)?;
         require_root_write_is_state_only(resolved, aliases)?;
         inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
+        if let Some(bank) = locally_mutated.as_deref_mut() {
+            mark_local_mutation(resolved, aliases, bank)?;
+        }
         fixed = fixed.checked_add(1).ok_or(TradingSbfError::Transition)?;
     }
     let mut item = 0_u32;
@@ -5018,6 +5040,9 @@ fn require_local_effect_discipline_v5(
                 .map_err(|_| TradingSbfError::Transition)?;
             require_root_write_is_state_only(resolved, aliases)?;
             inspect_lifecycle_binding_effects_v4(plans, resolved, aliases, &mut written)?;
+            if let Some(bank) = locally_mutated.as_deref_mut() {
+                mark_local_mutation(resolved, aliases, bank)?;
+            }
             operation = operation
                 .checked_add(1)
                 .ok_or(TradingSbfError::Transition)?;
@@ -5036,7 +5061,7 @@ fn require_local_effect_discipline_v5(
             ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Transition)?;
         }
     }
-    Ok(())
+    Ok(locally_mutated)
 }
 
 /// Fold one resolved Effect write against every planned binding.
@@ -5473,6 +5498,10 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     capability_program_set: [u8; 32],
     selected_capability_program: [u8; 32],
     aliases: &[usize],
+    // Folded out of the one walk over this Effect that
+    // `require_local_effect_discipline_v5` already makes, at these exact
+    // registers. `None` only when that walk saw no route to answer for.
+    locally_mutated: Option<&[bool]>,
 ) -> Result<(), ProgramError> {
     #[cfg(not(feature = "families"))]
     let _ = (
@@ -5483,8 +5512,10 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     if effect.route_count() == 0 {
         return Ok(());
     }
-    let locally_mutated =
-        local_mutation_representatives(effect, tail_count, scalars, identities, aliases)?;
+    let locally_mutated = locally_mutated.ok_or(TradingSbfError::Content)?;
+    if locally_mutated.len() != aliases.len() {
+        return Err(TradingSbfError::Content.into());
+    }
     #[cfg(any(
         feature = "families",
         feature = "series-family",
@@ -5570,7 +5601,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                 .map_err(|_| TradingSbfError::Content)?;
             require_chain_receipt_width_v3(effect.base(), invocation)?;
             require_no_common_projection_child_accounts_v3(invocation)?;
-            require_child_disjoint_from_local(invocation, aliases, &locally_mutated)?;
+            require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
             match invocation.role {
                 FixedRole::Core => preflight_core_route_v3(
                     program_id,
@@ -6183,43 +6214,6 @@ fn has_active_role(
         route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     Ok(false)
-}
-
-fn local_mutation_representatives(
-    effect: SelectedEffectProgramV4<'_>,
-    tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
-    aliases: &[usize],
-) -> Result<Vec<bool>, ProgramError> {
-    let mut output = vec![false; aliases.len()];
-    let mut fixed = 0_u16;
-    while fixed < effect.fixed_operation_count() {
-        mark_local_mutation(
-            effect
-                .resolved_fixed_effect(fixed, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Content)?,
-            aliases,
-            &mut output,
-        )?;
-        fixed = fixed.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    let mut item = 0_u32;
-    while item < tail_count {
-        let mut operation = 0_u16;
-        while operation < effect.item_operation_count() {
-            mark_local_mutation(
-                effect
-                    .resolved_item_effect(item, operation, tail_count, scalars, identities)
-                    .map_err(|_| TradingSbfError::Content)?,
-                aliases,
-                &mut output,
-            )?;
-            operation = operation.checked_add(1).ok_or(TradingSbfError::Content)?;
-        }
-        item = item.checked_add(1).ok_or(TradingSbfError::Content)?;
-    }
-    Ok(output)
 }
 
 fn mark_local_mutation(
