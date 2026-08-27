@@ -38,9 +38,9 @@ pub const GENERAL_INITIALIZE_ACCOUNT_COUNT_V2: usize = 9;
 
 const MARKET: usize = 0;
 const TRADING_PROGRAM: usize = 3;
-const SELECTION: usize = 5;
-const VERIFICATION: usize = 6;
-const CERTIFICATE: usize = 7;
+pub(crate) const SELECTION: usize = 5;
+pub(crate) const VERIFICATION: usize = 6;
+pub(crate) const CERTIFICATE: usize = 7;
 const CANDIDATE: usize = 8;
 const POLICY: usize = 9;
 const PAGE: usize = 10;
@@ -660,7 +660,7 @@ fn account<'a, 'info>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     extern crate std;
 
     use std::{boxed::Box, vec, vec::Vec};
@@ -687,7 +687,7 @@ mod tests {
 
     const GENERATION: u64 = 7;
 
-    fn id(low: u8) -> [u8; 32] {
+    pub(crate) fn id(low: u8) -> [u8; 32] {
         let mut value = [0_u8; 32];
         *value.get_mut(0).expect("identity byte") = low;
         value
@@ -704,11 +704,14 @@ mod tests {
         values
     }
 
-    fn at<'a>(frame: &'a [AccountInfo<'static>], index: usize) -> &'a AccountInfo<'static> {
+    pub(crate) fn at<'a>(
+        frame: &'a [AccountInfo<'static>],
+        index: usize,
+    ) -> &'a AccountInfo<'static> {
         frame.get(index).expect("frame account")
     }
 
-    fn borrowed(account: &AccountInfo<'_>) -> Vec<u8> {
+    pub(crate) fn borrowed(account: &AccountInfo<'_>) -> Vec<u8> {
         account.try_borrow_data().expect("account data").to_vec()
     }
 
@@ -718,7 +721,7 @@ mod tests {
         *byte ^= 1;
     }
 
-    fn account(
+    pub(crate) fn account(
         key: Pubkey,
         writable: bool,
         data: Vec<u8>,
@@ -783,7 +786,7 @@ mod tests {
         .expect("General config")
     }
 
-    fn config() -> GeneralConfigV2 {
+    pub(crate) fn config() -> GeneralConfigV2 {
         config_with_policy(policy().policy_id)
     }
 
@@ -818,13 +821,41 @@ mod tests {
         .expect("page")
     }
 
-    /// Build the composite root the common Trading layer authenticates, and
-    /// return both the context it derives and the General tail it splits off.
-    fn composite_root(
+    /// The composite root the common Trading layer authenticates, with the
+    /// exact account bytes behind it.
+    pub(crate) struct CompositeRootV2 {
+        /// Context the common layer derives from the immutable header.
+        pub(crate) context: TradingFamilyContextV1,
+        /// Authenticated composite root-account address.
+        pub(crate) root_key: Pubkey,
+        /// Initial active General tail.
+        pub(crate) root_state: GeneralRootV2,
+        /// Exact `header || tail` account bytes.
+        pub(crate) account_bytes: Vec<u8>,
+    }
+
+    impl CompositeRootV2 {
+        /// Rebuild the same authenticated account carrying another tail.
+        ///
+        /// The immutable header is byte-identical, so the common layer still
+        /// authenticates exactly this capability; only the family lifecycle
+        /// the header says nothing about has moved.
+        pub(crate) fn with_state(&self, state: GeneralRootV2) -> Vec<u8> {
+            let mut bytes = self.account_bytes.clone();
+            bytes
+                .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+                .expect("General tail")
+                .copy_from_slice(&state.to_bytes());
+            bytes
+        }
+    }
+
+    /// Build the composite root the common Trading layer authenticates.
+    pub(crate) fn composite_root_v2(
         program_id: Pubkey,
         market: Pubkey,
         config: GeneralConfigV2,
-    ) -> (TradingFamilyContextV1, GeneralRootV2) {
+    ) -> CompositeRootV2 {
         let config_id = hash(&config.to_bytes()).to_bytes();
         let release_set = cid(id(70));
         let selection = CapabilityExecutionSelectionV1::new(
@@ -863,7 +894,22 @@ mod tests {
             receipt,
         )
         .expect("authenticated family context");
-        (context, root_state)
+        CompositeRootV2 {
+            context,
+            root_key,
+            root_state,
+            account_bytes: root_account,
+        }
+    }
+
+    /// Return only the two values the family transition itself consumes.
+    fn composite_root(
+        program_id: Pubkey,
+        market: Pubkey,
+        config: GeneralConfigV2,
+    ) -> (TradingFamilyContextV1, GeneralRootV2) {
+        let root = composite_root_v2(program_id, market, config);
+        (root.context, root.root_state)
     }
 
     /// The five readonly accounts every General route starts with.
@@ -894,7 +940,7 @@ mod tests {
         account(key, writable, data, program_id, false)
     }
 
-    fn consider_frame(program_id: Pubkey, market: Pubkey) -> Vec<AccountInfo<'static>> {
+    pub(crate) fn consider_frame(program_id: Pubkey, market: Pubkey) -> Vec<AccountInfo<'static>> {
         let candidate = candidate();
         let policy = policy();
         let mut frame = common(program_id, market);
@@ -970,7 +1016,7 @@ mod tests {
         frame
     }
 
-    fn consider_request() -> ControllerRequestV1 {
+    pub(crate) fn consider_request() -> ControllerRequestV1 {
         ControllerRequestV1 {
             action: Action::Consider,
             expected_revision: 0,
