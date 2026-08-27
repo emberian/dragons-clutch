@@ -24,11 +24,11 @@ use dclutch_account_profile_contract::v2::{
 
 use super::{
     v3_hot_artifact::{
-        DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3,
-        DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3, DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
-        DealerCustodyIdentityFieldV3, dealer_current_slot_scalar_register_v3,
-        dealer_custody_identity_register_v3, dealer_equity_identity_count_v3,
-        dealer_equity_scalar_count_v3,
+        DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3, DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3,
+        DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3, DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3,
+        DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3, DealerCustodyIdentityFieldV3,
+        dealer_current_slot_scalar_register_v3, dealer_custody_identity_register_v3,
+        dealer_equity_identity_count_v3, dealer_equity_scalar_count_v3,
     },
     v3_multi_lp::MultiLpActionV3,
 };
@@ -96,6 +96,7 @@ pub fn dealer_equity_logical_account_count_v3(
         .and_then(|value| value.checked_add(DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3))
         .and_then(|value| value.checked_add(u16::try_from(signed_position_count).ok()?))
         .and_then(|value| value.checked_add(DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3))
+        .and_then(|value| value.checked_add(DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3))
         .ok_or(DealerEquityProfileErrorV3::Geometry)
 }
 
@@ -137,7 +138,12 @@ pub fn encode_dealer_equity_account_profile_v3(
     let lp = obligation
         .checked_add(1)
         .ok_or(DealerEquityProfileErrorV3::Geometry)?;
-    if lp.checked_add(1) != Some(account_count) {
+    // Appended past every route range and past both local write targets, so
+    // adding it renumbered nothing.
+    let custody_program = lp
+        .checked_add(1)
+        .ok_or(DealerEquityProfileErrorV3::Geometry)?;
+    if custody_program.checked_add(1) != Some(account_count) {
         return Err(DealerEquityProfileErrorV3::Geometry);
     }
 
@@ -150,6 +156,7 @@ pub fn encode_dealer_equity_account_profile_v3(
             claims_start,
             obligation,
             lp,
+            custody_program,
             input.logical_data_lengths,
         )?);
     }
@@ -241,13 +248,21 @@ fn account_rule(
     claims_start: u16,
     obligation: u16,
     lp: u16,
+    custody_program: u16,
     lengths: &[u32],
 ) -> Result<AccountRuleInputV2, DealerEquityProfileErrorV3> {
     let writable = coordinate == 0
         || coordinate == obligation
         || coordinate == lp
         || child_writable(action, signed_position_count, coordinate, claims_start)?;
-    let executable = child_executable(action, signed_position_count, coordinate, claims_start)?;
+    // Readonly, executable, no effect permission, self-representative: the
+    // loader that deployed it owns the record and the Registry activation cache
+    // is the sole authority on which program the Custody role selects. This
+    // topology states its five other program coordinates the same way, at the
+    // caller-supplied width, because the AccountProfile5 encoder it uses has no
+    // prestate channel to say `opaque` with.
+    let executable = coordinate == custody_program
+        || child_executable(action, signed_position_count, coordinate, claims_start)?;
     let alias = account_alias(action, signed_position_count, coordinate, claims_start)?;
     let write_data = coordinate == obligation || coordinate == lp;
     Ok(AccountRuleInputV2 {

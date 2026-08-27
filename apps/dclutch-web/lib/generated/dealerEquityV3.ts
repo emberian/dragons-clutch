@@ -21,6 +21,7 @@ export const DEALER_HOT_INJECTED_ACCOUNT_COUNT_V3 = 5 as const;
 export const DEALER_CUSTODY_TRANSFER_ACCOUNT_COUNT_V3 = 14 as const;
 export const DEALER_SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 = 20 as const;
 export const DEALER_EQUITY_LOCAL_ACCOUNT_COUNT_V3 = 2 as const;
+export const DEALER_EQUITY_CUSTODY_CALLEE_ACCOUNT_COUNT_V3 = 1 as const;
 export const CUSTODY_SCALAR_BASE_V3 = 6 as const;
 export const CUSTODY_SCALAR_STRIDE_V3 = 9 as const;
 export const CUSTODY_IDENTITY_BASE_V3 = 1 as const;
