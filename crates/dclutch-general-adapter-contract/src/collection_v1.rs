@@ -26,7 +26,7 @@ use dclutch_general_config_contract::root::{GeneralRootV2, RootError};
 use sha2::{Digest, Sha256};
 
 use crate::runtime_verify::AuthenticatedOrderTermsV2;
-use crate::runtime_width::{CandidateHeaderV2, ExecutionHeaderV2};
+use crate::runtime_width::{CandidateHeaderV2, ExecutionV2, VerifiedCandidateHeaderV2};
 
 /// Exact immutable batch prefix, whose digest is the canonical `batch_id`.
 pub const GENERAL_BATCH_PREFIX_BYTES_V1: usize = 160;
@@ -34,6 +34,8 @@ pub const GENERAL_BATCH_PREFIX_BYTES_V1: usize = 160;
 pub const GENERAL_BATCH_BYTES_V1: usize = 224;
 /// Exact fixed bytes before one order's two runtime-width per-lot tails.
 pub const GENERAL_ORDER_HEADER_BYTES_V1: usize = 160;
+/// Exact mutable escrow-state tail appended after an order's immutable prefix.
+pub const GENERAL_ORDER_STATE_BYTES_V1: usize = 32;
 
 const BATCH_MAGIC: [u8; 8] = *b"DCGBAT01";
 const ORDER_MAGIC: [u8; 8] = *b"DCGORD01";
@@ -43,6 +45,10 @@ const ORDER_PHASE: u8 = 21;
 
 const STATUS_COLLECTING: u8 = 1;
 const STATUS_CLOSED: u8 = 2;
+
+const ORDER_PHASE_PLACED: u8 = 1;
+const ORDER_PHASE_CANCELLED: u8 = 2;
+const ORDER_PHASE_RELEASED: u8 = 3;
 
 /// Canonical PDA seed domain for one General batch record.
 pub const GENERAL_BATCH_PDA_DOMAIN_V1: &[u8] = b"dclutch-general-batch-v1";
@@ -89,6 +95,12 @@ pub enum GeneralCollectionErrorV1 {
     Expired,
     /// The batch collection window has closed for this slot.
     OutsideWindow,
+    /// The order phase did not admit this escrow transition.
+    InvalidOrderPhase,
+    /// A cancellation was offered by an identity that is not the maker.
+    NotTheMaker,
+    /// The escrow could not fund the movement an authenticated row requires.
+    EscrowShortfall,
     /// The root refused the batch-count transition.
     Root(RootError),
 }
@@ -159,19 +171,30 @@ pub struct GeneralBatchOpeningV1 {
     pub max_orders: u32,
 }
 
-/// Mutable batch counters advanced by admission and closure.
+/// Mutable batch counters advanced by admission, cancellation and closure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralBatchStateV1 {
     /// Current canonical status.
     pub status: BatchStatusV1,
-    /// Number of admitted orders.
+    /// Number of admitted orders. Cancellation never returns a coordinate:
+    /// the envelope counts admissions, so a maker cannot churn placements to
+    /// exhaust another maker's opportunity and then recover the slot.
     pub order_count: u32,
     /// Root revision consumed by the open.
     pub opened_root_revision: u64,
     /// Root revision consumed by the close; zero while collecting.
     pub closed_root_revision: u64,
-    /// Sum of every admitted order's exact worst-case quote obligation.
+    /// Exact escrowed quote of every live admitted order.
+    ///
+    /// Admission adds one order's worst case; cancellation removes exactly what
+    /// that order escrowed. Because escrow is real -- the atoms moved into the
+    /// order's own Custody vault at admission -- this counter is the sum of
+    /// balances actually held, not a promise, and
+    /// [`authenticate_batch_verified_candidate_v1`] bounds a candidate's whole
+    /// quote debit by it.
     pub committed_quote_reserve: u64,
+    /// Number of admitted orders whose maker cancelled before the close.
+    pub cancelled_count: u32,
 }
 
 /// One complete General batch: immutable opening then mutable counters.
@@ -216,6 +239,7 @@ impl GeneralBatchV1 {
                 opened_root_revision: expected_revision,
                 closed_root_revision: 0,
                 committed_quote_reserve: 0,
+                cancelled_count: 0,
             },
         })
     }
@@ -228,7 +252,7 @@ impl GeneralBatchV1 {
         require_header(bytes, &BATCH_MAGIC, BATCH_PHASE)?;
         require_zero(bytes, 148, 4)?;
         require_zero(bytes, 161, 3)?;
-        require_zero(bytes, 192, 32)?;
+        require_zero(bytes, 196, 28)?;
         let opening = GeneralBatchOpeningV1 {
             outcome_count: read_u32(bytes, 12)?,
             sequence: read_u64(bytes, 16)?,
@@ -248,6 +272,7 @@ impl GeneralBatchV1 {
             opened_root_revision: read_u64(bytes, 168)?,
             closed_root_revision: read_u64(bytes, 176)?,
             committed_quote_reserve: read_u64(bytes, 184)?,
+            cancelled_count: read_u32(bytes, 192)?,
         };
         let value = Self { opening, state };
         value.validate()?;
@@ -296,13 +321,16 @@ impl GeneralBatchV1 {
             184,
             &self.state.committed_quote_reserve.to_le_bytes(),
         );
+        put(&mut output, 192, &self.state.cancelled_count.to_le_bytes());
         output
     }
 
     /// Validate every cross-field invariant of one complete batch.
     pub fn validate(self) -> GeneralCollectionResultV1<()> {
         validate_opening(self.opening)?;
-        if self.state.order_count > self.opening.max_orders {
+        if self.state.order_count > self.opening.max_orders
+            || self.state.cancelled_count > self.state.order_count
+        {
             return Err(GeneralCollectionErrorV1::BatchFull);
         }
         match self.state.status {
@@ -335,22 +363,38 @@ impl GeneralBatchV1 {
         hasher.finalize().into()
     }
 
-    /// Admit one signed order, reserving its exact worst-case obligation.
+    /// Admit one signed order, ESCROWING its exact worst-case obligation.
     ///
     /// The order must already be bound to this exact batch identity; the maker's
     /// authorization is the transaction signature the AccountProfile requires at
     /// the owner coordinate, not a field of the record.
+    ///
+    /// The returned [`OrderEscrowV1`] is the movement admission *requires*: it
+    /// is not advisory. Decision 0009 §2 recorded the collect-time debit as a
+    /// live credit regression -- a maker could place a funded order, spend the
+    /// collateral, and strand the whole candidate at `Collect`. Admission now
+    /// moves the atoms, so the only balance settlement can ever be short of is
+    /// one the protocol is already holding.
     pub fn admit(
         &mut self,
         order: GeneralOrderV1<'_>,
         funding: MakerFundingV1<'_>,
         current_slot: u64,
-    ) -> GeneralCollectionResultV1<[u8; 32]> {
+    ) -> GeneralCollectionResultV1<OrderEscrowV1> {
         if self.state.status != BatchStatusV1::Collecting {
             return Err(GeneralCollectionErrorV1::NotCollecting);
         }
         if current_slot >= self.opening.collection_close_slot {
             return Err(GeneralCollectionErrorV1::OutsideWindow);
+        }
+        // The record must say it was admitted at THIS slot: a placement writes
+        // its own admission slot, and accepting a record that names another one
+        // would let a replayed encoding re-enter a later batch window.
+        if order.state().phase != GeneralOrderPhaseV1::Placed {
+            return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+        }
+        if order.state().admitted_slot != current_slot {
+            return Err(GeneralCollectionErrorV1::Substitution);
         }
         let header = order.header();
         if header.batch_id != self.batch_id()
@@ -398,7 +442,105 @@ impl GeneralBatchV1 {
             .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
         self.state.order_count = next_count;
         self.state.committed_quote_reserve = next_reserve;
-        Ok(order.order_id())
+        Ok(OrderEscrowV1 {
+            order_id: order.order_id(),
+            owner_id: header.owner_id,
+            outcome_count: self.opening.outcome_count,
+            quote_atoms: quote_reserve,
+            direction: EscrowDirectionV1::Deposit,
+        })
+    }
+
+    /// Cancel one live order and return the exact refund the maker is owed.
+    ///
+    /// Only the maker may cancel, and only while the batch is still collecting:
+    /// after the close the order set is final and a candidate may already have
+    /// been built against it. `owner_id` is the identity the AccountProfile
+    /// required a signature at; this transition binds it to the record.
+    ///
+    /// The refund is the whole escrow, exactly. It is exact without any ledger
+    /// because the escrow is the order's OWN Custody vault and Claims Position:
+    /// a maker can never be paid out of another maker's collateral, and that is
+    /// structural rather than an invariant something has to maintain.
+    pub fn cancel(
+        &mut self,
+        order: GeneralOrderV1<'_>,
+        owner_id: [u8; 32],
+        current_slot: u64,
+    ) -> GeneralCollectionResultV1<OrderEscrowV1> {
+        if self.state.status != BatchStatusV1::Collecting {
+            return Err(GeneralCollectionErrorV1::NotCollecting);
+        }
+        if current_slot >= self.opening.collection_close_slot {
+            return Err(GeneralCollectionErrorV1::OutsideWindow);
+        }
+        let header = order.header();
+        if header.batch_id != self.batch_id() {
+            return Err(GeneralCollectionErrorV1::Substitution);
+        }
+        if header.owner_id != owner_id {
+            return Err(GeneralCollectionErrorV1::NotTheMaker);
+        }
+        if order.state().phase != GeneralOrderPhaseV1::Placed {
+            return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+        }
+        let quote_reserve = order.quote_reserve()?;
+        let next_reserve = self
+            .state
+            .committed_quote_reserve
+            .checked_sub(quote_reserve)
+            .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+        let next_cancelled = self
+            .state
+            .cancelled_count
+            .checked_add(1)
+            .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+        if next_cancelled > self.state.order_count {
+            return Err(GeneralCollectionErrorV1::ArithmeticOverflow);
+        }
+        self.state.committed_quote_reserve = next_reserve;
+        self.state.cancelled_count = next_cancelled;
+        Ok(OrderEscrowV1 {
+            order_id: order.order_id(),
+            owner_id: header.owner_id,
+            outcome_count: self.opening.outcome_count,
+            quote_atoms: quote_reserve,
+            direction: EscrowDirectionV1::Refund,
+        })
+    }
+
+    /// Release one live order's residual escrow after the batch's window ends.
+    ///
+    /// Permissionless, like every other verb whose only effect is to return a
+    /// maker's own collateral: withholding a refund is the griefing vector, and
+    /// requiring the maker's signature is what would enable it.
+    ///
+    /// The residual is deliberately NOT computed here. Whatever a winning
+    /// candidate collected already left the order's vault and Position at
+    /// `Collect`; what remains IS the refund. Returning a computed number would
+    /// be a second authority over a balance the chain already holds exactly.
+    pub fn release(
+        &self,
+        order: GeneralOrderV1<'_>,
+        current_slot: u64,
+    ) -> GeneralCollectionResultV1<OrderEscrowV1> {
+        if current_slot < self.opening.settlement_close_slot {
+            return Err(GeneralCollectionErrorV1::OutsideWindow);
+        }
+        let header = order.header();
+        if header.batch_id != self.batch_id() {
+            return Err(GeneralCollectionErrorV1::Substitution);
+        }
+        if order.state().phase != GeneralOrderPhaseV1::Placed {
+            return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+        }
+        Ok(OrderEscrowV1 {
+            order_id: order.order_id(),
+            owner_id: header.owner_id,
+            outcome_count: self.opening.outcome_count,
+            quote_atoms: 0,
+            direction: EscrowDirectionV1::Residual,
+        })
     }
 
     /// Close the batch against the live root, making its order set final.
@@ -463,6 +605,89 @@ pub struct MakerFundingV1<'a> {
     pub available_claims: &'a [u64],
 }
 
+/// Which way one authenticated escrow movement runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EscrowDirectionV1 {
+    /// Admission moves the maker's worst case into the order's own escrow.
+    Deposit,
+    /// Cancellation returns the whole escrow before the batch closes.
+    Refund,
+    /// Post-window release returns whatever settlement did not consume.
+    Residual,
+}
+
+/// One exact escrow movement an order-lifecycle transition requires.
+///
+/// The escrow is addressed by the order's own content identity on both sides:
+/// the Custody vault is `(market, release_set, order_id, Settlement)` and the
+/// Claims Position is `(market, order_id)`. Nothing else in the family names
+/// that pair, so an order's collateral is reachable by exactly the transitions
+/// that quote this value.
+///
+/// `quote_atoms` is exact for [`EscrowDirectionV1::Deposit`] and
+/// [`EscrowDirectionV1::Refund`]. For [`EscrowDirectionV1::Residual`] it is
+/// zero and MEANS zero-is-not-the-amount: the physical layer moves the observed
+/// balance, because after a settlement the escrow's own balance is the only
+/// exact statement of what is left.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OrderEscrowV1 {
+    /// Content identity of the order whose escrow this is.
+    pub order_id: [u8; 32],
+    /// Maker identity on the external side of the movement.
+    pub owner_id: [u8; 32],
+    /// Runtime outcome width of the claim leg.
+    pub outcome_count: u32,
+    /// Exact quote atoms, or zero when the balance itself is the amount.
+    pub quote_atoms: u64,
+    /// Which way the movement runs.
+    pub direction: EscrowDirectionV1,
+}
+
+/// Lifecycle phase of one placed order's escrow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum GeneralOrderPhaseV1 {
+    /// Escrowed and executable by a candidate naming this order.
+    Placed = ORDER_PHASE_PLACED,
+    /// The maker cancelled before the batch closed; escrow returned in full.
+    Cancelled = ORDER_PHASE_CANCELLED,
+    /// The batch's window ended and the residual escrow was returned.
+    Released = ORDER_PHASE_RELEASED,
+}
+
+impl GeneralOrderPhaseV1 {
+    fn decode(value: u8) -> GeneralCollectionResultV1<Self> {
+        match value {
+            ORDER_PHASE_PLACED => Ok(Self::Placed),
+            ORDER_PHASE_CANCELLED => Ok(Self::Cancelled),
+            ORDER_PHASE_RELEASED => Ok(Self::Released),
+            _ => Err(GeneralCollectionErrorV1::InvalidOrderPhase),
+        }
+    }
+
+    /// Return the canonical one-byte phase tag.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Mutable escrow state appended after one order's immutable prefix.
+///
+/// The prefix -- and only the prefix -- is what `order_id` digests, exactly as
+/// a batch identity digests only its opening. That is what lets an order carry
+/// a lifecycle at all: a cancellation must not move the identity a candidate,
+/// a manifest and a settlement row all name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOrderStateV1 {
+    /// Current escrow phase.
+    pub phase: GeneralOrderPhaseV1,
+    /// Slot the order was admitted at.
+    pub admitted_slot: u64,
+    /// Slot the escrow was returned at; zero while placed.
+    pub released_slot: u64,
+}
+
 /// Fixed fields of one immutable signed portfolio order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralOrderHeaderV1 {
@@ -486,15 +711,16 @@ pub struct GeneralOrderHeaderV1 {
     pub valid_until_slot: u64,
 }
 
-/// Borrowed immutable order record with two `u64[N]` per-lot tails.
+/// Borrowed order record: an immutable prefix then a mutable escrow tail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralOrderV1<'a> {
     bytes: &'a [u8],
     header: GeneralOrderHeaderV1,
+    state: GeneralOrderStateV1,
 }
 
 impl<'a> GeneralOrderV1<'a> {
-    /// Hostile-decode one exact `160 + 16N` order record.
+    /// Hostile-decode one exact `192 + 16N` order record.
     pub fn decode(bytes: &'a [u8]) -> GeneralCollectionResultV1<Self> {
         if bytes.len() < GENERAL_ORDER_HEADER_BYTES_V1 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
@@ -515,7 +741,42 @@ impl<'a> GeneralOrderV1<'a> {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         validate_order_header(header)?;
-        let value = Self { bytes, header };
+        let state_base = general_order_prefix_len_v1(header.outcome_count)?;
+        require_zero(
+            bytes,
+            state_base
+                .checked_add(1)
+                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            7,
+        )?;
+        require_zero(
+            bytes,
+            state_base
+                .checked_add(24)
+                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            8,
+        )?;
+        let state = GeneralOrderStateV1 {
+            phase: GeneralOrderPhaseV1::decode(read_u8(bytes, state_base)?)?,
+            admitted_slot: read_u64(
+                bytes,
+                state_base
+                    .checked_add(8)
+                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            )?,
+            released_slot: read_u64(
+                bytes,
+                state_base
+                    .checked_add(16)
+                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            )?,
+        };
+        validate_order_state(state)?;
+        let value = Self {
+            bytes,
+            header,
+            state,
+        };
         // A degenerate order that moves no claim in either direction is not a
         // portfolio order; it would occupy a coordinate and a rent-bearing
         // account while being unfillable.
@@ -530,9 +791,11 @@ impl<'a> GeneralOrderV1<'a> {
         header: GeneralOrderHeaderV1,
         receive_per_lot: &[u64],
         deliver_per_lot: &[u64],
+        state: GeneralOrderStateV1,
         output: &mut [u8],
     ) -> GeneralCollectionResultV1<()> {
         validate_order_header(header)?;
+        validate_order_state(state)?;
         let count = usize_from_u32(header.outcome_count)?;
         if receive_per_lot.len() != count || deliver_per_lot.len() != count {
             return Err(GeneralCollectionErrorV1::InvalidLength);
@@ -573,6 +836,22 @@ impl<'a> GeneralOrderV1<'a> {
                 &deliver_per_lot[outcome].to_le_bytes(),
             );
         }
+        let state_base = general_order_prefix_len_v1(header.outcome_count)?;
+        put(output, state_base, &[state.phase.tag()]);
+        put(
+            output,
+            state_base
+                .checked_add(8)
+                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            &state.admitted_slot.to_le_bytes(),
+        );
+        put(
+            output,
+            state_base
+                .checked_add(16)
+                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            &state.released_slot.to_le_bytes(),
+        );
         // Encode then hostile-decode our own candidate: the same total-function
         // discipline the three artifact encoders carry.
         decode_checked(output)
@@ -584,12 +863,64 @@ impl<'a> GeneralOrderV1<'a> {
         self.header
     }
 
-    /// Return the canonical `order_id`: the digest of the whole record.
+    /// Return the mutable escrow state.
+    #[must_use]
+    pub const fn state(self) -> GeneralOrderStateV1 {
+        self.state
+    }
+
+    /// Return the canonical `order_id`: the digest of the immutable prefix.
+    ///
+    /// The escrow tail is excluded on purpose. A cancellation writes that tail,
+    /// and if the tail were in the digest the identity a candidate, a manifest
+    /// and every settlement row carry would move underneath them.
     #[must_use]
     pub fn order_id(self) -> [u8; 32] {
+        let prefix = general_order_prefix_len_v1(self.header.outcome_count).unwrap_or(0);
         let mut hasher = Sha256::new();
-        hasher.update(self.bytes);
+        hasher.update(self.bytes.get(..prefix).unwrap_or_default());
         hasher.finalize().into()
+    }
+
+    /// Write this order's successor escrow state into an exact-width buffer.
+    ///
+    /// The immutable prefix is copied verbatim, so a lifecycle write can never
+    /// be the vehicle for substituting an order's terms.
+    pub fn encode_successor_state_into(
+        self,
+        state: GeneralOrderStateV1,
+        output: &mut [u8],
+    ) -> GeneralCollectionResultV1<()> {
+        validate_order_state(state)?;
+        if output.len() != self.bytes.len() {
+            return Err(GeneralCollectionErrorV1::InvalidLength);
+        }
+        if state.phase == self.state.phase {
+            return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+        }
+        if self.state.phase != GeneralOrderPhaseV1::Placed {
+            return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+        }
+        if state.admitted_slot != self.state.admitted_slot
+            || state.released_slot < self.state.admitted_slot
+        {
+            return Err(GeneralCollectionErrorV1::Substitution);
+        }
+        output.copy_from_slice(self.bytes);
+        let state_base = general_order_prefix_len_v1(self.header.outcome_count)?;
+        put(output, state_base, &[state.phase.tag()]);
+        put(
+            output,
+            state_base
+                .checked_add(16)
+                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            &state.released_slot.to_le_bytes(),
+        );
+        let successor = GeneralOrderV1::decode(output)?;
+        if successor.order_id() != self.order_id() || successor.state() != state {
+            return Err(GeneralCollectionErrorV1::Substitution);
+        }
+        Ok(())
     }
 
     /// Return one exact claim quantity received per filled lot.
@@ -665,14 +996,21 @@ impl<'a> GeneralOrderV1<'a> {
     }
 }
 
-/// Return exact `160 + 16N` bytes for one order record.
-pub fn general_order_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
+/// Return the exact `160 + 16N` immutable prefix `order_id` digests.
+pub fn general_order_prefix_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
     if outcome_count == 0 {
         return Err(GeneralCollectionErrorV1::InvalidLength);
     }
     usize_from_u32(outcome_count)?
         .checked_mul(16)
         .and_then(|tail| GENERAL_ORDER_HEADER_BYTES_V1.checked_add(tail))
+        .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
+}
+
+/// Return exact `192 + 16N` bytes for one whole order record.
+pub fn general_order_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
+    general_order_prefix_len_v1(outcome_count)?
+        .checked_add(GENERAL_ORDER_STATE_BYTES_V1)
         .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
 }
 
@@ -701,35 +1039,97 @@ pub fn authenticate_batch_candidate_v1(
     Ok(())
 }
 
+/// Require one verified candidate to fit inside the escrow the batch holds.
+///
+/// This is the check escrow-at-admission makes meaningful and that nothing
+/// could state before it. `committed_quote_reserve` used to be a sum of
+/// promises; it is now the sum of balances the protocol is holding in the
+/// orders' own vaults, so a candidate whose total debit exceeds it is one that
+/// could not be paid, and it is refused before any settlement account is
+/// created rather than stranding at the first short `Collect`.
+pub fn authenticate_batch_verified_candidate_v1(
+    batch: GeneralBatchV1,
+    verified: VerifiedCandidateHeaderV2,
+) -> GeneralCollectionResultV1<()> {
+    if batch.state().status != BatchStatusV1::Closed {
+        return Err(GeneralCollectionErrorV1::NotClosed);
+    }
+    let opening = batch.opening();
+    if verified.batch_id != batch.batch_id()
+        || verified.product_id != opening.product_id
+        || verified.outcome_count != opening.outcome_count
+        || verified.price_scale != opening.price_scale
+    {
+        return Err(GeneralCollectionErrorV1::Substitution);
+    }
+    if verified.quote_debit > batch.state().committed_quote_reserve {
+        return Err(GeneralCollectionErrorV1::EscrowShortfall);
+    }
+    Ok(())
+}
+
 /// Authenticate one Execution row against the immutable order it names.
 ///
 /// Returns the exact [`AuthenticatedOrderTermsV2`] the streamed verifier
 /// requires.  Every compact field the row repeats is checked against the record,
 /// and the record's own digest is checked against the `order_id` the row claims,
 /// so a row cannot import terms from an order it does not name.
+///
+/// **The per-lot vectors are checked here too, and that is not cosmetic.** The
+/// verifier accumulates `claim_input = deliver_per_lot * lots` and
+/// `claim_output = receive_per_lot * lots` from the vectors the CANDIDATE PAGE
+/// carries, and [`AuthenticatedOrderTermsV2`] has no coordinate for either. So
+/// while only the compact header fields were bound, a candidate author could
+/// fill a maker's order with a portfolio the maker never signed -- the digest
+/// matched, `max_lots` matched, and the claims moved were whatever the row said.
+/// Nothing else in the family closed this: the row's vectors are re-read from
+/// the same page on every step, so they were self-consistent and wrong
+/// together. Binding them to the record is also what makes the admission escrow
+/// a bound at all, since the escrowed claim reserve is computed from the
+/// record's `deliver_per_lot` and would otherwise bound nothing the row does.
 pub fn authenticate_order_execution_v1(
     batch: GeneralBatchV1,
     order: GeneralOrderV1<'_>,
-    execution: ExecutionHeaderV2,
+    execution: ExecutionV2<'_>,
 ) -> GeneralCollectionResultV1<AuthenticatedOrderTermsV2> {
     if batch.state().status != BatchStatusV1::Closed {
         return Err(GeneralCollectionErrorV1::NotClosed);
     }
     let header = order.header();
+    let execution_header = execution.header();
     if header.batch_id != batch.batch_id()
-        || header.outcome_count != execution.outcome_count
-        || header.owner_id != execution.owner_id
-        || header.nonce != execution.nonce
-        || header.max_lots != execution.max_lots
+        || header.outcome_count != execution_header.outcome_count
+        || header.owner_id != execution_header.owner_id
+        || header.nonce != execution_header.nonce
+        || header.max_lots != execution_header.max_lots
     {
         return Err(GeneralCollectionErrorV1::Substitution);
     }
+    // A cancelled or released order has no escrow behind it. Refusing here is
+    // what stops a candidate built while the batch was collecting from settling
+    // against collateral its maker has already been refunded.
+    if order.state().phase != GeneralOrderPhaseV1::Placed {
+        return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+    }
     let terms = order.terms();
-    if terms.order_id != execution.order_id {
+    if terms.order_id != execution_header.order_id {
         return Err(GeneralCollectionErrorV1::Substitution);
     }
-    if execution.lots == 0 || execution.lots > header.max_lots {
+    if execution_header.lots == 0 || execution_header.lots > header.max_lots {
         return Err(GeneralCollectionErrorV1::Substitution);
+    }
+    for outcome in 0..header.outcome_count {
+        if execution
+            .receive_per_lot(outcome)
+            .map_err(|_| GeneralCollectionErrorV1::InvalidLength)?
+            != order.receive_per_lot(outcome)?
+            || execution
+                .deliver_per_lot(outcome)
+                .map_err(|_| GeneralCollectionErrorV1::InvalidLength)?
+                != order.deliver_per_lot(outcome)?
+        {
+            return Err(GeneralCollectionErrorV1::Substitution);
+        }
     }
     Ok(terms)
 }
@@ -752,6 +1152,22 @@ fn validate_opening(opening: GeneralBatchOpeningV1) -> GeneralCollectionResultV1
     }
     if opening.settlement_close_slot <= opening.collection_close_slot {
         return Err(GeneralCollectionErrorV1::OutsideWindow);
+    }
+    Ok(())
+}
+
+fn validate_order_state(state: GeneralOrderStateV1) -> GeneralCollectionResultV1<()> {
+    match state.phase {
+        GeneralOrderPhaseV1::Placed => {
+            if state.released_slot != 0 {
+                return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+            }
+        }
+        GeneralOrderPhaseV1::Cancelled | GeneralOrderPhaseV1::Released => {
+            if state.released_slot < state.admitted_slot {
+                return Err(GeneralCollectionErrorV1::InvalidOrderPhase);
+            }
+        }
     }
     Ok(())
 }

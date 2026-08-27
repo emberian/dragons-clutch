@@ -186,6 +186,14 @@ pub enum GeneralChildEffectV1 {
     DistributeCollateral = 5,
     /// Move the exact terminal quote surplus out of settlement custody.
     PaySurplus = 6,
+    /// Move one order's reserved Claims into its escrow at admission.
+    EscrowClaims = 7,
+    /// Move one order's worst-case quote into its escrow at admission.
+    EscrowCollateral = 8,
+    /// Return one order's remaining escrowed Claims to its maker.
+    ReleaseClaims = 9,
+    /// Return one order's remaining escrowed quote to its maker.
+    ReleaseCollateral = 10,
 }
 
 impl GeneralChildEffectV1 {
@@ -196,13 +204,34 @@ impl GeneralChildEffectV1 {
                 | Self::CollectCollateral
                 | Self::DistributeClaims
                 | Self::DistributeCollateral
+                | Self::EscrowClaims
+                | Self::EscrowCollateral
+                | Self::ReleaseClaims
+                | Self::ReleaseCollateral
+        )
+    }
+
+    /// Whether this effect belongs to one order's escrow lifecycle rather than
+    /// to a candidate's settlement.
+    #[must_use]
+    pub const fn is_escrow(self) -> bool {
+        matches!(
+            self,
+            Self::EscrowClaims
+                | Self::EscrowCollateral
+                | Self::ReleaseClaims
+                | Self::ReleaseCollateral
         )
     }
 
     const fn is_scalar(self) -> bool {
         matches!(
             self,
-            Self::CollectCollateral | Self::DistributeCollateral | Self::PaySurplus
+            Self::CollectCollateral
+                | Self::DistributeCollateral
+                | Self::PaySurplus
+                | Self::EscrowCollateral
+                | Self::ReleaseCollateral
         )
     }
 

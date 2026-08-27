@@ -62,6 +62,15 @@ pub struct ClaimsResourcesV2 {
     pub owner_position_revision: u64,
     /// Current settlement Position revision, or absent sentinel when unused.
     pub settlement_position_revision: u64,
+    /// Current order-escrow Position revision, or absent sentinel when unused.
+    ///
+    /// The escrow Position is `(market, order_id)`: the claims a maker reserved
+    /// at admission live there, owned by the order's own content identity,
+    /// until `Collect` moves the filled part into settlement or a release
+    /// returns the rest. Decision 0009 §2's collect-time debit read the MAKER's
+    /// Position at settlement, so a maker who moved their claims after placing
+    /// stranded the candidate; this coordinate is what replaces that read.
+    pub escrow_position_revision: u64,
 }
 
 /// Physical Custody coordinates observed before one effect.
@@ -225,6 +234,161 @@ pub fn build_row_packets_v2(
     }
 }
 
+/// Build the packets one order's escrow lifecycle requires.
+///
+/// This is the movement decision 0009 §2 named and did not have: admission
+/// ESCROWS, so `Collect` never debits an account the maker still controls.
+/// Both legs address the escrow by the order's own content identity -- the
+/// Claims Position is `(market, order_id)` and the Custody vault context is
+/// `order_id` -- which is what makes a refund exact without a ledger. The
+/// escrow holds exactly one order's collateral, so a maker can never be paid
+/// out of another maker's, and that is a property of the address rather than
+/// an invariant something has to maintain.
+///
+/// `context.candidate_id` carries the BATCH identity for these effects: an
+/// admission has no candidate, and the batch is the lifecycle the replay
+/// belongs to. `page_index` and `execution_index` are zero for the same reason.
+#[allow(clippy::too_many_arguments)]
+pub fn build_order_escrow_packets_v1(
+    effect: GeneralChildEffectV1,
+    context: RowReplayContextV1,
+    outcome_count: u8,
+    quantities: &[u64; MAX_OUTCOMES],
+    claims: ClaimsResourcesV2,
+    custody: Option<CustodyResourcesV2>,
+) -> ChildPacketResult<GeneralChildPacketsV2> {
+    if !effect.is_escrow() || context.page_index != 0 || context.execution_index != 0 {
+        return Err(ChildPacketError::Coordinate);
+    }
+    match effect {
+        GeneralChildEffectV1::EscrowClaims | GeneralChildEffectV1::ReleaseClaims => {
+            if custody.is_some() {
+                return Err(ChildPacketError::Coordinate);
+            }
+            build_escrow_claims_packets_v1(effect, context, outcome_count, quantities, claims)
+        }
+        GeneralChildEffectV1::EscrowCollateral | GeneralChildEffectV1::ReleaseCollateral => {
+            build_escrow_custody_packets_v1(
+                effect,
+                context,
+                outcome_count,
+                quantities,
+                custody.ok_or(ChildPacketError::Coordinate)?,
+            )
+        }
+        _ => Err(ChildPacketError::General),
+    }
+}
+
+#[inline(never)]
+fn build_escrow_claims_packets_v1(
+    effect: GeneralChildEffectV1,
+    context: RowReplayContextV1,
+    outcome_count: u8,
+    quantities: &[u64; MAX_OUTCOMES],
+    claims: ClaimsResourcesV2,
+) -> ChildPacketResult<GeneralChildPacketsV2> {
+    let tail = encode_quantities(outcome_count, quantities)?;
+    let active_tail = &tail[..usize::from(outcome_count) * 8];
+    let parent =
+        GeneralChildPlanV2::new_row(effect, context, u32::from(outcome_count), active_tail)?
+            .digest()?;
+    let deposit = effect == GeneralChildEffectV1::EscrowClaims;
+    let claims_packet = build_claims_packet(
+        ClaimsAction::TransferNative,
+        context,
+        outcome_count,
+        active_tail,
+        if deposit {
+            context.owner_id
+        } else {
+            context.order_id
+        },
+        if deposit {
+            context.order_id
+        } else {
+            context.owner_id
+        },
+        claims.market_revision,
+        if deposit {
+            claims.owner_position_revision
+        } else {
+            claims.escrow_position_revision
+        },
+        if deposit {
+            claims.escrow_position_revision
+        } else {
+            claims.owner_position_revision
+        },
+        parent,
+    )?;
+    Ok(GeneralChildPacketsV2 {
+        claims: Some(claims_packet),
+        custody: None,
+        parent_request_digest: parent,
+    })
+}
+
+#[inline(never)]
+fn build_escrow_custody_packets_v1(
+    effect: GeneralChildEffectV1,
+    context: RowReplayContextV1,
+    outcome_count: u8,
+    quantities: &[u64; MAX_OUTCOMES],
+    resources: CustodyResourcesV2,
+) -> ChildPacketResult<GeneralChildPacketsV2> {
+    if usize::from(outcome_count) > MAX_OUTCOMES
+        || outcome_count == 0
+        || quantities[1..].iter().any(|quantity| *quantity != 0)
+    {
+        return Err(ChildPacketError::Coordinate);
+    }
+    let deposit = effect == GeneralChildEffectV1::EscrowCollateral;
+    let route_valid = if deposit {
+        resources.source_owner == context.owner_id
+            && is_zero(&resources.source_vault_context)
+            && is_zero(&resources.destination_owner)
+            && resources.destination_vault_context == context.order_id
+    } else {
+        is_zero(&resources.source_owner)
+            && resources.source_vault_context == context.order_id
+            && resources.destination_owner == context.owner_id
+            && is_zero(&resources.destination_vault_context)
+    };
+    if !route_valid {
+        return Err(ChildPacketError::Coordinate);
+    }
+    let quantity = quantities[0].to_le_bytes();
+    let parent = GeneralChildPlanV2::new_row(effect, context, 1, &quantity)?.digest()?;
+    let custody = build_custody_packet(
+        context.execution.release_set_id,
+        context.execution.market_id,
+        context.candidate_id,
+        context.order_id,
+        context.order_nonce,
+        context.page_index,
+        u32::from(context.execution_index),
+        quantities[0],
+        resources,
+        if deposit {
+            CompartmentV1::External
+        } else {
+            CompartmentV1::Settlement
+        },
+        if deposit {
+            CompartmentV1::Settlement
+        } else {
+            CompartmentV1::External
+        },
+        parent,
+    )?;
+    Ok(GeneralChildPacketsV2 {
+        claims: None,
+        custody: Some(custody),
+        parent_request_digest: parent,
+    })
+}
+
 #[inline(never)]
 fn build_row_claims_packets_v2(
     effect: GeneralChildEffectV1,
@@ -239,15 +403,19 @@ fn build_row_claims_packets_v2(
         GeneralChildPlanV2::new_row(effect, context, u32::from(outcome_count), active_tail)?
             .digest()?;
     let claims_packet = match effect {
+        // The source is the ORDER'S escrow Position, not the maker's. The
+        // claims moved here were debited from the maker at admission and have
+        // been held by the order ever since; a maker who has since emptied
+        // their own Position cannot make this row fail.
         GeneralChildEffectV1::CollectClaims => build_claims_packet(
             ClaimsAction::TransferNative,
             context,
             outcome_count,
             active_tail,
-            context.owner_id,
+            context.order_id,
             claims.settlement_owner,
             claims.market_revision,
-            claims.owner_position_revision,
+            claims.escrow_position_revision,
             claims.settlement_position_revision,
             parent,
         )?,
@@ -286,9 +454,16 @@ fn build_row_custody_packets_v2(
     {
         return Err(ChildPacketError::Coordinate);
     }
+    // Collect moves FROM THE ORDER'S OWN ESCROW VAULT, never from the maker's
+    // external account. Decision 0009 §2 named the external debit a live credit
+    // regression: between placement and settlement the collateral sat where the
+    // maker could spend it, and a maker who did stranded the whole candidate at
+    // its first `Collect`. The escrow vault is keyed by the order's content
+    // identity, so this route can reach exactly one order's collateral and the
+    // amount available is a balance the protocol already holds.
     let route_valid = if effect == GeneralChildEffectV1::CollectCollateral {
-        resources.source_owner == context.owner_id
-            && is_zero(&resources.source_vault_context)
+        is_zero(&resources.source_owner)
+            && resources.source_vault_context == context.order_id
             && is_zero(&resources.destination_owner)
             && resources.destination_vault_context == context.candidate_id
     } else {
@@ -312,11 +487,12 @@ fn build_row_custody_packets_v2(
         u32::from(context.execution_index),
         quantities[0],
         resources,
-        if effect == GeneralChildEffectV1::CollectCollateral {
-            CompartmentV1::External
-        } else {
-            CompartmentV1::Settlement
-        },
+        // Both sides of a Collect are `Settlement`: an order's escrow and a
+        // candidate's inventory are the SAME economic pool, and what separates
+        // them is the vault context, which is a PDA seed. A distinct compartment
+        // tag would separate pools that must be interconvertible and would put a
+        // General-shaped row in a taxonomy every family reads.
+        CompartmentV1::Settlement,
         if effect == GeneralChildEffectV1::CollectCollateral {
             CompartmentV1::Settlement
         } else {
@@ -694,6 +870,7 @@ mod tests {
             market_revision: 10,
             owner_position_revision: 20,
             settlement_position_revision: 30,
+            escrow_position_revision: 40,
         }
     }
 
@@ -759,23 +936,44 @@ mod tests {
     }
 
     #[test]
-    fn distinct_external_owner_collateral_packet_round_trips_and_receipt_checks() {
+    fn collect_moves_from_the_orders_escrow_vault_and_never_from_the_maker() {
         let mut quantities = [0; MAX_OUTCOMES];
         quantities[0] = 19;
+        // The escrow vault is keyed by the ORDER identity; the settlement
+        // inventory by the CANDIDATE identity.
+        let mut resources = custody(false, false);
+        resources.source_vault_context = row().order_id;
         let packets = build_row_packets_v2(
             GeneralChildEffectV1::CollectCollateral,
             row(),
             2,
             &quantities,
             claims(),
-            Some(custody(true, false)),
+            Some(resources),
         )
         .expect("packets");
         let packet = packets.custody.expect("custody");
         let request = packet.request();
-        assert_eq!(request.semantic.source_owner, row().owner_id);
-        assert_eq!(request.source_compartment, CompartmentV1::External);
+        // The regression decision 0009 §2 named: this used to be the maker's own
+        // external account, read at settlement time.
+        assert_eq!(request.semantic.source_owner, [0; 32]);
+        assert_eq!(request.source_vault_context, row().order_id);
+        assert_eq!(request.source_compartment, CompartmentV1::Settlement);
+        assert_eq!(request.destination_vault_context, row().candidate_id);
         assert_eq!(request.destination_compartment, CompartmentV1::Settlement);
+
+        // The old route is now refused outright, so no caller can reintroduce it.
+        assert_eq!(
+            build_row_packets_v2(
+                GeneralChildEffectV1::CollectCollateral,
+                row(),
+                2,
+                &quantities,
+                claims(),
+                Some(custody(true, false)),
+            ),
+            Err(ChildPacketError::Coordinate)
+        );
         let evidence = ReceiptEvidenceV1 {
             source_before: 30,
             source_after: 11,
@@ -803,6 +1001,137 @@ mod tests {
             },
         )
         .expect("verified");
+    }
+
+    #[test]
+    fn admission_escrow_packets_move_the_maker_into_the_orders_own_escrow() {
+        // The escrow context for BOTH legs is the order identity. A batch-wide
+        // escrow would pool makers' collateral and make an exact refund depend
+        // on a ledger; here the address is the ledger.
+        let mut context = row();
+        context.candidate_id = id(30); // the BATCH, for an admission
+        context.page_index = 0;
+        context.execution_index = 0;
+
+        let mut quantities = [0; MAX_OUTCOMES];
+        quantities[0] = 50;
+        let mut resources = custody(true, false);
+        resources.destination_vault_context = context.order_id;
+        let packets = build_order_escrow_packets_v1(
+            GeneralChildEffectV1::EscrowCollateral,
+            context,
+            1,
+            &quantities,
+            claims(),
+            Some(resources),
+        )
+        .expect("escrow packets");
+        let request = packets.custody.expect("custody").request();
+        assert_eq!(request.semantic.source_owner, context.owner_id);
+        assert_eq!(request.source_compartment, CompartmentV1::External);
+        assert_eq!(request.destination_compartment, CompartmentV1::Settlement);
+        assert_eq!(request.destination_vault_context, context.order_id);
+
+        // The claim leg debits the maker's Position into the order's.
+        let mut claim_quantities = [0; MAX_OUTCOMES];
+        claim_quantities[1] = 20;
+        let claim_packets = build_order_escrow_packets_v1(
+            GeneralChildEffectV1::EscrowClaims,
+            context,
+            2,
+            &claim_quantities,
+            claims(),
+            None,
+        )
+        .expect("claims escrow");
+        let plan = claim_packets.claims.expect("claims");
+        let plan = plan.plan().expect("plan");
+        assert_eq!(plan.source_owner(), context.owner_id);
+        assert_eq!(plan.destination_owner(), context.order_id);
+    }
+
+    #[test]
+    fn refund_packets_are_the_exact_mirror_and_hostile_routes_refuse() {
+        let mut context = row();
+        context.candidate_id = id(30);
+        context.page_index = 0;
+        context.execution_index = 0;
+        let mut quantities = [0; MAX_OUTCOMES];
+        quantities[0] = 50;
+
+        let mut resources = custody(false, true);
+        resources.source_vault_context = context.order_id;
+        let request = build_order_escrow_packets_v1(
+            GeneralChildEffectV1::ReleaseCollateral,
+            context,
+            1,
+            &quantities,
+            claims(),
+            Some(resources),
+        )
+        .expect("refund packets")
+        .custody
+        .expect("custody")
+        .request();
+        assert_eq!(request.source_compartment, CompartmentV1::Settlement);
+        assert_eq!(request.source_vault_context, context.order_id);
+        assert_eq!(request.semantic.destination_owner, context.owner_id);
+        assert_eq!(request.destination_compartment, CompartmentV1::External);
+
+        // A refund that names ANOTHER order's escrow is refused: this is the
+        // cross-order drain, and it cannot be reached through this builder.
+        let mut foreign = custody(false, true);
+        foreign.source_vault_context = id(31);
+        assert_eq!(
+            build_order_escrow_packets_v1(
+                GeneralChildEffectV1::ReleaseCollateral,
+                context,
+                1,
+                &quantities,
+                claims(),
+                Some(foreign),
+            ),
+            Err(ChildPacketError::Coordinate)
+        );
+        // A refund paid to someone who is not the maker is refused likewise.
+        let mut stranger = custody(false, true);
+        stranger.source_vault_context = context.order_id;
+        stranger.destination_owner = id(31);
+        assert_eq!(
+            build_order_escrow_packets_v1(
+                GeneralChildEffectV1::ReleaseCollateral,
+                context,
+                1,
+                &quantities,
+                claims(),
+                Some(stranger),
+            ),
+            Err(ChildPacketError::Coordinate)
+        );
+        // A settlement effect cannot be routed through the escrow builder, and
+        // an escrow effect cannot be routed through the settlement one.
+        assert_eq!(
+            build_order_escrow_packets_v1(
+                GeneralChildEffectV1::CollectCollateral,
+                context,
+                1,
+                &quantities,
+                claims(),
+                Some(resources),
+            ),
+            Err(ChildPacketError::Coordinate)
+        );
+        assert_eq!(
+            build_row_packets_v2(
+                GeneralChildEffectV1::EscrowCollateral,
+                row(),
+                1,
+                &quantities,
+                claims(),
+                Some(resources),
+            ),
+            Err(ChildPacketError::General)
+        );
     }
 
     #[test]
