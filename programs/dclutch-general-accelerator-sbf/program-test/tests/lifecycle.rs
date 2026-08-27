@@ -18,9 +18,15 @@ use dclutch_general_adapter_contract::{
         verify_candidate_row_v1,
     },
     collection_v1::{
-        GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1, GeneralOrderPhaseV1,
-        GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1, authenticate_batch_candidate_v1,
-        authenticate_order_execution_v1, general_order_len_v1,
+        EscrowDirectionV1, GeneralBatchOpeningV1, GeneralBatchV1, GeneralOrderHeaderV1,
+        GeneralOrderPhaseV1, GeneralOrderStateV1, GeneralOrderV1, MakerFundingV1,
+        authenticate_batch_candidate_v1, authenticate_order_execution_v1, general_order_len_v1,
+    },
+    escrow_v1::{
+        OrderEscrowObservationV1, OrderEscrowPlanV1, WorkEscrowClosePlanV1, WorkEscrowDrawPlanV1,
+        WorkEscrowFundingPlanV1, WorkEscrowObservationV1, authenticate_collect_from_escrow_v1,
+        authenticate_order_escrow_claims_v1, authenticate_work_escrow_v1,
+        work_escrow_required_lamports_v1,
     },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_candidate_bank_len_v3,
@@ -36,8 +42,8 @@ use dclutch_general_adapter_contract::{
         consider_verified_candidate_v2, freeze_selection_v2,
     },
     runtime_settlement::{
-        RuntimeSettlementActionV2, RuntimeSettlementBuffersV2, RuntimeSettlementViewV2,
-        evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
+        RuntimeSettlementActionV2, RuntimeSettlementBuffersV2, RuntimeSettlementEffectPlanV2,
+        RuntimeSettlementViewV2, evaluate_runtime_settlement_v2, initialize_runtime_settlement_v2,
         runtime_settlement_effect_len_v2,
     },
     runtime_verify::{AuthenticatedOrderTermsV2, runtime_verifier_len_v2},
@@ -109,6 +115,85 @@ struct TerminalFixture {
     candidate_id: [u8; 32],
     /// The submission record the verification advanced and paid out of.
     submission: GeneralCandidateV1,
+    /// The closed batch, so a settlement row can be checked against the escrow
+    /// its order actually holds rather than against a declared reserve.
+    batch: GeneralBatchV1,
+    /// The order records this batch admitted, in the candidate's row order.
+    orders: Vec<Vec<u8>>,
+    /// Every balance the escrow moved, carried through the whole campaign.
+    escrow: EscrowLedgerV1,
+}
+
+/// Rent-exempt minimum for one 224-byte submission record, at the current Rent.
+///
+/// It is a floor rather than a compartment: the work escrow may never be drawn
+/// into it, or the record it lives in becomes collectable.
+const SUBMISSION_RENT_FLOOR: u64 = 2_449_680;
+/// Lamports the solver holds before funding one submission.
+const SOLVER_LAMPORTS: u64 = 1_000_000_000;
+/// Quote atoms each maker holds before their order is admitted.
+const MAKER_QUOTE_ATOMS: u64 = 1_000_000;
+
+/// Every balance General's escrow touches, tracked across the whole campaign.
+///
+/// **This is what "the escrow moves" means for a campaign that has no lamport
+/// mover.** Decision 0010 §6 item 3 records the work escrow as accounted and not
+/// moved, and the sharper half is that nothing tied the accounting to a balance
+/// at all. Here every transition of the real lifecycle constructs its exact
+/// movement plan against an observed balance, applies it, and the plan's own
+/// postcondition check is what advances the ledger -- so a step whose record and
+/// whose balance disagree cannot be applied at all.
+///
+/// What it is NOT: a claim that lamports moved on chain. The seven collection and
+/// candidate actions have no artifact triple, so no on-chain route exists to
+/// carry these movements yet; the settlement half below is what runs on the real
+/// ELF, and the escrow it draws on is the one this ledger holds.
+#[derive(Clone, Debug)]
+struct EscrowLedgerV1 {
+    /// Lamports in the submission record's account.
+    work_escrow: u64,
+    /// Lamports held by the solver who funded the submission.
+    solver: u64,
+    /// Lamports paid out to the actors who performed cranks.
+    cranked: u64,
+    /// Quote atoms in each order's own escrow vault, keyed by `order_id`.
+    vaults: BTreeMap<[u8; 32], u64>,
+    /// Quote atoms each maker holds outside the protocol, keyed by `order_id`.
+    makers: BTreeMap<[u8; 32], u64>,
+    /// Quote atoms the settlement inventory has collected out of the escrows.
+    settlement: u64,
+}
+
+impl EscrowLedgerV1 {
+    fn new() -> Self {
+        Self {
+            work_escrow: 0,
+            solver: SOLVER_LAMPORTS,
+            cranked: 0,
+            vaults: BTreeMap::new(),
+            makers: BTreeMap::new(),
+            settlement: 0,
+        }
+    }
+
+    /// The observation one work-escrow transition reads.
+    fn work_observation(&self, beneficiary: u64) -> WorkEscrowObservationV1 {
+        WorkEscrowObservationV1 {
+            escrow_lamports: self.work_escrow,
+            rent_floor: SUBMISSION_RENT_FLOOR,
+            beneficiary_lamports: beneficiary,
+        }
+    }
+
+    /// Every lamport this ledger has ever held, which never changes.
+    fn total_lamports(&self) -> u64 {
+        self.work_escrow + self.solver + self.cranked
+    }
+
+    /// Every quote atom this ledger has ever held, which never changes.
+    fn total_atoms(&self) -> u64 {
+        self.vaults.values().sum::<u64>() + self.makers.values().sum::<u64>() + self.settlement
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -799,26 +884,56 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
     ];
     let identity = batch.batch_id();
     let claims = vec![u64::MAX / 4; count];
-    let mut placed: Vec<(Vec<u8>, u64)> = specs
-        .iter()
-        .map(|spec| {
-            let bytes = order_record(width, identity, spec);
-            let order = GeneralOrderV1::decode(&bytes).expect("order record");
-            batch
-                .admit(
-                    order,
-                    MakerFundingV1 {
-                        owner_id: OWNER,
-                        available_quote: u64::MAX / 4,
-                        available_claims: &claims,
-                    },
-                    ADMISSION_SLOT,
-                )
-                .expect("admit order");
-            (bytes, spec.lots)
-        })
-        .collect();
+    let mut ledger = EscrowLedgerV1::new();
+    let mut placed: Vec<(Vec<u8>, u64)> = Vec::new();
+    for spec in &specs {
+        let bytes = order_record(width, identity, spec);
+        let order = GeneralOrderV1::decode(&bytes).expect("order record");
+        let escrow = batch
+            .admit(
+                order,
+                MakerFundingV1 {
+                    owner_id: OWNER,
+                    available_quote: u64::MAX / 4,
+                    available_claims: &claims,
+                },
+                ADMISSION_SLOT,
+            )
+            .expect("admit order");
+        // ADMISSION MOVES THE ATOMS. Before this the escrow was a value the
+        // transition returned and nothing carried; here the movement is planned
+        // against the vault's observed balance, and the plan's own
+        // postcondition is what advances the ledger.
+        let order_id = order.order_id();
+        let plan = OrderEscrowPlanV1::new(
+            batch,
+            order,
+            escrow,
+            OrderEscrowObservationV1 {
+                escrow_context: order_id,
+                vault_quote_atoms: 0,
+                maker_quote_atoms: MAKER_QUOTE_ATOMS,
+            },
+        )
+        .expect("admission escrow plan");
+        for outcome in 0..width {
+            authenticate_order_escrow_claims_v1(order, EscrowDirectionV1::Deposit, outcome, 0)
+                .expect("a fresh escrow Position holds nothing at this outcome");
+        }
+        plan.validate_post(plan.vault_after(), plan.maker_after())
+            .expect("the admission movement is exactly the planned one");
+        assert_eq!(plan.vault_after(), order.quote_reserve().expect("reserve"));
+        ledger.vaults.insert(order_id, plan.vault_after());
+        ledger.makers.insert(order_id, plan.maker_after());
+        placed.push((bytes, spec.lots));
+    }
     assert_eq!(batch.state().order_count, 3);
+    // The batch's counter is no longer a sum of promises: it is the sum of the
+    // balances the protocol is holding, and that is now checkable.
+    assert_eq!(
+        batch.state().committed_quote_reserve,
+        ledger.vaults.values().sum::<u64>(),
+    );
     let revision = root.revision();
     let closed_identity = batch.close(&mut root, revision).expect("close batch");
     assert_eq!(closed_identity, identity);
@@ -902,6 +1017,26 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
     )
     .expect("submit the candidate against the closed batch");
 
+    // THE WORK ESCROW IS FUNDED, not merely declared. The solver pays the
+    // record's rent and its whole work capacity in one exact movement; over- and
+    // under-funding are both refused, and the account's balance is from here on
+    // the referent every capitalization check reads.
+    let funding = WorkEscrowFundingPlanV1::new(
+        opening_probe,
+        SUBMISSION_RENT_FLOOR,
+        ledger.solver,
+        ledger.work_escrow,
+    )
+    .expect("submission funding plan");
+    funding
+        .validate_post(funding.solver_after(), funding.escrow_after())
+        .expect("the funding movement is exactly the planned one");
+    ledger.solver = funding.solver_after();
+    ledger.work_escrow = funding.escrow_after();
+    authenticate_work_escrow_v1(submission, 0, ledger.work_observation(0))
+        .expect("a funded submission authenticates against its own balance");
+    assert_eq!(ledger.total_lamports(), SOLVER_LAMPORTS);
+
     // Each page is deliberately unbalanced. The complete candidate alone has
     // the uniform relation required for a complete-set materialization.
     let rows: [(Vec<u8>, AuthenticatedOrderTermsV2); 3] = core::array::from_fn(|index| {
@@ -977,6 +1112,24 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         .expect("verified row");
         assert_eq!(summary.complete, index == 2);
         assert_eq!(summary.reward.lamports, CRANK_REWARD_LAMPORTS);
+        // EVERY CRANK IS PAID, and paid out of a balance the candidate already
+        // holds. The draw plan is constructed from the escrow's observed
+        // lamports AND the successor record together, so a row that advanced its
+        // cursor without moving the reward -- or the reverse -- cannot be
+        // applied here at all.
+        let rows_verified_after = u32::try_from(index).expect("row cursor") + 1;
+        let draw = WorkEscrowDrawPlanV1::new(
+            ledger.work_observation(ledger.cranked),
+            summary.submission,
+            rows_verified_after,
+            summary.reward,
+        )
+        .expect("verification crank draw");
+        draw.validate_post(draw.escrow_after(), draw.beneficiary_after())
+            .expect("the crank payment is exactly the planned one");
+        ledger.work_escrow = draw.escrow_after();
+        ledger.cranked = draw.beneficiary_after();
+        assert_eq!(ledger.total_lamports(), SOLVER_LAMPORTS);
         // The terms the verb derived are the ones this fixture independently
         // projected from the same order record.
         assert_eq!(
@@ -1003,6 +1156,10 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         submission.state().verification_remaining,
         CRANK_REWARD_LAMPORTS
     );
+    // The escrow's remaining lamports are exactly the remaining cranks, proved
+    // against the account rather than against the record's own arithmetic.
+    authenticate_work_escrow_v1(submission, 3, ledger.work_observation(ledger.cranked))
+        .expect("the verified submission still holds exactly what it owes");
     TerminalFixture {
         width,
         verifier: cursor,
@@ -1010,12 +1167,34 @@ fn terminal_fixture(width: u32) -> TerminalFixture {
         manifests,
         candidate_id,
         submission,
+        batch,
+        orders: placed.iter().map(|(bytes, _)| bytes.clone()).collect(),
+        escrow: ledger,
     }
 }
 
 /// The order record one candidate row names, in the candidate's own row order.
 fn order_bytes_for(placed: &[(Vec<u8>, u64)], index: usize) -> &[u8] {
     &placed.get(index).expect("placed order").0
+}
+
+/// The admitted order record carrying one content identity.
+///
+/// Resolved by digest rather than by position: a settlement effect names an
+/// order by identity, and looking it up by the loop's index would let a row
+/// settle against a record it does not name.
+fn order_for_id(fixture: &TerminalFixture, order_id: [u8; 32]) -> Vec<u8> {
+    fixture
+        .orders
+        .iter()
+        .find(|bytes| {
+            GeneralOrderV1::decode(bytes)
+                .expect("admitted order")
+                .order_id()
+                == order_id
+        })
+        .expect("the effect names an order this batch admitted")
+        .clone()
 }
 
 fn initialized_cursor(fixture: &TerminalFixture) -> Vec<u8> {
@@ -1035,13 +1214,18 @@ fn initialized_cursor(fixture: &TerminalFixture) -> Vec<u8> {
     output
 }
 
+/// Run one settlement transition natively, returning `(cursor, effect)`.
+///
+/// The effect is returned because it carries the exact `quote_quantity` and
+/// `order_id` a row moves, and the escrow that funds it has to be checked
+/// against those and not against a figure the test restates.
 fn settle_native(
     fixture: &TerminalFixture,
     cursor: &[u8],
     action: RuntimeSettlementActionV2,
     manifest: Option<&[u8]>,
     manifest_order_index: u32,
-) -> Vec<u8> {
+) -> (Vec<u8>, Vec<u8>) {
     let cursor_value = SettlementCursorV2::decode(cursor).expect("cursor");
     let cursor_len = cursor.len();
     let effect_len = runtime_settlement_effect_len_v2(fixture.width).expect("effect width");
@@ -1070,7 +1254,7 @@ fn settle_native(
         },
     )
     .expect("native settlement transition");
-    cursor_output
+    (cursor_output, effect_output)
 }
 
 fn frozen_selection_for_verified(verified: &[u8]) -> Vec<u8> {
@@ -1394,6 +1578,10 @@ async fn real_sbf_consider_replaces_with_best_valid_submitted_candidate_then_fre
 
 async fn run_full_settlement_lifecycle(width: u32) {
     let fixture = terminal_fixture(width);
+    // The escrow the collection half funded, carried into the settlement half.
+    let mut escrow = fixture.escrow.clone();
+    let atoms_before = escrow.total_atoms();
+    let lamports_before = escrow.total_lamports();
     let (initialize, evidence) = execute_initialize(&fixture).await;
     assert_eq!(initialize, AcceleratorDispositionV2::Accepted);
     assert_execution_evidence(evidence, Action::InitializeSettlement, width);
@@ -1476,13 +1664,42 @@ async fn run_full_settlement_lifecycle(width: u32) {
             read_payload_scalar(ack.payload(), scalar::ORDER_COORDINATE),
             u64::try_from(expected_coordinate).expect("order coordinate") + 1
         );
-        cursor = settle_native(
+        let (next, effect) = settle_native(
             &fixture,
             &cursor,
             RuntimeSettlementActionV2::Collect,
             Some(manifest),
             u32::from(*manifest_order),
         );
+        cursor = next;
+        // SETTLEMENT DRAWS ON THE ESCROW, and the amount is the one the
+        // transition produced rather than one this test restates. Decision 0010
+        // §2 made this the whole point of escrow-at-admission: the only balance
+        // a settlement can be short of is one the protocol is already holding.
+        let plan = RuntimeSettlementEffectPlanV2::decode(&effect).expect("collect effect");
+        let header = plan.header();
+        let order_bytes = order_for_id(&fixture, header.order_id);
+        let order = GeneralOrderV1::decode(&order_bytes).expect("collected order");
+        let held = *escrow
+            .vaults
+            .get(&header.order_id)
+            .expect("the collected order has an escrow");
+        authenticate_collect_from_escrow_v1(
+            fixture.batch,
+            order,
+            OrderEscrowObservationV1 {
+                escrow_context: header.order_id,
+                vault_quote_atoms: held,
+                maker_quote_atoms: *escrow.makers.get(&header.order_id).expect("maker"),
+            },
+            header.quote_quantity,
+        )
+        .expect("the order's own escrow covers this row's debit");
+        escrow
+            .vaults
+            .insert(header.order_id, held - header.quote_quantity);
+        escrow.settlement += header.quote_quantity;
+        assert_eq!(escrow.total_atoms(), atoms_before);
         let expected = SettlementCursorV2::decode(&cursor).expect("collected cursor");
         assert_eq!(
             read_payload_scalar(ack.payload(), scalar::CURSOR_NEXT_ORDER),
@@ -1500,13 +1717,14 @@ async fn run_full_settlement_lifecycle(width: u32) {
         read_payload_scalar(materialized.payload(), scalar::CURSOR_PHASE),
         6
     );
-    cursor = settle_native(
+    let (next, _) = settle_native(
         &fixture,
         &cursor,
         RuntimeSettlementActionV2::Materialize,
         None,
         0,
     );
+    cursor = next;
 
     for (expected_coordinate, (manifest, manifest_order, page_index, execution_index)) in
         rows.iter().enumerate()
@@ -1527,13 +1745,14 @@ async fn run_full_settlement_lifecycle(width: u32) {
             read_payload_scalar(ack.payload(), scalar::ORDER_COORDINATE),
             u64::try_from(expected_coordinate).expect("order coordinate") + 1
         );
-        cursor = settle_native(
+        let (next, _) = settle_native(
             &fixture,
             &cursor,
             RuntimeSettlementActionV2::Distribute,
             Some(manifest),
             u32::from(*manifest_order),
         );
+        cursor = next;
     }
     let ready = SettlementCursorV2::decode(&cursor).expect("ready cursor");
     assert_eq!(ready.header().quote_inventory, 0);
@@ -1585,6 +1804,100 @@ async fn run_full_settlement_lifecycle(width: u32) {
     assert_eq!(
         read_payload_scalar(ack.payload(), scalar::CUSTODY_VAULT_RENT_LAMPORTS),
         404
+    );
+
+    // ------------------------------------------------------------------
+    // The escrow's own life closes, after the settlement it funded.
+    // ------------------------------------------------------------------
+    //
+    // A post-window release quotes no amount: whatever the winning candidate
+    // collected has already left, so what remains IS the refund. Every order
+    // gets one, and the movement is planned against the vault's own balance.
+    let batch = fixture.batch;
+    for bytes in &fixture.orders {
+        let order = GeneralOrderV1::decode(bytes).expect("admitted order");
+        let order_id = order.order_id();
+        let residual = batch
+            .release(order, SETTLEMENT_CLOSE_SLOT)
+            .expect("post-window release");
+        assert_eq!(residual.quote_atoms, 0);
+        let plan = OrderEscrowPlanV1::new(
+            batch,
+            order,
+            residual,
+            OrderEscrowObservationV1 {
+                escrow_context: order_id,
+                vault_quote_atoms: *escrow.vaults.get(&order_id).expect("vault"),
+                maker_quote_atoms: *escrow.makers.get(&order_id).expect("maker"),
+            },
+        )
+        .expect("residual release plan");
+        plan.validate_post(plan.vault_after(), plan.maker_after())
+            .expect("the release is exactly the planned one");
+        // The property the address was said to give for free, now measured: no
+        // maker leaves with more than the order escrowed.
+        assert!(plan.quote_atoms() <= order.quote_reserve().expect("reserve"));
+        escrow.vaults.insert(order_id, plan.vault_after());
+        escrow.makers.insert(order_id, plan.maker_after());
+    }
+    // Nothing was created and nothing was destroyed: every atom is either back
+    // with a maker or in the settlement inventory the candidate collected.
+    assert_eq!(escrow.total_atoms(), atoms_before);
+    assert!(escrow.vaults.values().all(|held| *held == 0));
+    assert_eq!(
+        escrow.settlement,
+        atoms_before - escrow.makers.values().sum::<u64>(),
+    );
+
+    // The consideration is the last crank the verification compartment was sized
+    // for. Gen-2 left it permissionless and UNPAID, which made a valid candidate
+    // nobody cranked simply not compete; here performing it draws its reward out
+    // of the candidate's own escrow.
+    let mut submission = fixture.submission;
+    let reward = submission
+        .record_considered()
+        .expect("the consideration is funded");
+    let draw = WorkEscrowDrawPlanV1::new(
+        escrow.work_observation(escrow.cranked),
+        submission,
+        3,
+        reward,
+    )
+    .expect("consideration draw");
+    draw.validate_post(draw.escrow_after(), draw.beneficiary_after())
+        .expect("the consideration payment is exactly the planned one");
+    escrow.work_escrow = draw.escrow_after();
+    escrow.cranked = draw.beneficiary_after();
+
+    // Close-out pays the cleanup crank and returns the residual AND the record's
+    // rent to the solver who paid it -- decision 0010 §6 item 3's rent ownership,
+    // routed rather than designed.
+    let (cleanup, refund) = submission.close_out().expect("close the submission out");
+    let close = WorkEscrowClosePlanV1::new(
+        escrow.work_observation(escrow.cranked),
+        cleanup,
+        refund,
+        escrow.solver,
+    )
+    .expect("close-out plan");
+    close
+        .validate_post(0, close.cranker_after(), close.solver_after())
+        .expect("the close-out is exactly the planned one");
+    escrow.work_escrow = 0;
+    escrow.cranked = close.cranker_after();
+    escrow.solver = close.solver_after();
+
+    // Every lamport the solver funded is back with the solver or with a cranker,
+    // and the escrow account holds nothing at all.
+    assert_eq!(escrow.total_lamports(), lamports_before);
+    assert_eq!(escrow.work_escrow, 0);
+    assert_eq!(escrow.cranked, 5 * CRANK_REWARD_LAMPORTS);
+    assert_eq!(escrow.solver, SOLVER_LAMPORTS - 5 * CRANK_REWARD_LAMPORTS);
+    // And the accounting has no remaining referent to disagree with: the record
+    // says both compartments are empty and so does the account.
+    assert_eq!(
+        work_escrow_required_lamports_v1(submission, SUBMISSION_RENT_FLOOR).expect("required"),
+        SUBMISSION_RENT_FLOOR,
     );
 }
 
