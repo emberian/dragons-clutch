@@ -15,43 +15,31 @@
 // `GlobalAlloc` implementation `entrypoint_adapter` installs.
 extern crate std;
 
-#[cfg(feature = "shadow-accelerator-auth-only")]
-use solana_program::program_error::ProgramError;
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
     pubkey::Pubkey,
 };
 
 /// Ephemeral exact prior-child receipt retention for the common Hot executor.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 mod child_receipt_v3;
 
 /// Family-neutral authoritative admitted-AOT candidate CPI.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod admitted_composition_v3;
 
 /// Family-neutral EffectProgram V3 composition for canonical Claims CPIs.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 pub mod claims_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod core_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Custody CPIs.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
@@ -63,10 +51,8 @@ pub mod direct;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
 /// V3 descriptor joins for independently finalized runtime-tail artifacts.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod dispatch_v3;
 /// Profile13 physical representative expansion shared by prefix and continuation.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 mod dynamic_accounts_v4;
 /// The named machine boundary: SBF entrypoint, input deserialization, heap.
 ///
@@ -83,64 +69,46 @@ pub mod execution_strategy_v2;
 #[cfg(feature = "families")]
 pub mod general;
 /// Generic atomic Custody→Core→Claims Market founding and commit-last Open.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 pub mod generic_market_founding_v1;
 /// Family-neutral authenticated V3 hot execution outer.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod hot_v3;
 /// Family-neutral native-signature evidence authentication and register seeding.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod native_signature;
 /// Family-neutral executable Core-to-Trading boundary.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod outer;
 /// Exact Claims Founding route and ordered projected-receipt join.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 #[allow(dead_code)]
 mod projected_claims_composition_v4;
 /// Exact current-Core Found route and acknowledgment join for projected Markets.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 #[allow(dead_code)]
 mod projected_core_composition_v4;
 /// Family-neutral creation of the projected-Custody prestate founding needs.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 pub mod projected_custody_bootstrap_v1;
 /// Family-neutral projected-Custody route-zero execution and receipt join.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 #[allow(dead_code)]
 mod projected_custody_composition_v4;
@@ -152,35 +120,27 @@ mod projected_custody_composition_v4;
 ))]
 pub mod projected_market_v2;
 /// Final Core Open and Trading replay commit-last boundary.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 #[allow(dead_code)]
 mod projected_open_composition_v4;
 /// Exact projected-Hoard realization route and receipt join.
-#[cfg(all(
-    not(feature = "shadow-accelerator-auth-only"),
-    any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    )
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
 ))]
 #[allow(dead_code)]
 mod projected_realize_composition_v4;
 /// Family-neutral EffectProgram V3 composition for canonical Resolution CPIs.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod resolution_composition_v3;
 /// Series family projection behind the common data-defined Trading boundary.
 #[cfg(any(feature = "families", feature = "series-family"))]
 pub mod series;
 /// Family-neutral read-only Shadow-AOT comparison CPI.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub mod shadow_composition_v3;
 
 /// Stable refusal from the canonical Trading SBF boundary.
@@ -221,12 +181,10 @@ impl From<TradingSbfError> for ProgramError {
 /// executes.
 pub const TRADING_MAX_INSTRUCTION_ACCOUNTS_V3: usize = 308;
 
-
 /// Execute the family-neutral authenticated activation route.
 ///
 /// Hot actions and closure remain fail-closed until their common profile and
 /// fixed-role receipt composition land in this same authority boundary.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 #[inline(never)]
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -272,7 +230,6 @@ pub fn process_instruction(
     }
 }
 
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 fn require_instruction_account_bound_v3(account_count: usize) -> ProgramResult {
     if account_count <= TRADING_MAX_INSTRUCTION_ACCOUNTS_V3 {
         Ok(())
@@ -281,7 +238,7 @@ fn require_instruction_account_bound_v3(account_count: usize) -> ProgramResult {
     }
 }
 
-#[cfg(all(test, not(feature = "shadow-accelerator-auth-only")))]
+#[cfg(test)]
 mod entrypoint_tests {
     use super::*;
 

@@ -18,7 +18,6 @@ custom-panic = []
 # Link only the public read-only Shadow callback authenticator when Trading is
 # consumed by an external accelerator. The canonical Trading executable never
 # enables this feature.
-shadow-accelerator-auth-only = []
 # Diagnostic-only phase checkpoints for measured SBF compute profiling.
 hot-cu-profile = []
 series-family = [

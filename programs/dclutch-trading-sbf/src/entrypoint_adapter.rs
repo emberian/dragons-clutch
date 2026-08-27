@@ -337,7 +337,11 @@ impl BumpHeapV1 {
         // either zero (the loader's zero-fill, never yet written) or a value
         // this allocator itself stored.
         let stored = unsafe { *self.header_word(HEAP_POSITION_WORD) };
-        if stored == 0 { HEAP_HEADER_BYTES } else { stored }
+        if stored == 0 {
+            HEAP_HEADER_BYTES
+        } else {
+            stored
+        }
     }
 
     /// Record a new bump position.
@@ -446,15 +450,13 @@ unsafe impl GlobalAlloc for BumpHeapV1 {
         // A no-op, exactly as the SDK's. See this type's documentation for the
         // measured reason the last-in-first-out release is not here.
     }
-
 }
 
 /// The Trading executable's program heap.
 #[cfg(all(
     target_os = "solana",
     not(feature = "custom-heap"),
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
+    not(feature = "no-entrypoint")
 ))]
 #[global_allocator]
 // SAFETY: HEAP_START_ADDRESS is the floor of the SBF program heap region. The
@@ -468,8 +470,7 @@ static PROGRAM_HEAP_V1: BumpHeapV1 =
 #[cfg(all(
     target_os = "solana",
     not(feature = "custom-heap"),
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
+    not(feature = "no-entrypoint")
 ))]
 #[must_use]
 pub fn program_heap_bytes_used_v1() -> usize {
@@ -480,8 +481,7 @@ pub fn program_heap_bytes_used_v1() -> usize {
 #[cfg(all(
     target_os = "solana",
     not(feature = "custom-heap"),
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
+    not(feature = "no-entrypoint")
 ))]
 #[must_use]
 pub fn program_heap_capacity_v1() -> usize {
@@ -510,7 +510,6 @@ pub fn program_heap_capacity_v1() -> usize {
 ///
 /// This function contains no `unsafe`: the sysvar is read through the safe
 /// `AccountInfo` borrow and every index is checked.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub fn admitted_heap_frame_bytes_v1(
     instructions: &AccountInfo<'_>,
 ) -> Result<Option<usize>, ProgramError> {
@@ -545,7 +544,6 @@ pub fn admitted_heap_frame_bytes_v1(
 /// layout knowledge lives in one place. It is written out here rather than
 /// taken as a dependency because that reader is another lane's in-flight work
 /// and this module must not be coupled to uncommitted code.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 fn admitted_heap_frame_bytes_from_sysvar_v1(data: &[u8]) -> Result<Option<usize>, ProgramError> {
     /// Bytes per serialized account meta: one privilege byte and an address.
     const META_BYTES: usize = 33;
@@ -566,9 +564,7 @@ fn admitted_heap_frame_bytes_from_sysvar_v1(data: &[u8]) -> Result<Option<usize>
             .and_then(|scaled| scaled.checked_add(2))
             .ok_or_else(refusal)?;
         let data_len_at = program_id_at.checked_add(32).ok_or_else(refusal)?;
-        let program_id = data
-            .get(program_id_at..data_len_at)
-            .ok_or_else(refusal)?;
+        let program_id = data.get(program_id_at..data_len_at).ok_or_else(refusal)?;
         let data_len = usize::from(read_u16(data, data_len_at).ok_or_else(refusal)?);
         let data_at = data_len_at.checked_add(2).ok_or_else(refusal)?;
         let data_end = data_at.checked_add(data_len).ok_or_else(refusal)?;
@@ -611,8 +607,7 @@ fn admitted_heap_frame_bytes_from_sysvar_v1(data: &[u8]) -> Result<Option<usize>
 #[cfg(all(
     target_os = "solana",
     not(feature = "custom-heap"),
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
+    not(feature = "no-entrypoint")
 ))]
 pub fn admit_heap_frame_v1(instructions: &AccountInfo<'_>) -> Result<usize, ProgramError> {
     match admitted_heap_frame_bytes_v1(instructions)? {
@@ -641,7 +636,6 @@ pub fn admit_heap_frame_v1(instructions: &AccountInfo<'_>) -> Result<usize, Prog
 ///   peak is the sum. Either it allocates less, or it supplies its own global
 ///   allocator over the granted heap." This module is that allocator, and this
 ///   is the declaration that lets the grant reach it.
-#[cfg(not(feature = "shadow-accelerator-auth-only"))]
 pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     #[cfg(any(
         feature = "families",
@@ -668,8 +662,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
 #[cfg(all(
     target_os = "solana",
     not(feature = "custom-heap"),
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
+    not(feature = "no-entrypoint")
 ))]
 fn lift_declared_heap_profile_v1(accounts: &[AccountInfo<'_>], instruction_data: &[u8]) {
     if !declares_extended_heap_profile_v1(instruction_data) {
@@ -724,9 +717,7 @@ impl InputCursor {
     #[inline(always)]
     fn take(&mut self, bytes: usize) -> Result<usize, ProgramError> {
         let start = self.offset;
-        let end = start
-            .checked_add(bytes)
-            .ok_or(TradingSbfError::Content)?;
+        let end = start.checked_add(bytes).ok_or(TradingSbfError::Content)?;
         if end > self.limit {
             return Err(TradingSbfError::Content.into());
         }
@@ -912,9 +903,7 @@ pub unsafe fn deserialize_into_v1<'a>(
                 // would clone an uninitialized `AccountInfo` here; refuse.
                 return Err(TradingSbfError::Content.into());
             }
-            let original = slots
-                .get(source)
-                .ok_or(TradingSbfError::Content)?;
+            let original = slots.get(source).ok_or(TradingSbfError::Content)?;
             // SAFETY: `source < index` and every slot below `index` was
             // written by an earlier iteration of this loop, so this slot is
             // initialized.
@@ -987,11 +976,7 @@ unsafe fn deserialize_account_v1<'a>(
 ///
 /// Called only by the SBF loader, with `input` pointing at the region described
 /// by this module's trust surface.
-#[cfg(all(
-    target_os = "solana",
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
-))]
+#[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn entrypoint(input: *mut u8) -> u64 {
     // SAFETY: the loader's contract, forwarded.
@@ -1010,11 +995,7 @@ pub unsafe extern "C" fn entrypoint(input: *mut u8) -> u64 {
 /// # Safety
 ///
 /// As [`entrypoint`].
-#[cfg(all(
-    target_os = "solana",
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
-))]
+#[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]
 #[inline(never)]
 unsafe fn entrypoint_on_stack(input: *mut u8) -> u64 {
     #[allow(clippy::declare_interior_mutable_const)]
@@ -1048,11 +1029,7 @@ unsafe fn entrypoint_on_stack(input: *mut u8) -> u64 {
 /// # Safety
 ///
 /// As [`entrypoint`].
-#[cfg(all(
-    target_os = "solana",
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
-))]
+#[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]
 #[inline(never)]
 unsafe fn entrypoint_on_heap(input: *mut u8) -> u64 {
     use std::vec::Vec;
@@ -1091,11 +1068,7 @@ unsafe fn entrypoint_on_heap(input: *mut u8) -> u64 {
 }
 
 /// Lift the heap ceiling if the route declares it, then run the program.
-#[cfg(all(
-    target_os = "solana",
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
-))]
+#[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]
 #[inline(never)]
 fn dispatch(program_id: &Pubkey, accounts: &[AccountInfo<'_>], instruction_data: &[u8]) -> u64 {
     #[cfg(not(feature = "custom-heap"))]
@@ -1106,11 +1079,7 @@ fn dispatch(program_id: &Pubkey, accounts: &[AccountInfo<'_>], instruction_data:
     }
 }
 
-#[cfg(all(
-    target_os = "solana",
-    not(feature = "no-entrypoint"),
-    not(feature = "shadow-accelerator-auth-only")
-))]
+#[cfg(all(target_os = "solana", not(feature = "no-entrypoint")))]
 solana_program::custom_panic_default!();
 
 /// Read a little-endian `u16` at `at`, or `None` if it does not fit.
@@ -1350,9 +1319,7 @@ mod tests {
     #[test]
     fn differential_declared_maximum_three_hundred_eight_accounts() {
         let slots: Vec<SlotSpec> = (0..crate::TRADING_MAX_INSTRUCTION_ACCOUNTS_V3)
-            .map(|index| {
-                SlotSpec::Fresh(account(u8::try_from(index % 251).expect("seed")))
-            })
+            .map(|index| SlotSpec::Fresh(account(u8::try_from(index % 251).expect("seed"))))
             .collect();
         differential(&slots, &[7; 32]);
     }
@@ -1664,8 +1631,16 @@ mod tests {
         assert_eq!(allocator.bytes_capacity(), ADAPTER_DEFAULT_HEAP_BYTES);
         // Below the protocol default, above the runtime maximum, and not a
         // multiple of the runtime's granularity are all refusals.
-        assert!(allocator.lift_ceiling(ADAPTER_DEFAULT_HEAP_BYTES - 1_024).is_err());
-        assert!(allocator.lift_ceiling(ADAPTER_MAX_HEAP_BYTES + 1_024).is_err());
+        assert!(
+            allocator
+                .lift_ceiling(ADAPTER_DEFAULT_HEAP_BYTES - 1_024)
+                .is_err()
+        );
+        assert!(
+            allocator
+                .lift_ceiling(ADAPTER_MAX_HEAP_BYTES + 1_024)
+                .is_err()
+        );
         assert!(allocator.lift_ceiling(33_000).is_err());
         assert_eq!(allocator.bytes_capacity(), ADAPTER_DEFAULT_HEAP_BYTES);
         assert_eq!(allocator.lift_ceiling(65_536), Ok(65_536));
@@ -1692,7 +1667,10 @@ mod tests {
             "and only the extra region"
         );
         // The pre-lift allocation is untouched.
-        assert_eq!(live as usize, allocator_base(&allocator) + HEAP_HEADER_BYTES);
+        assert_eq!(
+            live as usize,
+            allocator_base(&allocator) + HEAP_HEADER_BYTES
+        );
     }
 
     fn allocator_base(allocator: &BumpHeapV1) -> usize {
@@ -1702,10 +1680,8 @@ mod tests {
     // -----------------------------------------------------------------
     // Heap-frame admission out of the instructions sysvar
     // -----------------------------------------------------------------
-    #[cfg(not(feature = "shadow-accelerator-auth-only"))]
     mod admission {
         use super::*;
-
 
         fn request_heap_frame_data(bytes: u32) -> Vec<u8> {
             let mut data = vec![REQUEST_HEAP_FRAME_DISCRIMINANT];
@@ -1719,13 +1695,13 @@ mod tests {
             let borrowed: Vec<solana_program::sysvar::instructions::BorrowedInstruction<'_>> =
                 instructions
                     .iter()
-                    .map(
-                        |(program_id, data)| solana_program::sysvar::instructions::BorrowedInstruction {
+                    .map(|(program_id, data)| {
+                        solana_program::sysvar::instructions::BorrowedInstruction {
                             program_id,
                             accounts: Vec::new(),
                             data,
-                        },
-                    )
+                        }
+                    })
                     .collect();
             solana_instructions_sysvar::construct_instructions_data(&borrowed)
         }
