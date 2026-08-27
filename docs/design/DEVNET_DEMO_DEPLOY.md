@@ -394,10 +394,24 @@ clusters.
 `DCLTGMF1` went from **1,184,132 CU (84.6% of maximum) to 1,278,747 CU (91.3%)
 in one evening** at the end of 2026-08-26, entirely from other lanes' concurrent
 Core/Claims/Trading changes, with nothing watching it. There is no headroom to
-buy: the campaign already requests the maximum. **Re-measure `DCLTGMF1` at the
-exact deploy commit and refuse to deploy above ~95%**, because the failure mode
-is a hard refusal at the ceiling with no partial result — and on devnet the
-retry costs another founding's rent.
+buy: the campaign already requests the maximum.
+
+**Measured 2026-08-27**, two runs a half hour apart on the same machine:
+
+| run | commit | `DCLTGMF1` | % of 1,400,000 |
+|---|---|---:|---:|
+| genesis-mode control | `3b0c5883` | 1,220,253 | 87.2% |
+| §6 transaction-only dry run | `90d7688d` | **1,230,747** | **87.9%** |
+
+Six of seven ELFs are byte-identical between those two runs, so the +10,494 is
+not artifact growth; it is almost certainly PDA bump-seed noise — the gauntlet
+derives semantic release ids from the commit, so every record digest moves, and
+each extra `find_program_address` iteration costs ~1,500 CU. **Read the table as
+"87–88% and drifting", not as a trend.**
+
+**Re-measure `DCLTGMF1` at the exact deploy commit and refuse to deploy above
+~95%.** The failure mode is a hard refusal at the ceiling with no partial
+result, and on devnet the retry costs another founding's rent.
 
 The CU-BUDGET lane owns the checked-in budgets. Deploy day should read them.
 
