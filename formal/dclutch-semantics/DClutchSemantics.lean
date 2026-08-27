@@ -43,6 +43,7 @@ import DClutchSemantics.ProductPayoffAbi
 import DClutchSemantics.LiabilityBasisV2
 import DClutchSemantics.LiabilityBasisV2Spline
 import DClutchSemantics.LiabilityBasisV2SplineAbi
+import DClutchSemantics.LiabilityBasisV2SplineExamples
 import DClutchSemantics.ClaimsRepresentation
 import DClutchSemantics.ClaimsRepresentationExamples
 import DClutchSemantics.DealerLiquidity
