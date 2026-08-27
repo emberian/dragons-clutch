@@ -491,7 +491,7 @@ async fn submit_v0(
     addresses: Vec<Pubkey>,
     transaction_payer: Option<&Keypair>,
     signers: &[&Keypair],
-) -> Result<u64, BanksClientError> {
+) -> Result<u64, RefusedExecution> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let transaction_payer = transaction_payer.unwrap_or(&context.payer);
     let message = VersionedMessage::V0(
@@ -536,11 +536,53 @@ async fn submit_v0(
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
-    processed.result?;
+    let logs = processed
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.log_messages.clone())
+        .unwrap_or_default();
+    if let Err(error) = processed.result {
+        return Err(RefusedExecution {
+            error: BanksClientError::TransactionError(error),
+            logs,
+        });
+    }
     Ok(processed
         .metadata
         .map(|metadata| metadata.compute_units_consumed)
         .unwrap_or_default())
+}
+
+/// One refused execution together with the program log it reached.
+///
+/// A refusal test that only asserts `is_err()` cannot tell a refusal reached at
+/// its intended depth from one that aborted before any of the CPIs it claims to
+/// roll back ever ran.
+struct RefusedExecution {
+    error: BanksClientError,
+    logs: Vec<String>,
+}
+
+impl From<BanksClientError> for RefusedExecution {
+    fn from(error: BanksClientError) -> Self {
+        Self {
+            error,
+            logs: Vec::new(),
+        }
+    }
+}
+
+impl core::fmt::Debug for RefusedExecution {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{:?}", self.error)
+    }
+}
+
+impl RefusedExecution {
+    fn invoked(&self, program: Pubkey) -> bool {
+        let expected = format!("Program {program} invoke");
+        self.logs.iter().any(|line| line.starts_with(&expected))
+    }
 }
 
 fn program_test(artifacts: &Elves) -> ProgramTest {
@@ -902,17 +944,29 @@ async fn late_custody_refusal_rolls_back_registry_hot_claims_and_lifecycle() {
     add_lookup_table(&mut test, &addresses);
     let mut context = test.start_with_context().await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    let refusal = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("uninitialized Custody destination unexpectedly accepted");
+    // A rollback assertion over an execution that never started is vacuous: it
+    // holds for any refusal, including one raised before the first child CPI.
+    // The claim under test is specifically that Trading reached its Custody
+    // child, that child refused, and everything the earlier children wrote was
+    // rolled back. Require the depth the name claims.
     assert!(
-        submit_v0(
-            &mut context,
-            &instructions,
-            addresses,
-            Some(&direct.payer),
-            &[],
-        )
-        .await
-        .is_err(),
-        "uninitialized Custody destination unexpectedly accepted"
+        refusal.invoked(CLAIMS_PROGRAM_ID),
+        "the Claims children this test claims to roll back never ran: {:#?}",
+        refusal.logs
+    );
+    assert!(
+        refusal.invoked(CUSTODY_PROGRAM_ID),
+        "the late Custody refusal was never reached: {:#?}",
+        refusal.logs
     );
     let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     assert_eq!(
