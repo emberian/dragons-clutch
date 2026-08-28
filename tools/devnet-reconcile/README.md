@@ -41,7 +41,11 @@ as a source of chain truth.
 Hoard principal, protocol fees, and transaction fees are reported as three
 different quantities. The dossier has `signatureScheme: "none"`; its public
 transaction signatures are evidence identifiers, not a signature over the
-dossier.
+dossier. `evidence.rpc.mode` distinguishes a reproducible captured-RPC replay
+from a live finalized RPC observation. The former binds the exact capture-file
+SHA-256 and does not claim that replay was a new live observation. The latter
+publishes only the endpoint SHA-256, not a potentially credential-bearing URL.
+`dossierSha256` hashes canonical dossier JSON before that field is added.
 
 ## Commands
 

@@ -265,8 +265,12 @@ def decode_certificate(data: bytes) -> dict[str, Any]:
 
 
 class CapturedRpc:
-    def __init__(self, value: dict[str, Any]) -> None:
+    def __init__(self, value: dict[str, Any], capture_sha256: str | None = None) -> None:
         self.value = value
+        self.capture_sha256 = capture_sha256 or sha256_bytes(canonical_bytes(value))
+
+    def provenance(self) -> dict[str, str]:
+        return {"mode": "captured-finalized-rpc-replay", "captureSha256": self.capture_sha256}
 
     def genesis_hash(self) -> str:
         return text(self.value.get("genesisHash"), "capture genesisHash")
@@ -292,6 +296,9 @@ class LiveRpc:
         self.url = url
         self.timeout = timeout
         self.request_id = 0
+
+    def provenance(self) -> dict[str, str]:
+        return {"mode": "live-finalized-rpc", "endpointSha256": sha256_bytes(self.url.encode())}
 
     def call(self, method: str, params: list[Any]) -> Any:
         self.request_id += 1
@@ -804,7 +811,11 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
     directs = [item["direct"] for item in projections if "direct" in item]
     payouts = [item["payout"] for item in projections if "payout" in item]
     source_digests = [{"event": event["id"], "sha256": event["sourceSha256"]} for event in events]
-    evidence_core = {"manifestSha256": sha256_bytes(canonical_bytes(manifest)), "sourceDigests": source_digests}
+    evidence_core = {
+        "manifestSha256": sha256_bytes(canonical_bytes(manifest)),
+        "sourceDigests": source_digests,
+        "rpc": rpc.provenance(),
+    }
     dossier: dict[str, Any] = {
         "schema": DOSSIER_SCHEMA, "signatureScheme": "none", "activityId": manifest["activityId"],
         "cluster": {"kind": "devnet", "genesisHash": genesis}, "evidence": evidence_core,
@@ -821,11 +832,11 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
 
 
 def captured(path: pathlib.Path) -> CapturedRpc:
-    value = load_json(path)
+    raw, value = read_evidence_file(path)
     value = exact_keys(value, {"schema", "genesisHash", "transactions", "accounts"}, set(), "captured RPC")
     if value["schema"] != CAPTURE_SCHEMA:
         refuse("captured RPC schema is not admitted")
-    return CapturedRpc(value)
+    return CapturedRpc(value, sha256_bytes(raw))
 
 
 def write_dossier(path: pathlib.Path | None, dossier: dict[str, Any]) -> None:

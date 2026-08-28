@@ -252,6 +252,7 @@ class ReconcileTest(unittest.TestCase):
         dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
         self.assertEqual(dossier["schema"], reconcile.DOSSIER_SCHEMA)
         self.assertEqual(dossier["signatureScheme"], "none")
+        self.assertEqual(dossier["evidence"]["rpc"]["mode"], "captured-finalized-rpc-replay")
         self.assertEqual(dossier["totals"]["transactionFeesLamports"], "30000")
         self.assertEqual(dossier["totals"]["protocolFeesAtoms"], "20")
         self.assertEqual(dossier["totals"]["hoardPrincipalPaidAtoms"], "50")
@@ -458,7 +459,8 @@ class ReconcileTest(unittest.TestCase):
             capture_path.write_text(json.dumps(capture), encoding="utf-8")
             status = reconcile.main(["captured", "--manifest", str(manifest_path), "--journal-root", str(journal_root), "--rpc-capture", str(capture_path), "--out", str(out_path)])
             self.assertEqual(status, 0)
-            self.assertEqual(json.loads(out_path.read_text()), reconcile.reconcile(manifest, reconcile.CapturedRpc(capture)))
+            capture_sha256 = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+            self.assertEqual(json.loads(out_path.read_text()), reconcile.reconcile(manifest, reconcile.CapturedRpc(capture, capture_sha256)))
 
     def test_source_journal_digest_substitution_refuses_before_rpc(self):
         manifest, _ = fixture()
