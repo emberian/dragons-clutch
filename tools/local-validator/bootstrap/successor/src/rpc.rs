@@ -58,6 +58,13 @@ const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
 /// ComputeBudget program instruction discriminant for `SetComputeUnitLimit(u32)`.
 const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT: u8 = 2;
 
+/// How many times a send rebuilds a dropped transaction with a fresh blockhash
+/// before giving up. Each attempt gets a full blockhash lifetime, so this is a
+/// bound on total patience against a genuinely wedged cluster, not a retry of a
+/// transaction that failed on its merits (a failure is a confirmed status, not
+/// a drop).
+const REBUILD_ON_DROP_ATTEMPTS: u32 = 5;
+
 #[derive(Clone, Debug)]
 pub(crate) struct RpcAccount {
     pub(crate) lamports: u64,
@@ -127,6 +134,16 @@ pub(crate) struct Rpc {
     /// equality read a stale replica and refused a rollback that had in fact
     /// rolled back). Every single-account read waits this floor out.
     read_floor: u64,
+}
+
+/// What one submit+confirm attempt found.
+enum ConfirmOutcomeV1 {
+    /// The transaction reached finalized history; its evidence is here.
+    Confirmed(TransactionEvidence),
+    /// The transaction can never land on these bytes (its blockhash expired
+    /// with no status, or the confirm deadline passed). The caller rebuilds it
+    /// with a fresh blockhash and submits again.
+    Dropped,
 }
 
 impl Rpc {
@@ -639,17 +656,8 @@ impl Rpc {
         expect_failure: bool,
         heap_frame_bytes: Option<u32>,
     ) -> Result<TransactionEvidence> {
-        let blockhash = self.latest_blockhash()?;
         let bounded = bounded_instructions(instructions, heap_frame_bytes)
             .map_err(|error| Error::new(format!("{label}: {error}")))?;
-        let plan = dclutch_versioned_message_operator::compile_v0_message(
-            payer.pubkey(),
-            &bounded,
-            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
-            observation,
-            tables,
-        )
-        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
         let mut signers: Vec<&dyn Signer> = Vec::with_capacity(additional_signers.len() + 1);
         signers.push(payer);
         signers.extend(
@@ -657,10 +665,35 @@ impl Rpc {
                 .iter()
                 .map(|signer| *signer as &dyn Signer),
         );
-        let transaction = VersionedTransaction::try_new(plan.message, &signers)
-            .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
-        let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;
-        self.confirm(label, signature, &encoded, expect_failure)
+        for attempt in 0..REBUILD_ON_DROP_ATTEMPTS {
+            let (blockhash, last_valid) = self.latest_blockhash_with_height()?;
+            let plan = dclutch_versioned_message_operator::compile_v0_message(
+                payer.pubkey(),
+                &bounded,
+                solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+                observation,
+                tables,
+            )
+            .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+            let transaction = VersionedTransaction::try_new(plan.message, &signers)
+                .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
+            let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;
+            match self.confirm(label, signature, &encoded, expect_failure, last_valid)? {
+                ConfirmOutcomeV1::Confirmed(evidence) => return Ok(evidence),
+                ConfirmOutcomeV1::Dropped => {
+                    eprintln!(
+                        "rpc: {label} dropped (blockhash expired, attempt {} of {}); \
+                         rebuilding with a fresh blockhash",
+                        attempt + 1,
+                        REBUILD_ON_DROP_ATTEMPTS
+                    );
+                }
+            }
+        }
+        Err(Error::new(format!(
+            "{label} was dropped {REBUILD_ON_DROP_ATTEMPTS} times running; the cluster is not \
+             landing this transaction within a blockhash lifetime"
+        )))
     }
 
     fn submit<T: serde::Serialize>(
@@ -736,7 +769,6 @@ impl Rpc {
                 return Err(Error::new("transaction signer list contained duplicates"));
             }
         }
-        let blockhash = self.latest_blockhash()?;
         let bounded_instructions = bounded_instructions(instructions, None)
             .map_err(|error| Error::new(format!("{label}: {error}")))?;
         let mut signers: Vec<&dyn Signer> = Vec::with_capacity(additional_signers.len() + 1);
@@ -746,25 +778,64 @@ impl Rpc {
                 .iter()
                 .map(|signer| *signer as &dyn Signer),
         );
-        let transaction = Transaction::new_signed_with_payer(
-            &bounded_instructions,
-            Some(&payer.pubkey()),
-            &signers,
-            blockhash,
-        );
-        let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;
-        self.confirm(label, signature, &encoded, expect_failure)
+        for attempt in 0..REBUILD_ON_DROP_ATTEMPTS {
+            let (blockhash, last_valid) = self.latest_blockhash_with_height()?;
+            let transaction = Transaction::new_signed_with_payer(
+                &bounded_instructions,
+                Some(&payer.pubkey()),
+                &signers,
+                blockhash,
+            );
+            let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;
+            match self.confirm(label, signature, &encoded, expect_failure, last_valid)? {
+                ConfirmOutcomeV1::Confirmed(evidence) => return Ok(evidence),
+                ConfirmOutcomeV1::Dropped => {
+                    eprintln!(
+                        "rpc: {label} dropped (blockhash expired, attempt {} of {}); \
+                         rebuilding with a fresh blockhash",
+                        attempt + 1,
+                        REBUILD_ON_DROP_ATTEMPTS
+                    );
+                }
+            }
+        }
+        Err(Error::new(format!(
+            "{label} was dropped {REBUILD_ON_DROP_ATTEMPTS} times running; the cluster is not \
+             landing this transaction within a blockhash lifetime"
+        )))
     }
 
-    fn latest_blockhash(&mut self) -> Result<Hash> {
+    /// A recent blockhash and the last block height at which it is still valid.
+    ///
+    /// The height is what lets [`confirm`] tell a transaction that is merely
+    /// slow to land from one that is definitively dropped: once the chain's
+    /// block height passes `last_valid_block_height` with no status, no
+    /// validator will ever accept those bytes again, and the only recovery is
+    /// to rebuild with a fresh blockhash. `finalized` commitment (rather than
+    /// the usual `confirmed`) buys the longest validity window, which is what a
+    /// paced, sequential founding wants.
+    fn latest_blockhash_with_height(&mut self) -> Result<(Hash, u64)> {
         let value = self.call("getLatestBlockhash", &json!([{"commitment":"finalized"}]))?;
-        value
+        let inner = value
             .get("value")
-            .and_then(|value| value.get("blockhash"))
+            .ok_or_else(|| Error::new("getLatestBlockhash omitted value"))?;
+        let hash = inner
+            .get("blockhash")
             .and_then(Value::as_str)
             .ok_or_else(|| Error::new("getLatestBlockhash omitted blockhash"))?
             .parse::<Hash>()
-            .map_err(|error| Error::new(format!("blockhash: {error}")))
+            .map_err(|error| Error::new(format!("blockhash: {error}")))?;
+        let last_valid = inner
+            .get("lastValidBlockHeight")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::new("getLatestBlockhash omitted lastValidBlockHeight"))?;
+        Ok((hash, last_valid))
+    }
+
+    fn block_height(&mut self) -> Result<u64> {
+        self.call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+            .as_u64()
+            .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))
     }
 
     fn confirm(
@@ -773,7 +844,8 @@ impl Rpc {
         signature: Signature,
         encoded: &str,
         expect_failure: bool,
-    ) -> Result<TransactionEvidence> {
+        last_valid_block_height: u64,
+    ) -> Result<ConfirmOutcomeV1> {
         // A DEADLINE, not an iteration count. The count was equivalent while
         // every connection polled an unpaced loopback validator at 100 ms; on a
         // paced connection each iteration also waits out the call interval, so
@@ -792,9 +864,10 @@ impl Rpc {
         let mut next_resubmit = Instant::now() + self.pacing.resubmit_interval;
         while Instant::now() < deadline {
             if Instant::now() >= next_resubmit {
-                // A resubmit failure is not fatal here: the original submit
-                // succeeded, this is belt-and-braces against a drop, and the
-                // status poll is the authority on whether it landed.
+                // Resubmit against a transient drop while the blockhash is
+                // still valid. A resubmit failure is not fatal: the status
+                // poll below is the authority on whether it landed, and the
+                // block-height check is the authority on whether it ever can.
                 let _ = self.submit_encoded(label, encoded, expect_failure);
                 next_resubmit = Instant::now() + self.pacing.resubmit_interval;
             }
@@ -815,13 +888,26 @@ impl Rpc {
             {
                 break;
             }
+            if status.is_none() {
+                // Definitive-drop check: once the chain's block height passes
+                // the blockhash's last valid height with still no status, these
+                // bytes can never land — resubmitting them is futile and the
+                // caller must rebuild with a fresh blockhash. This is the wall
+                // attempt 5/6 hit at the DCLTGMF1 hostile probe on congested
+                // devnet; resubmit alone could not clear it because the
+                // blockhash had expired.
+                if self.block_height()? > last_valid_block_height {
+                    return Ok(ConfirmOutcomeV1::Dropped);
+                }
+            }
             thread::sleep(Duration::from_millis(100));
         }
-        let status = status.ok_or_else(|| {
-            Error::new(format!(
-                "{label} {signature} did not reach a visible status"
-            ))
-        })?;
+        let Some(status) = status else {
+            // Timed out without a status and without provable expiry: treat as
+            // a drop so the caller rebuilds, rather than failing a founding for
+            // a transaction that simply never landed.
+            return Ok(ConfirmOutcomeV1::Dropped);
+        };
         let status_error = status.get("err").cloned().filter(|value| !value.is_null());
         if expect_failure != status_error.is_some() {
             return Err(Error::new(format!(
@@ -899,7 +985,7 @@ impl Rpc {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(TransactionEvidence {
+        Ok(ConfirmOutcomeV1::Confirmed(TransactionEvidence {
             label: label.into(),
             signature: signature.to_string(),
             slot,
@@ -909,7 +995,7 @@ impl Rpc {
             compute_units_consumed,
             error: meta_error,
             logs,
-        })
+        }))
     }
 
     fn confirm_airdrop(
