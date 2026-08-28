@@ -21,6 +21,10 @@ use dclutch_core_contract::ContentId;
 use dclutch_sha256_adapter::digest;
 
 use crate::{
+    begin_retiring_bundle_v1::{
+        DirectBeginRetiringBundleInputV1, DirectBeginRetiringBundleV1,
+        build_direct_begin_retiring_bundle_v1, validate_direct_begin_retiring_bundle_v1,
+    },
     execution_v3::{DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3, DirectExecutionActionV3},
     native_close_bundle_v1::{
         DIRECT_NATIVE_CLOSE_SELECTOR_V1, DirectNativeCloseBundleInputV1, DirectNativeCloseBundleV1,
@@ -34,6 +38,7 @@ use crate::{
         DirectRegisterBuyHotBundleV4, DirectRegisterSellHotBundleV4,
         validate_direct_register_buy_hot_bundle_v4, validate_direct_register_sell_hot_bundle_v4,
     },
+    retirement_v1::DIRECT_BEGIN_RETIRING_SELECTOR_V1,
 };
 
 /// One action/descriptor coordinate proven by its complete Direct bundle.
@@ -72,6 +77,8 @@ pub enum DirectProgramSetErrorV4 {
     ProgramSet,
     /// The canonical lifecycle-native close bundle refused.
     NativeClose,
+    /// The canonical begin-retiring lifecycle bundle refused.
+    BeginRetiring,
 }
 
 /// Canonical ordinary execution plus lifecycle-native close release.
@@ -85,6 +92,113 @@ pub struct DirectInlineOrdinaryNativeCloseProgramSetV1 {
     pub program_set: Vec<u8>,
     /// SHA-256 identity of `program_set` selected by the Market manifest.
     pub program_set_id: [u8; 32],
+}
+
+/// Canonical ordinary execution plus both ordered lifecycle actions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectInlineOrdinaryLifecycleProgramSetV1 {
+    /// Complete selector-1 ordinary V4 artifacts.
+    pub ordinary: DirectInlineOrdinaryHotBundleV4,
+    /// Complete reserved-high-selector begin-retiring V1 artifacts.
+    pub begin_retiring: DirectBeginRetiringBundleV1,
+    /// Complete reserved-high-selector native-close V1 artifacts.
+    pub native_close: DirectNativeCloseBundleV1,
+    /// Exact heterogeneous three-entry CapabilityProgramSetV2 bytes.
+    pub program_set: Vec<u8>,
+    /// SHA-256 identity of `program_set` selected by the Market manifest.
+    pub program_set_id: [u8; 32],
+}
+
+/// Build the exact ordinary/begin-retiring/native-close ProgramSet.
+pub fn build_direct_inline_ordinary_lifecycle_program_set_v1(
+    ordinary: DirectInlineOrdinaryHotBundleV4,
+    capacity_profile: [u8; 32],
+) -> Result<DirectInlineOrdinaryLifecycleProgramSetV1, DirectProgramSetErrorV4> {
+    validate_direct_inline_ordinary_hot_bundle_v4(&ordinary, capacity_profile)
+        .map_err(|_| DirectProgramSetErrorV4::Bundle)?;
+    let begin_retiring = build_direct_begin_retiring_bundle_v1(DirectBeginRetiringBundleInputV1 {
+        ordinary: &ordinary,
+        capacity_profile,
+    })
+    .map_err(|_| DirectProgramSetErrorV4::BeginRetiring)?;
+    let native_close = build_direct_native_close_bundle_v1(DirectNativeCloseBundleInputV1 {
+        ordinary: &ordinary,
+        capacity_profile,
+    })
+    .map_err(|_| DirectProgramSetErrorV4::NativeClose)?;
+    let entries = ordinary_lifecycle_entries(&ordinary, &begin_retiring, &native_close)?;
+    let width = encoded_direct_program_set_bytes_v4(entries.len())?;
+    let mut program_set = vec![0_u8; width];
+    encode_program_set_v2(
+        DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3,
+        SelectorWidthV2::U32,
+        &entries,
+        &mut program_set,
+    )
+    .map_err(|_| DirectProgramSetErrorV4::ProgramSet)?;
+    let output = DirectInlineOrdinaryLifecycleProgramSetV1 {
+        ordinary,
+        begin_retiring,
+        native_close,
+        program_set_id: digest(&program_set),
+        program_set,
+    };
+    validate_direct_inline_ordinary_lifecycle_program_set_v1(&output, capacity_profile)?;
+    Ok(output)
+}
+
+/// Hostile-decode and bind the exact three-entry Direct lifecycle release.
+pub fn validate_direct_inline_ordinary_lifecycle_program_set_v1(
+    value: &DirectInlineOrdinaryLifecycleProgramSetV1,
+    capacity_profile: [u8; 32],
+) -> Result<(), DirectProgramSetErrorV4> {
+    validate_direct_inline_ordinary_hot_bundle_v4(&value.ordinary, capacity_profile)
+        .map_err(|_| DirectProgramSetErrorV4::Bundle)?;
+    validate_direct_begin_retiring_bundle_v1(
+        &value.begin_retiring,
+        DirectBeginRetiringBundleInputV1 {
+            ordinary: &value.ordinary,
+            capacity_profile,
+        },
+    )
+    .map_err(|_| DirectProgramSetErrorV4::BeginRetiring)?;
+    validate_direct_native_close_bundle_v1(
+        &value.native_close,
+        DirectNativeCloseBundleInputV1 {
+            ordinary: &value.ordinary,
+            capacity_profile,
+        },
+    )
+    .map_err(|_| DirectProgramSetErrorV4::NativeClose)?;
+    if value.program_set_id != digest(&value.program_set) {
+        return Err(DirectProgramSetErrorV4::ProgramSet);
+    }
+    let set = CapabilityProgramSetV2::decode(&value.program_set)
+        .map_err(|_| DirectProgramSetErrorV4::ProgramSet)?;
+    if set.selector_offset() != DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3
+        || set.selector_width() != SelectorWidthV2::U32
+        || set.entry_count() != 3
+    {
+        return Err(DirectProgramSetErrorV4::ProgramSet);
+    }
+    let expected =
+        ordinary_lifecycle_entries(&value.ordinary, &value.begin_retiring, &value.native_close)?;
+    for (index, entry) in expected.iter().copied().enumerate() {
+        if set
+            .entry(u16::try_from(index).map_err(|_| DirectProgramSetErrorV4::ProgramSet)?)
+            .map_err(|_| DirectProgramSetErrorV4::ProgramSet)?
+            != entry
+        {
+            return Err(DirectProgramSetErrorV4::ProgramSet);
+        }
+        let selected = set
+            .select_descriptor(&selector_probe(entry.selector()))
+            .map_err(|_| DirectProgramSetErrorV4::ProgramSet)?;
+        if selected != entry.descriptor() {
+            return Err(DirectProgramSetErrorV4::ProgramSet);
+        }
+    }
+    Ok(())
 }
 
 /// Build the exact two-entry ordinary/native-close ProgramSet.
@@ -321,10 +435,50 @@ fn ordinary_native_close_entries(
     ])
 }
 
+fn ordinary_lifecycle_entries(
+    ordinary: &DirectInlineOrdinaryHotBundleV4,
+    begin_retiring: &DirectBeginRetiringBundleV1,
+    native_close: &DirectNativeCloseBundleV1,
+) -> Result<[CapabilityProgramSetEntryV2; 3], DirectProgramSetErrorV4> {
+    Ok([
+        CapabilityProgramSetEntryV2::new(
+            DirectExecutionActionV3::InlineOrdinary as u32,
+            CapabilityDescriptorReferenceV2::new(
+                content(CAPABILITY_PROGRAM_SCHEMA_ID_V4)?,
+                content(digest(&ordinary.descriptor))?,
+            ),
+        ),
+        CapabilityProgramSetEntryV2::new(
+            DIRECT_BEGIN_RETIRING_SELECTOR_V1,
+            CapabilityDescriptorReferenceV2::new(
+                content(
+                    dclutch_capability_program_contract::CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
+                )?,
+                content(begin_retiring.descriptor_id)?,
+            ),
+        ),
+        CapabilityProgramSetEntryV2::new(
+            DIRECT_NATIVE_CLOSE_SELECTOR_V1,
+            CapabilityDescriptorReferenceV2::new(
+                content(
+                    dclutch_capability_program_contract::CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1,
+                )?,
+                content(native_close.descriptor_id)?,
+            ),
+        ),
+    ])
+}
+
 fn ordinary_selector_request() -> [u8; 16] {
     let mut request = [0_u8; 16];
     request[12..16]
         .copy_from_slice(&(DirectExecutionActionV3::InlineOrdinary as u32).to_le_bytes());
+    request
+}
+
+fn selector_probe(selector: u32) -> [u8; 16] {
+    let mut request = [0_u8; 16];
+    request[12..16].copy_from_slice(&selector.to_le_bytes());
     request
 }
 
@@ -436,6 +590,93 @@ mod tests {
         register_sell[12..16]
             .copy_from_slice(&(DirectExecutionActionV3::RegisterSell as u32).to_le_bytes());
         assert!(set.select_descriptor(&register_sell).is_err());
+    }
+
+    #[test]
+    fn ordinary_retirement_and_close_are_three_distinct_selectors() {
+        let ordinary = crate::ordinary_bundle_v4::tests::canonical_bundle_for_cross_module_tests();
+        let release = build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, [0x44; 32])
+            .expect("lifecycle release");
+        validate_direct_inline_ordinary_lifecycle_program_set_v1(&release, [0x44; 32])
+            .expect("validate");
+        let set = CapabilityProgramSetV2::decode(&release.program_set).expect("set");
+        assert_eq!(set.entry_count(), 3);
+        assert_eq!(set.entry(0).expect("ordinary").selector(), 1);
+        assert_eq!(
+            set.entry(1).expect("begin-retiring").selector(),
+            DIRECT_BEGIN_RETIRING_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(2).expect("native close").selector(),
+            DIRECT_NATIVE_CLOSE_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(1)
+                .expect("begin-retiring")
+                .descriptor()
+                .program()
+                .to_bytes(),
+            release.begin_retiring.descriptor_id
+        );
+        let register_sell = selector_probe(DirectExecutionActionV3::RegisterSell as u32);
+        assert!(set.select_descriptor(&register_sell).is_err());
+    }
+
+    #[test]
+    fn lifecycle_selector_schema_and_content_substitutions_refuse() {
+        let ordinary = crate::ordinary_bundle_v4::tests::canonical_bundle_for_cross_module_tests();
+        let release = build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, [0x44; 32])
+            .expect("lifecycle release");
+        let mut entries = ordinary_lifecycle_entries(
+            &release.ordinary,
+            &release.begin_retiring,
+            &release.native_close,
+        )
+        .expect("entries");
+        for hostile in [
+            CapabilityProgramSetEntryV2::new(
+                DIRECT_BEGIN_RETIRING_SELECTOR_V1 - 1,
+                entries[1].descriptor(),
+            ),
+            CapabilityProgramSetEntryV2::new(
+                DIRECT_BEGIN_RETIRING_SELECTOR_V1,
+                CapabilityDescriptorReferenceV2::new(
+                    ContentId::new(CAPABILITY_PROGRAM_SCHEMA_ID_V4).expect("schema"),
+                    entries[1].descriptor().program(),
+                ),
+            ),
+            CapabilityProgramSetEntryV2::new(
+                DIRECT_BEGIN_RETIRING_SELECTOR_V1,
+                CapabilityDescriptorReferenceV2::new(
+                    entries[1].descriptor().schema(),
+                    ContentId::new([0x66; 32]).expect("content"),
+                ),
+            ),
+        ] {
+            entries[1] = hostile;
+            let mut bytes =
+                vec![0_u8; encoded_direct_program_set_bytes_v4(entries.len()).expect("width")];
+            encode_program_set_v2(
+                DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3,
+                SelectorWidthV2::U32,
+                &entries,
+                &mut bytes,
+            )
+            .expect("hostile canonical set");
+            let mut candidate = release.clone();
+            candidate.program_set_id = digest(&bytes);
+            candidate.program_set = bytes;
+            assert!(
+                validate_direct_inline_ordinary_lifecycle_program_set_v1(&candidate, [0x44; 32],)
+                    .is_err()
+            );
+            entries = ordinary_lifecycle_entries(
+                &release.ordinary,
+                &release.begin_retiring,
+                &release.native_close,
+            )
+            .expect("entries");
+        }
     }
 
     #[test]
