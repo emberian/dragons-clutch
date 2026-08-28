@@ -1709,6 +1709,7 @@ dependencies = [
 name = "dclutch-custody-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-market-core-codec",

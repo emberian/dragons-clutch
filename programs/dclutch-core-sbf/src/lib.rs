@@ -51,6 +51,7 @@ mod records;
 mod release;
 mod resolution;
 pub mod retire_v1;
+mod retirement_replay_handoff_v1;
 mod series_consume;
 mod series_open;
 mod series_permit_expiry;
@@ -176,6 +177,22 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len()
+        == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        && instruction_data
+            .get(..dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+            == Some(dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request =
+            dclutch_custody_contract::RetirementReplayHandoffRequestV1::decode(instruction_data)
+                .map_err(|_| CoreSbfError::Instruction)?;
+        return retirement_replay_handoff_v1::process(
+            program_id,
+            accounts,
+            request,
+            instruction_data,
+        );
+    }
     if instruction_data.len() == INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1 {
         InitializeProtocolInfrastructureV1::decode(instruction_data)
             .map_err(|_| CoreSbfError::Instruction)?;
