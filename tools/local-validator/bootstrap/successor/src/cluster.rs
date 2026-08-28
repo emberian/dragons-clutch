@@ -97,6 +97,9 @@ pub(crate) struct PacingV1 {
     pub(crate) minimum_call_interval: Duration,
     /// How long a submitted transaction may take to reach finalized history.
     pub(crate) confirm_timeout: Duration,
+    /// How often, while awaiting confirmation, to resubmit the same signed
+    /// bytes against a devnet drop. Idempotent by signature.
+    pub(crate) resubmit_interval: Duration,
 }
 
 /// The unpaced profile: a validator this process owns, on a socket nobody else
@@ -104,6 +107,9 @@ pub(crate) struct PacingV1 {
 pub(crate) const LOOPBACK_PACING: PacingV1 = PacingV1 {
     minimum_call_interval: Duration::ZERO,
     confirm_timeout: Duration::from_secs(60),
+    // Longer than the whole loopback budget: a validator this process owns
+    // does not drop its own transactions, so the resubmit never fires locally.
+    resubmit_interval: Duration::from_secs(120),
 };
 
 /// The public-endpoint profile.
@@ -119,6 +125,10 @@ pub(crate) const LOOPBACK_PACING: PacingV1 = PacingV1 {
 const DEVNET_PACING: PacingV1 = PacingV1 {
     minimum_call_interval: Duration::from_millis(250),
     confirm_timeout: Duration::from_secs(300),
+    // ~30 s is a few blockhash lifetimes: long enough not to spam the endpoint
+    // (a resubmit is one sendTransaction), short enough that a drop is retried
+    // several times inside the 300 s deadline.
+    resubmit_interval: Duration::from_secs(30),
 };
 
 /// The cluster this run is pointed at, already proven admissible.

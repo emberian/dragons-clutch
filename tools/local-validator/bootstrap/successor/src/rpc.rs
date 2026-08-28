@@ -659,8 +659,8 @@ impl Rpc {
         );
         let transaction = VersionedTransaction::try_new(plan.message, &signers)
             .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
-        let signature = self.submit(label, &transaction, expect_failure)?;
-        self.confirm(label, signature, expect_failure)
+        let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;
+        self.confirm(label, signature, &encoded, expect_failure)
     }
 
     fn submit<T: serde::Serialize>(
@@ -668,11 +668,25 @@ impl Rpc {
         label: &str,
         transaction: &T,
         expect_failure: bool,
-    ) -> Result<Signature> {
+    ) -> Result<(Signature, String)> {
         let encoded = BASE64.encode(
             bincode::serialize(transaction)
                 .map_err(|error| Error::new(format!("serialize transaction: {error}")))?,
         );
+        let signature = self.submit_encoded(label, &encoded, expect_failure)?;
+        Ok((signature, encoded))
+    }
+
+    /// Send one already-encoded transaction. Idempotent by signature: the same
+    /// signed bytes resubmitted after a devnet drop land as the same signature
+    /// and the chain deduplicates, which is what makes [`confirm`]'s resubmit
+    /// loop safe.
+    fn submit_encoded(
+        &mut self,
+        label: &str,
+        encoded: &str,
+        expect_failure: bool,
+    ) -> Result<Signature> {
         self.call(
             "sendTransaction",
             &json!([encoded, {
@@ -738,8 +752,8 @@ impl Rpc {
             &signers,
             blockhash,
         );
-        let signature = self.submit(label, &transaction, expect_failure)?;
-        self.confirm(label, signature, expect_failure)
+        let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;
+        self.confirm(label, signature, &encoded, expect_failure)
     }
 
     fn latest_blockhash(&mut self) -> Result<Hash> {
@@ -757,6 +771,7 @@ impl Rpc {
         &mut self,
         label: &str,
         signature: Signature,
+        encoded: &str,
         expect_failure: bool,
     ) -> Result<TransactionEvidence> {
         // A DEADLINE, not an iteration count. The count was equivalent while
@@ -767,7 +782,22 @@ impl Rpc {
         // minutes its profile names.
         let deadline = Instant::now() + self.pacing.confirm_timeout;
         let mut status = None;
+        // Devnet drops transactions: a valid blockhash can expire before the
+        // transaction lands, and then no status ever appears (measured
+        // 2026-08-28, a founding died at a dropped hostile probe after the full
+        // 300 s). Resubmitting the SAME signed bytes is idempotent by
+        // signature, so the loop re-sends periodically until a status appears
+        // or the deadline passes. Loopback never needs this and its interval is
+        // long enough never to fire inside the 60 s local budget.
+        let mut next_resubmit = Instant::now() + self.pacing.resubmit_interval;
         while Instant::now() < deadline {
+            if Instant::now() >= next_resubmit {
+                // A resubmit failure is not fatal here: the original submit
+                // succeeded, this is belt-and-braces against a drop, and the
+                // status poll is the authority on whether it landed.
+                let _ = self.submit_encoded(label, encoded, expect_failure);
+                next_resubmit = Instant::now() + self.pacing.resubmit_interval;
+            }
             let result = self.call(
                 "getSignatureStatuses",
                 &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
