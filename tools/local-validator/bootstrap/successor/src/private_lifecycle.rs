@@ -60,6 +60,14 @@ const ACTIVITY_STAGES: [&str; 8] = [
     "payout",
     "retirement",
 ];
+const MANIFEST_EVENT_KINDS: [&str; 6] = [
+    "founding",
+    "participant",
+    "direct",
+    "resolution",
+    "payout",
+    "retirement",
+];
 const CHAOS_STAGES: [&str; 8] = [
     "founding",
     "participant",
@@ -404,7 +412,7 @@ fn authenticate_manifest(
         .get("events")
         .and_then(Value::as_array)
         .ok_or_else(|| Error::new("activity manifest events are not an array"))?;
-    if events.len() < ACTIVITY_STAGES.len() || events.len() > 128 {
+    if events.len() < MANIFEST_EVENT_KINDS.len() || events.len() > 128 {
         return Err(Error::new(
             "activity manifest event chain is not bounded and complete",
         ));
@@ -419,7 +427,7 @@ fn authenticate_manifest(
             .ok_or_else(|| Error::new(format!("activity event {index} is not an object")))?;
         let id = text_field(event, "id", "activity event")?;
         let stage = text_field(event, "kind", "activity event")?;
-        let stage_index = ACTIVITY_STAGES
+        let stage_index = MANIFEST_EVENT_KINDS
             .iter()
             .position(|expected| *expected == stage)
             .ok_or_else(|| Error::new("activity event has an unknown lifecycle kind"))?;
@@ -445,7 +453,7 @@ fn authenticate_manifest(
         }
         source_set.push(json!({"event": id, "sha256": source_sha256}));
     }
-    if seen_stages != ACTIVITY_STAGES.into_iter().collect() {
+    if seen_stages != MANIFEST_EVENT_KINDS.into_iter().collect() {
         return Err(Error::new(
             "activity manifest does not cover the exact lifecycle stage set",
         ));
@@ -1050,6 +1058,19 @@ mod tests {
         assert_eq!(CHAOS_STAGES[4], "hot");
         assert_eq!(ACTIVITY_STAGES[7], "retirement");
         assert_eq!(CHAOS_STAGES[7], "retire");
+        assert_eq!(
+            MANIFEST_EVENT_KINDS,
+            [
+                "founding",
+                "participant",
+                "direct",
+                "resolution",
+                "payout",
+                "retirement",
+            ]
+        );
+        assert!(!MANIFEST_EVENT_KINDS.contains(&"alt"));
+        assert!(!MANIFEST_EVENT_KINDS.contains(&"seal"));
     }
 
     #[test]
