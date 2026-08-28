@@ -2465,12 +2465,17 @@ dependencies = [
 [[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-resolution-core-v3-operator"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
+ "dclutch-core-contract",
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",

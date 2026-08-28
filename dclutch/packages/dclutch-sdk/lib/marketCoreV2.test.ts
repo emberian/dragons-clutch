@@ -5,6 +5,28 @@ import { describe, expect, it } from 'vitest';
 
 import { fromHex, hex, sha256 } from './bytes';
 import {
+  CORE_PHASE_OPEN_TAG,
+  CORE_READINESS_CONSUMED_TAG,
+  CORE_STATE_BYTES,
+  CORE_STATE_CAPABILITY_MANIFEST_OFFSET,
+  CORE_STATE_GENERATION_OFFSET,
+  CORE_STATE_IDENTITY_REALM_OFFSET,
+  CORE_STATE_MAGIC,
+  CORE_STATE_MARKET_ID_OFFSET,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
+  CORE_STATE_PRODUCT_ID_OFFSET,
+  CORE_STATE_PRODUCT_RECORD_OFFSET,
+  CORE_STATE_READINESS_OFFSET,
+  CORE_STATE_REGISTRY_PROGRAM_OFFSET,
+  CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  CORE_STATE_RESOLUTION_POLICY_OFFSET,
+  CORE_STATE_SELECTED_RELEASE_SET_OFFSET,
+  CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_STATE_PHASE_OFFSET,
+  CORE_VERSION,
+} from './generated/coreFound';
+import {
   decodeClaimsAggregateV2,
   decodeClaimsPositionV2,
   decodeMarketCoreStateV2,
@@ -44,6 +66,30 @@ const account = (name: string) => {
   return Object.freeze({ ...entry, data: accountBytes(entry.dataHex, `${name} bytes`) });
 };
 
+/** Parser-only current-generation bytes; never presented as chain evidence. */
+function syntheticCurrentMarket(): Uint8Array {
+  const bytes = new Uint8Array(CORE_STATE_BYTES);
+  bytes.set(CORE_STATE_MAGIC, 0);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(CORE_STATE_VERSION_OFFSET, CORE_VERSION, true);
+  bytes[CORE_STATE_PHASE_OFFSET] = CORE_PHASE_OPEN_TAG;
+  bytes[CORE_STATE_READINESS_OFFSET] = CORE_READINESS_CONSUMED_TAG;
+  for (const offset of [
+    CORE_STATE_MARKET_ID_OFFSET,
+    CORE_STATE_IDENTITY_REALM_OFFSET,
+    CORE_STATE_PRODUCT_RECORD_OFFSET,
+    CORE_STATE_PRODUCT_ID_OFFSET,
+    CORE_STATE_RESOLUTION_POLICY_OFFSET,
+    CORE_STATE_CAPABILITY_MANIFEST_OFFSET,
+    CORE_STATE_SELECTED_RELEASE_SET_OFFSET,
+    CORE_STATE_REGISTRY_PROGRAM_OFFSET,
+    CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  ]) bytes.fill(1, offset, offset + 32);
+  view.setBigUint64(CORE_STATE_GENERATION_OFFSET, 1n, true);
+  view.setBigUint64(CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET, 1n, true);
+  return bytes;
+}
+
 /**
  * The Custody namespace the campaign that founded this Market chose.
  *
@@ -79,40 +125,39 @@ async function foundingCustodyNamespace(market: string, releaseSetId: string, ge
 }
 
 describe('the Market a live dClutch chain actually holds', () => {
-  it('decodes the first locally Open Market from its finalized bytes', () => {
+  it('refuses the superseded 352-byte finalized Market generation', () => {
     const market = account('market');
-    const state = decodeMarketCoreStateV2(market.address, market.data);
     expect(market.owner).toBe(live.programs.core);
-    expect(state.accountBytes).toBe(352);
-    expect(state.version).toBe(2);
-    expect(state.phase).toBe('Open');
-    expect(state.readiness).toBe('Consumed');
-    expect(state.marketId).toBe(market.address);
-    expect(state.identity.generation).toBe('2');
-    expect(state.identity.registryProgram).toBe(live.programs.registry);
-    expect(state.identity.realmId).toBe('632c1f76f09491f39b197d8f67f61a922dee326941d8e663834fc1ed917f7760');
-    expect(state.identity.capabilityManifestId).toBe('7dc55519e971550586f4b69ef3386131791cdfc3e2a401667798f3234d450711');
-    expect(state.outstandingCapabilities).toBe('0');
-    expect(state.settlement).toEqual({ status: 'open', label: 'no terminal receipt' });
+    expect(market.data).toHaveLength(352);
+    expect(() => decodeMarketCoreStateV2(market.address, market.data))
+      .toThrow('This older devnet Market generation is incompatible');
   });
 
-  it('re-derives the Market address from the state account own identity seeds', () => {
+  it('does not derive a current Market address from superseded bytes', () => {
     const market = account('market');
-    expect(deriveMarketCoreAddressV2(live.programs.core, market.data)).toBe(market.address);
+    expect(() => deriveMarketCoreAddressV2(live.programs.core, market.data))
+      .toThrow('This older devnet Market generation is incompatible');
   });
 
   it('refuses the superseded categorical Market layout rather than guessing', () => {
-    const categorical = new Uint8Array(352);
+    const categorical = new Uint8Array(CORE_STATE_BYTES);
     categorical.set(new TextEncoder().encode('DCLTCAT1'));
     expect(() => decodeMarketCoreStateV2('11111111111111111111111111111111', categorical))
-      .toThrow('Core Market magic is not DCLTCOR2');
+      .toThrow('Core Market magic is not DCLTCOR3');
   });
 
   it('refuses a Market whose phase and terminal receipt disagree', () => {
-    const market = account('market');
-    const forged = new Uint8Array(market.data);
-    forged[320] = 1; // a terminal receipt on an Open Market
-    expect(() => decodeMarketCoreStateV2(market.address, forged)).toThrow('carries a terminal receipt');
+    const forged = syntheticCurrentMarket();
+    forged[CORE_STATE_TERMINAL_RECEIPT_OFFSET] = 1;
+    expect(() => decodeMarketCoreStateV2('11111111111111111111111111111111', forged))
+      .toThrow('carries a terminal receipt');
+  });
+
+  it('refuses a current Market with no authenticated principal cap', () => {
+    const forged = syntheticCurrentMarket();
+    new DataView(forged.buffer).setBigUint64(CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET, 0n, true);
+    expect(() => decodeMarketCoreStateV2('11111111111111111111111111111111', forged))
+      .toThrow('principal cap is absent');
   });
 
   it('decodes the founding supply vector from the Claims aggregate, not from the Market', () => {

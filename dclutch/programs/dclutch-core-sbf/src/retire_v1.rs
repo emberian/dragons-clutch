@@ -10,7 +10,7 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_claims_svm::market_closure_v1::{
     CLAIMS_MARKET_CLOSURE_POST_RESOURCE_DIGEST_DOMAIN_V1,
@@ -38,7 +38,7 @@ use dclutch_rent_contract::lifecycle_v2::{
     LifecycleRentCloseReceiptV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
 };
 use dclutch_resolution_codec::{
-    SOURCE_CLOSURE_RECEIPT_BYTES_V2, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2, SourceClosureReceiptV2,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -264,15 +264,37 @@ impl<'accounts, 'info> RetirementAccounts<'accounts, 'info> {
 }
 
 struct RetirementEvidence {
-    source_digest: [u8; 32],
+    source: SourceClosureEvidenceV3,
     claims_digest: [u8; 32],
     close_vault_digest: [u8; 32],
     close_replay_digest: [u8; 32],
-    source_revision: u64,
     claims_revision: u64,
     custody_revision: u64,
     claims_refund: u64,
     custody_refund: u64,
+}
+
+#[derive(Clone, Copy)]
+struct SourceClosureEvidenceV3 {
+    digest: [u8; 32],
+    closure_revision: u64,
+    receipt: SourceClosureReceiptV3,
+}
+
+impl SourceClosureEvidenceV3 {
+    fn authenticate_refund(self) -> Result<(), CoreSbfError> {
+        let classified_total = self
+            .receipt
+            .source_refund_lamports
+            .checked_add(self.receipt.ledger_remaining_native_principal)
+            .and_then(|value| value.checked_add(self.receipt.ledger_rent_lamports))
+            .and_then(|value| value.checked_add(self.receipt.ledger_lamport_surplus))
+            .ok_or(CoreSbfError::Arithmetic)?;
+        if classified_total != self.receipt.refund_lamports {
+            return Err(CoreSbfError::ChildAck);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -368,7 +390,7 @@ fn process_authenticated(
     close_replay_request_bytes: &[u8],
     rent: &Rent,
 ) -> ProgramResult {
-    let bundle = RetirementBundleV1::decode(bundle_bytes).map_err(|_| CoreSbfError::Instruction)?;
+    let bundle = decode_retirement_bundle(bundle_bytes)?;
     let bundle_input = bundle.input_ref();
     let state = authenticate_market(program_id, frame, request, bundle_input)?;
     let continuation_digest = ContentId::new(
@@ -413,8 +435,14 @@ fn process_authenticated(
     )
     .map_err(|_| CoreSbfError::Instruction)?;
     authenticate_rent_credit(frame, state, bundle_input.rent_credit)?;
+    let transition = plan_retired_transition(
+        request,
+        state,
+        admissions,
+        bundle_input.expected_core_lamports,
+    )?;
     let parent_digest = hash(request_bytes).to_bytes();
-    let source_digest = authenticate_source_receipt(frame, state, bundle_input, rent)?;
+    let source = authenticate_source_receipt(frame, state, bundle_input, rent)?;
     let rent_before = frame.rent_credit.lamports();
     let claims = execute_claims(
         program_id,
@@ -443,12 +471,11 @@ fn process_authenticated(
         close_vault.join,
         continuation,
     )?;
-    let evidence = RetirementEvidence {
-        source_digest,
+    let evidence = Box::new(RetirementEvidence {
+        source,
         claims_digest: claims.digest,
         close_vault_digest: close_vault.digest,
         close_replay_digest: close_replay.digest,
-        source_revision: bundle_input.source_closure_revision,
         claims_revision: claims.revision,
         custody_revision: close_replay.revision,
         claims_refund: claims.refund,
@@ -456,23 +483,24 @@ fn process_authenticated(
             .refund
             .checked_add(close_replay.refund)
             .ok_or(CoreSbfError::Arithmetic)?,
-    };
-    let transition = plan_retired_transition(
-        request,
-        state,
-        admissions,
-        bundle_input.expected_core_lamports,
-    )?;
+    });
     commit_retired(
         program_id,
         frame,
         &bundle,
         bundle_bytes,
-        evidence,
+        &evidence,
         rent_before,
         transition,
         continuation,
     )
+}
+
+#[inline(never)]
+fn decode_retirement_bundle(bundle_bytes: &[u8]) -> Result<Box<RetirementBundleV1>, CoreSbfError> {
+    RetirementBundleV1::decode(bundle_bytes)
+        .map(Box::new)
+        .map_err(|_| CoreSbfError::Instruction)
 }
 
 #[inline(never)]
@@ -618,13 +646,13 @@ fn authenticate_source_receipt(
     state: CoreState,
     bundle: &dclutch_market_core_codec::RetirementBundleInputV1,
     rent: &Rent,
-) -> Result<[u8; 32], CoreSbfError> {
+) -> Result<SourceClosureEvidenceV3, CoreSbfError> {
     if frame.source_receipt.owner != frame.resolution_program.key
         || frame.source_receipt.key.to_bytes() != bundle.source_receipt_account
-        || frame.source_receipt.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES_V2
+        || frame.source_receipt.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES_V3
         || !rent.is_exempt(
             frame.source_receipt.lamports(),
-            SOURCE_CLOSURE_RECEIPT_BYTES_V2,
+            SOURCE_CLOSURE_RECEIPT_BYTES_V3,
         )
     {
         return Err(CoreSbfError::ChildAck);
@@ -634,7 +662,7 @@ fn authenticate_source_receipt(
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
     let digest = hash(&bytes).to_bytes();
-    let receipt = SourceClosureReceiptV2::decode(&bytes).map_err(|_| CoreSbfError::ChildAck)?;
+    let receipt = SourceClosureReceiptV3::decode(&bytes).map_err(|_| CoreSbfError::ChildAck)?;
     let terminal = state
         .terminal_receipt
         .ok_or(CoreSbfError::Transition)?
@@ -646,6 +674,7 @@ fn authenticate_source_receipt(
     if digest != bundle.source_receipt_digest
         || receipt.market != bundle.market
         || receipt.receipt_account != bundle.source_receipt_account
+        || receipt.source_material != state.identity.resolution_policy.to_bytes()
         || receipt.capability_manifest != state.identity.capability_manifest.to_bytes()
         || receipt.terminal_certificate != terminal
         || receipt.beneficiary != state.rent_beneficiary.to_bytes()
@@ -658,7 +687,7 @@ fn authenticate_source_receipt(
     let sequence = receipt_sequence.to_le_bytes();
     let expected = Pubkey::find_program_address(
         &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
             receipt.source_state.as_slice(),
             &sequence,
         ],
@@ -668,7 +697,13 @@ fn authenticate_source_receipt(
     if expected != *frame.source_receipt.key {
         return Err(CoreSbfError::ChildAck);
     }
-    Ok(digest)
+    let evidence = SourceClosureEvidenceV3 {
+        digest,
+        closure_revision: receipt_sequence,
+        receipt,
+    };
+    evidence.authenticate_refund()?;
+    Ok(evidence)
 }
 
 #[inline(never)]
@@ -1033,14 +1068,15 @@ fn commit_retired(
     frame: RetirementAccounts<'_, '_>,
     bundle: &RetirementBundleV1,
     bundle_bytes: &[u8],
-    evidence: RetirementEvidence,
+    evidence: &RetirementEvidence,
     rent_before: u64,
     transition: RetiredTransitionPlan,
     continuation: RegistryContinuationRequestV1,
 ) -> ProgramResult {
     let bundle_input = bundle.input_ref();
-    if evidence.source_digest != bundle_input.source_receipt_digest
-        || evidence.source_revision != bundle_input.source_closure_revision
+    evidence.source.authenticate_refund()?;
+    if evidence.source.digest != bundle_input.source_receipt_digest
+        || evidence.source.closure_revision != bundle_input.source_closure_revision
         || evidence.claims_revision != bundle_input.claims_post_revision
         || evidence.custody_revision != bundle_input.custody_post_revision
     {
@@ -1056,7 +1092,7 @@ fn commit_retired(
         &[RETIREMENT_ROLE_COUNT_V1],
         &[RETIREMENT_CUSTODY_RECEIPT_COUNT_V1],
         frame.rent_credit.key.as_ref(),
-        evidence.source_digest.as_slice(),
+        evidence.source.digest.as_slice(),
         evidence.claims_digest.as_slice(),
         evidence.close_vault_digest.as_slice(),
         evidence.close_replay_digest.as_slice(),
@@ -1072,7 +1108,7 @@ fn commit_retired(
         release_set: bundle_input.release_set,
         rent_credit: bundle_input.rent_credit,
         bundle_digest: hash(bundle_bytes).to_bytes(),
-        source_receipt_digest: evidence.source_digest,
+        source_receipt_digest: evidence.source.digest,
         claims_receipt_digest: evidence.claims_digest,
         custody_close_vault_receipt_digest: evidence.close_vault_digest,
         custody_close_replay_receipt_digest: evidence.close_replay_digest,
@@ -1080,7 +1116,7 @@ fn commit_retired(
         retired_candidate_digest: transition.candidate_digest,
         post_resource_digest,
         generation: bundle_input.generation,
-        source_closure_revision: evidence.source_revision,
+        source_closure_revision: evidence.source.closure_revision,
         claims_post_revision: evidence.claims_revision,
         custody_post_revision: evidence.custody_revision,
         core_refund_lamports: transition.core_refund,

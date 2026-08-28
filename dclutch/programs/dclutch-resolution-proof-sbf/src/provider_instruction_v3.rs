@@ -43,14 +43,14 @@ use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_BYTES, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
-    PythAdapterConfigV1, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-    SOURCE_MATERIAL_V2_BYTES, SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES,
-    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV2,
+    PythAdapterConfigV1, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_MATERIAL_V3_BYTES, SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3,
     SourceResolutionStateV2, SourceSpecV1, StatisticSpecV1, WINDOW_SPEC_BYTES,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
@@ -623,7 +623,7 @@ fn authenticate_activation_and_caller(
         if role == ExecutionRoleV1::Resolution
             && (program.key != program_id
                 || activated.release().semantic_release_id().to_bytes()
-                    != RESOLUTION_CONTROLLER_RELEASE_ID_V4)
+                    != RESOLUTION_CONTROLLER_RELEASE_ID_V5)
         {
             return Err(ResolutionError::ResolutionRelease.into());
         }
@@ -729,12 +729,12 @@ fn authenticate_source_records(
         frame,
         rent,
         17,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
-        SOURCE_MATERIAL_V2_BYTES,
+        SOURCE_MATERIAL_V3_BYTES,
     )?;
     let material =
-        SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let source_data = borrow_record(
         frame,
         rent,
@@ -1094,6 +1094,7 @@ mod tests {
     use dclutch_resolution_codec::PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3;
     use dclutch_source_contract::{
         PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3, SOURCE_MATERIAL_V3_MAGIC,
         SOURCE_SPEC_SCHEMA_PREIMAGE_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1,
         WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
     };
@@ -1165,6 +1166,10 @@ mod tests {
     #[test]
     fn finalized_source_and_request_schema_ids_match_their_labels() {
         for (preimage, expected) in [
+            (
+                SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3,
+                SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+            ),
             (SOURCE_SPEC_SCHEMA_PREIMAGE_V1, SOURCE_SPEC_SCHEMA_ID_V1),
             (
                 PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1,
@@ -1186,5 +1191,34 @@ mod tests {
         ] {
             assert_eq!(hash(preimage).to_bytes(), expected);
         }
+    }
+
+    #[test]
+    fn source_material_v3_is_exact_width_and_refuses_hostile_schema_bytes() {
+        let id = |tag| SourceContentId::new([tag; 32]).expect("nonzero fixture identity");
+        let material =
+            SourceMaterialV3::explicitly_unbounded(id(1), id(2), id(3), id(4), None, id(5));
+        let exact = material.to_bytes();
+        assert_eq!(SOURCE_MATERIAL_V3_BYTES, 240);
+        assert_eq!(exact.len(), SOURCE_MATERIAL_V3_BYTES);
+        assert_eq!(SourceMaterialV3::decode(&exact), Ok(material));
+        assert!(
+            SourceMaterialV3::decode(
+                exact
+                    .get(..SOURCE_MATERIAL_V3_BYTES - 1)
+                    .expect("short hostile material"),
+            )
+            .is_err()
+        );
+        let mut long = std::vec::Vec::from(exact);
+        long.push(0);
+        assert!(SourceMaterialV3::decode(&long).is_err());
+
+        let mut wrong_magic = exact;
+        wrong_magic[0] ^= 1;
+        assert!(SourceMaterialV3::decode(&wrong_magic).is_err());
+        let mut wrong_schema = exact;
+        wrong_schema[SOURCE_MATERIAL_V3_MAGIC.len()] ^= 1;
+        assert!(SourceMaterialV3::decode(&wrong_schema).is_err());
     }
 }

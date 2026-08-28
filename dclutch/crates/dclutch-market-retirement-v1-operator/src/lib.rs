@@ -44,8 +44,11 @@ use dclutch_release_set_contract::{
 use dclutch_rent_contract::lifecycle_v2::{
     LifecycleAccountIdV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
 };
-use dclutch_resolution_codec::SourceClosureReceiptV2;
-pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
+use dclutch_resolution_codec::SourceClosureReceiptV3;
+use dclutch_resolution_core_v3_operator::authenticate_resolution_retirement_receipt_v3;
+pub use dclutch_resolution_core_v3_operator::{
+    Finality, Observation, ObservedAccount, ResolutionRetirementReceiptFactsV3,
+};
 use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
@@ -157,7 +160,9 @@ pub struct MarketRetirementReportV1 {
     pub close_replay_authority: Pubkey,
     /// Core-derived RentV2 close authority.
     pub rent_close_authority: Pubkey,
-    /// Exact lamports credited through Claims, Custody, Core, and RentV2.
+    /// Exact Resolution-owned Source and subset-ledger closure facts.
+    pub resolution_facts: ResolutionRetirementReceiptFactsV3,
+    /// Exact post-Resolution lamports credited through Claims, Custody, Core, and RentV2.
     pub expected_refund_delta: u64,
     /// Runtime Claims width; never assumed equal to a compile-time `N`.
     pub claim_count: u32,
@@ -192,7 +197,7 @@ pub enum MarketRetirementOperatorErrorV1 {
 struct AuthenticatedRetirementV1 {
     observation: Observation,
     market: CoreState,
-    source: SourceClosureReceiptV2,
+    source: ResolutionRetirementReceiptFactsV3,
     claims: LiabilityBasisMarketViewV2,
     replay: CustodyReplayV1,
 }
@@ -436,6 +441,7 @@ pub fn build_market_retirement_v1(
         close_vault_authority,
         close_replay_authority,
         rent_close_authority,
+        resolution_facts: authenticated.source,
         expected_refund_delta,
         claim_count: authenticated.claims.claim_count,
         continuation,
@@ -493,7 +499,7 @@ fn authenticate_snapshot(
     authenticate_rent(snapshot, market)?;
     let source = authenticate_resolution(snapshot, market)?;
     let claims = authenticate_claims(snapshot, market)?;
-    let (replay, _) = authenticate_custody(snapshot, market)?;
+    let (replay, _) = authenticate_custody(snapshot, market, source)?;
     Ok(AuthenticatedRetirementV1 {
         observation,
         market,
@@ -782,21 +788,56 @@ fn authenticate_rent(
 fn authenticate_resolution(
     snapshot: &MarketRetirementSnapshotV1,
     market: CoreState,
-) -> Result<SourceClosureReceiptV2, MarketRetirementOperatorErrorV1> {
-    let source = SourceClosureReceiptV2::decode(&snapshot.source_receipt.data)
+) -> Result<ResolutionRetirementReceiptFactsV3, MarketRetirementOperatorErrorV1> {
+    let source = SourceClosureReceiptV3::decode(&snapshot.source_receipt.data)
         .map_err(|_| MarketRetirementOperatorErrorV1::Resolution)?;
-    if snapshot.source_receipt.owner != snapshot.resolution_program.key
-        || snapshot.source_receipt.executable
+    let classified_total = source
+        .source_refund_lamports
+        .checked_add(source.ledger_remaining_native_principal)
+        .and_then(|value| value.checked_add(source.ledger_rent_lamports))
+        .and_then(|value| value.checked_add(source.ledger_lamport_surplus))
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
+    if classified_total != source.refund_lamports
         || source.receipt_account != snapshot.source_receipt.key.to_bytes()
         || source.market != snapshot.market.key.to_bytes()
         || source.generation != market.identity.generation
+        || source.source_material != market.identity.resolution_policy.to_bytes()
+        || source.capability_manifest != market.identity.capability_manifest.to_bytes()
         || source.beneficiary != snapshot.rent_credit.key.to_bytes()
+        || source.selector != market.terminal_winner
         || market.terminal_receipt.map(|value| value.to_bytes())
             != Some(source.terminal_certificate)
     {
         return Err(MarketRetirementOperatorErrorV1::Resolution);
     }
-    Ok(source)
+    let expected = ResolutionRetirementReceiptFactsV3 {
+        market: source.market,
+        generation: source.generation,
+        resolution_closure_receipt: source.receipt_account,
+        source_state: source.source_state,
+        source_material: source.source_material,
+        capability_manifest: source.capability_manifest,
+        terminal_certificate: source.terminal_certificate,
+        beneficiary: source.beneficiary,
+        selector: source.selector,
+        terminal_sequence: source.terminal_sequence,
+        source_state_digest: source.source_state_digest,
+        terminal_certificate_digest: source.terminal_certificate_digest,
+        funding_set_digest: source.funding_set_digest,
+        source_refund_lamports: source.source_refund_lamports,
+        ledger_remaining_native_principal: source.ledger_remaining_native_principal,
+        ledger_rent_lamports: source.ledger_rent_lamports,
+        ledger_lamport_surplus: source.ledger_lamport_surplus,
+        refund_lamports: source.refund_lamports,
+        closed_at: source.closed_at,
+    };
+    authenticate_resolution_retirement_receipt_v3(
+        &snapshot.source_receipt,
+        &snapshot.rent_sysvar,
+        snapshot.resolution_program.key,
+        expected,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Resolution)
 }
 
 fn authenticate_claims(
@@ -839,6 +880,7 @@ fn authenticate_claims(
 fn authenticate_custody(
     snapshot: &MarketRetirementSnapshotV1,
     market: CoreState,
+    source: ResolutionRetirementReceiptFactsV3,
 ) -> Result<(CustodyReplayV1, RealmV1), MarketRetirementOperatorErrorV1> {
     let replay = CustodyReplayV1::decode(&snapshot.custody_replay.data)
         .map_err(|_| MarketRetirementOperatorErrorV1::Custody)?;
@@ -894,8 +936,7 @@ fn authenticate_custody(
         AuthenticatedRetirementV1 {
             observation: snapshot.market.observation,
             market,
-            source: SourceClosureReceiptV2::decode(&snapshot.source_receipt.data)
-                .map_err(|_| MarketRetirementOperatorErrorV1::Resolution)?,
+            source,
             claims: LiabilityBasisMarketViewV2::decode(&snapshot.claims_aggregate.data)
                 .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?,
             replay,

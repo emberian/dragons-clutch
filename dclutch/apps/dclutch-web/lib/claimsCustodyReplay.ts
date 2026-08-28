@@ -478,14 +478,3 @@ export async function inspectClaimsCustodyReplayV1(
     return Object.freeze({ status: 'refused', reason: error instanceof Error ? error.message : 'the replay inspection refused without a usable reason' });
   }
 }
-
-/**
- * Why the payout leg itself is not yet wallet-executable, stated as the named
- * chain facts rather than as hedging. `claims/terminal_settlement_v3::process`
- * decodes caller_role Core(0) or Trading(2) only, and no campaign drives it
- * (docs/reference/routes.md; ADR-0008 §7.6), so a plain LiabilityBasisV2
- * Position has no wallet-direct payout route. The Rational representation's
- * RedeemTerminal is on-chain-proven, but it redeems Token-2022 shard
- * representations, which a plain Position does not hold.
- */
-export const PLAIN_POSITION_PAYOUT_BLOCK_V1 = 'Your winning balance and its exact payout are real, on-chain numbers. What is missing is the instruction that pays a plain position out to a wallet: the chain only accepts that move from two of its own internal programs today (ADR-0008 \u00a77.6). The cursor this flow creates is step one, done and waiting; the payout instruction is the missing piece, and shipping it is protocol work \u2014 not something your wallet or this page can route around.';

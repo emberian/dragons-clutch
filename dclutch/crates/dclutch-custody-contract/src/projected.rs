@@ -1,6 +1,6 @@
 //! Canonical pre-founding custody for a Core-authenticated future Market.
 
-use dclutch_market_core_codec::{CoreState, Phase, ProjectFoundReceiptV1};
+use dclutch_market_core_codec::{CoreState, Phase, ProjectFoundReceiptV2};
 use dclutch_release_set_contract::ExecutionRoleV1;
 
 use crate::{CompartmentV1, CustodyReplayV1};
@@ -8,20 +8,20 @@ use crate::{CompartmentV1, CustodyReplayV1};
 /// Projected-custody request magic.
 pub const PROJECTED_CUSTODY_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLPCQ01";
 /// Projected-custody state magic.
-pub const PROJECTED_CUSTODY_STATE_MAGIC_V1: [u8; 8] = *b"DCLPCS01";
+pub const PROJECTED_CUSTODY_STATE_MAGIC_V2: [u8; 8] = *b"DCLPCS02";
 /// Projected-custody terminal receipt magic.
 pub const PROJECTED_CUSTODY_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCR01";
 /// Exact request width.
 pub const PROJECTED_CUSTODY_REQUEST_BYTES_V1: usize = 768;
 /// Exact persisted-state width.
-pub const PROJECTED_CUSTODY_STATE_BYTES_V1: usize = 808;
+pub const PROJECTED_CUSTODY_STATE_BYTES_V2: usize = 808;
 /// Exact terminal receipt width.
 pub const PROJECTED_CUSTODY_RECEIPT_BYTES_V1: usize = 320;
 /// Exact projected-Custody replay-creation physical frame width.
 ///
 /// Seven common accounts, four Initialize-specific accounts, and the exact
-/// thirty-one-account Core `ProjectFound` sub-frame this operation forwards.
-pub const PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1: usize = 42;
+/// thirty-seven-account Core `ProjectFound` sub-frame this operation forwards.
+pub const PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2: usize = 48;
 /// Exact projected-Custody Hoard-vault-creation physical frame width.
 pub const PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact projected-Custody source-compartment-creation physical frame width.
@@ -61,6 +61,7 @@ const _: () = assert!(
 /// Lock-and-close receipt magic.
 pub const PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLPCL01";
 const VERSION_V1: u16 = 1;
+const VERSION_V2: u16 = 2;
 
 /// Stable refusal from projected pre-founding custody.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,16 +190,16 @@ pub enum ProjectedCustodyPhaseV1 {
 /// The role is pinned to [`ExecutionRoleV1::Trading`] and is not a request
 /// field. [`normal_replay_from_realization_v1`] mints a **Trading**-role replay
 /// out of this account, and the source compartment
-/// [`ProjectedCustodyStateV1::open_source_compartment`] creates is Trading-role
+/// [`ProjectedCustodyStateV2::open_source_compartment`] creates is Trading-role
 /// too; a projection at any other role's address would realize into a replay
 /// whose bytes and address disagreed. The founding therefore claims exactly the
 /// Trading compartment of a Market's Custody namespace, not the whole of it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProjectedCustodyStateSeedsV1 {
+pub struct ProjectedCustodyStateSeedsV2 {
     replay: crate::CustodyReplaySeedsV1,
 }
 
-impl ProjectedCustodyStateSeedsV1 {
+impl ProjectedCustodyStateSeedsV2 {
     /// The sole role a projected-Custody state realizes into.
     pub const REALIZED_ROLE: ExecutionRoleV1 = ExecutionRoleV1::Trading;
 
@@ -222,9 +223,9 @@ impl ProjectedCustodyStateSeedsV1 {
 
 /// Canonical seeds of the normal source replay a projected founding creates.
 ///
-/// [`ProjectedCustodyStateV1::open_source_compartment`] mints a
+/// [`ProjectedCustodyStateV2::open_source_compartment`] mints a
 /// **Trading**-role [`CustodyReplayV1`] at `funding_source_context`, and
-/// [`ProjectedCustodyStateV1::lock_hoard_and_close_source`] reads and closes it.
+/// [`ProjectedCustodyStateV2::lock_hoard_and_close_source`] reads and closes it.
 /// Both coordinates are the ordinary replay namespace, so both derive through
 /// [`crate::CustodyReplaySeedsV1`] and pick up the role seed with everything
 /// else.
@@ -509,7 +510,7 @@ impl ProjectedCustodyRequestV1 {
     /// `HoardOpen` at revision two instead and never calls this; Series is the
     /// live example. This constructor is the *generic* ladder only.
     ///
-    /// [`ProjectedCustodyStateV1::authenticate_next`] admits a successor only
+    /// [`ProjectedCustodyStateV2::authenticate_next`] admits a successor only
     /// when all thirty of its non-transition fields match the persisted
     /// request byte-for-byte; `operation`, `expected_revision`,
     /// `resulting_revision`, and `amount` are the only four it permits to
@@ -692,7 +693,7 @@ impl ProjectedCustodyRequestV1 {
 
 /// Persisted authority for one exact future Market Hoard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ProjectedCustodyStateV1 {
+pub struct ProjectedCustodyStateV2 {
     /// Live phase.
     pub phase: ProjectedCustodyPhaseV1,
     /// Exact projection/action coordinates.
@@ -702,23 +703,29 @@ pub struct ProjectedCustodyStateV1 {
     /// Principal held under this authority; zero until the source compartment
     /// is funded, then unchanged as Lock moves it into the Hoard.
     pub locked_amount: u64,
+    /// Source-projected principal ceiling in complete-set units.
+    /// `u64::MAX` is the sole canonical unbounded representation.
+    pub principal_cap_sets: u64,
     /// Digest of the last exact accepted request.
     pub last_request_digest: [u8; 32],
     /// PDA bump for exact self-authentication.
     pub bump: u8,
 }
 
-impl ProjectedCustodyStateV1 {
+impl ProjectedCustodyStateV2 {
     /// Encode the sole persisted authority bytes.
     ///
     /// Borrowed rather than by value: this state is over eight hundred bytes
     /// and every SBF call site is inside a four-kilobyte stack budget.
-    pub fn encode(&self) -> Result<[u8; PROJECTED_CUSTODY_STATE_BYTES_V1], ProjectedCustodyError> {
+    pub fn encode(&self) -> Result<[u8; PROJECTED_CUSTODY_STATE_BYTES_V2], ProjectedCustodyError> {
         self.request.validate()?;
         nonzero(self.last_request_digest)?;
-        let mut output = [0; PROJECTED_CUSTODY_STATE_BYTES_V1];
-        output[..8].copy_from_slice(&PROJECTED_CUSTODY_STATE_MAGIC_V1);
-        put_u16(&mut output, 8, VERSION_V1)?;
+        if self.principal_cap_sets == 0 {
+            return Err(ProjectedCustodyError::NonCanonical);
+        }
+        let mut output = [0; PROJECTED_CUSTODY_STATE_BYTES_V2];
+        output[..8].copy_from_slice(&PROJECTED_CUSTODY_STATE_MAGIC_V2);
+        put_u16(&mut output, 8, VERSION_V2)?;
         put_u8(&mut output, 10, self.phase as u8)?;
         put_u8(&mut output, 11, self.bump)?;
         put_u8(
@@ -726,6 +733,7 @@ impl ProjectedCustodyStateV1 {
             12,
             self.request.funding_source_compartment.tag(),
         )?;
+        put_u64(&mut output, 16, self.principal_cap_sets)?;
         write_identities(&mut output, 32, &self.request.identities())?;
         put_u64(&mut output, 704, self.request.generation)?;
         put_u64(&mut output, 712, self.request.expiry_slot)?;
@@ -754,12 +762,13 @@ impl ProjectedCustodyStateV1 {
 
     /// Hostile-decode the sole persisted authority bytes.
     pub fn decode(input: &[u8]) -> Result<Self, ProjectedCustodyError> {
-        header(
+        header_version(
             input,
-            &PROJECTED_CUSTODY_STATE_MAGIC_V1,
-            PROJECTED_CUSTODY_STATE_BYTES_V1,
+            &PROJECTED_CUSTODY_STATE_MAGIC_V2,
+            PROJECTED_CUSTODY_STATE_BYTES_V2,
+            VERSION_V2,
         )?;
-        if any_nonzero(input, 13, 19)? {
+        if any_nonzero(input, 13, 3)? || any_nonzero(input, 24, 8)? {
             return Err(ProjectedCustodyError::NonCanonical);
         }
         let ids = read_identities::<21>(input, 32)?;
@@ -772,6 +781,7 @@ impl ProjectedCustodyStateV1 {
         };
         let next_revision = read_u64(input, 720)?;
         let locked_amount = read_u64(input, 728)?;
+        let principal_cap_sets = read_u64(input, 16)?;
         // `custodied_amount` is the principal this authority holds, wherever it
         // currently sits: in the funded source compartment before Lock, in the
         // Hoard after it. Both phases must carry a nonzero one and no other
@@ -780,7 +790,8 @@ impl ProjectedCustodyStateV1 {
             phase,
             ProjectedCustodyPhaseV1::HoardLocked | ProjectedCustodyPhaseV1::SourceFunded
         );
-        if next_revision == 0 || custodied_amount != (locked_amount > 0) {
+        if next_revision == 0 || principal_cap_sets == 0 || custodied_amount != (locked_amount > 0)
+        {
             return Err(ProjectedCustodyError::Phase);
         }
         let operation = match phase {
@@ -834,6 +845,7 @@ impl ProjectedCustodyStateV1 {
             request: immutable,
             next_revision,
             locked_amount,
+            principal_cap_sets,
             last_request_digest: slice(input, 776, 32)?
                 .try_into()
                 .map_err(|_| ProjectedCustodyError::InvalidLength)?,
@@ -845,7 +857,7 @@ impl ProjectedCustodyStateV1 {
     #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         request: ProjectedCustodyRequestV1,
-        projection: ProjectFoundReceiptV1,
+        projection: ProjectFoundReceiptV2,
         projection_producer: [u8; 32],
         projection_receipt_digest: [u8; 32],
         request_digest: [u8; 32],
@@ -870,6 +882,7 @@ impl ProjectedCustodyStateV1 {
             || request.token_program != projection.token_program.to_bytes()
             || request.collateral_release != projection.collateral_release.to_bytes()
             || request.rent_program != projection.rent_program.to_bytes()
+            || projection.principal_cap_sets == 0
         {
             return Err(ProjectedCustodyError::Projection);
         }
@@ -879,6 +892,7 @@ impl ProjectedCustodyStateV1 {
             request,
             next_revision: 1,
             locked_amount: 0,
+            principal_cap_sets: projection.principal_cap_sets,
             last_request_digest: request_digest,
             bump,
         })
@@ -1527,7 +1541,7 @@ impl ProjectedCustodyReceiptV1 {
     }
 
     fn terminal(
-        state: &ProjectedCustodyStateV1,
+        state: &ProjectedCustodyStateV2,
         request: &ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
         realized: bool,
@@ -1562,7 +1576,7 @@ impl ProjectedCustodyReceiptV1 {
 /// authority at the same canonical replay PDA. The projected Hoard remains
 /// live, so the normal replay starts with exactly one open Vault.
 pub fn normal_replay_from_realization_v1(
-    state: ProjectedCustodyStateV1,
+    state: ProjectedCustodyStateV2,
     receipt: ProjectedCustodyReceiptV1,
     poststate_commitment: [u8; 32],
 ) -> Result<CustodyReplayV1, ProjectedCustodyError> {
@@ -1608,10 +1622,19 @@ fn nonzero(value: [u8; 32]) -> Result<(), ProjectedCustodyError> {
 }
 
 fn header(input: &[u8], magic: &[u8; 8], width: usize) -> Result<(), ProjectedCustodyError> {
+    header_version(input, magic, width, VERSION_V1)
+}
+
+fn header_version(
+    input: &[u8],
+    magic: &[u8; 8],
+    width: usize,
+    version: u16,
+) -> Result<(), ProjectedCustodyError> {
     if input.len() != width || input.get(..8) != Some(magic.as_slice()) {
         return Err(ProjectedCustodyError::InvalidHeader);
     }
-    if read_u16(input, 8)? != VERSION_V1 {
+    if read_u16(input, 8)? != version {
         return Err(ProjectedCustodyError::InvalidHeader);
     }
     Ok(())
@@ -1808,8 +1831,8 @@ mod tests {
         }
     }
 
-    fn projection() -> ProjectFoundReceiptV1 {
-        ProjectFoundReceiptV1::new(
+    fn projection() -> ProjectFoundReceiptV2 {
+        ProjectFoundReceiptV2::new(
             Identity::new(id(1)).expect("id"),
             7,
             Identity::new(id(2)).expect("id"),
@@ -1821,6 +1844,7 @@ mod tests {
             Identity::new(id(5)).expect("id"),
             Identity::new(id(6)).expect("id"),
             Identity::new(id(13)).expect("id"),
+            u64::MAX,
             id(20),
         )
         .expect("projection")
@@ -1844,6 +1868,7 @@ mod tests {
                 generation: 7,
             },
             outstanding_capabilities: 0,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: identity(22),
             terminal_receipt: None,
         }
@@ -1854,7 +1879,7 @@ mod tests {
         let init = request(ProjectedCustodyOperationV1::Initialize, 0, 0);
         let bytes = init.encode().expect("bytes");
         assert_eq!(ProjectedCustodyRequestV1::decode(&bytes), Ok(init));
-        let state = ProjectedCustodyStateV1::initialize(
+        let state = ProjectedCustodyStateV2::initialize(
             init,
             projection(),
             id(12),
@@ -1934,7 +1959,7 @@ mod tests {
             ProjectedCustodyRequestV1::decode(&bytes),
             Err(ProjectedCustodyError::NonCanonical)
         );
-        let state = ProjectedCustodyStateV1::initialize(
+        let state = ProjectedCustodyStateV2::initialize(
             init,
             projection(),
             id(12),
@@ -1989,7 +2014,7 @@ mod tests {
 
     #[test]
     fn empty_open_can_abort_only_after_expiry() {
-        let state = ProjectedCustodyStateV1::initialize(
+        let state = ProjectedCustodyStateV2::initialize(
             request(ProjectedCustodyOperationV1::Initialize, 0, 0),
             projection(),
             id(12),
@@ -2028,7 +2053,7 @@ mod tests {
 
     #[test]
     fn lock_can_atomically_exhaust_and_close_exact_normal_source() {
-        let state = ProjectedCustodyStateV1::initialize(
+        let state = ProjectedCustodyStateV2::initialize(
             request(ProjectedCustodyOperationV1::Initialize, 0, 0),
             projection(),
             id(12),
@@ -2148,7 +2173,7 @@ mod tests {
             );
         }
 
-        let state = ProjectedCustodyStateSeedsV1::from_request(request);
+        let state = ProjectedCustodyStateSeedsV2::from_request(request);
         for (index, seed) in state.as_slices().iter().enumerate() {
             assert!(
                 seed.len() <= MAX_PDA_SEED_BYTES,
@@ -2231,12 +2256,13 @@ mod tests {
 
         // The persisted state admits each derived successor in order, which is
         // the property the Trading bootstrap route depends on.
-        let mut state = ProjectedCustodyStateV1 {
+        let mut state = ProjectedCustodyStateV2 {
             bump: 254,
             phase: ProjectedCustodyPhaseV1::Initialized,
             request: prestate.initialize,
             next_revision: INITIALIZE_RESULTING_REVISION_V1,
             locked_amount: 0,
+            principal_cap_sets: u64::MAX,
             last_request_digest: id(40),
         };
         assert_eq!(
@@ -2353,12 +2379,13 @@ mod tests {
             500,
         );
         let open_source = lock.founding_prestate_v1().expect("prestate").open_source;
-        let base = ProjectedCustodyStateV1 {
+        let base = ProjectedCustodyStateV2 {
             bump: 254,
             phase: ProjectedCustodyPhaseV1::HoardOpen,
             request: open_source,
             next_revision: OPEN_HOARD_RESULTING_REVISION_V1,
             locked_amount: 0,
+            principal_cap_sets: u64::MAX,
             last_request_digest: id(40),
         };
         let call = |request,
@@ -2492,12 +2519,13 @@ mod tests {
             500,
         );
         let prestate = lock.founding_prestate_v1().expect("prestate");
-        let mut funded = ProjectedCustodyStateV1 {
+        let mut funded = ProjectedCustodyStateV2 {
             bump: 254,
             phase: ProjectedCustodyPhaseV1::HoardOpen,
             request: prestate.open_hoard,
             next_revision: OPEN_HOARD_RESULTING_REVISION_V1,
             locked_amount: 0,
+            principal_cap_sets: u64::MAX,
             last_request_digest: id(40),
         };
         funded
@@ -2514,7 +2542,7 @@ mod tests {
             )
             .expect("open source compartment");
         let bytes = funded.encode().expect("state bytes");
-        let decoded = ProjectedCustodyStateV1::decode(&bytes).expect("decode");
+        let decoded = ProjectedCustodyStateV2::decode(&bytes).expect("decode");
         assert_eq!(decoded.phase, ProjectedCustodyPhaseV1::SourceFunded);
         assert_eq!(decoded.locked_amount, 500);
         assert_eq!(decoded.next_revision, 3);
@@ -2584,7 +2612,7 @@ mod tests {
     }
 
     /// Build the exact `SourceFunded` state a generic founding rests at.
-    fn source_funded_state(principal: u64) -> ProjectedCustodyStateV1 {
+    fn source_funded_state(principal: u64) -> ProjectedCustodyStateV2 {
         let lock = generic_request(
             ProjectedCustodyOperationV1::LockHoardAndCloseSource,
             OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
@@ -2593,17 +2621,18 @@ mod tests {
         let open_source = lock
             .founding_prestate_stage_v1(FoundingPrestateStageV1::OpenSourceCompartment)
             .expect("open source prestate");
-        ProjectedCustodyStateV1 {
+        ProjectedCustodyStateV2 {
             bump: 254,
             phase: ProjectedCustodyPhaseV1::SourceFunded,
             request: open_source,
             next_revision: OPEN_SOURCE_COMPARTMENT_RESULTING_REVISION_V1,
             locked_amount: principal,
+            principal_cap_sets: u64::MAX,
             last_request_digest: id(60),
         }
     }
 
-    fn abort_source_request(state: &ProjectedCustodyStateV1) -> ProjectedCustodyRequestV1 {
+    fn abort_source_request(state: &ProjectedCustodyStateV2) -> ProjectedCustodyRequestV1 {
         ProjectedCustodyRequestV1 {
             operation: ProjectedCustodyOperationV1::AbortSourceAndClose,
             expected_revision: state.next_revision,
@@ -2776,14 +2805,14 @@ mod tests {
 
     #[test]
     fn the_source_abort_admits_only_the_funded_phase() {
-        let request_at = |state: &ProjectedCustodyStateV1| abort_source_request(state);
+        let request_at = |state: &ProjectedCustodyStateV2| abort_source_request(state);
         let base = source_funded_state(500);
         for phase in [
             ProjectedCustodyPhaseV1::Initialized,
             ProjectedCustodyPhaseV1::HoardOpen,
             ProjectedCustodyPhaseV1::HoardLocked,
         ] {
-            let state = ProjectedCustodyStateV1 { phase, ..base };
+            let state = ProjectedCustodyStateV2 { phase, ..base };
             let request = request_at(&state);
             assert_eq!(
                 state

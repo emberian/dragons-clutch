@@ -8,7 +8,7 @@
 
 use super::{
     ContentId, Error, NormalizedProviderEvidenceV1, ProviderReleaseV1, PythAdapterConfigV1, Result,
-    SourceAccessProfile, SourceMaterialV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
+    SourceAccessProfile, SourceMaterialV3, SourceSpecV1, StatisticKind, StatisticSpecV1,
     WindowKind, WindowSpecV1,
 };
 
@@ -73,10 +73,10 @@ impl PythProviderAdapterObligationV2 {
     ///
     /// Every `*_id` is the authenticated content digest of the adjacent value.
     /// The Product record digest is authenticated separately because
-    /// [`SourceMaterialV2`] intentionally owns only that graph root.
+    /// [`SourceMaterialV3`] intentionally owns only that graph root.
     #[allow(clippy::too_many_arguments)]
     pub fn from_authenticated_records(
-        material: SourceMaterialV2,
+        material: SourceMaterialV3,
         authenticated_product_record_digest: ContentId,
         source_spec_id: ContentId,
         source: SourceSpecV1,
@@ -224,7 +224,7 @@ mod tests {
     }
 
     struct Fixture {
-        material: SourceMaterialV2,
+        material: SourceMaterialV3,
         product: ContentId,
         source_id: ContentId,
         source: SourceSpecV1,
@@ -280,8 +280,14 @@ mod tests {
             capacity,
         )
         .expect("terminal statistic");
-        let material =
-            SourceMaterialV2::new(product, source_id, window_id, statistic_id, None, failure);
+        let material = SourceMaterialV3::explicitly_unbounded(
+            product,
+            source_id,
+            window_id,
+            statistic_id,
+            None,
+            failure,
+        );
         Fixture {
             material,
             product,
@@ -337,7 +343,7 @@ mod tests {
     #[test]
     fn parallel_provider_and_product_truth_refuse() {
         let mut altered = fixture();
-        altered.material = SourceMaterialV2::new(
+        altered.material = SourceMaterialV3::explicitly_unbounded(
             id(99),
             altered.source_id,
             altered.window_id,

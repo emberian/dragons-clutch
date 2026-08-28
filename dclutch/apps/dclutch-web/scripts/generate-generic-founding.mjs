@@ -8,6 +8,7 @@ const sources = Object.freeze({
   claims: readFileSync(new URL('crates/dclutch-claims-svm/src/founding_v5.rs', root), 'utf8'),
   client: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/market.rs', root), 'utf8'),
   clientRpc: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/rpc.rs', root), 'utf8'),
+  coreFrame: readFileSync(new URL('programs/dclutch-core-sbf/src/frame.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/genericFoundingV1.ts', import.meta.url);
 
@@ -127,12 +128,12 @@ lines.push('//   crates/dclutch-custody-contract/src/projected.rs               
 lines.push('//   crates/dclutch-claims-svm/src/founding_v5.rs                    (Claims)');
 lines.push('//   tools/local-validator/bootstrap/successor/src/market.rs         (the frame width)');
 lines.push('');
-lines.push('/** Sole top-level DCLTGMF1 discriminator. The outer carries no other bytes. */');
-lines.push(`export const GENERIC_MARKET_FOUNDING_MAGIC_V1 = '${magic('route', 'GENERIC_MARKET_FOUNDING_MAGIC_V1')}' as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1')} as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1')} as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1')} as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1')} as const;`);
+lines.push('/** Sole top-level DCLTGMF2 discriminator. The outer carries no other bytes. */');
+lines.push(`export const GENERIC_MARKET_FOUNDING_MAGIC_V2 = '${magic('route', 'GENERIC_MARKET_FOUNDING_MAGIC_V2')}' as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V2')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V2')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V2')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V2')} as const;`);
 lines.push('');
 lines.push('/** Index of each readonly request account inside the frame prefix. */');
 for (const [name, index] of [['FOUND', routeIndex('FOUND_RAW')], ['LOCK', routeIndex('LOCK_RAW')], ['REALIZE', routeIndex('REALIZE_RAW')], ['CLAIMS', routeIndex('CLAIMS_RAW')]]) {
@@ -154,13 +155,14 @@ lines.push(' * The client pins it as one number so a stage-width change shows up
 lines.push(' * disagreement rather than as a silently wider frame; the assertion that the');
 lines.push(' * six widths above sum to it lives in `genericMarketFounding.test.ts`.');
 lines.push(' */');
-lines.push(`export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1 = ${scalar('client', 'GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2 = ${scalar('client', 'GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2')} as const;`);
+lines.push(`export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = ${scalar('coreFrame', 'PROJECTED_FOUND_ACCOUNT_COUNT_V2')} as const;`);
 lines.push('');
 lines.push('/** Exact distinct writable keys the outer requires, asserted by the client. */');
-lines.push('export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V1 = 11 as const;');
+lines.push('export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V2 = 11 as const;');
 lines.push('');
-lines.push('/** Agave `increase_tx_account_lock_limit`; the fee payer is the key outside the frame. */');
-lines.push('export const MAX_TX_ACCOUNT_LOCKS_V1 = 128 as const;');
+lines.push('/** Devnet transaction account-lock limit without the raise feature. */');
+lines.push('export const MAX_TX_ACCOUNT_LOCKS_V2 = 64 as const;');
 lines.push('');
 lines.push('/** Indexes into the Found stage that the route itself dereferences. */');
 lines.push(`export const CORE_FOUND_MARKET_INDEX_V1 = ${routeIndex('CORE_FOUND_MARKET')} as const;`);
@@ -221,9 +223,8 @@ lines.push('/**');
 lines.push(' * ComputeBudget declarations the reference client puts on every transaction.');
 lines.push(' *');
 lines.push(' * `bounded_instructions` owns these and refuses a caller-supplied duplicate.');
-lines.push(' * The default per-transaction ceiling is 200,000 CU and Found31 alone spends');
-lines.push(' * over a million, so a builder that omits the limit does not produce a slow');
-lines.push(' * transaction -- it produces one that cannot complete.');
+lines.push(' * The configured limit is part of the emitted bytes, not a performance claim.');
+lines.push(' * Current V2 routes require their own pass-count and 20-seed mean evidence.');
 lines.push(' */');
 lines.push(`export const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT_V1 = ${scalar('clientRpc', 'SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT')} as const;`);
 lines.push(`export const REQUEST_HEAP_FRAME_DISCRIMINANT_V1 = ${scalar('clientRpc', 'REQUEST_HEAP_FRAME_DISCRIMINANT')} as const;`);

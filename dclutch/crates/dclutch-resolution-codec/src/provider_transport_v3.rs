@@ -75,7 +75,7 @@ pub struct ProviderSubmitRequestV3 {
     pub source_state: [u8; 32],
     /// Deterministic lifecycle destination.
     pub lifecycle: [u8; 32],
-    /// Market-selected SourceMaterialV2 identity.
+    /// Market-selected `SourceMaterialV3` identity.
     pub source_material: [u8; 32],
     /// Source-selected Pyth release identity.
     pub provider_release: [u8; 32],

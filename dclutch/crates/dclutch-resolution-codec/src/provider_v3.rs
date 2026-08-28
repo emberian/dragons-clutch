@@ -117,7 +117,7 @@ pub struct ProviderExecutionRequestV3 {
     pub source_state: [u8; 32],
     /// Deterministic typed terminal certificate destination.
     pub certificate_account: [u8; 32],
-    /// Exact SourceMaterialV2 content identity.
+    /// Exact `SourceMaterialV3` content identity.
     pub source_material: [u8; 32],
     /// Exact primary SourceSpec content identity.
     pub source_spec: [u8; 32],

@@ -8,7 +8,7 @@ import {
 
 import { boundedInstructionsV1 } from './founding/computeBudget';
 import { routableAddressesV1 } from './founding/lookupTable';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import {
   CAPABILITY_ENTRY_ACTIVATION_DEADLINE_OFFSET_V1,
   CAPABILITY_ENTRY_ACTIVATION_POLICY_OFFSET_V1,
@@ -77,15 +77,18 @@ import {
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
   ARTIFACT_RELEASE_SCHEMA_ID_V1,
+  GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+  MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+  SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+  SOURCE_SPEC_SCHEMA_ID_V1,
   CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
   CORE_ACTION_FOUND_TAG,
-  CORE_FOUND_ACCOUNT_COUNT_V2,
-  CORE_FOUND_ACCOUNT_ROLES_V2,
+  CORE_FOUND_ACCOUNT_COUNT_V3,
+  CORE_FOUND_ACCOUNT_ROLES_V3,
   CORE_REQUEST_BYTES,
   CORE_REQUEST_MAGIC,
   CORE_STATE_BYTES,
   CORE_VERSION,
-  EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
   LIFECYCLE_RENT_ACTION_CREATE_V2,
   LIFECYCLE_RENT_CREDIT_BYTES_V2,
   LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2,
@@ -99,7 +102,7 @@ import {
   PRODUCT_RECORD_SCHEMA_ID_V2,
   REALM_SCHEMA_RELEASE_ID_V1,
   RESULT_DOMAIN_SCHEMA_ID_V2,
-  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
 } from './generated/coreFound';
 import { inspectProtocolInfrastructureV1, type ProtocolInfrastructureInspectionV1 } from './infrastructure';
 import {
@@ -107,7 +110,6 @@ import {
   RENT_SYSVAR_ID,
   SYSTEM_PROGRAM_ID,
   SYSVAR_OWNER_ID,
-  decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
 } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
@@ -116,7 +118,7 @@ import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u6
 const PRODUCT_RECORD_BYTES = 112;
 const DOMAIN_HEADER_BYTES = 240;
 const PORTFOLIO_HEADER_BYTES = 208;
-const SOURCE_MATERIAL_BYTES = 208;
+const SOURCE_MATERIAL_BYTES = 240;
 const MAX_U32 = 0xffff_ffff;
 
 export type CoreFoundInputV2 = Readonly<{
@@ -128,12 +130,15 @@ export type CoreFoundInputV2 = Readonly<{
   productRecord: string;
   resultDomainRecord: string;
   portfolioRecord: string;
+  linkedBasisRecord: string;
   sourceMaterialRecord: string;
+  sourceSpecRecord: string;
+  capacityProfileRecord: string;
+  manipulationFloorRecord: string;
   capabilityManifestRecord: string;
-  executionReleaseSetRecord: string;
   generation: bigint;
   /**
-   * The finalized routing table Found31 rides, read back off the chain.
+   * The finalized routing table Found37 rides, read back off the chain.
    *
    * Absent, `prepareCoreFoundV2` still derives everything and still reports
    * `routableAddresses`, but compiling refuses: with its required ComputeBudget
@@ -171,10 +176,10 @@ export type CoreFoundPlanV2 = Readonly<{
   rentCreateTransaction: VersionedTransaction | null;
   rentCreateWireBytes: Uint8Array | null;
   /**
-   * The compiled Found31 packet, or null when it could not be compiled.
+   * The compiled Found37 packet, or null when it could not be compiled.
    *
    * Null is not a failure of the derivation: everything above it -- the Market
-   * address, the 31-account frame, the exact rent debit -- is derived and
+   * address, the 37-account frame, the exact rent debit -- is derived and
    * correct. It means only that this frame does not fit a packet without a
    * routing table, which is a fact about the frame and not about the caller.
    * `foundRefusal` says so in words.
@@ -222,6 +227,33 @@ function same(left: Uint8Array, right: Uint8Array): boolean {
 
 function accountMap(entries: Awaited<ReturnType<SolanaRpcClient['multipleAccounts']>>): ReadonlyMap<string, RpcAccount | null> {
   return new Map(entries.accounts.map((entry) => [entry.address, entry.account]));
+}
+
+/** Acquire one finalized observation floor without exceeding the RPC's 32-key bound. */
+export async function acquireFinalizedAccountsInChunksV1(
+  client: Pick<SolanaRpcClient, 'multipleAccounts'>,
+  addresses: ReadonlyArray<string>,
+  minimumContextSlot: string,
+): Promise<Awaited<ReturnType<SolanaRpcClient['multipleAccounts']>>> {
+  if (addresses.length === 0 || new Set(addresses).size !== addresses.length) {
+    throw new Error('chunked finalized acquisition requires distinct nonempty addresses');
+  }
+  const accounts: Array<{ address: string; account: RpcAccount | null }> = [];
+  let observedSlot: string | null = null;
+  for (let offset = 0; offset < addresses.length; offset += 32) {
+    const chunk = addresses.slice(offset, offset + 32);
+    const observation = await client.multipleAccounts(chunk, minimumContextSlot);
+    if (BigInt(observation.slot) < BigInt(minimumContextSlot)) {
+      throw new Error('chunked finalized acquisition regressed below its context floor');
+    }
+    if (observedSlot !== null && observation.slot !== observedSlot) {
+      throw new Error('chunked finalized acquisition returned different context slots');
+    }
+    observedSlot = observation.slot;
+    accounts.push(...observation.accounts);
+  }
+  if (observedSlot === null) throw new Error('chunked finalized acquisition returned no context');
+  return Object.freeze({ slot: observedSlot, accounts: Object.freeze(accounts) });
 }
 
 function required(accounts: ReadonlyMap<string, RpcAccount | null>, address: string, field: string): RpcAccount {
@@ -295,14 +327,16 @@ function validateRealm(bytes: Uint8Array): void {
     .forEach((offset) => requireNonzero(slice(bytes, offset, 32), 'Realm identity'));
 }
 
-export function validateCoreFoundSourceMaterialV2(bytes: Uint8Array, productDigest: Uint8Array): void {
-  if (bytes.length !== SOURCE_MATERIAL_BYTES || ascii(bytes, 0, 8) !== 'DCLTSMV2' || u16(bytes, 8) !== 2) throw new Error('SourceMaterialV2 has the wrong exact ABI');
-  if (bytes[10] > 1) throw new Error('SourceMaterialV2 recovery tag is undefined');
-  requireZero(bytes, 11, 5, 'SourceMaterialV2 header');
-  if (!same(slice(bytes, 16, 32), productDigest)) throw new Error('SourceMaterialV2 selects a different Product record digest');
-  [16, 48, 80, 112, 176].forEach((offset) => requireNonzero(slice(bytes, offset, 32), 'SourceMaterialV2 identity'));
+export function validateCoreFoundSourceMaterialV3(bytes: Uint8Array, productDigest: Uint8Array): void {
+  if (bytes.length !== SOURCE_MATERIAL_BYTES || ascii(bytes, 0, 8) !== 'DCLTSMV3' || u16(bytes, 8) !== 3) throw new Error('SourceMaterialV3 has the wrong exact ABI');
+  if (bytes[10] > 1 || (bytes[11] !== 1 && bytes[11] !== 2)) throw new Error('SourceMaterialV3 tag is undefined');
+  requireZero(bytes, 12, 4, 'SourceMaterialV3 header');
+  if (!same(slice(bytes, 16, 32), productDigest)) throw new Error('SourceMaterialV3 selects a different Product record digest');
+  [16, 48, 80, 112, 176].forEach((offset) => requireNonzero(slice(bytes, offset, 32), 'SourceMaterialV3 identity'));
   const recovery = slice(bytes, 144, 32);
-  if ((bytes[10] === 0 && !isZero(recovery)) || (bytes[10] === 1 && isZero(recovery))) throw new Error('SourceMaterialV2 recovery policy is noncanonical');
+  const floor = slice(bytes, 208, 32);
+  if ((bytes[10] === 0 && !isZero(recovery)) || (bytes[10] === 1 && isZero(recovery))) throw new Error('SourceMaterialV3 recovery policy is noncanonical');
+  if ((bytes[11] === 1 && !isZero(floor)) || (bytes[11] === 2 && isZero(floor))) throw new Error('SourceMaterialV3 principal policy is noncanonical');
 }
 
 function validateFundingQuote(bytes: Uint8Array): Readonly<{ rent: bigint; creation: bigint }> {
@@ -515,7 +549,7 @@ export function compileLifecycleRentCreateTransactionV2(input: Readonly<{
     instructions: [instruction],
   }).compileToV0Message());
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error('lifecycle Rent Create exceeds the packet bound');
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error('lifecycle Rent Create exceeds the packet bound');
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
     .slice(0, transaction.message.header.numRequiredSignatures)
     .map((value) => value.toBase58()));
@@ -543,15 +577,15 @@ export function compileCoreFoundTransactionV2(input: Readonly<{
   accountAddresses: ReadonlyArray<string>;
   lookupTable?: AddressLookupTableAccount;
 }>): CompiledCoreFoundTransactionV2 {
-  if (input.accountAddresses.length !== CORE_FOUND_ACCOUNT_COUNT_V2) {
-    throw new Error(`Core Found requires exactly ${CORE_FOUND_ACCOUNT_COUNT_V2} account metas`);
+  if (input.accountAddresses.length !== CORE_FOUND_ACCOUNT_COUNT_V3) {
+    throw new Error(`Core Found requires exactly ${CORE_FOUND_ACCOUNT_COUNT_V3} account metas`);
   }
-  if (new Set(input.accountAddresses).size !== CORE_FOUND_ACCOUNT_COUNT_V2) {
+  if (new Set(input.accountAddresses).size !== CORE_FOUND_ACCOUNT_COUNT_V3) {
     throw new Error('Core Found account metas alias named roles');
   }
   if (input.accountAddresses[0] !== input.payer
       || input.accountAddresses[1] !== input.market
-      || input.accountAddresses[19] !== input.coreProgram) {
+      || input.accountAddresses[25] !== input.coreProgram) {
     throw new Error('Core Found payer, Market, or Core program is at the wrong exact account index');
   }
   const payer = key(input.payer, 'payer');
@@ -559,29 +593,32 @@ export function compileCoreFoundTransactionV2(input: Readonly<{
   const requestBytes = foundRequest(input.generation, market);
   const metas = input.accountAddresses.map((address, index) => ({
     pubkey: key(address, `Found account ${index}`),
-    isSigner: CORE_FOUND_ACCOUNT_ROLES_V2[index].signer,
-    isWritable: CORE_FOUND_ACCOUNT_ROLES_V2[index].writable,
+    isSigner: CORE_FOUND_ACCOUNT_ROLES_V3[index].signer,
+    isWritable: CORE_FOUND_ACCOUNT_ROLES_V3[index].writable,
   }));
   const instruction = new TransactionInstruction({
     programId: key(input.coreProgram, 'Core program'),
     keys: metas,
     data: requestBytes as Buffer,
   });
-  // Found31 spends over a million compute units authenticating whole program
-  // ELFs, against a 200,000-unit default. Without the declaration the runtime
-  // kills it with `Program failed to complete`, which is what the first real
-  // submission of this builder's output got. The limit is the reference
-  // client's own, emitted rather than restated.
+  // The bounded-instruction owner supplies the configured limit. This builder
+  // reproduces its bytes; it does not infer a compute margin from the old wire.
+  // Current V2 routes require their own pass-count and 20-seed mean evidence.
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: payer,
     recentBlockhash: key(input.recentBlockhash, 'recent blockhash').toBase58(),
     instructions: [...boundedInstructionsV1([instruction])],
   }).compileToV0Message(input.lookupTable === undefined ? undefined : [input.lookupTable]));
-  const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) {
+  let wireBytes: Uint8Array;
+  try {
+    wireBytes = transaction.serialize();
+  } catch (error) {
+    throw new Error(`Core Found transaction exceeds the ${SOLANA_PACKET_BYTES_V1}-byte packet bound${input.lookupTable === undefined ? '; this frame requires a finalized routing table' : ''}`, { cause: error });
+  }
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) {
     throw new Error(input.lookupTable === undefined
-      ? `Core Found transaction is ${wireBytes.length} bytes inline, above the ${PACKET_DATA_SIZE}-byte packet bound; this frame requires a finalized routing table`
-      : `Core Found transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+      ? `Core Found transaction is ${wireBytes.length} bytes inline, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound; this frame requires a finalized routing table`
+      : `Core Found transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   }
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
     .slice(0, transaction.message.header.numRequiredSignatures)
@@ -609,9 +646,9 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   const registry = key(input.registryProgram, 'Registry program');
   key(input.activationCache, 'activation cache');
   key(input.refundWallet, 'refund wallet');
-  const rawAddresses = [input.realmRecord, input.productRecord, input.resultDomainRecord, input.portfolioRecord, input.sourceMaterialRecord, input.capabilityManifestRecord, input.executionReleaseSetRecord];
+  const rawAddresses = [input.realmRecord, input.productRecord, input.resultDomainRecord, input.portfolioRecord, input.linkedBasisRecord, input.sourceMaterialRecord, input.sourceSpecRecord, input.capacityProfileRecord, input.manipulationFloorRecord, input.capabilityManifestRecord];
   rawAddresses.forEach((address, index) => key(address, `finalized raw record ${index}`));
-  if (new Set([input.registryProgram, input.activationCache, input.refundWallet, ...rawAddresses]).size !== 10) throw new Error('Found authority inputs alias named roles');
+  if (new Set([input.registryProgram, input.activationCache, input.refundWallet, ...rawAddresses]).size !== 13) throw new Error('Found authority inputs alias named roles');
 
   const infrastructure = await inspectProtocolInfrastructureV1(client, { registryProgram: registry.toBase58(), activationCache: input.activationCache });
   const initial = await client.multipleAccounts(rawAddresses, infrastructure.observedSlot);
@@ -621,19 +658,24 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     [input.productRecord, PRODUCT_RECORD_SCHEMA_ID_V2, 'Product'],
     [input.resultDomainRecord, RESULT_DOMAIN_SCHEMA_ID_V2, 'result domain'],
     [input.portfolioRecord, PORTFOLIO_SCHEMA_ID_V2, 'portfolio'],
-    [input.sourceMaterialRecord, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, 'Source material'],
+    [input.linkedBasisRecord, GRADED_BASIS_RECORD_SCHEMA_ID_V3, 'linked basis'],
+    [input.sourceMaterialRecord, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, 'Source material'],
+    [input.sourceSpecRecord, SOURCE_SPEC_SCHEMA_ID_V1, 'Source spec'],
+    [input.capacityProfileRecord, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, 'capacity profile'],
+    [input.manipulationFloorRecord, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, 'manipulation floor'],
     [input.capabilityManifestRecord, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, 'capability manifest'],
   ] as const;
   const authorities = await Promise.all(specs.map(([address, schema, field]) => recordAuthority(client, input.registryProgram, address, schema, required(initialAccounts, address, field), field)));
-  const releaseSetAccount = required(initialAccounts, input.executionReleaseSetRecord, 'execution release set');
-  const releaseSetDecoded = await decodeExecutionReleaseSetV1(releaseSetAccount.data);
-  const releaseSetAuthority = await recordAuthority(client, input.registryProgram, input.executionReleaseSetRecord, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, releaseSetAccount, 'execution release set');
-  if (releaseSetDecoded.id !== hex(releaseSetAuthority.digest) || releaseSetDecoded.id !== infrastructure.executionReleaseSetId) throw new Error('finalized release set and activation cache identities differ');
+  const releaseSetDigest = Uint8Array.from(infrastructure.executionReleaseSetId.match(/../g) ?? [], (value) => Number.parseInt(value, 16));
+  if (releaseSetDigest.length !== 32 || isZero(releaseSetDigest)) throw new Error('activation cache has an invalid release-set identity');
 
-  const [realm, product, domain, portfolio, source, manifest] = authorities;
+  const [realm, product, domain, portfolio, linkedBasis, source, sourceSpec, capacityProfile, manipulationFloor, manifest] = authorities;
   validateRealm(realm.bytes);
   const graph = decodeCoreFoundProductGraphV2(product.bytes, domain.bytes, portfolio.bytes, domain.digest, portfolio.digest);
-  validateCoreFoundSourceMaterialV2(source.bytes, product.digest);
+  validateCoreFoundSourceMaterialV3(source.bytes, product.digest);
+  if (!same(slice(source.bytes, 48, 32), sourceSpec.digest)
+      || !same(slice(sourceSpec.bytes, 144, 32), capacityProfile.digest)
+      || !same(slice(source.bytes, 208, 32), manipulationFloor.digest)) throw new Error('SourceMaterialV3 graph identities differ from the authenticated records');
   validateCoreFoundCapabilityManifestV1(manifest.bytes);
 
   const market = PublicKey.findProgramAddressSync([
@@ -643,7 +685,7 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     graph.productId,
     source.digest,
     manifest.digest,
-    releaseSetAuthority.digest,
+    releaseSetDigest,
     registry.toBytes(),
     generationBytes(input.generation),
   ], key(infrastructure.core.program, 'Core program'))[0];
@@ -657,24 +699,25 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   const accountAddresses = [
     input.payer, market.toBase58(), rentCredit.toBase58(), infrastructure.rent.program,
     realm.raw, realm.staging, product.raw, product.staging, domain.raw, domain.staging, portfolio.raw, portfolio.staging,
-    source.raw, source.staging, manifest.raw, manifest.staging, releaseSetAuthority.raw, releaseSetAuthority.staging,
-    input.activationCache, infrastructure.core.program, infrastructure.core.programData, input.registryProgram, RENT_SYSVAR_ID, SYSTEM_PROGRAM_ID,
+    linkedBasis.raw, linkedBasis.staging, source.raw, source.staging, sourceSpec.raw, sourceSpec.staging,
+    capacityProfile.raw, capacityProfile.staging, manipulationFloor.raw, manipulationFloor.staging,
+    manifest.raw, manifest.staging, input.activationCache, infrastructure.core.program, infrastructure.core.programData, input.registryProgram, RENT_SYSVAR_ID, SYSTEM_PROGRAM_ID,
     infrastructure.profilePda, registryArtifact.record, registryArtifact.staging, infrastructure.registry.programData,
     rentArtifact.record, rentArtifact.staging, infrastructure.rent.programData,
   ];
-  if (accountAddresses.length !== CORE_FOUND_ACCOUNT_COUNT_V2 || new Set(accountAddresses).size !== CORE_FOUND_ACCOUNT_COUNT_V2) throw new Error('Found31 account projection aliases named roles');
+  if (accountAddresses.length !== CORE_FOUND_ACCOUNT_COUNT_V3 || new Set(accountAddresses).size !== CORE_FOUND_ACCOUNT_COUNT_V3) throw new Error('Found37 account projection aliases named roles');
   const observationAddresses = input.refundWallet === input.payer ? accountAddresses : [...accountAddresses, input.refundWallet];
-  const finalObservation = await client.multipleAccounts(observationAddresses, initial.slot);
+  const finalObservation = await acquireFinalizedAccountsInChunksV1(client, observationAddresses, initial.slot);
   const finalAccounts = accountMap(finalObservation);
   const payerAccount = required(finalAccounts, input.payer, 'payer');
   if (payerAccount.owner !== SYSTEM_PROGRAM_ID || payerAccount.executable || payerAccount.data.length !== 0) throw new Error('payer is not a System-owned data-free wallet');
   vacant(finalAccounts.get(market.toBase58()), 'Market destination');
   const refundWallet = required(finalAccounts, input.refundWallet, 'refund wallet');
   if (refundWallet.owner !== SYSTEM_PROGRAM_ID || refundWallet.executable || refundWallet.data.length !== 0) throw new Error('refund wallet is not a System-owned data-free wallet');
-  // The credit is a PRECONDITION of Found31 and the OUTPUT of its own
+  // The credit is a PRECONDITION of Found37 and the OUTPUT of its own
   // transaction, and those are different requirements. Demanding vacancy in
   // both places is what made a two-stage flow impossible: the moment the credit
-  // landed, re-preparing Found31 against the same coordinates refused. So the
+  // landed, re-preparing Found37 against the same coordinates refused. So the
   // observation branches on what is actually there, and each branch states the
   // whole of its own requirement.
   const creditDestination = finalAccounts.get(rentCredit.toBase58()) ?? null;
@@ -689,7 +732,7 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     vacant(creditDestination, 'lifecycle RentCredit destination');
     if ((creditDestination?.lamports ?? '0') !== '0') throw new Error('lifecycle RentCredit destination is prefunded');
   }
-  for (const authority of [...authorities, releaseSetAuthority]) {
+  for (const authority of authorities) {
     const raw = required(finalAccounts, authority.raw, 'finalized raw record');
     if (raw.owner !== input.registryProgram || raw.executable || BigInt(raw.lamports) < authority.rentMinimum || !same(raw.data, authority.bytes) || !same(await sha256(raw.data), authority.digest)) throw new Error('finalized raw record changed or lost Registry/rent authority');
     vacant(finalAccounts.get(authority.staging), 'finalized staging cursor');
@@ -710,12 +753,12 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
   if (BigInt(payerAccount.lamports) < totalRentDebit) throw new Error('payer cannot cover the exact current Market and lifecycle-credit rent debit');
   const confirmedInfrastructure = await inspectProtocolInfrastructureV1(client, { registryProgram: input.registryProgram, activationCache: input.activationCache });
   if (!infrastructureEqual(infrastructure, confirmedInfrastructure)) throw new Error('immutable infrastructure projection changed during Found construction');
-  const blockhash = await client.latestBlockhash(confirmedInfrastructure.observedSlot);
+  const blockhash = await client.latestMutationBlockhash(confirmedInfrastructure.observedSlot);
   const rentCreation = creditExists ? null : compileLifecycleRentCreateTransactionV2({
     payer: input.payer,
     refundWallet: input.refundWallet,
     market: market.toBase58(),
-    releaseSet: releaseSetAuthority.digest,
+    releaseSet: releaseSetDigest,
     generation: input.generation,
     rentProgram: infrastructure.rent.program,
     recentBlockhash: blockhash.blockhash,
@@ -728,8 +771,8 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     programId: key(infrastructure.core.program, 'Core program'),
     keys: accountAddresses.map((address, index) => ({
       pubkey: key(address, `Found account ${index}`),
-      isSigner: CORE_FOUND_ACCOUNT_ROLES_V2[index].signer,
-      isWritable: CORE_FOUND_ACCOUNT_ROLES_V2[index].writable,
+      isSigner: CORE_FOUND_ACCOUNT_ROLES_V3[index].signer,
+      isWritable: CORE_FOUND_ACCOUNT_ROLES_V3[index].writable,
     })),
     data: foundRequest(input.generation, market) as Buffer,
   });
@@ -764,7 +807,7 @@ export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFou
     productRecordDigest: hex(product.digest),
     productId: hex(graph.productId),
     outcomeCount: graph.outcomeCount,
-    executionReleaseSetId: releaseSetDecoded.id,
+    executionReleaseSetId: infrastructure.executionReleaseSetId,
     infrastructureProfile: infrastructure.profilePda,
     infrastructureRecognition: infrastructure.recognition,
     marketRentTopUp: marketRentTopUp.toString(),

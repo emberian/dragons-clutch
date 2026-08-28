@@ -100,6 +100,9 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
       {position.claim.kind === 'redeemable' && <RedeemFlow
         endpoint={redeem.endpoint}
         marketAddress={entry.marketAddress}
+        positionAddress={position.address}
+        claimIndex={position.claim.winningClaim}
+        availableQuantity={position.claim.redeemableAtoms}
         claimsProgramId={redeem.claimsProgramId}
         custodyProgramId={redeem.custodyProgramId}
         registryProgramId={redeem.registryProgramId}

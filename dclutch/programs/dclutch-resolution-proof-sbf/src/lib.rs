@@ -11,7 +11,7 @@ use dclutch_capability_contract::CapabilityManifestV1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::DeploymentObservationV1;
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_source_contract::{RecoveryPolicyV2, SourceMaterialV2};
+use dclutch_source_contract::{RecoveryPolicyV2, SourceMaterialV3};
 use solana_program::{
     account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,
     program_error::ProgramError, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
@@ -22,6 +22,7 @@ mod core_effect;
 /// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
 /// compartment a deadline-driven terminal spends.
 pub mod funded;
+mod pre_market_funding_v1;
 mod provider_instruction_v3;
 mod provider_transport_v3;
 /// Current-ABI real-provider evidence composition shared by fixed Core and
@@ -135,7 +136,7 @@ impl From<ResolutionError> for ProgramError {
 
 pub(crate) enum RecordKind {
     CapabilityManifest,
-    SourceMaterialV2,
+    SourceMaterialV3,
     RecoveryPolicyV2,
 }
 
@@ -153,6 +154,13 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if pre_market_funding_v1::is_pre_market_funding_v1(instruction_data) {
+        return pre_market_funding_v1::process_pre_market_funding_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     if core_effect::is_core_effect(instruction_data) {
         return core_effect::process_core_effect(program_id, accounts, instruction_data);
     }
@@ -603,7 +611,7 @@ pub(crate) fn authenticate_finalized_record(
     }
     let valid = match kind {
         RecordKind::CapabilityManifest => CapabilityManifestV1::decode(bytes).is_ok(),
-        RecordKind::SourceMaterialV2 => SourceMaterialV2::decode(bytes).is_ok(),
+        RecordKind::SourceMaterialV3 => SourceMaterialV3::decode(bytes).is_ok(),
         RecordKind::RecoveryPolicyV2 => RecoveryPolicyV2::decode(bytes).is_ok(),
     };
     if !valid {
@@ -667,7 +675,7 @@ fn authenticate_resolution_release(
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let release = role.release();
     if release.program().to_bytes() != program_id.to_bytes()
-        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
+        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
         || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
     {
         return Err(ResolutionError::ResolutionRelease.into());

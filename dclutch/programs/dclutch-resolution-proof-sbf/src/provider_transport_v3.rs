@@ -26,12 +26,12 @@ use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     ProviderReclaimReceiptV3, ProviderReclaimRequestV3, ProviderSubmitReceiptV3,
     ProviderSubmitRequestV3, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateV2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V5, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
-    PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-    SOURCE_MATERIAL_V2_BYTES, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
+    PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_MATERIAL_V3_BYTES, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
+    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
     WINDOW_SPEC_BYTES, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 use solana_program::{
@@ -518,7 +518,7 @@ fn authenticate_infrastructure<'info>(
             || (role == ExecutionRoleV1::Resolution
                 && (role_program.key != program_id
                     || selected.release().semantic_release_id().to_bytes()
-                        != RESOLUTION_CONTROLLER_RELEASE_ID_V4))
+                        != RESOLUTION_CONTROLLER_RELEASE_ID_V5))
         {
             return Err(ResolutionError::ResolutionRelease.into());
         }
@@ -553,13 +553,13 @@ fn authenticate_submission_records(
         frame.account(17),
         frame.account(18),
         rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
         &material_data,
-        SOURCE_MATERIAL_V2_BYTES,
+        SOURCE_MATERIAL_V3_BYTES,
     )?;
     let material =
-        SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     drop(material_data);
     let source_data = frame
         .account(19)
@@ -1049,7 +1049,7 @@ fn authenticate_reclaim_release(
         != request.release_set
         || selected.release().program().to_bytes() != program_id.to_bytes()
         || selected.release().semantic_release_id().to_bytes()
-            != RESOLUTION_CONTROLLER_RELEASE_ID_V4
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V5
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }

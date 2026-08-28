@@ -8,7 +8,8 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     liability_basis_vector_width_v2,
 };
 use dclutch_market_retirement_v1_operator::{
-    MarketRetirementOperatorErrorV1, MarketRetirementSnapshotV1, build_market_retirement_v1,
+    MarketRetirementOperatorErrorV1, MarketRetirementSnapshotV1,
+    ResolutionRetirementReceiptFactsV3, build_market_retirement_v1,
 };
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
@@ -115,7 +116,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let trading_release = release(TRADING_PROGRAM_ID, [0x46; 32], &trading_elf);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V5,
         &elves.resolution,
     );
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
@@ -205,6 +206,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
     };
@@ -253,7 +255,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     .0;
     let closure = Pubkey::find_program_address(
         &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
             source.as_ref(),
             &(TERMINAL_SEQUENCE + 1).to_le_bytes(),
         ],
@@ -266,7 +268,32 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let manifest_id = CapabilityContentId::new(hash(&manifest_account.data).to_bytes())
         .expect("manifest identity");
     let manifest = CapabilityManifestV1::decode(&manifest_account.data).expect("manifest");
-    let funding = [0_u16, 1, 2].map(|entry| funding_key(market, manifest_id, manifest, entry));
+    const RESOLUTION_FUNDING_MASK: u16 = 0b111;
+    let funding = funding_key(market, manifest_id, manifest, RESOLUTION_FUNDING_MASK);
+    let funding_width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let mut funding_data = vec![0_u8; funding_width];
+    FundingLedgerV2::initialize(
+        &mut funding_data,
+        manifest_id,
+        manifest,
+        RESOLUTION_FUNDING_MASK,
+    )
+    .expect("pre-Market pending Resolution subset ledger");
+    let funding_principal = FundingLedgerV2::decode(&funding_data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .and_then(|ledger| ledger.remaining_native_lamports_total())
+        .expect("bounded aggregate Resolution principal");
+    set_account(
+        &mut context,
+        funding,
+        Account {
+            lamports: Rent::default().minimum_balance(funding_width) + funding_principal,
+            data: funding_data,
+            owner: RESOLUTION_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
 
     let replay_request = custody_request(
         release_set,
@@ -367,6 +394,7 @@ struct RetirementPlan {
     instruction: Instruction,
     direct_instruction: Instruction,
     activation_cache_digest: CoreContentId,
+    resolution_facts: ResolutionRetirementReceiptFactsV3,
     expected_refund_delta: u64,
 }
 
@@ -501,6 +529,7 @@ async fn retirement_instruction(
         instruction: report.instruction,
         direct_instruction: report.direct_instruction,
         activation_cache_digest,
+        resolution_facts: report.resolution_facts,
         expected_refund_delta: report.expected_refund_delta,
     }
 }
@@ -529,52 +558,32 @@ async fn execute_same_lineage_funding_and_open(
     let create = build_resolution_create_fund_v3(&create_snapshot(context, &fixture.base).await)
         .expect("chain-derived same-Market CreateFund");
     validate_resolution_create_fund_report_v3(&create).expect("exact same-Market CreateFund");
-    let mut create_instructions = Vec::with_capacity(5);
+    let mut create_instructions = Vec::with_capacity(2);
     create_instructions.push(transfer(
         &payer,
         &fixture.base.source,
         create.source_top_up_lamports,
     ));
-    for (funding, top_up) in fixture
-        .base
-        .funding
-        .into_iter()
-        .zip(create.funding_top_up_lamports)
-    {
-        create_instructions.push(transfer(&payer, &funding, top_up));
-    }
     create_instructions.push(create.instruction.clone());
     let mut substituted_system = create_instructions.clone();
     substituted_system
         .last_mut()
         .expect("CreateFund instruction")
-        .accounts[17]
+        .accounts[15]
         .pubkey = sysvar::rent::ID;
     assert!(
         submit(context, &substituted_system).await.is_err(),
-        "a substituted System program must refuse after all four top-ups"
+        "a substituted System program must refuse after the Source top-up"
     );
     assert_eq!(
         open_rollback_snapshot(context, &fixture.base).await,
         before_create,
-        "late CreateFund refusal rolls the Market, Source, three Funds, Custody, and RentCredit back"
+        "late CreateFund refusal rolls the Market, Source, subset ledger, Custody, and RentCredit back"
     );
     submit(context, &create_instructions)
         .await
-        .expect("create exact same-Market Source and three pending Funds");
-    for funding in fixture.base.funding {
-        assert_eq!(
-            FundingStateV1::decode(
-                &observed(context, funding)
-                    .await
-                    .expect("created same-Market Funding")
-                    .data,
-            )
-            .expect("Funding state")
-            .status(),
-            FundingStatus::Pending,
-        );
-    }
+        .expect("create the exact same-Market Source against the pending subset ledger");
+    assert_funding_ledger_status(context, &fixture.base, FundingLedgerStatusV2::Pending).await;
 
     let verify =
         build_resolution_verify_fund_ready_v3(&verify_snapshot(context, &fixture.base).await)
@@ -595,7 +604,8 @@ async fn execute_same_lineage_funding_and_open(
     );
     submit(context, &[verify.instruction])
         .await
-        .expect("activate exact same-Market three-ledger funding");
+        .expect("activate the exact same-Market three-row subset ledger");
+    assert_funding_ledger_status(context, &fixture.base, FundingLedgerStatusV2::Active).await;
 
     let before_open = open_rollback_snapshot(context, &fixture.base).await;
     let mut substituted_admission =
@@ -828,7 +838,7 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     submit(&mut context, &[begin_retiring_instruction(&fixture.base)])
         .await
         .expect("permissionless BeginRetiring");
-    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V2);
+    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
     let payer = context.payer.pubkey();
     submit(
         &mut context,
@@ -839,11 +849,24 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture.base).await)
         .expect("chain-derived CloseFund");
     validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
-    submit(&mut context, &[close.instruction])
+    let expected_resolution_facts = close.expected_retirement_facts;
+    submit(&mut context, &[close.instruction.clone()])
         .await
         .expect("Resolution closes Source subtree first");
+    let closure = SourceClosureReceiptV3::decode(
+        &observed(&mut context, fixture.base.closure)
+            .await
+            .expect("V3 Source closure receipt")
+            .data,
+    )
+    .expect("exhaustive V3 Source closure receipt");
+    assert_exhaustive_closure_receipt(closure, &close);
 
     let plan = retirement_instruction(&mut context, &fixture).await;
+    assert_eq!(
+        plan.resolution_facts, expected_resolution_facts,
+        "the retirement builder must carry every Resolution-owned closure component unchanged"
+    );
     let chain_snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
     let mut stale_observation = chain_snapshot.clone();
     stale_observation.claims_aggregate.observation.slot += 1;
@@ -877,7 +900,10 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     );
     let report = build_market_retirement_v1(&chain_snapshot).expect("retirement report");
     assert_eq!(report.claim_count, 5, "Claims width is runtime-derived");
-    assert_eq!(fixture.base.funding.len(), 3, "Resolution has three funds");
+    assert_ne!(
+        plan.resolution_facts.funding_set_digest, [0; 32],
+        "retirement carries the exact three-row Resolution funding prestate digest"
+    );
     assert_eq!(plan.direct_instruction.accounts.len(), 35);
     assert_eq!(plan.direct_instruction.data.len(), 2_152);
     assert_eq!(plan.instruction.accounts.len(), 46);

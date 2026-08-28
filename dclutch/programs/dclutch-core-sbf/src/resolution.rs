@@ -1,28 +1,28 @@
 //! Resolution-role child composition through the canonical Core authority.
 
 use dclutch_capability_contract::{
-    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
-    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1,
-    FundingStateV1, FundingStatus,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
+    CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
+    FUNDING_LEDGER_SLOT_BYTES_V2, FundingLedgerStatusV2, FundingLedgerV2,
 };
 use dclutch_market_core_codec::{
-    Action, CapabilityFundingHeaderV1, ChildEffectObservation, CoreEffectAckV1, CoreEffectActionV1,
-    CoreEffectEnvelopeV1, CoreState, Phase, Product, Readiness, Request, Role, TerminalReceipt,
-    admit_terminal, verify_readiness,
+    Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2, ChildEffectObservation,
+    CoreEffectAckV1, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Phase, Product,
+    Readiness, Request, Role, TerminalReceipt, admit_terminal, verify_readiness,
 };
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV2};
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V4, RESOLUTION_CORE_ROLE_REQUEST_BYTES,
-    RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1, ResolutionCertificateKindV2, ResolutionCertificateV2,
-    ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV1,
-    SOURCE_CLOSURE_RECEIPT_BYTES_V2, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
-    SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1, SourceClosureReceiptV2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V5, RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2,
+    RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    ResolutionCoreActionV1, ResolutionCoreReceiptKindV1, ResolutionRoleRequestV2,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
+    SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2, SourceClosureReceiptV3,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
-    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_V2_BYTES,
-    SOURCE_RESOLUTION_STATE_BYTES_V2, SourceMaterialV2, SourceResolutionPhaseV1,
+    RecoveryPolicyV2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES,
+    SOURCE_RESOLUTION_STATE_BYTES_V2, SourceMaterialV3, SourceResolutionPhaseV1,
     SourceResolutionStateV2,
 };
 use solana_program::{
@@ -44,60 +44,60 @@ use crate::{
 
 /// Exact Resolution role request after the 280-byte Core envelope.
 pub const RESOLUTION_ROLE_REQUEST_BYTES_V1: usize =
-    dclutch_market_core_codec::CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1
-        + RESOLUTION_CORE_ROLE_REQUEST_BYTES;
+    CAPABILITY_FUNDING_HEADER_BYTES_V2 + RESOLUTION_CORE_ROLE_REQUEST_BYTES_V2;
 /// Exact top-level Core data width for a Resolution child effect.
 pub const RESOLUTION_CORE_INSTRUCTION_BYTES_V1: usize = dclutch_market_core_codec::REQUEST_BYTES
     + dclutch_market_core_codec::CORE_EFFECT_ENVELOPE_BYTES_V1
     + RESOLUTION_ROLE_REQUEST_BYTES_V1;
 
 /// Exact outer account count for Source/Funding creation.
-pub const RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1: usize = 20;
+pub const RESOLUTION_CREATE_OUTER_ACCOUNT_COUNT_V1: usize = 18;
 /// Exact outer account count for Source/Funding readiness.
-pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 21;
+pub const RESOLUTION_VERIFY_OUTER_ACCOUNT_COUNT_V1: usize = 19;
 /// Exact child and outer account count for terminal admission, including the
 /// three Product Runtime V2 finalized record pairs reauthenticated by both
 /// Resolution and Core.
-pub const RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1: usize = 24;
+pub const RESOLUTION_ADMIT_CHILD_ACCOUNT_COUNT_V1: usize = 22;
 /// Exact outer account count for terminal admission.
-pub const RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1: usize = 24;
+pub const RESOLUTION_ADMIT_OUTER_ACCOUNT_COUNT_V1: usize = 22;
 /// Exact outer and child account count for Source/Funding close.
-pub const RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1: usize = 24;
+pub const RESOLUTION_CLOSE_OUTER_ACCOUNT_COUNT_V1: usize = 22;
 
 const SOURCE_MATERIAL: usize = 8;
 const SOURCE_MATERIAL_STAGING: usize = 9;
 const CAPABILITY_MANIFEST: usize = 10;
 const CAPABILITY_MANIFEST_STAGING: usize = 11;
 const SOURCE_STATE: usize = 12;
-const RECOVERY_FUNDING: usize = 13;
-const EXHAUSTION_FUNDING: usize = 14;
-const FAILURE_FUNDING: usize = 15;
+const FUNDING_LEDGER: usize = 13;
 
-const CREATE_RENT: usize = 16;
-const CREATE_SYSTEM: usize = 17;
-const CREATE_RECOVERY_POLICY: usize = 18;
-const CREATE_RECOVERY_POLICY_STAGING: usize = 19;
-const VERIFY_BENEFICIARY: usize = 16;
-const VERIFY_CLOCK: usize = 17;
-const VERIFY_RENT: usize = 18;
-const VERIFY_RECOVERY_POLICY: usize = 19;
-const VERIFY_RECOVERY_POLICY_STAGING: usize = 20;
-const ADMIT_CERTIFICATE: usize = 16;
-const ADMIT_RENT: usize = 17;
-const ADMIT_PRODUCT: usize = 18;
-const ADMIT_PRODUCT_STAGING: usize = 19;
-const ADMIT_RESULT_DOMAIN: usize = 20;
-const ADMIT_RESULT_DOMAIN_STAGING: usize = 21;
-const ADMIT_PORTFOLIO: usize = 22;
-const ADMIT_PORTFOLIO_STAGING: usize = 23;
-const CLOSE_CERTIFICATE: usize = 16;
-const CLOSE_CLOSURE: usize = 17;
-const CLOSE_BENEFICIARY: usize = 18;
-const CLOSE_CLOCK: usize = 19;
-const CLOSE_RENT: usize = 20;
-const CLOSE_SYSTEM: usize = 21;
-const CLOSE_RECOVERY_POLICY: usize = 22;
-const CLOSE_RECOVERY_POLICY_STAGING: usize = 23;
+const CREATE_RENT: usize = 14;
+const CREATE_SYSTEM: usize = 15;
+const CREATE_RECOVERY_POLICY: usize = 16;
+const CREATE_RECOVERY_POLICY_STAGING: usize = 17;
+const VERIFY_BENEFICIARY: usize = 14;
+const VERIFY_CLOCK: usize = 15;
+const VERIFY_RENT: usize = 16;
+const VERIFY_RECOVERY_POLICY: usize = 17;
+const VERIFY_RECOVERY_POLICY_STAGING: usize = 18;
+const ADMIT_CERTIFICATE: usize = 14;
+const ADMIT_RENT: usize = 15;
+const ADMIT_PRODUCT: usize = 16;
+const ADMIT_PRODUCT_STAGING: usize = 17;
+const ADMIT_RESULT_DOMAIN: usize = 18;
+const ADMIT_RESULT_DOMAIN_STAGING: usize = 19;
+const ADMIT_PORTFOLIO: usize = 20;
+const ADMIT_PORTFOLIO_STAGING: usize = 21;
+const CLOSE_CERTIFICATE: usize = 14;
+const CLOSE_CLOSURE: usize = 15;
+const CLOSE_BENEFICIARY: usize = 16;
+const CLOSE_CLOCK: usize = 17;
+const CLOSE_RENT: usize = 18;
+const CLOSE_SYSTEM: usize = 19;
+const CLOSE_RECOVERY_POLICY: usize = 20;
+const CLOSE_RECOVERY_POLICY_STAGING: usize = 21;
+
+const RESOLUTION_FUNDING_LEDGER_BYTES: usize =
+    FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
 
 /// Execute one exact Resolution child effect and commit any Core transition last.
 #[inline(never)]
@@ -112,21 +112,28 @@ pub(crate) fn process(
     if role_request.len() != RESOLUTION_ROLE_REQUEST_BYTES_V1 {
         return Err(CoreSbfError::Instruction.into());
     }
-    let funding_header = CapabilityFundingHeaderV1::decode(
+    let funding_header = CapabilityFundingHeaderV2::decode(
         role_request
-            .get(..dclutch_market_core_codec::CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1)
+            .get(..CAPABILITY_FUNDING_HEADER_BYTES_V2)
             .ok_or(CoreSbfError::Instruction)?,
     )
     .map_err(|_| CoreSbfError::Instruction)?;
-    if funding_header.funding_count() != 3 {
+    if funding_header.physical_count() != 1 || funding_header.logical_count() != 3 {
         return Err(CoreSbfError::Instruction.into());
     }
-    let resolution_request = ResolutionRoleRequestV1::decode(
+    let resolution_request = ResolutionRoleRequestV2::decode(
         role_request
-            .get(dclutch_market_core_codec::CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1..)
+            .get(CAPABILITY_FUNDING_HEADER_BYTES_V2..)
             .ok_or(CoreSbfError::Instruction)?,
     )
     .map_err(|_| CoreSbfError::Instruction)?;
+    if funding_header.selected_mask()
+        != resolution_request
+            .funding_entry_mask()
+            .map_err(|_| CoreSbfError::Funding)?
+    {
+        return Err(CoreSbfError::Instruction.into());
+    }
     authenticate_action(request, envelope, resolution_request)?;
     validate_outer_frame(program_id, accounts, resolution_request.action)?;
     let frame = FixedRoleAccountsV1::parse(program_id, accounts)?;
@@ -202,9 +209,9 @@ pub(crate) fn process(
             // `open_market` can refuse to open a Market whose Fund is not.
             // An atomically founded Market consumed its readiness at the
             // commit-last Open and has no such lane left to record into; the
-            // Fund's activation is owned by the three `FundingStateV1`
-            // accounts the child just moved to `Active`, and `AdmitTerminal`
-            // reauthenticates exactly those. Writing nothing here keeps one
+            // Fund's activation is owned by the three selected rows in the
+            // child-owned subset ledger, and `AdmitTerminal` reauthenticates
+            // exactly those. Writing nothing here keeps one
             // semantic owner for that fact instead of minting a second.
             if candidate.phase == Phase::Founding {
                 verify_readiness(
@@ -244,7 +251,7 @@ pub(crate) fn process(
 fn authenticate_action(
     request: Request,
     envelope: CoreEffectEnvelopeV1,
-    resolution: ResolutionRoleRequestV1,
+    resolution: ResolutionRoleRequestV2,
 ) -> Result<(), CoreSbfError> {
     let (top_level, effect) = match resolution.action {
         ResolutionCoreActionV1::CreateFund => {
@@ -291,22 +298,14 @@ fn authenticate_request_coordinates(
     frame: &FixedRoleAccountsV1<'_, '_>,
     state: CoreState,
     envelope: CoreEffectEnvelopeV1,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
 ) -> Result<(), CoreSbfError> {
     if request.source_state
-        != account(frame.child_accounts(16)?, SOURCE_STATE)?
+        != account(frame.child_accounts(14)?, SOURCE_STATE)?
             .key
             .to_bytes()
-        || request.recovery_funding
-            != account(frame.child_accounts(16)?, RECOVERY_FUNDING)?
-                .key
-                .to_bytes()
-        || request.exhaustion_funding
-            != account(frame.child_accounts(16)?, EXHAUSTION_FUNDING)?
-                .key
-                .to_bytes()
-        || request.failure_funding
-            != account(frame.child_accounts(16)?, FAILURE_FUNDING)?
+        || request.funding_ledger
+            != account(frame.child_accounts(14)?, FUNDING_LEDGER)?
                 .key
                 .to_bytes()
         || request.source_material != state.identity.resolution_policy.to_bytes()
@@ -377,12 +376,11 @@ fn authenticate_request_coordinates(
 /// its own Resolution Fund at all, which made every atomically founded Market
 /// permanently unresolvable.
 ///
-/// Admitting the second prestate defers physical creation, not authority.
-/// Every byte `CreateFund` writes is a function of the Market's immutable
-/// identity and its capability manifest, and that manifest is one of the seeds
-/// of the Market's own address — so the resolution capability is precommitted
-/// before the Market exists, and its accounts are prepaid before they are
-/// created. Nothing here is a caller choice.
+/// Admitting the second prestate defers only Source-state creation, not
+/// authority. The capability manifest is an immutable seed of the Market
+/// address, and the Resolution subset ledger already exists before Market
+/// Found. `CreateFund` writes only the prepaid Source destination and
+/// authenticates the ledger byte-for-byte. Nothing here is a caller choice.
 ///
 /// A Market that has already minted a terminal receipt is refused from both
 /// directions. `Terminal`, `Retiring` and `Retired` are excluded by phase, and
@@ -432,19 +430,14 @@ fn validate_outer_frame(
         }
     }
     let expected_writable = match action {
-        ResolutionCoreActionV1::CreateFund => [true, true, true, true],
-        ResolutionCoreActionV1::VerifyFundReady => [false, true, true, true],
-        ResolutionCoreActionV1::AdmitTerminal => [false, false, false, false],
-        ResolutionCoreActionV1::CloseFund => [true, true, true, true],
+        ResolutionCoreActionV1::CreateFund => [true, false],
+        ResolutionCoreActionV1::VerifyFundReady => [false, true],
+        ResolutionCoreActionV1::AdmitTerminal => [false, false],
+        ResolutionCoreActionV1::CloseFund => [true, true],
     };
-    for (index, writable) in [
-        SOURCE_STATE,
-        RECOVERY_FUNDING,
-        EXHAUSTION_FUNDING,
-        FAILURE_FUNDING,
-    ]
-    .into_iter()
-    .zip(expected_writable)
+    for (index, writable) in [SOURCE_STATE, FUNDING_LEDGER]
+        .into_iter()
+        .zip(expected_writable)
     {
         let value = account(accounts, index)?;
         if value.is_writable != writable || value.executable {
@@ -524,7 +517,7 @@ fn validate_outer_frame(
 fn authenticate_recovery_policy(
     frame: &FixedRoleAccountsV1<'_, '_>,
     accounts: &[AccountInfo<'_>],
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
     action: ResolutionCoreActionV1,
 ) -> Result<(), CoreSbfError> {
     let (policy_index, staging_index) = recovery_policy_indices(action)?;
@@ -533,7 +526,7 @@ fn authenticate_recovery_policy(
     let material_data = material_account
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if material_data.len() != SOURCE_MATERIAL_V2_BYTES {
+    if material_data.len() != SOURCE_MATERIAL_V3_BYTES {
         return Err(CoreSbfError::Reference);
     }
     authenticate_finalized_record(
@@ -541,11 +534,11 @@ fn authenticate_recovery_policy(
         material_account,
         account(accounts, SOURCE_MATERIAL_STAGING)?,
         &rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
         &material_data,
     )?;
-    let material = SourceMaterialV2::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
+    let material = SourceMaterialV3::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
     // A material either bought an ordered recovery walk or it did not, and the
     // two shapes authenticate differently on purpose. `Some` is the original
     // path, byte for byte. `None` is the §12.7/§12.8 no-recovery market — the
@@ -623,7 +616,7 @@ fn authenticate_recovery_policy(
                     .entry(entry_index)
                     .map_err(|_| CoreSbfError::Funding)?;
                 if entry.config_id().to_bytes() != expected_config
-                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
+                    || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
                 {
                     return Err(CoreSbfError::Funding);
                 }
@@ -647,7 +640,7 @@ fn authenticate_recovery_policy(
 #[inline(never)]
 fn authenticate_no_recovery_entries(
     manifest: CapabilityManifestV1<'_>,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
 ) -> Result<(), CoreSbfError> {
     if request.recovery_entry_index == request.exhaustion_entry_index
         || request.recovery_entry_index == request.failure_entry_index
@@ -667,7 +660,7 @@ fn authenticate_no_recovery_entries(
         let entry = manifest
             .entry(entry_index)
             .map_err(|_| CoreSbfError::Funding)?;
-        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
             return Err(CoreSbfError::Funding);
         }
         if let Some(config) = configs.get_mut(slot) {
@@ -725,6 +718,10 @@ struct CloseProjection {
     source_state_digest: [u8; 32],
     terminal_certificate_digest: [u8; 32],
     funding_set_digest: [u8; 32],
+    source_refund_lamports: u64,
+    ledger_remaining_native_principal: u64,
+    ledger_rent_lamports: u64,
+    ledger_lamport_surplus: u64,
 }
 
 #[inline(never)]
@@ -732,7 +729,7 @@ fn authenticate_close_prestate(
     frame: &FixedRoleAccountsV1<'_, '_>,
     accounts: &[AccountInfo<'_>],
     state: CoreState,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
 ) -> Result<CloseProjection, CoreSbfError> {
     let rent = read_rent(account(accounts, CLOSE_RENT)?)?;
     authenticate_live_poststate(
@@ -742,6 +739,7 @@ fn authenticate_close_prestate(
         request,
         ResolutionCoreActionV1::AdmitTerminal,
         &rent,
+        true,
     )?;
     let source = account(accounts, SOURCE_STATE)?
         .try_borrow_data()
@@ -779,25 +777,40 @@ fn authenticate_close_prestate(
     {
         return Err(CoreSbfError::Reference);
     }
-    let recovery = account(accounts, RECOVERY_FUNDING)?
+    let funding_ledger = account(accounts, FUNDING_LEDGER)?
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Reference)?;
-    let exhaustion = account(accounts, EXHAUSTION_FUNDING)?
+    let manifest_data = account(accounts, CAPABILITY_MANIFEST)?
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Reference)?;
-    let failure = account(accounts, FAILURE_FUNDING)?
-        .try_borrow_data()
-        .map_err(|_| CoreSbfError::Reference)?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| CoreSbfError::Funding)?;
+    let manifest_id =
+        CapabilityContentId::new(request.capability_manifest).map_err(|_| CoreSbfError::Funding)?;
+    let authenticated = FundingLedgerV2::decode(&funding_ledger)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .map_err(|_| CoreSbfError::Funding)?;
+    let ledger_remaining_native_principal = authenticated
+        .remaining_native_lamports_total()
+        .map_err(|_| CoreSbfError::Funding)?;
+    let ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES);
+    let ledger_lamport_surplus = account(accounts, FUNDING_LEDGER)?
+        .lamports()
+        .checked_sub(
+            ledger_rent_lamports
+                .checked_add(ledger_remaining_native_principal)
+                .ok_or(CoreSbfError::Arithmetic)?,
+        )
+        .ok_or(CoreSbfError::Funding)?;
     Ok(CloseProjection {
         source_state_digest: solana_program::hash::hash(&source).to_bytes(),
         terminal_certificate_digest: solana_program::hash::hash(&certificate).to_bytes(),
-        funding_set_digest: hashv(&[
-            SOURCE_FUNDING_SET_DIGEST_DOMAIN_V1,
-            &recovery,
-            &exhaustion,
-            &failure,
-        ])
-        .to_bytes(),
+        funding_set_digest: hashv(&[SOURCE_FUNDING_SET_DIGEST_DOMAIN_V2, &funding_ledger])
+            .to_bytes(),
+        source_refund_lamports: account(accounts, SOURCE_STATE)?.lamports(),
+        ledger_remaining_native_principal,
+        ledger_rent_lamports,
+        ledger_lamport_surplus,
     })
 }
 
@@ -806,7 +819,7 @@ fn authenticate_admit_projection(
     frame: &FixedRoleAccountsV1<'_, '_>,
     accounts: &[AccountInfo<'_>],
     state: CoreState,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
 ) -> Result<AdmitProjection, CoreSbfError> {
     let rent = read_rent(account(accounts, ADMIT_RENT)?)?;
     let registry = frame.registry().key;
@@ -814,7 +827,7 @@ fn authenticate_admit_projection(
     let material_data = material_account
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    if material_data.len() != SOURCE_MATERIAL_V2_BYTES {
+    if material_data.len() != SOURCE_MATERIAL_V3_BYTES {
         return Err(CoreSbfError::Reference);
     }
     authenticate_finalized_record(
@@ -822,11 +835,11 @@ fn authenticate_admit_projection(
         material_account,
         account(accounts, SOURCE_MATERIAL_STAGING)?,
         &rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
         &material_data,
     )?;
-    let material = SourceMaterialV2::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
+    let material = SourceMaterialV3::decode(&material_data).map_err(|_| CoreSbfError::Reference)?;
 
     let runtime = authenticate_selected_runtime_v2(
         registry,
@@ -919,7 +932,7 @@ fn authenticate_terminal_certificate(
     resolution_program: &Pubkey,
     source_account: &AccountInfo<'_>,
     certificate_account: &AccountInfo<'_>,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
     state: CoreState,
     selector: u32,
     outcome_count: u32,
@@ -985,7 +998,7 @@ fn authenticate_poststate(
     frame: &FixedRoleAccountsV1<'_, '_>,
     accounts: &[AccountInfo<'_>],
     state: CoreState,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
     acknowledgement: CoreEffectAckV1,
     close_projection: Option<CloseProjection>,
 ) -> Result<(), CoreSbfError> {
@@ -1003,20 +1016,14 @@ fn authenticate_poststate(
             let closure = account(accounts, CLOSE_CLOSURE)?
                 .try_borrow_data()
                 .map_err(|_| CoreSbfError::ChildAck)?;
-            resolution_poststate_digest(request.action, &closure, &[], &[], &[], None)?
+            resolution_poststate_digest(request.action, &closure, &[], None)?
         }
         action => {
-            authenticate_live_poststate(frame, accounts, state, request, action, &rent)?;
+            authenticate_live_poststate(frame, accounts, state, request, action, &rent, false)?;
             let source = account(accounts, SOURCE_STATE)?
                 .try_borrow_data()
                 .map_err(|_| CoreSbfError::ChildAck)?;
-            let recovery = account(accounts, RECOVERY_FUNDING)?
-                .try_borrow_data()
-                .map_err(|_| CoreSbfError::ChildAck)?;
-            let exhaustion = account(accounts, EXHAUSTION_FUNDING)?
-                .try_borrow_data()
-                .map_err(|_| CoreSbfError::ChildAck)?;
-            let failure = account(accounts, FAILURE_FUNDING)?
+            let funding_ledger = account(accounts, FUNDING_LEDGER)?
                 .try_borrow_data()
                 .map_err(|_| CoreSbfError::ChildAck)?;
             let certificate = if action == ResolutionCoreActionV1::AdmitTerminal {
@@ -1031,9 +1038,7 @@ fn authenticate_poststate(
             resolution_poststate_digest(
                 action,
                 &source,
-                &recovery,
-                &exhaustion,
-                &failure,
+                &funding_ledger,
                 certificate.as_ref().map(|bytes| bytes.as_ref()),
             )?
         }
@@ -1050,9 +1055,10 @@ fn authenticate_live_poststate(
     frame: &FixedRoleAccountsV1<'_, '_>,
     accounts: &[AccountInfo<'_>],
     state: CoreState,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
     action: ResolutionCoreActionV1,
     rent: &Rent,
+    admit_donations: bool,
 ) -> Result<(), CoreSbfError> {
     let source_account = account(accounts, SOURCE_STATE)?;
     if source_account.owner != frame.target_program().key
@@ -1100,49 +1106,65 @@ fn authenticate_live_poststate(
     let manifest_id =
         CapabilityContentId::new(request.capability_manifest).map_err(|_| CoreSbfError::Funding)?;
     let expected_status = if action == ResolutionCoreActionV1::CreateFund {
-        FundingStatus::Pending
+        FundingLedgerStatusV2::Pending
     } else {
-        FundingStatus::Active
+        FundingLedgerStatusV2::Active
     };
-    for (index, entry_index) in [
-        (RECOVERY_FUNDING, request.recovery_entry_index),
-        (EXHAUSTION_FUNDING, request.exhaustion_entry_index),
-        (FAILURE_FUNDING, request.failure_entry_index),
+    let funding_account = account(accounts, FUNDING_LEDGER)?;
+    if funding_account.owner != frame.target_program().key
+        || funding_account.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES
+    {
+        return Err(CoreSbfError::ChildAck);
+    }
+    let funding_data = funding_account
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::ChildAck)?;
+    let ledger = FundingLedgerV2::decode(&funding_data).map_err(|_| CoreSbfError::Funding)?;
+    if ledger.selected_mask()
+        != request
+            .funding_entry_mask()
+            .map_err(|_| CoreSbfError::Funding)?
+        || ledger.slot_count() != 3
+    {
+        return Err(CoreSbfError::Funding);
+    }
+    let authenticated = ledger
+        .authenticate(manifest_id, manifest)
+        .map_err(|_| CoreSbfError::Funding)?;
+    for entry_index in [
+        request.recovery_entry_index,
+        request.exhaustion_entry_index,
+        request.failure_entry_index,
     ] {
-        let funding_account = account(accounts, index)?;
-        if funding_account.owner != frame.target_program().key
-            || funding_account.data_len() != FUNDING_STATE_BYTES
-        {
-            return Err(CoreSbfError::ChildAck);
-        }
-        let funding_data = funding_account
-            .try_borrow_data()
-            .map_err(|_| CoreSbfError::ChildAck)?;
-        let funding = FundingStateV1::decode(&funding_data).map_err(|_| CoreSbfError::Funding)?;
-        if funding.entry_index() != entry_index || funding.status() != expected_status {
-            return Err(CoreSbfError::ChildAck);
-        }
-        let custody = FundingCustodyObservationV1::native_only(
-            funding_account.lamports(),
-            rent.minimum_balance(FUNDING_STATE_BYTES),
-        )
-        .map_err(|_| CoreSbfError::Funding)?;
-        funding
-            .validate_against(manifest_id, manifest, custody)
+        let slot = authenticated
+            .slot(entry_index)
             .map_err(|_| CoreSbfError::Funding)?;
-        let derivation = CapabilityFundingDerivationV1::new(
-            frame.market().key.to_bytes(),
-            state.identity.generation,
-            manifest_id,
-            manifest,
-            funding,
+        if slot.status() != expected_status
+            || slot.remaining().realm_collateral_total() != 0
+            || slot.released().realm_collateral_total() != 0
+        {
+            return Err(CoreSbfError::ChildAck);
+        }
+    }
+    authenticated
+        .validate_native_custody(
+            funding_account.lamports(),
+            rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES),
+            admit_donations,
         )
         .map_err(|_| CoreSbfError::Funding)?;
-        if Pubkey::find_program_address(&derivation.seed_components(), frame.target_program().key).0
-            != *funding_account.key
-        {
-            return Err(CoreSbfError::Funding);
-        }
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        frame.target_program().key.to_bytes(),
+        frame.market().key.to_bytes(),
+        state.identity.generation,
+        manifest_id,
+        ledger,
+    )
+    .map_err(|_| CoreSbfError::Funding)?;
+    if Pubkey::find_program_address(&derivation.seed_components(), frame.target_program().key).0
+        != *funding_account.key
+    {
+        return Err(CoreSbfError::Funding);
     }
     Ok(())
 }
@@ -1151,16 +1173,11 @@ fn authenticate_close_poststate(
     frame: &FixedRoleAccountsV1<'_, '_>,
     accounts: &[AccountInfo<'_>],
     state: CoreState,
-    request: ResolutionRoleRequestV1,
+    request: ResolutionRoleRequestV2,
     prestate: CloseProjection,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
-    for index in [
-        SOURCE_STATE,
-        RECOVERY_FUNDING,
-        EXHAUSTION_FUNDING,
-        FAILURE_FUNDING,
-    ] {
+    for index in [SOURCE_STATE, FUNDING_LEDGER] {
         let value = account(accounts, index)?;
         let data = value
             .try_borrow_data()
@@ -1178,13 +1195,13 @@ fn authenticate_close_poststate(
         .map_err(|_| CoreSbfError::ChildAck)?;
     if closure_account.owner != frame.target_program().key
         || closure_account.key.to_bytes() != request.receipt
-        || closure_account.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES_V2
-        || !rent.is_exempt(closure_account.lamports(), SOURCE_CLOSURE_RECEIPT_BYTES_V2)
+        || closure_account.data_len() != SOURCE_CLOSURE_RECEIPT_BYTES_V3
+        || !rent.is_exempt(closure_account.lamports(), SOURCE_CLOSURE_RECEIPT_BYTES_V3)
     {
         return Err(CoreSbfError::ChildAck);
     }
     let closure =
-        SourceClosureReceiptV2::decode(&closure_data).map_err(|_| CoreSbfError::ChildAck)?;
+        SourceClosureReceiptV3::decode(&closure_data).map_err(|_| CoreSbfError::ChildAck)?;
     let terminal_receipt = state
         .terminal_receipt
         .ok_or(CoreSbfError::Transition)?
@@ -1206,13 +1223,17 @@ fn authenticate_close_poststate(
         || closure.source_state_digest != prestate.source_state_digest
         || closure.terminal_certificate_digest != prestate.terminal_certificate_digest
         || closure.funding_set_digest != prestate.funding_set_digest
+        || closure.source_refund_lamports != prestate.source_refund_lamports
+        || closure.ledger_remaining_native_principal != prestate.ledger_remaining_native_principal
+        || closure.ledger_rent_lamports != prestate.ledger_rent_lamports
+        || closure.ledger_lamport_surplus != prestate.ledger_lamport_surplus
     {
         return Err(CoreSbfError::ChildAck);
     }
     let sequence = request.receipt_sequence.to_le_bytes();
     if Pubkey::find_program_address(
         &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
             account(accounts, SOURCE_STATE)?.key.as_ref(),
             &sequence,
         ],
@@ -1251,9 +1272,7 @@ fn authenticate_source_state(
 fn resolution_poststate_digest(
     action: ResolutionCoreActionV1,
     source_or_closure: &[u8],
-    recovery: &[u8],
-    exhaustion: &[u8],
-    failure: &[u8],
+    funding_ledger: &[u8],
     certificate: Option<&[u8]>,
 ) -> Result<dclutch_market_core_codec::Identity, CoreSbfError> {
     let action_tag = [match action {
@@ -1264,19 +1283,17 @@ fn resolution_poststate_digest(
     }];
     nonzero_identity(
         hashv(&[
-            RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V1,
+            RESOLUTION_POSTSTATE_DIGEST_DOMAIN_V2,
             &action_tag,
             source_or_closure,
-            recovery,
-            exhaustion,
-            failure,
+            funding_ledger,
             certificate.unwrap_or(&[]),
         ])
         .to_bytes(),
     )
 }
 
-fn ack_revisions_match(acknowledgement: CoreEffectAckV1, request: ResolutionRoleRequestV1) -> bool {
+fn ack_revisions_match(acknowledgement: CoreEffectAckV1, request: ResolutionRoleRequestV2) -> bool {
     match request.action {
         ResolutionCoreActionV1::CreateFund => {
             acknowledgement.pre_resource_a_revision() == 0
@@ -1360,4 +1377,4 @@ fn account<'accounts, 'info>(
     accounts.get(index).ok_or(CoreSbfError::AccountFrame)
 }
 
-const _: usize = SOURCE_MATERIAL_V2_BYTES;
+const _: usize = SOURCE_MATERIAL_V3_BYTES;

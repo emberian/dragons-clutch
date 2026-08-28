@@ -1450,6 +1450,7 @@ mod tests {
                 generation: 1,
             },
             outstanding_capabilities: 1,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: semantic_id(16)?,
             terminal_receipt: None,
         })

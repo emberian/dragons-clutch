@@ -55,6 +55,20 @@ def main : IO Unit := do
   IO.println s!"pub const CAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b\"{fundingAuthorityPdaDomain}\";"
   IO.println s!"pub const CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1: &[u8] = b\"{fundingVaultPdaDomain}\";"
 
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_MAGIC_V2: [u8; 8] = *b\"{fundingLedgerMagicV2}\";"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_SCHEMA_VERSION_V2: u16 = {fundingLedgerSchemaVersionV2};"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_HEADER_BYTES_V2: usize = {ledgerHeaderBytesV2};"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_SLOT_BYTES_V2: usize = {ledgerSlotBytesV2};"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_HEADER_RESERVED_BYTES_V2: usize = {ledgerHeaderReservedBytesV2};"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_SLOT_RESERVED_BYTES_V2: usize = {ledgerSlotReservedBytesV2};"
+  for field in ledgerHeaderLayoutV2 do
+    IO.println s!"pub const {LedgerHeaderFieldV2.constantName field.spec.name}: usize = {field.offset};"
+  for field in ledgerSlotLayoutV2 do
+    IO.println s!"pub const {LedgerSlotFieldV2.constantName field.spec.name}: usize = {field.offset};"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2: &[u8] = b\"{fundingLedgerPdaDomainV2}\";"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2: &[u8] = b\"{fundingLedgerAuthorityPdaDomainV2}\";"
+  IO.println s!"pub const CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2: &[u8] = b\"{fundingLedgerVaultPdaDomainV2}\";"
+
   IO.println s!"pub const MARKET_OPENING_READINESS_MAGIC_V1: [u8; 8] = *b\"{readinessMagic}\";"
   IO.println s!"pub const MARKET_OPENING_READINESS_SCHEMA_VERSION_V1: u16 = {readinessSchemaVersion};"
   IO.println s!"pub const MARKET_OPENING_READINESS_BYTES_V1: usize = {readinessBytes};"

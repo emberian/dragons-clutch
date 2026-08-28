@@ -8,6 +8,15 @@ import {
 } from '@solana/web3.js';
 
 import { ascii, hex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import {
+  CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
+  CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_VERSION,
+} from './generated/coreFound';
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import { deriveFinalizedRecordAddressesV1, SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
@@ -24,7 +33,6 @@ export const TOKEN_2022_BEHAVIOR_PROFILE_ID_V2 = Uint8Array.from([
 ]);
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
-const CORE_STATE_BYTES_V2 = 352;
 const TOKEN_ACCOUNT_BYTES = 165;
 const TOKEN_MINT_BASE_BYTES = 82;
 const TOKEN_MINT_TLV_OFFSET = 166;
@@ -267,14 +275,17 @@ export function decodeToken2022BehaviorAccountV2(address: string, account: RpcAc
   return Object.freeze({ address, mint, owner, rawAmount: u64(bytes, 64) });
 }
 
-function decodeCoreMarket(bytes: Uint8Array): Readonly<{
+export function decodeRationalTokenCoreMarketV2(bytes: Uint8Array): Readonly<{
   phase: BearerTransferInspectionV2['marketPhase'];
   realmId: Uint8Array;
   releaseSet: Uint8Array;
   registryProgram: string;
   generation: bigint;
+  principalCapSets: bigint;
 }> {
-  if (bytes.length !== CORE_STATE_BYTES_V2 || ascii(bytes, 0, 8) !== 'DCLTCOR2' || u16(bytes, 8) !== 2) {
+  if (bytes.length !== CORE_STATE_BYTES
+      || ascii(bytes, 0, 8) !== ascii(CORE_STATE_MAGIC, 0, 8)
+      || u16(bytes, CORE_STATE_VERSION_OFFSET) !== CORE_VERSION) {
     throw new Error('Market is not the exact CoreStateV2 ABI');
   }
   const phases = ['Founding', 'Open', 'Terminal', 'Retiring', 'Retired'] as const;
@@ -288,9 +299,13 @@ function decodeCoreMarket(bytes: Uint8Array): Readonly<{
     ['Market identity', slice(bytes, 16, 32)], ['Realm identity', realmId], ['Product record', slice(bytes, 80, 32)],
     ['Product identity', slice(bytes, 112, 32)], ['resolution policy', slice(bytes, 144, 32)],
     ['capability manifest', slice(bytes, 176, 32)], ['release set', releaseSet], ['Registry program', registryBytes],
-    ['rent beneficiary', slice(bytes, 288, 32)],
+    ['rent beneficiary', slice(bytes, CORE_STATE_RENT_BENEFICIARY_OFFSET, 32)],
   ] as const) requireNonzero(value, field);
-  const terminalReceipt = slice(bytes, 320, 32);
+  const principalCapSets = u64(bytes, CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET);
+  if (principalCapSets === 0n) {
+    throw new Error('Market principal cap is absent');
+  }
+  const terminalReceipt = slice(bytes, CORE_STATE_TERMINAL_RECEIPT_OFFSET, 32);
   const terminalWinner = new DataView(bytes.buffer, bytes.byteOffset + 12, 4).getUint32(0, true);
   const outstanding = u64(bytes, 280);
   const foundingValid = phase === 'Founding' && readiness !== 2 && terminalWinner === 0 && isZero(terminalReceipt);
@@ -298,7 +313,14 @@ function decodeCoreMarket(bytes: Uint8Array): Readonly<{
   const terminalValid = (phase === 'Terminal' || phase === 'Retiring') && readiness === 2 && !isZero(terminalReceipt);
   const retiredValid = phase === 'Retired' && readiness === 2 && !isZero(terminalReceipt) && outstanding === 0n;
   if (!foundingValid && !openValid && !terminalValid && !retiredValid) throw new Error('Market CoreStateV2 lifecycle invariants do not hold');
-  return Object.freeze({ phase, realmId, releaseSet, registryProgram: new PublicKey(registryBytes).toBase58(), generation: u64(bytes, 272) });
+  return Object.freeze({
+    phase,
+    realmId,
+    releaseSet,
+    registryProgram: new PublicKey(registryBytes).toBase58(),
+    generation: u64(bytes, 272),
+    principalCapSets,
+  });
 }
 
 function decodeLookupTable(address: string, account: RpcAccount): AddressLookupTableAccount {
@@ -332,7 +354,7 @@ export async function inspectBearerTransferV2(
   if (BigInt(marketObservation.slot) < BigInt(floor)) throw new Error('Market observation regressed below the finalized floor');
   const marketAccount = required(marketObservation.account, 'Market');
   if (marketAccount.owner !== input.coreProgram || marketAccount.executable) throw new Error('Market is not nonexecutable state owned by the selected Core program');
-  const market = decodeCoreMarket(marketAccount.data);
+  const market = decodeRationalTokenCoreMarketV2(marketAccount.data);
   const selectionBytes = encodeTokenBehaviorSelectionV2(market.realmId, market.releaseSet);
   const selectionDigest = await sha256(selectionBytes);
   const selectionAddresses = deriveFinalizedRecordAddressesV1(market.registryProgram, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, selectionDigest);

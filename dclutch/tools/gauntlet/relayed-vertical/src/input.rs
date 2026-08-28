@@ -13,11 +13,11 @@ mod relayed;
 use dclutch_relay_contract::release::AccountSetEntryV1;
 use solana_sdk::pubkey::Pubkey;
 
+use relayed::RelayedVenueFactsV1;
 pub(crate) use relayed::{
     DISCLOSED_FAILURE_CONFLATION, RelayedMarketFactsV1, WALK_BOUNTY_LAMPORTS, WindowChoiceV1,
     window_choice,
 };
-use relayed::RelayedVenueFactsV1;
 
 use crate::Result;
 use crate::twin;

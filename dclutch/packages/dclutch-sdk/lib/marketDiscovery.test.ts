@@ -15,6 +15,13 @@ import {
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+  CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
+  CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_VERSION,
   LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET,
   LIABILITY_BASIS_MARKET_GENERATION_OFFSET,
   LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET,
@@ -23,13 +30,14 @@ import {
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 /**
- * Discovery, checked against the chain the campaign actually produced.
+ * Discovery joins historical finalized companion records to a parser-only
+ * current Core body.
  *
- * Every account below is finalized bytes read off a live successor validator.
- * The Market is `DCLTCOR2`; its liabilities are in a Claims-owned aggregate;
- * its Realm is a finalized Registry record. Adversarial cases mutate one field
- * of the real bytes, so the only thing wrong with the input is the thing the
- * case is about.
+ * The 352-byte Market fixture is retained only to prove this generation refuses
+ * it. `CURRENT_MARKET_DATA` moves its stable identity prefix into the generated
+ * 360-byte layout and supplies a nonzero test cap. It is unit-test input, never
+ * external evidence of a post-upgrade Market. The Claims and Registry records
+ * remain verbatim finalized bytes from the earlier campaign.
  */
 
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
@@ -38,6 +46,18 @@ const REGISTRY = LIVE.programs.registry;
 const CLAIMS = LIVE.programs.claims;
 const CUSTODY = LIVE.programs.custody;
 const SLOT = '99';
+
+const CURRENT_MARKET_DATA = (() => {
+  const bytes = new Uint8Array(CORE_STATE_BYTES);
+  bytes.set(LIVE.market.data.slice(0, CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET));
+  bytes.set(CORE_STATE_MAGIC, 0);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(CORE_STATE_VERSION_OFFSET, CORE_VERSION, true);
+  view.setBigUint64(CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET, 500_000_000n, true);
+  bytes.set(LIVE.market.data.slice(288, 320), CORE_STATE_RENT_BENEFICIARY_OFFSET);
+  bytes.set(LIVE.market.data.slice(320, 352), CORE_STATE_TERMINAL_RECEIPT_OFFSET);
+  return bytes;
+})();
 
 function client(
   accounts: ReadonlyMap<string, RpcAccount>,
@@ -97,7 +117,7 @@ async function liveFoundingNamespace(): Promise<Uint8Array> {
 /** The whole finalized graph the campaign left behind. */
 async function liveChain(): Promise<Map<string, RpcAccount>> {
   const accounts = new Map<string, RpcAccount>([
-    [LIVE.market.address, liveRpcAccount(LIVE.market)],
+    [LIVE.market.address, liveRpcAccount(LIVE.market, { data: CURRENT_MARKET_DATA })],
     [LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate)],
   ]);
   const realm = await recordAddresses(REALM_SCHEMA_RELEASE_ID_V1, LIVE.realmRecord.data);
@@ -106,7 +126,16 @@ async function liveChain(): Promise<Map<string, RpcAccount>> {
 }
 
 describe('Market discovery cards', () => {
-  it('decodes the live Open Market, its Claims liabilities and its Realm record', async () => {
+  it('refuses the superseded finalized Market generation explicitly', async () => {
+    const discovery = await inspectMarketDiscoveryV1(
+      client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market)]])),
+      { coreProgramId: CORE, addresses: [LIVE.market.address] },
+    );
+    expect(discovery.cards[0]).toMatchObject({ status: 'refused' });
+    expect(discovery.cards[0].refusal).toMatch(/older devnet Market generation is incompatible/);
+  });
+
+  it('decodes a current parser body with the historical Claims and Realm records', async () => {
     const discovery = await inspectMarketDiscoveryV1(client(await liveChain()), {
       coreProgramId: CORE,
       registryProgramId: REGISTRY,
@@ -121,9 +150,10 @@ describe('Market discovery cards', () => {
     expect(card.readiness).toBe('Consumed');
     expect(card.generation).toBe('2');
     expect(card.outstandingCapabilities).toBe('0');
+    expect(card.principalCapSets).toBe('500000000');
     expect(card.settlement).toEqual({ status: 'open', label: 'no terminal receipt' });
-    expect(card.identity.schemaMagic).toBe('DCLTCOR2');
-    expect(card.identity.accountBytes).toBe(352);
+    expect(card.identity.schemaMagic).toBe('DCLTCOR3');
+    expect(card.identity.accountBytes).toBe(360);
     expect(card.identity.registryProgram).toBe(REGISTRY);
     expect(provenanceChipV1(card.provenance)).toBe(`CHAIN · finalized slot ${SLOT}`);
 
@@ -294,16 +324,16 @@ describe('Market discovery cards', () => {
     expect(absent.cards[0].refusal).toMatch(/absent at the finalized observation floor/);
     expect(provenanceChipV1(absent.cards[0].provenance)).toBe('REFUSED');
 
-    const foreign = await inspectMarketDiscoveryV1(client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market, { owner: SYSTEM_PROGRAM })]])), {
+    const foreign = await inspectMarketDiscoveryV1(client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market, { owner: SYSTEM_PROGRAM, data: CURRENT_MARKET_DATA })]])), {
       coreProgramId: CORE, addresses: [LIVE.market.address],
     });
     expect(foreign.cards[0].refusal).toMatch(/owner differs from the selected Core program/);
 
-    const truncated = LIVE.market.data.slice(0, LIVE.market.data.length - 1);
+    const truncated = CURRENT_MARKET_DATA.slice(0, CURRENT_MARKET_DATA.length - 1);
     const damaged = await inspectMarketDiscoveryV1(client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market, { data: truncated })]])), {
       coreProgramId: CORE, addresses: [LIVE.market.address],
     });
-    expect(damaged.cards[0].refusal).toMatch(/the exact width is 352/);
+    expect(damaged.cards[0].refusal).toMatch(/the exact current width is 360/);
   });
 
   it('refuses a Realm record whose bytes do not hash to the committed identity', async () => {
@@ -330,11 +360,11 @@ describe('Market discovery cards', () => {
 
 describe('Market enumeration', () => {
   it('recognizes the live Core Market header and nothing else', () => {
-    expect(isCoreMarketHeaderV2(LIVE.market.data)).toBe(true);
+    expect(isCoreMarketHeaderV2(CURRENT_MARKET_DATA)).toBe(true);
     expect(isCoreMarketHeaderV2(LIVE.claimsAggregate.data)).toBe(false);
     expect(isCoreMarketHeaderV2(LIVE.realmRecord.data)).toBe(false);
     // The superseded categorical Market layout is not a live Market header.
-    const categorical = new Uint8Array(352);
+    const categorical = new Uint8Array(CORE_STATE_BYTES);
     categorical.set(new TextEncoder().encode('DCLTCAT1'));
     expect(isCoreMarketHeaderV2(categorical)).toBe(false);
   });
@@ -342,13 +372,13 @@ describe('Market enumeration', () => {
   it('lists only Market-headered Core accounts from a bounded finalized scan', async () => {
     const enumeration = await enumerateCoreMarketAddressesV1(client(new Map(), {
       headers: [
-        [LIVE.market.address, LIVE.market.data.slice(0, 16)],
+        [LIVE.market.address, CURRENT_MARKET_DATA.slice(0, 16)],
         [LIVE.claimsAggregate.address, LIVE.claimsAggregate.data.slice(0, 16)],
       ],
     }), CORE);
     expect(enumeration.mode).toBe('program-scan');
     expect(enumeration.addresses).toEqual([LIVE.market.address]);
-    expect(enumeration.note).toMatch(/2 finalized Core accounts at slot 99; 1 carry the DCLTCOR2 Market header/);
+    expect(enumeration.note).toMatch(/2 finalized Core accounts at slot 99; 1 carry the DCLTCOR3 Market header/);
   });
 
   it('reports the indexer-shaped gap when getProgramAccounts is unavailable', async () => {

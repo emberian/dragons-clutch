@@ -28,9 +28,9 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    PROJECTED_CUSTODY_STATE_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    PROJECTED_CUSTODY_STATE_BYTES_V2, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
     ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
-    ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+    ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, Request, Role, SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1,
@@ -67,7 +67,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use crate::{
     CoreSbfError,
     found::{self, PreparedFound},
-    frame::{FOUND_ACCOUNT_COUNT_V2, FoundAccounts, require_distinct},
+    frame::{FOUND_ACCOUNT_COUNT_V3, FoundAccounts, require_distinct},
     generic_founding_v1::{
         GenericFoundingPermitInputV1, GenericFoundingPermitPlanV1,
         build_permit_plan as build_generic_permit_plan, create_permit as create_generic_permit,
@@ -77,7 +77,7 @@ use crate::{
 };
 
 /// Fixed account count before the ordered FundingState prefix and Claims suffix.
-pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V2 + 11;
+pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V3 + 11;
 /// Exact evidence suffix after the ordered FundingState accounts for Found.
 pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
 const MAXIMUM_FUNDING_STATES_V1: usize = 16;
@@ -183,24 +183,24 @@ impl<'accounts, 'info> SeriesConsumeAccounts<'accounts, 'info> {
             return Err(CoreSbfError::AccountFrame);
         }
         let found_slice = accounts
-            .get(..FOUND_ACCOUNT_COUNT_V2)
+            .get(..FOUND_ACCOUNT_COUNT_V3)
             .ok_or(CoreSbfError::AccountFrame)?;
         let fixed = accounts
             .get(..SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1)
             .ok_or(CoreSbfError::AccountFrame)?;
         require_distinct(fixed)?;
         let found = FoundAccounts::parse(program_id, found_slice)?;
-        let trading_program = account(accounts, 31)?;
-        let trading_programdata = account(accounts, 32)?;
-        let root = account(accounts, 33)?;
-        let ticket_state = account(accounts, 34)?;
-        let template_raw = account(accounts, 35)?;
-        let template_staging = account(accounts, 36)?;
-        let occurrence_raw = account(accounts, 37)?;
-        let occurrence_staging = account(accounts, 38)?;
-        let ticket_raw = account(accounts, 39)?;
-        let ticket_staging = account(accounts, 40)?;
-        let clock = account(accounts, 41)?;
+        let trading_program = account(accounts, FOUND_ACCOUNT_COUNT_V3)?;
+        let trading_programdata = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 1)?;
+        let root = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 2)?;
+        let ticket_state = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 3)?;
+        let template_raw = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 4)?;
+        let template_staging = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 5)?;
+        let occurrence_raw = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 6)?;
+        let occurrence_staging = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 7)?;
+        let ticket_raw = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 8)?;
+        let ticket_staging = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 9)?;
+        let clock = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 10)?;
         if trading_program.is_signer
             || trading_program.is_writable
             || !trading_program.executable
@@ -404,13 +404,13 @@ fn prepare_found(
                 .to_bytes(),
         )?,
     );
-    Ok(Box::new(found::prepare_with_admission(
+    found::prepare_with_admission(
         program_id,
         frame,
         found_request,
         rent,
         release_admissions.admission(Role::Core)?,
-    )?))
+    )
 }
 
 #[inline(never)]
@@ -1045,20 +1045,20 @@ fn authenticate_projected_state(
     admitted: &AdmittedSeries,
     prepared: &PreparedFound,
     lock_receipt: &ProjectedCustodyLockReceiptV1,
-) -> Result<Box<ProjectedCustodyStateV1>, CoreSbfError> {
+) -> Result<Box<ProjectedCustodyStateV2>, CoreSbfError> {
     let data = suffix
         .projected_replay
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
     if suffix.projected_replay.owner != suffix.custody_program.key
-        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V1
+        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V2
     {
         return Err(CoreSbfError::ChildAck);
     }
     let projected =
-        Box::new(ProjectedCustodyStateV1::decode(&data).map_err(|_| CoreSbfError::ChildAck)?);
+        Box::new(ProjectedCustodyStateV2::decode(&data).map_err(|_| CoreSbfError::ChildAck)?);
     drop(data);
-    let seeds = ProjectedCustodyStateSeedsV1::from_request(projected.request);
+    let seeds = ProjectedCustodyStateSeedsV2::from_request(projected.request);
     let (expected, bump) =
         Pubkey::find_program_address(&seeds.as_slices(), suffix.custody_program.key);
     let ticket_context = admitted.ticket.content_id().to_bytes();
@@ -1145,7 +1145,7 @@ fn authenticate_projected_state(
 }
 
 fn canonical_realize_request(
-    projected: &ProjectedCustodyStateV1,
+    projected: &ProjectedCustodyStateV2,
 ) -> Result<dclutch_custody_contract::ProjectedCustodyRequestV1, CoreSbfError> {
     let mut request = projected.request;
     request.operation = ProjectedCustodyOperationV1::RealizeAndClose;
@@ -1159,7 +1159,7 @@ fn canonical_realize_request(
 }
 
 #[inline(never)]
-fn realize_request_digest(projected: &ProjectedCustodyStateV1) -> Result<[u8; 32], CoreSbfError> {
+fn realize_request_digest(projected: &ProjectedCustodyStateV2) -> Result<[u8; 32], CoreSbfError> {
     Ok(hash(
         &canonical_realize_request(projected)?
             .encode()
@@ -1170,7 +1170,7 @@ fn realize_request_digest(projected: &ProjectedCustodyStateV1) -> Result<[u8; 32
 
 #[inline(never)]
 fn realize_receipt_facts(
-    projected: &ProjectedCustodyStateV1,
+    projected: &ProjectedCustodyStateV2,
     request_digest: [u8; 32],
     market: dclutch_market_core_codec::CoreState,
     hoard_amount: u64,

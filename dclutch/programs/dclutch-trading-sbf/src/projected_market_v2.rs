@@ -9,10 +9,10 @@
 
 use dclutch_custody_contract::{
     ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1,
-    ProjectedCustodyStateV1,
+    ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
-    Action, Identity, ProjectFoundReceiptV1, Request, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
+    Action, Identity, ProjectFoundReceiptV2, Request, SeriesCoreFoundAckV2, SeriesCoreRequestV1,
 };
 use solana_program::hash::hash;
 
@@ -204,8 +204,8 @@ pub fn encode_projected_market_execution_v2(
 /// supplies projection bytes, and the reconstructed receipt must hash to the
 /// commitment already stored by Custody.
 pub fn reconstruct_project_found_v1(
-    state: ProjectedCustodyStateV1,
-) -> Result<ProjectFoundReceiptV1, ProjectedMarketExecutionErrorV2> {
+    state: ProjectedCustodyStateV2,
+) -> Result<ProjectFoundReceiptV2, ProjectedMarketExecutionErrorV2> {
     require_open_projected_state(state)?;
     let market = Identity::new(state.request.market)
         .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
@@ -213,7 +213,7 @@ pub fn reconstruct_project_found_v1(
     let found_bytes = found
         .encode()
         .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
-    let receipt = ProjectFoundReceiptV1::new(
+    let receipt = ProjectFoundReceiptV2::new(
         market,
         state.request.generation,
         identity(state.request.realm)?,
@@ -225,6 +225,7 @@ pub fn reconstruct_project_found_v1(
         identity(state.request.source)?,
         identity(state.request.release_set)?,
         identity(state.request.rent_program)?,
+        state.principal_cap_sets,
         hash(&found_bytes).to_bytes(),
     )
     .map_err(|_| ProjectedMarketExecutionErrorV2::Projection)?;
@@ -240,7 +241,7 @@ pub fn reconstruct_project_found_v1(
 /// Derive the unique next Lock-and-close-source request from authenticated
 /// HoardOpen state and the admitted positive principal.
 pub fn reconstruct_projected_lock_v1(
-    state: ProjectedCustodyStateV1,
+    state: ProjectedCustodyStateV2,
     amount: u64,
 ) -> Result<ProjectedCustodyRequestV1, ProjectedMarketExecutionErrorV2> {
     require_open_projected_state(state)?;
@@ -308,7 +309,7 @@ pub fn authenticate_series_found_span_v2(
 }
 
 fn require_open_projected_state(
-    state: ProjectedCustodyStateV1,
+    state: ProjectedCustodyStateV2,
 ) -> Result<(), ProjectedMarketExecutionErrorV2> {
     if state.phase != ProjectedCustodyPhaseV1::HoardOpen
         || state.locked_amount != 0
@@ -398,7 +399,7 @@ mod tests {
         [byte; 32]
     }
 
-    fn open_state() -> ProjectedCustodyStateV1 {
+    fn open_state() -> ProjectedCustodyStateV2 {
         let mut request = ProjectedCustodyRequestV1 {
             operation: ProjectedCustodyOperationV1::OpenHoard,
             caller_role: ProjectedCallerRoleV1::TradingCapability,
@@ -435,11 +436,12 @@ mod tests {
             funding_source_state_rent_lamports: 3_000,
             funding_source_vault_rent_lamports: 4_000,
         };
-        let provisional = ProjectedCustodyStateV1 {
+        let provisional = ProjectedCustodyStateV2 {
             phase: ProjectedCustodyPhaseV1::HoardOpen,
             request,
             next_revision: 2,
             locked_amount: 0,
+            principal_cap_sets: u64::MAX,
             last_request_digest: id(22),
             bump: 254,
         };
@@ -447,7 +449,7 @@ mod tests {
         let found = Request::administrative(Action::Found, request.generation, market)
             .encode()
             .expect("Found bytes");
-        let receipt = ProjectFoundReceiptV1::new(
+        let receipt = ProjectFoundReceiptV2::new(
             market,
             request.generation,
             identity(request.realm).expect("realm"),
@@ -459,11 +461,12 @@ mod tests {
             identity(request.source).expect("Source"),
             identity(request.release_set).expect("release set"),
             identity(request.rent_program).expect("Rent"),
+            u64::MAX,
             hash(&found).to_bytes(),
         )
         .expect("receipt");
         request.projection_receipt_digest = hash(&receipt.encode().expect("encode")).to_bytes();
-        ProjectedCustodyStateV1 {
+        ProjectedCustodyStateV2 {
             request,
             ..provisional
         }

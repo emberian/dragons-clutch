@@ -58,6 +58,12 @@ def main : IO Unit := do
   IO.println s!"pub(crate) const CORE_REQUEST_TERMINAL_FAILURE_KIND: u8 = {coreTerminalFailureKind};"
   IO.println s!"pub(crate) const CORE_REQUEST_CLOSURE_KIND: u8 = {coreClosureKind};"
   IO.println ""
+  IO.println s!"pub(crate) const CORE_REQUEST_V2_BYTES_VALUE: usize = {coreRequestBytesV2};"
+  IO.println s!"pub(crate) const CORE_REQUEST_V2_ABI_VERSION: u16 = {coreRequestVersionV2};"
+  emitRustBytes "pub(crate)" "CORE_REQUEST_V2_MAGIC_BYTES" coreRequestMagicV2
+  for field in CoreRequestFieldV2.all do
+    IO.println s!"pub(crate) const {CoreRequestFieldV2.rustName field}: usize = {CoreRequestFieldV2.offset field};"
+  IO.println ""
   IO.println s!"pub(crate) const CLOSURE_BYTES_VALUE: usize = {closureBytes};"
   IO.println s!"pub(crate) const CLOSURE_ABI_VERSION: u16 = {closureVersion};"
   emitRustBytes "pub(crate)" "CLOSURE_MAGIC_BYTES" closureMagic
@@ -84,5 +90,7 @@ def main : IO Unit := do
   emitRustBytes "pub(crate)" "FUNDED_RECEIPT_EXAMPLE" (encodeFundedReceipt exampleFundedReceipt)
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "CORE_REQUEST_EXAMPLE" (encodeCoreRequest exampleCoreRequest)
+  IO.println "#[cfg(test)]"
+  emitRustBytes "pub(crate)" "CORE_REQUEST_V2_EXAMPLE" (encodeCoreRequestV2 exampleCoreRequestV2)
   IO.println "#[cfg(test)]"
   emitRustBytes "pub(crate)" "CLOSURE_EXAMPLE" (encodeClosure exampleClosure)

@@ -205,6 +205,7 @@ impl FractionalChainFixtureV1 {
             terminal_winner: 0,
             identity: market_identity,
             outstanding_capabilities: 1,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: identity_bytes(rent_beneficiary),
             terminal_receipt: None,
         }

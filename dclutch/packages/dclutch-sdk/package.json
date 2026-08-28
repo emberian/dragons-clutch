@@ -24,6 +24,8 @@
     "test": "vitest run --config vitest.config.ts",
     "abi:claims-replay": "node scripts/generate-claims-custody-replay.mjs",
     "abi:claims-replay:verify": "node scripts/generate-claims-custody-replay.mjs --check",
+    "abi:wallet-terminal": "node scripts/generate-wallet-terminal-payout-v3.mjs",
+    "abi:wallet-terminal:verify": "node scripts/generate-wallet-terminal-payout-v3.mjs --check",
     "abi:registered": "node scripts/generate-registered-direct.mjs",
     "abi:registered:verify": "node scripts/generate-registered-direct.mjs --check",
     "abi:infrastructure": "node scripts/generate-protocol-infrastructure.mjs",

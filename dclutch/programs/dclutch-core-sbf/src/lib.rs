@@ -20,11 +20,11 @@ use dclutch_custody_contract::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
 };
 use dclutch_market_core_codec::{
-    Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
-    CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
-    GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1, PROJECT_FOUND_REQUEST_BYTES_V1,
-    PROJECT_FOUND_REQUEST_MAGIC_V1, ProjectFoundRequestV1, REQUEST_BYTES,
-    RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
+    Action, CAPABILITY_FUNDING_HEADER_BYTES_V2, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1,
+    CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2, CoreEffectEnvelopeV1,
+    GENERIC_FOUNDING_REQUEST_BYTES_V1, GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1,
+    PROJECT_FOUND_REQUEST_BYTES_V2, PROJECT_FOUND_REQUEST_MAGIC_V2, ProjectFoundRequestV2,
+    REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
     SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1,
     SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1, SeriesPermitExpiryRequestV1,
 };
@@ -59,7 +59,10 @@ pub use begin_retiring::BEGIN_RETIRING_ACCOUNT_COUNT_V1;
 pub use execute_provider_v3::{
     EXECUTE_PROVIDER_ACCOUNT_COUNT_V3, EXECUTE_PROVIDER_PREFIX_BYTES_V3,
 };
-pub use frame::{FOUND_ACCOUNT_COUNT_V2, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1};
+pub use frame::{
+    FOUND_ACCOUNT_COUNT_V3, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1,
+    PROJECTED_FOUND_ACCOUNT_COUNT_V2,
+};
 pub use generic_founding_v1::{
     GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
     GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
@@ -78,6 +81,9 @@ pub const CAPABILITY_PREFIX_BYTES_V1: usize = REQUEST_BYTES + CORE_EFFECT_ENVELO
 /// Exact generic capability semantic prefix before family-owned request bytes.
 pub const CAPABILITY_ROLE_PREFIX_BYTES_V1: usize =
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1;
+/// Exact generic capability semantic prefix for subset-ledger V2 routes.
+pub const CAPABILITY_ROLE_PREFIX_BYTES_V2: usize =
+    CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_HEADER_BYTES_V2;
 
 /// Stable refusal from the isolated Core SBF trust boundary.
 #[repr(u32)]
@@ -99,7 +105,7 @@ pub enum CoreSbfError {
     RentCredit = 0x3006,
     /// System, Rent, Clock, vacant account, or exact creation plan refused.
     Creation = 0x3007,
-    /// Capability manifest entry, FundingState, custody, deadline, or PDA refused.
+    /// Capability manifest entry, funding ledger, custody, deadline, or PDA refused.
     Funding = 0x3008,
     /// Canonical release-pinned Core caller authority refused.
     CallerAuthority = 0x3009,
@@ -268,11 +274,11 @@ pub fn process_instruction(
         }
         return Err(CoreSbfError::Instruction.into());
     }
-    if instruction_data.len() == PROJECT_FOUND_REQUEST_BYTES_V1
-        && instruction_data.get(..PROJECT_FOUND_REQUEST_MAGIC_V1.len())
-            == Some(PROJECT_FOUND_REQUEST_MAGIC_V1.as_slice())
+    if instruction_data.len() == PROJECT_FOUND_REQUEST_BYTES_V2
+        && instruction_data.get(..PROJECT_FOUND_REQUEST_MAGIC_V2.len())
+            == Some(PROJECT_FOUND_REQUEST_MAGIC_V2.as_slice())
     {
-        let projected = ProjectFoundRequestV1::decode(instruction_data)
+        let projected = ProjectFoundRequestV2::decode(instruction_data)
             .map_err(|_| CoreSbfError::Instruction)?;
         let found_bytes = projected
             .found
@@ -352,7 +358,7 @@ pub fn process_instruction(
             let selection_bytes = role_request
                 .get(..CAPABILITY_EXECUTION_SELECTION_BYTES_V1)
                 .ok_or(CoreSbfError::Instruction)?;
-            let header_end = CAPABILITY_ROLE_PREFIX_BYTES_V1;
+            let header_end = CAPABILITY_ROLE_PREFIX_BYTES_V2;
             let header_bytes = role_request
                 .get(CAPABILITY_EXECUTION_SELECTION_BYTES_V1..header_end)
                 .ok_or(CoreSbfError::Instruction)?;
@@ -366,7 +372,7 @@ pub fn process_instruction(
                 .map_err(|_| CoreSbfError::Instruction)?;
             let selection = CapabilityExecutionSelectionV1::decode(selection_bytes)
                 .map_err(|_| CoreSbfError::Instruction)?;
-            let funding_header = CapabilityFundingHeaderV1::decode(header_bytes)
+            let funding_header = CapabilityFundingHeaderV2::decode(header_bytes)
                 .map_err(|_| CoreSbfError::Instruction)?;
             capability::process(
                 program_id,

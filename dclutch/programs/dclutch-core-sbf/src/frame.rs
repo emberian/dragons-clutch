@@ -5,8 +5,10 @@ use solana_sdk_ids::{system_program, sysvar};
 
 use crate::CoreSbfError;
 
-/// Exact Found account count with append-only infrastructure authority.
-pub const FOUND_ACCOUNT_COUNT_V2: usize = 31;
+/// Exact ordinary Found/ProjectFound V3 account count.
+pub const FOUND_ACCOUNT_COUNT_V3: usize = 37;
+/// Exact projected generic-Found V2 prefix account count.
+pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 25;
 /// Exact account count for one-time infrastructure-profile initialization.
 pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1: usize = 14;
 
@@ -24,12 +26,18 @@ pub(crate) struct FoundAccounts<'accounts, 'info> {
     pub result_domain_staging: &'accounts AccountInfo<'info>,
     pub portfolio_raw: &'accounts AccountInfo<'info>,
     pub portfolio_staging: &'accounts AccountInfo<'info>,
+    pub linked_basis_raw: &'accounts AccountInfo<'info>,
+    pub linked_basis_staging: &'accounts AccountInfo<'info>,
     pub resolution_raw: &'accounts AccountInfo<'info>,
     pub resolution_staging: &'accounts AccountInfo<'info>,
+    pub source_spec_raw: &'accounts AccountInfo<'info>,
+    pub source_spec_staging: &'accounts AccountInfo<'info>,
+    pub capacity_profile_raw: &'accounts AccountInfo<'info>,
+    pub capacity_profile_staging: &'accounts AccountInfo<'info>,
+    pub manipulation_floor_raw: &'accounts AccountInfo<'info>,
+    pub manipulation_floor_staging: &'accounts AccountInfo<'info>,
     pub manifest_raw: &'accounts AccountInfo<'info>,
     pub manifest_staging: &'accounts AccountInfo<'info>,
-    pub release_raw: &'accounts AccountInfo<'info>,
-    pub release_staging: &'accounts AccountInfo<'info>,
     pub activation_cache: &'accounts AccountInfo<'info>,
     pub core_program: &'accounts AccountInfo<'info>,
     pub core_programdata: &'accounts AccountInfo<'info>,
@@ -54,7 +62,7 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         Self::parse_with_mode(program_id, accounts, true)
     }
 
-    /// Parse the exact same Found31 identities for a stateless projection.
+    /// Parse the exact same ordinary Found identities for a stateless projection.
     ///
     /// Projection never receives write or signature authority over the payer
     /// or future Market. All immutable authorities remain in the identical
@@ -73,7 +81,7 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         accounts: &'accounts [AccountInfo<'info>],
         mutating: bool,
     ) -> Result<Self, CoreSbfError> {
-        if accounts.len() != FOUND_ACCOUNT_COUNT_V2 {
+        if accounts.len() != FOUND_ACCOUNT_COUNT_V3 {
             return Err(CoreSbfError::AccountFrame);
         }
         let [
@@ -89,12 +97,18 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             result_domain_staging,
             portfolio_raw,
             portfolio_staging,
+            linked_basis_raw,
+            linked_basis_staging,
             resolution_raw,
             resolution_staging,
+            source_spec_raw,
+            source_spec_staging,
+            capacity_profile_raw,
+            capacity_profile_staging,
+            manipulation_floor_raw,
+            manipulation_floor_staging,
             manifest_raw,
             manifest_staging,
-            release_raw,
-            release_staging,
             activation_cache,
             core_program,
             core_programdata,
@@ -164,12 +178,18 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             result_domain_staging,
             portfolio_raw,
             portfolio_staging,
+            linked_basis_raw,
+            linked_basis_staging,
             resolution_raw,
             resolution_staging,
+            source_spec_raw,
+            source_spec_staging,
+            capacity_profile_raw,
+            capacity_profile_staging,
+            manipulation_floor_raw,
+            manipulation_floor_staging,
             manifest_raw,
             manifest_staging,
-            release_raw,
-            release_staging,
             activation_cache,
             registry_artifact_raw,
             registry_artifact_staging,
@@ -193,12 +213,180 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             result_domain_staging,
             portfolio_raw,
             portfolio_staging,
+            linked_basis_raw,
+            linked_basis_staging,
             resolution_raw,
             resolution_staging,
+            source_spec_raw,
+            source_spec_staging,
+            capacity_profile_raw,
+            capacity_profile_staging,
+            manipulation_floor_raw,
+            manipulation_floor_staging,
             manifest_raw,
             manifest_staging,
-            release_raw,
-            release_staging,
+            activation_cache,
+            core_program,
+            core_programdata,
+            registry_program,
+            rent,
+            system,
+            infrastructure_profile,
+            registry_artifact_raw,
+            registry_artifact_staging,
+            registry_programdata,
+            rent_artifact_raw,
+            rent_artifact_staging,
+            rent_programdata,
+        })
+    }
+}
+
+/// Compact projected generic-Found V2 prefix.
+///
+/// Realm/collateral, Source identity, and the principal cap come from the
+/// authenticated projected-Custody state. The complete activation cache owns
+/// the exact execution-release projection. Ordinary ProjectFound retains the
+/// omitted finalized records and is the sole producer of those projected facts.
+pub(crate) struct ProjectedFoundAccountsV2<'accounts, 'info> {
+    pub payer: &'accounts AccountInfo<'info>,
+    pub market: &'accounts AccountInfo<'info>,
+    pub rent_credit: &'accounts AccountInfo<'info>,
+    pub rent_program: &'accounts AccountInfo<'info>,
+    pub product_raw: &'accounts AccountInfo<'info>,
+    pub product_staging: &'accounts AccountInfo<'info>,
+    pub result_domain_raw: &'accounts AccountInfo<'info>,
+    pub result_domain_staging: &'accounts AccountInfo<'info>,
+    pub portfolio_raw: &'accounts AccountInfo<'info>,
+    pub portfolio_staging: &'accounts AccountInfo<'info>,
+    pub manifest_raw: &'accounts AccountInfo<'info>,
+    pub manifest_staging: &'accounts AccountInfo<'info>,
+    pub activation_cache: &'accounts AccountInfo<'info>,
+    pub core_program: &'accounts AccountInfo<'info>,
+    pub core_programdata: &'accounts AccountInfo<'info>,
+    pub registry_program: &'accounts AccountInfo<'info>,
+    pub rent: &'accounts AccountInfo<'info>,
+    pub system: &'accounts AccountInfo<'info>,
+    pub infrastructure_profile: &'accounts AccountInfo<'info>,
+    pub registry_artifact_raw: &'accounts AccountInfo<'info>,
+    pub registry_artifact_staging: &'accounts AccountInfo<'info>,
+    pub registry_programdata: &'accounts AccountInfo<'info>,
+    pub rent_artifact_raw: &'accounts AccountInfo<'info>,
+    pub rent_artifact_staging: &'accounts AccountInfo<'info>,
+    pub rent_programdata: &'accounts AccountInfo<'info>,
+}
+
+impl<'accounts, 'info> ProjectedFoundAccountsV2<'accounts, 'info> {
+    #[inline(never)]
+    pub fn parse(
+        program_id: &Pubkey,
+        accounts: &'accounts [AccountInfo<'info>],
+    ) -> Result<Self, CoreSbfError> {
+        let [
+            payer,
+            market,
+            rent_credit,
+            rent_program,
+            product_raw,
+            product_staging,
+            result_domain_raw,
+            result_domain_staging,
+            portfolio_raw,
+            portfolio_staging,
+            manifest_raw,
+            manifest_staging,
+            activation_cache,
+            core_program,
+            core_programdata,
+            registry_program,
+            rent,
+            system,
+            infrastructure_profile,
+            registry_artifact_raw,
+            registry_artifact_staging,
+            registry_programdata,
+            rent_artifact_raw,
+            rent_artifact_staging,
+            rent_programdata,
+        ] = accounts
+        else {
+            return Err(CoreSbfError::AccountFrame);
+        };
+        require_distinct(accounts)?;
+        if !payer.is_signer
+            || !payer.is_writable
+            || payer.executable
+            || market.is_signer
+            || !market.is_writable
+            || market.executable
+            || rent_credit.is_signer
+            || rent_credit.is_writable
+            || rent_credit.executable
+            || rent_program.is_signer
+            || rent_program.is_writable
+            || !rent_program.executable
+            || core_program.key != program_id
+            || core_program.is_signer
+            || core_program.is_writable
+            || !core_program.executable
+            || core_programdata.is_signer
+            || core_programdata.is_writable
+            || core_programdata.executable
+            || registry_program.is_signer
+            || registry_program.is_writable
+            || !registry_program.executable
+            || infrastructure_profile.is_signer
+            || infrastructure_profile.is_writable
+            || infrastructure_profile.executable
+            || registry_programdata.is_signer
+            || registry_programdata.is_writable
+            || registry_programdata.executable
+            || rent_programdata.is_signer
+            || rent_programdata.is_writable
+            || rent_programdata.executable
+            || rent.key != &sysvar::rent::ID
+            || rent.is_signer
+            || rent.is_writable
+            || rent.executable
+            || system.key != &system_program::ID
+            || system.is_signer
+            || system.is_writable
+            || !system.executable
+        {
+            return Err(CoreSbfError::AccountFrame);
+        }
+        for readonly in [
+            product_raw,
+            product_staging,
+            result_domain_raw,
+            result_domain_staging,
+            portfolio_raw,
+            portfolio_staging,
+            manifest_raw,
+            manifest_staging,
+            activation_cache,
+            registry_artifact_raw,
+            registry_artifact_staging,
+            rent_artifact_raw,
+            rent_artifact_staging,
+        ] {
+            if readonly.is_signer || readonly.is_writable || readonly.executable {
+                return Err(CoreSbfError::AccountFrame);
+            }
+        }
+        Ok(Self {
+            payer,
+            market,
+            rent_credit,
+            rent_program,
+            product_raw,
+            product_staging,
+            result_domain_raw,
+            result_domain_staging,
+            portfolio_raw,
+            portfolio_staging,
+            manifest_raw,
+            manifest_staging,
             activation_cache,
             core_program,
             core_programdata,

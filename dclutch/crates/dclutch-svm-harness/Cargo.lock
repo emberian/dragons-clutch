@@ -1669,6 +1669,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-pre-market-funding-test-caller-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-registry-contract",
+ "dclutch-release-set-contract",
+ "dclutch-resolution-codec",
+ "solana-program",
+]
+
+[[package]]
+name = "dclutch-product-compiler"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "dclutch-product-contract"
 version = "0.1.0"
 
@@ -1689,6 +1709,27 @@ name = "dclutch-product-runtime-v2-admission"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-product-runtime-v2-operator"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-contract",
+ "dclutch-market-core-codec",
+ "dclutch-product-compiler",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-source-contract",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -1822,6 +1863,10 @@ dependencies = [
 [[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-resolution-core-v3-operator"
@@ -1907,8 +1952,11 @@ dependencies = [
  "dclutch-market-core-codec",
  "dclutch-market-open-v1-operator",
  "dclutch-market-retirement-v1-operator",
+ "dclutch-pre-market-funding-test-caller-sbf",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
+ "dclutch-product-runtime-v2-operator",
  "dclutch-program-test-evidence",
  "dclutch-provider-transport-v3-operator",
  "dclutch-pyth-svm",

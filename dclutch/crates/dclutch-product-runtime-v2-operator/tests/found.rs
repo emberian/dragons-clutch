@@ -3,13 +3,20 @@
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, EMPTY_MANIFEST_BYTES};
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{
+        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
+        compile_basis_v3, semantic_basis_preimage_v3,
+    },
+};
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_admission::{FinalizedRecordCoordinateV2, PRODUCT_RECORD_BYTES_V2};
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, Error, FinalizedRecordObservationV2,
     ProductCompilationInputV2, compile_product_records_v2,
     found::{
-        FOUND_ACCOUNT_COUNT_V2, FinalizedReferenceObservationV2, FoundStateV2,
+        FOUND_ACCOUNT_COUNT_V3, FinalizedReferenceObservationV2, FoundStateV2,
         build_found_instruction_v2, project_found_v2,
     },
     lifecycle_rent_v2::{
@@ -38,10 +45,18 @@ use dclutch_rent_contract::{
     },
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SourceMaterialV3,
+    CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+    SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile, SourceCapacityProfileV1, SourceMaterialV3,
+    SourceSpecV1,
 };
 use solana_program::sysvar::SysvarSerialize;
-use solana_program::{account_info::AccountInfo, hash::hash, pubkey::Pubkey, rent::Rent};
+use solana_program::{
+    account_info::AccountInfo,
+    hash::{hash, hashv},
+    pubkey::Pubkey,
+    rent::Rent,
+};
 use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysvar};
 
 // Agave 4.0.2 exposes this exact immutable NativeLoader metadata on the
@@ -120,6 +135,7 @@ struct CompiledGraph {
     product: RecordBacking,
     domain: RecordBacking,
     portfolio: RecordBacking,
+    basis: RecordBacking,
 }
 
 fn id(byte: u8) -> ContentId {
@@ -153,6 +169,35 @@ fn account(
 
 fn compile_graph(cuts: &[i128], coefficient: u64) -> CompiledGraph {
     let outcome_count = cuts.len().checked_add(2).expect("outcome count");
+    let basis_width = u32::try_from(outcome_count).expect("fixture basis width");
+    let provisional_input = BasisInputV3 {
+        kind: BasisKindV3::CategoricalQ1,
+        product_id: id(1).to_bytes(),
+        result_domain_id: [0xf2; 32],
+        coordinate_domain_id: id(2).to_bytes(),
+        result_unit_id: id(3).to_bytes(),
+        evaluator_release_id: [0xf3; 32],
+        basis_width,
+        payout_scale: 1,
+        knot_denominator: 1,
+        knots: &[],
+        terms: &[],
+        failure_payouts: &[],
+    };
+    let basis_bytes = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, outcome_count, 0, 0)
+        .expect("basis bytes");
+    let mut provisional_basis = vec![0_u8; basis_bytes];
+    compile_basis_v3(provisional_input, &mut provisional_basis).expect("provisional basis");
+    let semantic = semantic_basis_preimage_v3(&provisional_basis).expect("semantic basis");
+    let liability_basis_id = ContentId::new(
+        hashv(&[
+            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+            semantic.prefix(),
+            semantic.suffix(),
+        ])
+        .to_bytes(),
+    )
+    .expect("semantic basis identity");
     let coefficients = vec![coefficient; outcome_count];
     let mut product = [0_u8; PRODUCT_RECORD_BYTES_V2];
     let mut domain = vec![0_u8; result_domain_record_bytes(cuts.len()).expect("domain bytes")];
@@ -164,7 +209,7 @@ fn compile_graph(cuts: &[i128], coefficient: u64) -> CompiledGraph {
             coordinate_domain_id: id(2),
             result_unit_id: id(3),
             claim_basis_id: id(4),
-            liability_basis_id: id(5),
+            liability_basis_id,
             representation_release_id: id(6),
             mapping_release_id: id(7),
             cut_denominator: 1,
@@ -177,11 +222,37 @@ fn compile_graph(cuts: &[i128], coefficient: u64) -> CompiledGraph {
         &mut portfolio,
     )
     .expect("canonical Product graph");
+    let mut basis = vec![0_u8; basis_bytes];
+    compile_basis_v3(
+        BasisInputV3 {
+            result_domain_id: report.receipt.result_domain.content_digest.to_bytes(),
+            ..provisional_input
+        },
+        &mut basis,
+    )
+    .expect("linked basis");
     CompiledGraph {
         product: RecordBacking::from_coordinate(report.receipt.product, product.to_vec()),
         domain: RecordBacking::from_coordinate(report.receipt.result_domain, domain),
         portfolio: RecordBacking::from_coordinate(report.receipt.portfolio, portfolio),
+        basis: RecordBacking::new(GRADED_BASIS_RECORD_SCHEMA_ID_V3, basis),
         report,
+    }
+}
+
+fn absent_reference(schema: [u8; 32]) -> FinalizedReferenceObservationV2<'static> {
+    let digest = [0_u8; 32];
+    let raw =
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &REGISTRY).0;
+    let staging =
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &REGISTRY).0;
+    FinalizedReferenceObservationV2 {
+        schema_id: schema,
+        record: FinalizedRecordObservationV2 {
+            raw: account(raw, system_program::ID, 0, false, &[]),
+            staging: account(staging, system_program::ID, 0, false, &[]),
+            raw_rent_minimum: 0,
+        },
     }
 }
 
@@ -285,8 +356,9 @@ struct Fixture {
     graph: CompiledGraph,
     realm: RecordBacking,
     source: RecordBacking,
+    source_spec: RecordBacking,
+    capacity_profile: RecordBacking,
     manifest: RecordBacking,
-    release_set: RecordBacking,
     activation_cache: Pubkey,
     activation_data: Vec<u8>,
     core_programdata: Pubkey,
@@ -322,9 +394,33 @@ impl Fixture {
         })
         .expect("Realm");
         let realm = RecordBacking::new(REALM_SCHEMA_RELEASE_ID_V1, realm.to_bytes().to_vec());
+        let capacity_profile = SourceCapacityProfileV1::new(
+            CapacityEnvelope::Provisional,
+            1,
+            0,
+            source_id(0xd5),
+            source_id(0xd6),
+            208,
+            0,
+        )
+        .expect("Source capacity profile");
+        let capacity_profile = RecordBacking::new(
+            SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+            capacity_profile.to_bytes().to_vec(),
+        );
+        let source_spec = SourceSpecV1::new(
+            source_id(0xd7),
+            source_id(0xd8),
+            source_id(0xd9),
+            SourceAccessProfile::RelayedObservationRecord,
+            source_id(0xda),
+            SourceContentId::new(capacity_profile.digest).expect("capacity identity"),
+        );
+        let source_spec =
+            RecordBacking::new(SOURCE_SPEC_SCHEMA_ID_V1, source_spec.to_bytes().to_vec());
         let source = SourceMaterialV3::explicitly_unbounded(
             SourceContentId::new(graph.product.digest).expect("Product record digest"),
-            source_id(0xd1),
+            SourceContentId::new(source_spec.digest).expect("SourceSpec identity"),
             source_id(0xd2),
             source_id(0xd3),
             None,
@@ -409,8 +505,9 @@ impl Fixture {
             graph,
             realm,
             source,
+            source_spec,
+            capacity_profile,
             manifest,
-            release_set,
             activation_cache,
             activation_data,
             core_programdata,
@@ -455,9 +552,12 @@ impl Fixture {
             product: self.graph.product.observation(),
             result_domain: self.graph.domain.observation(),
             portfolio: self.graph.portfolio.observation(),
+            linked_basis: self.graph.basis.observation(),
             source_material: self.source.reference(),
+            source_spec: self.source_spec.reference(),
+            capacity_profile: self.capacity_profile.reference(),
+            manipulation_floor: absent_reference(MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1),
             capability_manifest: self.manifest.reference(),
-            execution_release_set: self.release_set.reference(),
             activation_cache: account(
                 self.activation_cache,
                 REGISTRY,
@@ -616,14 +716,14 @@ fn found_and_credit_accept_real_system_metadata_and_refuse_substitution() {
 }
 
 #[test]
-fn valid_found31_exports_runtime_width_instruction() {
+fn valid_found37_exports_runtime_width_instruction() {
     let fixture = Fixture::new();
     assert_eq!(fixture.graph.report.outcome_count, 258);
-    assert_eq!(FOUND_ACCOUNT_COUNT_V2, 31);
+    assert_eq!(FOUND_ACCOUNT_COUNT_V3, 37);
     let plan =
         build_found_instruction_v2(GENERATION, fixture.state()).expect("Found instruction plan");
     assert_eq!(plan.outcome_count, 258);
-    assert_eq!(plan.instruction.accounts.len(), 31);
+    assert_eq!(plan.instruction.accounts.len(), 37);
     assert_eq!(plan.market_address, fixture.market);
     assert_eq!(
         plan.product.product_record_digest.to_bytes(),
@@ -632,7 +732,7 @@ fn valid_found31_exports_runtime_width_instruction() {
     assert_eq!(
         plan.instruction
             .accounts
-            .get(24)
+            .get(30)
             .expect("profile meta")
             .pubkey,
         fixture.infrastructure_profile
@@ -640,7 +740,7 @@ fn valid_found31_exports_runtime_width_instruction() {
     assert_eq!(
         plan.instruction
             .accounts
-            .get(25)
+            .get(31)
             .expect("Registry artifact meta")
             .pubkey,
         fixture.registry_artifact.raw
@@ -648,7 +748,7 @@ fn valid_found31_exports_runtime_width_instruction() {
     assert_eq!(
         plan.instruction
             .accounts
-            .get(27)
+            .get(33)
             .expect("Registry ProgramData meta")
             .pubkey,
         fixture.registry_programdata
@@ -656,7 +756,7 @@ fn valid_found31_exports_runtime_width_instruction() {
     assert_eq!(
         plan.instruction
             .accounts
-            .get(28)
+            .get(34)
             .expect("Rent artifact meta")
             .pubkey,
         fixture.rent_artifact.raw
@@ -664,7 +764,7 @@ fn valid_found31_exports_runtime_width_instruction() {
     assert_eq!(
         plan.instruction
             .accounts
-            .get(30)
+            .get(36)
             .expect("Rent ProgramData meta")
             .pubkey,
         fixture.rent_programdata
@@ -736,15 +836,15 @@ fn pre_credit_projection_refuses_stale_and_substituted_authority() {
         Err(Error::ObservationMismatch)
     );
 
-    let substituted_release = FinalizedReferenceObservationV2 {
-        schema_id: state.execution_release_set.schema_id,
+    let substituted_source_spec = FinalizedReferenceObservationV2 {
+        schema_id: state.source_spec.schema_id,
         record: state.capability_manifest.record,
     };
     assert_eq!(
         project_found_v2(
             GENERATION,
             dclutch_product_runtime_v2_operator::found::FoundProjectionStateV2 {
-                execution_release_set: substituted_release,
+                source_spec: substituted_source_spec,
                 ..state
             }
         ),
@@ -805,7 +905,7 @@ fn found_requires_reacquired_real_post_create_credit() {
     );
 
     let final_plan = build_found_instruction_v2(GENERATION, fixture.state())
-        .expect("reacquired post-create credit enables Found31");
+        .expect("reacquired post-create credit enables Found37");
     assert_eq!(
         final_plan.market_address,
         create.state.market().to_bytes().into()
@@ -959,7 +1059,7 @@ fn wrong_source_product_and_late_payer_failure_refuse() {
     let fixture = Fixture::new();
     let hostile_source = SourceMaterialV3::explicitly_unbounded(
         source_id(0xe1),
-        source_id(0xd1),
+        SourceContentId::new(fixture.source_spec.digest).expect("SourceSpec identity"),
         source_id(0xd2),
         source_id(0xd3),
         None,

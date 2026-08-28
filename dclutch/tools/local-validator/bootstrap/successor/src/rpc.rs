@@ -30,7 +30,8 @@ const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 ///
 /// A previous campaign requested 256 KiB here and **measured it to change
 /// nothing**: the transaction carried the instruction and the runtime accepted
-/// it, but `DCLTPCB1` still died out of memory at the same point, because
+/// it, but the pre-V2 projected bootstrap still died out of memory at the same
+/// point, because
 /// `RequestHeapFrame` raises the region the runtime *grants* while the stock
 /// `solana-program-entrypoint` allocator is constructed with the compile-time
 /// constant `HEAP_LENGTH = 32 * 1024` and never asks how much it was given.
@@ -42,7 +43,7 @@ const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 /// and `admit_heap_frame_v1` re-derives the grant from the instructions sysvar
 /// the runtime itself serialized, applying agave's own
 /// `sanitize_requested_heap_size`. Exactly two routes declare the extended
-/// profile — `DCLTGMF1` and `DCLTPCB1` — and both now carry the instructions
+/// profile — `DCLTGMF2` and `DCLTPCB2` — and both now carry the instructions
 /// sysvar in their frame so the adapter can find it. The Hot execution path is
 /// deliberately **not** on that list and keeps the 32 KiB discipline, so this
 /// constant is applied per transaction and never globally.
@@ -65,9 +66,9 @@ const SET_COMPUTE_UNIT_PRICE_DISCRIMINANT: u8 = 3;
 /// The priority fee every campaign transaction now carries, in microlamports
 /// per compute unit.
 ///
-/// Measured on devnet 2026-08-28: every small transaction of a founding landed
-/// in seconds while the 1.4M-CU DCLTGMF1-route transactions were left behind
-/// by leaders for a full blockhash lifetime, repeatedly, at priority zero —
+/// Measured on devnet 2026-08-28 against the pre-V2 founding wire: every small
+/// transaction landed in seconds while the 1.4M-CU atomic founding was left
+/// behind by leaders for a full blockhash lifetime, repeatedly, at priority zero —
 /// block packing prefers paid-per-CU, and a zero-fee compute-heavy transaction
 /// is the first thing a leader drops. 50,000 µlam/CU prices a 1.4M-CU
 /// transaction's priority at 70,000 lamports (0.00007 SOL) — decisive on
@@ -606,7 +607,7 @@ impl Rpc {
 
     /// Submit one routed v0 transaction on a runtime-granted extended heap.
     ///
-    /// Only the two founding routes may use this: `DCLTGMF1` and `DCLTPCB1`
+    /// Only the two founding routes may use this: `DCLTGMF2` and `DCLTPCB2`
     /// are the exhaustive list in
     /// `entrypoint_adapter::declares_extended_heap_profile_v1`, and each
     /// presents the instructions sysvar in its own frame so the program can
@@ -921,10 +922,7 @@ impl Rpc {
                 // no replica's — has passed since submit, and (b) the height
                 // exceeds the bound by a finalization-depth margin.
                 let aged = submitted_at.elapsed() >= Duration::from_secs(75);
-                if aged
-                    && self.block_height()?
-                        > last_valid_block_height.saturating_add(32)
-                {
+                if aged && self.block_height()? > last_valid_block_height.saturating_add(32) {
                     return Ok(ConfirmOutcomeV1::Dropped);
                 }
             }
@@ -1087,7 +1085,7 @@ impl Rpc {
 /// instruction. This campaign builds no such transaction today, and this
 /// refusal is what keeps that true: a precompile appearing in a bounded list
 /// is a defect to fix at the call site, never something to prepend past.
-fn bounded_instructions(
+pub(crate) fn bounded_instructions(
     instructions: &[Instruction],
     heap_frame_bytes: Option<u32>,
 ) -> Result<Vec<Instruction>> {

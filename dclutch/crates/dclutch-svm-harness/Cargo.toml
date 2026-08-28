@@ -11,11 +11,15 @@ publish = false
 # precedent for nested program-test harnesses); excluding them lets this
 # harness take one as a path dependency, which is what lets a campaign name
 # the caller's refusal instead of typing its number.
-exclude = ["test-programs/resolution-receipt-caller"]
+exclude = [
+    "test-programs/pre-market-funding-caller",
+    "test-programs/resolution-receipt-caller",
+]
 
 [dev-dependencies]
 dclutch-resolution-proof-sbf = { path = "../../programs/dclutch-resolution-proof-sbf", features = ["no-entrypoint"] }
 dclutch-resolution-receipt-test-caller-sbf = { path = "test-programs/resolution-receipt-caller", features = ["no-entrypoint"] }
+dclutch-pre-market-funding-test-caller-sbf = { path = "test-programs/pre-market-funding-caller", features = ["no-entrypoint"] }
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-claims-svm = { path = "../dclutch-claims-svm" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
@@ -35,6 +39,8 @@ dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
 dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
+dclutch-product-runtime-v2-operator = { path = "../dclutch-product-runtime-v2-operator" }
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
 dclutch-program-test-evidence = { path = "../../tools/gauntlet/program-test-evidence" }
 dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
 dclutch-provider-transport-v3-operator = { path = "../dclutch-provider-transport-v3-operator", default-features = false }

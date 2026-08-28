@@ -133,6 +133,11 @@ through canonical Core Found31, stages the entire projected-Custody prestate
 through `DCLTPCB1` at its own generation, and then founds a *second* Market
 atomically through `DCLTGMF1`.
 
+These recorded `DCLTGMF1` observations predate the current state clean break.
+Their finalized Market is the older 352-byte generation and is incompatible
+with the 360-byte `DCLTCOR3` Market the current builder emits; it remains
+historical evidence only.
+
 ```text
 slot=1444 cu=223540   create canonical Found31 Market
 slot=2021 cu=754119   create the projected-Custody founding prestate (DCLTPCB1)
@@ -186,7 +191,7 @@ the admission with `allocate` + `assign` only — **never a transfer**.
 
 | account | requirement |
 |---|---|
-| Market | `lamports == rent.minimum_balance(352)` **exactly** — an over-funded Market refuses |
+| Market | `lamports == rent.minimum_balance(360)` **exactly** — an over-funded Market refuses |
 | one-shot permit | `lamports == rent.minimum_balance(608)` **exactly** |
 | Claims aggregate | at least `rent.minimum_balance(256 + 8·claim_count)` |
 | founder Position | at least `rent.minimum_balance(128 + 8·claim_count)` |
@@ -218,7 +223,7 @@ requiring the bytes the chain is holding.
 
 | account | owner | bytes | contents |
 |---|---|---:|---|
-| Market | Core | 352 | phase **`Open`**, readiness **`Consumed`**, no terminal receipt, derived identity, rent beneficiary the founding generation's credit |
+| Market | Core | 352 | archived pre-cap generation: phase **`Open`**, readiness **`Consumed`**, no terminal receipt, derived identity, rent beneficiary the founding generation's credit |
 | Claims aggregate | Claims | 288 | `256 + 8×4` for a four-outcome Product |
 | founder Position | Claims | 160 | `128 + 8×4` |
 | Claims admission | Claims | 512 | |

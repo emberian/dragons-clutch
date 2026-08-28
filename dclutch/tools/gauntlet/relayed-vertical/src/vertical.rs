@@ -9,8 +9,8 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
 use dclutch_market_core_codec::CoreState;
 use dclutch_product_runtime_v2::ResultDomainV2;
@@ -23,7 +23,7 @@ use dclutch_relay_contract::{
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
     record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1},
 };
-use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2};
+use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V5, ResolutionCertificateKindV2};
 use dclutch_resolution_core_v3_operator::{
     ObservedAccount, ResolutionCreateFundSnapshotV3, ResolutionVerifyFundReadySnapshotV3,
     build_resolution_create_fund_v3, build_resolution_verify_fund_ready_v3,
@@ -31,8 +31,9 @@ use dclutch_resolution_core_v3_operator::{
 };
 use dclutch_source_contract::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-    SOURCE_SPEC_SCHEMA_ID_V1, SourceResolutionPhaseV1, WINDOW_SPEC_SCHEMA_ID_V1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, SourceMaterialV3, SourcePrincipalPolicyV1, SourceResolutionPhaseV1,
+    WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::transfer;
@@ -329,30 +330,40 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     let manifest_id =
         CapabilityContentId::new(market_state.identity.capability_manifest.to_bytes())
             .map_err(|error| Error::new(format!("manifest identity: {error:?}")))?;
-    let funding_state_rent = session.rpc.minimum_balance(FUNDING_STATE_BYTES)?;
-    let mut funding = [Pubkey::default(); 3];
-    for (slot, entry_index) in funding_entry_indices.into_iter().enumerate() {
-        let entry = manifest_view
-            .entry(entry_index)
-            .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        let target = funding_state_rent
-            .checked_add(entry.funding_quote().amounts().native_lamports_total())
-            .ok_or_else(|| Error::new("funding target overflow"))?;
-        let custody = FundingCustodyObservationV1::native_only(target, funding_state_rent)
-            .map_err(|error| Error::new(format!("funding custody: {error:?}")))?;
-        let state = FundingStateV1::new(manifest_id, manifest_view, entry_index, custody)
-            .map_err(|error| Error::new(format!("pending FundingState: {error:?}")))?;
-        let derivation = CapabilityFundingDerivationV1::new(
-            market.to_bytes(),
-            generation,
-            manifest_id,
-            manifest_view,
-            state,
-        )
-        .map_err(|error| Error::new(format!("funding derivation: {error:?}")))?;
-        funding[slot] =
-            Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0;
-    }
+    let selected_mask =
+        funding_entry_indices
+            .into_iter()
+            .try_fold(0_u16, |mask, entry_index| {
+                1_u16
+                    .checked_shl(u32::from(entry_index))
+                    .map(|bit| mask | bit)
+                    .ok_or_else(|| Error::new("funding entry index exceeds the subset-ledger mask"))
+            })?;
+    let mut funding_ledger_bytes = vec![
+        0_u8;
+        funding_ledger_bytes_v2(3).map_err(|error| Error::new(
+            format!("FundingLedgerV2 width: {error:?}")
+        ))?
+    ];
+    FundingLedgerV2::initialize(
+        &mut funding_ledger_bytes,
+        manifest_id,
+        manifest_view,
+        selected_mask,
+    )
+    .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
+    let pending_funding = FundingLedgerV2::decode(&funding_ledger_bytes)
+        .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
+    let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
+        resolution_program.to_bytes(),
+        market.to_bytes(),
+        generation,
+        manifest_id,
+        pending_funding,
+    )
+    .map_err(|error| Error::new(format!("funding-ledger derivation: {error:?}")))?;
+    let funding =
+        Pubkey::find_program_address(&funding_derivation.seed_components(), &resolution_program).0;
     let source_state = Pubkey::find_program_address(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
@@ -365,9 +376,28 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
 
     let material_pair = RecordPairV1::derive(
         registry_program,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         facts.material_digest,
     );
+    let material_account = session
+        .rpc
+        .required_account(material_pair.raw, "SourceMaterialV3 record")?;
+    let material = SourceMaterialV3::decode(&material_account.data)
+        .map_err(|error| Error::new(format!("SourceMaterialV3: {error:?}")))?;
+    if material.recovery_policy().is_some() {
+        return Err(Error::new(
+            "the relayed vertical requires a no-recovery SourceMaterialV3",
+        ));
+    }
+    match material.principal_policy() {
+        SourcePrincipalPolicyV1::BoundedByFloor(floor)
+            if floor.to_bytes() == facts.manipulation_floor_digest => {}
+        _ => {
+            return Err(Error::new(
+                "the relayed SourceMaterialV3 does not select the published manipulation floor",
+            ));
+        }
+    }
     let manifest_pair = RecordPairV1::derive(
         registry_program,
         dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -400,14 +430,9 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             create.source_top_up_lamports,
         ));
     }
-    for (destination, top_up) in funding.into_iter().zip(create.funding_top_up_lamports) {
-        if top_up > 0 {
-            prepay.push(transfer(&authority.pubkey(), &destination, top_up));
-        }
-    }
     if !prepay.is_empty() {
         session.transactions.push(session.rpc.send(
-            "relayed vertical: prepay the Source state and the three Resolution Funds",
+            "relayed vertical: prepay the Source state",
             &prepay,
             &authority,
         )?);
@@ -449,7 +474,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             &mut session.transactions,
         )?;
     session.transactions.push(session.rpc.send_v0(
-        "relayed vertical: a no-recovery Market creates its own Resolution funding",
+        "relayed vertical: a no-recovery Market creates its Source against initialized Resolution funding",
         std::slice::from_ref(&create.instruction),
         &authority,
         funding_observation,
@@ -480,16 +505,25 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         funding_observation,
         &funding_tables,
     )?);
-    for (label, address) in [
-        ("recovery companion Fund", funding[0]),
-        ("exhaustion companion Fund", funding[1]),
-        ("failure Fund", funding[2]),
-    ] {
-        let status = FundingStateV1::decode(&session.rpc.required_account(address, label)?.data)
-            .map_err(|error| Error::new(format!("{label}: {error:?}")))?
+    let funding_account = session
+        .rpc
+        .required_account(funding, "Resolution funding ledger")?;
+    let active_funding = FundingLedgerV2::decode(&funding_account.data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest_view))
+        .map_err(|error| Error::new(format!("Resolution funding ledger: {error:?}")))?;
+    for entry_index in funding_entry_indices {
+        let status = active_funding
+            .slot(entry_index)
+            .map_err(|error| {
+                Error::new(format!(
+                    "Resolution funding ledger entry {entry_index}: {error:?}"
+                ))
+            })?
             .status();
-        if status != FundingStatus::Active {
-            return Err(Error::new(format!("{label} is {status:?}, not Active")));
+        if status != FundingLedgerStatusV2::Active {
+            return Err(Error::new(format!(
+                "Resolution funding ledger entry {entry_index} is {status:?}, not Active"
+            )));
         }
     }
     relayworld::require_source_phase(
@@ -500,14 +534,14 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     stages.push(StageV1 {
         stage: "resolution funding (no recovery)".into(),
         outcome: "executed".into(),
-        note: "CreateFund and VerifyFundReady over the SHORT no-recovery frame (the two \
-               RecoveryPolicyV2 tail positions absent), the first execution of the e5b6923 \
-               admission on a live validator. The failure compartment is configured by the \
-               market's own Source material; the two companions are prepaid and refundable."
+        note: "CreateFund and VerifyFundReady over the short no-recovery frame (the two \
+               RecoveryPolicyV2 tail positions absent). One Resolution-owned subset ledger \
+               carries the failure compartment configured by the market's Source material and \
+               its two prepaid, refundable companions."
             .into(),
     });
     ledger.watch("resolution_source_state", source_state);
-    ledger.watch("resolution_funding_failure", funding[2]);
+    ledger.watch("resolution_funding_ledger", funding);
     ledger.watch("resolution_rent_beneficiary", rent_beneficiary);
     ledger.observe(
         &mut session.rpc,
@@ -581,7 +615,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         manifest: manifest_pair,
         rent_beneficiary,
         source_state,
-        failure_funding: funding[2],
+        failure_funding: funding,
     };
 
     // Prepay both certificate destinations: success and failure are different
@@ -1129,7 +1163,7 @@ fn select_no_recovery_entries(
         let entry = manifest
             .entry(entry_index)
             .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
             continue;
         }
         if entry.config_id().to_bytes() == material_digest {
@@ -1166,7 +1200,7 @@ fn fund_snapshot(
     material: RecordPairV1,
     manifest: RecordPairV1,
     source_state: Pubkey,
-    funding: [Pubkey; 3],
+    funding_ledger: Pubkey,
 ) -> Result<ResolutionCreateFundSnapshotV3> {
     let (observation, present) = rpc.finalized_observed_accounts(
         &[
@@ -1203,9 +1237,7 @@ fn fund_snapshot(
         capability_manifest: at(8)?,
         capability_manifest_staging: vacant(observation, manifest.staging),
         source_destination: observed_or_vacant(rpc, observation, source_state)?,
-        recovery_destination: observed_or_vacant(rpc, observation, funding[0])?,
-        exhaustion_destination: observed_or_vacant(rpc, observation, funding[1])?,
-        failure_destination: observed_or_vacant(rpc, observation, funding[2])?,
+        funding_ledger: observed_or_vacant(rpc, observation, funding_ledger)?,
         rent_sysvar: at(9)?,
         system_program: at(10)?,
         // The no-recovery material has no policy record; per the operator's
@@ -1228,7 +1260,7 @@ fn verify_snapshot(
     material: RecordPairV1,
     manifest: RecordPairV1,
     source_state: Pubkey,
-    funding: [Pubkey; 3],
+    funding: Pubkey,
     rent_beneficiary: Pubkey,
 ) -> Result<ResolutionVerifyFundReadySnapshotV3> {
     let (observation, present) = rpc.finalized_observed_accounts(
@@ -1243,9 +1275,7 @@ fn verify_snapshot(
             material.raw,
             manifest.raw,
             source_state,
-            funding[0],
-            funding[1],
-            funding[2],
+            funding,
             rent_beneficiary,
             sysvar::rent::ID,
             sysvar::clock::ID,
@@ -1271,12 +1301,10 @@ fn verify_snapshot(
         capability_manifest: at(8)?,
         capability_manifest_staging: vacant(observation, manifest.staging),
         source_state: at(9)?,
-        recovery_funding: at(10)?,
-        exhaustion_funding: at(11)?,
-        failure_funding: at(12)?,
-        beneficiary: at(13)?,
-        rent_sysvar: at(14)?,
-        clock_sysvar: at(15)?,
+        funding_ledger: at(10)?,
+        beneficiary: at(11)?,
+        rent_sysvar: at(12)?,
+        clock_sysvar: at(13)?,
         recovery_policy: at(7)?,
         recovery_policy_staging: vacant(observation, material.staging),
     })

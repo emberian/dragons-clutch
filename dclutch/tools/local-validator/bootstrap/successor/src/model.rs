@@ -92,6 +92,11 @@ pub(crate) struct MarketRunInput {
     /// The run spec carries the exact bodies for the same reason it already
     /// carries `linked_basis_hex` rather than an opaque digest.
     pub(crate) source_spec_hex: String,
+    /// Exact SourceCapacityProfileV1 body named by the SourceSpec.
+    pub(crate) source_capacity_profile_hex: String,
+    /// ManipulationFloorV1 policy template. Empty selects explicit unbounded;
+    /// nonempty is rebound to the immutable Realm mint before publication.
+    pub(crate) manipulation_floor_hex: String,
     pub(crate) window_spec_hex: String,
     pub(crate) statistic_spec_hex: String,
     pub(crate) provider_release_hex: String,

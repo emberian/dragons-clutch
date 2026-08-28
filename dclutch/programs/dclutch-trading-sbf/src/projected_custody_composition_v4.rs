@@ -9,8 +9,8 @@ use dclutch_custody_contract::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1, PROJECTED_CUSTODY_REQUEST_BYTES_V1,
     PROJECTED_CUSTODY_REQUEST_MAGIC_V1, ProjectedCallerRoleV1, ProjectedCustodyCallerSeedsV1,
     ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
-    ProjectedCustodyRequestV1, ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV1,
-    ProjectedCustodyStateV1,
+    ProjectedCustodyRequestV1, ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV2,
+    ProjectedCustodyStateV2,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -180,7 +180,7 @@ pub(crate) fn execute_projected_custody_lock_route_v4<'info>(
         let state_data = state_account
             .try_borrow_data()
             .map_err(|_| TradingSbfError::Transition)?;
-        ProjectedCustodyStateV1::decode(&state_data).map_err(|_| TradingSbfError::Transition)?
+        ProjectedCustodyStateV2::decode(&state_data).map_err(|_| TradingSbfError::Transition)?
     };
     let source_replay = cpi_accounts
         .get(SOURCE_REPLAY)
@@ -277,7 +277,7 @@ fn prepare<'a>(
         let state_data = state_account
             .try_borrow_data()
             .map_err(|_| TradingSbfError::Content)?;
-        ProjectedCustodyStateV1::decode(&state_data).map_err(|_| TradingSbfError::Content)?
+        ProjectedCustodyStateV2::decode(&state_data).map_err(|_| TradingSbfError::Content)?
     };
     authenticate_lock_prestate_v4(request, prestate)?;
     Ok(PreparedProjectedCustodyLockV4 {
@@ -334,7 +334,7 @@ fn authenticate_lock_frame_v4(
     request_digest: [u8; 32],
     accounts: &[AccountInfo<'_>],
 ) -> Result<(), ProgramError> {
-    let state_seeds = ProjectedCustodyStateSeedsV1::from_request(request);
+    let state_seeds = ProjectedCustodyStateSeedsV2::from_request(request);
     let expected_state =
         Pubkey::find_program_address(&state_seeds.as_slices(), custody_program.key).0;
     let caller_seeds = ProjectedCustodyCallerSeedsV1::new(request, request_digest);
@@ -419,7 +419,7 @@ fn exact_lock_privileges_v4(accounts: &[AccountInfo<'_>]) -> bool {
 
 fn authenticate_lock_prestate_v4(
     request: ProjectedCustodyRequestV1,
-    state: ProjectedCustodyStateV1,
+    state: ProjectedCustodyStateV2,
 ) -> Result<(), ProgramError> {
     if state.phase != ProjectedCustodyPhaseV1::HoardOpen
         || state.request.operation != ProjectedCustodyOperationV1::OpenHoard
@@ -440,7 +440,7 @@ fn authenticate_lock_result_v4(
     request_digest: [u8; 32],
     source_replay: [u8; 32],
     raw_receipt: [u8; PROJECTED_CUSTODY_LOCK_RECEIPT_BYTES_V1],
-    state: ProjectedCustodyStateV1,
+    state: ProjectedCustodyStateV2,
     producer: Pubkey,
     expected_producer: Pubkey,
     provenance: ExpectedReceiptProvenanceV4,
@@ -574,8 +574,8 @@ mod tests {
         }
     }
 
-    fn open_state(request: ProjectedCustodyRequestV1) -> ProjectedCustodyStateV1 {
-        ProjectedCustodyStateV1 {
+    fn open_state(request: ProjectedCustodyRequestV1) -> ProjectedCustodyStateV2 {
+        ProjectedCustodyStateV2 {
             phase: ProjectedCustodyPhaseV1::HoardOpen,
             request: ProjectedCustodyRequestV1 {
                 operation: ProjectedCustodyOperationV1::OpenHoard,
@@ -586,6 +586,7 @@ mod tests {
             },
             next_revision: 2,
             locked_amount: 0,
+            principal_cap_sets: u64::MAX,
             last_request_digest: id(30),
             bump: 31,
         }
@@ -594,8 +595,8 @@ mod tests {
     fn locked_state(
         request: ProjectedCustodyRequestV1,
         request_digest: [u8; 32],
-    ) -> ProjectedCustodyStateV1 {
-        let state = ProjectedCustodyStateV1 {
+    ) -> ProjectedCustodyStateV2 {
+        let state = ProjectedCustodyStateV2 {
             phase: ProjectedCustodyPhaseV1::HoardLocked,
             request: ProjectedCustodyRequestV1 {
                 operation: ProjectedCustodyOperationV1::OpenHoard,
@@ -606,10 +607,11 @@ mod tests {
             },
             next_revision: request.resulting_revision,
             locked_amount: request.amount,
+            principal_cap_sets: u64::MAX,
             last_request_digest: request_digest,
             bump: 31,
         };
-        ProjectedCustodyStateV1::decode(&state.encode().expect("state bytes"))
+        ProjectedCustodyStateV2::decode(&state.encode().expect("state bytes"))
             .expect("hostile decode")
     }
 

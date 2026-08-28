@@ -295,6 +295,7 @@ pub fn compile_product_lbv2_fixture_v2(
         terminal_winner: 0,
         identity: core_identity,
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(input.source_owner.to_bytes())?,
         terminal_receipt: None,
     }

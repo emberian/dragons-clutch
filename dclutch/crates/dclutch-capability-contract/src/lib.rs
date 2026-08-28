@@ -186,6 +186,8 @@ pub enum Error {
     RealmCollateralBindingMismatch,
     /// A funding-state status byte was unknown.
     UnknownFundingStatus,
+    /// A FundingLedgerV2 slot status byte was unknown.
+    UnknownFundingLedgerStatus,
     /// Funding state did not bind to the supplied manifest entry.
     FundingBindingMismatch,
     /// Present observed native lamports did not equal remaining lamports.

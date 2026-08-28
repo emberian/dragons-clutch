@@ -151,6 +151,7 @@ mod tests {
                 generation: 1,
             },
             outstanding_capabilities: 0,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: id(38),
             terminal_receipt: Some(id(39)),
         }

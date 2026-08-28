@@ -54,7 +54,7 @@ use dclutch_source_contract::{
     PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, ProviderReleaseV1,
     RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, RoundingBoundary,
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceAccessProfile, SourceCapacityProfileV1,
-    SourceMaterialV2, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    SourceMaterialV3, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
     admit_founding_principal,
 };
 use solana_sdk_ids::sysvar;
@@ -445,15 +445,16 @@ pub(crate) fn relayed_market_input(
         ));
     }
 
-    // 8. SourceMaterialV2 with NO recovery policy: the §12.7 shape whose
+    // 8. SourceMaterialV3 with a bounded floor and no recovery policy: the §12.7 shape whose
     //    silent-provider path is the funded deadline walk.
-    let material = SourceMaterialV2::new(
+    let material = SourceMaterialV3::bounded_by_floor(
         source_content(product_record_digest)?,
         source_content(source_spec_digest)?,
         source_content(window_digest)?,
         source_content(statistic_digest)?,
         None,
         source_content(SOURCE_FAILURE_POLICY_RELEASE_ID_V2)?,
+        source_content(manipulation_floor_digest)?,
     );
     let material_digest: [u8; 32] = Sha256::digest(material.to_bytes()).into();
 
@@ -539,6 +540,8 @@ pub(crate) fn relayed_market_input(
         statistic_spec_id: hex(&statistic_digest),
         failure_policy_release_id: hex(&SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
         source_spec_hex: hex(&source_spec_bytes),
+        source_capacity_profile_hex: hex(&capacity.to_bytes()),
+        manipulation_floor_hex: hex(&manipulation_floor_bytes),
         window_spec_hex: hex(&window_bytes),
         statistic_spec_hex: hex(&statistic_bytes),
         provider_release_hex: hex(&provider_release_bytes),

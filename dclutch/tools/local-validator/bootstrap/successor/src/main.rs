@@ -19,6 +19,7 @@ mod relayed;
 mod rpc;
 mod runtime;
 mod seed;
+mod upgrade;
 
 type Result<T> = core::result::Result<T, Error>;
 
@@ -75,6 +76,9 @@ fn run() -> Result<()> {
         Some("ledger-census") => run_ledger_census(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
         Some("campaign") => run_campaign(arguments.collect()),
+        Some("devnet-upgrade-baseline-v1") => upgrade::run_baseline(arguments.collect()),
+        Some("devnet-upgrade-extend-v1") => upgrade::run_extension(arguments.collect()),
+        Some("devnet-upgrade-v1") => upgrade::run(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -862,6 +866,7 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 
 fn usage() {
     usage_supervisor();
+    println!("{}", upgrade::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
          ABSOLUTE_JSON [--market ABSOLUTE_JSON] --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... \

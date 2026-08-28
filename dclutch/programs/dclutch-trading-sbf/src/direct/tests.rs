@@ -109,6 +109,7 @@ fn core_market_view(outcome_count: u32) -> CoreMarketViewV1 {
             generation: 4,
         },
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(90),
         terminal_receipt: None,
     };
