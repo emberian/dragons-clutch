@@ -66,7 +66,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
-    io::Write as _,
+    io::{ErrorKind, Write as _},
+    os::unix::fs::MetadataExt as _,
     path::{Path, PathBuf},
     str::FromStr as _,
     time::{SystemTime, UNIX_EPOCH},
@@ -920,6 +921,101 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
         ));
     }
     Ok(())
+}
+
+struct CampaignEvidenceLeaseV1 {
+    path: PathBuf,
+    parent: PathBuf,
+    file: fs::File,
+}
+
+impl CampaignEvidenceLeaseV1 {
+    fn acquire(evidence_path: &Path) -> Result<Self> {
+        let parent = evidence_path
+            .parent()
+            .ok_or_else(|| Error::new("evidence output requires a parent directory"))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            Error::new(format!(
+                "create evidence directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+        let file_name = evidence_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| Error::new("evidence output requires a UTF-8 file name"))?;
+        let path = evidence_path.with_file_name(format!("{file_name}.lock"));
+        let created_at_unix_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::new("system clock precedes the Unix epoch"))?
+            .as_secs();
+        let owner = serde_json::to_vec_pretty(&json!({
+            "schema": "dclutch-successor-campaign-evidence-lock-v1",
+            "pid": std::process::id(),
+            "evidence": evidence_path.display().to_string(),
+            "createdAtUnixSeconds": created_at_unix_seconds,
+            "stalePolicy": "never-auto-remove; confirm no live owner, then remove manually",
+        }))?;
+        let mut file = match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                return Err(Error::new(format!(
+                    "campaign evidence is locked at {}; locks are never removed automatically. Confirm that no process owns it before removing a stale lock manually",
+                    path.display()
+                )));
+            }
+            Err(error) => {
+                return Err(Error::new(format!(
+                    "create campaign evidence lock {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        let initialize = file
+            .write_all(&owner)
+            .and_then(|()| file.write_all(b"\n"))
+            .and_then(|()| file.sync_all())
+            .and_then(|()| fs::File::open(parent)?.sync_all());
+        if let Err(error) = initialize {
+            if Self::owns_link(&file, &path) {
+                let _ = fs::remove_file(&path);
+            }
+            return Err(Error::new(format!(
+                "initialize campaign evidence lock {}: {error}",
+                path.display()
+            )));
+        }
+        if !Self::owns_link(&file, &path) {
+            return Err(Error::new(format!(
+                "campaign evidence lock {} changed while it was acquired",
+                path.display()
+            )));
+        }
+        Ok(Self {
+            path,
+            parent: parent.to_path_buf(),
+            file,
+        })
+    }
+
+    fn owns_link(file: &fs::File, path: &Path) -> bool {
+        let Ok(held) = file.metadata() else {
+            return false;
+        };
+        let Ok(linked) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        held.dev() == linked.dev() && held.ino() == linked.ino()
+    }
+}
+
+impl Drop for CampaignEvidenceLeaseV1 {
+    fn drop(&mut self) {
+        if Self::owns_link(&self.file, &self.path) {
+            let _ = fs::remove_file(&self.path);
+            let _ = fs::File::open(&self.parent).and_then(|directory| directory.sync_all());
+        }
+    }
 }
 
 fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
@@ -1877,6 +1973,15 @@ fn authenticate_checked_live_substrate(rpc: &mut Rpc, plan: &SuccessorPlan) -> R
 
 /// Run the driver.
 pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
+    let _evidence_lease = args
+        .evidence_path
+        .as_deref()
+        .map(CampaignEvidenceLeaseV1::acquire)
+        .transpose()?;
+    execute_with_evidence_lease(args)
+}
+
+fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     if args.execute && args.evidence_path.is_none() {
         return Err(Error::new(
             "--execute requires --evidence ABSOLUTE_JSON so intent is durable before any mutation",
@@ -2244,9 +2349,8 @@ fn execute_stages(
                 let Some(input) = market else {
                     return Err(Error::new(
                         "the founding stage needs a market input: pass --market ABSOLUTE_JSON \
-                         carrying the run spec's `market` block as its own document (the \
-                         `demo-market` subcommand prints the local-fixture shape). Every earlier \
-                         stage runs without one.",
+                         carrying the exact output of `devnet-market` or `graduation-market`. \
+                         Every earlier stage runs without one.",
                     ));
                 };
                 let (mint, wallet) = founding_keys.ok_or_else(|| {
@@ -2673,6 +2777,35 @@ mod tests {
                 },
             },
         })
+    }
+
+    #[test]
+    fn campaign_evidence_lease_refuses_a_racer_and_releases_only_its_owned_link() {
+        let evidence = std::env::temp_dir().join(format!(
+            "dclutch-campaign-evidence-lease-{}.json",
+            Pubkey::new_unique()
+        ));
+        let first = CampaignEvidenceLeaseV1::acquire(&evidence).expect("first lease");
+        let lock_path = first.path.clone();
+        assert!(lock_path.exists(), "durable lock must exist while owned");
+        let refusal = CampaignEvidenceLeaseV1::acquire(&evidence)
+            .err()
+            .expect("simultaneous campaign must refuse");
+        assert!(refusal.0.contains("locked"), "{}", refusal.0);
+        assert!(
+            refusal.0.contains("never removed automatically"),
+            "{}",
+            refusal.0
+        );
+        drop(first);
+        assert!(
+            !lock_path.exists(),
+            "owner must release its exact lock inode"
+        );
+
+        let next = CampaignEvidenceLeaseV1::acquire(&evidence).expect("released lease reacquires");
+        drop(next);
+        assert!(!lock_path.exists());
     }
 
     #[test]

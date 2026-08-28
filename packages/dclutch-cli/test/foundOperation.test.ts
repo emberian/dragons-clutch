@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -124,7 +124,13 @@ function flag(arguments_: ReadonlyArray<string>, name: string): string {
   return arguments_[index + 1] as string;
 }
 
-function successfulDependencies(calls: string[][], failCampaignAfterEvidence = false): FoundOperationDependenciesV1 {
+function successfulDependencies(
+  calls: string[][],
+  failures: Readonly<{
+    campaignAfterEvidence?: boolean;
+    participantBeforeEvidence?: boolean;
+  }> = Object.freeze({}),
+): FoundOperationDependenciesV1 {
   return Object.freeze({
     invoke(_binary, arguments_) {
       calls.push([...arguments_]);
@@ -133,6 +139,9 @@ function successfulDependencies(calls: string[][], failCampaignAfterEvidence = f
         return { status: 0, stdout: Buffer.from('{"market":"exact-rust-authored"}\n'), stderr: new Uint8Array() };
       }
       if (command === 'campaign') {
+        if (!arguments_.includes('--execute') && existsSync(flag(arguments_, '--evidence'))) {
+          return { status: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
+        }
         const plan = readFileSync(flag(arguments_, '--plan'));
         const market = readFileSync(flag(arguments_, '--market'));
         writeFileSync(flag(arguments_, '--evidence'), `${JSON.stringify({
@@ -146,9 +155,15 @@ function successfulDependencies(calls: string[][], failCampaignAfterEvidence = f
             market: { accounts: { founding_market: { address: key(13) } } },
           },
         })}\n`);
-        return { status: failCampaignAfterEvidence ? 1 : 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
+        return { status: failures.campaignAfterEvidence === true ? 1 : 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
       }
       if (command === 'devnet-user-position-admission-v1') {
+        if (failures.participantBeforeEvidence === true) {
+          return { status: 1, stdout: new Uint8Array(), stderr: new Uint8Array() };
+        }
+        if (!arguments_.includes('--execute') && existsSync(flag(arguments_, '--output'))) {
+          return { status: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
+        }
         const plan = readFileSync(flag(arguments_, '--plan'));
         const evidence = readFileSync(flag(arguments_, '--campaign-evidence'));
         const collateral = arguments_.includes('--collateral-source-owner') ? {
@@ -228,7 +243,7 @@ describe('permanent-devnet founding exterior', () => {
     expect(() => runFoundOperationV1(
       context(), { out: () => undefined, err: () => undefined },
       files.binary, files.operation, files.journal, null, true,
-      successfulDependencies(firstCalls, true),
+      successfulDependencies(firstCalls, { campaignAfterEvidence: true }),
     )).toThrow(/founding campaign exited 1/);
     expect(JSON.parse(readFileSync(files.journal, 'utf8')).phase).toBe('market-prepared');
 
@@ -241,6 +256,105 @@ describe('permanent-devnet founding exterior', () => {
     expect(resumedCalls.map((call) => call[0])).toEqual([
       'campaign', 'devnet-user-position-admission-v1',
     ]);
+  });
+
+  it('digest-checks a founding-complete resume before any canonical owner or key path', () => {
+    const files = fixture(root());
+    expect(() => runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, true,
+      successfulDependencies([], { participantBeforeEvidence: true }),
+    )).toThrow(/participant admission exited 1/);
+    const journalBefore = readFileSync(files.journal);
+    expect(JSON.parse(journalBefore.toString()).phase).toBe('founding-complete');
+    writeFileSync(files.evidence, Buffer.concat([readFileSync(files.evidence), Buffer.from(' ')]));
+
+    const resumedCalls: string[][] = [];
+    expect(() => runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, true,
+      successfulDependencies(resumedCalls),
+    )).toThrow(/campaign evidence changed after it was durably joined/);
+    expect(resumedCalls).toHaveLength(0);
+    expect(readFileSync(files.journal)).toEqual(journalBefore);
+  });
+
+  it('authenticates both complete reports through their Rust owners and refuses either drift first', () => {
+    const files = fixture(root());
+    runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, true,
+      successfulDependencies([]),
+    );
+    const campaign = readFileSync(files.evidence);
+    const participant = readFileSync(files.participant);
+    const journal = readFileSync(files.journal);
+
+    writeFileSync(files.participant, Buffer.concat([participant, Buffer.from('\n')]));
+    const participantDriftCalls: string[][] = [];
+    expect(() => runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, false,
+      successfulDependencies(participantDriftCalls),
+    )).toThrow(/participant evidence changed after it was durably joined/);
+    expect(participantDriftCalls).toHaveLength(0);
+    expect(readFileSync(files.journal)).toEqual(journal);
+
+    writeFileSync(files.participant, participant);
+    writeFileSync(files.evidence, Buffer.concat([campaign, Buffer.from('\n')]));
+    const campaignDriftCalls: string[][] = [];
+    expect(() => runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, false,
+      successfulDependencies(campaignDriftCalls),
+    )).toThrow(/campaign evidence changed after it was durably joined/);
+    expect(campaignDriftCalls).toHaveLength(0);
+    expect(readFileSync(files.journal)).toEqual(journal);
+
+    writeFileSync(files.evidence, campaign);
+    const pollCalls: string[][] = [];
+    expect(runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, false,
+      successfulDependencies(pollCalls),
+    )).toBe(0);
+    expect(pollCalls.map((call) => call[0])).toEqual([
+      'campaign', 'devnet-user-position-admission-v1',
+    ]);
+    expect(pollCalls.every((call) => !call.includes('--execute'))).toBe(true);
+  });
+
+  it('holds an exclusive durable operation lock across child dispatch and releases only its own inode', () => {
+    const files = fixture(root());
+    const calls: string[][] = [];
+    const base = successfulDependencies(calls);
+    let raced = false;
+    const dependencies: FoundOperationDependenciesV1 = Object.freeze({
+      invoke(binary, arguments_) {
+        if (!raced && arguments_[0] === 'devnet-market') {
+          raced = true;
+          expect(() => runFoundOperationV1(
+            context(), { out: () => undefined, err: () => undefined },
+            files.binary, files.operation, files.journal, null, false,
+            dependencies,
+          )).toThrow(/is locked.*never removed automatically/i);
+        }
+        return base.invoke(binary, arguments_);
+      },
+    });
+    expect(runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, false,
+      dependencies,
+    )).toBe(0);
+    expect(raced).toBe(true);
+    expect(existsSync(`${files.journal}.lock`)).toBe(false);
+
+    expect(runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      files.binary, files.operation, files.journal, null, false,
+      successfulDependencies([]),
+    )).toBe(0);
   });
 
   it('refuses wrong genesis, shared-flag injection, operation drift, and duplicate roles', () => {

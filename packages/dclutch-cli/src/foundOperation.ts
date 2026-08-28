@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import {
   closeSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   linkSync,
   lstatSync,
@@ -34,6 +35,7 @@ const OPERATION_SCHEMA_V1 = 'dclutch-devnet-market-participant-operation-v1';
 const JOURNAL_SCHEMA_V1 = 'dclutch-devnet-market-participant-journal-v1';
 const CAMPAIGN_SCHEMA_V1 = 'dclutch-successor-campaign-report-v1';
 const PARTICIPANT_SCHEMA_V1 = 'dclutch-devnet-user-position-admission-execution-v1';
+const OPERATION_LOCK_SCHEMA_V1 = 'dclutch-devnet-market-participant-operation-lock-v1';
 const MAX_OPERATION_BYTES = 128 * 1024;
 const MAX_MARKET_INPUT_BYTES = 1024 * 1024;
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
@@ -147,6 +149,13 @@ type JournalBodyV1 = Readonly<{
 type JournalV1 = JournalBodyV1 & Readonly<{ bodySha256: string }>;
 
 type InvocationResultV1 = Readonly<{ status: number | null; stdout: Uint8Array; stderr: Uint8Array }>;
+
+type OperationLeaseV1 = Readonly<{
+  path: string;
+  descriptor: number;
+  device: bigint;
+  inode: bigint;
+}>;
 
 export type FoundOperationDependenciesV1 = Readonly<{
   invoke: (binary: string, arguments_: ReadonlyArray<string>) => InvocationResultV1;
@@ -528,6 +537,81 @@ function fsyncDirectory(path: string): void {
   try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
 }
 
+function operationLockPath(journalPath: string): string {
+  return `${journalPath}.lock`;
+}
+
+function operationLeaseLinkMatches(path: string, device: bigint, inode: bigint): boolean {
+  try {
+    const linked = lstatSync(path, { bigint: true });
+    return linked.dev === device && linked.ino === inode;
+  } catch {
+    return false;
+  }
+}
+
+function acquireOperationLease(operationPath: string, journalPath: string): OperationLeaseV1 {
+  const path = operationLockPath(journalPath);
+  const parent = dirname(path);
+  mkdirSync(parent, { recursive: true });
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, 'wx', 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new Error(
+        `found operation is locked at ${path}; locks are never removed automatically. `
+        + 'Confirm that no process owns it before removing a stale lock manually',
+      );
+    }
+    throw error;
+  }
+  let device: bigint | null = null;
+  let inode: bigint | null = null;
+  try {
+    const metadata = fstatSync(descriptor, { bigint: true });
+    device = metadata.dev;
+    inode = metadata.ino;
+    const owner = Buffer.from(`${JSON.stringify({
+      schema: OPERATION_LOCK_SCHEMA_V1,
+      pid: process.pid,
+      operation: operationPath,
+      journal: journalPath,
+      createdAtUnixMs: Date.now(),
+      stalePolicy: 'never-auto-remove; confirm no live owner, then remove manually',
+    }, null, 2)}\n`);
+    let offset = 0;
+    while (offset < owner.length) offset += writeSync(descriptor, owner, offset, owner.length - offset);
+    fsyncSync(descriptor);
+    fsyncDirectory(parent);
+    return Object.freeze({ path, descriptor, device: metadata.dev, inode: metadata.ino });
+  } catch (error) {
+    if (device !== null && inode !== null && operationLeaseLinkMatches(path, device, inode)) {
+      try { unlinkSync(path); } catch { /* preserve the acquisition failure */ }
+    }
+    try { closeSync(descriptor); } catch { /* preserve the acquisition failure */ }
+    throw error;
+  }
+}
+
+function releaseOperationLease(lease: OperationLeaseV1): Error | null {
+  let failure: Error | null = null;
+  try {
+    const held = fstatSync(lease.descriptor, { bigint: true });
+    if (held.dev === lease.device && held.ino === lease.inode
+      && operationLeaseLinkMatches(lease.path, lease.device, lease.inode)) {
+      unlinkSync(lease.path);
+      fsyncDirectory(dirname(lease.path));
+    }
+  } catch (error) {
+    failure = error instanceof Error ? error : new Error(String(error));
+  }
+  try { closeSync(lease.descriptor); } catch (error) {
+    failure ??= error instanceof Error ? error : new Error(String(error));
+  }
+  return failure;
+}
+
 function writeTemporary(path: string, source: Uint8Array): string {
   const parent = dirname(path);
   mkdirSync(parent, { recursive: true });
@@ -665,17 +749,18 @@ function marketCommand(kind: MarketKindV1): string {
   return kind === 'flagship' ? 'devnet-market' : 'graduation-market';
 }
 
-function campaignArguments(operation: FoundOperationV1, rpcUrl: string): string[] {
+function campaignArguments(operation: FoundOperationV1, rpcUrl: string, execute: boolean): string[] {
   const arguments_ = [
     'campaign', '--rpc-url', rpcUrl, '--i-mean-devnet', SOLANA_DEVNET_GENESIS_HASH_V1,
     '--plan', operation.plan, '--market', operation.market.output,
-    '--evidence', operation.campaign.evidence, '--through', 'founding', '--execute',
+    '--evidence', operation.campaign.evidence, '--through', 'founding',
   ];
+  if (execute) arguments_.push('--execute');
   for (const row of operation.campaign.keypairs) arguments_.push(`--keypair-${row.role}`, row.path);
   return arguments_;
 }
 
-function participantArguments(operation: FoundOperationV1, rpcUrl: string): string[] {
+function participantArguments(operation: FoundOperationV1, rpcUrl: string, execute: boolean): string[] {
   const participant = operation.participant;
   const arguments_ = [
     'devnet-user-position-admission-v1', '--rpc-url', rpcUrl,
@@ -686,8 +771,9 @@ function participantArguments(operation: FoundOperationV1, rpcUrl: string): stri
     '--fee-payer', participant.feePayer,
     '--fee-payer-keypair', participant.feePayerKeypair,
     '--minimum-finalized-slot', participant.minimumFinalizedSlot,
-    '--output', participant.output, '--execute',
+    '--output', participant.output,
   ];
+  if (execute) arguments_.push('--execute');
   if (participant.collateral !== null) {
     arguments_.push(
       '--collateral-source-owner', participant.collateral.sourceOwner,
@@ -697,6 +783,74 @@ function participantArguments(operation: FoundOperationV1, rpcUrl: string): stri
     );
   }
   return arguments_;
+}
+
+function readJournalEvidence(path: string, expectedSha256: string | null, label: string): Uint8Array {
+  if (expectedSha256 === null) throw new Error(`found journal omitted its ${label} digest`);
+  const source = readBounded(path, MAX_EVIDENCE_BYTES, label);
+  if (sha256(source) !== expectedSha256) {
+    throw new Error(`${label} changed after it was durably joined to the found journal`);
+  }
+  return source;
+}
+
+function authenticatePhaseArtifacts(journal: JournalV1, operation: FoundOperationV1): void {
+  if (journal.phase === 'planned' || journal.phase === 'market-authored') return;
+  const market = readBounded(operation.market.output, MAX_MARKET_INPUT_BYTES, 'Market input');
+  const saved = Buffer.from(journal.marketInputBase64 ?? '', 'base64');
+  if (sha256(market) !== journal.marketInputSha256 || !Buffer.from(market).equals(saved)) {
+    throw new Error('Market input changed after it was durably joined to the found journal');
+  }
+  if (journal.phase === 'founding-complete' || journal.phase === 'participant-complete') {
+    readJournalEvidence(operation.campaign.evidence, journal.campaignEvidenceSha256, 'campaign evidence');
+  }
+  if (journal.phase === 'participant-complete') {
+    readJournalEvidence(operation.participant.output, journal.participantEvidenceSha256, 'participant evidence');
+  }
+}
+
+function authenticateCampaignOwner(
+  dependencies: FoundOperationDependenciesV1,
+  binary: string,
+  operation: FoundOperationV1,
+  journal: JournalV1,
+  io: Io,
+): Record<string, unknown> {
+  const before = readJournalEvidence(operation.campaign.evidence, journal.campaignEvidenceSha256, 'campaign evidence');
+  invokeChecked(
+    dependencies,
+    binary,
+    campaignArguments(operation, journal.rpcUrl, false),
+    'founding campaign authentication',
+    io,
+  );
+  const after = readJournalEvidence(operation.campaign.evidence, journal.campaignEvidenceSha256, 'campaign evidence');
+  if (!Buffer.from(after).equals(Buffer.from(before))) {
+    throw new Error('founding campaign authentication changed its finalized evidence');
+  }
+  return validateCampaignEvidence(after, journal);
+}
+
+function authenticateParticipantOwner(
+  dependencies: FoundOperationDependenciesV1,
+  binary: string,
+  operation: FoundOperationV1,
+  journal: JournalV1,
+  io: Io,
+): Record<string, unknown> {
+  const before = readJournalEvidence(operation.participant.output, journal.participantEvidenceSha256, 'participant evidence');
+  invokeChecked(
+    dependencies,
+    binary,
+    participantArguments(operation, journal.rpcUrl, false),
+    'participant admission authentication',
+    io,
+  );
+  const after = readJournalEvidence(operation.participant.output, journal.participantEvidenceSha256, 'participant evidence');
+  if (!Buffer.from(after).equals(Buffer.from(before))) {
+    throw new Error('participant admission authentication changed its finalized evidence');
+  }
+  return validateParticipantEvidence(after, journal, operation);
 }
 
 function writeSession(path: string, rpcUrl: string, planSource: Uint8Array, campaign: Record<string, unknown>): void {
@@ -720,7 +874,7 @@ function writeSession(path: string, rpcUrl: string, planSource: Uint8Array, camp
  * Default is read-only Market-input preparation. `execute` is durably recorded
  * before either signer-owning child is invoked.
  */
-export function runFoundOperationV1(
+function runFoundOperationUnderLeaseV1(
   context: CliContext,
   io: Io,
   binary: string,
@@ -744,8 +898,9 @@ export function runFoundOperationV1(
     successorSha256: sha256(binarySource),
     planSha256: sha256(planSource),
   };
-  if ([operationPath, journalPath, binary].some((path) => [operation.market.output, operation.campaign.evidence, operation.participant.output].includes(path))) {
-    throw new Error('operation outputs must not overwrite the operation, journal, or successor binary');
+  if ([operationPath, journalPath, operationLockPath(journalPath), binary]
+    .some((path) => [operation.market.output, operation.campaign.evidence, operation.participant.output].includes(path))) {
+    throw new Error('operation outputs must not overwrite the operation, journal, operation lock, or successor binary');
   }
 
   let journalBytesBefore: Uint8Array;
@@ -802,8 +957,46 @@ export function runFoundOperationV1(
     persist(transition(journal, { phase: 'market-prepared' }));
   }
 
+  let campaignAuthenticated = false;
+  let participantAuthenticated = false;
+  authenticatePhaseArtifacts(journal, operation);
+  if (journal.phase === 'founding-complete' || journal.phase === 'participant-complete') {
+    authenticateCampaignOwner(dependencies, binary, operation, journal, io);
+    campaignAuthenticated = true;
+  }
+  if (journal.phase === 'participant-complete') {
+    authenticateParticipantOwner(dependencies, binary, operation, journal, io);
+    participantAuthenticated = true;
+  }
+
   io.out(`market input prepared at ${operation.market.output} (${journal.marketInputSha256})`);
   if (!execute) {
+    if (journal.phase === 'participant-complete') {
+      const campaignSource = readJournalEvidence(
+        operation.campaign.evidence,
+        journal.campaignEvidenceSha256,
+        'campaign evidence',
+      );
+      const participantSource = readJournalEvidence(
+        operation.participant.output,
+        journal.participantEvidenceSha256,
+        'participant evidence',
+      );
+      const campaign = validateCampaignEvidence(campaignSource, journal);
+      validateParticipantEvidence(participantSource, journal, operation);
+      if (sessionOut !== null) {
+        writeSession(
+          isAbsolute(sessionOut) ? sessionOut : resolve(process.cwd(), sessionOut),
+          context.rpcUrl,
+          planSource,
+          campaign,
+        );
+      }
+      io.out(`founding complete: ${operation.campaign.evidence}`);
+      io.out(`participant admission complete: ${operation.participant.output}`);
+      io.out(`operation journal complete: ${journalPath}`);
+      return 0;
+    }
     io.out('read-only preparation complete; rerun the same operation and journal with --execute to found and admit the participant');
     return 0;
   }
@@ -814,30 +1007,86 @@ export function runFoundOperationV1(
     // Always dispatch it: on a completed report it returns the exact preserved
     // bytes, while a partial report is resumed only from its authenticated
     // checkpoint. This exterior never substitutes a second report validator.
-    invokeChecked(dependencies, binary, campaignArguments(operation, context.rpcUrl), 'founding campaign', io);
+    authenticatePhaseArtifacts(journal, operation);
+    invokeChecked(dependencies, binary, campaignArguments(operation, context.rpcUrl, true), 'founding campaign', io);
     const source = readBounded(operation.campaign.evidence, MAX_EVIDENCE_BYTES, 'campaign evidence');
     validateCampaignEvidence(source, journal);
     persist(transition(journal, { phase: 'founding-complete', campaignEvidenceSha256: sha256(source) }));
+    campaignAuthenticated = true;
   }
 
   if (journal.phase === 'founding-complete') {
     // The participant producer owns its submitted/finalized report and live
     // poststate authentication. An existing output is deliberately passed
     // back to that producer rather than trusted as a static local projection.
-    invokeChecked(dependencies, binary, participantArguments(operation, context.rpcUrl), 'participant admission', io);
+    authenticatePhaseArtifacts(journal, operation);
+    if (!campaignAuthenticated) {
+      authenticateCampaignOwner(dependencies, binary, operation, journal, io);
+      campaignAuthenticated = true;
+    }
+    invokeChecked(dependencies, binary, participantArguments(operation, context.rpcUrl, true), 'participant admission', io);
     const source = readBounded(operation.participant.output, MAX_EVIDENCE_BYTES, 'participant evidence');
     validateParticipantEvidence(source, journal, operation);
     persist(transition(journal, { phase: 'participant-complete', participantEvidenceSha256: sha256(source) }));
+    participantAuthenticated = true;
   }
 
   if (journal.phase !== 'participant-complete') throw new Error(`found operation stopped at unexpected phase ${journal.phase}`);
-  const campaignSource = readBounded(operation.campaign.evidence, MAX_EVIDENCE_BYTES, 'campaign evidence');
+  authenticatePhaseArtifacts(journal, operation);
+  if (!campaignAuthenticated) authenticateCampaignOwner(dependencies, binary, operation, journal, io);
+  if (!participantAuthenticated) authenticateParticipantOwner(dependencies, binary, operation, journal, io);
+  // Re-read both after their canonical owners return. The complete journal is
+  // never accepted from its TypeScript envelope or a pre-poll snapshot alone.
+  const campaignSource = readJournalEvidence(operation.campaign.evidence, journal.campaignEvidenceSha256, 'campaign evidence');
+  const participantSource = readJournalEvidence(operation.participant.output, journal.participantEvidenceSha256, 'participant evidence');
   const campaign = validateCampaignEvidence(campaignSource, journal);
+  validateParticipantEvidence(participantSource, journal, operation);
   if (sessionOut !== null) writeSession(isAbsolute(sessionOut) ? sessionOut : resolve(process.cwd(), sessionOut), context.rpcUrl, planSource, campaign);
   io.out(`founding complete: ${operation.campaign.evidence}`);
   io.out(`participant admission complete: ${operation.participant.output}`);
   io.out(`operation journal complete: ${journalPath}`);
   return 0;
+}
+
+export function runFoundOperationV1(
+  context: CliContext,
+  io: Io,
+  binary: string,
+  operationPath: string,
+  journalPath: string,
+  sessionOut: string | null,
+  execute: boolean,
+  dependencies: FoundOperationDependenciesV1 = DEFAULT_DEPENDENCIES,
+): number {
+  if (!isAbsolute(operationPath) || !isAbsolute(journalPath)) {
+    throw new Error('--found-operation and --found-journal must be absolute');
+  }
+  if (typeof context.flags.rpc !== 'string') throw new Error('devnet founding requires an explicit --rpc URL');
+  if (context.flags['i-mean-devnet'] !== SOLANA_DEVNET_GENESIS_HASH_V1) {
+    throw new Error(`--i-mean-devnet must equal Solana devnet's full genesis hash ${SOLANA_DEVNET_GENESIS_HASH_V1}`);
+  }
+  const lease = acquireOperationLease(operationPath, journalPath);
+  let result: number | undefined;
+  let failure: unknown;
+  try {
+    result = runFoundOperationUnderLeaseV1(
+      context,
+      io,
+      binary,
+      operationPath,
+      journalPath,
+      sessionOut,
+      execute,
+      dependencies,
+    );
+  } catch (error) {
+    failure = error;
+  }
+  const releaseFailure = releaseOperationLease(lease);
+  if (failure !== undefined) throw failure;
+  if (releaseFailure !== null) throw releaseFailure;
+  if (result === undefined) throw new Error('found operation returned no result');
+  return result;
 }
 
 export const FOUND_OPERATION_SCHEMA_V1 = OPERATION_SCHEMA_V1;
