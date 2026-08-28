@@ -33,6 +33,8 @@ pub(crate) const COMMAND_V1: &str = "local-private-validator-lifecycle-receipt-v
 const RECEIPT_SCHEMA_V1: &str = "dclutch-owned-loopback-reconcile-session-receipt-v1";
 const MANIFEST_SCHEMA_V1: &str = "dclutch-owned-loopback-activity-reconcile-manifest-v1";
 const DESCRIPTORS_SCHEMA_V1: &str = "dclutch-owned-loopback-stage-journal-descriptors-v1";
+const ACTIVITY_SESSION_SCHEMA_V1: &str = "dclutch-owned-loopback-private-lifecycle-session-v1";
+const CHAOS_SESSION_SCHEMA_V1: &str = "dclutch-owned-loopback-private-lifecycle-chaos-session-v1";
 const PYTH_FACTS_SCHEMA_V1: &str = "dclutch-flagship-pyth-update-facts-v1";
 const PYTH_RECEIVER_PROGRAM_ID: &str = "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp";
 const PYTH_ROUTER_PROGRAM_ID: &str = "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL";
@@ -144,6 +146,29 @@ struct JournalReceipt {
     schema: String,
     completion_pointer: String,
     completion_value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ActivitySessionStage {
+    stage: String,
+    path: String,
+    sha256: String,
+    schema: String,
+    completion_pointer: String,
+    completion_value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ActivitySession {
+    schema: String,
+    status: String,
+    cluster: String,
+    genesis_hash: String,
+    stages: Vec<ActivitySessionStage>,
+    completed_stages: Vec<String>,
+    stage_set_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -314,7 +339,11 @@ pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
             "the chaos-session descriptor does not name --chaos-session",
         ));
     }
-    authenticate_chaos(&chaos_path)?;
+    let chaos = authenticate_chaos(&chaos_path)?;
+    let chaos_journal = journals
+        .iter()
+        .find(|row| row.path == chaos_relative)
+        .ok_or_else(|| Error::new("chaos-session journal was not projected"))?;
 
     let programs = authenticate_programs(&plan, &capture, retained_authority)?;
     let capture_relative = relative_evidence_path(&evidence_root, &capture_path, "capture")?;
@@ -338,6 +367,12 @@ pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
         .iter()
         .find(|row| &row.path == session_relative)
         .ok_or_else(|| Error::new("activity-session journal was not projected"))?;
+    let completed_stages = authenticate_activity_session(
+        &evidence_root,
+        session_relative,
+        &journals,
+        &capture.genesis_hash,
+    )?;
     let receipt = json!({
         "schema": RECEIPT_SCHEMA_V1,
         "status": "finalized",
@@ -365,11 +400,102 @@ pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
             "sha256": session.sha256,
             "schema": session.schema,
             "status": "finalized",
-            "completedStages": ACTIVITY_STAGES,
+            "completedStages": completed_stages,
+        },
+        "chaosSession": {
+            "path": chaos_journal.path,
+            "sha256": chaos_journal.sha256,
+            "schema": chaos.schema,
+            "status": chaos.status,
         },
     });
     write_new_json(&arguments.output, &receipt)?;
     Ok(receipt)
+}
+
+fn authenticate_activity_session(
+    evidence_root: &Path,
+    relative_path: &str,
+    journals: &[JournalReceipt],
+    expected_genesis_hash: &str,
+) -> Result<Vec<String>> {
+    let path = resolve_relative_evidence(evidence_root, relative_path, "activity session")?;
+    let bytes = bounded_read(&path, "activity session")?;
+    let session: ActivitySession = serde_json::from_value(exact_json(&bytes, "activity session")?)?;
+    if session.schema != ACTIVITY_SESSION_SCHEMA_V1
+        || session.status != "finalized"
+        || session.cluster != "owned-loopback"
+        || session.genesis_hash != expected_genesis_hash
+        || session.stages.len() != ACTIVITY_STAGES.len()
+        || session.completed_stages.len() != ACTIVITY_STAGES.len()
+    {
+        return Err(Error::new(
+            "activity session is not the exact finalized owned-loopback lifecycle",
+        ));
+    }
+    let journal_rows = journals
+        .iter()
+        .map(|row| (row.path.as_str(), row))
+        .collect::<BTreeMap<_, _>>();
+    let mut paths = BTreeSet::new();
+    for ((stage, completed), expected) in session
+        .stages
+        .iter()
+        .map(|row| row.stage.as_str())
+        .zip(session.completed_stages.iter().map(String::as_str))
+        .zip(ACTIVITY_STAGES)
+    {
+        if stage != expected || completed != expected {
+            return Err(Error::new(
+                "activity session stages or completedStages are noncanonical",
+            ));
+        }
+    }
+    for row in &session.stages {
+        canonical_relative(&row.path, "activity session stage path")?;
+        if row.completion_value != "finalized" || !paths.insert(row.path.as_str()) {
+            return Err(Error::new(
+                "activity session stage paths repeat or remain provisional",
+            ));
+        }
+        let journal = journal_rows
+            .get(row.path.as_str())
+            .ok_or_else(|| Error::new("activity session stage is absent from journal closure"))?;
+        if journal.sha256 != row.sha256
+            || journal.schema != row.schema
+            || journal.completion_pointer != row.completion_pointer
+            || journal.completion_value != row.completion_value
+        {
+            return Err(Error::new(
+                "activity session stage differs from the authenticated journal closure",
+            ));
+        }
+        let source_path =
+            resolve_relative_evidence(evidence_root, &row.path, "activity session stage")?;
+        let source_bytes = bounded_read(&source_path, "activity session stage")?;
+        let source = exact_json(&source_bytes, "activity session stage")?;
+        if sha256(&source_bytes) != row.sha256
+            || source
+                .as_object()
+                .and_then(|object| object.get("schema"))
+                .and_then(Value::as_str)
+                != Some(row.schema.as_str())
+            || json_pointer(&source, &row.completion_pointer)? != &Value::String("finalized".into())
+        {
+            return Err(Error::new(
+                "activity session stage bytes are substituted, provisional, or partial",
+            ));
+        }
+    }
+    let stage_set_sha256 = sha256(&canonical_json_bytes(&serde_json::to_value(
+        &session.stages,
+    )?)?);
+    if session.stage_set_sha256 != stage_set_sha256 {
+        return Err(Error::new(
+            "activity session stageSetSha256 differs from its exact ordered rows",
+        ));
+    }
+    Ok(session.completed_stages)
 }
 
 fn authenticate_manifest(
@@ -551,10 +677,10 @@ fn authenticate_journals(
     Ok((journals, semantic_paths))
 }
 
-fn authenticate_chaos(path: &Path) -> Result<()> {
+fn authenticate_chaos(path: &Path) -> Result<ChaosSession> {
     let bytes = bounded_read(path, "chaos session")?;
     let chaos: ChaosSession = serde_json::from_value(exact_json(&bytes, "chaos session")?)?;
-    if chaos.schema.is_empty()
+    if chaos.schema != CHAOS_SESSION_SCHEMA_V1
         || chaos.status != "finalized"
         || chaos.stages.len() != CHAOS_STAGES.len()
     {
@@ -570,7 +696,7 @@ fn authenticate_chaos(path: &Path) -> Result<()> {
             ));
         }
     }
-    Ok(())
+    Ok(chaos)
 }
 
 fn authenticate_programs(
@@ -1071,6 +1197,132 @@ mod tests {
         );
         assert!(!MANIFEST_EVENT_KINDS.contains(&"alt"));
         assert!(!MANIFEST_EVENT_KINDS.contains(&"seal"));
+    }
+
+    #[test]
+    fn chaos_session_requires_exact_schema_and_vocabulary() {
+        let path = fs::canonicalize(std::env::temp_dir())
+            .expect("canonical temp")
+            .join(format!(
+                "dclutch-private-lifecycle-chaos-{}.json",
+                std::process::id()
+            ));
+        let mut session = json!({
+            "schema": CHAOS_SESSION_SCHEMA_V1,
+            "status": "finalized",
+            "stages": CHAOS_STAGES
+                .iter()
+                .map(|stage| json!({
+                    "stage": stage,
+                    "status": "finalized",
+                    "intentSha256": "11".repeat(32),
+                }))
+                .collect::<Vec<_>>(),
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec(&session).expect("chaos session JSON"),
+        )
+        .expect("write chaos session");
+        authenticate_chaos(&path).expect("exact chaos session");
+        session["schema"] = Value::String("dclutch-lifecycle-chaos-summary-v1".into());
+        fs::write(
+            &path,
+            serde_json::to_vec(&session).expect("substituted chaos JSON"),
+        )
+        .expect("write substituted chaos session");
+        assert!(authenticate_chaos(&path).is_err());
+        fs::remove_file(path).expect("remove chaos session");
+    }
+
+    #[test]
+    fn activity_session_reopens_exact_eight_stage_closure() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = fs::canonicalize(std::env::temp_dir())
+            .expect("canonical temp")
+            .join(format!(
+                "dclutch-private-lifecycle-session-{}-{nonce}",
+                std::process::id()
+            ));
+        fs::create_dir(&root).expect("create evidence root");
+        let mut stages = Vec::new();
+        let mut journals = Vec::new();
+        for stage in ACTIVITY_STAGES {
+            let relative = format!("{stage}.json");
+            let source_path = root.join(&relative);
+            let source =
+                json!({"schema": format!("dclutch-test-{stage}-v1"), "status": "finalized"});
+            let source_bytes = serde_json::to_vec(&source).expect("source JSON");
+            fs::write(&source_path, &source_bytes).expect("write stage source");
+            let row = ActivitySessionStage {
+                stage: stage.into(),
+                path: relative.clone(),
+                sha256: sha256(&source_bytes),
+                schema: format!("dclutch-test-{stage}-v1"),
+                completion_pointer: "/status".into(),
+                completion_value: "finalized".into(),
+            };
+            journals.push(JournalReceipt {
+                path: relative,
+                sha256: row.sha256.clone(),
+                schema: row.schema.clone(),
+                completion_pointer: row.completion_pointer.clone(),
+                completion_value: row.completion_value.clone(),
+            });
+            stages.push(row);
+        }
+        let session_path = root.join("session.json");
+        let stage_set_sha256 = sha256(
+            &canonical_json_bytes(&serde_json::to_value(&stages).expect("stages"))
+                .expect("canonical stages"),
+        );
+        let mut session = json!({
+            "schema": ACTIVITY_SESSION_SCHEMA_V1,
+            "status": "finalized",
+            "cluster": "owned-loopback",
+            "genesisHash": "owned-loopback-genesis",
+            "stages": stages,
+            "completedStages": ACTIVITY_STAGES,
+            "stageSetSha256": stage_set_sha256,
+        });
+        fs::write(
+            &session_path,
+            serde_json::to_vec(&session).expect("session JSON"),
+        )
+        .expect("write session");
+        assert_eq!(
+            authenticate_activity_session(
+                &root,
+                "session.json",
+                &journals,
+                "owned-loopback-genesis",
+            )
+            .expect("exact session"),
+            ACTIVITY_STAGES
+        );
+
+        session["completedStages"]
+            .as_array_mut()
+            .expect("completed stages")
+            .pop();
+        fs::write(
+            &session_path,
+            serde_json::to_vec(&session).expect("partial session JSON"),
+        )
+        .expect("write partial session");
+        assert!(
+            authenticate_activity_session(
+                &root,
+                "session.json",
+                &journals,
+                "owned-loopback-genesis",
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(root).expect("remove evidence root");
     }
 
     #[test]
