@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { decodeSession } from '../src/context';
 import { nameRefusals } from '../src/output';
-import { decodeWalkBook } from '../src/commands/walk';
+import { decodeWalkBook, FAILURE_WALK_MUTATION_REFUSAL_V1 } from '../src/commands/walk';
 import { DIRECT_TRADE_MUTATION_REFUSAL_V1, tradeCommand } from '../src/commands/trade';
 import { run } from '../src/main';
 
@@ -80,6 +80,21 @@ describe('walk book', () => {
     ]) book[field] = key(2);
     expect(decodeWalkBook(book).market).toBe(key(2));
   });
+
+  it('refuses submission before reading a book or key until a durable walk journal exists', async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const missing = '/this/failure-walk-file-must-not-be-read.json';
+    const code = await run([
+      '--book', missing,
+      '--keypair', missing,
+      '--rpc', 'http://127.0.0.1:1/',
+      'walk',
+    ], {}, { out: (line) => out.push(line), err: (line) => err.push(line) });
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toEqual([`refused: ${FAILURE_WALK_MUTATION_REFUSAL_V1}`]);
+  });
 });
 
 describe('public Direct mutation boundary', () => {
@@ -111,6 +126,7 @@ describe('public Direct mutation boundary', () => {
     expect(out).toHaveLength(1);
     expect(out[0]).toContain('buy                              disabled: refuses before context, keys, signing, or RPC access');
     expect(out[0]).toContain('intent sell|buy                  authenticate a route and sign one off-chain Direct intent (--out; never submits)');
+    expect(out[0]).toContain('walk                             preview the funded failure walk (--dry-run required; submission disabled)');
     expect(out[0]).not.toContain('cross a sell intent');
     expect(out[0]).not.toContain('cross a buy intent');
   });

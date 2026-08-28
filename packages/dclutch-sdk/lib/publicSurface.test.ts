@@ -34,6 +34,7 @@ const forbiddenWalletExports = [
 ] as const;
 
 const forbiddenRpcExports = [
+  'request',
   'sendRawTransaction',
   'sendTransaction',
   'submitSignedTransaction',
@@ -107,21 +108,27 @@ describe('package public surface', () => {
     const root = await import('@dclutch/sdk');
     const rpc = await import('@dclutch/sdk/rpc');
     const prototype = rpc.SolanaRpcClient.prototype as unknown as Record<string, unknown>;
+    const client = new rpc.SolanaRpcClient('http://127.0.0.1:8899/') as unknown as Record<string, unknown>;
 
     expect(rpc.SolanaRpcClient).toBeTypeOf('function');
     for (const name of forbiddenRpcExports) {
       expect(name in root, `${name} escaped through the SDK root`).toBe(false);
       expect(name in rpc, `${name} escaped through the RPC subpath`).toBe(false);
       expect(name in prototype, `${name} escaped as an RPC client method`).toBe(false);
+      expect(name in client, `${name} escaped as an RPC client instance property`).toBe(false);
     }
+    expect(() => (client.request as (...args: unknown[]) => unknown)('sendTransaction', [])).toThrow(TypeError);
   });
 
   it('typechecks as an outside consumer only when submission and deep imports stay refused', () => {
     const diagnostics = externalConsumerDiagnostics(`
       import { SolanaRpcClient as RootClient } from '@dclutch/sdk';
       import { SolanaRpcClient as RpcClient } from '@dclutch/sdk/rpc';
+      const rootClient = new RootClient('http://127.0.0.1:8899/');
+      // @ts-expect-error the JSON-RPC dispatcher is an ECMAScript private slot
+      rootClient['request']('sendTransaction', []);
       // @ts-expect-error the package root exposes read-only RPC, never submission
-      new RootClient('http://127.0.0.1:8899/').sendRawTransaction(new Uint8Array([1]));
+      rootClient.sendRawTransaction(new Uint8Array([1]));
       // @ts-expect-error the RPC subpath exposes read-only RPC, never submission
       new RpcClient('http://127.0.0.1:8899/').sendRawTransaction(new Uint8Array([1]));
       // @ts-expect-error package exports do not admit filesystem-style deep imports

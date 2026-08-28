@@ -33,7 +33,7 @@ commands:
   spine                            is this market Direct-tradable now, and which walls stand (--market)
   redeem                           resume or finalize one exact wallet payout
   found                            drive the run-spec founding producer (--spec; --demo to preview)
-  walk                             the funded failure walk: commit a passed deadline, collect the bounty
+  walk                             preview the funded failure walk (--dry-run required; submission disabled)
   refusal <code...>                name any custom program error via the band registry
 
 global flags:

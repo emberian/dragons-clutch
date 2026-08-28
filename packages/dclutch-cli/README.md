@@ -41,9 +41,11 @@ dclutch --session session.json redeem --market <market> --keypair owner.json \
   --payout-alt-plan payout-alt-plan.json \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
-# the funded failure walk: a passed deadline is free money for whoever watched
+# inspect the funded failure-walk packet. Submission is disabled until this
+# command has its own durable packet/signature/Submitted/poststate journal.
 dclutch --session session.json walk --book walk-book.json \
     --generation 1 --terminal-sequence 1 --keypair anyone.json \
+    --dry-run \
     --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
 dclutch refusal 0x5000            # any custom code, named via the band registry
@@ -75,7 +77,10 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
   payout input. An already-derived `--payout-input` remains available for
   automation.
 - Keep the same `--payout-alt-plan` and `--payout-journal` paths when you rerun
-  the command. Replay and lookup-table setup finish in separate runs. Replay
+  the command. The CLI accepts an already-finalized payout lookup table. If
+  that table still needs creation or extension, it saves the checked plan and
+  stops before loading your key; those mutations reopen after each packet has
+  its own durable Submitted journal and finalized readback. Replay
   creation uses `<payout-journal>.claims-replay.json`: its exact unsigned packet
   is saved before your key is read, and its exact signed ID is saved before one
   raw send. The command checks the exact finalized Claims transaction, Custody
@@ -88,11 +93,12 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
   receipt and account changes pass.
 - The keypair is always an explicit `--keypair <path>` or `$DCLUTCH_KEYPAIR`;
   there is no default-wallet fallback, deliberately.
-- Every enabled public-chain mutation (`redeem` and `walk`) requires
+- Every enabled public-chain mutation (`redeem`) requires
   `--i-mean-devnet` with Solana devnet's full genesis hash. The endpoint proves
   that exact identity again before every transaction signature and submission;
   an RPC hostname and an earlier observation grant no authority.
-- `--dry-run` on `redeem` and `walk` builds and prints without signing. It does
-  not enable `buy` or `sell`.
+- `walk` requires `--dry-run` and never signs or submits. `--dry-run` on
+  `redeem` also builds and prints without signing. Neither flag enables `buy`
+  or `sell`.
 
 Unpublished (0.x, `private: true`) — same dispensation as the SDK.

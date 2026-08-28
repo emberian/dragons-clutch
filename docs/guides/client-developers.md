@@ -118,6 +118,11 @@ payment record if it does not exist, publish and freeze the payout lookup
 table, then sign the payout itself. Do not combine those steps into one
 optimistic submit loop.
 
+The current CLI accepts an already-finalized payout lookup table. When a table
+still needs creation or extension, it saves the checked plan and stops before
+loading your key. Those mutations remain closed until each exact packet has its
+own durable Submitted journal and finalized readback.
+
 `inspectClaimsCustodyReplayV1` (`@dclutch/sdk/claimsCustodyReplay`) can inspect
 that first record and compile the exact unsigned plan when it is absent. The
 public SDK deliberately stops there: it does not expose a transaction-submit

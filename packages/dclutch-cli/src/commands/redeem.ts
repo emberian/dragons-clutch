@@ -26,10 +26,8 @@ import {
   nextWalletTerminalPayoutAltActionV1,
   observeWalletTerminalPayoutAltV1,
   parseWalletTerminalPayoutAltPlanV1,
-  provisionWalletTerminalPayoutAltV1,
   type WalletTerminalPayoutAltPlanV1,
 } from '../payoutAlt';
-import { submitAndConfirm } from '../submit';
 import { successorBinary } from '../successor';
 import {
   archivePayoutOperationJournalV1,
@@ -289,24 +287,6 @@ async function finalizedAltObservation(
   return observeWalletTerminalPayoutAltV1(observed.slot, observed.account, plan.lookupTable);
 }
 
-async function provisionAltFromRpc(
-  client: ReturnType<typeof rpcClient>,
-  plan: WalletTerminalPayoutAltPlanV1,
-  signer: ReturnType<typeof loadKeypair>,
-  io: Io,
-  acknowledgment: string,
-) {
-  return provisionWalletTerminalPayoutAltV1(plan, signer, {
-    observe: () => finalizedAltObservation(client, plan),
-    latestMutationBlockhash: async (minimumContextSlot) => {
-      await assertExactDevnetMutation(client, acknowledgment, 'redeem lookup-table blockhash acquisition');
-      return client.latestBlockhash(minimumContextSlot);
-    },
-    submit: async (wire) => (await submitAndConfirm(client, wire, io, acknowledgment)).succeeded,
-    wait: () => new Promise((resolveWait) => setTimeout(resolveWait, 2_000)),
-  });
-}
-
 export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv): Promise<number> {
   const marketAddress = context.flags.market;
   if (typeof marketAddress !== 'string') throw new Error('pass --market <address>');
@@ -467,8 +447,8 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
     const submittedSignature = await submitExactDevnetSignedPacketInternal(
       client,
       submittedReplayWireBytesV1(submittedJournal, restored),
+      signed.signature,
       devnetAcknowledgment,
-      { maxRetries: 0 },
     );
     if (submittedSignature !== signed.signature) {
       throw new Error('the RPC returned another Claims replay signature; the submitted journal remains preserved and must not be replayed');
@@ -535,9 +515,9 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
       writeFileSync(payoutInput, `${projected.encoded}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     }
 
-    // Step 2 is a separately finalized prerequisite. Its plan is written
-    // before the first table transaction. A payout is never signed in the
-    // same invocation that changes the table.
+    // Step 2 is a separately finalized prerequisite. Its checked plan is
+    // written before the CLI refuses an unjournaled table mutation. A payout
+    // is never signed in the same invocation that observes a missing table.
     const altPathFlag = context.flags['payout-alt-plan'];
     let manifest: WalletTerminalPayoutManifestV3;
     if (typeof altPathFlag === 'string') {
@@ -560,7 +540,7 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
         encoded = produced.encoded;
         if (context.flags['dry-run'] !== true) {
           writeFileSync(altPath, `${encoded}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-          progressIo.out(`saved the resumable payout lookup-table plan before submission: ${altPath}`);
+          progressIo.out(`saved the checked payout lookup-table plan; submission remains closed: ${altPath}`);
         }
       }
       assertWalletTerminalPayoutAltMatchesPortfolioV1(altPlan, expected);
@@ -572,23 +552,10 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
         return 0;
       }
       if (next.kind !== 'ready') {
-        const keypair = loadKeypair(context, env);
-        if (keypair.publicKey.toBase58() !== owner) throw new Error('the named lookup-table signer is not --payer');
-        const provisioned = await provisionAltFromRpc(
-          client,
-          altPlan,
-          keypair,
-          progressIo,
-          devnetAcknowledgment,
+        throw new Error(
+          `payout lookup-table ${next.kind} is not available in this CLI yet; keep the checked plan at ${altPath}. `
+          + 'No key was loaded and no transaction was signed or submitted. This step reopens when each exact create or extend packet has its own durable Submitted journal and finalized readback.',
         );
-        const finalAccount = await client.accountInfo(altPlan.lookupTable, provisioned.finalizedSlot);
-        if (finalAccount.account === null) throw new Error('finalized payout lookup table disappeared after provisioning');
-        progressIo.out(
-          `payout lookup table ready at ${altPlan.lookupTable}: ${altPlan.addresses.length} ordered addresses, `
-          + `${finalAccount.account.lamports} lamports parked, ${provisioned.transactions} transaction(s) this run`,
-        );
-        progressIo.out('lookup-table prerequisite is finalized; rerun redeem to journal and sign the payout');
-        return 0;
       }
       manifest = payoutManifestFromAltPlan(context, env, devnetAcknowledgment, altPlan);
     } else {
@@ -634,8 +601,8 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
     const submittedSignature = await submitExactDevnetSignedPacketInternal(
       client,
       submittedPayoutWireBytesV1(submittedJournal, prepared),
+      signed.signature,
       devnetAcknowledgment,
-      { maxRetries: 0 },
     );
     if (submittedSignature !== signed.signature) {
       throw new Error('the RPC returned another payout signature; the submitted journal remains preserved and must not be replayed');

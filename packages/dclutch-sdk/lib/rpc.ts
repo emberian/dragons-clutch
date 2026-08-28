@@ -233,7 +233,7 @@ export class SolanaRpcClient {
     this.endpoint = url.toString();
   }
 
-  private async request(method: string, params: ReadonlyArray<unknown>): Promise<unknown> {
+  async #request(method: string, params: ReadonlyArray<unknown>): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
     try {
@@ -266,7 +266,7 @@ export class SolanaRpcClient {
   }
 
   async probe(): Promise<ConnectionFacts> {
-    const [versionRaw, genesisRaw] = await Promise.all([this.request('getVersion', []), this.request('getGenesisHash', [])]);
+    const [versionRaw, genesisRaw] = await Promise.all([this.#request('getVersion', []), this.#request('getGenesisHash', [])]);
     if (!plain(versionRaw)) throw new Error('getVersion returned an invalid result');
     return Object.freeze({
       endpoint: this.endpoint,
@@ -288,7 +288,7 @@ export class SolanaRpcClient {
    * deliberately not cached.
    */
   async assertMutationCluster(): Promise<MutationClusterAdmissionV1> {
-    const genesisHash = canonicalGenesisHash(await this.request('getGenesisHash', []));
+    const genesisHash = canonicalGenesisHash(await this.#request('getGenesisHash', []));
     if (genesisHash === SOLANA_MAINNET_BETA_GENESIS_HASH_V1) {
       throw new Error('mutation refused: the endpoint reports Solana mainnet-beta genesis');
     }
@@ -306,7 +306,7 @@ export class SolanaRpcClient {
 
   async programHeaders(programId: string): Promise<Readonly<{ slot: string; accounts: ReadonlyArray<HeaderObservation> }>> {
     new PublicKey(programId);
-    const raw = await this.request('getProgramAccounts', [programId, {
+    const raw = await this.#request('getProgramAccounts', [programId, {
       commitment: 'finalized',
       encoding: 'base64',
       withContext: true,
@@ -328,7 +328,7 @@ export class SolanaRpcClient {
     new PublicKey(address);
     const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
-    const raw = await this.request('getAccountInfo', [address, configuration]);
+    const raw = await this.#request('getAccountInfo', [address, configuration]);
     if (!plain(raw) || !plain(raw.context) || !('value' in raw)) throw new Error('getAccountInfo did not return a finalized context');
     return Object.freeze({
       slot: String(exactUnsigned(raw.context.slot, 'account observation slot')),
@@ -343,7 +343,7 @@ export class SolanaRpcClient {
     if (new Set(canonical).size !== canonical.length) throw new Error('getMultipleAccounts addresses must be distinct');
     const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
-    const raw = await this.request('getMultipleAccounts', [canonical, configuration]);
+    const raw = await this.#request('getMultipleAccounts', [canonical, configuration]);
     if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value) || raw.value.length !== canonical.length) throw new Error('getMultipleAccounts did not return one finalized value per address');
     const slot = String(exactUnsigned(raw.context.slot, 'multiple-account observation slot'));
     // Bound the narrowed array to a const: property narrowing does not survive
@@ -356,13 +356,13 @@ export class SolanaRpcClient {
   }
 
   async finalizedSlot(): Promise<string> {
-    return String(exactUnsigned(await this.request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
+    return String(exactUnsigned(await this.#request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
   }
 
   async latestBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
     const configuration: Record<string, unknown> = { commitment: 'finalized' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
-    const raw = await this.request('getLatestBlockhash', [configuration]);
+    const raw = await this.#request('getLatestBlockhash', [configuration]);
     if (!plain(raw) || !plain(raw.context) || !plain(raw.value)) throw new Error('getLatestBlockhash did not return a finalized context and value');
     const blockhash = exactText(raw.value.blockhash, 'recent blockhash', 64);
     new PublicKey(blockhash);
@@ -381,7 +381,7 @@ export class SolanaRpcClient {
 
   async minimumBalanceForRentExemption(dataLength: number): Promise<RentExemptionObservation> {
     if (!Number.isSafeInteger(dataLength) || dataLength < 0 || dataLength > 10_485_760) throw new Error('rent data length is outside the bounded account profile');
-    const lamports = exactUnsigned(await this.request('getMinimumBalanceForRentExemption', [dataLength, { commitment: 'finalized' }]), 'rent-exempt lamports');
+    const lamports = exactUnsigned(await this.#request('getMinimumBalanceForRentExemption', [dataLength, { commitment: 'finalized' }]), 'rent-exempt lamports');
     return Object.freeze({ dataLength, lamports: String(lamports) });
   }
 
@@ -395,7 +395,7 @@ export class SolanaRpcClient {
   async signaturesForAddress(address: string, limit: number): Promise<ReadonlyArray<SignatureRecordObservation>> {
     new PublicKey(address);
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error('signature listing limit must be 1..50');
-    const raw = await this.request('getSignaturesForAddress', [address, { commitment: 'finalized', limit }]);
+    const raw = await this.#request('getSignaturesForAddress', [address, { commitment: 'finalized', limit }]);
     if (!Array.isArray(raw)) throw new Error('getSignaturesForAddress did not return an array');
     return Object.freeze(raw.map((entry, index) => {
       if (!plain(entry)) throw new Error(`signature record ${index} is malformed`);
@@ -418,7 +418,7 @@ export class SolanaRpcClient {
     for (const signature of signatures) {
       if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error('signature status polling requires canonical base58 signatures');
     }
-    const raw = await this.request('getSignatureStatuses', [signatures, { searchTransactionHistory: true }]);
+    const raw = await this.#request('getSignatureStatuses', [signatures, { searchTransactionHistory: true }]);
     if (!plain(raw) || !Array.isArray(raw.value) || raw.value.length !== signatures.length) {
       throw new Error('getSignatureStatuses did not return one status per signature');
     }
@@ -445,7 +445,7 @@ export class SolanaRpcClient {
   /** Read one finalized transaction with its balance movements and logs. */
   async transaction(signature: string): Promise<TransactionMetaObservation | null> {
     if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error('transaction read requires one canonical base58 signature');
-    const raw = await this.request('getTransaction', [signature, {
+    const raw = await this.#request('getTransaction', [signature, {
       commitment: 'finalized',
       encoding: 'base64',
       maxSupportedTransactionVersion: 0,

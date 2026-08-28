@@ -9,8 +9,9 @@
  * refuses fail-closed with a code this tool names.
  *
  * The account book comes from `--book <json>` whose fields are the frame's
- * own slot names (see `@dclutch/sdk/failureWalk`); `--dry-run` prints the
- * frame and wire without submitting.
+ * own slot names (see `@dclutch/sdk/failureWalk`). This command currently
+ * requires `--dry-run`: it prints the frame and wire, but does not sign or
+ * submit until the walk owns a durable Submitted journal.
  */
 import { readFileSync } from 'node:fs';
 
@@ -19,8 +20,10 @@ import { COMMIT_DEADLINE_FAILURE_FRAME_V1 } from '@dclutch/sdk/generated/relayTr
 
 import { loadKeypair, rpcClient, type CliContext } from '../context';
 import { assertExactDevnetMutation, devnetGenesisAcknowledgment, latestExactDevnetBlockhash } from '../mutation';
-import { block, type Io } from '../output';
-import { lamportDelta, submitAndConfirm } from '../submit';
+import { type Io } from '../output';
+
+export const FAILURE_WALK_MUTATION_REFUSAL_V1 =
+  'failure-walk submission is not available yet. Pass --dry-run to inspect the exact frame. Submission reopens when this command persists the unsigned packet before signing, the exact signature and packet in a Submitted journal before one send, and the finalized certificate and bounty poststate afterward.';
 
 const BOOK_FIELDS: ReadonlyArray<keyof FailureWalkBookV1> = Object.freeze([
   'resolutionProgram', 'market', 'coreProgram', 'registryActivation', 'sourceResolutionState',
@@ -43,6 +46,7 @@ export function decodeWalkBook(value: unknown): FailureWalkBookV1 {
 }
 
 export async function walk(context: CliContext, io: Io, env: NodeJS.ProcessEnv): Promise<number> {
+  if (context.flags['dry-run'] !== true) throw new Error(FAILURE_WALK_MUTATION_REFUSAL_V1);
   const acknowledgment = devnetGenesisAcknowledgment(context);
   const client = rpcClient(context);
   await assertExactDevnetMutation(client, acknowledgment, 'failure-walk preparation');
@@ -54,34 +58,15 @@ export async function walk(context: CliContext, io: Io, env: NodeJS.ProcessEnv):
   const walker = loadKeypair(context, env);
   const blockhash = await latestExactDevnetBlockhash(client, acknowledgment, 'failure-walk blockhash acquisition');
   const transaction = buildFailureWalkTransactionV1(book, walker.publicKey.toBase58(), generation, terminalSequence, blockhash.blockhash);
-  if (context.flags['dry-run'] === true) {
-    io.out(`walk of market ${book.market}, generation ${generation}, terminal sequence ${terminalSequence} — NOT submitted`);
-    const instruction = transaction.instructions[0];
-    if (instruction !== undefined) {
-      for (const [index, slot] of COMMIT_DEADLINE_FAILURE_FRAME_V1.entries()) {
-        const meta = instruction.keys[index];
-        io.out(`  ${String(index).padStart(2)} ${slot.name.padEnd(34)} ${meta?.pubkey.toBase58() ?? '?'}${slot.writable ? '  writable' : ''}${slot.signer ? '  signer' : ''}`);
-      }
+  io.out(`walk of market ${book.market}, generation ${generation}, terminal sequence ${terminalSequence} — NOT submitted`);
+  const instruction = transaction.instructions[0];
+  if (instruction !== undefined) {
+    for (const [index, slot] of COMMIT_DEADLINE_FAILURE_FRAME_V1.entries()) {
+      const meta = instruction.keys[index];
+      io.out(`  ${String(index).padStart(2)} ${slot.name.padEnd(34)} ${meta?.pubkey.toBase58() ?? '?'}${slot.writable ? '  writable' : ''}${slot.signer ? '  signer' : ''}`);
     }
-    const wire = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
-    io.out(`  wire ${wire.length + 64} bytes signed, of 1232 — a bare legacy packet, no lookup table`);
-    return 0;
   }
-  await assertExactDevnetMutation(client, acknowledgment, 'failure-walk transaction signature');
-  transaction.sign(walker);
-  const wire = transaction.serialize();
-  io.out(`walking market ${book.market} to its explicit failure outcome (${wire.length} byte legacy packet)`);
-  const outcome = await submitAndConfirm(client, Uint8Array.from(wire), io, acknowledgment);
-  if (!outcome.succeeded) return 1;
-  if (outcome.meta !== null) {
-    const delta = lamportDelta(outcome.meta, walker.publicKey.toBase58());
-    block(io, [
-      ['walker', walker.publicKey.toBase58()],
-      ['paid', delta === null ? 'unknown' : `${delta} lamports net of the fee (fee ${outcome.meta.feeLamports})`],
-      ['certificate', book.resolutionCertificate],
-    ]);
-  } else {
-    io.out(`bounty paid to ${walker.publicKey.toBase58()}; certificate at ${book.resolutionCertificate}`);
-  }
+  const wire = transaction.serialize({ requireAllSignatures: false, verifySignatures: false });
+  io.out(`  wire ${wire.length + 64} bytes signed, of 1232 — a bare legacy packet, no lookup table`);
   return 0;
 }

@@ -91,17 +91,22 @@ not a promise.
 
 ```sh
 dclutch walk --book walk-book.json --generation 1 --terminal-sequence 1 \
-    --keypair anyone.json
+    --keypair anyone.json --dry-run \
+    --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 ```
 
-Once an open market reaches that deadline, any wallet can be the walker. You
-pay one transaction fee and the market pays the bounty its creator funded.
-The archived demo input disclosed 250,000 lamports, but that input did not open
-on devnet, so the number is not a current offer or collectible bounty. Too
-early? The program refuses and tells you so, and you're out one fee. When a
-market is actually open, the race is worth scripting: watch deadlines, be
-first, collect. It is the mechanism that makes "the oracle ghosted" cost the
-market instead of costing you.
+The command currently previews the exact account frame and packet only. It
+does not sign or submit a walk. Submission stays closed until the command can
+save the unsigned packet before your key is read, save the exact signature and
+packet in a durable Submitted journal before one send, and verify the finalized
+certificate and bounty afterward.
+
+Once that caller exists and an open market reaches its deadline, any wallet can
+be the walker: you pay one transaction fee and the market pays the bounty its
+creator funded. The archived demo input disclosed 250,000 lamports, but that
+input did not open on devnet, so the number is not a current offer or
+collectible bounty. The mechanism is implemented; the public submission caller
+is the part still closed.
 
 ## The honest part
 
