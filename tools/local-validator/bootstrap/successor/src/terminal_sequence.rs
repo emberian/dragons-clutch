@@ -103,17 +103,17 @@ use solana_sdk::{
 };
 
 use crate::{
-    Error, Result, campaign,
+    Error, Result,
+    campaign::{self, CampaignTerminalEvidenceV1, parse_campaign_terminal_evidence_v1},
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
     model::{MarketRunInput, SuccessorPlan},
     plan::{hex32, pubkey},
     rpc::{Rpc, RpcAccount, WritePolicyV1},
     runtime::decode_hex,
     terminal_lifecycle::{
-        CampaignTerminalEvidenceV1, authenticate_campaign_market_v1, authenticate_plan_source,
-        authenticate_zero_claims, decode_routed_market, finalized_snapshot,
-        parse_campaign_terminal_evidence_v1, require_direct_retirement_evidence, required_account,
-        routed_record,
+        authenticate_campaign_market_v1, authenticate_plan_source, authenticate_zero_claims,
+        decode_routed_market, finalized_snapshot, require_direct_retirement_evidence,
+        required_account, routed_record,
     },
     wallet_terminal::authenticate_role,
 };

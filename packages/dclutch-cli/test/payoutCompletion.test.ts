@@ -88,7 +88,6 @@ import {
   restoreReplayOperationJournalV1,
   signPayoutPlanV1,
   signReplayOperationV1,
-  transactionSignatureV1,
   writeUnsignedPayoutOperationJournalV1,
   writeUnsignedReplayOperationJournalV1,
   type PayoutOperationJournalV1,
@@ -105,18 +104,19 @@ function inputValue() {
     market: key(1), owner, recipientOwner: owner, recipient: key(3),
     collateralMint: key(4), tokenProgram: key(5), quantity: '7', claimIndex: 1,
     transferIndex: 0, parentContext: digest(6), custodyContext: digest(7), releaseSet: digest(8),
-    programs: { registry: key(9), core: key(10), claims: key(11), custody: key(12) },
+    terminalCertificate: key(22),
+    programs: { registry: key(9), core: key(10), claims: key(11), custody: key(12), resolution: key(13) },
     records: {
       realm: digest(13), product: digest(14), resultDomain: digest(15), portfolio: digest(16),
       productBasis: digest(17), compositionDescriptor: digest(18), compositionGraph: digest(19),
-      compositionTranslation: digest(20), compositionExposure: digest(21), terminalRecord: digest(22),
+      compositionTranslation: digest(20), compositionExposure: digest(21),
     },
   };
 }
 
 function evidenceValue(planBytes: Uint8Array) {
   return {
-    schema: 'dclutch-successor-campaign-report-v1', cluster: 'acknowledged-devnet',
+    schema: 'dclutch-successor-campaign-report-v1', cluster: 'devnet',
     rpc_url: 'https://api.devnet.solana.com/', mode: 'execute',
     plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
     execution: {
@@ -391,7 +391,7 @@ describe('CLI payout completion boundary', () => {
     }))).toThrow(/missing or unknown fields/);
   });
 
-  it('accepts emitted devnet campaign evidence and refuses duplicate, stale, flat, and unbounded substitutions', () => {
+  it('authenticates the campaign envelope without duplicating Rust execution schema truth', () => {
     const plan = Buffer.from('{"plan":"exact"}\n');
     const valid = evidenceValue(plan);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify(valid)))).not.toThrow();
@@ -411,43 +411,18 @@ describe('CLI payout completion boundary', () => {
       directSelectedManifestEntryIndex: 0, accounts: valid.execution.market.accounts,
     })))).toThrow(/not dclutch-successor-campaign-report-v1/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid,
-      execution: {
-        ...valid.execution,
-        market: {
-          ...valid.execution.market,
-          accounts: {
-            ...valid.execution.market.accounts,
-            terminal_record: valid.execution.market.accounts.founding_market,
-          },
-        },
-      },
-    })))).toThrow(/live Core terminal_receipt/);
+      ...valid, cluster: 'loopback',
+    })))).toThrow(/executed external devnet/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid,
-      execution: {
-        ...valid.execution,
-        market: {
-          ...valid.execution.market,
-          completed: Array.from({ length: 513 }, (_, index) => `stage-${index}`),
-        },
-      },
-    })))).toThrow(/completed-stage list/);
+      ...valid, mode: 'preflight (reads only, enforced)',
+    })))).toThrow(/executed external devnet/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(Buffer.from('other plan'), Buffer.from(JSON.stringify(valid))))
+      .toThrow(/exact plan bytes/);
+    // Nested execution is intentionally opaque here. The Rust campaign parser
+    // owns its exact key set before the first RPC request.
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid,
-      execution: { ...valid.execution, transactions: Array.from({ length: 4_097 }, () => null) },
-    })))).toThrow(/4096-row bound/);
-    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid,
-      execution: {
-        ...valid.execution,
-        transactions: [{
-          label: 'one', signature: transactionSignatureV1(new Uint8Array(64).fill(1)), slot: 1,
-          transaction_metadata_available: true, fee_lamports: 1, fee_only_balance_change: true,
-          compute_units_consumed: 1, error: null, logs: Array.from({ length: 513 }, () => 'log'),
-        }],
-      },
-    })))).toThrow(/inexact finalized evidence/);
+      ...valid, execution: { thirdSchema: true },
+    })))).not.toThrow();
   });
 
   it('persists exact intent and plan digests before signing, then preserves submitted ambiguity', async () => {

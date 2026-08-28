@@ -105,17 +105,17 @@ describe('wallet terminal payout producer consumer', () => {
         format: 'dclutch-wallet-terminal-payout-plan-input-v1', market: key(1), owner,
         recipientOwner: owner, recipient, collateralMint: key(4), tokenProgram: key(5),
         quantity: '7', claimIndex: 1, transferIndex: 0, parentContext: identity(6),
-        custodyContext: identity(7), releaseSet: identity(8),
-        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13) },
+        custodyContext: identity(7), releaseSet: identity(8), terminalCertificate: key(30),
+        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13), resolution: key(14) },
         records: {
           realm: identity(20), product: identity(21), resultDomain: identity(22), portfolio: identity(23),
           productBasis: identity(24), compositionDescriptor: identity(26), compositionGraph: identity(27),
-          compositionTranslation: identity(28), compositionExposure: identity(29), terminalRecord: identity(30),
+          compositionTranslation: identity(28), compositionExposure: identity(29),
         },
       };
       writeFileSync(plan, planBytes);
       writeFileSync(evidence, JSON.stringify({
-        schema: 'dclutch-successor-campaign-report-v1', cluster: 'acknowledged-devnet',
+        schema: 'dclutch-successor-campaign-report-v1', cluster: 'devnet',
         rpc_url: 'https://api.devnet.solana.com/', mode: 'execute',
         plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
         execution: {
@@ -167,13 +167,12 @@ describe('wallet terminal payout producer consumer', () => {
         format: 'dclutch-wallet-terminal-payout-plan-input-v1', market: key(1), owner,
         recipientOwner: owner, recipient: key(3), collateralMint: key(4), tokenProgram: key(5),
         quantity: '7', claimIndex: 1, transferIndex: 0, parentContext: identity(6),
-        custodyContext: identity(7), releaseSet: identity(8),
-        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13) },
+        custodyContext: identity(7), releaseSet: identity(8), terminalCertificate: key(30),
+        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13), resolution: key(14) },
         records: {
           realm: identity(20), product: identity(21), resultDomain: identity(22), portfolio: identity(23),
-          productBasis: identity(24), executionDescriptor: identity(25), compositionDescriptor: identity(26),
+          productBasis: identity(24), compositionDescriptor: identity(26),
           compositionGraph: identity(27), compositionTranslation: identity(28), compositionExposure: identity(29),
-          terminalRecord: identity(30),
         },
       };
       const sourceBytes = Buffer.from(JSON.stringify(source));

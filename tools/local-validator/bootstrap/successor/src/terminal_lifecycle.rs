@@ -8,29 +8,26 @@
 //! `terminal_sequence`; this module neither reads keys nor signs or submits a
 //! transaction.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Write,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_market_core_codec::CoreState;
 use dclutch_operator::ObservedAccount;
-use dclutch_product_payoff_v2_codec::runtime_v3::{BasisKindV3, ProductBasisV3};
-use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
 use crate::{
     Error, Result,
+    campaign::{
+        CampaignAccountEvidenceV1, CampaignTerminalEvidenceV1, parse_campaign_terminal_evidence_v1,
+    },
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
     model::SuccessorPlan,
     plan::{hex, hex32, pubkey},
-    rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
+    rpc::{Rpc, WritePolicyV1},
     wallet_terminal::{
         FinalizedSnapshotV1, INPUT_FORMAT, LookupTableRequirementV1, PlanInputV1,
         ProgramSelectorsV1, RecordPairV1, RecordSelectorsV1, SelectedInputV1, build_report,
@@ -39,9 +36,6 @@ use crate::{
 };
 
 const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context/v1";
-const CAMPAIGN_REPORT_SCHEMA_V1: &str = "dclutch-successor-campaign-report-v1";
-const MAX_CAMPAIGN_REPORT_BYTES_V1: usize = 16 * 1024 * 1024;
-
 const TERMINAL_COMPOSITION_LABELS_V1: [&str; 4] = [
     "terminal_composition_descriptor_record",
     "terminal_composition_graph_record",
@@ -61,144 +55,6 @@ pub(crate) const DIRECT_NATIVE_CLOSE_LABELS_V1: [&str; 3] = [
     "direct_native_close_descriptor_record",
 ];
 
-/// The sole terminal projection of the permanent-devnet campaign report.
-///
-/// This type is deliberately not `Deserialize`: no flat payout DTO is an
-/// accepted external schema. `parse_campaign_terminal_evidence_v1` is the
-/// only constructor and projects the exact nested report emitted by
-/// `campaign` after it has authenticated that report's schema and completed
-/// execution shape.
-#[derive(Clone, Debug)]
-pub(crate) struct CampaignTerminalEvidenceV1 {
-    pub(crate) plan_sha256: String,
-    pub(crate) founding_custody_context: String,
-    pub(crate) direct_selected_manifest_entry_index: u16,
-    pub(crate) accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CampaignAccountEvidenceV1 {
-    pub(crate) address: String,
-    pub(crate) owner: String,
-    pub(crate) lamports: u64,
-    pub(crate) executable: bool,
-    pub(crate) data_len: usize,
-    pub(crate) data_sha256: String,
-    pub(crate) account_sha256: String,
-}
-
-pub(crate) fn parse_campaign_terminal_evidence_v1(
-    source: &[u8],
-) -> Result<CampaignTerminalEvidenceV1> {
-    if source.is_empty() || source.len() > MAX_CAMPAIGN_REPORT_BYTES_V1 {
-        return Err(Error::new(
-            "campaign report is outside the 1..16777216 byte bound",
-        ));
-    }
-    let report: Value = parse_json_without_duplicate_keys_v1(source)?;
-    if report.get("schema").and_then(Value::as_str) != Some(CAMPAIGN_REPORT_SCHEMA_V1) {
-        return Err(Error::new(
-            "terminal evidence is not dclutch-successor-campaign-report-v1",
-        ));
-    }
-    let plan_sha256 = report
-        .get("plan_sha256")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("campaign report omitted plan_sha256"))?
-        .to_owned();
-    hex32(&plan_sha256)?;
-    if report
-        .pointer("/execution/completed")
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
-        return Err(Error::new(
-            "campaign report does not carry completed execution",
-        ));
-    }
-    let market = report
-        .pointer("/execution/market")
-        .and_then(Value::as_object)
-        .ok_or_else(|| Error::new("campaign report omitted execution.market"))?;
-    let completed = market
-        .get("completed")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error::new("campaign report omitted execution.market.completed"))?;
-    let mut completed_names = BTreeSet::new();
-    if completed.is_empty()
-        || completed.len() > 512
-        || completed.iter().any(|stage| {
-            stage.as_str().is_none_or(|value| {
-                value.is_empty() || value.len() > 512 || !completed_names.insert(value)
-            })
-        })
-    {
-        return Err(Error::new(
-            "campaign report market completion list is noncanonical",
-        ));
-    }
-    let founding_custody_context = market
-        .get("founding_custody_context")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            Error::new("campaign report omitted execution.market.founding_custody_context")
-        })?
-        .to_owned();
-    hex32(&founding_custody_context)?;
-    let direct_selected_manifest_entry_index = market
-        .get("direct_selected_manifest_entry_index")
-        .and_then(Value::as_u64)
-        .and_then(|value| u16::try_from(value).ok())
-        .ok_or_else(|| {
-            Error::new(
-                "campaign report omitted canonical execution.market.direct_selected_manifest_entry_index",
-            )
-        })?;
-    let accounts_value = market
-        .get("accounts")
-        .and_then(Value::as_object)
-        .ok_or_else(|| Error::new("campaign report omitted execution.market.accounts"))?;
-    if accounts_value.is_empty() || accounts_value.len() > 4_096 {
-        return Err(Error::new(
-            "campaign report account projection is outside the 1..4096 row bound",
-        ));
-    }
-    if accounts_value.contains_key("terminal_record") {
-        return Err(Error::new(
-            "campaign report carries a stale terminal_record row; live Core terminal_receipt is the sole terminal identity",
-        ));
-    }
-    let mut accounts = BTreeMap::new();
-    for (label, value) in accounts_value {
-        if label.is_empty() || label.len() > 128 {
-            return Err(Error::new("campaign report account label is not bounded"));
-        }
-        let row: CampaignAccountEvidenceV1 = serde_json::from_value(value.clone())
-            .map_err(|error| Error::new(format!("campaign account {label}: {error}")))?;
-        pubkey(&row.address)?;
-        pubkey(&row.owner)?;
-        hex32(&row.data_sha256)?;
-        hex32(&row.account_sha256)?;
-        // These physical facts are intentionally retained in the exact
-        // campaign row even though terminal routing never treats either as
-        // authority. Deserialization above proves their integer/bool shapes.
-        let _routing_only_physical_facts = (row.lamports, row.executable);
-        if row.data_len > MAX_CAMPAIGN_REPORT_BYTES_V1 {
-            return Err(Error::new(format!(
-                "campaign account {label} data length is outside the bound"
-            )));
-        }
-        accounts.insert(label.clone(), row);
-    }
-    Ok(CampaignTerminalEvidenceV1 {
-        plan_sha256,
-        founding_custody_context,
-        direct_selected_manifest_entry_index,
-        accounts,
-    })
-}
-
 struct ArgumentsV1 {
     origin: ClusterOriginV1,
     plan: PathBuf,
@@ -212,13 +68,10 @@ struct ArgumentsV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CoreTerminalReceiptMeaningV1 {
-    /// Core accepted a Resolution certificate account for a categorical
-    /// result. No terminal-coordinate record exists or is consulted.
-    CategoricalResolutionCertificate(Pubkey),
-    /// Core carries the content identity used to derive the rational terminal
-    /// coordinate record pair. That pair is authenticated by the payout
-    /// semantic owner before use.
-    RationalTerminalCoordinate([u8; 32]),
+    /// Every admitted Core writer persists the exact Resolution certificate
+    /// account key. Market-family interpretation belongs to the authenticated
+    /// certificate body, never to this identity.
+    ResolutionCertificate(Pubkey),
 }
 
 pub(crate) fn run_wallet_terminal_input(arguments: Vec<String>) -> Result<()> {
@@ -282,12 +135,7 @@ pub(crate) fn run_wallet_terminal_input(arguments: Vec<String>) -> Result<()> {
     }
     let _authenticated = build_report(&selected, &snapshot)?;
     let receipt_label = match receipt_meaning {
-        CoreTerminalReceiptMeaningV1::CategoricalResolutionCertificate(_) => {
-            "categorical Resolution certificate"
-        }
-        CoreTerminalReceiptMeaningV1::RationalTerminalCoordinate(_) => {
-            "rational terminal coordinate"
-        }
+        CoreTerminalReceiptMeaningV1::ResolutionCertificate(_) => "Resolution certificate",
     };
     eprintln!(
         "wallet-terminal-payout-input: authenticated one finalized snapshot at slot {} with live Core {}",
@@ -306,34 +154,14 @@ fn authenticate_core_terminal_receipt_meaning_v1(
         .terminal_receipt
         .ok_or_else(|| Error::new("Core Market has no accepted terminal receipt"))?
         .to_bytes();
-    if receipt != selected.terminal_record_digest {
+    if receipt != selected.terminal_certificate.to_bytes() {
         return Err(Error::new(
             "live Core terminal receipt differs from the projected payout identity",
         ));
     }
-    let basis = ProductBasisV3::decode(
-        &snapshot
-            .required(selected.product_basis.raw, "ProductBasis")?
-            .data,
-    )
-    .map_err(|error| Error::new(format!("ProductBasis: {error:?}")))?;
-    Ok(core_terminal_receipt_meaning_v1(basis.kind(), receipt))
-}
-
-fn core_terminal_receipt_meaning_v1(
-    kind: BasisKindV3,
-    receipt: [u8; 32],
-) -> CoreTerminalReceiptMeaningV1 {
-    match kind {
-        BasisKindV3::CategoricalQ1 => {
-            CoreTerminalReceiptMeaningV1::CategoricalResolutionCertificate(Pubkey::new_from_array(
-                receipt,
-            ))
-        }
-        BasisKindV3::GradedExactComplement => {
-            CoreTerminalReceiptMeaningV1::RationalTerminalCoordinate(receipt)
-        }
-    }
+    Ok(CoreTerminalReceiptMeaningV1::ResolutionCertificate(
+        Pubkey::new_from_array(receipt),
+    ))
 }
 
 pub(crate) fn decode_routed_market(
@@ -447,12 +275,14 @@ fn routed_input(
         parent_context: hex(&[1; 32]),
         custody_context: evidence.founding_custody_context.clone(),
         release_set: plan.release_set_id.clone(),
+        terminal_certificate: Pubkey::new_from_array(terminal_receipt).to_string(),
         lookup_table: None,
         programs: ProgramSelectorsV1 {
             registry: plan.registry.program_id.clone(),
             core: plan.core.program_id.clone(),
             claims: plan.claims.program_id.clone(),
             custody: plan.custody.program_id.clone(),
+            resolution: plan.resolution.program_id.clone(),
         },
         records: RecordSelectorsV1 {
             realm: record_digest("realm_record")?,
@@ -464,12 +294,6 @@ fn routed_input(
             composition_graph: record_digest(TERMINAL_COMPOSITION_LABELS_V1[1])?,
             composition_translation: record_digest(TERMINAL_COMPOSITION_LABELS_V1[2])?,
             composition_exposure: record_digest(TERMINAL_COMPOSITION_LABELS_V1[3])?,
-            // This legacy wire field carries Core's accepted terminal receipt
-            // identity. For categorical Markets it is the Resolution
-            // certificate account; for rational Markets it is the terminal
-            // coordinate digest. Its meaning comes from live Core state, not
-            // from an untrusted campaign row.
-            terminal_record: hex(&terminal_receipt),
         },
     })
 }
@@ -543,7 +367,7 @@ fn stable_parent_context_v1(
         &claim_index_bytes,
         &transfer_index_bytes,
         &selected.release_set,
-        &selected.terminal_record_digest,
+        selected.terminal_certificate.as_ref(),
         &market_digest,
         &aggregate_digest,
         &position_digest,
@@ -904,12 +728,14 @@ mod tests {
             stable_parent_context_v1(&selected_b, &snapshot_b, 7, 1).unwrap()
         );
         selected_b.owner = selected_a.owner;
-        selected_b.terminal_record_digest[0] ^= 1;
+        let mut substituted_certificate = selected_b.terminal_certificate.to_bytes();
+        substituted_certificate[0] ^= 1;
+        selected_b.terminal_certificate = Pubkey::new_from_array(substituted_certificate);
         assert_ne!(
             first,
             stable_parent_context_v1(&selected_b, &snapshot_b, 7, 1).unwrap()
         );
-        selected_b.terminal_record_digest = selected_a.terminal_record_digest;
+        selected_b.terminal_certificate = selected_a.terminal_certificate;
         snapshot_b
             .accounts
             .get_mut(&selected_b.custody_replay)
@@ -966,7 +792,7 @@ mod tests {
         let owner = Pubkey::new_unique().to_string();
         let exact = serde_json::to_vec(&serde_json::json!({
             "schema": "dclutch-successor-campaign-report-v1",
-            "cluster": "acknowledged-devnet",
+            "cluster": "devnet",
             "rpc_url": "https://api.devnet.solana.com/",
             "mode": "execute",
             "plan_sha256": hex(&[1; 32]),
@@ -1006,6 +832,75 @@ mod tests {
                 .to_string()
                 .contains("exact founding campaign evidence")
         );
+
+        for hostile in [
+            serde_json::json!({
+                "schema": "dclutch-successor-campaign-report-v1",
+                "cluster": "loopback",
+                "mode": "execute",
+                "plan_sha256": hex(&[1; 32]),
+                "execution": {"completed": true, "recoveredFinalizedFounding": false, "transactions": [], "market": null}
+            }),
+            serde_json::json!({
+                "schema": "dclutch-successor-campaign-report-v1",
+                "cluster": "devnet",
+                "mode": "preflight (reads only, enforced)",
+                "plan_sha256": hex(&[1; 32]),
+                "execution": {"completed": true, "recoveredFinalizedFounding": false, "transactions": [], "market": null}
+            }),
+        ] {
+            assert!(
+                parse_campaign_terminal_evidence_v1(
+                    &serde_json::to_vec(&hostile).expect("hostile origin evidence bytes")
+                )
+                .expect_err("non-exterior evidence must refuse")
+                .to_string()
+                .contains("executed external devnet")
+            );
+        }
+
+        for hostile_execution in [
+            serde_json::json!({
+                "completed": true,
+                "recoveredFinalizedFounding": true,
+                "transactions": [],
+                "market": null
+            }),
+            serde_json::json!({
+                "completed": true,
+                "recoveredFinalizedFounding": false,
+                "transactions": [],
+                "market": null
+            }),
+            serde_json::json!({
+                "completed": true,
+                "recoveredFinalizedFounding": false,
+                "transactions": [{
+                    "label": "inexact",
+                    "signature": solana_sdk::signature::Signature::default().to_string(),
+                    "slot": 1,
+                    "transaction_metadata_available": true,
+                    "fee_lamports": null,
+                    "fee_only_balance_change": null,
+                    "compute_units_consumed": null,
+                    "error": null,
+                    "logs": [],
+                    "parallelDtoTruth": true
+                }],
+                "market": serde_json::from_slice::<Value>(&exact).expect("exact")["execution"]["market"].clone()
+            }),
+        ] {
+            let mut hostile: Value =
+                serde_json::from_slice(&exact).expect("exact campaign report value");
+            hostile["execution"] = hostile_execution;
+            assert!(
+                parse_campaign_terminal_evidence_v1(
+                    &serde_json::to_vec(&hostile).expect("hostile execution bytes")
+                )
+                .is_err(),
+                "crash recovery, absent Market, and third-schema transactions must refuse"
+            );
+        }
 
         let mut pasted_terminal: Value =
             serde_json::from_slice(&exact).expect("exact campaign report value");
@@ -1099,17 +994,11 @@ mod tests {
     }
 
     #[test]
-    fn live_core_receipt_has_one_explicit_meaning_per_market_family() {
+    fn live_core_receipt_has_one_certificate_account_meaning() {
         let receipt = [23; 32];
         assert_eq!(
-            core_terminal_receipt_meaning_v1(BasisKindV3::CategoricalQ1, receipt),
-            CoreTerminalReceiptMeaningV1::CategoricalResolutionCertificate(Pubkey::new_from_array(
-                receipt
-            ))
-        );
-        assert_eq!(
-            core_terminal_receipt_meaning_v1(BasisKindV3::GradedExactComplement, receipt),
-            CoreTerminalReceiptMeaningV1::RationalTerminalCoordinate(receipt)
+            CoreTerminalReceiptMeaningV1::ResolutionCertificate(Pubkey::new_from_array(receipt)),
+            CoreTerminalReceiptMeaningV1::ResolutionCertificate(Pubkey::new_from_array(receipt))
         );
     }
 

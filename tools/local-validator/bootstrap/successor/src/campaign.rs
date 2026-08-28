@@ -64,10 +64,11 @@
 //! and printed; it is not silently assumed.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write as _,
     path::{Path, PathBuf},
+    str::FromStr as _,
 };
 
 use dclutch_pyth_svm::devnet_release_v1;
@@ -76,7 +77,10 @@ use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
     ProgramV3View,
 };
-use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::{
+    Deserialize,
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
+};
 use serde_json::{Value, json};
 use solana_sdk::{
     pubkey::Pubkey,
@@ -88,14 +92,209 @@ use crate::{
     Error, Result,
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
     model::{CheckedUpgradeRolePinV1, ProgramPin, SuccessorPlan},
-    plan::{hex, pubkey},
-    rpc::{Rpc, WritePolicyV1},
+    plan::{hex, hex32, pubkey},
+    rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
     runtime,
     seed::{KeyForge, role},
 };
 
 /// The acknowledgment flag's literal spelling, for the argument table.
 pub(crate) const DEVNET_ACKNOWLEDGMENT_FLAG_NAME: &str = DEVNET_ACKNOWLEDGMENT_FLAG;
+
+const CAMPAIGN_REPORT_SCHEMA_V1: &str = "dclutch-successor-campaign-report-v1";
+const MAX_CAMPAIGN_REPORT_BYTES_V1: usize = 16 * 1024 * 1024;
+
+/// The only terminal-consumable projection of this module's campaign report.
+///
+/// The campaign emitter and this parser deliberately live together. Other
+/// clients may reject an unrelated envelope cheaply, but they must not grow a
+/// second list of the exact execution, transaction, Market, or account fields.
+#[derive(Clone, Debug)]
+pub(crate) struct CampaignTerminalEvidenceV1 {
+    pub(crate) plan_sha256: String,
+    pub(crate) founding_custody_context: String,
+    pub(crate) direct_selected_manifest_entry_index: u16,
+    pub(crate) accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CampaignAccountEvidenceV1 {
+    pub(crate) address: String,
+    pub(crate) owner: String,
+    pub(crate) lamports: u64,
+    pub(crate) executable: bool,
+    pub(crate) data_len: usize,
+    pub(crate) data_sha256: String,
+    pub(crate) account_sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TerminalExecutionV1 {
+    completed: bool,
+    recovered_finalized_founding: bool,
+    transactions: Vec<TerminalTransactionEvidenceV1>,
+    market: Option<TerminalMarketEvidenceV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalTransactionEvidenceV1 {
+    label: String,
+    signature: String,
+    slot: u64,
+    transaction_metadata_available: bool,
+    fee_lamports: NullableV1<u64>,
+    fee_only_balance_change: NullableV1<bool>,
+    compute_units_consumed: NullableV1<u64>,
+    error: Value,
+    logs: Vec<String>,
+}
+
+/// Required JSON field whose value may itself be null.
+struct NullableV1<T>(Option<T>);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for NullableV1<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Self)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalMarketEvidenceV1 {
+    completed: Vec<String>,
+    accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
+    founding_custody_context: String,
+    direct_selected_manifest_entry_index: u16,
+}
+
+pub(crate) fn parse_campaign_terminal_evidence_v1(
+    source: &[u8],
+) -> Result<CampaignTerminalEvidenceV1> {
+    if source.is_empty() || source.len() > MAX_CAMPAIGN_REPORT_BYTES_V1 {
+        return Err(Error::new(
+            "campaign report is outside the 1..16777216 byte bound",
+        ));
+    }
+    let report: Value = parse_json_without_duplicate_keys_v1(source)?;
+    if report.get("schema").and_then(Value::as_str) != Some(CAMPAIGN_REPORT_SCHEMA_V1) {
+        return Err(Error::new(
+            "terminal evidence is not dclutch-successor-campaign-report-v1",
+        ));
+    }
+    if report.get("cluster").and_then(Value::as_str) != Some("devnet")
+        || report.get("mode").and_then(Value::as_str) != Some("execute")
+    {
+        return Err(Error::new(
+            "terminal evidence requires an executed external devnet campaign; loopback and preflight reports are non-consumable",
+        ));
+    }
+    let plan_sha256 = report
+        .get("plan_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("campaign report omitted plan_sha256"))?
+        .to_owned();
+    hex32(&plan_sha256)?;
+    let execution: TerminalExecutionV1 = serde_json::from_value(
+        report
+            .get("execution")
+            .cloned()
+            .ok_or_else(|| Error::new("campaign report omitted execution"))?,
+    )
+    .map_err(|error| Error::new(format!("campaign execution: {error}")))?;
+    if !execution.completed {
+        return Err(Error::new(
+            "campaign report does not carry completed execution",
+        ));
+    }
+    if execution.recovered_finalized_founding {
+        return Err(Error::new(
+            "crash-recovered founding evidence is non-consumable; a separate recovery-to-complete step must reconstruct and authenticate execution.market before terminal use",
+        ));
+    }
+    if execution.transactions.len() > 4_096 {
+        return Err(Error::new(
+            "campaign report transaction projection exceeds 4096 rows",
+        ));
+    }
+    let mut transaction_labels = BTreeSet::new();
+    for transaction in &execution.transactions {
+        if transaction.label.is_empty()
+            || transaction.label.len() > 512
+            || !transaction_labels.insert(transaction.label.as_str())
+            || solana_sdk::signature::Signature::from_str(&transaction.signature).is_err()
+            || transaction.logs.len() > 512
+            || transaction
+                .logs
+                .iter()
+                .any(|line| line.as_bytes().len() > 4_096)
+        {
+            return Err(Error::new(
+                "campaign report transaction projection is noncanonical",
+            ));
+        }
+        // Reading every field here makes the required-field contract explicit;
+        // none of these physical observations is treated as semantic authority.
+        let _routing_only_physical_facts = (
+            transaction.slot,
+            transaction.transaction_metadata_available,
+            &transaction.fee_lamports.0,
+            &transaction.fee_only_balance_change.0,
+            &transaction.compute_units_consumed.0,
+            &transaction.error,
+        );
+    }
+    let market = execution
+        .market
+        .ok_or_else(|| Error::new("campaign report omitted execution.market"))?;
+    let mut completed_names = BTreeSet::new();
+    if market.completed.is_empty()
+        || market.completed.len() > 512
+        || market.completed.iter().any(|stage| {
+            stage.is_empty() || stage.len() > 512 || !completed_names.insert(stage.as_str())
+        })
+    {
+        return Err(Error::new(
+            "campaign report market completion list is noncanonical",
+        ));
+    }
+    hex32(&market.founding_custody_context)?;
+    if market.accounts.is_empty() || market.accounts.len() > 4_096 {
+        return Err(Error::new(
+            "campaign report account projection is outside the 1..4096 row bound",
+        ));
+    }
+    if market.accounts.contains_key("terminal_record") {
+        return Err(Error::new(
+            "campaign report carries a stale terminal_record row; live Core terminal_receipt is the sole terminal certificate identity",
+        ));
+    }
+    for (label, row) in &market.accounts {
+        if label.is_empty() || label.len() > 128 {
+            return Err(Error::new("campaign report account label is not bounded"));
+        }
+        pubkey(&row.address)?;
+        pubkey(&row.owner)?;
+        hex32(&row.data_sha256)?;
+        hex32(&row.account_sha256)?;
+        let _routing_only_physical_facts = (row.lamports, row.executable);
+        if row.data_len > MAX_CAMPAIGN_REPORT_BYTES_V1 {
+            return Err(Error::new(format!(
+                "campaign account {label} data length is outside the bound"
+            )));
+        }
+    }
+    Ok(CampaignTerminalEvidenceV1 {
+        plan_sha256,
+        founding_custody_context: market.founding_custody_context,
+        direct_selected_manifest_entry_index: market.direct_selected_manifest_entry_index,
+        accounts: market.accounts,
+    })
+}
 
 /// The roles a driver run must be handed a keypair file for.
 ///

@@ -172,7 +172,8 @@ export type WalletTerminalPayoutPlanInputV1 = Readonly<{
   parentContext: string;
   custodyContext: string;
   releaseSet: string;
-  programs: Readonly<{ registry: string; core: string; claims: string; custody: string }>;
+  terminalCertificate: string;
+  programs: Readonly<{ registry: string; core: string; claims: string; custody: string; resolution: string }>;
   records: Readonly<{
     realm: string;
     product: string;
@@ -183,7 +184,6 @@ export type WalletTerminalPayoutPlanInputV1 = Readonly<{
     compositionGraph: string;
     compositionTranslation: string;
     compositionExposure: string;
-    terminalRecord: string;
   }>;
 }>;
 
@@ -394,14 +394,6 @@ function exactJson(source: string | Uint8Array, field: string, maximumBytes: num
   try { return JSON.parse(text); } catch { return fail('value decoder refused'); }
 }
 
-function boundedText(value: unknown, field: string, maximumBytes: number): string {
-  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value
-      || new TextEncoder().encode(value).byteLength > maximumBytes) {
-    throw new Error(`${field} is not nonempty canonical text within ${maximumBytes} bytes`);
-  }
-  return value;
-}
-
 function address(value: unknown, field: string): string {
   if (typeof value !== 'string') throw new Error(`${field} is not one canonical Solana address`);
   let parsed: PublicKey;
@@ -467,7 +459,7 @@ function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-/** Hostile-check one exact completed campaign dossier before Rust consumes it. */
+/** Authenticate only the campaign envelope Rust needs before it owns the exact projection. */
 export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, evidenceBytes: Uint8Array): void {
   const evidence = object(exactJson(evidenceBytes, 'campaign evidence', MAX_EVIDENCE_BYTES), 'campaign evidence');
   if (evidence.schema !== EVIDENCE_FORMAT) {
@@ -475,75 +467,12 @@ export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, e
   }
   const expectedPlan = identity(evidence.plan_sha256, 'campaign plan digest');
   if (sha256(planBytes) !== expectedPlan) throw new Error('campaign evidence does not authenticate the exact plan bytes');
-  const execution = object(evidence.execution, 'campaign execution');
-  exactKeys(execution, ['completed', 'recoveredFinalizedFounding', 'transactions', 'market'], 'campaign execution');
-  if (execution.completed !== true || typeof execution.recoveredFinalizedFounding !== 'boolean') {
-    throw new Error('campaign evidence does not carry completed execution');
+  if (evidence.cluster !== 'devnet' || evidence.mode !== 'execute') {
+    throw new Error('terminal evidence requires an executed external devnet campaign');
   }
-  const market = object(execution.market, 'campaign execution Market');
-  exactKeys(market, [
-    'completed', 'accounts', 'founding_custody_context', 'direct_selected_manifest_entry_index',
-  ], 'campaign execution Market');
-  identity(market.founding_custody_context, 'founding Custody context');
-  index(market.direct_selected_manifest_entry_index, 'Direct selected manifest entry', 65_535);
-  if (!Array.isArray(market.completed) || market.completed.length === 0 || market.completed.length > 512
-      || market.completed.some((entry) => {
-        try { boundedText(entry, 'campaign completed stage', 512); return false; } catch { return true; }
-      })
-      || new Set(market.completed).size !== market.completed.length) {
-    throw new Error('campaign evidence does not carry one nonempty ordered completed-stage list');
-  }
-  if (!Array.isArray(execution.transactions) || execution.transactions.length > 4_096) {
-    throw new Error('campaign evidence transactions are not an array within the 4096-row bound');
-  }
-  const transactionLabels = new Set<string>();
-  for (const [offset, raw] of execution.transactions.entries()) {
-    const row = object(raw, `campaign transaction ${offset}`);
-    exactKeys(row, [
-      'label', 'signature', 'slot', 'transaction_metadata_available', 'fee_lamports',
-      'fee_only_balance_change', 'compute_units_consumed', 'error', 'logs',
-    ], `campaign transaction ${offset}`);
-    let label: string;
-    try { label = boundedText(row.label, `campaign transaction ${offset} label`, 512); } catch {
-      throw new Error(`campaign transaction ${offset} has another label shape`);
-    }
-    if (transactionLabels.has(label)) throw new Error(`campaign transaction ${offset} has another label shape`);
-    transactionLabels.add(label);
-    exactSignature(row.signature);
-    if (typeof row.slot !== 'number' || !Number.isSafeInteger(row.slot) || row.slot < 0
-        || typeof row.transaction_metadata_available !== 'boolean'
-        || (row.fee_lamports !== null && (typeof row.fee_lamports !== 'number'
-          || !Number.isSafeInteger(row.fee_lamports) || row.fee_lamports < 0))
-        || (row.compute_units_consumed !== null && (typeof row.compute_units_consumed !== 'number'
-          || !Number.isSafeInteger(row.compute_units_consumed) || row.compute_units_consumed < 0))
-        || (row.fee_only_balance_change !== null && typeof row.fee_only_balance_change !== 'boolean')
-        || !Array.isArray(row.logs) || row.logs.length > 512
-        || row.logs.some((entry) => typeof entry !== 'string'
-          || new TextEncoder().encode(entry).byteLength > 4_096)) {
-      throw new Error(`campaign transaction ${offset} has inexact finalized evidence`);
-    }
-  }
-  const accounts = object(market.accounts, 'campaign evidence accounts');
-  if (Object.keys(accounts).length === 0 || Object.keys(accounts).length > 4_096) {
-    throw new Error('campaign evidence persisted accounts are outside the 1..4096 row bound');
-  }
-  for (const [label, raw] of Object.entries(accounts)) {
-    if (label === 'terminal_record') {
-      throw new Error('campaign report carries a stale terminal_record row; live Core terminal_receipt is the sole terminal identity');
-    }
-    if (label.length === 0 || new TextEncoder().encode(label).byteLength > 128) {
-      throw new Error('campaign evidence account label is not bounded');
-    }
-    const row = object(raw, `campaign account ${label}`);
-    exactKeys(row, ['address', 'owner', 'lamports', 'executable', 'data_len', 'data_sha256', 'account_sha256'], `campaign account ${label}`);
-    address(row.address, `campaign account ${label} address`);
-    address(row.owner, `campaign account ${label} owner`);
-    if (typeof row.lamports !== 'number' || !Number.isSafeInteger(row.lamports) || row.lamports < 0
-        || typeof row.data_len !== 'number' || !Number.isSafeInteger(row.data_len) || row.data_len < 0
-        || typeof row.executable !== 'boolean') throw new Error(`campaign account ${label} has inexact physical facts`);
-    identity(row.data_sha256, `campaign account ${label} data digest`);
-    identity(row.account_sha256, `campaign account ${label} account digest`);
-  }
+  // `campaign.rs::parse_campaign_terminal_evidence_v1` is the single exact
+  // execution/transaction/Market/account schema owner. The subprocess that
+  // consumes these bytes runs that parser before its first RPC request.
 }
 
 /** Hostile-decode the exact flat input emitted by `wallet-terminal-payout-input`. */
@@ -552,15 +481,15 @@ export function parseWalletTerminalPayoutPlanInputV1(source: string): WalletTerm
   exactKeys(value, [
     'format', 'market', 'owner', 'recipientOwner', 'recipient', 'collateralMint', 'tokenProgram',
     'quantity', 'claimIndex', 'transferIndex', 'parentContext', 'custodyContext', 'releaseSet',
-    'programs', 'records',
+    'terminalCertificate', 'programs', 'records',
   ], 'wallet payout projected input');
   if (value.format !== INPUT_FORMAT) throw new Error('wallet payout projected input has another format');
   const programs = object(value.programs, 'wallet payout programs');
-  exactKeys(programs, ['registry', 'core', 'claims', 'custody'], 'wallet payout programs');
+  exactKeys(programs, ['registry', 'core', 'claims', 'custody', 'resolution'], 'wallet payout programs');
   const records = object(value.records, 'wallet payout records');
   const recordFields = [
     'realm', 'product', 'resultDomain', 'portfolio', 'productBasis', 'compositionDescriptor',
-    'compositionGraph', 'compositionTranslation', 'compositionExposure', 'terminalRecord',
+    'compositionGraph', 'compositionTranslation', 'compositionExposure',
   ] as const;
   exactKeys(records, recordFields, 'wallet payout records');
   const owner = address(value.owner, 'wallet payout owner');
@@ -582,11 +511,13 @@ export function parseWalletTerminalPayoutPlanInputV1(source: string): WalletTerm
     parentContext: identity(value.parentContext, 'wallet payout parent context'),
     custodyContext: identity(value.custodyContext, 'wallet payout Custody context'),
     releaseSet: identity(value.releaseSet, 'wallet payout release set'),
+    terminalCertificate: address(value.terminalCertificate, 'wallet payout Resolution certificate'),
     programs: Object.freeze({
       registry: address(programs.registry, 'Registry program'),
       core: address(programs.core, 'Core program'),
       claims: address(programs.claims, 'Claims program'),
       custody: address(programs.custody, 'Custody program'),
+      resolution: address(programs.resolution, 'Resolution program'),
     }),
     records: Object.freeze(Object.fromEntries(recordFields.map((field) => [field, identity(records[field], `wallet payout ${field} record`)]))) as WalletTerminalPayoutPlanInputV1['records'],
   });

@@ -39,13 +39,13 @@ function fixture(owner = key(2), width = 25) {
     market: key(1), owner, recipientOwner: owner, recipient: key(3), collateralMint: key(4),
     tokenProgram: key(5), quantity: '7', claimIndex: 1, transferIndex: 0,
     parentContext: '06'.repeat(32), custodyContext: '07'.repeat(32), releaseSet: '08'.repeat(32),
-    programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13) },
+    terminalCertificate: key(30),
+    programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13), resolution: key(14) },
     records: {
       realm: '14'.repeat(32), product: '15'.repeat(32), resultDomain: '16'.repeat(32),
-      portfolio: '17'.repeat(32), productBasis: '18'.repeat(32),
-      executionDescriptor: '19'.repeat(32), compositionDescriptor: '1a'.repeat(32),
+      portfolio: '17'.repeat(32), productBasis: '18'.repeat(32), compositionDescriptor: '1a'.repeat(32),
       compositionGraph: '1b'.repeat(32), compositionTranslation: '1c'.repeat(32),
-      compositionExposure: '1d'.repeat(32), terminalRecord: '1e'.repeat(32),
+      compositionExposure: '1d'.repeat(32),
     },
   };
   const sourceBytes = Buffer.from(JSON.stringify(source));
