@@ -34,6 +34,10 @@ receipt tests prove the parser, not a completed protocol lifecycle.
 - every Direct fill's gross quote with no unnamed rounding, then an independent floor of
   `gross * 50 / 10_000` on each side;
 - exact `LiabilityBasisPositionV2` identity, geometry, revision, and balances;
+- for owned-loopback Hot evidence, exact ordered seller and buyer Position
+  pre/post states, distinct accounts and owners, and one conserved outcome
+  transfer equal to the fill; the public-devnet manifest does not admit this
+  private-only field;
 - exact hostile decoding and market binding of `ResolutionCertificateV2`;
 - every payout's claim burns and equal Hoard-principal debit / recipient credit;
 - retirement closure observations and exact positive refund deltas;
