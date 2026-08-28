@@ -22,14 +22,18 @@ import {
   CUSTODY_OPERATION_INITIALIZE_REPLAY_V1,
   CUSTODY_REPLAY_BYTES_V1,
   CUSTODY_REPLAY_CALLER_ROLE_OFFSET_V1,
+  CUSTODY_REPLAY_CALLER_PROGRAM_OFFSET_V1,
   CUSTODY_REPLAY_CONTEXT_OFFSET_V1,
   CUSTODY_REPLAY_GENERATION_OFFSET_V1,
   CUSTODY_REPLAY_MAGIC_V1,
   CUSTODY_REPLAY_MARKET_OFFSET_V1,
   CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1,
+  CUSTODY_REPLAY_OPEN_VAULT_COUNT_OFFSET_V1,
   CUSTODY_REPLAY_PDA_DOMAIN_V1,
+  CUSTODY_REPLAY_REALM_OFFSET_V1,
   CUSTODY_REPLAY_RELEASE_SET_OFFSET_V1,
   CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1,
+  CUSTODY_REPLAY_STATUS_OFFSET_V1,
   CUSTODY_REPLAY_VERSION_OFFSET_V1,
   CUSTODY_REQUEST_BYTES_V1,
   CUSTODY_REQUEST_CALLER_PROGRAM_OFFSET_V1,
@@ -74,7 +78,7 @@ import {
   type ClaimsAggregateV2,
 } from './marketCoreV2';
 import { SYSTEM_PROGRAM_ID, UPGRADEABLE_LOADER_ID, deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
-import { type SolanaRpcClient } from './rpc';
+import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 /**
  * The wallet-side redemption precondition, built exactly once.
@@ -97,6 +101,13 @@ import { type SolanaRpcClient } from './rpc';
  */
 
 const SOLANA_PACKET_BYTES = 1_232;
+const U64_MAX = 0xffff_ffff_ffff_ffffn;
+
+// These two fields close the 288-byte Rust replay layout. They are derived
+// from the generated preceding coordinate so this hand-written consumer does
+// not invent a second offset authority.
+const CUSTODY_REPLAY_LAST_REQUEST_DIGEST_OFFSET_V1 = CUSTODY_REPLAY_GENERATION_OFFSET_V1 + 8;
+const CUSTODY_REPLAY_LAST_POSTSTATE_COMMITMENT_OFFSET_V1 = CUSTODY_REPLAY_LAST_REQUEST_DIGEST_OFFSET_V1 + 32;
 
 /**
  * An explicit ceiling far above the measured cost of the whole Custody-CPI
@@ -137,6 +148,25 @@ function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function accountLamports(account: RpcAccount, field: string): bigint {
+  if (!/^(0|[1-9][0-9]*)$/.test(account.lamports)) throw new Error(`${field} lamports are not canonical unsigned decimal text`);
+  const value = BigInt(account.lamports);
+  if (value > U64_MAX) throw new Error(`${field} lamports exceed u64`);
+  return value;
+}
+
+function requireMaterialAccount(account: RpcAccount, field: string): void {
+  if (account.executable) throw new Error(`${field} is executable`);
+  if (account.space !== account.data.length) throw new Error(`${field} RPC space does not equal its acquired data length`);
+  if (accountLamports(account, field) === 0n) throw new Error(`${field} has zero lamports`);
+}
+
+function requireCanonicalAggregateBytes(account: RpcAccount): void {
+  // LiabilityBasisMarketViewV2::decode requires these two reserved header
+  // bytes to be zero. decodeClaimsAggregateV2 historically only decoded them.
+  if (account.data[10] !== 0 || account.data[11] !== 0) throw new Error('Claims aggregate reserved bytes are nonzero');
 }
 
 /** Encode the exact 48-byte `DCLCCR01` request naming one Market. */
@@ -273,16 +303,25 @@ export async function inspectClaimsCustodyReplayV1(
     if (aggregateAccount.owner !== claimsProgram.toBase58() || aggregateAccount.executable) {
       return Object.freeze({ status: 'refused', reason: `the derived aggregate address holds an account the selected Claims program does not own (owner ${aggregateAccount.owner})` });
     }
+    requireMaterialAccount(aggregateAccount, 'Claims aggregate');
+    requireCanonicalAggregateBytes(aggregateAccount);
     const aggregate = decodeClaimsAggregateV2(aggregateAddress, aggregateAccount.data);
     if (aggregate.logicalMarket !== marketAddress) {
       return Object.freeze({ status: 'refused', reason: `the aggregate at the derived address names logical Market ${aggregate.logicalMarket}, not ${marketAddress}` });
+    }
+    if (aggregate.registryProgram !== registryProgram.toBase58()) {
+      return Object.freeze({ status: 'refused', reason: `the aggregate selects Registry program ${aggregate.registryProgram}, not ${registryProgram.toBase58()}` });
     }
 
     const releaseSet = fromHex(aggregate.selectedReleaseSetId, 'aggregate release set');
     const context = fromHex(aggregate.custodyContext, 'aggregate custody context');
     const realmId = fromHex(aggregate.realmId, 'aggregate Realm identity');
-    if (isZero(context)) {
-      return Object.freeze({ status: 'refused', reason: 'the aggregate persists a zero Custody namespace; no replay can be derived from it' });
+    const productInstanceId = fromHex(aggregate.productInstanceId, 'aggregate Product instance');
+    const liabilityBasisId = fromHex(aggregate.liabilityBasisId, 'aggregate LiabilityBasis');
+    if ([releaseSet, realmId, context, productInstanceId, liabilityBasisId].some(isZero)
+      || isZero(new PublicKey(aggregate.logicalMarket).toBytes())
+      || isZero(new PublicKey(aggregate.registryProgram).toBytes())) {
+      return Object.freeze({ status: 'refused', reason: 'the Claims aggregate contains a zero identity that the Rust aggregate codec refuses' });
     }
 
     const marketBytes = new PublicKey(marketAddress).toBytes();
@@ -297,28 +336,56 @@ export async function inspectClaimsCustodyReplayV1(
 
     const replayObservation = await client.multipleAccounts([replayAddress], floor);
     const replayAccount = replayObservation.accounts[0]?.account ?? null;
-    if (replayAccount !== null && replayAccount.data.length > 0) {
+    if (replayAccount !== null && replayAccount.data.length === 0) {
+      if (replayAccount.owner !== SYSTEM_PROGRAM_ID
+        || replayAccount.executable
+        || replayAccount.space !== 0
+        || accountLamports(replayAccount, 'vacant replay account') !== 0n) {
+        return Object.freeze({ status: 'refused', reason: `an occupied account exists at the derived Claims-role replay address ${replayAddress}; creation requires a System-owned, non-executable, zero-lamport, zero-space vacancy` });
+      }
+    } else if (replayAccount !== null) {
+      requireMaterialAccount(replayAccount, 'Claims-role Custody replay');
       if (replayAccount.owner !== custodyProgram.toBase58()
-        || replayAccount.data.length !== CUSTODY_REPLAY_BYTES_V1
-        || !same(replayAccount.data.slice(0, 8), CUSTODY_REPLAY_MAGIC_V1)
+        || replayAccount.data.length !== CUSTODY_REPLAY_BYTES_V1) {
+        return Object.freeze({ status: 'refused', reason: `an account exists at the derived Claims-role replay address ${replayAddress} but does not decode as this Market's Claims-role Custody replay` });
+      }
+      const nextRevision = u64At(replayAccount.data, CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1);
+      const generation = u64At(replayAccount.data, CUSTODY_REPLAY_GENERATION_OFFSET_V1);
+      const rentRefund = replayAccount.data.slice(CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1, CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1 + 32);
+      const lastRequestDigest = replayAccount.data.slice(CUSTODY_REPLAY_LAST_REQUEST_DIGEST_OFFSET_V1, CUSTODY_REPLAY_LAST_REQUEST_DIGEST_OFFSET_V1 + 32);
+      const lastPoststateCommitment = replayAccount.data.slice(CUSTODY_REPLAY_LAST_POSTSTATE_COMMITMENT_OFFSET_V1, CUSTODY_REPLAY_BYTES_V1);
+      if (!same(replayAccount.data.slice(0, 8), CUSTODY_REPLAY_MAGIC_V1)
         || u16At(replayAccount.data, CUSTODY_REPLAY_VERSION_OFFSET_V1) !== CUSTODY_ABI_VERSION_V1
+        || replayAccount.data[CUSTODY_REPLAY_STATUS_OFFSET_V1] !== 1
         || replayAccount.data[CUSTODY_REPLAY_CALLER_ROLE_OFFSET_V1] !== EXECUTION_ROLE_CLAIMS_V1
         || !same(replayAccount.data.slice(CUSTODY_REPLAY_MARKET_OFFSET_V1, CUSTODY_REPLAY_MARKET_OFFSET_V1 + 32), marketBytes)
         || !same(replayAccount.data.slice(CUSTODY_REPLAY_RELEASE_SET_OFFSET_V1, CUSTODY_REPLAY_RELEASE_SET_OFFSET_V1 + 32), releaseSet)
-        || !same(replayAccount.data.slice(CUSTODY_REPLAY_CONTEXT_OFFSET_V1, CUSTODY_REPLAY_CONTEXT_OFFSET_V1 + 32), context)) {
+        || !same(replayAccount.data.slice(CUSTODY_REPLAY_REALM_OFFSET_V1, CUSTODY_REPLAY_REALM_OFFSET_V1 + 32), realmId)
+        || !same(replayAccount.data.slice(CUSTODY_REPLAY_CONTEXT_OFFSET_V1, CUSTODY_REPLAY_CONTEXT_OFFSET_V1 + 32), context)
+        || !same(replayAccount.data.slice(CUSTODY_REPLAY_CALLER_PROGRAM_OFFSET_V1, CUSTODY_REPLAY_CALLER_PROGRAM_OFFSET_V1 + 32), claimsProgram.toBytes())
+        || isZero(rentRefund)
+        || nextRevision === 0n
+        || generation !== BigInt(aggregate.generation)
+        || isZero(lastRequestDigest)
+        || isZero(lastPoststateCommitment)) {
         return Object.freeze({ status: 'refused', reason: `an account exists at the derived Claims-role replay address ${replayAddress} but does not decode as this Market's Claims-role Custody replay` });
       }
+      // Reading the field is intentional even though every u32 bit pattern is
+      // valid: it keeps this parser's byte coverage aligned with Rust's exact
+      // replay layout instead of silently leaving the coordinate unchecked.
+      new DataView(replayAccount.data.buffer, replayAccount.data.byteOffset + CUSTODY_REPLAY_OPEN_VAULT_COUNT_OFFSET_V1, 4).getUint32(0, true);
       return Object.freeze({
         status: 'exists',
         replayAddress,
-        nextRevision: u64At(replayAccount.data, CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1).toString(),
-        generation: u64At(replayAccount.data, CUSTODY_REPLAY_GENERATION_OFFSET_V1).toString(),
-        rentRefund: new PublicKey(replayAccount.data.slice(CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1, CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1 + 32)).toBase58(),
+        nextRevision: nextRevision.toString(),
+        generation: generation.toString(),
+        rentRefund: new PublicKey(rentRefund).toBase58(),
         note: 'The Claims-role Custody replay already exists, so a redemption plan replays against it directly; no creation is owed.',
       });
     }
 
     const rent = await client.minimumBalanceForRentExemption(CUSTODY_REPLAY_BYTES_V1);
+    if (rent.dataLength !== CUSTODY_REPLAY_BYTES_V1) throw new Error('Rent response does not name the requested replay width');
     const custodyRequestBytes = await encodeExpectedCustodyRequestV1({
       releaseSet,
       market: marketBytes,
