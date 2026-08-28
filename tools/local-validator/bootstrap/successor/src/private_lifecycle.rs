@@ -155,7 +155,7 @@ struct ChaosStage {
 }
 
 pub(crate) fn usage() -> &'static str {
-    "\n  dclutch-local-successor-bootstrap local-private-validator-lifecycle-receipt-v1 \\\n+     --evidence-root ABSOLUTE_DIR --source-commit FULL_LOWERCASE_COMMIT \\\n+     --checked-release-gate-sha256 SHA256 --plan ABSOLUTE_JSON \\\n+     --checked-release-gate ABSOLUTE_JSON --pyth-facts ABSOLUTE_JSON \\\n+     --pyth-provider-closure ABSOLUTE_JSON --finalized-capture ABSOLUTE_JSON \\\n+     --activity-manifest ABSOLUTE_JSON --stage-journal-descriptors ABSOLUTE_JSON \\\n+     --chaos-session ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON\n"
+    "\n  dclutch-local-successor-bootstrap local-private-validator-lifecycle-receipt-v1 \\\n     --evidence-root ABSOLUTE_DIR --source-commit FULL_LOWERCASE_COMMIT \\\n     --checked-release-gate-sha256 SHA256 --plan ABSOLUTE_JSON \\\n     --checked-release-gate ABSOLUTE_JSON --pyth-facts ABSOLUTE_JSON \\\n     --pyth-provider-closure ABSOLUTE_JSON --finalized-capture ABSOLUTE_JSON \\\n     --activity-manifest ABSOLUTE_JSON --stage-journal-descriptors ABSOLUTE_JSON \\\n     --chaos-session ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON\n"
 }
 
 pub(crate) fn parse_args<I>(arguments: I) -> Result<PrivateLifecycleArgs>
