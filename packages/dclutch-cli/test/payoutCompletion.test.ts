@@ -9,6 +9,26 @@ import type {
   WalletTerminalPayoutReportV3,
   WalletTerminalPayoutRouteV3,
 } from '@dclutch/sdk/walletTerminalPayoutV3';
+import {
+  encodeClaimsCustodyReplayRequestV1,
+  encodeExpectedCustodyRequestV1,
+  type ClaimsCustodyReplayPlanV1,
+} from '@dclutch/sdk/claimsCustodyReplay';
+import {
+  CUSTODY_REPLAY_BYTES_V1,
+  CUSTODY_REPLAY_CALLER_PROGRAM_OFFSET_V1,
+  CUSTODY_REPLAY_CALLER_ROLE_OFFSET_V1,
+  CUSTODY_REPLAY_CONTEXT_OFFSET_V1,
+  CUSTODY_REPLAY_GENERATION_OFFSET_V1,
+  CUSTODY_REPLAY_MAGIC_V1,
+  CUSTODY_REPLAY_MARKET_OFFSET_V1,
+  CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1,
+  CUSTODY_REPLAY_REALM_OFFSET_V1,
+  CUSTODY_REPLAY_RELEASE_SET_OFFSET_V1,
+  CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1,
+  CUSTODY_REPLAY_STATUS_OFFSET_V1,
+  CUSTODY_REPLAY_VERSION_OFFSET_V1,
+} from '@dclutch/sdk/generated/claimsCustodyReplayV1';
 import type { RpcAccount, TransactionMetaObservation } from '@dclutch/sdk/rpc';
 import {
   Keypair,
@@ -22,15 +42,22 @@ import { describe, expect, it } from 'vitest';
 
 import {
   archivePayoutOperationJournalV1,
+  archiveReplayOperationJournalV1,
   authenticateCompletedCampaignEvidenceV1,
   finalizePayoutOperationV1,
+  finalizeReplayOperationV1,
   loadPayoutOperationJournalV1,
+  loadReplayOperationJournalV1,
   markPayoutOperationSubmittedV1,
+  markReplayOperationSubmittedV1,
   parseWalletTerminalPayoutPlanInputV1,
   restorePayoutOperationJournalV1,
+  restoreReplayOperationJournalV1,
   signPayoutPlanV1,
+  signReplayOperationV1,
   transactionSignatureV1,
   writeUnsignedPayoutOperationJournalV1,
+  writeUnsignedReplayOperationJournalV1,
   type PayoutOperationJournalV1,
 } from '../src/payoutCompletion';
 
@@ -134,6 +161,87 @@ function preparedFixture() {
     custodyContext: digest(5), signedPacketBase64: 'AA==', payout: '7', lookupTable: key(91),
   } as unknown as WalletTerminalPayoutManifestV3;
   return { signer, plan, manifest };
+}
+
+function putU16(bytes: Uint8Array, offset: number, value: number): void {
+  new DataView(bytes.buffer, bytes.byteOffset + offset, 2).setUint16(0, value, true);
+}
+
+function putU64(bytes: Uint8Array, offset: number, value: bigint): void {
+  new DataView(bytes.buffer, bytes.byteOffset + offset, 8).setBigUint64(0, value, true);
+}
+
+function hashBytes(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
+  const hash = createHash('sha256');
+  for (const part of parts) hash.update(part);
+  return new Uint8Array(hash.digest());
+}
+
+function littleU64(value: bigint): Uint8Array {
+  const bytes = new Uint8Array(8); putU64(bytes, 0, value); return bytes;
+}
+
+async function replayFixture() {
+  const signer = Keypair.fromSeed(new Uint8Array(32).fill(71));
+  const market = key(61); const claims = key(62); const custody = key(63); const registry = key(64);
+  const replay = key(65); const aggregate = key(66); const rent = 1_000n;
+  const release = new Uint8Array(32).fill(6); const realm = new Uint8Array(32).fill(7);
+  const context = new Uint8Array(32).fill(8);
+  const custodyRequestBytes = await encodeExpectedCustodyRequestV1({
+    releaseSet: release, market: new PublicKey(market).toBytes(), realm, context,
+    claimsProgram: new PublicKey(claims).toBytes(), payer: signer.publicKey.toBytes(),
+    generation: 9n, rentLamports: rent,
+  });
+  const instructionData = encodeClaimsCustodyReplayRequestV1(market);
+  const instruction = new TransactionInstruction({
+    programId: new PublicKey(claims),
+    keys: [
+      { pubkey: new PublicKey(replay), isSigner: false, isWritable: true },
+      { pubkey: new PublicKey(aggregate), isSigner: false, isWritable: false },
+      { pubkey: new PublicKey(custody), isSigner: false, isWritable: false },
+      { pubkey: new PublicKey(registry), isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from(instructionData),
+  });
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: signer.publicKey, recentBlockhash: key(90), instructions: [instruction],
+  }).compileToLegacyMessage());
+  const requestDigest = hashBytes(custodyRequestBytes);
+  const plan = Object.freeze({
+    marketAddress: market, aggregateAddress: aggregate,
+    aggregate: { registryProgram: registry }, replayAddress: replay,
+    callerAuthorityAddress: key(67), activationCacheAddress: key(68), claimsProgramDataAddress: key(69),
+    realmRecordAddress: key(70), realmStagingAddress: key(72), payer: signer.publicKey.toBase58(),
+    rentLamports: rent.toString(), custodyRequestBytes,
+    custodyRequestDigestHex: Buffer.from(requestDigest).toString('hex'), instructionData,
+    transaction, wireBytes: transaction.serialize(), requiredSigners: Object.freeze([signer.publicKey.toBase58()]),
+  }) as unknown as ClaimsCustodyReplayPlanV1;
+
+  const poststate = hashBytes(
+    new TextEncoder().encode('dclutch:custody-poststate:v1'), requestDigest,
+    new PublicKey(replay).toBytes(), new PublicKey(replay).toBytes(),
+    littleU64(0n), littleU64(0n), littleU64(0n), littleU64(0n), littleU64(rent),
+  );
+  const replayBytes = new Uint8Array(CUSTODY_REPLAY_BYTES_V1);
+  replayBytes.set(CUSTODY_REPLAY_MAGIC_V1, 0); putU16(replayBytes, CUSTODY_REPLAY_VERSION_OFFSET_V1, 1);
+  replayBytes[CUSTODY_REPLAY_STATUS_OFFSET_V1] = 1; replayBytes[CUSTODY_REPLAY_CALLER_ROLE_OFFSET_V1] = 1;
+  replayBytes.set(release, CUSTODY_REPLAY_RELEASE_SET_OFFSET_V1);
+  replayBytes.set(new PublicKey(market).toBytes(), CUSTODY_REPLAY_MARKET_OFFSET_V1);
+  replayBytes.set(realm, CUSTODY_REPLAY_REALM_OFFSET_V1); replayBytes.set(context, CUSTODY_REPLAY_CONTEXT_OFFSET_V1);
+  replayBytes.set(new PublicKey(claims).toBytes(), CUSTODY_REPLAY_CALLER_PROGRAM_OFFSET_V1);
+  replayBytes.set(signer.publicKey.toBytes(), CUSTODY_REPLAY_RENT_REFUND_OFFSET_V1);
+  putU64(replayBytes, CUSTODY_REPLAY_NEXT_REVISION_OFFSET_V1, 1n);
+  putU64(replayBytes, CUSTODY_REPLAY_GENERATION_OFFSET_V1, 9n);
+  replayBytes.set(requestDigest, 224); replayBytes.set(poststate, 256);
+
+  const receipt = new Uint8Array(384);
+  receipt.set(new TextEncoder().encode('DCLCUSC1'), 0); putU16(receipt, 8, 1);
+  receipt[10] = 0; receipt[11] = 1;
+  receipt.set(release, 16); receipt.set(new PublicKey(market).toBytes(), 48); receipt.set(context, 80);
+  receipt.set(custodyRequestBytes.slice(304, 336), 112); receipt.set(requestDigest, 144);
+  putU64(receipt, 248, 1n); putU64(receipt, 296, rent); receipt.set(poststate, 304);
+  receipt.set(hashBytes(replayBytes), 336);
+  return { signer, plan, programs: { claims, custody, registry }, replayBytes, receipt, rent };
 }
 
 function material(owner: string, byte: number): RpcAccount {
@@ -240,6 +348,127 @@ describe('CLI payout completion boundary', () => {
       expect(submitted).toMatchObject({ phase: 'submitted', signature: signed.signature });
       expect(() => archivePayoutOperationJournalV1(path, submitted, 'discarded')).toThrow(/cannot be discarded/);
       expect(loadPayoutOperationJournalV1(path)).toEqual(submitted);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('journals Claims replay bytes before signing and refuses duplicate, trailing, and submitted discard ambiguity', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dclutch-replay-journal-test-'));
+    const path = join(directory, 'payout.json.claims-replay.json');
+    try {
+      const fixture = await replayFixture();
+      const unsigned = writeUnsignedReplayOperationJournalV1(path, key(1), fixture.plan, fixture.programs);
+      expect(loadReplayOperationJournalV1(path)).toEqual(unsigned);
+      expect(restoreReplayOperationJournalV1(unsigned)).toMatchObject({
+        market: fixture.plan.marketAddress, owner: fixture.plan.payer, replay: fixture.plan.replayAddress,
+      });
+      const source = readFileSync(path, 'utf8');
+      writeFileSync(path, source.replace(
+        '"operation":"claims-custody-replay-create-v1"',
+        '"operation":"claims-custody-replay-create-v1","operation":"claims-custody-replay-create-v1"',
+      ));
+      expect(() => loadReplayOperationJournalV1(path)).toThrow(/duplicate JSON object key/);
+      writeFileSync(path, `${source} null`);
+      expect(() => loadReplayOperationJournalV1(path)).toThrow(/trailing data/);
+      const nested = JSON.parse(source) as Record<string, unknown>;
+      nested.intent = String(nested.intent).replace(
+        '"format":"dclutch-claims-custody-replay-journal-intent-v1"',
+        '"format":"dclutch-claims-custody-replay-journal-intent-v1","format":"dclutch-claims-custody-replay-journal-intent-v1"',
+      );
+      nested.intentDigest = createHash('sha256').update(String(nested.intent)).digest('hex');
+      writeFileSync(path, JSON.stringify(nested));
+      expect(() => loadReplayOperationJournalV1(path)).toThrow(/duplicate JSON object key/);
+      writeFileSync(path, source);
+
+      const duplicatePlan = JSON.parse(source) as Record<string, unknown>;
+      duplicatePlan.plan = String(duplicatePlan.plan).replace(
+        '"format":"dclutch-claims-custody-replay-journal-plan-v1"',
+        '"format":"dclutch-claims-custody-replay-journal-plan-v1","format":"dclutch-claims-custody-replay-journal-plan-v1"',
+      );
+      duplicatePlan.planDigest = createHash('sha256').update(String(duplicatePlan.plan)).digest('hex');
+      writeFileSync(path, JSON.stringify(duplicatePlan));
+      expect(() => loadReplayOperationJournalV1(path)).toThrow(/duplicate JSON object key/);
+      writeFileSync(path, source);
+
+      const savedPlan = JSON.parse(unsigned.plan) as Record<string, unknown>;
+      const request = Buffer.from(String(savedPlan.custodyRequestBase64), 'base64'); request[176] = 1;
+      savedPlan.custodyRequestBase64 = request.toString('base64');
+      const substitutedDigest = createHash('sha256').update(request).digest('hex');
+      const savedIntent = JSON.parse(unsigned.intent) as Record<string, unknown>;
+      savedIntent.custodyRequestDigest = substitutedDigest;
+      expect(() => restoreReplayOperationJournalV1({
+        ...unsigned,
+        operationDigest: substitutedDigest,
+        intent: JSON.stringify(savedIntent),
+        plan: JSON.stringify(savedPlan),
+      }))
+        .toThrow(/exact InitializeReplay coordinates/);
+
+      const restored = restoreReplayOperationJournalV1(unsigned);
+      const signed = signReplayOperationV1(restored, fixture.signer);
+      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature);
+      expect(submitted.phase).toBe('submitted');
+      expect(() => archiveReplayOperationJournalV1(path, submitted, 'discarded')).toThrow(/cannot be discarded/);
+      expect(loadReplayOperationJournalV1(path)).toEqual(submitted);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('finalizes Claims replay only with the exact packet, Custody receipt, rent movement, and replay poststate', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dclutch-replay-finalize-test-'));
+    const path = join(directory, 'payout.json.claims-replay.json');
+    try {
+      const fixture = await replayFixture();
+      const unsigned = writeUnsignedReplayOperationJournalV1(path, key(1), fixture.plan, fixture.programs);
+      const restored = restoreReplayOperationJournalV1(unsigned);
+      const signed = signReplayOperationV1(restored, fixture.signer);
+      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature);
+      const addresses = restored.transaction.message.staticAccountKeys.map((address) => address.toBase58());
+      const ownerIndex = addresses.indexOf(restored.owner); const replayIndex = addresses.indexOf(restored.replay);
+      const pre = addresses.map((_, index) => index === ownerIndex ? '10000' : index === replayIndex ? '0' : '1');
+      const post = addresses.map((_, index) => index === ownerIndex
+        ? String(10_000n - fixture.rent - 5n) : index === replayIndex ? fixture.rent.toString() : '1');
+      const meta: TransactionMetaObservation = Object.freeze({
+        signature: signed.signature, slot: '50', blockTime: null, succeeded: true, errorText: null,
+        feeLamports: '5', accountAddresses: Object.freeze(addresses),
+        preBalances: Object.freeze(pre), postBalances: Object.freeze(post), logMessages: Object.freeze([]),
+        returnData: Object.freeze({ programId: fixture.programs.custody, data: fixture.receipt }),
+        transactionBytes: signed.wireBytes,
+      });
+      const replayAccount = material(fixture.programs.custody, 1);
+      const exactReplayAccount: RpcAccount = Object.freeze({
+        ...replayAccount, data: fixture.replayBytes, space: fixture.replayBytes.length,
+        lamports: fixture.rent.toString(),
+      });
+      const client = (changedMeta: TransactionMetaObservation = meta, account: RpcAccount = exactReplayAccount) => ({
+        transaction: async () => changedMeta,
+        finalizedSlot: async () => '51',
+        multipleAccounts: async () => ({
+          slot: '51', accounts: Object.freeze([{ address: restored.replay, account }]),
+        }),
+      });
+      await expect(finalizeReplayOperationV1(client(), submitted, restored)).resolves.toEqual({
+        signature: signed.signature, observedSlot: '51', replay: restored.replay,
+      });
+      await expect(finalizeReplayOperationV1(client({ ...meta, transactionBytes: restored.wireBytes }), submitted, restored))
+        .rejects.toThrow(/packet differs/);
+      await expect(finalizeReplayOperationV1(client({ ...meta, returnData: null }), submitted, restored))
+        .rejects.toThrow(/Custody-produced/);
+      await expect(finalizeReplayOperationV1(client({
+        ...meta, returnData: { programId: fixture.programs.claims, data: fixture.receipt },
+      }), submitted, restored)).rejects.toThrow(/Custody-produced/);
+      const wrongReceipt = new Uint8Array(fixture.receipt); wrongReceipt[144] ^= 1;
+      await expect(finalizeReplayOperationV1(client({
+        ...meta, returnData: { programId: fixture.programs.custody, data: wrongReceipt },
+      }), submitted, restored)).rejects.toThrow(/request or poststate/);
+      await expect(finalizeReplayOperationV1(client({
+        ...meta, postBalances: Object.freeze(post.map((balance, index) => index === replayIndex ? '999' : balance)),
+      }), submitted, restored)).rejects.toThrow(/fee-plus-rent/);
+      const wrongReplay = new Uint8Array(fixture.replayBytes); wrongReplay[224] ^= 1;
+      await expect(finalizeReplayOperationV1(client(meta, { ...exactReplayAccount, data: wrongReplay }), submitted, restored))
+        .rejects.toThrow(/exact digests/);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

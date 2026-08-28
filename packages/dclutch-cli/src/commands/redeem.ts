@@ -32,14 +32,22 @@ import { submitAndConfirm } from '../submit';
 import { successorBinary } from '../successor';
 import {
   archivePayoutOperationJournalV1,
+  archiveReplayOperationJournalV1,
   authenticateCompletedCampaignEvidenceV1,
   finalizePayoutOperationV1,
+  finalizeReplayOperationV1,
   loadPayoutOperationJournalV1,
+  loadReplayOperationJournalV1,
   markPayoutOperationSubmittedV1,
+  markReplayOperationSubmittedV1,
   parseWalletTerminalPayoutPlanInputV1,
+  replayOperationJournalPathV1,
   restorePayoutOperationJournalV1,
+  restoreReplayOperationJournalV1,
   signPayoutPlanV1,
+  signReplayOperationV1,
   writeUnsignedPayoutOperationJournalV1,
+  writeUnsignedReplayOperationJournalV1,
   type WalletTerminalPayoutPlanInputV1,
 } from '../payoutCompletion';
 
@@ -306,6 +314,7 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
   const journalFlag = context.flags['payout-journal'];
   if (typeof journalFlag !== 'string') throw new Error('pass --payout-journal <durable local journal path>');
   const journalPath = payoutInputPath(journalFlag);
+  const replayJournalPath = replayOperationJournalPathV1(journalPath);
   const devnetAcknowledgment = devnetGenesisAcknowledgment(context);
   const client = rpcClient(context);
   const progressIo: Io = context.json ? Object.freeze({ out: io.err, err: io.err }) : io;
@@ -344,6 +353,40 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
     }
     const archive = archivePayoutOperationJournalV1(journalPath, savedJournal, 'discarded');
     progressIo.out(`archived the unsigned payout plan without signing: ${archive}`);
+  }
+
+  const savedReplayJournal = loadReplayOperationJournalV1(replayJournalPath);
+  if (savedReplayJournal !== null) {
+    if (savedReplayJournal.clusterGenesis !== devnetAcknowledgment
+        || savedReplayJournal.market !== marketAddress || savedReplayJournal.owner !== owner) {
+      throw new Error('the saved Claims replay journal belongs to another cluster, Market, or owner');
+    }
+    if (savedReplayJournal.phase === 'submitted') {
+      await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem Claims replay journal recovery');
+      const restored = restoreReplayOperationJournalV1(savedReplayJournal);
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        try {
+          const finalized = await finalizeReplayOperationV1(client, savedReplayJournal, restored);
+          const archive = archiveReplayOperationJournalV1(replayJournalPath, savedReplayJournal, 'finalized');
+          io.out(JSON.stringify({
+            status: 'replay-finalized', ...finalized, journalArchive: archive,
+            next: 'rerun redeem to continue with lookup-table preparation or payout',
+          }));
+          return 0;
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes('not available at finalized commitment yet')) throw error;
+          if (attempt === 59) {
+            throw new Error('the submitted Claims replay is still ambiguous after 60 finalized reads; its journal remains preserved and must not be resubmitted');
+          }
+          await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+        }
+      }
+    }
+    if (context.flags['discard-unsigned-payout'] !== true) {
+      throw new Error('an unsigned Claims replay journal already exists; inspect it or pass --discard-unsigned-payout to archive it without signing');
+    }
+    const archive = archiveReplayOperationJournalV1(replayJournalPath, savedReplayJournal, 'discarded');
+    progressIo.out(`archived the unsigned Claims replay plan without signing: ${archive}`);
   }
 
   await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem preparation');
@@ -393,36 +436,48 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
       progressIo.out('dry run — nothing signed or submitted');
       return 0;
     }
+    const unsignedJournal = writeUnsignedReplayOperationJournalV1(
+      replayJournalPath,
+      devnetAcknowledgment,
+      plan,
+      {
+        claims: programId(context, 'claims'),
+        custody: programId(context, 'custody'),
+        registry: programId(context, 'registry'),
+      },
+    );
+    const restored = restoreReplayOperationJournalV1(unsignedJournal);
+    progressIo.out(`saved the exact unsigned Claims replay before loading the signer: ${replayJournalPath}`);
+    await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem Claims replay signature');
     const keypair = loadKeypair(context, env);
-    if (keypair.publicKey.toBase58() !== owner) throw new Error('the named replay signer is not --payer');
-    await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem replay transaction signature');
-    plan.transaction.sign([keypair]);
-    const outcome = await submitAndConfirm(client, plan.transaction.serialize(), progressIo, devnetAcknowledgment);
-    if (!outcome.succeeded) return 1;
-    let finalizedReplay = false;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const observed = await inspectClaimsCustodyReplayV1(client, {
-        marketAddress,
-        claimsProgramId: programId(context, 'claims'),
-        custodyProgramId: programId(context, 'custody'),
-        registryProgramId: programId(context, 'registry'),
-        payer: owner,
-      });
-      if (observed.status === 'exists') {
-        finalizedReplay = true;
-        progressIo.out(`replay finalized at ${observed.replayAddress} (next revision ${observed.nextRevision})`);
-        break;
-      }
-      if (observed.status === 'refused') {
-        throw new Error(`finalized replay readback refused: ${observed.reason}`);
-      }
-      await new Promise((resolveWait) => setTimeout(resolveWait, 2_000));
+    if (keypair.publicKey.toBase58() !== owner) {
+      throw new Error('the named replay signer is not --payer; the unsigned Claims replay journal remains preserved');
     }
-    if (!finalizedReplay) {
-      throw new Error('Claims-role Custody replay did not reach finalized readback within 60 seconds; do not resubmit it blindly');
+    const signed = signReplayOperationV1(restored, keypair);
+    const submittedJournal = markReplayOperationSubmittedV1(replayJournalPath, unsignedJournal, signed.signature);
+    await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem Claims replay raw submission');
+    const submittedSignature = await client.sendRawTransaction(signed.wireBytes);
+    if (submittedSignature !== signed.signature) {
+      throw new Error('the RPC returned another Claims replay signature; the submitted journal remains preserved and must not be replayed');
     }
-    progressIo.out('replay prerequisite is finalized; rerun redeem to prepare the payout without carrying this signature across phases');
-    return 0;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      try {
+        const finalized = await finalizeReplayOperationV1(client, submittedJournal, restored);
+        const archive = archiveReplayOperationJournalV1(replayJournalPath, submittedJournal, 'finalized');
+        io.out(JSON.stringify({
+          status: 'replay-finalized', ...finalized, journalArchive: archive,
+          next: 'rerun redeem to continue with lookup-table preparation or payout',
+        }));
+        return 0;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes('not available at finalized commitment yet')) throw error;
+        if (attempt === 59) {
+          throw new Error('the submitted Claims replay is still ambiguous after 60 finalized reads; its journal remains preserved and must not be resubmitted');
+        }
+        await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+      }
+    }
+    throw new Error('unreachable Claims replay finalization state');
   }
 
   const expected = Object.freeze({
