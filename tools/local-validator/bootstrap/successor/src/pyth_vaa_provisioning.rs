@@ -1109,13 +1109,15 @@ fn build_intent(
         &accumulator.signed_vaa,
     )?;
     let (recent_blockhash, last_valid_block_height) = latest_blockhash(rpc)?;
-    let message = Message::new(&instructions, Some(&arguments.fee_payer));
+    let message =
+        Message::new_with_blockhash(&instructions, Some(&arguments.fee_payer), &recent_blockhash);
     authenticate_message(
         &message,
         &instructions,
         arguments.fee_payer,
         arguments.submitter,
         arguments.encoded_vaa,
+        recent_blockhash,
     )?;
     let message_bytes = bincode::serialize(&message)
         .map_err(|error| Error::new(format!("serialize Router message: {error}")))?;
@@ -1408,12 +1410,15 @@ fn authenticate_intent(intent: &IntentV1, arguments: &ArgumentsV1) -> Result<()>
     let message_bytes = decode_canonical_base64(&intent.message_base64, "Router message")?;
     let message: Message = bincode::deserialize(&message_bytes)
         .map_err(|error| Error::new(format!("durable Router message: {error}")))?;
+    let recent_blockhash = Hash::from_str(&intent.recent_blockhash)
+        .map_err(|error| Error::new(format!("durable Router blockhash: {error}")))?;
     authenticate_message(
         &message,
         &instructions,
         arguments.fee_payer,
         arguments.submitter,
         arguments.encoded_vaa,
+        recent_blockhash,
     )?;
     let placeholder = Transaction {
         signatures: vec![Signature::default(); usize::from(message.header.num_required_signatures)],
@@ -1421,6 +1426,7 @@ fn authenticate_intent(intent: &IntentV1, arguments: &ArgumentsV1) -> Result<()>
     };
     if intent.observation_slot == 0
         || intent.message_sha256 != sha256_hex(&message_bytes)
+        || intent.recent_blockhash != placeholder.message.recent_blockhash.to_string()
         || intent.instructions
             != instructions
                 .iter()
@@ -1467,8 +1473,9 @@ fn authenticate_message(
     fee_payer: Pubkey,
     submitter: Pubkey,
     encoded_vaa: Pubkey,
+    recent_blockhash: Hash,
 ) -> Result<()> {
-    let rebuilt = Message::new(instructions, Some(&fee_payer));
+    let rebuilt = Message::new_with_blockhash(instructions, Some(&fee_payer), &recent_blockhash);
     if message != &rebuilt
         || message.account_keys.first() != Some(&fee_payer)
         || message.header.num_required_signatures != if fee_payer == submitter { 2 } else { 3 }
@@ -1687,9 +1694,14 @@ fn sign_submit_finalize(
     let message_bytes = decode_canonical_base64(&journal.intent.message_base64, "Router message")?;
     let message: Message = bincode::deserialize(&message_bytes)
         .map_err(|error| Error::new(format!("durable Router message: {error}")))?;
-    let mut transaction = Transaction::new_unsigned(message);
     let blockhash = Hash::from_str(&journal.intent.recent_blockhash)
         .map_err(|error| Error::new(format!("durable Router blockhash: {error}")))?;
+    if message.recent_blockhash != blockhash {
+        return Err(Error::new(
+            "durable Router message blockhash differed from its intent",
+        ));
+    }
+    let mut transaction = Transaction::new_unsigned(message);
     let signers: Vec<&dyn Signer> = if arguments.fee_payer == arguments.submitter {
         vec![&submitter, &encoded]
     } else {
@@ -1901,31 +1913,49 @@ fn authenticate_signed_packet(journal: &JournalV1) -> Result<Transaction> {
             .ok_or_else(|| Error::new("signed Router journal omitted packet"))?,
         "signed Router packet",
     )?;
-    if sha256_hex(&wire)
-        != journal
-            .signed_packet_sha256
-            .as_deref()
-            .ok_or_else(|| Error::new("signed Router journal omitted packet digest"))?
-        || wire.len() != journal.intent.expected_wire_bytes
-    {
+    let expected_digest = journal
+        .signed_packet_sha256
+        .as_deref()
+        .ok_or_else(|| Error::new("signed Router journal omitted packet digest"))?;
+    let expected_signature = journal
+        .expected_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("signed Router journal omitted expected signature"))?;
+    authenticate_signed_packet_bytes(
+        &wire,
+        expected_digest,
+        journal.intent.expected_wire_bytes,
+        &journal.intent.message_base64,
+        expected_signature,
+    )
+}
+
+fn authenticate_signed_packet_bytes(
+    wire: &[u8],
+    expected_digest: &str,
+    expected_wire_bytes: usize,
+    expected_message_base64: &str,
+    expected_signature: &str,
+) -> Result<Transaction> {
+    if sha256_hex(wire) != expected_digest || wire.len() != expected_wire_bytes {
         return Err(Error::new(
             "signed Router packet digest or exact width changed",
         ));
     }
-    let transaction: Transaction = bincode::deserialize(&wire)
+    let transaction: Transaction = bincode::deserialize(wire)
         .map_err(|error| Error::new(format!("signed Router packet: {error}")))?;
     transaction
         .verify()
         .map_err(|error| Error::new(format!("signed Router signatures: {error}")))?;
     let message_bytes = bincode::serialize(&transaction.message)
         .map_err(|error| Error::new(format!("signed Router message: {error}")))?;
-    if BASE64.encode(&message_bytes) != journal.intent.message_base64
+    if BASE64.encode(&message_bytes) != expected_message_base64
         || transaction
             .signatures
             .first()
             .map(ToString::to_string)
             .as_deref()
-            != journal.expected_signature.as_deref()
+            != Some(expected_signature)
     {
         return Err(Error::new(
             "signed Router packet message or expected signature changed",
@@ -2825,9 +2855,17 @@ mod tests {
             instructions[3].data,
             anchor_discriminator(b"global:verify_encoded_vaa_v1")
         );
-        let message = Message::new(&instructions, Some(&payer));
-        authenticate_message(&message, &instructions, payer, submitter, encoded)
-            .expect("message owner");
+        let blockhash = Hash::new_from_array([0x48; 32]);
+        let message = Message::new_with_blockhash(&instructions, Some(&payer), &blockhash);
+        authenticate_message(
+            &message,
+            &instructions,
+            payer,
+            submitter,
+            encoded,
+            blockhash,
+        )
+        .expect("message owner");
         let wire = bincode::serialize(&Transaction {
             signatures: vec![
                 Signature::default();
@@ -2837,6 +2875,70 @@ mod tests {
         })
         .expect("wire");
         assert!(wire.len() <= SOLANA_PACKET_BYTES_V1, "{}", wire.len());
+    }
+
+    #[test]
+    fn offline_signed_packet_accepts_exact_blockhash_and_refuses_substitution() {
+        let update = parse_accumulator_update(&accumulator([0x49; 32], 2_100)).expect("update");
+        let payer = Keypair::new();
+        let submitter = Keypair::new();
+        let encoded = Keypair::new();
+        let guardian = Pubkey::new_from_array([4; 32]);
+        let router = Pubkey::new_from_array([5; 32]);
+        let instructions = provision_instructions(
+            payer.pubkey(),
+            submitter.pubkey(),
+            encoded.pubkey(),
+            guardian,
+            router,
+            1_000_000,
+            &update.signed_vaa,
+        )
+        .expect("instructions");
+        let blockhash = Hash::new_from_array([0x50; 32]);
+        let message = Message::new_with_blockhash(&instructions, Some(&payer.pubkey()), &blockhash);
+        authenticate_message(
+            &message,
+            &instructions,
+            payer.pubkey(),
+            submitter.pubkey(),
+            encoded.pubkey(),
+            blockhash,
+        )
+        .expect("exact blockhash message");
+        let message_bytes = bincode::serialize(&message).expect("message bytes");
+        let mut transaction = Transaction::new_unsigned(message);
+        transaction
+            .try_sign(&[&payer, &submitter, &encoded], blockhash)
+            .expect("sign exact packet");
+        let wire = bincode::serialize(&transaction).expect("packet bytes");
+        authenticate_signed_packet_bytes(
+            &wire,
+            &sha256_hex(&wire),
+            wire.len(),
+            &BASE64.encode(&message_bytes),
+            &transaction.signatures[0].to_string(),
+        )
+        .expect("exact signed packet");
+
+        let hostile_blockhash = Hash::new_from_array([0x51; 32]);
+        let hostile_message =
+            Message::new_with_blockhash(&instructions, Some(&payer.pubkey()), &hostile_blockhash);
+        let mut hostile = Transaction::new_unsigned(hostile_message);
+        hostile
+            .try_sign(&[&payer, &submitter, &encoded], hostile_blockhash)
+            .expect("sign self-consistent hostile packet");
+        let hostile_wire = bincode::serialize(&hostile).expect("hostile packet bytes");
+        assert!(
+            authenticate_signed_packet_bytes(
+                &hostile_wire,
+                &sha256_hex(&hostile_wire),
+                hostile_wire.len(),
+                &BASE64.encode(&message_bytes),
+                &hostile.signatures[0].to_string(),
+            )
+            .is_err()
+        );
     }
 
     #[test]
