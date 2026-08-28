@@ -8,6 +8,7 @@ be tested without a validator or keys.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -32,6 +33,26 @@ BOUNDARIES = (
     "retire",
 )
 EVIDENCE = b'{"schema":"fake-canonical-evidence-v1","market":"one"}\n'
+SIGNATURE = b"\0" * 64
+RECENT_BLOCKHASH = b"\x07" * 32
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def base58_encode(value: bytes) -> str:
+    zeroes = len(value) - len(value.lstrip(b"\0"))
+    number = int.from_bytes(value, "big")
+    encoded = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        encoded = BASE58_ALPHABET[remainder] + encoded
+    return "1" * zeroes + encoded
+
+
+def fake_transaction() -> str:
+    # One signature plus the smallest well-formed legacy message: one account,
+    # one recent blockhash, and zero instructions.
+    message = b"\x01\x00\x00\x01" + b"\0" * 32 + RECENT_BLOCKHASH + b"\x00"
+    return base64.b64encode(b"\x01" + SIGNATURE + message).decode()
 
 
 def write_atomic(path: Path, value: object) -> None:
@@ -91,15 +112,25 @@ def run_session(case_work: Path, rpc_url: str) -> int:
     prepared = control / "PREPARED.json"
     if not prepared.exists():
         write_atomic(prepared, {"schema": CONTROL_SCHEMA, "state": "prepared"})
+
+    if case in {"wallet-underfund", "wallet-surplus"}:
+        wait_for(control / "FAULT.json")
+        fault = json.loads((control / "FAULT.json").read_text())
+        if fault.get("fault") != case:
+            return 25
+        write_atomic(
+            control / "FAULT_ARMED.json",
+            {"schema": CONTROL_SCHEMA, "state": "fault-armed", "fault": case},
+        )
+        wait_for(control / "GO.json")
+        return 26
+
     wait_for(control / "GO.json")
 
     if case in {"corrupted-evidence", "replaced-evidence"}:
         if (case_work / "evidence.json").read_bytes() != EVIDENCE:
             return 23
         return 24
-    if case in {"wallet-underfund", "wallet-surplus"}:
-        fault = json.loads((control / "FAULT.json").read_text())
-        return 25 if fault.get("fault") == case else 26
 
     journals = case_work / "journals"
     for stage in BOUNDARIES:
@@ -110,7 +141,8 @@ def run_session(case_work: Path, rpc_url: str) -> int:
             current = json.loads(path.read_text())
         except (FileNotFoundError, json.JSONDecodeError):
             current = None
-        if current is None or current.get("phase") not in {"submitted", "finalized"}:
+        resumed_submitted = current is not None and current.get("phase") == "submitted"
+        if not resumed_submitted:
             journal(path, stage, "planned")
             journal(path, stage, "signed-not-submitted")
             journal(path, stage, "submitted")
@@ -122,30 +154,73 @@ def run_session(case_work: Path, rpc_url: str) -> int:
             # A restart at Submitted polls the frozen intent.  It never sends it.
             time.sleep(0.01)
 
+        if case == f"kill-{stage}":
+            if resumed_submitted:
+                try:
+                    rpc(rpc_url, "getSignatureStatuses", [[base58_encode(SIGNATURE)]])
+                except Exception:
+                    return 27
+            else:
+                latest = rpc(
+                    url=rpc_url,
+                    method="getLatestBlockhash",
+                    params=[{"commitment": "finalized"}],
+                )
+                if latest.get("result") is None:
+                    return 28
+                try:
+                    rpc(
+                        url=rpc_url,
+                        method="sendTransaction",
+                        params=[
+                            fake_transaction(),
+                            {"encoding": "base64", "maxRetries": 0},
+                        ],
+                    )
+                except Exception:
+                    return 29
+                return 30
+
         if stage == "hot" and case in {"rpc-timeout", "duplicate-send", "blockhash-expiry"}:
-            packet = "ZmFrZS1mcm96ZW4tdHJhbnNhY3Rpb24="
+            latest = rpc(
+                url=rpc_url,
+                method="getLatestBlockhash",
+                params=[{"commitment": "finalized"}],
+            )
+            if latest.get("result") is None:
+                return 31
+            packet = fake_transaction()
             try:
-                response = rpc(url=rpc_url, method="sendTransaction", params=[packet])
+                response = rpc(
+                    url=rpc_url,
+                    method="sendTransaction",
+                    params=[packet, {"encoding": "base64", "maxRetries": 0}],
+                )
             except Exception:
                 if case != "rpc-timeout":
-                    return 31
+                    return 32
                 # Unknown send result: recover by status polling only.
                 try:
-                    rpc(rpc_url, "getSignatureStatuses", [["fake-signature"]])
+                    rpc(rpc_url, "getSignatureStatuses", [[base58_encode(SIGNATURE)]])
                 except Exception:
-                    return 32
+                    return 33
                 journal(path, stage, "finalized")
                 continue
             if response.get("error") is not None:
                 try:
-                    rpc(rpc_url, "getSignatureStatuses", [["fake-signature"]])
+                    rpc(rpc_url, "getSignatureStatuses", [[base58_encode(SIGNATURE)]])
                 except Exception:
-                    return 35
-                return 33
+                    return 34
+                return 35
 
         journal(path, stage, "finalized")
         if stage == "payout" and case == "late-child-refusal":
-            return 34
+            write_atomic(
+                control / "FAULT_ARMED.json",
+                {"schema": CONTROL_SCHEMA, "state": "fault-armed", "fault": case},
+            )
+            wait_for(control / "FAULT_GO.json")
+            return 36
 
     final_state = {
         "schema": SNAPSHOT_SCHEMA,

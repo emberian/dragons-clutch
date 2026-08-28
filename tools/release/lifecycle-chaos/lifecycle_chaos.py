@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import contextlib
 import dataclasses
 import hashlib
@@ -64,6 +65,8 @@ ALL_CASES = (
 )
 MAX_JSON_BYTES = 16 * 1024 * 1024
 POLL_SECONDS = 0.01
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+MAX_TRANSACTION_BYTES = 1232
 
 
 class Refusal(RuntimeError):
@@ -118,6 +121,115 @@ def sha256_file(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def base58_encode(value: bytes) -> str:
+    zeroes = len(value) - len(value.lstrip(b"\0"))
+    number = int.from_bytes(value, "big")
+    encoded = ""
+    while number:
+        number, remainder = divmod(number, 58)
+        encoded = BASE58_ALPHABET[remainder] + encoded
+    return "1" * zeroes + encoded
+
+
+def base58_decode(value: str, label: str) -> bytes:
+    if not value:
+        raise Refusal(f"{label} is empty")
+    number = 0
+    for char in value:
+        try:
+            digit = BASE58_ALPHABET.index(char)
+        except ValueError as exc:
+            raise Refusal(f"{label} is not base58") from exc
+        number = number * 58 + digit
+    width = (number.bit_length() + 7) // 8
+    body = number.to_bytes(width, "big") if width else b""
+    return b"\0" * (len(value) - len(value.lstrip("1"))) + body
+
+
+def short_vec(body: bytes, offset: int, label: str) -> tuple[int, int]:
+    value = 0
+    shift = 0
+    for _ in range(3):
+        if offset >= len(body):
+            raise Refusal(f"{label} ended inside a compact length")
+        byte = body[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            return value, offset
+        shift += 7
+    raise Refusal(f"{label} carried an overlong compact length")
+
+
+def frozen_transaction(call: Mapping[str, Any]) -> tuple[str, str, str]:
+    params = call.get("params")
+    if not isinstance(params, list) or not 1 <= len(params) <= 2 or not isinstance(params[0], str):
+        raise Refusal("sendTransaction params are malformed")
+    config = params[1] if len(params) == 2 else {}
+    if not isinstance(config, dict):
+        raise Refusal("sendTransaction config is malformed")
+    encoding = config.get("encoding", "base58")
+    try:
+        if encoding == "base64":
+            wire = base64.b64decode(params[0], validate=True)
+        elif encoding == "base58":
+            wire = base58_decode(params[0], "sendTransaction wire")
+        else:
+            raise Refusal("sendTransaction encoding is neither base64 nor base58")
+    except (ValueError, binascii.Error) as exc:
+        raise Refusal(f"sendTransaction wire is malformed: {exc}") from exc
+    if not 0 < len(wire) <= MAX_TRANSACTION_BYTES:
+        raise Refusal("sendTransaction wire is outside the Solana packet bound")
+
+    signature_count, message_offset = short_vec(wire, 0, "sendTransaction signatures")
+    signatures_end = message_offset + signature_count * 64
+    if signature_count == 0 or signatures_end >= len(wire):
+        raise Refusal("sendTransaction omitted its first signature or message")
+    signature = base58_encode(wire[message_offset : message_offset + 64])
+    message = wire[signatures_end:]
+    if message[0] & 0x80:
+        if message[0] != 0x80:
+            raise Refusal("sendTransaction used an unsupported message version")
+        header_offset = 1
+    else:
+        header_offset = 0
+    key_count_offset = header_offset + 3
+    if key_count_offset >= len(message):
+        raise Refusal("sendTransaction message omitted its header")
+    key_count, keys_offset = short_vec(message, key_count_offset, "message account keys")
+    blockhash_offset = keys_offset + key_count * 32
+    blockhash_end = blockhash_offset + 32
+    if blockhash_end > len(message):
+        raise Refusal("sendTransaction message omitted its recent blockhash")
+    blockhash = base58_encode(message[blockhash_offset:blockhash_end])
+    return sha256_bytes(wire), signature, blockhash
+
+
+def require_accepted_send(status: int, response: bytes, signature: str) -> None:
+    value = unique_json_bytes(response, "sendTransaction response")
+    if (
+        status != 200
+        or not isinstance(value, dict)
+        or value.get("result") != signature
+        or value.get("error") is not None
+    ):
+        raise Refusal("upstream did not accept the exact frozen transaction signature")
+
+
+def status_signature_values(call: Mapping[str, Any]) -> list[str] | None:
+    if call.get("method") != "getSignatureStatuses":
+        return None
+    params = call.get("params")
+    if (
+        not isinstance(params, list)
+        or not params
+        or not isinstance(params[0], list)
+        or not all(isinstance(value, str) for value in params[0])
+    ):
+        raise Refusal("getSignatureStatuses params are malformed")
+    return params[0]
 
 
 def unique_json_bytes(data: bytes, label: str) -> Any:
@@ -430,6 +542,7 @@ def kill_then_resume(
     rpc_url: str,
     control: Path,
     boundary: str,
+    proxy: "RpcFaultProxy",
 ) -> tuple[ProcessResult, str]:
     argv, cwd, environment = expanded_command(
         spec.command,
@@ -448,15 +561,25 @@ def kill_then_resume(
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
-    wait_prepared(control, child, spec.journal_timeout_seconds)
-    atomic_json(control / "GO.json", {"schema": CONTROL_SCHEMA, "state": "go"})
-    submitted = wait_for_submitted(
-        child,
-        case_work / spec.journal_relative / f"{boundary}.json",
-        boundary,
-        spec.journal_timeout_seconds,
-    )
+    try:
+        wait_prepared(control, child, spec.journal_timeout_seconds)
+        atomic_json(control / "GO.json", {"schema": CONTROL_SCHEMA, "state": "go"})
+        submitted = wait_for_submitted(
+            child,
+            case_work / spec.journal_relative / f"{boundary}.json",
+            boundary,
+            spec.journal_timeout_seconds,
+        )
+        if not proxy.state.delivery_done.wait(spec.journal_timeout_seconds):
+            raise Refusal(f"session did not deliver the frozen {boundary} packet after Submitted")
+    except Exception:
+        terminate_group(child, force=True)
+        proxy.state.release_delivery.set()
+        raise
     terminate_group(child, force=True)
+    proxy.state.release_delivery.set()
+    if not proxy.state.injection_done.wait(spec.journal_timeout_seconds):
+        raise Refusal(f"{boundary} delivery handler did not stop after process death")
     stdout, stderr = child.communicate()
     killed = ProcessResult(child.returncode, stdout, stderr, time.monotonic_ns() - started)
     record_attempt(case_work / "attempt-1-killed", argv, killed)
@@ -576,25 +699,52 @@ def replace_evidence(path: Path, replacement: Path) -> str:
 
 
 class _ProxyState:
-    def __init__(self, upstream: str, rule: RpcRule, journal_root: Path):
+    def __init__(self, upstream: str, rule: RpcRule, journal_root: Path, expiry_timeout: float):
         self.upstream = upstream
         self.rule = rule
         self.journal_root = journal_root
+        self.expiry_timeout = expiry_timeout
         self.lock = threading.Lock()
         self.trace: list[dict[str, Any]] = []
+        self.blockhash_heights: dict[str, int] = {}
+        self.delivery_done = threading.Event()
+        self.injection_done = threading.Event()
+        self.release_delivery = threading.Event()
         self.fired = False
         self.failure: str | None = None
 
-    def stage(self) -> tuple[str | None, str | None]:
+    def stage(self) -> tuple[str | None, str | None, str | None]:
         for stage in reversed(BOUNDARIES):
             value = stable_journal(self.journal_root / f"{stage}.json", stage)
             if value is not None:
-                return stage, value["intentSha256"]
-        return None, None
+                return stage, value["phase"], value["intentSha256"]
+        return None, None, None
 
     def append(self, row: dict[str, Any]) -> None:
         with self.lock:
             self.trace.append(row)
+
+    def remember_blockhash(self, call: Mapping[str, Any], response: bytes) -> None:
+        if call.get("method") != "getLatestBlockhash":
+            return
+        value = unique_json_bytes(response, "getLatestBlockhash response")
+        result = value.get("result") if isinstance(value, dict) else None
+        facts = result.get("value") if isinstance(result, dict) else None
+        if not isinstance(facts, dict):
+            raise Refusal("getLatestBlockhash response omitted result.value")
+        blockhash = facts.get("blockhash")
+        last_valid = facts.get("lastValidBlockHeight")
+        if not isinstance(blockhash, str) or not isinstance(last_valid, int) or last_valid < 0:
+            raise Refusal("getLatestBlockhash response carried malformed expiry facts")
+        with self.lock:
+            self.blockhash_heights[blockhash] = last_valid
+
+    def last_valid_height(self, blockhash: str) -> int:
+        with self.lock:
+            try:
+                return self.blockhash_heights[blockhash]
+            except KeyError as exc:
+                raise Refusal("frozen send used a blockhash not observed through this proxy") from exc
 
 
 class _RpcHandler(http.server.BaseHTTPRequestHandler):
@@ -613,27 +763,37 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
             method = call.get("method") if isinstance(call, dict) else None
             if not isinstance(method, str):
                 raise Refusal("proxied RPC request omitted method")
-            stage, intent = self.server.state.stage()
+            stage, phase, intent = self.server.state.stage()
             packet = sha256_bytes(body)
+            if method == "sendTransaction" and stage == self.server.state.rule.stage and phase != "submitted":
+                raise Refusal("sendTransaction reached RPC before durable Submitted")
             matching = (
                 not self.server.state.fired
                 and method == self.server.state.rule.method
                 and stage == self.server.state.rule.stage
+                and phase == "submitted"
             )
-            self.server.state.append(
-                {
-                    "source": "client",
-                    "method": method,
-                    "stage": stage,
-                    "intentSha256": intent,
-                    "requestSha256": packet,
-                }
-            )
+            row = {
+                "source": "client",
+                "method": method,
+                "stage": stage,
+                "phase": phase,
+                "intentSha256": intent,
+                "requestSha256": packet,
+            }
+            statuses = status_signature_values(call)
+            if statuses is not None:
+                row["signatureStatusValues"] = statuses
+            self.server.state.append(row)
             if matching:
                 self.server.state.fired = True
-                self._inject(body, method, stage, intent)
+                try:
+                    self._inject(call, body, method, stage, intent)
+                finally:
+                    self.server.state.injection_done.set()
                 return
             status, response = self._forward(body)
+            self.server.state.remember_blockhash(call, response)
             self._reply(status, response)
         except Exception as exc:  # server thread cannot surface directly
             self.server.state.failure = str(exc)
@@ -652,10 +812,19 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
         except urlerror.HTTPError as exc:
             return exc.code, exc.read()
 
-    def _inject(self, body: bytes, method: str, stage: str | None, intent: str | None) -> None:
+    def _inject(
+        self,
+        call: Mapping[str, Any],
+        body: bytes,
+        method: str,
+        stage: str | None,
+        intent: str | None,
+    ) -> None:
         kind = self.server.state.rule.kind
-        if kind == "rpc-timeout":
+        wire_sha256, signature, blockhash = frozen_transaction(call)
+        if kind == "kill-delivery":
             status, response = self._forward(body)
+            require_accepted_send(status, response, signature)
             self.server.state.append(
                 {
                     "source": "injected-forward",
@@ -663,17 +832,47 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
                     "stage": stage,
                     "intentSha256": intent,
                     "requestSha256": sha256_bytes(body),
+                    "wireSha256": wire_sha256,
+                    "transactionSignature": signature,
+                    "recentBlockhash": blockhash,
                     "responseSha256": sha256_bytes(response),
                     "status": status,
                 }
             )
-            time.sleep(self.server.response_timeout_seconds)
+            self.server.state.delivery_done.set()
+            if not self.server.state.release_delivery.wait(self.server.state.expiry_timeout):
+                raise Refusal("supervisor did not release the delivered kill packet")
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                self._reply(status, response)
+            return
+        if kind == "rpc-timeout":
+            status, response = self._forward(body)
+            require_accepted_send(status, response, signature)
+            self.server.state.append(
+                {
+                    "source": "injected-forward",
+                    "method": method,
+                    "stage": stage,
+                    "intentSha256": intent,
+                    "requestSha256": sha256_bytes(body),
+                    "wireSha256": wire_sha256,
+                    "transactionSignature": signature,
+                    "recentBlockhash": blockhash,
+                    "responseSha256": sha256_bytes(response),
+                    "status": status,
+                }
+            )
+            self.server.state.delivery_done.set()
+            if not self.server.state.release_delivery.wait(self.server.state.expiry_timeout):
+                raise Refusal("client RPC did not time out within the bounded case timeout")
             with contextlib.suppress(BrokenPipeError, ConnectionResetError):
                 self._reply(status, response)
             return
         if kind == "duplicate-send":
             first_status, first = self._forward(body)
             second_status, second = self._forward(body)
+            require_accepted_send(first_status, first, signature)
+            require_accepted_send(second_status, second, signature)
             for ordinal, status, response in ((1, first_status, first), (2, second_status, second)):
                 self.server.state.append(
                     {
@@ -683,6 +882,9 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
                         "stage": stage,
                         "intentSha256": intent,
                         "requestSha256": sha256_bytes(body),
+                        "wireSha256": wire_sha256,
+                        "transactionSignature": signature,
+                        "recentBlockhash": blockhash,
                         "responseSha256": sha256_bytes(response),
                         "status": status,
                     }
@@ -690,31 +892,74 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
             self._reply(first_status, first)
             return
         if kind == "blockhash-expiry":
-            call = unique_json_bytes(body, "expired send request")
-            response = {
-                "jsonrpc": "2.0",
-                "id": call.get("id"),
-                "error": {
-                    "code": -32002,
-                    "message": "Transaction simulation failed: Blockhash not found",
-                    "data": {"err": "BlockhashNotFound"},
-                },
-            }
-            encoded = json.dumps(response, separators=(",", ":")).encode()
+            last_valid = self.server.state.last_valid_height(blockhash)
+            observed = self._wait_until_expired(last_valid)
+            status, encoded = self._forward(body)
+            response = unique_json_bytes(encoded, "expired send response")
+            error = response.get("error") if isinstance(response, dict) else None
+            error_data = error.get("data") if isinstance(error, dict) else None
+            if (
+                status != 200
+                or not isinstance(error, dict)
+                or "Blockhash" not in str(error.get("message", ""))
+                or not isinstance(error_data, dict)
+                or error_data.get("err") != "BlockhashNotFound"
+            ):
+                raise Refusal("upstream accepted the transaction after its blockhash expired")
             self.server.state.append(
                 {
-                    "source": "injected-expiry",
+                    "source": "injected-expired-forward",
                     "method": method,
                     "stage": stage,
                     "intentSha256": intent,
                     "requestSha256": sha256_bytes(body),
+                    "wireSha256": wire_sha256,
+                    "transactionSignature": signature,
+                    "recentBlockhash": blockhash,
+                    "lastValidBlockHeight": last_valid,
+                    "observedBlockHeight": observed,
                     "responseSha256": sha256_bytes(encoded),
-                    "status": 200,
+                    "status": status,
                 }
             )
-            self._reply(200, encoded)
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                self._reply(status, encoded)
             return
         raise Refusal(f"unknown RPC injection {kind}")
+
+    def _wait_until_expired(self, last_valid: int) -> int:
+        deadline = time.monotonic() + self.server.state.expiry_timeout
+        request_id = 0
+        while time.monotonic() < deadline:
+            request_id += 1
+            body = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": f"dclutch-lifecycle-chaos-expiry-{request_id}",
+                    "method": "getBlockHeight",
+                    "params": [{"commitment": "finalized"}],
+                },
+                separators=(",", ":"),
+            ).encode()
+            status, response = self._forward(body)
+            value = unique_json_bytes(response, "getBlockHeight response")
+            height = value.get("result") if isinstance(value, dict) else None
+            self.server.state.append(
+                {
+                    "source": "supervisor-expiry-poll",
+                    "method": "getBlockHeight",
+                    "requestSha256": sha256_bytes(body),
+                    "responseSha256": sha256_bytes(response),
+                    "status": status,
+                    "blockHeight": height,
+                }
+            )
+            if status != 200 or not isinstance(height, int) or height < 0:
+                raise Refusal("getBlockHeight did not return one nonnegative height")
+            if height > last_valid:
+                return height
+            time.sleep(0.05)
+        raise Refusal("blockhash did not expire within the bounded case timeout")
 
     def _reply(self, status: int, body: bytes) -> None:
         self.send_response(status)
@@ -728,16 +973,15 @@ class _RpcServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = False
     daemon_threads = True
 
-    def __init__(self, state: _ProxyState, response_timeout_seconds: float):
+    def __init__(self, state: _ProxyState):
         super().__init__(("127.0.0.1", 0), _RpcHandler)
         self.state = state
-        self.response_timeout_seconds = response_timeout_seconds
 
 
 class RpcFaultProxy:
-    def __init__(self, upstream: str, rule: RpcRule, journal_root: Path):
-        self.state = _ProxyState(upstream, rule, journal_root)
-        self.server = _RpcServer(self.state, 2.0)
+    def __init__(self, upstream: str, rule: RpcRule, journal_root: Path, expiry_timeout: float):
+        self.state = _ProxyState(upstream, rule, journal_root, expiry_timeout)
+        self.server = _RpcServer(self.state)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property
@@ -750,12 +994,15 @@ class RpcFaultProxy:
         return self
 
     def __exit__(self, *_args: object) -> None:
+        self.state.release_delivery.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
 
 
 def rpc_rule(case: str) -> RpcRule:
+    if case.startswith("kill-") and case.removeprefix("kill-") in BOUNDARIES:
+        return RpcRule("kill-delivery", "sendTransaction", case.removeprefix("kill-"))
     if case not in RPC_CASES:
         raise Refusal(f"{case} is not an RPC chaos case")
     return RpcRule(case, "sendTransaction", "hot")
@@ -770,14 +1017,34 @@ def validate_poll_only(trace: Sequence[dict[str, Any]], injected_case: str) -> N
     repeated = {key: count for key, count in client_sends.items() if count > 1}
     if repeated:
         raise Refusal(f"{injected_case} recovery resent a frozen intent instead of polling: {repeated}")
-    methods = [row.get("method") for row in trace if row.get("source") == "client"]
-    if injected_case in {"rpc-timeout", "blockhash-expiry"}:
+    client_rows = [row for row in trace if row.get("source") == "client"]
+    methods = [row.get("method") for row in client_rows]
+    if injected_case in {"rpc-timeout", "blockhash-expiry"} or injected_case.startswith("kill-"):
         try:
             send_index = methods.index("sendTransaction")
         except ValueError as exc:
             raise Refusal(f"{injected_case} did not reach its frozen send") from exc
-        if "getSignatureStatuses" not in methods[send_index + 1 :]:
+        injected = next(
+            (
+                row
+                for row in trace
+                if row.get("source") in {"injected-forward", "injected-expired-forward"}
+                and row.get("method") == "sendTransaction"
+            ),
+            None,
+        )
+        if injected is None or not isinstance(injected.get("transactionSignature"), str):
+            raise Refusal(f"{injected_case} omitted its frozen transaction signature")
+        signature = injected["transactionSignature"]
+        polls = [
+            row
+            for row in client_rows[send_index + 1 :]
+            if row.get("method") == "getSignatureStatuses"
+        ]
+        if not polls:
             raise Refusal(f"{injected_case} recovery did not poll the frozen signature")
+        if not any(signature in row.get("signatureStatusValues", []) for row in polls):
+            raise Refusal(f"{injected_case} recovery polled another signature")
 
 
 def copy_fixture(spec: Spec, case_work: Path) -> None:
@@ -802,6 +1069,26 @@ def wait_prepared(control: Path, child: subprocess.Popen[bytes], timeout: float)
             return
         time.sleep(POLL_SECONDS)
     raise Refusal("session did not expose its prepared prestate within the bound")
+
+
+def wait_fault_armed(
+    control: Path,
+    child: subprocess.Popen[bytes],
+    case: str,
+    timeout: float,
+) -> None:
+    deadline = time.monotonic() + timeout
+    armed = control / "FAULT_ARMED.json"
+    expected = {"schema": CONTROL_SCHEMA, "state": "fault-armed", "fault": case}
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            raise Refusal(f"session exited before the {case} fault boundary")
+        if armed.exists():
+            if read_unique_json(armed, "chaos fault-armed handshake") != expected:
+                raise Refusal("chaos fault-armed handshake is malformed")
+            return
+        time.sleep(POLL_SECONDS)
+    raise Refusal(f"session did not expose the {case} fault boundary within the bound")
 
 
 def prestart_fault(spec: Spec, case: str, case_work: Path) -> str | None:
@@ -848,9 +1135,23 @@ def run_with_handshake(
         start_new_session=True,
     )
     wait_prepared(control, child, spec.journal_timeout_seconds)
-    before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
     before = prestart_fault(spec, case, case_work)
-    atomic_json(control / "GO.json", {"schema": CONTROL_SCHEMA, "state": "go"})
+    go = {"schema": CONTROL_SCHEMA, "state": "go"}
+    if case in {"wallet-underfund", "wallet-surplus"}:
+        wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
+        before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
+        atomic_json(control / "GO.json", go)
+    elif case == "late-child-refusal":
+        atomic_json(control / "GO.json", go)
+        wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
+        before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
+        atomic_json(
+            control / "FAULT_GO.json",
+            {"schema": CONTROL_SCHEMA, "state": "fault-go", "fault": case},
+        )
+    else:
+        before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
+        atomic_json(control / "GO.json", go)
     try:
         stdout, stderr = child.communicate(timeout=spec.case_timeout_seconds)
     except subprocess.TimeoutExpired:
@@ -877,13 +1178,14 @@ def case_result(
     evidence_before: str | None = None
     before_snapshot: dict[str, Any] | None = None
     try:
-        if case in RPC_CASES:
+        if case in RPC_CASES or case.startswith("kill-"):
             if spec.rpc_upstream is None:
                 raise Refusal(f"{case} requires a checked loopback upstream")
             proxy = RpcFaultProxy(
                 spec.rpc_upstream,
                 rpc_rule(case),
                 case_work / spec.journal_relative,
+                spec.case_timeout_seconds * 0.9,
             )
             proxy.__enter__()
             rpc_url = proxy.url
@@ -893,7 +1195,7 @@ def case_result(
             # advances until the selected semantic owner has fsynced Submitted.
             boundary = case.removeprefix("kill-")
             result, killed_intent = kill_then_resume(
-                spec, case, case_work, rpc_url, control, boundary
+                spec, case, case_work, rpc_url, control, boundary, proxy
             )
         else:
             result, evidence_before, before_snapshot = run_with_handshake(
@@ -908,6 +1210,10 @@ def case_result(
             raise Refusal(f"{case} failed with status {result.returncode}")
 
         if proxy is not None:
+            if proxy.state.rule.kind == "rpc-timeout":
+                proxy.state.release_delivery.set()
+            if not proxy.state.injection_done.wait(spec.case_timeout_seconds):
+                raise Refusal(f"{case} RPC injection did not finish within its bound")
             if proxy.state.failure is not None:
                 raise Refusal(f"{case} RPC proxy failed: {proxy.state.failure}")
             if not proxy.state.fired:
