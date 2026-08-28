@@ -4823,6 +4823,29 @@ pub(crate) fn usage() -> &'static str {
      necessary key file is opened; no signer bytes or key paths enter the checkpoint."
 }
 
+pub(crate) fn owned_loopback_usage() -> &'static str {
+    "\n  dclutch-local-successor-bootstrap \
+     local-private-validator-flagship-resolution-v1 --produce-input \
+     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \
+     --campaign-evidence ABSOLUTE_JSON --pyth-facts ABSOLUTE_JSON \
+     --producer-checkpoint ABSOLUTE_JSON --output ABSOLUTE_JSON\n\n  \
+     dclutch-local-successor-bootstrap \
+     local-private-validator-flagship-resolution-v1 --provision-tables \
+     --rpc-url http://127.0.0.1:PORT --producer-checkpoint ABSOLUTE_JSON \
+     --table-journal ABSOLUTE_JSON [--execute --authority-keypair ABSOLUTE_JSON]\n\n  \
+     dclutch-local-successor-bootstrap \
+     local-private-validator-flagship-resolution-v1 \
+     --rpc-url http://127.0.0.1:PORT --input ABSOLUTE_JSON \
+     --checkpoint ABSOLUTE_JSON [--through submit|execute|reclaim|complete] \
+     [--execute --submitter-keypair ABSOLUTE_JSON --resolver-keypair ABSOLUTE_JSON \
+     --update-keypair ABSOLUTE_JSON]\n\nThis command exposes the same authenticated provider \
+     lifecycle to a validator launched and owned by the private lifecycle runner. It accepts \
+     only 127.0.0.1 with an explicit permitted port, requires the distinct owned-loopback input, \
+     checkpoint, table-journal, and pinned local Pyth release domains, and refuses every external \
+     origin, including devnet and mainnet-beta. Without --execute it remains key-free and \
+     read-only."
+}
+
 struct ProviderFinalizedTransactionV1 {
     slot: u64,
     fee_lamports: u64,

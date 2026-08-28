@@ -7897,7 +7897,8 @@ fn parse_terminal_sequence_arguments_v1(
             "--lookup-table" => &mut supplied_lookup_table,
             _ => {
                 return Err(Error::new(format!(
-                    "unknown devnet-terminal-sequence-v1 argument: {argument}"
+                    "unknown {} argument: {argument}",
+                    terminal_sequence_command_v1(expected_cluster)
                 )));
             }
         };
@@ -7960,6 +7961,29 @@ pub(crate) fn usage() -> &'static str {
      return data, and account poststate. Rerun to advance. If --lookup-table is absent, the same \
      journal machinery creates, extends, activates, and freezes a dedicated exact-union ALT before \
      protocol stage one. Mainnet-beta is refused unconditionally."
+}
+
+const fn terminal_sequence_command_v1(expected_cluster: ExpectedClusterV1) -> &'static str {
+    match expected_cluster {
+        ExpectedClusterV1::Devnet => "devnet-terminal-sequence-v1",
+        ExpectedClusterV1::OwnedLoopback => "local-private-validator-terminal-sequence-v1",
+    }
+}
+
+pub(crate) fn owned_loopback_usage() -> &'static str {
+    "\n  dclutch-local-successor-bootstrap \
+     local-private-validator-terminal-sequence-v1 \
+     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \
+     --market-input ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY \
+     --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \
+     --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \
+     [--lookup-table PUBKEY] [--execute]\n\nWithout --execute this command performs bounded \
+     finalized reads from a validator launched and owned by the private lifecycle runner, then \
+     persists exactly one unsigned durable next action before any key can be opened. With \
+     --execute it uses the same crash-safe signed-packet journal and exact finalized-poststate \
+     checks as the devnet command, but writes distinct owned-loopback session and journal domains. \
+     It accepts only 127.0.0.1 with an explicit permitted port and refuses every external origin, \
+     including devnet and mainnet-beta."
 }
 
 #[cfg(test)]
@@ -8948,6 +8972,35 @@ mod tests {
             parse_terminal_sequence_arguments_v1(arguments.clone(), ExpectedClusterV1::Devnet)
                 .expect("read plan");
         assert!(!parsed.execute);
+        assert!(
+            ExpectedClusterV1::Devnet
+                .authenticate(&parsed.origin)
+                .is_err()
+        );
+
+        let local = parse_terminal_sequence_arguments_v1(
+            arguments.clone(),
+            ExpectedClusterV1::OwnedLoopback,
+        )
+        .expect("owned-loopback read plan");
+        ExpectedClusterV1::OwnedLoopback
+            .authenticate(&local.origin)
+            .expect("owned-loopback command admits only its local origin");
+
+        let mut external = arguments.clone();
+        external[1] = "https://api.devnet.solana.com".into();
+        external.extend([
+            DEVNET_ACKNOWLEDGMENT_FLAG.into(),
+            DEVNET_GENESIS_HASH.into(),
+        ]);
+        let external =
+            parse_terminal_sequence_arguments_v1(external, ExpectedClusterV1::OwnedLoopback)
+                .expect("parse typed external origin");
+        assert!(
+            ExpectedClusterV1::OwnedLoopback
+                .authenticate(&external.origin)
+                .is_err()
+        );
 
         let mut execute = arguments.clone();
         execute.push("--execute".into());
