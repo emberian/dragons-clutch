@@ -54,6 +54,7 @@ export * from './lib/walletTerminalPayoutV3';
 export * from './lib/coreFound';
 export * from './lib/infrastructure';
 export * from './lib/capabilityManifest';
+export * from './lib/founding/principalCapacity';
 export * from './lib/releaseRegistry';
 
 // Local-validator conformance: verify a running successor byte-for-byte

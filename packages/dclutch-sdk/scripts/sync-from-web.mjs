@@ -33,8 +33,15 @@ const WEB_ONLY = new Set([
   'lib/sbomVerify.test.ts',
 ]);
 
+/** App compatibility shims that already re-export their SDK semantic owner. */
+const SDK_OWNED_REEXPORTS = new Set([
+  'lib/founding/principalCapacity.ts',
+  'lib/marketDiscovery.ts',
+]);
+
 /** SDK files with deliberate local edits; never auto-copied. */
 const DIVERGED = new Set([
+  'lib/founding/principalCapacity.test.ts',
   'lib/rpc.ts',
   'lib/rpc.test.ts',
   'lib/localSuccessor.ts',
@@ -53,7 +60,7 @@ let diverged = 0;
 let fresh = 0;
 for (const file of tracked) {
   const rel = file.replace('apps/dclutch-web/', '');
-  if (WEB_ONLY.has(rel)) continue;
+  if (WEB_ONLY.has(rel) || SDK_OWNED_REEXPORTS.has(rel)) continue;
   const webPath = join(webRoot, rel.split('/').join('/'));
   const sdkPath = join(sdkRoot, rel.split('/').join('/'));
   const upstream = readFileSync(webPath);

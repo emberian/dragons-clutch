@@ -44,11 +44,22 @@ const discovery = await inspectMarketDiscoveryV1(client, {
 for (const card of discovery.cards) {
   console.log(card.address, card.status === 'decoded' ? card.phase : card.refusal);
 }
+
+if (found.mode === 'program-scan') {
+  for (const old of found.incompatibleMarketAccounts) {
+    console.log(old.address, old.magic, old.accountBytes, 'historical; not current');
+  }
+}
 ```
 
 A card decodes fully or comes back as `refused` with a reason. A refusal
 here means the account did not match the layout exactly — treat it as "not
 a market I can use", not as an error to retry.
+
+The scan lists current 360-byte `DCLTCOR3` Markets separately from exact
+historical 352-byte `DCLTCOR2` accounts. It never decodes the historical bytes
+as current state. Read `incompatibleMarketAccounts` when you need to explain
+why an older address is absent from the current list.
 
 Each read starts from a finalized floor. A multi-account response is
 internally consistent at its returned slot, which may be later than that
@@ -58,6 +69,44 @@ facts before you ask for a signature. `inspectMarketDetailV1`
 (`@dclutch/sdk/marketDetail`) gives you one market in full;
 `inspectPortfolioV1` (`@dclutch/sdk/portfolio`) derives a user's positions
 directly from market addresses — no indexer involved.
+
+## Checking the founding principal cap
+
+Import the generated floor identity and the decoder from the SDK. The decoder
+checks the exact 160-byte layout, magic, version, reserved bytes, basis, and all
+four nonzero identities. Bind the decoded floor to your authenticated Source,
+adapter configuration, and collateral unit before you use its number.
+
+```ts
+import {
+  admitFoundingPrincipalV1,
+  admitGenericFoundingQuantityV1,
+  decodeManipulationFloorV1,
+  projectPrincipalCapSetsV1,
+} from '@dclutch/sdk';
+
+const floor = decodeManipulationFloorV1(floorRecordBytes);
+const atomVerdict = admitFoundingPrincipalV1(capacity, floor, {
+  sourceSpecId,
+  adapterConfigId,
+  collateralUnitId,
+}, proposedPrincipalAtoms);
+
+const principalCapSets = projectPrincipalCapSetsV1(
+  atomVerdict.largestAdmittedPrincipal ?? 0n,
+  basisScale,
+);
+const quantityVerdict = admitGenericFoundingQuantityV1(
+  principalCapSets,
+  proposedCompleteSets,
+);
+```
+
+That last verdict mirrors the current Core generic Found check. On chain,
+ProjectFound authenticates the whole Source graph and performs the same named
+floor division before generic Found mutates anything; Core then persists
+`principal_cap_sets` in the Market root. Your calculation is a preview until
+those chain bindings are authenticated.
 
 ## Reviewing a Direct trade
 
