@@ -468,13 +468,16 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     if sha256_bytes(canonical_bytes(source_set)) != manifest["sourceSetSha256"]:
         refuse("sourceSetSha256 does not bind the ordered operation evidence")
     semantic_fields = {
-        "direct": ("direct", 1), "certificate": ("resolution", 1),
-        "payout": ("payout", 1),
+        "direct": ("direct", 1, None), "certificate": ("resolution", 1, 1),
+        "payout": ("payout", 1, None),
     }
-    for field, (owner_kind, count) in semantic_fields.items():
+    for field, (owner_kind, minimum, maximum) in semantic_fields.items():
         owners = [event for event in events if field in event]
-        if len(owners) != count or any(event["kind"] != owner_kind for event in owners):
-            refuse(f"activity must have exactly one {owner_kind}-owned {field} fact")
+        if len(owners) < minimum or (maximum is not None and len(owners) > maximum) or any(event["kind"] != owner_kind for event in owners):
+            refuse(f"activity has an invalid number or owner of {field} facts")
+    for event in events:
+        if event["kind"] in ("direct", "payout") and event["tokenDeltas"] and event["kind"] not in event:
+            refuse(f"token-moving {event['kind']} event {event['id']} omitted its exact economic facts")
     if any(("retirement" in event) != (event["kind"] == "retirement") for event in events):
         refuse("every retirement transaction, and no other kind, must own retirement facts")
     final_accounts = manifest["finalAccounts"]
@@ -559,6 +562,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     if not isinstance(pre, list) or not isinstance(post, list) or len(pre) != len(keys) or len(post) != len(keys):
         refuse("transaction lamport balance vectors differ from account keys")
     observed_lamports: dict[str, int] = {}
+    observed_lamport_states: dict[str, tuple[int, int]] = {}
     by_address = {account["address"]: ref for ref, account in accounts.items()}
     for index, address in enumerate(keys):
         if not isinstance(pre[index], int) or not isinstance(post[index], int):
@@ -569,6 +573,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
             if ref is None:
                 refuse(f"transaction changed undeclared lamport account {address}")
             observed_lamports[ref] = delta
+            observed_lamport_states[ref] = (pre[index], post[index])
     expected_lamports = parse_delta_list(event["lamportDeltas"], "lamportDeltas", accounts)
     if observed_lamports != expected_lamports:
         refuse(f"event {event['id']} lamport deltas differ from finalized transaction")
@@ -576,6 +581,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     post_tokens = token_amounts(meta, "postTokenBalances", keys)
     observed_tokens: dict[str, int] = {}
     token_mints: dict[str, str] = {}
+    observed_token_states: dict[str, tuple[int, int, str, str]] = {}
     for address in set(pre_tokens) | set(post_tokens):
         before = pre_tokens.get(address); after = post_tokens.get(address)
         mint = (before or after)[0]
@@ -588,6 +594,8 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
                 refuse(f"transaction changed undeclared token account {address}")
             observed_tokens[ref] = amount
             token_mints[ref] = mint
+            owner = (after or before)[1]
+            observed_token_states[ref] = (before[2] if before else 0, after[2] if after else 0, mint, owner)
     expected_tokens = parse_delta_list(event["tokenDeltas"], "tokenDeltas", accounts)
     if observed_tokens != expected_tokens:
         refuse(f"event {event['id']} token deltas differ from finalized transaction")
@@ -598,6 +606,14 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         "signature": event["signature"], "slot": event["slot"], "feePayer": event["feePayer"],
         "transactionFeeLamports": event["feeLamports"], "lamportDeltas": event["lamportDeltas"],
         "tokenDeltas": event["tokenDeltas"], "sourceSha256": event["sourceSha256"],
+        "lamportObservations": [
+            {"account": ref, "beforeLamports": str(observed_lamport_states[ref][0]), "afterLamports": str(observed_lamport_states[ref][1]), "deltaLamports": str(observed_lamports[ref])}
+            for ref in sorted(observed_lamport_states)
+        ],
+        "tokenObservations": [
+            {"account": ref, "mint": observed_token_states[ref][2], "owner": observed_token_states[ref][3], "beforeAtoms": str(observed_token_states[ref][0]), "afterAtoms": str(observed_token_states[ref][1]), "deltaAtoms": str(observed_tokens[ref])}
+            for ref in sorted(observed_token_states)
+        ],
     }
     if event["kind"] == "direct":
         direct = exact_keys(event.get("direct"), {"fillAtoms", "executionPrice", "priceScale", "feeBasisPointsPerSide", "sellerToken", "buyerToken", "feeRecipientToken", "mint"}, set(), "direct facts")
@@ -726,23 +742,58 @@ def reconcile_final_accounts(manifest: dict[str, Any], accounts: dict[str, dict[
 
 def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
     accounts, events = validate_manifest(manifest)
-    direct_event = next(event for event in events if "direct" in event)
-    collateral_mint = pubkey(direct_event["direct"]["mint"], "lifecycle collateral mint")
-    for ref in (direct_event["direct"]["sellerToken"], direct_event["direct"]["buyerToken"], direct_event["direct"]["feeRecipientToken"]):
-        if accounts[ref]["mint"] != collateral_mint:
-            refuse("Direct account inventory differs from the lifecycle collateral mint")
-    payout_event = next(event for event in events if "payout" in event)
-    for ref in (payout_event["payout"]["hoardToken"], payout_event["payout"]["recipientToken"]):
-        if accounts[ref]["mint"] != collateral_mint:
-            refuse("payout account inventory differs from the lifecycle collateral mint")
+    direct_events = [event for event in events if "direct" in event]
+    collateral_mint = pubkey(direct_events[0]["direct"]["mint"], "lifecycle collateral mint")
+    for direct_event in direct_events:
+        if direct_event["direct"]["mint"] != collateral_mint:
+            refuse("Direct events disagree on the lifecycle collateral mint")
+        for ref in (direct_event["direct"]["sellerToken"], direct_event["direct"]["buyerToken"], direct_event["direct"]["feeRecipientToken"]):
+            if ref not in accounts or accounts[ref].get("mint") != collateral_mint:
+                refuse("Direct account inventory differs from the lifecycle collateral mint")
+    payout_events = [event for event in events if "payout" in event]
+    for payout_event in payout_events:
+        if payout_event["payout"]["mint"] != collateral_mint:
+            refuse("payout events disagree on the lifecycle collateral mint")
+        for ref in (payout_event["payout"]["hoardToken"], payout_event["payout"]["recipientToken"]):
+            if ref not in accounts or accounts[ref].get("mint") != collateral_mint:
+                refuse("payout account inventory differs from the lifecycle collateral mint")
     genesis = rpc.genesis_hash()
     if genesis != DEVNET_GENESIS_HASH:
         refuse(f"RPC genesis {genesis!r} is not exact Solana devnet")
     projections = [reconcile_event(event, accounts, rpc, collateral_mint) for event in events]
+    last_lamports: dict[str, int] = {}
+    last_tokens: dict[str, int] = {}
+    last_positions: dict[str, dict[str, Any]] = {}
+    for event in projections:
+        for observation in event["lamportObservations"]:
+            ref = observation["account"]
+            before = int(observation["beforeLamports"])
+            if ref in last_lamports and last_lamports[ref] != before:
+                refuse(f"activity lamport history for {ref} is discontinuous")
+            last_lamports[ref] = int(observation["afterLamports"])
+        for observation in event["tokenObservations"]:
+            ref = observation["account"]
+            before = int(observation["beforeAtoms"])
+            if ref in last_tokens and last_tokens[ref] != before:
+                refuse(f"activity token history for {ref} is discontinuous")
+            last_tokens[ref] = int(observation["afterAtoms"])
+        if "position" in event:
+            ref = event["position"]["account"]
+            if ref in last_positions and last_positions[ref] != event["position"]["pre"]:
+                refuse(f"activity Position history for {ref} is discontinuous")
+            last_positions[ref] = event["position"]["post"]
     final = reconcile_final_accounts(manifest, accounts, rpc, max(int(event["slot"]) for event in events))
+    for observed in final:
+        ref = observed["account"]
+        if observed["closed"]:
+            continue
+        if ref in last_tokens and int(observed["amountAtoms"]) != last_tokens[ref]:
+            refuse(f"final token account {ref} advanced outside the activity chain")
+        if ref in last_positions and observed.get("position") != last_positions[ref]:
+            refuse(f"final Position {ref} advanced outside the activity chain")
     transaction_fees = sum(int(event["feeLamports"]) for event in events)
-    direct = next(item["direct"] for item in projections if item["kind"] == "direct")
-    payout = next(item["payout"] for item in projections if item["kind"] == "payout")
+    directs = [item["direct"] for item in projections if "direct" in item]
+    payouts = [item["payout"] for item in projections if "payout" in item]
     source_digests = [{"event": event["id"], "sha256": event["sourceSha256"]} for event in events]
     evidence_core = {"manifestSha256": sha256_bytes(canonical_bytes(manifest)), "sourceDigests": source_digests}
     dossier: dict[str, Any] = {
@@ -751,8 +802,8 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
         "accounts": manifest["accounts"], "events": projections, "finalAccounts": final,
         "totals": {
             "transactionFeesLamports": str(transaction_fees),
-            "protocolFeesAtoms": direct["feeRecipientAtoms"],
-            "hoardPrincipalPaidAtoms": payout["principalAtoms"],
+            "protocolFeesAtoms": str(sum(int(direct["feeRecipientAtoms"]) for direct in directs)),
+            "hoardPrincipalPaidAtoms": str(sum(int(payout["principalAtoms"]) for payout in payouts)),
             "hoardPrincipalClassification": "collateral-principal-not-fee-bounty-rent-reserve-or-treasury",
         },
     }

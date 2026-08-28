@@ -18,6 +18,9 @@ as a source of chain truth.
 - every transaction in an ordered founding, participant, Direct, resolution,
   payout, and retirement chain, joined by a single predecessor chain (a phase
   may own multiple transactions and multiple transaction fees);
+- sequential pre/post continuity for every wallet lamport balance, token atom
+  balance, and Position touched more than once, joined to the current finalized
+  token/Position state so individually valid transactions cannot be spliced;
 - the exact devnet genesis hash and finalized transaction signature, slot,
   status, transaction fee, account vector, lamport deltas, and raw token atoms;
 - all changed lamport and token accounts are declared—an unexplained balance
@@ -25,11 +28,11 @@ as a source of chain truth.
 - every token account bound to its declared mint and to either the collateral
   or claim asset class; every Direct and payout role bound to the one Realm
   collateral mint (claim mints may correctly differ);
-- Direct gross quote with no unnamed rounding, then an independent floor of
+- every Direct fill's gross quote with no unnamed rounding, then an independent floor of
   `gross * 50 / 10_000` on each side;
 - exact `LiabilityBasisPositionV2` identity, geometry, revision, and balances;
 - exact hostile decoding and market binding of `ResolutionCertificateV2`;
-- payout claim burns and equal Hoard-principal debit / recipient credit;
+- every payout's claim burns and equal Hoard-principal debit / recipient credit;
 - retirement closure observations and exact positive refund deltas;
 - current finalized raw account bytes, owner, lamports, Token-2022 base fields,
   or vacancy, at a slot no earlier than the activity.
