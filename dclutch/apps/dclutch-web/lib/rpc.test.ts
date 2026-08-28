@@ -102,6 +102,30 @@ describe('bounded finalized RPC client', () => {
     });
   });
 
+  it('reads only a bounded account-data window when a whole ProgramData body is unnecessary', async () => {
+    const addresses = ['11111111111111111111111111111111', 'SysvarC1ock11111111111111111111111111111111'];
+    const fetcher: typeof fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
+      expect(request.method).toBe('getMultipleAccounts');
+      expect(request.params).toEqual([addresses, {
+        commitment: 'finalized',
+        encoding: 'base64',
+        minContextSlot: 44,
+        dataSlice: { offset: 0, length: 45 },
+      }]);
+      return response({ context: { slot: 46 }, value: [
+        { data: ['', 'base64'], executable: false, lamports: 1, owner: addresses[0], space: 9_000_000 },
+        null,
+      ] });
+    };
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher)
+      .multipleAccountDataSlices(addresses, 0, 45, '44')).resolves.toMatchObject({
+      slot: '46', accounts: [{ account: { space: 9_000_000 } }, { account: null }],
+    });
+    await expect(new SolanaRpcClient('http://127.0.0.1:8899', fetcher)
+      .multipleAccountDataSlices(addresses, 0, 0, '44')).rejects.toThrow(/outside the bounded account profile/);
+  });
+
   it('submits only one bounded caller-signed packet with preflight enabled', async () => {
     const signature = '2'.repeat(88);
     const fetcher: typeof fetch = async (_input, init) => {

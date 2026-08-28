@@ -2795,31 +2795,39 @@ mod tests {
         .expect("prepare real-SBF infrastructure plan");
         validate_plan(&plan).expect("validate real-SBF plan");
 
-        let child = Command::new(which_validator().expect("pinned validator"))
-            .arg("--config")
-            .arg("/dev/null")
-            .arg("--ledger")
-            .arg(root.join("ledger"))
-            .arg("--account-dir")
-            .arg(root.join("accounts"))
-            .arg("--mint")
-            .arg(system_program::ID.to_string())
-            .arg("--bind-address")
-            .arg("127.0.0.1")
-            .arg("--rpc-port")
-            .arg("22290")
-            .arg("--faucet-port")
-            .arg("22292")
-            .arg("--gossip-port")
-            .arg("22293")
-            .arg("--dynamic-port-range")
-            .arg("22300-22331")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn real-SBF validator");
-        let mut validator = ValidatorChild { child };
+        let spawn_validator = |genesis: bool| {
+            let mut command = Command::new(which_validator().expect("pinned validator"));
+            command
+                .arg("--config")
+                .arg("/dev/null")
+                .arg("--ledger")
+                .arg(root.join("ledger"));
+            if genesis {
+                command
+                    .arg("--account-dir")
+                    .arg(root.join("accounts"))
+                    .arg("--mint")
+                    .arg(system_program::ID.to_string());
+            }
+            let child = command
+                .arg("--bind-address")
+                .arg("127.0.0.1")
+                .arg("--rpc-port")
+                .arg("22290")
+                .arg("--faucet-port")
+                .arg("22292")
+                .arg("--gossip-port")
+                .arg("22293")
+                .arg("--dynamic-port-range")
+                .arg("22300-22331")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn real-SBF validator");
+            ValidatorChild { child }
+        };
+        let mut validator = spawn_validator(true);
         let mut rpc =
             wait_test_rpc(&mut validator, "http://127.0.0.1:22290/").expect("real-SBF RPC");
         let hostile = Keypair::new();
@@ -2884,9 +2892,33 @@ mod tests {
         )
         .expect("real-SBF Core revoke");
         verify_core_programdata(&mut rpc, &plan).expect("real-SBF Core poststate");
-        for (label, instruction) in
-            activation_instructions(&plan, authority.pubkey()).expect("activation walk-up")
-        {
+        let activation =
+            activation_instructions(&plan, authority.pubkey()).expect("activation walk-up");
+        for (label, instruction) in activation.iter().take(2) {
+            rpc.send(label, std::slice::from_ref(instruction), &authority)
+                .expect("real-SBF partial role activation succeeds");
+        }
+        let progress = activation_progress(&mut rpc, &plan)
+            .expect("exact partial activation progress")
+            .expect("partial activation cache exists");
+        assert!(progress.is_written(ExecutionRoleV1::Core));
+        assert!(progress.is_written(ExecutionRoleV1::Claims));
+        assert!(!progress.is_written(ExecutionRoleV1::Trading));
+
+        // Stop the validator after a valid two-role prefix, then resume the
+        // exact ledger without replaying genesis inputs. The chain-derived
+        // detector must select only the three still-empty roles after the
+        // process boundary; no local campaign state file participates.
+        drop(rpc);
+        drop(validator);
+        let mut validator = spawn_validator(false);
+        let mut rpc =
+            wait_test_rpc(&mut validator, "http://127.0.0.1:22290/").expect("resumed real-SBF RPC");
+        let pending = pending_activation_instructions(&mut rpc, &plan, authority.pubkey())
+            .expect("chain-derived activation resume");
+        assert_eq!(pending.len(), 3);
+        assert!(pending[0].0.ends_with("Trading"));
+        for (label, instruction) in pending {
             rpc.send(label, &[instruction], &authority)
                 .expect("real-SBF role activation succeeds");
         }
