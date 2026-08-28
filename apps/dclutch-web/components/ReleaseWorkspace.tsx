@@ -28,9 +28,7 @@ import {
 import { releaseUngateV1 } from '@/lib/releaseUngate';
 import { SolanaRpcClient } from '@/lib/rpc';
 import WalletDirectory, { useWalletDirectoryV1 } from './WalletDirectory';
-import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
-
-const LOCAL_RPC = DEFAULT_RPC_ENDPOINT_V1;
+import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
 
 function message(error: unknown): string { return error instanceof Error ? error.message : 'unknown release refusal'; }
 function compact(value: string): string { return value.length > 20 ? `${value.slice(0, 9)}…${value.slice(-7)}` : value; }
@@ -113,10 +111,10 @@ function InfrastructureResult({ report }: Readonly<{ report: ProtocolInfrastruct
 }
 
 export default function ReleaseWorkspace() {
-  const [endpoint, setEndpoint] = useState(LOCAL_RPC); const [registry, setRegistry] = useState(''); const [payer, setPayer] = useState('');
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint); const [registry, setRegistry] = useDeploymentFieldV1((d) => d.programs.registry); const [payer, setPayer] = useState('');
   const [multiprogram, setMultiprogram] = useState(''); const [manifests, setManifests] = useState(blankManifests);
   const [activationCompute, setActivationCompute] = useState(String(REGISTRY_MAX_COMPUTE_UNITS)); const [activationStatus, setActivationStatus] = useState('No manifest or chain request has been made.'); const [activation, setActivation] = useState<RegistryActivationPlanV1 | null>(null);
-  const [cache, setCache] = useState(''); const [role, setRole] = useState<RegistryRole>('trading'); const [reauthCompute, setReauthCompute] = useState('80000'); const [reauthStatus, setReauthStatus] = useState('No cache has been reacquired.'); const [reauth, setReauth] = useState<RegistryReauthenticationPlanV1 | null>(null);
+  const [cache, setCache] = useDeploymentFieldV1((d) => d.activationCache ?? ''); const [role, setRole] = useState<RegistryRole>('trading'); const [reauthCompute, setReauthCompute] = useState('80000'); const [reauthStatus, setReauthStatus] = useState('No cache has been reacquired.'); const [reauth, setReauth] = useState<RegistryReauthenticationPlanV1 | null>(null);
   const wallets = useWalletDirectoryV1();
   const [walletStatus, setWalletStatus] = useState('No wallet identity has been requested.');
   const [signed, setSigned] = useState<Readonly<Partial<Record<RegistryRole, WalletSignedTransactionV1>>>>({});

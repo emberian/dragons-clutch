@@ -6,8 +6,8 @@ import { FormEvent, useState } from 'react';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
 import { CORE_FOUND_ACCOUNT_LABELS_V2, CORE_FOUND_ACCOUNT_ROLES_V2 } from '@/lib/generated/coreFound';
+import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 import { SolanaRpcClient } from '@/lib/rpc';
-import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
 type AddressField = Exclude<keyof CoreFoundInputV2, 'generation'>;
 type AddressValues = Record<AddressField, string>;
@@ -63,8 +63,15 @@ function compact(value: string): string {
 }
 
 export default function CoreFoundWorkspace() {
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
+  const deployment = useDeploymentV1();
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
   const [addresses, setAddresses] = useState<AddressValues>(emptyAddresses);
+  // Deployment-derivable fields arrive filled; an operator's edit overrides.
+  const effective: AddressValues = {
+    ...addresses,
+    registryProgram: addresses.registryProgram !== '' ? addresses.registryProgram : deployment.programs.registry,
+    activationCache: addresses.activationCache !== '' ? addresses.activationCache : deployment.activationCache ?? '',
+  };
   const [generation, setGeneration] = useState('1');
   const [state, setState] = useState<BuildState>({
     kind: 'idle',
@@ -80,7 +87,7 @@ export default function CoreFoundWorkspace() {
     setState({ kind: 'loading', message: 'Reacquiring immutable releases, Product semantics, and all 31 accounts at finalized commitment…' });
     try {
       const plan = await prepareCoreFoundV2(new SolanaRpcClient(endpoint), {
-        ...addresses,
+        ...effective,
         generation: canonicalU64(generation),
       });
       setState({ kind: 'ready', plan, rentBase64: plan.rentCreateWireBytes === null ? null : encodeBase64(plan.rentCreateWireBytes), foundBase64: plan.wireBytes === null ? null : encodeBase64(plan.wireBytes) });
@@ -104,7 +111,7 @@ export default function CoreFoundWorkspace() {
     <form className="direct-card found-form" onSubmit={construct}>
       <header className="direct-card-heading"><span>01</span><div><h2>Chain authority and record coordinates</h2><p>No program, balance, Product, or release identity is supplied by the application. Every address below is treated as untrusted input and reauthenticated.</p></div></header>
       <div className="direct-form-grid found-control-grid"><label><span>Finalized RPC endpoint</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Market generation</span><input required inputMode="numeric" value={generation} onChange={(event) => setGeneration(event.target.value.trim())} /></label></div>
-      <div className="direct-form-grid found-record-grid">{ADDRESS_FIELDS.map(({ field, label }) => <label key={field}><span>{label}</span><input required spellCheck={false} value={addresses[field]} onChange={(event) => update(field, event.target.value)} /></label>)}</div>
+      <div className="direct-form-grid found-record-grid">{ADDRESS_FIELDS.map(({ field, label }) => <label key={field}><span>{label}</span><input required spellCheck={false} value={effective[field]} onChange={(event) => update(field, event.target.value)} /></label>)}</div>
       <button type="submit" disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reacquiring Found31 authority…' : 'Construct unsigned lifecycle + Found transactions'}</button>
       <p className="direct-status" aria-live="polite">{state.kind === 'ready' ? `Accepted at finalized slot ${state.plan.observedSlot}. Both transactions remain unsigned and unsubmitted.` : state.message}</p>
     </form>

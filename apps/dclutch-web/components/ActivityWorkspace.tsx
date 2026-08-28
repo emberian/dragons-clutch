@@ -13,7 +13,8 @@ import {
 import { parseMarketAddressListV1, shortAddressV1 } from '@/lib/marketDiscovery';
 import { parsePortfolioOwnerV1 } from '@/lib/portfolio';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
-import { DEFAULT_RPC_ENDPOINT_V1, clusterNameV1 } from '@/lib/rpcDefault';
+import { useDeploymentFieldV1 } from '@/lib/deploymentStore';
+import { clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -51,10 +52,10 @@ function ActivityRow({ entry }: Readonly<{ entry: ActivityEntryV1 }>) {
 
 export default function ActivityWorkspace() {
   const directory = useWalletDirectoryV1();
-  const [endpoint, setEndpoint] = useState(DEFAULT_RPC_ENDPOINT_V1);
-  const [claimsProgram, setClaimsProgram] = useState('');
-  const [coreProgram, setCoreProgram] = useState('');
-  const [tradingProgram, setTradingProgram] = useState('');
+  const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
+  const [claimsProgram, setClaimsProgram] = useDeploymentFieldV1((d) => d.programs.claims);
+  const [coreProgram, setCoreProgram] = useDeploymentFieldV1((d) => d.programs.core);
+  const [tradingProgram, setTradingProgram] = useDeploymentFieldV1((d) => d.programs.trading);
   const [owner, setOwner] = useState('');
   const [addressList, setAddressList] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No signature history has been read.' });
