@@ -66,7 +66,10 @@ update signer must remain vacant; the terminal Resolution caller owns Receiver
 `PostUpdate` and consumes those exact facts.
 
 Today, the caller-backed development probe stops after the real founding and
-participant transactions:
+participant transactions. The local market mints an explicit extra 100,000,000
+raw collateral atoms into the `direct-buyer` fixture account owned by the
+`participant`, removes mint authority, and records that separate supply before
+the participant caller transfers and approves the exact amount:
 
 ```sh
 SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \

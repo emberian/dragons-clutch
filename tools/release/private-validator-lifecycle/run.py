@@ -65,8 +65,11 @@ PYTH_JOURNAL_FILES = (
 ROLE_ORDER = ("registry", "rent", "custody", "resolution", "claims", "trading", "core")
 DEVELOPMENT_FEE_BASIS_POINTS = 50
 FEE_BASIS_POINTS_DENOMINATOR = 10_000
+PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS = 100_000_000
 VALIDATOR_MINT_ROLE = "core-upgrade-authority"
 DEVELOPMENT_FEE_RECIPIENT_ROLE = "founding-source-funder"
+PARTICIPANT_ROLE = "participant"
+PARTICIPANT_FIXTURE_SOURCE_ROLE = "direct-buyer"
 LOCAL_AIRDROP_ROLES: tuple[str, ...] = ()
 PROTOCOL_CREATED_KEY_ROLES = (
     "collateral-mint",
@@ -783,6 +786,59 @@ def key_flags(report: dict[str, Any]) -> list[str]:
     return flags
 
 
+def authenticate_participant_fixture_liquidity(
+    campaign: dict[str, Any],
+    market: dict[str, Any],
+    participant: str,
+    source_account: str,
+) -> dict[str, Any]:
+    execution = campaign.get("execution")
+    fixture = (
+        execution.get("localParticipantFixtureLiquidity")
+        if isinstance(execution, dict)
+        else None
+    )
+    expected_keys = {
+        "sourceTokenAccount",
+        "sourceOwner",
+        "quantityAtoms",
+        "foundingCollateralAtoms",
+        "totalSupplyAtoms",
+        "mint",
+        "mintAuthorityRemoved",
+        "transactionSignature",
+        "finalizedSlot",
+        "computeUnitsConsumed",
+    }
+    founding_atoms = market.get("initial_collateral_atoms")
+    expected_mint = campaign.get("founding_targets", {}).get("collateral_mint")
+    if (
+        not isinstance(fixture, dict)
+        or set(fixture) != expected_keys
+        or fixture.get("sourceTokenAccount") != source_account
+        or fixture.get("sourceOwner") != participant
+        or fixture.get("quantityAtoms") != PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS
+        or not isinstance(founding_atoms, int)
+        or founding_atoms <= 0
+        or fixture.get("foundingCollateralAtoms") != founding_atoms
+        or fixture.get("totalSupplyAtoms")
+        != founding_atoms + PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS
+        or fixture.get("mint") != expected_mint
+        or fixture.get("mintAuthorityRemoved") is not True
+        or not isinstance(fixture.get("transactionSignature"), str)
+        or not fixture["transactionSignature"]
+        or not isinstance(fixture.get("finalizedSlot"), int)
+        or fixture["finalizedSlot"] <= 0
+        or not isinstance(fixture.get("computeUnitsConsumed"), int)
+        or fixture["computeUnitsConsumed"] <= 0
+    ):
+        raise Refusal(
+            "founding evidence omitted the exact 100,000,000-atom, "
+            "authority-removed local participant liquidity receipt"
+        )
+    return fixture
+
+
 def dcltgmf2_metric(evidence: Path) -> int:
     document = read_unique_json(evidence, "founding evidence")
     transactions = document.get("execution", {}).get("transactions", [])
@@ -970,7 +1026,18 @@ def run_one(
         )
 
         participant = run / "participant.json"
-        participant_key = Path(report["keypairs"]["participant"])
+        participant_key = require_role_key(report, PARTICIPANT_ROLE)
+        fixture_source_key = require_role_key(report, PARTICIPANT_FIXTURE_SOURCE_ROLE)
+        participant_address = key_address(paths.solana, participant_key)
+        fixture_source_address = key_address(paths.solana, fixture_source_key)
+        campaign_report = read_unique_json(evidence, "finalized founding evidence")
+        market_report = read_unique_json(market, "market input")
+        fixture_liquidity = authenticate_participant_fixture_liquidity(
+            campaign_report,
+            market_report,
+            participant_address,
+            fixture_source_address,
+        )
         payer_key = require_role_key(report, VALIDATOR_MINT_ROLE)
         minimum_slot = rpc(url, "getSlot", [{"commitment": "finalized"}])
         if not isinstance(minimum_slot, int) or minimum_slot <= 0:
@@ -989,7 +1056,7 @@ def run_one(
                 "--campaign-evidence",
                 str(evidence),
                 "--position-owner",
-                key_address(paths.solana, participant_key),
+                participant_address,
                 "--position-owner-keypair",
                 str(participant_key),
                 "--fee-payer",
@@ -1000,6 +1067,14 @@ def run_one(
                 str(minimum_slot),
                 "--output",
                 str(participant),
+                "--collateral-source-owner",
+                participant_address,
+                "--collateral-source-owner-keypair",
+                str(participant_key),
+                "--collateral-source-account",
+                fixture_source_address,
+                "--collateral-quantity-atoms",
+                str(PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS),
                 "--execute",
             ],
         )
@@ -1011,8 +1086,20 @@ def run_one(
             or participant_report.get("phase") != "finalized"
             or not participant_report.get("authorizedMutation")
             or not isinstance(participant_report.get("finalized"), dict)
+            or not isinstance(participant_report.get("collateral"), dict)
+            or participant_report["collateral"].get("phase") != "finalized"
+            or not isinstance(participant_report["collateral"].get("finalized"), dict)
+            or participant_report["collateral"].get("intent", {}).get("sourceAccount")
+            != fixture_source_address
+            or participant_report["collateral"].get("intent", {}).get("sourceOwner")
+            != participant_address
+            or participant_report["collateral"].get("intent", {}).get("quantityAtoms")
+            != PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS
         ):
-            raise Refusal("participant admission did not preserve one finalized loopback report")
+            raise Refusal(
+                "participant admission did not preserve finalized admission plus exact "
+                "100,000,000-atom collateral preparation"
+            )
 
         metric = dcltgmf2_metric(evidence)
         fee_profile = {
@@ -1043,6 +1130,7 @@ def run_one(
                 "dcltgmf2_compute_units": metric,
                 "compute_units": {"founding-dcltgmf2": metric},
                 "fee_profile": fee_profile,
+                "participant_fixture_liquidity": fixture_liquidity,
                 "plan": str(plan),
                 "founding_evidence": str(evidence),
                 "participant_evidence": str(participant),
