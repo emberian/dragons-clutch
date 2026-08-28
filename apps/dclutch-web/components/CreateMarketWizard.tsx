@@ -1,7 +1,7 @@
 'use client';
 
 import Nav from '@/components/Nav';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
 import {
@@ -43,24 +43,23 @@ import {
   assessWindowWidthV1,
   resolutionDeadlineV1,
 } from '@/lib/founding/windowCadence';
-import { hex, sha256 } from '@/lib/bytes';
 import { SolanaRpcClient } from '@/lib/rpc';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 
 type StepId = 'product' | 'window' | 'funding' | 'review' | 'submit';
 
 const STEPS: ReadonlyArray<Readonly<{ id: StepId; number: string; title: string; blurb: string }>> = Object.freeze([
-  { id: 'product', number: '01', title: 'Product', blurb: 'Range protection on a Pyth source. The partition, the payoff, and the explicit failure outcome.' },
-  { id: 'window', number: '02', title: 'Window width', blurb: '§12.3’s cadence table. The operator states a width; nothing here states one for them.' },
-  { id: 'funding', number: '03', title: 'Principal & funding', blurb: 'Seven segregated compartments, and the κ capacity bound checked at the atom.' },
-  { id: 'review', number: '04', title: 'Review the ladder', blurb: 'The exact transaction set, with every rung labelled by what actually builds it.' },
-  { id: 'submit', number: '05', title: 'Inspect only', blurb: 'Reacquire the browser-previewable pair without signing or spending.' },
+  { id: 'product', number: '01', title: 'Design the payout', blurb: 'Range protection on a Pyth source: what pays, what does not, and what happens if the source is silent.' },
+  { id: 'window', number: '02', title: 'Choose the window', blurb: 'You state how long the source may answer; this page does not choose for you.' },
+  { id: 'funding', number: '03', title: 'Backing & funding', blurb: 'Seven named funding purposes and a capacity ratio checked in exact base units.' },
+  { id: 'review', number: '04', title: 'Review the plan', blurb: 'Every opening step, with a plain statement of what can build it today.' },
+  { id: 'submit', number: '05', title: 'Inspect the chain', blurb: 'Recheck the partial browser preview without signing or spending.' },
 ]);
 
 const STATUS_LABEL: Readonly<Record<FoundingRungStatusV1, string>> = Object.freeze({
-  'browser-builder': 'browser builder',
-  'browser-frame-borrowed-coordinates': 'browser frame · borrowed coordinates',
-  'tooling-only': 'tooling only',
+  'browser-builder': 'browser preview',
+  'browser-frame-borrowed-coordinates': 'uses operator coordinates',
+  'tooling-only': 'operator tooling',
 });
 
 type AddressField = Exclude<keyof CoreFoundInputV2, 'generation' | 'lookupTable'>;
@@ -239,21 +238,6 @@ export default function CreateMarketWizard() {
     } catch (error) { return { ok: false as const, message: reason(error) }; }
   }, [compartments]);
 
-  // The manifest's content identity is what the Market PDA is derived from, so
-  // it is worth showing -- but SHA-256 in the browser is async, which makes it
-  // the one derived value here that cannot be a `useMemo`. The cancel flag
-  // keeps a slow digest of an old manifest from overwriting a newer one.
-  const [manifestDigest, setManifestDigest] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      let next: string | null = null;
-      try { if (manifest.ok) next = hex(await sha256(manifest.bytes)); } catch { next = null; }
-      if (live) setManifestDigest(next);
-    })();
-    return () => { live = false; };
-  }, [manifest]);
-
   const ladder = summarizeFoundingLadderV1();
   const displayDecimals = digitsOrNull(decimals) ?? 0;
 
@@ -277,13 +261,13 @@ export default function CreateMarketWizard() {
 
     <section className="market-heading">
       <div>
-        <div className="market-kicker"><span>Design · range protection</span><span>DCLTGMF2 read-only preview</span></div>
+        <div className="market-kicker"><span>Design · range protection</span><span>Read-only opening preview</span></div>
         <h1>State a band.<br />Price the window.<br />See the whole ladder.</h1>
       </div>
       <p>
-        Founding is not one transaction. This wizard composes the Product, the terminal window and the funding from the
-        same arithmetic the chain applies, then shows the exact transaction set — including the rungs a browser cannot
-        build yet, named with the reason. Nothing here fabricates a price, a market, or a release.
+        Opening a market takes several ordered steps. This page combines the payout design, answer window, and funding
+        with the same exact arithmetic the protocol uses, then shows which steps have a browser preview and which still
+        require the operator tooling. Nothing here fabricates a price, a market, or a deployed release.
       </p>
     </section>
 
@@ -300,7 +284,7 @@ export default function CreateMarketWizard() {
     {step === 'product' && <section className="direct-card">
       <header className="direct-card-heading"><span>01</span><div>
         <h2>Range protection on a Pyth source</h2>
-        <p>A categorical partition of one coordinate domain by two cuts, plus an explicit failure outcome. The payoff is one unit of the liability basis in either tail and nothing inside the band — the shape a holder buys as protection against the price leaving a range they can live with.</p>
+        <p>You choose a lower and upper edge, plus what happens if the source is silent. A claim pays one collateral unit when the answer falls outside the band and zero inside it.</p>
       </div></header>
       <div className="direct-form-grid">
         <label><span>Coordinate label (display only)</span><input value={coordinateLabel} onChange={(event) => setCoordinateLabel(event.target.value)} /></label>
@@ -325,7 +309,7 @@ export default function CreateMarketWizard() {
         <p className="direct-refusal">
           The labels above are display metadata and are never decoded from a Market account. What the chain re-derives at
           Found time is the partition: cuts strictly increasing, regions exactly cuts + 1, outcomes exactly regions + 1,
-          and a portfolio that is neither empty nor un-normalized.
+          and a payout design that is neither empty nor ambiguous.
         </p>
       </> : <p className="direct-refusal">Refused: {product.message}</p>}
     </section>}
@@ -370,50 +354,51 @@ export default function CreateMarketWizard() {
 
     {step === 'funding' && <section className="direct-card">
       <header className="direct-card-heading"><span>03</span><div>
-        <h2>Principal, the capacity bound, and seven segregated compartments</h2>
-        <p>Founding mints one complete set per collateral atom, so the founder holds every outcome. Capability funding is quoted per compartment and carries two independent totals; nothing anywhere adds a lamport to a collateral atom.</p>
+        <h2>Backing, the capacity ratio, and seven named funding purposes</h2>
+        <p>Opening mints one complete set per collateral atom, so the founder initially holds every outcome. Each operating purpose is funded separately, and network lamports are never added to collateral atoms.</p>
       </div></header>
       <div className="direct-form-grid">
         <label><span>Founding principal · raw collateral atoms</span><input inputMode="numeric" value={principal} onChange={(event) => setPrincipal(event.target.value)} /></label>
-        <label><span>Venue manipulation floor · lamports{floorRecord.kind === 'decoded' ? ' · from the record below' : ' · stated'}</span><input inputMode="numeric" disabled={floorRecord.kind === 'decoded'} value={floorRecord.kind === 'decoded' ? floorRecord.floor.floorAtoms.toString() : venueFloor} onChange={(event) => setVenueFloor(event.target.value)} /></label>
-        <label><span>κ numerator / denominator</span><span className="wizard-pair">
+        <label><span>Venue cost floor · lamports{floorRecord.kind === 'decoded' ? ' · from the technical proof below' : ' · stated'}</span><input inputMode="numeric" disabled={floorRecord.kind === 'decoded'} value={floorRecord.kind === 'decoded' ? floorRecord.floor.floorAtoms.toString() : venueFloor} onChange={(event) => setVenueFloor(event.target.value)} /></label>
+        <label><span>Capacity ratio · numerator / denominator</span><span className="wizard-pair">
           <input inputMode="numeric" value={kappaNumerator} onChange={(event) => setKappaNumerator(event.target.value)} />
           <input inputMode="numeric" value={kappaDenominator} onChange={(event) => setKappaDenominator(event.target.value)} />
         </span></label>
       </div>
 
-      <label><span>ManipulationFloorV1 record · {MANIPULATION_FLOOR_V1_BYTES} bytes of hexadecimal, optional — the venue&apos;s own floor derivation, from the operator&apos;s source tooling; without it the typed floor above is what counts</span>
-        <textarea spellCheck={false} value={floorRecordHex} onChange={(event) => setFloorRecordHex(event.target.value)} />
-      </label>
-      {floorRecord.kind === 'decoded'
-        ? <dl className="found-facts">
+      <details className="trade-v3-bytes">
+        <summary>Technical: verify a venue-derived floor</summary>
+        <label><span>Venue floor proof · {MANIPULATION_FLOOR_V1_BYTES} bytes of hexadecimal, optional</span>
+          <textarea spellCheck={false} value={floorRecordHex} onChange={(event) => setFloorRecordHex(event.target.value)} />
+        </label>
+        {floorRecord.kind === 'decoded'
+          ? <dl className="found-facts">
             <div><dt>Recognized</dt><dd><code>{MANIPULATION_FLOOR_V1_MAGIC}</code> · {floorRecord.floor.basis.replace('-', ' ')} derivation</dd></div>
             <div><dt>Floor</dt><dd>{floorRecord.floor.floorAtoms.toLocaleString()} atoms of the collateral unit below</dd></div>
             <div><dt>Derived for Source</dt><dd>{floorRecord.floor.sourceSpecId}</dd></div>
             <div><dt>Venue configuration</dt><dd>{floorRecord.floor.adapterConfigId}</dd></div>
             <div><dt>Collateral unit</dt><dd>{floorRecord.floor.collateralUnitId}</dd></div>
             <div><dt>Derivation release</dt><dd>{floorRecord.floor.derivationReleaseId}{floorRecord.floor.derivationReleaseId === BONDING_CURVE_FLOOR_DERIVATION_ID_V1 ? ' · bonding-curve buyout/exit' : ''}</dd></div>
-          </dl>
-        : <p className="direct-refusal">
+            </dl>
+          : <p className="direct-refusal">
             {floorRecord.kind === 'refused'
               ? `Refused: ${floorRecord.message}`
               : 'No floor record supplied, so the number above is a stated claim about a venue rather than that venue’s own derivation. A real founding binds the floor to the Source, adapter configuration and collateral unit it was derived for; a floor derived for something else is not a weaker bound, it is an answer to a different question.'}
-          </p>}
+            </p>}
+      </details>
 
       {kappa.ok ? <div className={`wizard-kappa ${kappa.verdict.admitted ? 'admitted' : 'refused'}`}>
         <strong>{kappa.verdict.admitted ? 'Under the capacity bound' : `Over the capacity bound · ${kappa.verdict.refusal}`}</strong>
         <p>
           The predicate is <code>principal · denominator ≤ numerator · floor</code>, cross-multiplied so there is no
-          division and no rounding. At κ = {formatCapacityV1(capacity)} against a floor of {BigInt(venueFloor || '0').toLocaleString()} lamports,
+          division and no rounding. At a ratio of {formatCapacityV1(capacity)} against a floor of {BigInt(venueFloor || '0').toLocaleString()} lamports,
           {' '}the largest admitted principal is {kappa.verdict.largestAdmittedPrincipal === null ? 'none' : kappa.verdict.largestAdmittedPrincipal.toLocaleString()} atoms.
           {kappa.verdict.scaled !== null && kappa.verdict.bound !== null && <> This founding states {kappa.verdict.scaled.toLocaleString()} against a bound of {kappa.verdict.bound.toLocaleString()}.</>}
         </p>
         <p className="wizard-enforcement">
-          Enforcement: <strong>{kappa.verdict.enforcement}</strong>. No on-chain route applies this predicate today — it is
-          proven in Lean and implemented in <code>dclutch-source-contract</code>, and its only non-test caller is the
-          off-chain gauntlet driver. Found sees the Source and not the principal; Claims FoundingV5 sees the reverse. So
-          this verdict tells you what the protocol <em>intends</em>, not what a validator will refuse. And even once wired,
-          a founding-only check is not a cap: principal grows on every complete-set split.
+          Enforcement: <strong>{kappa.verdict.enforcement}</strong>. The current onchain opening path does not enforce this
+          ratio, so this verdict is a design warning rather than a validator guarantee. A check made only at opening would
+          not be a permanent cap anyway, because later complete-set splits can increase the principal.
         </p>
       </div> : <p className="direct-refusal">Refused: {kappa.message}</p>}
 
@@ -424,9 +409,9 @@ export default function CreateMarketWizard() {
         <div><dt>Paying outcomes</dt><dd>{backing.payingOutcomes.map((index) => product.value.outcomes[index].label).join(' · ')}</dd></div>
       </dl>}
 
-      <h3 className="wizard-subhead">Capability funding · one quote per entry, {manifest.ok ? manifest.entries : 0} entries</h3>
+      <h3 className="wizard-subhead">Operating funds · one quote per service, {manifest.ok ? manifest.entries : 0} services</h3>
       <table className="wizard-table">
-        <thead><tr><th>Compartment</th><th>Asset policy</th><th>Per entry · lamports</th><th>Manifest total</th></tr></thead>
+        <thead><tr><th>Purpose</th><th>Asset rule</th><th>Per service · lamports</th><th>Plan total</th></tr></thead>
         <tbody>{FUNDING_COMPARTMENTS_V1.map((compartment) => {
           const total = manifest.ok ? manifest.totals.perCompartment.find((entry) => entry.name === compartment.name) : undefined;
           return <tr key={compartment.name} className={total && total.amount > 0n ? 'wizard-paying' : ''}>
@@ -443,22 +428,21 @@ export default function CreateMarketWizard() {
       </table>
       {manifest.ok
         ? <p className="direct-status">
-            Manifest encodes to {manifest.bytes.length} bytes and passes the Found path’s own decoder.
-            {manifestDigest && <> Its content identity is <code>{manifestDigest}</code> — the digest that goes into the Market PDA.</>}
-            {' '}Capability identities here are wizard placeholders; a real founding names released kinds.
+            The funding plan encodes to {manifest.bytes.length} bytes and passes the opening decoder.
+            {' '}Service identities here are preview placeholders; a real opening names checked releases.
           </p>
         : <p className="direct-refusal">Refused: {manifest.message}</p>}
       <p className="direct-refusal">
         <code>Rent</code> and <code>Creation</code> pay for account existence and admit native lamports only. The other five
-        are capability-selected. Both totals are recomputed from the compartments and never taken from a caller, and the
+        are selected by the service. Both totals are recomputed from the named purposes and never taken from a caller, and the
         Realm collateral binding is present exactly when the Realm total is nonzero.
       </p>
     </section>}
 
     {step === 'review' && <section className="direct-card">
       <header className="direct-card-heading"><span>04</span><div>
-        <h2>The exact transaction set</h2>
-        <p>{ladder.rungs} rungs. {ladder.browserBuilders} have a browser builder, {ladder.browserFrames} assemble their frame in the browser from coordinates Rust supplies, and {ladder.toolingOnly} are tooling-only. Three ride an address lookup table.</p>
+        <h2>The ordered opening plan</h2>
+        <p>{ladder.rungs} steps. {ladder.browserBuilders} have a browser preview, {ladder.browserFrames} can be assembled from operator-supplied coordinates, and {ladder.toolingOnly} remain in the operator tooling. Three use an address lookup table.</p>
       </div></header>
       <ol className="wizard-ladder">
         {FOUNDING_LADDER_V1.map((rung, index) => <li key={rung.id} className={rung.status}>
@@ -469,24 +453,22 @@ export default function CreateMarketWizard() {
             {rung.lookupTable && <span className="wizard-badge alt">ALT</span>}
           </div>
           <p className="wizard-rung-effect">{rung.effect}</p>
-          <dl>
+          <details><summary>Technical builder details</summary><dl>
             <div><dt>Transactions</dt><dd>{rung.transactions}</dd></div>
             <div><dt>Builder</dt><dd><code>{rung.builder}</code></dd></div>
-          </dl>
+          </dl></details>
           <p className="wizard-rung-reason">{rung.reason}</p>
         </li>)}
       </ol>
       <p className="direct-refusal">
-        A “Create market” button that submitted one transaction would be a lie about five sixths of this. The rungs marked
-        tooling-only are not missing features to be filled in by hand — each names a first-party Rust encoder or kernel
-        transition that is the authority for what its bytes mean, and a browser re-implementation would be a second
-        authority rather than a client.
+        A one-click “Create market” button would misstate this plan. Steps marked for operator tooling must use the
+        first-party implementation that owns their transaction meaning; this page does not reimplement them in the browser.
       </p>
     </section>}
 
     {step === 'submit' && <section className="direct-card">
       <header className="direct-card-heading"><span>05</span><div>
-        <h2>Inspect the browser-previewable founding pair</h2>
+        <h2>Inspect the partial browser preview</h2>
         <p>This read-only check reacquires the immutable releases, Product semantics, and account frame at finalized commitment. It does not ask for a wallet, create a lookup table, sign a transaction, spend devnet SOL, or open a Market.</p>
       </div></header>
 
@@ -517,8 +499,8 @@ export default function CreateMarketWizard() {
       </>}
       <p className="direct-refusal">
         This page deliberately has no signing or submission button. The partial browser pair would spend devnet funds
-        and stop at phase <em>Founding</em>; it is not an open Market. The complete operator campaign owns the durable
-        journal, every founding rung, the final <em>Open</em> transition, and recovery after a crash. Until that complete
+        and stop before the Market is open. The complete operator campaign owns the durable
+        journal, every opening step, the final transition, and recovery after a crash. Until that complete
         caller is available here, use this page only to review the design and inspect the unsigned preview.
       </p>
     </section>}

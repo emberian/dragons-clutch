@@ -7,6 +7,9 @@ describe('operator surface presentation', () => {
   it('shows executable breadth and exact refusal boundaries without invented state', () => {
     const html = renderToStaticMarkup(<OperatorSurface />);
     expect(html).toContain('Operations.');
+    expect(html).toContain('Every route still requires its own preflight');
+    expect(html).toContain('does not prove that a route is executable');
+    expect(html).toContain('Constructor readiness map');
     expect(html).toContain('Reacquire the multiprogram deployment');
     expect(html).toContain('Create registered order');
     expect(html).toContain('Initialize / collect / materialize / distribute');
