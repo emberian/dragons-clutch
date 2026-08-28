@@ -34,7 +34,7 @@ export default function SmokeStory() {
         <strong>{live ? 'Live on Solana devnet' : 'Not live yet'}</strong>
         {live
           ? <p>The protocol substrate is deployed on Solana devnet at permanent addresses, and the markets below link straight to their live on-chain accounts as each one is founded. Devnet SOL is free test money — this is a public rehearsal, not an investment.</p>
-          : <p>None of these markets exist today and nothing is deployed to any network. Everything below has been run end-to-end on local test machines. When the markets go live, this page will link straight to them.</p>}
+          : <p>The seven protocol programs are deployed at permanent addresses on Solana devnet. None of these three smoke markets exists yet. Everything below has been rehearsed end-to-end on local test machines; when each market is founded on devnet, this page will link straight to its account.</p>}
       </aside>
     </section>
 

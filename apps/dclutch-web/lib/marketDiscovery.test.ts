@@ -7,6 +7,7 @@ import {
   enumerateCoreMarketAddressesV1,
   inspectMarketDiscoveryV1,
   isCoreMarketHeaderV2,
+  isIncompatibleCoreMarketAccountV1,
   parseMarketAddressListV1,
   provenanceChipV1,
   shortAddressV1,
@@ -354,7 +355,7 @@ describe('Market discovery cards', () => {
   it('answers an empty address set honestly instead of scanning for something to show', async () => {
     const discovery = await inspectMarketDiscoveryV1(client(await liveChain()), { coreProgramId: CORE, addresses: [] });
     expect(discovery.cards).toEqual([]);
-    expect(discovery.reason).toMatch(/No Market address has been supplied or enumerated/);
+    expect(discovery.reason).toMatch(/No current compatible Market address has been supplied or enumerated/);
   });
 });
 
@@ -369,16 +370,35 @@ describe('Market enumeration', () => {
     expect(isCoreMarketHeaderV2(categorical)).toBe(false);
   });
 
-  it('lists only Market-headered Core accounts from a bounded finalized scan', async () => {
+  it('recognizes only the exact superseded 352-byte DCLTCOR2 account as incompatible', () => {
+    expect(isIncompatibleCoreMarketAccountV1(liveRpcAccount(LIVE.market))).toBe(true);
+    expect(isIncompatibleCoreMarketAccountV1(liveRpcAccount(LIVE.market, {
+      data: mutate(LIVE.market.data, 0, new TextEncoder().encode('DCLTCOR3')),
+    }))).toBe(false);
+    expect(isIncompatibleCoreMarketAccountV1({
+      ...liveRpcAccount(LIVE.market),
+      space: 351,
+    })).toBe(false);
+  });
+
+  it('lists current Markets while separately disclosing incompatible historical accounts', async () => {
     const enumeration = await enumerateCoreMarketAddressesV1(client(new Map(), {
       headers: [
-        [LIVE.market.address, CURRENT_MARKET_DATA.slice(0, 16)],
+        [LIVE.market.address, CURRENT_MARKET_DATA],
+        [LIVE.founder, LIVE.market.data],
         [LIVE.claimsAggregate.address, LIVE.claimsAggregate.data.slice(0, 16)],
       ],
     }), CORE);
     expect(enumeration.mode).toBe('program-scan');
     expect(enumeration.addresses).toEqual([LIVE.market.address]);
-    expect(enumeration.note).toMatch(/2 finalized Core accounts at slot 99; 1 carry the DCLTCOR3 Market header/);
+    if (enumeration.mode !== 'program-scan') throw new Error('expected a program scan');
+    expect(enumeration.incompatibleMarketAccounts).toEqual([{
+      address: LIVE.founder,
+      magic: 'DCLTCOR2',
+      accountBytes: 352,
+    }]);
+    expect(enumeration.note).toMatch(/3 finalized Core accounts at slot 99; 1 carry the current DCLTCOR3 Market header/);
+    expect(enumeration.note).toMatch(/1 historical DCLTCOR2 Market account; it uses the incompatible 352-byte layout and is not listed as current/);
   });
 
   it('reports the indexer-shaped gap when getProgramAccounts is unavailable', async () => {

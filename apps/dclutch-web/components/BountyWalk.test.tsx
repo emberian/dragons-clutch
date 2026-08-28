@@ -15,14 +15,16 @@ describe('the smoke story and bounty pages speak to the reader', () => {
     expect(smoke).toContain('yours — can send one ordinary transaction');
   });
 
-  it('says plainly that nothing is live, without evidence-register jargon', () => {
+  it('distinguishes the deployed devnet programs from smoke markets that are not live yet', () => {
     for (const html of [bounty, smoke]) {
       expect(html).toContain('Not live yet');
       for (const jargon of ['census', 'ProgramTest', 'fail-closed', 'hostile-decode', 'provenance chip', 'evidence level', 'finalized floor']) {
         expect(html).not.toContain(jargon);
       }
     }
-    expect(smoke).toContain('nothing is deployed to any network');
+    expect(smoke).toContain('seven protocol programs are deployed at permanent addresses on Solana devnet');
+    expect(smoke).toContain('None of these three smoke markets exists yet');
+    expect(smoke).not.toContain('nothing is deployed to any network');
     expect(bounty).toContain('No such market is live on any public network today');
   });
 

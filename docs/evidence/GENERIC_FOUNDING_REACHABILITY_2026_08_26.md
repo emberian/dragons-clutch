@@ -29,7 +29,7 @@ and is kept verbatim, because the reasoning is what located each blocker. Three
 of its conclusions are refuted by measurement and one of its counts was wrong
 every time it was stated. The current truth, the current numbers, the current
 artifact digests, and the current transcript are in
-[the W1f supersession](#w1f-supersession-2026-08-27--the-market-is-open) at the
+[the W1f supersession](#w1f-supersession-2026-08-27-the-market-is-open) at the
 end of this document.
 
 | The record below says | 2026-08-27 |

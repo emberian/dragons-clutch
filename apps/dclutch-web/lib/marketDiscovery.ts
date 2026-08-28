@@ -7,7 +7,13 @@ import {
   type CapabilityActivationV1,
   type CapabilityFundingQuoteV1,
 } from './capabilityManifest';
-import { CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CORE_STATE_MAGIC, REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+import {
+  CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+  CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_VERSION,
+  REALM_SCHEMA_RELEASE_ID_V1,
+} from './generated/coreFound';
 import {
   MARKET_HOARD_UNAUTHENTICATED_V1,
   decodeClaimsAggregateV2,
@@ -56,6 +62,19 @@ import { type BindingCheck } from './decoders';
 export const MARKET_DISCOVERY_MAX_ADDRESSES = 32;
 const RPC_ACCOUNT_BATCH = 32;
 const CORE_STATE_MAGIC_TEXT = new TextDecoder().decode(CORE_STATE_MAGIC);
+const INCOMPATIBLE_CORE_STATE_VERSION = CORE_VERSION - 1;
+const INCOMPATIBLE_CORE_STATE_BYTES = CORE_STATE_BYTES - 8;
+const INCOMPATIBLE_CORE_STATE_MAGIC = (() => {
+  const magic = CORE_STATE_MAGIC.slice();
+  const versionDigitOffset = magic.length - 1;
+  const asciiZero = 48;
+  if (magic[versionDigitOffset] !== asciiZero + CORE_VERSION) {
+    throw new Error('generated Core magic no longer ends with its one-digit schema version');
+  }
+  magic[versionDigitOffset] = asciiZero + INCOMPATIBLE_CORE_STATE_VERSION;
+  return magic;
+})();
+const INCOMPATIBLE_CORE_STATE_MAGIC_TEXT = new TextDecoder().decode(INCOMPATIBLE_CORE_STATE_MAGIC);
 
 export type MarketProvenanceV1 =
   | Readonly<{ kind: 'chain'; observedSlot: string }>
@@ -204,9 +223,22 @@ export type MarketDiscoveryCardV1 =
     refusal: string;
   }>;
 
+export type IncompatibleMarketAccountV1 = Readonly<{
+  address: string;
+  magic: string;
+  accountBytes: number;
+}>;
+
 export type MarketEnumerationV1 =
   | Readonly<{ mode: 'address-list'; note: string; addresses: ReadonlyArray<string> }>
-  | Readonly<{ mode: 'program-scan'; note: string; scanSlot: string; addresses: ReadonlyArray<string>; scannedAccounts: number }>
+  | Readonly<{
+    mode: 'program-scan';
+    note: string;
+    scanSlot: string;
+    addresses: ReadonlyArray<string>;
+    scannedAccounts: number;
+    incompatibleMarketAccounts: ReadonlyArray<IncompatibleMarketAccountV1>;
+  }>
   | Readonly<{ mode: 'refused'; note: string; reason: string; addresses: ReadonlyArray<string> }>;
 
 export type MarketDiscoveryV1 = Readonly<{
@@ -267,6 +299,14 @@ export function isCoreMarketHeaderV2(data: Uint8Array): boolean {
   return CORE_STATE_MAGIC.every((byte, index) => data[index] === byte);
 }
 
+/** Recognize the exact 352-byte devnet Market generation the current reader cannot decode. */
+export function isIncompatibleCoreMarketAccountV1(account: Pick<RpcAccount, 'data' | 'space'>): boolean {
+  if (account.space !== INCOMPATIBLE_CORE_STATE_BYTES || account.data.length < 10) return false;
+  if (!INCOMPATIBLE_CORE_STATE_MAGIC.every((byte, index) => account.data[index] === byte)) return false;
+  return new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength).getUint16(8, true)
+    === INCOMPATIBLE_CORE_STATE_VERSION;
+}
+
 type EnumerationClient = Pick<SolanaRpcClient, 'programHeaders'>;
 
 /**
@@ -284,14 +324,26 @@ export async function enumerateCoreMarketAddressesV1(client: EnumerationClient, 
       .filter((entry) => isCoreMarketHeaderV2(entry.account.data))
       .map((entry) => entry.address)
       .sort((left, right) => left.localeCompare(right));
+    const incompatibleMarketAccounts = scan.accounts
+      .filter((entry) => isIncompatibleCoreMarketAccountV1(entry.account))
+      .map((entry) => Object.freeze({
+        address: entry.address,
+        magic: INCOMPATIBLE_CORE_STATE_MAGIC_TEXT,
+        accountBytes: INCOMPATIBLE_CORE_STATE_BYTES,
+      }))
+      .sort((left, right) => left.address.localeCompare(right.address));
     const bounded = addresses.slice(0, MARKET_DISCOVERY_MAX_ADDRESSES);
     const dropped = addresses.length - bounded.length;
+    const incompatibleNote = incompatibleMarketAccounts.length === 0
+      ? ''
+      : ` The same scan found ${incompatibleMarketAccounts.length} historical ${INCOMPATIBLE_CORE_STATE_MAGIC_TEXT} Market account${incompatibleMarketAccounts.length === 1 ? '' : 's'}; ${incompatibleMarketAccounts.length === 1 ? 'it uses' : 'they use'} the incompatible ${INCOMPATIBLE_CORE_STATE_BYTES}-byte layout and ${incompatibleMarketAccounts.length === 1 ? 'is' : 'are'} not listed as current.`;
     return Object.freeze({
       mode: 'program-scan',
       scanSlot: scan.slot,
       addresses: Object.freeze(bounded),
       scannedAccounts: scan.accounts.length,
-      note: `getProgramAccounts returned ${scan.accounts.length} finalized Core accounts at slot ${scan.slot}; ${addresses.length} carry the ${CORE_STATE_MAGIC_TEXT} Market header${dropped > 0 ? `, of which ${dropped} exceed the ${MARKET_DISCOVERY_MAX_ADDRESSES}-Market listing bound and were not read` : ''}.`,
+      incompatibleMarketAccounts: Object.freeze(incompatibleMarketAccounts),
+      note: `getProgramAccounts returned ${scan.accounts.length} finalized Core accounts at slot ${scan.slot}; ${addresses.length} carry the current ${CORE_STATE_MAGIC_TEXT} Market header${dropped > 0 ? `, of which ${dropped} exceed the ${MARKET_DISCOVERY_MAX_ADDRESSES}-Market listing bound and were not read` : ''}.${incompatibleNote}`,
     });
   } catch (error) {
     return Object.freeze({
@@ -594,6 +646,9 @@ export async function inspectMarketDiscoveryV1(
   });
   const floor = await client.finalizedSlot();
   if (addresses.length === 0) {
+    const incompatibleCount = enumeration.mode === 'program-scan'
+      ? enumeration.incompatibleMarketAccounts.length
+      : 0;
     return Object.freeze({
       coreProgramId,
       registryProgramId,
@@ -602,7 +657,9 @@ export async function inspectMarketDiscoveryV1(
       floorSlot: floor,
       enumeration,
       cards: Object.freeze([]),
-      reason: 'No Market address has been supplied or enumerated at this finalized floor.',
+      reason: incompatibleCount === 0
+        ? 'No current compatible Market address has been supplied or enumerated at this finalized floor.'
+        : `No current compatible Market is listed at this finalized floor. The scan also found ${incompatibleCount} historical ${INCOMPATIBLE_CORE_STATE_MAGIC_TEXT} account${incompatibleCount === 1 ? '' : 's'} that the current reader cannot decode.`,
     });
   }
 
