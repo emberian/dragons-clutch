@@ -80,6 +80,56 @@ spec contains semantic market inputs—not account addresses or caller-authored
 digests. The Rust compiler and chain-derived operators own every record digest,
 PDA, instruction frame, and next publication action.
 
+## First devnet Direct market: read-only planning authority
+
+Before you hand a market document to the external campaign, the Direct planner
+derives its capability records from authenticated facts. You give it the exact
+checked deployment plan, a devnet RPC URL, the full devnet-genesis
+acknowledgement, and both fee facts:
+
+```text
+--plan ABSOLUTE_JSON
+--rpc-url URL
+--i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
+--direct-fee-basis-points U16
+--direct-fee-recipient PUBKEY
+```
+
+You must supply both the fee rate and recipient. The planner deliberately has
+no default, including no implied zero-fee choice, because those are operator
+policy rather than facts the compiler may invent. It validates an explicit
+zero basis-point value normally and still requires a nonzero recipient.
+
+The planner is devnet-only, key-free, and read-only. It refuses loopback,
+authenticates the endpoint's genesis hash, and uses one finalized
+`getMultipleAccounts` observation at or above the newest checked deployment
+floor. That one observation contains the Rent sysvar and the Program and
+ProgramData accounts for all seven roles. The planner rechecks every Loader
+link, deployment slot, upgrade authority, complete ProgramData digest, live ELF
+digest, checked candidate prefix, and zero padding before it derives a market.
+It does not contain a sign, send, or deploy path.
+
+The authenticated `Market` owns the collateral decimals, so it also owns the
+Direct price scale (`10^decimals`). The observed Rent sysvar owns the complete
+rent minimum for the exact 256-byte Direct root. The finalized observation slot
+owns the activation deadline: exactly 216,000 slots later, with checked
+arithmetic. That is a provisional devnet smoke window, approximately 24 hours
+at Solana's target slot time; it is an exact slot policy, not a wall-clock
+promise and not a caller scalar. The capability manifest quotes the complete
+root rent. Any lamports already on a vacant root are classified by root
+activation rather than hidden as one-lamport "dust" in the quote.
+
+Treat every saved plan as untrusted input. The parser bounds its byte length
+and refuses duplicate keys at any depth, trailing JSON values, unknown fields,
+defaulted projections, or noncanonical fields. It then reauthenticates the
+checked deployment-set journal and the exact activation projection before the
+first RPC read.
+
+`devnet-market` and `graduation-market` accept exactly this surface and have no
+second scalar-or-file authority path. `demo-market` is a retired local-only
+fixture: it always refuses because a local fixture cannot authenticate the
+permanent devnet Direct deployment, and it will not invent those facts.
+
 ## `--keypair-seed`: deterministic keys, loopback only
 
 `run` takes an optional `--keypair-seed <64 lowercase hex>`. Default is absent,

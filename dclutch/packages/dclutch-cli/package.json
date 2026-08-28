@@ -2,7 +2,7 @@
   "name": "@dclutch/cli",
   "version": "0.1.0",
   "private": true,
-  "description": "dclutch: the dClutch trader loop from a terminal - markets, buy/sell, redeem, portfolio, found, and the funded failure walk - built on @dclutch/sdk, which it exists to prove.",
+  "description": "dclutch: a fail-closed dClutch terminal client for market inspection, off-chain Direct intents, redemption, portfolio, founding, and the funded failure walk.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "engines": {

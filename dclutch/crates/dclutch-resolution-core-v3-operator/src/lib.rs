@@ -12,6 +12,8 @@
 pub mod pre_market_funding_v1;
 /// Shared finalized Product-graph authentication used by successor operators.
 pub mod product_graph_observation_v3;
+/// Exact stage-specific projections for finalized provider transactions.
+pub mod provider_finalized_projection_v3;
 
 use dclutch_capability_contract::{
     CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,

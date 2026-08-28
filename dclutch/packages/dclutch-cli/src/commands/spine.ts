@@ -5,8 +5,9 @@
  * The spine derivation reads everything from the market alone: the manifest
  * entry, the immutable program set, price scale and fee, the root prestate,
  * and (given `--keypair` or an owner argument) the caller's own trading
- * prestate. Each missing precondition is a named wall, not a generic error —
- * run this before `buy` and you know what the chain will say.
+ * prestate. Each missing precondition is a named wall, not a generic error.
+ * This is read-only inspection; it does not enable the disabled public
+ * `buy`/`sell` mutation commands.
  */
 import { inspectDirectTradeSpineV1 } from '@dclutch/sdk/directTradeSpine';
 
