@@ -1,5 +1,6 @@
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import LandingPulse from '@/components/charts/LandingPulse';
 
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 
@@ -41,6 +42,13 @@ export default function SiteLanding() {
         chain you point it at, and with nothing deployed it will refuse, with
         reasons.</p>
       </aside>
+    </section>
+
+    <section className="trade-v3-card">
+      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three counts, read finalized off the active deployment — never estimated, never cached from an earlier visit. A dash is an unread value, never a zero; a read zero is shown as the zero it is.</p></div></header>
+      {/* FE-CHART mount: LandingPulse reads the counts from the active
+          deployment and feeds the presentational NumberStrip. */}
+      <LandingPulse />
     </section>
 
     <section className="trade-v3-card">
