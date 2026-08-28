@@ -10,14 +10,15 @@
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_capability_contract::ContentId;
 use dclutch_claims_svm::{
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
     product_basis_terminal_v3::ProductClaimsTerminalAdmissionV3,
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_custody_contract::{
-    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1,
-    CustodyReplaySeedsV1, CustodyVaultSeedsV1,
+    CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1,
+    CustodyReplaySeedsV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
 };
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
@@ -42,7 +43,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_activation_auth_v1::{
     activation_cache_address_v1, authenticate_activated_role_v1,
 };
-use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3, COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
     COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, RecordAdmissionV3,
@@ -1603,6 +1604,59 @@ pub(crate) mod tests {
             transfer_index: 0,
         })
         .expect("request");
+        let request_digest = hash(&request.to_bytes()).to_bytes();
+        let custody_request = CustodyRequestV1 {
+            operation: OperationV1::Transfer,
+            caller_role: CustodyCallerRoleV1::Claims,
+            source_compartment: CompartmentV1::HoardPrincipal,
+            destination_compartment: CompartmentV1::External,
+            release_set: [31; 32],
+            market: route.market.to_bytes(),
+            realm: [32; 32],
+            context: [44; 32],
+            caller_program: route.claims_program.to_bytes(),
+            semantic: ContextV1 {
+                candidate: [45; 32],
+                source_owner: [0; 32],
+                destination_owner: [91; 32],
+                order: [0; 32],
+                parent_request_digest: request_digest,
+                order_nonce: 4,
+                generation: 2,
+                page_index: 0,
+                execution_index: 0,
+                transfer_index: 0,
+            },
+            source: route.hoard.to_bytes(),
+            destination: route.recipient.to_bytes(),
+            source_vault_context: [44; 32],
+            destination_vault_context: [0; 32],
+            mint: route.collateral_mint.to_bytes(),
+            token_program: route.token_program.to_bytes(),
+            payer: [0; 32],
+            rent_refund: [0; 32],
+            expected_revision: 5,
+            resulting_revision: 6,
+            amount: 11,
+            rent_lamports: 0,
+        };
+        let custody_request_digest = hash(
+            &custody_request
+                .to_bytes()
+                .expect("canonical Custody request bytes"),
+        )
+        .to_bytes();
+        let custody_caller_seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new([31; 32]).expect("release-set identity"),
+            route.market.to_bytes(),
+            ExecutionRoleV1::Claims,
+            [44; 32],
+            custody_request_digest,
+        )
+        .expect("Custody caller seeds");
+        let custody_caller =
+            Pubkey::find_program_address(&custody_caller_seeds.as_slices(), &route.claims_program)
+                .0;
         let mut accounts = vec![AccountMeta::new_readonly(owner, true)];
         accounts.extend((40_u8..75).map(|byte| {
             let key = Pubkey::new_from_array([byte; 32]);
@@ -1624,13 +1678,14 @@ pub(crate) mod tests {
                 finality: Finality::Finalized,
             },
             request,
-            request_digest: [40; 32],
+            request_digest,
             signed_packet: vec![1, 2, 3, 4, 5],
             signed_packet_digest: [41; 32],
             signed_table_digest: [42; 32],
             payout: 11,
-            custody_caller: Pubkey::new_from_array([76; 32]),
-            custody_request_digest: [43; 32],
+            custody_caller,
+            custody_request_digest,
+            custody_request: Some(custody_request),
             owner,
             route,
             pre_aggregate_bytes: vec![1],
@@ -1678,6 +1733,22 @@ pub(crate) mod tests {
     #[test]
     fn manifest_json_has_one_stable_golden_vector() {
         let report = payout_report();
+        assert_eq!(
+            report.request_digest,
+            hash(&report.request.to_bytes()).to_bytes()
+        );
+        let custody_request = report
+            .custody_request
+            .expect("positive payout carries its exact Custody request");
+        assert_eq!(
+            report.custody_request_digest,
+            hash(
+                &custody_request
+                    .to_bytes()
+                    .expect("canonical Custody request bytes")
+            )
+            .to_bytes()
+        );
         let value = input();
         let selected = SelectedInputV1::parse(&value, LookupTableRequirementV1::Present)
             .expect("selected input");

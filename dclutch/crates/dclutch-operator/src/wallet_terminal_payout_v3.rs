@@ -31,8 +31,9 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_POSTSTATE_DOMAIN_V1,
-    CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+    CallerRoleV1 as CustodyCallerRoleV1, CompartmentV1, ContextV1, CustodyReceiptV1,
+    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1, OperationV1,
+    ReceiptEvidenceV1,
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::ProductBasisV3;
 use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
@@ -196,6 +197,8 @@ pub struct WalletTerminalPayoutReportV3 {
     pub custody_caller: Pubkey,
     /// Exact positive-payout Custody request digest, zero for a zero payout.
     pub custody_request_digest: [u8; 32],
+    /// Exact positive-payout Custody request, absent for a zero payout.
+    pub custody_request: Option<CustodyRequestV1>,
     /// Sole wallet signer required by the instruction.
     pub owner: Pubkey,
     /// Exact physical route used to derive the instruction and postcondition.
@@ -350,7 +353,7 @@ pub fn build_wallet_terminal_payout_v3(
         deltas,
     ])
     .to_bytes();
-    let (custody_caller, custody_request_digest) = custody_caller(
+    let (custody_caller, custody_request_digest, custody_request) = custody_caller(
         route,
         market,
         request,
@@ -377,6 +380,7 @@ pub fn build_wallet_terminal_payout_v3(
         payout,
         custody_caller,
         custody_request_digest,
+        custody_request,
         owner: Pubkey::new_from_array(input.owner),
         route,
         pre_aggregate_bytes: input.aggregate_bytes.to_vec(),
@@ -474,13 +478,34 @@ pub struct WalletTerminalPayoutPoststateV3<'a> {
     pub recipient_token_bytes: &'a [u8],
 }
 
-/// Verify the exact economic and committed poststate of one accepted payout.
-pub fn verify_wallet_terminal_payout_postcondition_v3(
+/// Exact owned poststate projected before a wallet payout is signed.
+///
+/// This is the sole host-side owner of the Claims, Custody replay, token, and
+/// nested Custody/Claims receipt arithmetic. Exterior executors persist these
+/// bytes as durable intent; the verifier below then compares accepted chain
+/// bytes against the same projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WalletTerminalPayoutExpectedPoststateV3 {
+    /// Exact Claims return-data receipt bytes.
+    pub receipt_bytes: Vec<u8>,
+    /// Exact Claims aggregate bytes after the burn.
+    pub aggregate_bytes: Vec<u8>,
+    /// Exact wallet Position bytes after the burn.
+    pub position_bytes: Vec<u8>,
+    /// Exact Claims-role Custody replay bytes after the payout.
+    pub custody_replay_bytes: Vec<u8>,
+    /// Exact Hoard token-account bytes after the payout.
+    pub hoard_token_bytes: Vec<u8>,
+    /// Exact recipient token-account bytes after the payout.
+    pub recipient_token_bytes: Vec<u8>,
+}
+
+/// Project the exact poststate and nested receipts of one checked payout.
+pub fn project_wallet_terminal_payout_postcondition_v3(
     report: &WalletTerminalPayoutReportV3,
-    post: WalletTerminalPayoutPoststateV3<'_>,
-) -> Result<(), WalletTerminalPayoutErrorV3> {
+) -> Result<WalletTerminalPayoutExpectedPoststateV3, WalletTerminalPayoutErrorV3> {
     let request = report.request.input();
-    let expected_aggregate = debited_claim_bytes(
+    let aggregate_bytes = debited_claim_bytes(
         &report.pre_aggregate_bytes,
         LiabilityBasisMarketLayoutV2::REVISION,
         LiabilityBasisMarketLayoutV2::SUPPLIES,
@@ -488,7 +513,7 @@ pub fn verify_wallet_terminal_payout_postcondition_v3(
         request.claim_index,
         request.quantity,
     )?;
-    let expected_position = debited_claim_bytes(
+    let position_bytes = debited_claim_bytes(
         &report.pre_position_bytes,
         LiabilityBasisPositionLayoutV2::REVISION,
         LiabilityBasisPositionLayoutV2::BALANCES,
@@ -496,58 +521,36 @@ pub fn verify_wallet_terminal_payout_postcondition_v3(
         request.claim_index,
         request.quantity,
     )?;
-    if post.aggregate_bytes != expected_aggregate || post.position_bytes != expected_position {
-        return Err(WalletTerminalPayoutErrorV3::Postcondition);
-    }
-    LiabilityBasisMarketViewV2::decode(post.aggregate_bytes)
+    LiabilityBasisMarketViewV2::decode(&aggregate_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    LiabilityBasisPositionViewV2::decode(post.position_bytes)
+    LiabilityBasisPositionViewV2::decode(&position_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
 
     let before_replay = CustodyReplayV1::decode(&report.pre_custody_replay_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let after_replay = CustodyReplayV1::decode(post.custody_replay_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let expected_replay_revision = before_replay
+    let post_custody_revision = before_replay
         .next_revision
         .checked_add(u64::from(report.payout != 0))
         .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
-    if after_replay.next_revision != expected_replay_revision {
-        return Err(WalletTerminalPayoutErrorV3::Postcondition);
-    }
-
     let before_hoard = TokenAccount::parse(&report.pre_hoard_token_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let after_hoard = TokenAccount::parse(post.hoard_token_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
     let before_recipient = TokenAccount::parse(&report.pre_recipient_token_bytes)
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let after_recipient = TokenAccount::parse(post.recipient_token_bytes)
-        .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let expected_hoard_bytes = token_amount_bytes(
-        &report.pre_hoard_token_bytes,
-        before_hoard
-            .amount
-            .checked_sub(report.payout)
-            .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?,
-    )?;
-    let expected_recipient_bytes = token_amount_bytes(
-        &report.pre_recipient_token_bytes,
-        before_recipient
-            .amount
-            .checked_add(report.payout)
-            .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?,
-    )?;
-    if after_hoard.mint != before_hoard.mint
-        || after_hoard.owner != before_hoard.owner
-        || after_recipient.mint != before_recipient.mint
-        || after_recipient.owner != before_recipient.owner
-        || post.hoard_token_bytes != expected_hoard_bytes
-        || post.recipient_token_bytes != expected_recipient_bytes
-    {
-        return Err(WalletTerminalPayoutErrorV3::Postcondition);
-    }
-    let expected_replay_bytes = if report.payout == 0 {
+    let after_hoard_amount = before_hoard
+        .amount
+        .checked_sub(report.payout)
+        .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
+    let after_recipient_amount = before_recipient
+        .amount
+        .checked_add(report.payout)
+        .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
+    let hoard_token_bytes = token_amount_bytes(&report.pre_hoard_token_bytes, after_hoard_amount)?;
+    let recipient_token_bytes =
+        token_amount_bytes(&report.pre_recipient_token_bytes, after_recipient_amount)?;
+    let custody_replay_bytes = if report.payout == 0 {
+        if report.custody_request.is_some() || report.custody_request_digest != [0; 32] {
+            return Err(WalletTerminalPayoutErrorV3::Postcondition);
+        }
         report.pre_custody_replay_bytes.clone()
     } else {
         let poststate_commitment = hashv(&[
@@ -556,14 +559,14 @@ pub fn verify_wallet_terminal_payout_postcondition_v3(
             &report.route.hoard.to_bytes(),
             &report.route.recipient.to_bytes(),
             &before_hoard.amount.to_le_bytes(),
-            &after_hoard.amount.to_le_bytes(),
+            &after_hoard_amount.to_le_bytes(),
             &before_recipient.amount.to_le_bytes(),
-            &after_recipient.amount.to_le_bytes(),
+            &after_recipient_amount.to_le_bytes(),
             &0_u64.to_le_bytes(),
         ])
         .to_bytes();
         CustodyReplayV1 {
-            next_revision: expected_replay_revision,
+            next_revision: post_custody_revision,
             last_request_digest: report.custody_request_digest,
             last_poststate_commitment: poststate_commitment,
             ..before_replay
@@ -572,24 +575,47 @@ pub fn verify_wallet_terminal_payout_postcondition_v3(
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?
         .to_vec()
     };
-    if post.custody_replay_bytes != expected_replay_bytes {
-        return Err(WalletTerminalPayoutErrorV3::Postcondition);
-    }
 
-    let receipt = TerminalSettlementReceiptV3::decode(post.receipt_bytes)
+    let custody_receipt_digest = if report.payout == 0 {
+        [0; 32]
+    } else {
+        let request = report
+            .custody_request
+            .ok_or(WalletTerminalPayoutErrorV3::Postcondition)?;
+        let replay_state_digest = hash(&custody_replay_bytes).to_bytes();
+        let replay = CustodyReplayV1::decode(&custody_replay_bytes)
+            .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
+        let receipt = CustodyReceiptV1::new(
+            request,
+            report.custody_request_digest,
+            ReceiptEvidenceV1 {
+                source_before: before_hoard.amount,
+                source_after: after_hoard_amount,
+                destination_before: before_recipient.amount,
+                destination_after: after_recipient_amount,
+                poststate_commitment: replay.last_poststate_commitment,
+                replay_state_digest,
+            },
+        )
         .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?;
-    let evidence = receipt.evidence();
+        hash(
+            &receipt
+                .to_bytes()
+                .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?,
+        )
+        .to_bytes()
+    };
     let signed_post_resource_digest = hashv(&[
         SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3,
-        post.aggregate_bytes,
-        post.position_bytes,
+        &aggregate_bytes,
+        &position_bytes,
     ])
     .to_bytes();
-    let custody_replay_digest = hashv(&[post.custody_replay_bytes]).to_bytes();
+    let custody_replay_digest = hashv(&[&custody_replay_bytes]).to_bytes();
     let custody_token_poststate_digest = hashv(&[
         TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
-        post.hoard_token_bytes,
-        post.recipient_token_bytes,
+        &hoard_token_bytes,
+        &recipient_token_bytes,
     ])
     .to_bytes();
     let post_resource_digest = hashv(&[
@@ -598,33 +624,61 @@ pub fn verify_wallet_terminal_payout_postcondition_v3(
         &signed_post_resource_digest,
         &custody_replay_digest,
         &custody_token_poststate_digest,
-        &evidence.custody_receipt_digest,
+        &custody_receipt_digest,
     ])
     .to_bytes();
-    let expected_market_revision = request
-        .expected_market_revision
-        .checked_add(1)
-        .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
-    let expected_position_revision = request
-        .expected_position_revision
-        .checked_add(1)
-        .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?;
-    if receipt.request() != report.request
-        || evidence.request_digest != report.request_digest
-        || evidence.signed_packet_digest != report.signed_packet_digest
-        || evidence.signed_table_digest != report.signed_table_digest
-        || evidence.signed_post_resource_digest != signed_post_resource_digest
-        || evidence.custody_request_digest != report.custody_request_digest
-        || evidence.custody_replay_digest != custody_replay_digest
-        || evidence.custody_token_poststate_digest != custody_token_poststate_digest
-        || evidence.post_resource_digest != post_resource_digest
-        || evidence.payout != report.payout
-        || evidence.pre_market_revision != request.expected_market_revision
-        || evidence.post_market_revision != expected_market_revision
-        || evidence.pre_position_revision != request.expected_position_revision
-        || evidence.post_position_revision != expected_position_revision
-        || evidence.pre_custody_revision != request.expected_custody_revision
-        || evidence.post_custody_revision != expected_replay_revision
+    let receipt_bytes = TerminalSettlementReceiptV3::new(
+        report.request,
+        dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementReceiptInputV3 {
+            request_digest: report.request_digest,
+            signed_packet_digest: report.signed_packet_digest,
+            signed_table_digest: report.signed_table_digest,
+            signed_post_resource_digest,
+            custody_request_digest: report.custody_request_digest,
+            custody_receipt_digest,
+            custody_replay_digest,
+            custody_token_poststate_digest,
+            post_resource_digest,
+            payout: report.payout,
+            pre_market_revision: request.expected_market_revision,
+            post_market_revision: request
+                .expected_market_revision
+                .checked_add(1)
+                .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?,
+            pre_position_revision: request.expected_position_revision,
+            post_position_revision: request
+                .expected_position_revision
+                .checked_add(1)
+                .ok_or(WalletTerminalPayoutErrorV3::Arithmetic)?,
+            pre_custody_revision: request.expected_custody_revision,
+            post_custody_revision,
+        },
+    )
+    .map_err(|_| WalletTerminalPayoutErrorV3::Postcondition)?
+    .to_bytes()
+    .to_vec();
+    Ok(WalletTerminalPayoutExpectedPoststateV3 {
+        receipt_bytes,
+        aggregate_bytes,
+        position_bytes,
+        custody_replay_bytes,
+        hoard_token_bytes,
+        recipient_token_bytes,
+    })
+}
+
+/// Verify the exact economic and committed poststate of one accepted payout.
+pub fn verify_wallet_terminal_payout_postcondition_v3(
+    report: &WalletTerminalPayoutReportV3,
+    post: WalletTerminalPayoutPoststateV3<'_>,
+) -> Result<(), WalletTerminalPayoutErrorV3> {
+    let expected = project_wallet_terminal_payout_postcondition_v3(report)?;
+    if post.receipt_bytes != expected.receipt_bytes
+        || post.aggregate_bytes != expected.aggregate_bytes
+        || post.position_bytes != expected.position_bytes
+        || post.custody_replay_bytes != expected.custody_replay_bytes
+        || post.hoard_token_bytes != expected.hoard_token_bytes
+        || post.recipient_token_bytes != expected.recipient_token_bytes
     {
         return Err(WalletTerminalPayoutErrorV3::Postcondition);
     }
@@ -795,9 +849,9 @@ fn custody_caller(
     request_digest: [u8; 32],
     packet_digest: [u8; 32],
     payout: u64,
-) -> Result<(Pubkey, [u8; 32]), WalletTerminalPayoutErrorV3> {
+) -> Result<(Pubkey, [u8; 32], Option<CustodyRequestV1>), WalletTerminalPayoutErrorV3> {
     if payout == 0 {
-        return Ok((route.claims_program, [0; 32]));
+        return Ok((route.claims_program, [0; 32], None));
     }
     let input = request.input();
     let candidate_digest = hashv(&[
@@ -863,6 +917,7 @@ fn custody_caller(
     Ok((
         Pubkey::find_program_address(&seeds.as_slices(), &route.claims_program).0,
         custody_request_digest,
+        Some(custody),
     ))
 }
 
@@ -994,9 +1049,7 @@ mod tests {
             encode_liability_basis_market_into_v2, encode_liability_basis_position_into_v2,
             liability_basis_vector_width_v2,
         },
-        terminal_settlement_v3::{
-            TERMINAL_SETTLEMENT_REQUEST_BYTES_V3, TerminalSettlementReceiptInputV3,
-        },
+        terminal_settlement_v3::TERMINAL_SETTLEMENT_REQUEST_BYTES_V3,
     };
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BasisInputV3, BasisKindV3, basis_record_bytes_v3, compile_basis_v3,
@@ -1351,118 +1404,16 @@ mod tests {
     fn accepted_poststate(
         report: &WalletTerminalPayoutReportV3,
     ) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
-        let request = report.request.input();
-        let aggregate = debited_claim_bytes(
-            &report.pre_aggregate_bytes,
-            LiabilityBasisMarketLayoutV2::REVISION,
-            LiabilityBasisMarketLayoutV2::SUPPLIES,
-            LiabilityBasisMarketLayoutV2::SUPPLY_STRIDE,
-            request.claim_index,
-            request.quantity,
+        let expected = project_wallet_terminal_payout_postcondition_v3(report)
+            .expect("accepted wallet payout poststate");
+        (
+            expected.receipt_bytes,
+            expected.aggregate_bytes,
+            expected.position_bytes,
+            expected.custody_replay_bytes,
+            expected.hoard_token_bytes,
+            expected.recipient_token_bytes,
         )
-        .expect("aggregate poststate");
-        let position = debited_claim_bytes(
-            &report.pre_position_bytes,
-            LiabilityBasisPositionLayoutV2::REVISION,
-            LiabilityBasisPositionLayoutV2::BALANCES,
-            LiabilityBasisPositionLayoutV2::BALANCE_STRIDE,
-            request.claim_index,
-            request.quantity,
-        )
-        .expect("Position poststate");
-        let before_hoard = TokenAccount::parse(&report.pre_hoard_token_bytes).expect("Hoard");
-        let before_recipient =
-            TokenAccount::parse(&report.pre_recipient_token_bytes).expect("recipient");
-        let hoard = token_amount_bytes(
-            &report.pre_hoard_token_bytes,
-            before_hoard.amount - report.payout,
-        )
-        .expect("Hoard poststate");
-        let recipient = token_amount_bytes(
-            &report.pre_recipient_token_bytes,
-            before_recipient.amount + report.payout,
-        )
-        .expect("recipient poststate");
-        let before_replay =
-            CustodyReplayV1::decode(&report.pre_custody_replay_bytes).expect("replay");
-        let replay = if report.payout == 0 {
-            report.pre_custody_replay_bytes.clone()
-        } else {
-            let poststate_commitment = hashv(&[
-                CUSTODY_POSTSTATE_DOMAIN_V1,
-                &report.custody_request_digest,
-                &report.route.hoard.to_bytes(),
-                &report.route.recipient.to_bytes(),
-                &before_hoard.amount.to_le_bytes(),
-                &(before_hoard.amount - report.payout).to_le_bytes(),
-                &before_recipient.amount.to_le_bytes(),
-                &(before_recipient.amount + report.payout).to_le_bytes(),
-                &0_u64.to_le_bytes(),
-            ])
-            .to_bytes();
-            CustodyReplayV1 {
-                next_revision: before_replay.next_revision + 1,
-                last_request_digest: report.custody_request_digest,
-                last_poststate_commitment: poststate_commitment,
-                ..before_replay
-            }
-            .to_bytes()
-            .expect("replay poststate")
-            .to_vec()
-        };
-        let signed_post_resource_digest = hashv(&[
-            SIGNED_DELTA_POST_RESOURCE_DIGEST_DOMAIN_V3,
-            &aggregate,
-            &position,
-        ])
-        .to_bytes();
-        let replay_digest = hashv(&[&replay]).to_bytes();
-        let token_digest = hashv(&[
-            TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
-            &hoard,
-            &recipient,
-        ])
-        .to_bytes();
-        let custody_receipt_digest = if report.payout == 0 {
-            [0; 32]
-        } else {
-            [30; 32]
-        };
-        let post_resource_digest = hashv(&[
-            TERMINAL_SETTLEMENT_POST_RESOURCE_DOMAIN_V3,
-            &report.request_digest,
-            &signed_post_resource_digest,
-            &replay_digest,
-            &token_digest,
-            &custody_receipt_digest,
-        ])
-        .to_bytes();
-        let receipt = TerminalSettlementReceiptV3::new(
-            report.request,
-            TerminalSettlementReceiptInputV3 {
-                request_digest: report.request_digest,
-                signed_packet_digest: report.signed_packet_digest,
-                signed_table_digest: report.signed_table_digest,
-                signed_post_resource_digest,
-                custody_request_digest: report.custody_request_digest,
-                custody_receipt_digest,
-                custody_replay_digest: replay_digest,
-                custody_token_poststate_digest: token_digest,
-                post_resource_digest,
-                payout: report.payout,
-                pre_market_revision: request.expected_market_revision,
-                post_market_revision: request.expected_market_revision + 1,
-                pre_position_revision: request.expected_position_revision,
-                post_position_revision: request.expected_position_revision + 1,
-                pre_custody_revision: request.expected_custody_revision,
-                post_custody_revision: request.expected_custody_revision
-                    + u64::from(report.payout != 0),
-            },
-        )
-        .expect("Claims receipt")
-        .to_bytes()
-        .to_vec();
-        (receipt, aggregate, position, replay, hoard, recipient)
     }
 
     #[test]
