@@ -11004,6 +11004,44 @@ mod tests {
         fs::write(&registry_program_path, &original_registry_program)
             .expect("restore Registry Program account JSON");
 
+        let original_registry_account = crate::plan::authenticate_cli_account_file_v1(
+            &registry_program_path,
+            registry_program_pin,
+        )
+        .expect("authenticate original Registry Program account JSON");
+        let mut surplus_plan = plan.clone();
+        let surplus_pin = surplus_plan
+            .genesis_accounts
+            .get_mut("loader.registry.program")
+            .expect("surplus Registry Program account pin");
+        let surplus_lamports = surplus_pin
+            .lamports
+            .checked_add(1)
+            .expect("one surplus lamport");
+        let mut surplus_value: serde_json::Value =
+            serde_json::from_slice(&original_registry_program).expect("account JSON value");
+        surplus_value["account"]["lamports"] = serde_json::json!(surplus_lamports);
+        let mut surplus_bytes =
+            serde_json::to_vec_pretty(&surplus_value).expect("surplus account JSON");
+        surplus_bytes.push(b'\n');
+        surplus_pin.lamports = surplus_lamports;
+        surplus_pin.account_sha256 = crate::plan::account_sha256_v1(
+            original_registry_account.owner,
+            surplus_lamports,
+            original_registry_account.executable,
+            original_registry_account.rent_epoch,
+            &original_registry_account.data,
+        )
+        .expect("surplus account digest");
+        surplus_pin.json_file_sha256 = digest(&surplus_bytes);
+        fs::write(&registry_program_path, surplus_bytes)
+            .expect("write coherent surplus Registry Program account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&surplus_plan)
+            .expect_err("coherent rent surplus must refuse");
+        assert!(error.to_string().contains("Loader pair"), "{error}");
+        fs::write(&registry_program_path, &original_registry_program)
+            .expect("restore exact-rent Registry Program account JSON");
+
         let extra_path = PathBuf::from(&plan.account_dir).join("extra.json");
         fs::write(&extra_path, b"{}\n").expect("write extra account JSON");
         let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)

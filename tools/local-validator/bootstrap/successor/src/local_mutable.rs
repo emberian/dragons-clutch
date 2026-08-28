@@ -325,14 +325,14 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             || program.owner != bpf_loader_upgradeable::ID
             || !program.executable
             || program.rent_epoch != 0
-            || program.lamports < Rent::default().minimum_balance(program.data.len())
+            || program.lamports != Rent::default().minimum_balance(program.data.len())
             || program_view.programdata() != programdata_key.to_bytes()
             || programdata.pubkey != programdata_key
             || programdata_pin.address != role.programdata_id
             || programdata.owner != bpf_loader_upgradeable::ID
             || programdata.executable
             || programdata.rent_epoch != 0
-            || programdata.lamports < Rent::default().minimum_balance(programdata.data.len())
+            || programdata.lamports != Rent::default().minimum_balance(programdata.data.len())
             || programdata_view.deployment_slot() != role.deployment_slot
             || programdata_view.upgrade_authority() != Some(authority.to_bytes())
             || hex(&Sha256::digest(programdata_view.elf())) != role.live_elf_sha256
@@ -534,6 +534,14 @@ pub(crate) fn prepare_local_mutable_v1(
         .map_err(|_| Error::new("--seed must be exactly 64 lowercase hex characters"))?;
 
     fs::create_dir(&work)?;
+    let work = fs::canonicalize(&work)?;
+    let output_name = output
+        .file_name()
+        .ok_or_else(|| Error::new("--output omitted its filename"))?;
+    let output_parent = output
+        .parent()
+        .ok_or_else(|| Error::new("--output omitted its parent"))?;
+    let output = fs::canonicalize(output_parent)?.join(output_name);
     let key_dir = work.join("keys");
     let programdata_dir = work.join("programdata");
     fs::create_dir(&key_dir)?;

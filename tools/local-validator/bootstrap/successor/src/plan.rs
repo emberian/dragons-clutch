@@ -425,7 +425,7 @@ pub(crate) fn authenticate_cli_account_file_v1(
     })
 }
 
-fn account_sha256_v1(
+pub(crate) fn account_sha256_v1(
     owner: Pubkey,
     lamports: u64,
     executable: bool,
