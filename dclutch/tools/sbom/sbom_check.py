@@ -15,12 +15,12 @@ theoretical).
 
 This tool is the same method, generalized to this repository's shape:
 
-  - every tracked ``Cargo.lock`` (there is no single workspace: 47 of them,
-    the root workspace plus 46 independent test-program/tool mini-workspaces)
-    resolved with ``cargo metadata --locked --offline``, and
-  - every tracked ``package.json`` with its ``package-lock.json`` (today:
-    ``apps/dclutch-web``; the discovery is automatic so a future tool's
-    ``package.json`` is picked up without editing this script).
+  - every tracked ``Cargo.toml`` that declares ``[workspace]``, paired with
+    that workspace root's committed ``Cargo.lock`` and resolved with
+    ``cargo metadata --locked --offline``, and
+  - every tracked ``package.json``; dependency-bearing package trees are
+    resolved from their adjacent ``package-lock.json``. Discovery is automatic,
+    so adding a workspace or package tree never requires updating a count here.
 
 Classification rules, per package:
 
@@ -73,8 +73,11 @@ Flagging never fails the gate by itself -- gen-1's own SBOM was PASS with
 three flagged families outstanding, and a review queue that also reds the
 build stops getting reviewed and starts getting silenced. What fails the
 gate: a genuinely unclassified license (nothing in the chain above), a
-forbidden dependency source, a stale/unresolvable lockfile, or a committed
-``SBOM.md`` that does not byte-match a fresh run.
+forbidden dependency source, an unexpected metadata failure, or committed
+``SBOM.md``/``NOTICES.md`` output that does not byte-match a fresh run. A
+recognized stale Cargo lock is reported as an unresolvable manifest; it makes
+``--verify`` red until that changed report is regenerated, but is not itself
+misclassified as a license failure.
 
 Usage:
     tools/sbom/sbom_check.py            regenerate tools/sbom/SBOM.md
@@ -334,23 +337,21 @@ def discover_cargo_specs(
     """Every *workspace-root* manifest (its own ``[workspace]`` table), each
     paired with its own committed lock.
 
-    This repository has no single workspace: 38 manifests each declare
-    ``[workspace]`` themselves (the root plus 37 self-contained
-    test-program/tool mini-workspaces). Every other tracked ``Cargo.toml`` is
-    a *member*, adopted by the nearest ancestor that declares ``[workspace]``
-    (Cargo's own directory-walk rule -- membership in that ancestor's
-    ``members`` list is not required for the adoption, only exclusion from
-    it prevents it) even when it is not named in that ancestor's ``members``
-    at all. ``cargo metadata --manifest-path`` on a member returns the
-    *entire* owning workspace's resolved graph, so checking members
-    individually would both recompute the same closure dozens of times and
+    This repository deliberately has multiple independent workspaces. Every
+    other tracked ``Cargo.toml`` is a *member*, adopted by the nearest ancestor
+    that declares ``[workspace]`` (Cargo's own directory-walk rule --
+    membership in that ancestor's ``members`` list is not required for the
+    adoption, only exclusion from it prevents it) even when it is not named in
+    that ancestor's ``members`` at all. ``cargo metadata --manifest-path`` on
+    a member returns the *entire* owning workspace's resolved graph, so
+    checking members individually would both recompute the same closure and
     misattribute its rows to the wrong manifest.
 
-    Fifteen of those members carry their own leftover ``Cargo.lock`` next to
-    them anyway (pre-workspace-membership relics, most likely): cargo never
-    reads those files, so they are excluded from checking here and returned
-    separately as a stray-lock finding -- real repository hygiene debt, not
-    an SBOM classification question.
+    Some members carry their own leftover ``Cargo.lock`` next to them anyway
+    (pre-workspace-membership relics, most likely): cargo never reads those
+    files, so they are excluded from checking here and returned separately as
+    a stray-lock finding -- real repository hygiene debt, not an SBOM
+    classification question.
     """
     manifests = tracked_files(root, "*Cargo.toml")
     ws_manifests: list[tuple[str, str]] = []
@@ -546,12 +547,12 @@ def discover_npm_specs(root: pathlib.Path) -> list[str]:
 
 def dedupe_rows(rows: list[Row]) -> list[Row]:
     """One row per distinct (ecosystem, name, version, source, checksum,
-    license, basis), regardless of how many of this repository's 32
-    independent Cargo/npm manifests happen to resolve it. ``manifest`` is
-    excluded from the identity on purpose -- an SBOM lists what a repository
-    depends on once each, not once per consumer; ``Coverage`` below is the
-    per-manifest traceability. Deterministic regardless of scan order: ties
-    keep the lexicographically-first manifest.
+    license, basis), regardless of how many discovered Cargo/npm manifests
+    happen to resolve it. ``manifest`` is excluded from the identity on purpose
+    -- an SBOM lists what a repository depends on once each, not once per
+    consumer; ``Coverage`` below is the per-manifest traceability.
+    Deterministic regardless of scan order: ties keep the
+    lexicographically-first manifest.
     """
     best: dict[tuple, Row] = {}
     for r in rows:
@@ -652,10 +653,12 @@ def write_sbom(
     lines.append("")
     lines.append(
         "The complete dependency/license closure of this repository: every "
-        "tracked Cargo workspace (there is no single one — 47 independent "
-        "lockfiles, listed in [Coverage](#coverage)) and the web app's npm "
-        "tree. Regenerate with `tools/sbom/sbom_check.py`; check for drift "
-        "with `tools/sbom/sbom_check.py --verify` (also wired into "
+        "tracked Cargo workspace and npm package tree discovered from the "
+        "repository manifests. The exact current set is listed in "
+        "[Coverage](#coverage); it is "
+        "discovered from tracked manifests rather than maintained as a "
+        "separate count. Regenerate with `tools/sbom/sbom_check.py`; check "
+        "for drift with `tools/sbom/sbom_check.py --verify` (also wired into "
         "`tools/gauntlet` — see `tools/sbom/README.md`)."
     )
     lines.append("")
@@ -706,7 +709,7 @@ def write_sbom(
         lines.append("")
 
     dep_table("Cargo dependencies", cargo_rows)
-    dep_table("npm dependencies (apps/dclutch-web)", npm_rows)
+    dep_table("npm dependencies (tracked package trees)", npm_rows)
 
     lines.append("## Coverage")
     lines.append("")

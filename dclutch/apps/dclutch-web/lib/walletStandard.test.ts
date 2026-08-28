@@ -19,6 +19,14 @@ import {
 
 function key(byte: number): string { return new PublicKey(new Uint8Array(32).fill(byte)).toBase58(); }
 
+const admittedClient = Object.freeze({
+  assertMutationCluster: async () => Object.freeze({
+    endpoint: 'https://devnet.example/',
+    genesisHash: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+    kind: 'devnet' as const,
+  }),
+});
+
 type MockAccount = Readonly<{ address: string; label?: string; chains: string[]; features: string[] }>;
 
 function account(byte: number, chains = ['solana:localnet']): MockAccount {
@@ -203,7 +211,9 @@ describe('Wallet Standard identity and handoff', () => {
   it('selects the chain an endpoint justifies and refuses when the wallet has none', () => {
     expect(solanaChainForEndpointV1('http://127.0.0.1:8899', ['solana:mainnet', 'solana:localnet'])).toBe('solana:localnet');
     expect(solanaChainForEndpointV1('http://127.0.0.1:8899', ['solana:devnet'])).toBe('solana:devnet');
-    expect(solanaChainForEndpointV1('https://rpc.example.com', ['solana:devnet', 'solana:mainnet'])).toBe('solana:mainnet');
+    expect(solanaChainForEndpointV1('https://rpc.example.com', ['solana:devnet', 'solana:mainnet'])).toBe('solana:devnet');
+    expect(() => solanaChainForEndpointV1('https://rpc.example.com', ['solana:mainnet'])).toThrow(/announces none of/);
+    expect(() => solanaChainForEndpointV1('https://rpc.example.com', ['solana:testnet'])).toThrow(/announces none of/);
     expect(() => solanaChainForEndpointV1('https://rpc.example.com', ['eip155:1'])).toThrow(/announces none of/);
   });
 
@@ -227,7 +237,7 @@ describe('Wallet Standard identity and handoff', () => {
     });
     const handoff = walletStandardHandoffV1(wallet, payer, 'solana:localnet');
     expect(signCalls).toBe(0);
-    const signed = await requestWalletTransactionSignatureV1(handoff, unsignedFixture(payer), payer);
+    const signed = await requestWalletTransactionSignatureV1(admittedClient, handoff, unsignedFixture(payer), payer);
     expect(signCalls).toBe(1);
     expect(signed.signer).toBe(payer);
     expect(signed.complete).toBe(true);
@@ -250,7 +260,7 @@ describe('Wallet Standard identity and handoff', () => {
       },
     });
     const handoff = walletStandardHandoffV1(wallet, payer, 'solana:localnet');
-    await expect(requestWalletTransactionSignatureV1(handoff, unsignedFixture(payer), payer)).rejects.toThrow(/rewrote/);
+    await expect(requestWalletTransactionSignatureV1(admittedClient, handoff, unsignedFixture(payer), payer)).rejects.toThrow(/rewrote/);
   });
 
   it('exposes no sign method a wallet did not announce, and refuses an unauthorized address', async () => {

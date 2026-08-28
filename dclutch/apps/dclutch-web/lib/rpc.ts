@@ -21,6 +21,11 @@ const MAX_LOG_MESSAGE_BYTES = 512;
 const MAX_INNER_INSTRUCTION_SETS = 64;
 const MAX_INNER_INSTRUCTIONS = 64;
 
+/** Solana devnet's chain identity, not an endpoint-name heuristic. */
+export const SOLANA_DEVNET_GENESIS_HASH_V1 = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+const SOLANA_MAINNET_BETA_GENESIS_HASH_V1 = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+const SOLANA_TESTNET_GENESIS_HASH_V1 = '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY';
+
 export type RpcAccount = Readonly<{
   data: Uint8Array;
   executable: boolean;
@@ -49,6 +54,12 @@ export type ConnectionFacts = Readonly<{
   genesisHash: string;
   solanaCore: string;
   featureSet: string | null;
+}>;
+
+export type MutationClusterAdmissionV1 = Readonly<{
+  endpoint: string;
+  genesisHash: string;
+  kind: 'devnet' | 'loopback-local-validator';
 }>;
 
 export type LatestBlockhashObservation = Readonly<{
@@ -187,6 +198,35 @@ function plain(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function canonicalGenesisHash(value: unknown): string {
+  const genesisHash = exactText(value, 'genesis hash', 96);
+  let canonical: string;
+  try {
+    canonical = new PublicKey(genesisHash).toBase58();
+  } catch {
+    throw new Error('getGenesisHash returned a noncanonical chain identity');
+  }
+  if (canonical !== genesisHash) throw new Error('getGenesisHash returned a noncanonical chain identity');
+  return genesisHash;
+}
+
+function isStrictLoopbackOrigin(endpoint: string): boolean {
+  const url = new URL(endpoint);
+  if (url.protocol !== 'http:'
+      || url.username !== ''
+      || url.password !== ''
+      || url.port === ''
+      || url.pathname !== '/'
+      || url.search !== ''
+      || url.hash !== '') return false;
+  const hostname = url.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (hostname === 'localhost' || hostname === '::1') return true;
+  const octets = hostname.split('.');
+  return octets.length === 4
+    && octets.every((octet) => /^(0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255)
+    && octets[0] === '127';
+}
+
 async function boundedJson(response: Response, maximumBytes = MAX_RPC_RESPONSE_BYTES): Promise<unknown> {
   if (!response.ok) throw new Error(`RPC HTTP status ${response.status}`);
   const declared = response.headers.get('content-length');
@@ -295,6 +335,34 @@ export class SolanaRpcClient {
     });
   }
 
+  /**
+   * Reacquire the chain's own identity before preparing or submitting a write.
+   *
+   * A non-loopback endpoint is admitted only by devnet's exact genesis hash;
+   * its hostname grants nothing. A fresh local validator has an unpredictable
+   * genesis hash, so its separate allowance requires a credential-free,
+   * explicit-port HTTP loopback origin. Known public production and test
+   * chains are refused even through loopback because that socket may be a
+   * tunnel. Call this again at every later mutation boundary; admissions are
+   * deliberately not cached.
+   */
+  async assertMutationCluster(): Promise<MutationClusterAdmissionV1> {
+    const genesisHash = canonicalGenesisHash(await this.request('getGenesisHash', []));
+    if (genesisHash === SOLANA_MAINNET_BETA_GENESIS_HASH_V1) {
+      throw new Error('mutation refused: the endpoint reports Solana mainnet-beta genesis');
+    }
+    if (genesisHash === SOLANA_TESTNET_GENESIS_HASH_V1) {
+      throw new Error('mutation refused: the endpoint reports Solana testnet genesis');
+    }
+    if (genesisHash === SOLANA_DEVNET_GENESIS_HASH_V1) {
+      return Object.freeze({ endpoint: this.endpoint, genesisHash, kind: 'devnet' });
+    }
+    if (isStrictLoopbackOrigin(this.endpoint)) {
+      return Object.freeze({ endpoint: this.endpoint, genesisHash, kind: 'loopback-local-validator' });
+    }
+    throw new Error(`mutation refused: the endpoint reports an unknown non-devnet genesis ${genesisHash}`);
+  }
+
   async programHeaders(programId: string): Promise<Readonly<{ slot: string; accounts: ReadonlyArray<HeaderObservation> }>> {
     new PublicKey(programId);
     const raw = await this.request('getProgramAccounts', [programId, {
@@ -359,6 +427,12 @@ export class SolanaRpcClient {
       blockhash,
       lastValidBlockHeight: String(exactUnsigned(raw.value.lastValidBlockHeight, 'last valid block height')),
     });
+  }
+
+  /** Acquire a recent blockhash only after a fresh mutation-cluster check. */
+  async latestMutationBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
+    await this.assertMutationCluster();
+    return this.latestBlockhash(minimumContextSlot);
   }
 
   async minimumBalanceForRentExemption(dataLength: number): Promise<RentExemptionObservation> {
@@ -505,6 +579,7 @@ export class SolanaRpcClient {
     }
     let binary = '';
     for (const byte of bytes) binary += String.fromCharCode(byte);
+    await this.assertMutationCluster();
     const result = exactText(await this.request('sendTransaction', [btoa(binary), {
       encoding: 'base64',
       skipPreflight: false,

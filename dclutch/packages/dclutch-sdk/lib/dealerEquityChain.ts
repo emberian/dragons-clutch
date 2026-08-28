@@ -396,8 +396,8 @@ export async function inspectDealerEquityRouteV3(
     if (checked.execution.releaseSet.id !== hex(releaseSet)) throw new Error('checked infrastructure selects another Market execution release set');
     const trading = checked.execution.artifacts.trading;
     const core = checked.execution.artifacts.core;
-    if (trading.upgradeAuthority !== null || core.upgradeAuthority !== null || trading.program !== tradingProgram || core.program !== coreProgram) {
-      throw new Error('checked infrastructure does not recognize immutable Core/Trading programs for this route');
+    if (trading.program !== tradingProgram || core.program !== coreProgram) {
+      throw new Error('checked infrastructure does not recognize the Core/Trading programs for this route');
     }
     await authenticateArtifactDeploymentV1(required(observation.accounts, tradingProgram, 'Trading program'), tradingProgram,
       required(observation.accounts, fixed[HotAbi.HOT_TRADING_PROGRAMDATA_ACCOUNT_V3]?.address ?? '', 'Trading ProgramData'), fixed[HotAbi.HOT_TRADING_PROGRAMDATA_ACCOUNT_V3]?.address ?? '', trading);
@@ -412,7 +412,7 @@ export async function inspectDealerEquityRouteV3(
     checkedOuter = Object.freeze({ status: 'checked', tradingArtifactRelease: checked.execution.releaseSet.roles.trading.artifactReleaseId, checkedManifestDigest: checked.checkedInfrastructureId });
   }
 
-  const latest = await client.latestBlockhash(observation.slot);
+  const latest = await client.latestMutationBlockhash(observation.slot);
   const lookupTables = Object.freeze(manifest.lookupTables.map((address) => lookupTable(address, required(observation.accounts, address, 'lookup table'))));
   const route: DealerEquityHotRouteV3 = Object.freeze({
     payer: manifest.payer, tradingProgram, market: marketAddress, releaseSet, generation,

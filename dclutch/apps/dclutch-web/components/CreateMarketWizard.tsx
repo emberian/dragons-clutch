@@ -294,7 +294,7 @@ export default function CreateMarketWizard() {
 
   /** Sign one transaction with the connected wallet and submit it, once. */
   async function signAndSubmitOne(transaction: VersionedTransaction, client: SolanaRpcClient): Promise<string> {
-    const signed = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), transaction, addresses.payer);
+    const signed = await requestWalletTransactionSignatureV1(client, wallets.handoff(endpoint), transaction, addresses.payer);
     if (!signed.complete) throw new Error('the wallet did not complete the signature set');
     return submitSignedTransactionV1(client, signed.transaction);
   }
@@ -351,7 +351,7 @@ export default function CreateMarketWizard() {
     const pages = [routing.create, ...routing.extensions];
     for (let index = 0; index < pages.length; index += 1) {
       updateStage('routing-table', { detail: `Signing ${index === 0 ? 'create' : `extend page ${index}`} of ${pages.length}…` });
-      const blockhash = await client.latestBlockhash();
+      const blockhash = await client.latestMutationBlockhash();
       const signature = await signAndSubmitOne(compile([pages[index]], blockhash.blockhash), client);
       lastSlot = await awaitFinalized(client, signature);
       updateStage('routing-table', { signature, detail: `${index + 1} of ${pages.length} finalized at slot ${lastSlot}` });

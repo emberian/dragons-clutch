@@ -1,8 +1,9 @@
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
+import { fileURLToPath } from 'node:url';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
-import hostingConfig from './.openai/hosting.json';
+import hostingConfig from './.openai/hosting.json' with { type: 'json' };
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
@@ -46,6 +47,18 @@ export default defineConfig(async () => {
 
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
+    // @solana/web3.js loads rpc-websockets through its package root even in a
+    // browser bundle. rpc-websockets 9 has explicit `browser` and `node`
+    // exports but no `workerd` export, so the Cloudflare environment must be
+    // pointed at the browser implementation instead of failing resolution.
+    resolve: {
+      alias: {
+        'rpc-websockets': fileURLToPath(new URL(
+          './node_modules/rpc-websockets/dist/index.browser.mjs',
+          import.meta.url,
+        )),
+      },
+    },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

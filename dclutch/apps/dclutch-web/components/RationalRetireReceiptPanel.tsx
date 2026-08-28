@@ -69,7 +69,7 @@ export default function RationalRetireReceiptPanel() {
     if (inspection === null) return;
     setCandidate(null);
     try {
-      const latest = await new SolanaRpcClient(endpoint).latestBlockhash(inspection.observedSlot);
+      const latest = await new SolanaRpcClient(endpoint).latestMutationBlockhash(inspection.observedSlot);
       const next = buildRationalRetireReceiptCandidateV4(inspection, latest.blockhash);
       setCandidate(next);
       setBuildStatus(`Unsigned v0 candidate: ${next.wireBytes.length} / 1232 bytes · ${next.loadedAddresses} ALT addresses · exact Claims frame 20+4×${next.supportCount}. Execution remains refused.`);

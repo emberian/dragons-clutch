@@ -82,9 +82,9 @@ export default function RedeemFlow({
     const plan = flow.state.plan;
     setFlow({ kind: 'signing', state: flow.state });
     try {
-      const signed = await requestWalletTransactionSignatureV1(directory.handoff(endpoint), plan.transaction, wallet);
-      if (!signed.complete) throw new Error('the wallet did not complete the single required signature');
       const client = new SolanaRpcClient(endpoint);
+      const signed = await requestWalletTransactionSignatureV1(client, directory.handoff(endpoint), plan.transaction, wallet);
+      if (!signed.complete) throw new Error('the wallet did not complete the single required signature');
       const signature = await submitSignedTransactionV1(client, signed.transaction);
       setFlow({ kind: 'submitted', state: flow.state, signature, confirmation: 'submitted; awaiting the created replay at finalized commitment' });
       // Confirmation is the POSTCONDITION, not a status row: the replay account
