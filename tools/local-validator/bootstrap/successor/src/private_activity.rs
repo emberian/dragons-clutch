@@ -22,6 +22,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use solana_loader_v3_interface::get_program_data_address;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
+use solana_sdk_ids::bpf_loader_upgradeable;
 
 use crate::{
     Error, Result,
@@ -480,6 +481,9 @@ pub(crate) fn run_lifecycle_session(arguments: LifecycleSessionArgumentsV1) -> R
             return Err(Error::new(
                 "lifecycle stage journal descriptors repeat a path or contain an empty identity",
             ));
+        }
+        if descriptor.schema == STAGE_SCHEMA_V1 {
+            authenticate_normalized_stage_descriptor(descriptor)?;
         }
         let path = resolve_relative(&root, &descriptor.path, "lifecycle journal source")?;
         let value = parse_json_without_duplicate_keys_v1(&bounded_read(
@@ -1767,6 +1771,7 @@ pub(crate) fn run_capture(arguments: CaptureArgumentsV1) -> Result<Value> {
     if finalized_slot == 0 {
         return Err(Error::new("finalized capture boundary is zero"));
     }
+    refuse_unexpected_loader_accounts(&values, &loader_addresses)?;
     let closed = manifest
         .final_accounts
         .iter()
@@ -1863,6 +1868,28 @@ fn captured_account_row(
     }))
 }
 
+fn refuse_unexpected_loader_accounts(
+    values: &BTreeMap<String, Option<Value>>,
+    exact_loader_addresses: &BTreeSet<String>,
+) -> Result<()> {
+    let loader = bpf_loader_upgradeable::ID.to_string();
+    for (address, value) in values {
+        if !exact_loader_addresses.contains(address)
+            && value
+                .as_ref()
+                .and_then(Value::as_object)
+                .and_then(|account| account.get("owner"))
+                .and_then(Value::as_str)
+                == Some(loader.as_str())
+        {
+            return Err(Error::new(
+                "finalized capture includes a Loader-v3 account outside the exact 18-account closure",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_captured_transaction(
     transaction: &Value,
     expected_signature: &str,
@@ -1928,11 +1955,7 @@ fn derive_manifest(
             ));
         }
         if descriptor.schema == STAGE_SCHEMA_V1 {
-            if !STAGES.contains(&descriptor.semantic_role.as_str()) {
-                return Err(Error::new(
-                    "activity stage wrapper is owned by an unknown semantic role",
-                ));
-            }
+            authenticate_normalized_stage_descriptor(&descriptor)?;
             let completion: StageCompletionV1 = serde_json::from_value(value.clone())?;
             authenticate_stage_completion(
                 rpc,
@@ -2046,6 +2069,18 @@ fn derive_manifest(
             source_set_sha256: sha256(&canonical_json(&Value::Array(source_set))?),
         },
     ))
+}
+
+fn authenticate_normalized_stage_descriptor(descriptor: &JournalDescriptorV1) -> Result<()> {
+    if descriptor.schema != STAGE_SCHEMA_V1
+        || !STAGES.contains(&descriptor.semantic_role.as_str())
+        || descriptor.completion_pointer != "/status"
+    {
+        return Err(Error::new(
+            "normalized activity stage descriptor does not bind its exact top-level status owner",
+        ));
+    }
+    Ok(())
 }
 
 fn authenticate_stage_completion(
@@ -2871,6 +2906,24 @@ mod tests {
         pairs[0] = authentic;
         pairs[1] = authentic;
         assert!(exact_loader_pair_closure(&pairs).is_err());
+
+        let expected = BTreeSet::from(["expected".to_owned()]);
+        let values = BTreeMap::from([
+            (
+                "expected".to_owned(),
+                Some(json!({"owner": bpf_loader_upgradeable::ID.to_string()})),
+            ),
+            (
+                "unexpected-buffer".to_owned(),
+                Some(json!({"owner": bpf_loader_upgradeable::ID.to_string()})),
+            ),
+        ]);
+        assert!(refuse_unexpected_loader_accounts(&values, &expected).is_err());
+        let exact = BTreeMap::from([(
+            "expected".to_owned(),
+            Some(json!({"owner": bpf_loader_upgradeable::ID.to_string()})),
+        )]);
+        refuse_unexpected_loader_accounts(&exact, &expected).expect("exact Loader closure");
     }
 
     #[test]
@@ -2931,5 +2984,15 @@ mod tests {
         assert!(parse_stage_args(arguments).is_err());
         assert!(json_pointer(&json!({"bad~escape": true}), "/bad~2escape", "test").is_err());
         assert!(canonical_relative(r"journals\substituted.json", "test").is_err());
+
+        let mut descriptor = JournalDescriptorV1 {
+            semantic_role: "founding".into(),
+            path: "founding.json".into(),
+            schema: STAGE_SCHEMA_V1.into(),
+            completion_pointer: "/status".into(),
+        };
+        authenticate_normalized_stage_descriptor(&descriptor).expect("top-level stage status");
+        descriptor.completion_pointer = "/sources/0/completionValue".into();
+        assert!(authenticate_normalized_stage_descriptor(&descriptor).is_err());
     }
 }
