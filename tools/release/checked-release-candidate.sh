@@ -233,7 +233,7 @@ while IFS=$'\t' read -r label package; do
     (
         cd "$SOURCE"
         CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
-            cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
+            cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
     ) >>"$link_log" 2>&1
     cat "$link_log" >> "$BUILD_LOG"
     count="$(grep -c "$DIAGNOSTIC_PATTERN" "$link_log" || true)"
@@ -341,7 +341,7 @@ for entry in $ROLES; do
         printf 'solana_version=%s\n' "$SOLANA_VERSION"
         printf 'cargo_build_sbf_version=%s\n' "$BUILD_SBF_VERSION"
         printf 'target_triple=%s\n' "$TARGET_TRIPLE"
-        printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml\n' "$package"
+        printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked\n' "$package"
         # Strictly ascending, unique, and each one load-bearing.
         printf 'assumption=Loader V3 Program and ProgramData bytes were constructed offline from the exact ELF; no chain was observed\n'
         printf 'assumption=cargo_lock_digest is SHA-256 of the exact Cargo.lock that resolved this package\n'
