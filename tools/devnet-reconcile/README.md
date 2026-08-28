@@ -22,7 +22,9 @@ as a source of chain truth.
   status, transaction fee, account vector, lamport deltas, and raw token atoms;
 - all changed lamport and token accounts are declared—an unexplained balance
   change refuses;
-- one immutable collateral mint throughout each Direct and payout transfer;
+- every token account bound to its declared mint and to either the collateral
+  or claim asset class; every Direct and payout role bound to the one Realm
+  collateral mint (claim mints may correctly differ);
 - Direct gross quote with no unnamed rounding, then an independent floor of
   `gross * 50 / 10_000` on each side;
 - exact `LiabilityBasisPositionV2` identity, geometry, revision, and balances;
@@ -73,7 +75,8 @@ references are unique logical names whose addresses may not alias. The manifest
 contains:
 
 - `cluster`: exact `devnet` kind and genesis hash;
-- `accounts`: `{ref,address,kind,role}` entries;
+- `accounts`: `{ref,address,kind,role}` entries, with exact `mint` and
+  `assetClass` (`collateral` or `claim`) on every token account;
 - `sourceSetSha256`: SHA-256 of the canonical ordered
   `[{"event":...,"sha256":...}]` source list;
 - `events`: one or more events in each of the six canonical phases, each with

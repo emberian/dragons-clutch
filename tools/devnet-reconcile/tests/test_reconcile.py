@@ -138,10 +138,12 @@ def fixture():
         "market": "protocol", "closed_protocol": "protocol", "token_authority": "wallet",
         "token_program": "protocol", "protocol_owner": "protocol",
     }
-    accounts = [
-        {"ref": name, "address": identities[name][0], "kind": account_kinds[name], "role": name.replace("_", "-")}
-        for name in names
-    ]
+    accounts = []
+    for name in names:
+        account = {"ref": name, "address": identities[name][0], "kind": account_kinds[name], "role": name.replace("_", "-")}
+        if account["kind"] == "token":
+            account.update({"mint": mint_address, "assetClass": "collateral"})
+        accounts.append(account)
     source_bytes = b'{"schema":"fixture-semantic-owner-journal-v1"}\n'
     zero_digest = hashlib.sha256(source_bytes).hexdigest()
     pos_pre = position_data(identities["token_authority"][1], 1, [100, 0])
@@ -275,7 +277,26 @@ class ReconcileTest(unittest.TestCase):
             tx = capture["transactions"]["signature-participant"]
             tx["meta"]["preTokenBalances"][0]["mint"] = other
             tx["meta"]["postTokenBalances"][0]["mint"] = other
-        self.assert_refuses(mutate, "non-Realm collateral mint")
+        self.assert_refuses(mutate, "declared token-account mint")
+
+    def test_declared_claim_mint_may_differ_from_collateral(self):
+        manifest, capture = fixture()
+        claim_mint, claim_raw = key(94)
+        participant = next(account for account in manifest["accounts"] if account["ref"] == "participant_token")
+        participant.update(mint=claim_mint, assetClass="claim")
+        expected = next(account for account in manifest["finalAccounts"] if account["account"] == "participant_token")
+        expected["mint"] = claim_mint
+        authority = next(account for account in manifest["accounts"] if account["ref"] == "token_authority")["address"]
+        authority_raw = reconcile.b58decode(authority, "fixture authority")
+        data = token_data(claim_raw, authority_raw, 100)
+        expected["dataSha256"] = hashlib.sha256(data).hexdigest()
+        address = participant["address"]
+        capture["accounts"][address]["value"]["data"] = [base64.b64encode(data).decode(), "base64"]
+        tx = capture["transactions"]["signature-participant"]
+        tx["meta"]["preTokenBalances"][1]["mint"] = claim_mint
+        tx["meta"]["postTokenBalances"][1]["mint"] = claim_mint
+        dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
+        self.assertEqual(dossier["schema"], reconcile.DOSSIER_SCHEMA)
 
     def test_side_fee_substitution_refuses(self):
         def mutate(manifest, capture):
@@ -299,7 +320,7 @@ class ReconcileTest(unittest.TestCase):
             tx = capture["transactions"]["signature-payout"]
             tx["meta"]["preTokenBalances"][1]["mint"] = other
             tx["meta"]["postTokenBalances"][1]["mint"] = other
-        self.assert_refuses(mutate, "non-Realm collateral mint")
+        self.assert_refuses(mutate, "declared token-account mint")
 
     def test_missing_retired_vacancy_refuses(self):
         def mutate(manifest, capture):

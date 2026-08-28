@@ -406,7 +406,7 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     accounts: dict[str, dict[str, Any]] = {}
     addresses: set[str] = set()
     for index, item in enumerate(raw_accounts):
-        item = exact_keys(item, {"ref", "address", "kind", "role"}, set(), f"accounts[{index}]")
+        item = exact_keys(item, {"ref", "address", "kind", "role"}, {"mint", "assetClass"}, f"accounts[{index}]")
         ref = text(item["ref"], "account ref")
         address = pubkey(item["address"], f"account {ref} address")
         if ref in accounts or address in addresses:
@@ -414,6 +414,14 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
         if item["kind"] not in ("wallet", "token", "position", "certificate", "protocol"):
             refuse(f"account {ref} has an unknown kind")
         text(item["role"], f"account {ref} role")
+        if item["kind"] == "token":
+            if set(item) != {"ref", "address", "kind", "role", "mint", "assetClass"}:
+                refuse(f"token account {ref} must declare its exact mint and assetClass")
+            pubkey(item["mint"], f"token account {ref} mint")
+            if item["assetClass"] not in ("collateral", "claim"):
+                refuse(f"token account {ref} has an unknown assetClass")
+        elif "mint" in item or "assetClass" in item:
+            refuse(f"non-token account {ref} declares token-only fields")
         accounts[ref] = item
         addresses.add(address)
     events = manifest["events"]
@@ -493,6 +501,8 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
                 pubkey(expected["mint"], f"final token {ref} mint")
                 pubkey(expected["authority"], f"final token {ref} authority")
                 decimal(expected["amountAtoms"], f"final token {ref} amountAtoms")
+                if expected["mint"] != accounts[ref]["mint"]:
+                    refuse(f"final token account {ref} differs from its declared mint")
     critical_refs = {ref for ref, account in accounts.items() if account["kind"] in ("token", "position", "certificate")}
     if not critical_refs.issubset(final_refs):
         refuse("finalAccounts omits a token, Position, or certificate account")
@@ -581,8 +591,8 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
     expected_tokens = parse_delta_list(event["tokenDeltas"], "tokenDeltas", accounts)
     if observed_tokens != expected_tokens:
         refuse(f"event {event['id']} token deltas differ from finalized transaction")
-    if any(mint != collateral_mint for mint in token_mints.values()):
-        refuse(f"event {event['id']} mixes a non-Realm collateral mint")
+    if any(mint != accounts[ref]["mint"] for ref, mint in token_mints.items()):
+        refuse(f"event {event['id']} substitutes a declared token-account mint")
     projection: dict[str, Any] = {
         "id": event["id"], "kind": event["kind"], "operation": event["operation"], "predecessor": event["predecessor"],
         "signature": event["signature"], "slot": event["slot"], "feePayer": event["feePayer"],
@@ -598,7 +608,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         if fill == 0 or scale == 0 or bps != 50:
             refuse("Direct exact fill/scale or 50-bps-per-side policy is invalid")
         refs = [direct["sellerToken"], direct["buyerToken"], direct["feeRecipientToken"]]
-        if len(set(refs)) != 3 or any(ref not in accounts or accounts[ref]["kind"] != "token" for ref in refs):
+        if len(set(refs)) != 3 or any(ref not in accounts or accounts[ref]["kind"] != "token" or accounts[ref]["assetClass"] != "collateral" for ref in refs):
             refuse("Direct seller, buyer, and fee recipient token roles alias or are absent")
         mint = pubkey(direct["mint"], "Direct mint")
         if mint != collateral_mint:
@@ -644,7 +654,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         payout = exact_keys(event.get("payout"), {"hoardToken", "recipientToken", "position", "principalAtoms", "claimsBurnedAtoms", "mint"}, set(), "payout facts")
         principal = decimal(payout["principalAtoms"], "payout principal")
         hoard = payout["hoardToken"]; recipient = payout["recipientToken"]
-        if hoard == recipient or any(ref not in accounts or accounts[ref]["kind"] != "token" for ref in (hoard, recipient)):
+        if hoard == recipient or any(ref not in accounts or accounts[ref]["kind"] != "token" or accounts[ref]["assetClass"] != "collateral" for ref in (hoard, recipient)):
             refuse("payout Hoard and recipient token roles alias or are absent")
         mint = pubkey(payout["mint"], "payout mint")
         if token_mints.get(hoard) != mint or token_mints.get(recipient) != mint:
@@ -718,9 +728,13 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
     accounts, events = validate_manifest(manifest)
     direct_event = next(event for event in events if "direct" in event)
     collateral_mint = pubkey(direct_event["direct"]["mint"], "lifecycle collateral mint")
-    for expected in manifest["finalAccounts"]:
-        if not expected["closed"] and accounts[expected["account"]]["kind"] == "token" and expected["mint"] != collateral_mint:
-            refuse("final token accounts mix a non-Realm collateral mint")
+    for ref in (direct_event["direct"]["sellerToken"], direct_event["direct"]["buyerToken"], direct_event["direct"]["feeRecipientToken"]):
+        if accounts[ref]["mint"] != collateral_mint:
+            refuse("Direct account inventory differs from the lifecycle collateral mint")
+    payout_event = next(event for event in events if "payout" in event)
+    for ref in (payout_event["payout"]["hoardToken"], payout_event["payout"]["recipientToken"]):
+        if accounts[ref]["mint"] != collateral_mint:
+            refuse("payout account inventory differs from the lifecycle collateral mint")
     genesis = rpc.genesis_hash()
     if genesis != DEVNET_GENESIS_HASH:
         refuse(f"RPC genesis {genesis!r} is not exact Solana devnet")
