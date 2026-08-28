@@ -819,6 +819,7 @@ mod tests {
     fn missing_native_composition_is_an_explicit_lifecycle_blocker() {
         let evidence = CampaignTerminalEvidenceV1 {
             plan_sha256: hex(&[1; 32]),
+            market_sha256: hex(&[3; 32]),
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
             accounts: BTreeMap::new(),
@@ -842,6 +843,7 @@ mod tests {
             "rpc_url": "https://api.devnet.solana.com/",
             "mode": "execute",
             "plan_sha256": hex(&[1; 32]),
+            "market_sha256": hex(&[5; 32]),
             "execution": {
                 "completed": true,
                 "recoveredFinalizedFounding": false,
@@ -1083,6 +1085,7 @@ mod tests {
         }
         let exact = CampaignTerminalEvidenceV1 {
             plan_sha256: hex(&[1; 32]),
+            market_sha256: hex(&[3; 32]),
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
             accounts: accounts.clone(),
