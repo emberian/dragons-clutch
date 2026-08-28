@@ -21,6 +21,7 @@ mod generated_capability_execution;
 mod generated_protocol_infrastructure;
 
 mod protocol_infrastructure;
+mod source_semantic_release;
 
 pub use generated_capability_execution::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CAPABILITY_EXECUTION_SELECTION_CONFIG_OFFSET,
@@ -37,6 +38,11 @@ pub use protocol_infrastructure::{
     InitializeProtocolInfrastructureV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_PREIMAGE_V1, ProtocolInfrastructureProfileV1,
+};
+pub use source_semantic_release::{
+    SOURCE_REVISION_HEX_BYTES_V1, SOURCE_SEMANTIC_RELEASE_DOMAIN_V1,
+    SOURCE_SEMANTIC_RELEASE_PREIMAGE_BYTES_V1, SourceSemanticReleaseErrorV1, SourceSemanticRoleV1,
+    source_semantic_release_preimage_v1,
 };
 
 /// Offset of the program-set record's two canonical PDA bumps.

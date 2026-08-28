@@ -2,6 +2,7 @@
 
 use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use solana_sdk::pubkey::Pubkey;
 
 mod campaign;
@@ -92,7 +93,7 @@ fn run() -> Result<()> {
         Some("devnet-upgrade-baseline-v1") => upgrade::run_baseline(arguments.collect()),
         Some("devnet-upgrade-extend-v1") => upgrade::run_extension(arguments.collect()),
         Some("devnet-upgrade-v1") => upgrade::run(arguments.collect()),
-        Some("devnet-upgrade-set-journal-v1") => upgrade::run_set_journal(arguments.collect()),
+        Some("devnet-deployment-set-journal-v2") => upgrade::run_set_journal(arguments.collect()),
         Some("devnet-user-position-admission-v1") => {
             user_position_admission::run(arguments.collect())
         }
@@ -703,6 +704,10 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     let mut rent_credit_elf = None;
     let mut rent_credit_sha256 = None;
     let mut rent_credit_semantic_release = None;
+    let mut upgrade_set_journal = None;
+    let mut deployment_set_rpc_url = None;
+    let mut deployment_set_devnet_acknowledgment = None;
+    let mut deployment_set_solana_cli = None;
     let mut record_publication = None;
     // Seven optional observed Loader V3 ProgramData accounts and seven optional
     // genesis-install slots. The DEPLOYMENT SLOT is never one of these values:
@@ -800,6 +805,10 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             "--rent-credit-elf" => &mut rent_credit_elf,
             "--rent-credit-sha256" => &mut rent_credit_sha256,
             "--rent-credit-semantic-release-id" => &mut rent_credit_semantic_release,
+            "--deployment-set-journal" => &mut upgrade_set_journal,
+            "--rpc-url" => &mut deployment_set_rpc_url,
+            "--i-mean-devnet" => &mut deployment_set_devnet_acknowledgment,
+            "--solana-cli" => &mut deployment_set_solana_cli,
             // Optional. Absent is `genesis`, which is byte-for-byte what this
             // subcommand did before the flag existed.
             "--record-publication" => &mut record_publication,
@@ -808,6 +817,291 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
+    }
+    if upgrade_set_journal.is_some() {
+        for (label, supplied) in [
+            ("--registry-program-id", registry_program.is_some()),
+            ("--registry-elf", registry_elf.is_some()),
+            ("--registry-sha256", registry_sha256.is_some()),
+            (
+                "--registry-semantic-release-id",
+                registry_semantic_release.is_some(),
+            ),
+            ("--core-program-id", core_program.is_some()),
+            ("--core-elf", core_elf.is_some()),
+            ("--core-sha256", core_sha256.is_some()),
+            (
+                "--core-semantic-release-id",
+                core_semantic_release.is_some(),
+            ),
+            (
+                "--core-bootstrap-upgrade-authority",
+                core_bootstrap_upgrade_authority.is_some(),
+            ),
+            ("--claims-program-id", claims_program.is_some()),
+            ("--claims-elf", claims_elf.is_some()),
+            ("--claims-sha256", claims_sha256.is_some()),
+            (
+                "--claims-semantic-release-id",
+                claims_semantic_release.is_some(),
+            ),
+            ("--trading-program-id", trading_program.is_some()),
+            ("--trading-elf", trading_elf.is_some()),
+            ("--trading-sha256", trading_sha256.is_some()),
+            (
+                "--trading-semantic-release-id",
+                trading_semantic_release.is_some(),
+            ),
+            ("--resolution-program-id", resolution_program.is_some()),
+            ("--resolution-elf", resolution_elf.is_some()),
+            ("--resolution-sha256", resolution_sha256.is_some()),
+            (
+                "--resolution-semantic-release-id",
+                resolution_semantic_release.is_some(),
+            ),
+            ("--custody-program-id", custody_program.is_some()),
+            ("--custody-elf", custody_elf.is_some()),
+            ("--custody-sha256", custody_sha256.is_some()),
+            (
+                "--custody-semantic-release-id",
+                custody_semantic_release.is_some(),
+            ),
+            ("--rent-credit-program-id", rent_credit_program.is_some()),
+            ("--rent-credit-elf", rent_credit_elf.is_some()),
+            ("--rent-credit-sha256", rent_credit_sha256.is_some()),
+            (
+                "--rent-credit-semantic-release-id",
+                rent_credit_semantic_release.is_some(),
+            ),
+        ] {
+            if supplied {
+                return Err(Error::new(format!(
+                    "{label} is forbidden with --deployment-set-journal; checked evidence is the sole owner"
+                )));
+            }
+        }
+        for (role, flag_role, input, carried) in [
+            ("registry", "registry", &deployments.registry, true),
+            ("rent", "rent-credit", &deployments.rent_credit, true),
+            ("custody", "custody", &deployments.custody, false),
+            ("resolution", "resolution", &deployments.resolution, false),
+            ("claims", "claims", &deployments.claims, false),
+            ("trading", "trading", &deployments.trading, false),
+            ("core", "core", &deployments.core, false),
+        ] {
+            if input.expected_live_elf_sha256.is_some()
+                || input.expected_upgrade_authority.is_some()
+                || input.genesis_deployment_slot != 0
+            {
+                return Err(Error::new(format!(
+                    "raw {role} live hash, authority, or genesis slot is forbidden with --deployment-set-journal"
+                )));
+            }
+            if carried && input.observed_programdata.is_some() {
+                return Err(Error::new(format!(
+                    "--{flag_role}-observed-programdata is forbidden for CarryForward; the authenticated snapshot is the sole owner"
+                )));
+            }
+        }
+        if record_publication
+            .as_deref()
+            .is_some_and(|value| value != "transaction")
+        {
+            return Err(Error::new(
+                "--deployment-set-journal requires --record-publication transaction",
+            ));
+        }
+    }
+    let checked_upgrade_set = match upgrade_set_journal {
+        Some(path) => Some(
+            upgrade::authenticate_complete_deployment_set_for_prepare_live(
+                &absolute(Some(path), "--deployment-set-journal")?,
+                &required(deployment_set_rpc_url.take(), "--rpc-url")?,
+                &required(
+                    deployment_set_devnet_acknowledgment.take(),
+                    "--i-mean-devnet",
+                )?,
+                &absolute(deployment_set_solana_cli.take(), "--solana-cli")?,
+            )?,
+        ),
+        None => {
+            if deployment_set_rpc_url.is_some()
+                || deployment_set_devnet_acknowledgment.is_some()
+                || deployment_set_solana_cli.is_some()
+            {
+                return Err(Error::new(
+                    "--rpc-url, --i-mean-devnet, and --solana-cli are valid only with --deployment-set-journal",
+                ));
+            }
+            None
+        }
+    };
+    if let Some(set) = &checked_upgrade_set {
+        for (label, supplied) in [
+            ("--registry-program-id", registry_program.is_some()),
+            ("--registry-elf", registry_elf.is_some()),
+            ("--registry-sha256", registry_sha256.is_some()),
+            (
+                "--registry-semantic-release-id",
+                registry_semantic_release.is_some(),
+            ),
+            ("--core-program-id", core_program.is_some()),
+            ("--core-elf", core_elf.is_some()),
+            ("--core-sha256", core_sha256.is_some()),
+            (
+                "--core-semantic-release-id",
+                core_semantic_release.is_some(),
+            ),
+            (
+                "--core-bootstrap-upgrade-authority",
+                core_bootstrap_upgrade_authority.is_some(),
+            ),
+            ("--claims-program-id", claims_program.is_some()),
+            ("--claims-elf", claims_elf.is_some()),
+            ("--claims-sha256", claims_sha256.is_some()),
+            (
+                "--claims-semantic-release-id",
+                claims_semantic_release.is_some(),
+            ),
+            ("--trading-program-id", trading_program.is_some()),
+            ("--trading-elf", trading_elf.is_some()),
+            ("--trading-sha256", trading_sha256.is_some()),
+            (
+                "--trading-semantic-release-id",
+                trading_semantic_release.is_some(),
+            ),
+            ("--resolution-program-id", resolution_program.is_some()),
+            ("--resolution-elf", resolution_elf.is_some()),
+            ("--resolution-sha256", resolution_sha256.is_some()),
+            (
+                "--resolution-semantic-release-id",
+                resolution_semantic_release.is_some(),
+            ),
+            ("--custody-program-id", custody_program.is_some()),
+            ("--custody-elf", custody_elf.is_some()),
+            ("--custody-sha256", custody_sha256.is_some()),
+            (
+                "--custody-semantic-release-id",
+                custody_semantic_release.is_some(),
+            ),
+            ("--rent-credit-program-id", rent_credit_program.is_some()),
+            ("--rent-credit-elf", rent_credit_elf.is_some()),
+            ("--rent-credit-sha256", rent_credit_sha256.is_some()),
+            (
+                "--rent-credit-semantic-release-id",
+                rent_credit_semantic_release.is_some(),
+            ),
+        ] {
+            if supplied {
+                return Err(Error::new(format!(
+                    "{label} is forbidden with --deployment-set-journal; checked evidence is the sole owner"
+                )));
+            }
+        }
+        if record_publication
+            .as_deref()
+            .is_some_and(|value| value != "transaction")
+        {
+            return Err(Error::new(
+                "--deployment-set-journal requires --record-publication transaction",
+            ));
+        }
+        record_publication = Some("transaction".into());
+        let retained = plan::pubkey(&set.retained_upgrade_authority)?;
+        for (role, flag_role, input) in [
+            ("registry", "registry", &mut deployments.registry),
+            ("rent", "rent-credit", &mut deployments.rent_credit),
+            ("custody", "custody", &mut deployments.custody),
+            ("resolution", "resolution", &mut deployments.resolution),
+            ("claims", "claims", &mut deployments.claims),
+            ("trading", "trading", &mut deployments.trading),
+            ("core", "core", &mut deployments.core),
+        ] {
+            if input.expected_live_elf_sha256.is_some()
+                || input.expected_upgrade_authority.is_some()
+                || input.genesis_deployment_slot != 0
+            {
+                return Err(Error::new(format!(
+                    "raw {role} live hash, authority, or genesis slot is forbidden with --deployment-set-journal"
+                )));
+            }
+            let pin = set
+                .roles
+                .iter()
+                .find(|pin| pin.role == role)
+                .expect("authenticated set contains every role");
+            match pin.disposition {
+                model::CheckedDeploymentDispositionV1::CarryForward => {
+                    if input.observed_programdata.is_some() {
+                        return Err(Error::new(format!(
+                            "--{flag_role}-observed-programdata is forbidden for CarryForward; the authenticated snapshot is the sole owner"
+                        )));
+                    }
+                    let encoded = pin.carried_programdata_base64.as_deref().ok_or_else(|| {
+                        Error::new(format!(
+                            "authenticated CarryForward {role} omitted ProgramData bytes"
+                        ))
+                    })?;
+                    input.observed_programdata_bytes =
+                        Some(BASE64.decode(encoded).map_err(|_| {
+                            Error::new(format!(
+                                "authenticated CarryForward {role} ProgramData is not base64"
+                            ))
+                        })?);
+                }
+                model::CheckedDeploymentDispositionV1::Upgrade => {
+                    if input.observed_programdata.is_none() {
+                        return Err(Error::new(format!(
+                            "--deployment-set-journal requires --{flag_role}-observed-programdata for receipt-backed Upgrade"
+                        )));
+                    }
+                }
+            }
+            input.expected_live_elf_sha256 = Some(pin.live_elf_sha256.clone());
+            input.expected_upgrade_authority = Some(retained);
+        }
+        let role = |name: &str| {
+            set.roles
+                .iter()
+                .find(|pin| pin.role == name)
+                .expect("authenticated set contains every role")
+        };
+        let registry = role("registry");
+        registry_program = Some(registry.program_id.clone());
+        registry_elf = Some(registry.checked_candidate_elf_path.clone());
+        registry_sha256 = Some(registry.checked_candidate_elf_sha256.clone());
+        registry_semantic_release = Some(registry.semantic_release_id.clone());
+        let core = role("core");
+        core_program = Some(core.program_id.clone());
+        core_elf = Some(core.checked_candidate_elf_path.clone());
+        core_sha256 = Some(core.checked_candidate_elf_sha256.clone());
+        core_semantic_release = Some(core.semantic_release_id.clone());
+        core_bootstrap_upgrade_authority = Some(set.retained_upgrade_authority.clone());
+        let claims = role("claims");
+        claims_program = Some(claims.program_id.clone());
+        claims_elf = Some(claims.checked_candidate_elf_path.clone());
+        claims_sha256 = Some(claims.checked_candidate_elf_sha256.clone());
+        claims_semantic_release = Some(claims.semantic_release_id.clone());
+        let trading = role("trading");
+        trading_program = Some(trading.program_id.clone());
+        trading_elf = Some(trading.checked_candidate_elf_path.clone());
+        trading_sha256 = Some(trading.checked_candidate_elf_sha256.clone());
+        trading_semantic_release = Some(trading.semantic_release_id.clone());
+        let resolution = role("resolution");
+        resolution_program = Some(resolution.program_id.clone());
+        resolution_elf = Some(resolution.checked_candidate_elf_path.clone());
+        resolution_sha256 = Some(resolution.checked_candidate_elf_sha256.clone());
+        resolution_semantic_release = Some(resolution.semantic_release_id.clone());
+        let custody = role("custody");
+        custody_program = Some(custody.program_id.clone());
+        custody_elf = Some(custody.checked_candidate_elf_path.clone());
+        custody_sha256 = Some(custody.checked_candidate_elf_sha256.clone());
+        custody_semantic_release = Some(custody.semantic_release_id.clone());
+        let rent = role("rent");
+        rent_credit_program = Some(rent.program_id.clone());
+        rent_credit_elf = Some(rent.checked_candidate_elf_path.clone());
+        rent_credit_sha256 = Some(rent.checked_candidate_elf_sha256.clone());
+        rent_credit_semantic_release = Some(rent.semantic_release_id.clone());
     }
     let args = plan::PrepareArgs {
         account_dir: absolute(account_dir, "--account-dir")?,
@@ -862,6 +1156,7 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             rent_credit_semantic_release,
             "--rent-credit-semantic-release-id",
         )?,
+        checked_upgrade_set,
         record_publication: match record_publication.as_deref() {
             None => plan::RecordPublicationV1::Genesis,
             Some(value) => plan::RecordPublicationV1::parse(value)?,
@@ -881,6 +1176,9 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
         "resolution_program_id": prepared.resolution.program_id,
         "custody_program_id": prepared.custody.program_id,
         "rent_credit_program_id": prepared.rent_credit.program_id,
+        "checked_upgrade_set_final_sha256": prepared.checked_upgrade_set
+            .as_ref()
+            .map(|set| set.final_set_sha256.as_str()),
         "genesis_account_count": prepared.genesis_accounts.len(),
     });
     let mut stdout = std::io::stdout();
@@ -995,6 +1293,62 @@ fn usage() {
 
 fn usage_supervisor() {
     println!(
-        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --registry-program-id PUBKEY --registry-elf ABSOLUTE_RAW_ELF --registry-sha256 RAW_SHA256 --registry-semantic-release-id SHA256 --core-program-id PUBKEY --core-elf ABSOLUTE_RAW_ELF --core-sha256 RAW_SHA256 --core-semantic-release-id SHA256 --core-bootstrap-upgrade-authority PUBKEY --claims-program-id PUBKEY --claims-elf ABSOLUTE_RAW_ELF --claims-sha256 RAW_SHA256 --claims-semantic-release-id SHA256 --trading-program-id PUBKEY --trading-elf ABSOLUTE_RAW_ELF --trading-sha256 RAW_SHA256 --trading-semantic-release-id SHA256 --resolution-program-id PUBKEY --resolution-elf ABSOLUTE_RAW_ELF --resolution-sha256 RAW_SHA256 --resolution-semantic-release-id SHA256 --custody-program-id PUBKEY --custody-elf ABSOLUTE_RAW_ELF --custody-sha256 RAW_SHA256 --custody-semantic-release-id SHA256 --rent-credit-program-id PUBKEY --rent-credit-elf ABSOLUTE_RAW_ELF --rent-credit-sha256 RAW_SHA256 --rent-credit-semantic-release-id SHA256 [--record-publication genesis|transaction] [--ROLE-observed-programdata ABSOLUTE_ACCOUNT_BODY --ROLE-live-elf-sha256 LIVE_SHA256] [--ROLE-genesis-deployment-slot U64] [--ROLE-expected-upgrade-authority PUBKEY]\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe run command is the canonical same-process supervisor. It creates one ephemeral Core authority only in memory, prepares its public key into fresh genesis inputs, starts a guarded foreground localhost validator, initializes Core infrastructure, proves pre-revocation release refusal, revokes Loader-v3 authority to None, and activates the immutable release set. It never reads a wallet or CLI configuration.\n\nA ROLE is one of registry, core, claims, trading, resolution, custody, rent-credit. --ROLE-elf and --ROLE-sha256 always name the exact checked RAW build candidate. --ROLE-observed-programdata takes a complete Loader V3 ProgramData account body read off a cluster; it requires --ROLE-live-elf-sha256 naming the complete live ELF tail, including allocation padding. Prepare proves the live tail is exactly the raw candidate followed only by zero bytes, retains both digests and the padding width in the plan, and binds ArtifactReleaseV1 to the LIVE digest. The live digest without an observation, or an observation with only the old raw digest, refuses. --ROLE-genesis-deployment-slot writes a slot into the genesis install this plan materializes so a LOCAL rehearsal exercises a nonzero deployment slot. It is mutually exclusive with an observation, and no flag supplies the slot the release binds: that is always hostile-decoded out of the resulting ProgramData image by the same parse the on-chain authenticator runs.\n\n--ROLE-expected-upgrade-authority DECLARES the upgrade authority an observed ProgramData carries, for the mutable substrate decision 0012 chose. Like the slot, it does NOT supply what the release binds -- the authority is decoded out of the observation itself -- it is the declaration the observation is CHECKED AGAINST, so a role that quietly became mutable, or mutable under a key nobody named, still refuses at plan time instead of minting a release that hands upgrade rights to a stranger. Absent means the caller declares none, which is what every invocation before 0012 meant. It describes an observation and is refused against a genesis install. A role observed mutable mints ArtifactUpgradePolicyV1::ExactAuthority naming exactly that key; a revoked one mints Immutable as before. Core is the one role whose answer depends on the campaign: a genesis-installed Core binds None because the supervisor revokes it, while an observed Core binds what it carries because the external driver has no revoke stage -- and a plan of the second kind is one the run supervisor refuses.\n\n--keypair-seed is a TEST-ONLY affordance and is REFUSED unless the spec's RPC endpoint is on localhost or 127.0.0.1. With it, every signing key the campaign generates is derived deterministically as SHA-256(domain || 0 || seed || 0 || role-name || 0 || per-role index) read as an ed25519 secret seed, which collapses the find_program_address bump-search noise the gauntlet's compute budgets have to tolerate. It also makes every one of those private keys reproducible by anyone who can read the seed off a command line, a shell history or a checked-in script, so on any public cluster it would hand a stranger the campaign's funded accounts, mint authorities and upgrade authorities. Default is a fresh unreproducible key per request."
+        "Usage:\n  dclutch-local-successor-bootstrap prepare --account-dir ABSOLUTE_NEW_DIR --output ABSOLUTE_NEW_JSON --deployment-set-journal ABSOLUTE_JSON --rpc-url https://api.devnet.solana.com --i-mean-devnet DEVNET_GENESIS --solana-cli ABSOLUTE_EXECUTABLE --custody-observed-programdata ABSOLUTE_BODY --resolution-observed-programdata ABSOLUTE_BODY --claims-observed-programdata ABSOLUTE_BODY --trading-observed-programdata ABSOLUTE_BODY --core-observed-programdata ABSOLUTE_BODY\n  dclutch-local-successor-bootstrap run --spec ABSOLUTE_JSON [--keypair-seed 64_LOWERCASE_HEX]\n  dclutch-local-successor-bootstrap demo-market --registry-program-id PUBKEY\n\nThe checked deployment-set form is the only prepare admission for the permanent devnet set. Registry and Rent are exact CarryForward rows sourced only from the authenticated one-context snapshot; their raw program, ELF, ProgramData, semantic, slot, authority, and publication flags are refused. Custody, Resolution, Claims, Trading, and Core require exact complete Upgrade receipts and hostile current ProgramData bodies. Prepare first reruns the key-free live finalized audit, then rehashes all evidence and reproduces the existing Registry/Rent ArtifactRelease records and singleton profile byte-for-byte."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn checked(extra: &[&str]) -> Vec<String> {
+        let mut arguments = vec![
+            "--deployment-set-journal".to_owned(),
+            "/this-file-must-not-be-read.json".to_owned(),
+        ];
+        arguments.extend(extra.iter().map(|value| (*value).to_owned()));
+        arguments
+    }
+
+    #[test]
+    fn checked_prepare_cli_refuses_raw_infrastructure_before_evidence_or_rpc() {
+        for hostile in [
+            vec!["--registry-program-id", "11111111111111111111111111111111"],
+            vec!["--registry-observed-programdata", "/tmp/substituted.bin"],
+            vec!["--rent-credit-live-elf-sha256", "11"],
+            vec![
+                "--core-expected-upgrade-authority",
+                "11111111111111111111111111111111",
+            ],
+            vec!["--record-publication", "genesis"],
+        ] {
+            let refusal = run_prepare(checked(&hostile)).expect_err("raw checked input refuses");
+            assert!(
+                refusal.0.contains("forbidden") || refusal.0.contains("requires"),
+                "{}",
+                refusal.0
+            );
+            assert!(
+                !refusal.0.contains("this-file-must-not-be-read"),
+                "the hostile flag must refuse before evidence I/O: {}",
+                refusal.0
+            );
+        }
+    }
+
+    #[test]
+    fn checked_prepare_cli_has_no_receipt_or_disposition_override_flags() {
+        for hostile in [
+            vec!["--registry-receipt", "/tmp/fake.json"],
+            vec!["--registry-disposition", "upgrade"],
+            vec!["--rent-credit-disposition", "upgrade"],
+        ] {
+            let refusal = run_prepare(checked(&hostile)).expect_err("unknown authority flag");
+            assert!(
+                refusal.0.contains("unknown prepare argument"),
+                "{}",
+                refusal.0
+            );
+        }
+    }
 }

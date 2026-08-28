@@ -22,7 +22,7 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -33,6 +33,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use crate::{
     Error, Result,
     model::{
+        CheckedDeploymentDispositionV1, CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
         CoreBootstrapPin, GenesisAccountPin, InfrastructureProfilePin, ProgramPin, RecordPair,
         SuccessorPlan,
     },
@@ -75,6 +76,7 @@ pub(crate) struct PrepareArgs {
     pub(crate) rent_credit_elf: PathBuf,
     pub(crate) rent_credit_sha256: String,
     pub(crate) rent_credit_semantic_release_id: String,
+    pub(crate) checked_upgrade_set: Option<CheckedUpgradeSetPinV1>,
 }
 
 /// Where one role's deployment slot was read from.
@@ -115,6 +117,9 @@ pub(crate) struct RoleDeploymentInputV1 {
     /// its Loader metadata and ELF tail. Present means the role's release is
     /// minted from an observation.
     pub(crate) observed_programdata: Option<PathBuf>,
+    /// Checked-mode-only exact ProgramData body derived from authenticated
+    /// CarryForward evidence. No public flag populates this field.
+    pub(crate) observed_programdata_bytes: Option<Vec<u8>>,
     /// Declared SHA-256 of the complete live ELF tail inside the observed
     /// ProgramData account, including Loader allocation padding. Required
     /// exactly when `observed_programdata` is present.
@@ -221,8 +226,16 @@ fn role_deployment(
         (Some(declared), _) => Some(declared),
         (None, fixed) => fixed,
     };
-    let (image, source) = match input.observed_programdata.as_deref() {
-        Some(path) => {
+    let (image, source) = match (
+        input.observed_programdata.as_deref(),
+        input.observed_programdata_bytes.as_deref(),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err(Error::new(format!(
+                "{label} ProgramData has both a raw path and checked embedded evidence"
+            )));
+        }
+        (Some(path), None) => {
             if input.genesis_deployment_slot != 0 {
                 return Err(Error::new(format!(
                     "{label} may either observe a ProgramData account or fabricate a genesis deployment slot, not both"
@@ -230,7 +243,15 @@ fn role_deployment(
             }
             (fs::read(path)?, DeploymentSourceV1::ObservedAccount)
         }
-        None => {
+        (None, Some(bytes)) => {
+            if input.genesis_deployment_slot != 0 {
+                return Err(Error::new(format!(
+                    "{label} checked ProgramData cannot also select a genesis slot"
+                )));
+            }
+            (bytes.to_vec(), DeploymentSourceV1::ObservedAccount)
+        }
+        (None, None) => {
             // A declaration describes something already on a cluster. The
             // genesis install fabricates its own account image, so a
             // declaration here would be describing bytes this plan is about to
@@ -526,6 +547,160 @@ struct ReleaseFacts {
     id: ArtifactReleaseIdV1,
 }
 
+fn checked_set_role<'a>(
+    set: &'a CheckedUpgradeSetPinV1,
+    ordinal: usize,
+    role: &str,
+) -> Result<&'a CheckedUpgradeRolePinV1> {
+    let pin = set
+        .roles
+        .get(ordinal)
+        .ok_or_else(|| Error::new("checked Upgrade set omitted a permanent role"))?;
+    if pin.role != role {
+        return Err(Error::new(format!(
+            "checked Upgrade set role {ordinal} is {:?}; expected {role}",
+            pin.role
+        )));
+    }
+    Ok(pin)
+}
+
+fn validate_checked_upgrade_set(
+    args: &PrepareArgs,
+    set: &CheckedUpgradeSetPinV1,
+    deployments: [(&str, Pubkey, &Path, &str, &str, &RoleDeployment); 7],
+) -> Result<()> {
+    if args.record_publication != RecordPublicationV1::Transaction {
+        return Err(Error::new(
+            "checked permanent-devnet prepare requires transaction record publication",
+        ));
+    }
+    crate::upgrade::reauthenticate_checked_deployment_set_pin(set)?;
+    if set.schema != crate::upgrade::CHECKED_SET_PREPARE_SCHEMA
+        || set.semantic_derivation != crate::upgrade::SEMANTIC_DERIVATION_V1
+        || set.roles.len() != 7
+    {
+        return Err(Error::new(
+            "checked Upgrade-set schema, semantic derivation, or role closure is invalid",
+        ));
+    }
+    let retained = Pubkey::from_str(&set.retained_upgrade_authority)
+        .map_err(|_| Error::new("checked Upgrade-set retained authority is not a Pubkey"))?;
+    if retained != args.core_bootstrap_upgrade_authority {
+        return Err(Error::new(
+            "Core bootstrap authority differs from the checked Upgrade-set retained authority",
+        ));
+    }
+    // The set journal's canonical order differs from release-plan display
+    // order. Name both coordinates explicitly so no zip can silently swap a
+    // role while preserving internally consistent caller data.
+    let expected = [
+        checked_set_role(set, 0, "registry")?,
+        checked_set_role(set, 1, "rent")?,
+        checked_set_role(set, 2, "custody")?,
+        checked_set_role(set, 3, "resolution")?,
+        checked_set_role(set, 4, "claims")?,
+        checked_set_role(set, 5, "trading")?,
+        checked_set_role(set, 6, "core")?,
+    ];
+    for (index, pin) in expected.iter().enumerate() {
+        let carry = index < 2;
+        let exact_tag = if carry {
+            pin.disposition == CheckedDeploymentDispositionV1::CarryForward
+                && pin.baseline_path.is_none()
+                && pin.baseline_sha256.is_none()
+                && pin.receipt_path.is_none()
+                && pin.receipt_sha256.is_none()
+                && pin.artifact_release_body_hex.is_some()
+                && pin.artifact_release_id.is_some()
+                && pin.carried_programdata_base64.is_some()
+        } else {
+            pin.disposition == CheckedDeploymentDispositionV1::Upgrade
+                && pin.baseline_path.is_some()
+                && pin.baseline_sha256.is_some()
+                && pin.receipt_path.is_some()
+                && pin.receipt_sha256.is_some()
+                && pin.artifact_release_body_hex.is_none()
+                && pin.artifact_release_id.is_none()
+                && pin.carried_programdata_base64.is_none()
+        };
+        if !exact_tag {
+            return Err(Error::new(format!(
+                "checked deployment-set role {} violates its exact Upgrade/CarryForward field closure",
+                pin.role
+            )));
+        }
+    }
+    for ((label, program, elf, candidate_sha, semantic, deployment), pin) in
+        deployments.into_iter().zip(expected)
+    {
+        let canonical_elf = fs::canonicalize(elf)?;
+        if pin.role != label
+            || pin.program_id != program.to_string()
+            || pin.programdata_id != programdata(program).to_string()
+            || pin.checked_candidate_elf_path != canonical_elf.display().to_string()
+            || pin.checked_candidate_elf_sha256 != candidate_sha
+            || pin.semantic_release_id != semantic
+            || deployment.source != DeploymentSourceV1::ObservedAccount
+            || pin.live_elf_sha256 != hex(&deployment.live_elf_sha256)
+            || pin.deployment_slot != deployment.deployment_slot
+            || pin.programdata_account_sha256 != hex(&sha256_bytes(&deployment.image))
+            || deployment.upgrade_authority != Some(retained.to_bytes())
+        {
+            return Err(Error::new(format!(
+                "{label} prepare facts differ from the authenticated Upgrade-set role; raw caller substitution is refused"
+            )));
+        }
+        hex32(&pin.programdata_account_sha256).map_err(|_| {
+            Error::new(format!(
+                "{label} checked Upgrade receipt ProgramData account digest is invalid"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_carried_infrastructure_projection(
+    set: &CheckedUpgradeSetPinV1,
+    registry: ReleaseFacts,
+    rent: ReleaseFacts,
+    profile_address: Pubkey,
+    profile_bytes: &[u8],
+) -> Result<()> {
+    let registry_pin = checked_set_role(set, 0, "registry")?;
+    let rent_pin = checked_set_role(set, 1, "rent")?;
+    for (label, pin, facts) in [
+        ("registry", registry_pin, registry),
+        ("rent", rent_pin, rent),
+    ] {
+        let expected_body = pin
+            .artifact_release_body_hex
+            .as_deref()
+            .ok_or_else(|| Error::new(format!("CarryForward {label} omitted artifact body")))?;
+        let expected_id = pin
+            .artifact_release_id
+            .as_deref()
+            .ok_or_else(|| Error::new(format!("CarryForward {label} omitted artifact ID")))?;
+        if hex(&facts.release.to_bytes()) != expected_body
+            || hex(facts.id.as_bytes()) != expected_id
+        {
+            return Err(Error::new(format!(
+                "checked prepare would replace the carried {label} ArtifactRelease instead of reusing it byte-for-byte"
+            )));
+        }
+    }
+    let carry = &set.infrastructure_carry_forward;
+    if profile_address.to_string() != carry.profile_address
+        || hex(profile_bytes) != carry.profile_body_hex
+        || hex(&sha256_bytes(profile_bytes)) != carry.profile_body_sha256
+    {
+        return Err(Error::new(
+            "checked prepare would replace the carried singleton infrastructure profile instead of reusing it byte-for-byte",
+        ));
+    }
+    Ok(())
+}
+
 impl ReleaseFacts {
     fn binding(self) -> ExecutionRoleBindingV1 {
         ExecutionRoleBindingV1::new(self.release.program(), self.id)
@@ -580,6 +755,71 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         role_deployment("Custody", &custody_elf, None, &args.deployments.custody)?;
     let rent_deployment =
         role_deployment("RentCredit", &rent_elf, None, &args.deployments.rent_credit)?;
+
+    if let Some(set) = &args.checked_upgrade_set {
+        validate_checked_upgrade_set(
+            &args,
+            set,
+            [
+                (
+                    "registry",
+                    args.registry_program,
+                    &args.registry_elf,
+                    &args.registry_sha256,
+                    &args.registry_semantic_release_id,
+                    &registry_deployment,
+                ),
+                (
+                    "rent",
+                    args.rent_credit_program,
+                    &args.rent_credit_elf,
+                    &args.rent_credit_sha256,
+                    &args.rent_credit_semantic_release_id,
+                    &rent_deployment,
+                ),
+                (
+                    "custody",
+                    args.custody_program,
+                    &args.custody_elf,
+                    &args.custody_sha256,
+                    &args.custody_semantic_release_id,
+                    &custody_deployment,
+                ),
+                (
+                    "resolution",
+                    args.resolution_program,
+                    &args.resolution_elf,
+                    &args.resolution_sha256,
+                    &args.resolution_semantic_release_id,
+                    &resolution_deployment,
+                ),
+                (
+                    "claims",
+                    args.claims_program,
+                    &args.claims_elf,
+                    &args.claims_sha256,
+                    &args.claims_semantic_release_id,
+                    &claims_deployment,
+                ),
+                (
+                    "trading",
+                    args.trading_program,
+                    &args.trading_elf,
+                    &args.trading_sha256,
+                    &args.trading_semantic_release_id,
+                    &trading_deployment,
+                ),
+                (
+                    "core",
+                    args.core_program,
+                    &args.core_elf,
+                    &args.core_sha256,
+                    &args.core_semantic_release_id,
+                    &core_deployment,
+                ),
+            ],
+        )?;
+    }
 
     // What a release BINDS is the authority its ProgramData carries AT
     // ACTIVATION, which is not always the authority observed now. Nothing in
@@ -640,7 +880,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         trading_deployment.upgrade_authority,
     )?;
     let resolution_semantic = hex32(&args.resolution_semantic_release_id)?;
-    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
+    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
         return Err(Error::new(
             "Resolution semantic release ID does not match the selected executable contract",
         ));
@@ -691,6 +931,15 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         &args.core_program,
     )
     .0;
+    if let Some(set) = &args.checked_upgrade_set {
+        validate_carried_infrastructure_projection(
+            set,
+            registry,
+            rent,
+            infrastructure_address,
+            &infrastructure_bytes,
+        )?;
+    }
 
     let provider = local_validator_release_v1()
         .map_err(|error| Error::new(format!("local Pyth release projection: {error:?}")))?;
@@ -808,6 +1057,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             // mutable substrate it has no revoke stage for.
             release_recognition_requires_revoke: core_activation_upgrade_authority.is_none(),
         },
+        checked_upgrade_set: args.checked_upgrade_set,
         infrastructure_profile: InfrastructureProfilePin {
             address: infrastructure_address.to_string(),
             schema_id: hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1),
@@ -964,6 +1214,21 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
         args.custody_program,
         args.rent_credit_program,
     ])?;
+    if args.checked_upgrade_set.is_none()
+        && crate::upgrade::is_permanent_devnet_program_set(&[
+            args.registry_program,
+            args.rent_credit_program,
+            args.custody_program,
+            args.resolution_program,
+            args.claims_program,
+            args.trading_program,
+            args.core_program,
+        ])
+    {
+        return Err(Error::new(
+            "the permanent devnet program set requires --upgrade-set-journal; raw release facts cannot authorize activation",
+        ));
+    }
     if args.core_bootstrap_upgrade_authority == Pubkey::default()
         || args.core_bootstrap_upgrade_authority == system_program::ID
         || args.core_bootstrap_upgrade_authority == bpf_loader_upgradeable::ID
@@ -1054,7 +1319,7 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
             )));
         }
         match (
-            input.observed_programdata.is_some(),
+            input.observed_programdata.is_some() || input.observed_programdata_bytes.is_some(),
             input.expected_live_elf_sha256.as_deref(),
         ) {
             (true, Some(digest)) => {
@@ -1455,7 +1720,7 @@ mod tests {
             resolution_program: program(5),
             resolution_elf,
             resolution_sha256,
-            resolution_semantic_release_id: hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+            resolution_semantic_release_id: hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V5),
             custody_program: program(6),
             custody_elf,
             custody_sha256,
@@ -1464,6 +1729,7 @@ mod tests {
             rent_credit_elf,
             rent_credit_sha256,
             rent_credit_semantic_release_id: hex(&[17; 32]),
+            checked_upgrade_set: None,
             record_publication: publication,
             deployments,
         });

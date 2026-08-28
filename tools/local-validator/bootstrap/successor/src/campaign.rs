@@ -71,8 +71,10 @@ use std::{
 };
 
 use dclutch_pyth_svm::devnet_release_v1;
+use dclutch_registry_contract::ArtifactReleaseV1;
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
+    ProgramV3View,
 };
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Value, json};
@@ -85,7 +87,7 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 use crate::{
     Error, Result,
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
-    model::SuccessorPlan,
+    model::{CheckedUpgradeRolePinV1, ProgramPin, SuccessorPlan},
     plan::{hex, pubkey},
     rpc::{Rpc, WritePolicyV1},
     runtime,
@@ -1083,19 +1085,22 @@ pub(crate) fn wallet_arithmetic(
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| Error::new("getBalance omitted a u64 value"))?;
     let mut record_rent = 0_u64;
-    for pair in plan.records.values() {
-        let body = runtime::decode_hex(&pair.body_hex)?;
-        record_rent = record_rent.saturating_add(rpc.minimum_balance(body.len())?);
+    for label in plan.records.keys() {
+        record_rent = record_rent.saturating_add(runtime::remaining_record_publication_rent(
+            rpc, plan, label, payer,
+        )?);
     }
-    let profile_rent =
-        rpc.minimum_balance(runtime::decode_hex(&plan.infrastructure_profile.body_hex)?.len())?;
-    // The activation cache's width is the contract's, not a number this tool
-    // owns; read the account if it exists and price the plan's own profile
-    // width otherwise, which is the closest honest proxy available offline.
-    let activation_rent = match rpc.account(pubkey(&plan.activation)?)? {
-        Some(account) => rpc.minimum_balance(account.data.len())?,
-        None => profile_rent,
-    };
+    let profile_address = pubkey(&plan.infrastructure_profile.address)?;
+    let profile_body = runtime::decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let profile_minimum = rpc.minimum_balance(profile_body.len())?;
+    let profile_account = rpc.account(profile_address)?;
+    let profile_rent = remaining_profile_rent(
+        profile_account.as_ref(),
+        pubkey(&plan.core.program_id)?,
+        &profile_body,
+        profile_minimum,
+    )?;
+    let activation_rent = runtime::remaining_activation_rent(rpc, plan)?;
     let fees = ESTIMATED_TRANSACTIONS.saturating_mul(LAMPORTS_PER_SIGNATURE);
     let required = record_rent
         .saturating_add(profile_rent)
@@ -1110,6 +1115,27 @@ pub(crate) fn wallet_arithmetic(
         estimated_fee_lamports: fees,
         required_lamports: required,
     })
+}
+
+fn remaining_profile_rent(
+    account: Option<&crate::rpc::RpcAccount>,
+    core: Pubkey,
+    expected_body: &[u8],
+    minimum_balance: u64,
+) -> Result<u64> {
+    let Some(account) = account else {
+        return Ok(minimum_balance);
+    };
+    if account.owner != core
+        || account.executable
+        || account.data != expected_body
+        || account.lamports < minimum_balance
+    {
+        return Err(Error::new(
+            "existing infrastructure profile conflicts with the exact plan coordinate",
+        ));
+    }
+    Ok(0)
 }
 
 /// Authenticate the committed devnet Pyth release row against live accounts.
@@ -1252,6 +1278,221 @@ pub(crate) fn deploy_ladder(plan: &SuccessorPlan, origin: &ClusterOriginV1) -> V
     lines
 }
 
+fn checked_role<'a>(
+    plan: &'a SuccessorPlan,
+    set_role: &'a CheckedUpgradeRolePinV1,
+) -> Result<(&'a ProgramPin, &'static str)> {
+    Ok(match set_role.role.as_str() {
+        "registry" => (&plan.registry, "registry_artifact_release"),
+        "rent" => (&plan.rent_credit, "rent_artifact_release"),
+        "custody" => (&plan.custody, "custody_artifact_release"),
+        "resolution" => (&plan.resolution, "resolution_artifact_release"),
+        "claims" => (&plan.claims, "claims_artifact_release"),
+        "trading" => (&plan.trading, "trading_artifact_release"),
+        "core" => (&plan.core, "core_artifact_release"),
+        other => {
+            return Err(Error::new(format!(
+                "unknown checked deployment role {other}"
+            )));
+        }
+    })
+}
+
+fn authenticate_checked_plan_role_projection(
+    plan: &SuccessorPlan,
+    set_role: &CheckedUpgradeRolePinV1,
+    retained_authority: Pubkey,
+) -> Result<()> {
+    let (pin, record_label) = checked_role(plan, set_role)?;
+    let candidate = fs::read(&pin.checked_candidate_elf_path)?;
+    let candidate_sha = hex(&<sha2::Sha256 as sha2::Digest>::digest(&candidate));
+    if pin.program_id != set_role.program_id
+        || pin.programdata_id != set_role.programdata_id
+        || pin.elf_path != pin.checked_candidate_elf_path
+        || pin.elf_sha256 != pin.checked_candidate_elf_sha256
+        || pin.checked_candidate_elf_path != set_role.checked_candidate_elf_path
+        || pin.checked_candidate_elf_sha256 != set_role.checked_candidate_elf_sha256
+        || candidate_sha != set_role.checked_candidate_elf_sha256
+        || pin.live_elf_sha256 != set_role.live_elf_sha256
+        || pin.semantic_release_id != set_role.semantic_release_id
+        || pin.deployment_slot != set_role.deployment_slot
+        || pin.programdata_sha256 != set_role.programdata_account_sha256
+        || pin.upgrade_authority.as_deref() != Some(retained_authority.to_string().as_str())
+        || pin.deployment_source != "observed-programdata-account"
+    {
+        return Err(Error::new(format!(
+            "saved plan role {} differs from its authenticated deployment-set evidence",
+            set_role.role
+        )));
+    }
+    let pair = plan
+        .records
+        .get(record_label)
+        .ok_or_else(|| Error::new(format!("saved plan omitted {record_label}")))?;
+    let body = runtime::decode_hex(&pair.body_hex)?;
+    let body_sha = hex(&<sha2::Sha256 as sha2::Digest>::digest(&body));
+    let release = ArtifactReleaseV1::decode(&body).map_err(|error| {
+        Error::new(format!(
+            "saved plan {record_label} is not an ArtifactRelease: {error:?}"
+        ))
+    })?;
+    if pair.content_sha256 != body_sha
+        || pin.artifact_release_id != body_sha
+        || release.program().to_bytes() != pubkey(&pin.program_id)?.to_bytes()
+        || release.programdata() != pubkey(&pin.programdata_id)?.to_bytes()
+        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.semantic_release_id().as_bytes()
+            != &crate::plan::hex32(&pin.semantic_release_id)?
+        || release.elf_digest() != crate::plan::hex32(&pin.live_elf_sha256)?
+        || release.deployment_slot() != pin.deployment_slot
+        || release.upgrade_authority() != Some(retained_authority.to_bytes())
+    {
+        return Err(Error::new(format!(
+            "saved plan {record_label} differs from its checked mutable slot pin"
+        )));
+    }
+    if set_role.disposition == crate::model::CheckedDeploymentDispositionV1::CarryForward
+        && (set_role.artifact_release_body_hex.as_deref() != Some(pair.body_hex.as_str())
+            || set_role.artifact_release_id.as_deref() != Some(body_sha.as_str()))
+    {
+        return Err(Error::new(format!(
+            "saved plan replaced carried {} ArtifactRelease bytes",
+            set_role.role
+        )));
+    }
+    Ok(())
+}
+
+/// A saved public-cluster plan is an untrusted projection. Before any keypair
+/// file is loaded, rehash its mixed deployment-set evidence and bind every
+/// mutable Program pin and artifact body back to that owner.
+fn authenticate_checked_campaign_plan(plan: &SuccessorPlan) -> Result<()> {
+    let mutable = runtime::role_pins(plan)
+        .into_iter()
+        .any(|(_, pin)| pin.upgrade_authority.is_some());
+    require_checked_mutable_binding(mutable, plan.checked_upgrade_set.is_some())?;
+    let Some(set) = plan.checked_upgrade_set.as_ref() else {
+        return Ok(());
+    };
+    crate::upgrade::reauthenticate_checked_deployment_set_pin(set)?;
+    if set.devnet_genesis_hash != crate::cluster::DEVNET_GENESIS_HASH
+        || plan.record_publication != "transaction"
+        || plan.core_bootstrap.release_recognition_requires_revoke
+        || plan.core_bootstrap.upgrade_authority != set.retained_upgrade_authority
+        || set.roles.len() != 7
+    {
+        return Err(Error::new(
+            "saved checked plan header differs from its permanent-devnet deployment set",
+        ));
+    }
+    let retained = pubkey(&set.retained_upgrade_authority)?;
+    for role in &set.roles {
+        authenticate_checked_plan_role_projection(plan, role, retained)?;
+        let (_, record_label) = checked_role(plan, role)?;
+        let _ = runtime::record(plan, record_label)?;
+    }
+    let carry = &set.infrastructure_carry_forward;
+    if plan.infrastructure_profile.address != carry.profile_address
+        || plan.infrastructure_profile.body_hex != carry.profile_body_hex
+        || plan.infrastructure_profile.body_sha256 != carry.profile_body_sha256
+        || plan.infrastructure_profile.registry_artifact_release_id
+            != plan.registry.artifact_release_id
+        || plan.infrastructure_profile.rent_artifact_release_id
+            != plan.rent_credit.artifact_release_id
+    {
+        return Err(Error::new(
+            "saved plan replaced the authenticated carried infrastructure profile",
+        ));
+    }
+    runtime::authenticate_checked_activation_projection(plan)
+}
+
+fn require_checked_mutable_binding(mutable: bool, has_checked_set: bool) -> Result<()> {
+    if mutable && !has_checked_set {
+        return Err(Error::new(
+            "mutable saved plan is not bound to checked deployment-set evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_live_checked_role(
+    role: &str,
+    pin: &ProgramPin,
+    program: &crate::rpc::RpcAccount,
+    programdata: &crate::rpc::RpcAccount,
+    candidate: &[u8],
+) -> Result<()> {
+    let program_key = pubkey(&pin.program_id)?;
+    let programdata_key = pubkey(&pin.programdata_id)?;
+    let program_view = ProgramV3View::parse(&program.data)
+        .map_err(|error| Error::new(format!("{role} Program account: {error:?}")))?;
+    let programdata_view = ProgramDataV3View::parse(&programdata.data)
+        .map_err(|error| Error::new(format!("{role} ProgramData account: {error:?}")))?;
+    let authority = pin
+        .upgrade_authority
+        .as_deref()
+        .map(pubkey)
+        .transpose()?
+        .map(|key| key.to_bytes());
+    let live = programdata_view.elf();
+    if program.owner != bpf_loader_upgradeable::ID
+        || !program.executable
+        || program_view.programdata() != programdata_key.to_bytes()
+        || Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0
+            != programdata_key
+        || programdata.owner != bpf_loader_upgradeable::ID
+        || programdata.executable
+        || hex(&<sha2::Sha256 as sha2::Digest>::digest(&programdata.data)) != pin.programdata_sha256
+        || programdata_view.deployment_slot() != pin.deployment_slot
+        || programdata_view.upgrade_authority() != authority
+        || hex(&<sha2::Sha256 as sha2::Digest>::digest(live)) != pin.live_elf_sha256
+        || live.get(..candidate.len()) != Some(candidate)
+        || live.get(candidate.len()..).is_none_or(|padding| {
+            padding.len() != pin.live_elf_padding_bytes || padding.iter().any(|byte| *byte != 0)
+        })
+    {
+        return Err(Error::new(format!(
+            "{role} live Program/ProgramData/link/slot/authority differs from the checked saved plan"
+        )));
+    }
+    Ok(())
+}
+
+fn authenticate_checked_live_substrate(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+    let Some(set) = plan.checked_upgrade_set.as_ref() else {
+        return Ok(());
+    };
+    let mut addresses = Vec::with_capacity(14);
+    for role in &set.roles {
+        let (pin, _) = checked_role(plan, role)?;
+        addresses.push(pubkey(&pin.program_id)?);
+        addresses.push(pubkey(&pin.programdata_id)?);
+    }
+    let floor = set
+        .roles
+        .iter()
+        .map(|role| role.deployment_slot)
+        .chain(std::iter::once(
+            set.infrastructure_carry_forward.context_slot,
+        ))
+        .max()
+        .ok_or_else(|| Error::new("checked deployment set omitted roles"))?;
+    let (_, accounts) = rpc.finalized_accounts(&addresses, floor)?;
+    for (index, role) in set.roles.iter().enumerate() {
+        let (pin, _) = checked_role(plan, role)?;
+        let program = accounts[index * 2]
+            .as_ref()
+            .ok_or_else(|| Error::new(format!("{} Program is absent", role.role)))?;
+        let programdata = accounts[index * 2 + 1]
+            .as_ref()
+            .ok_or_else(|| Error::new(format!("{} ProgramData is absent", role.role)))?;
+        let candidate = fs::read(&pin.checked_candidate_elf_path)?;
+        authenticate_live_checked_role(&role.role, pin, program, programdata, &candidate)?;
+    }
+    Ok(())
+}
+
 /// Run the driver.
 pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
     if args.execute && args.evidence_path.is_none() {
@@ -1260,6 +1501,7 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
         ));
     }
     let plan: SuccessorPlan = serde_json::from_slice(&fs::read(&args.plan_path)?)?;
+    authenticate_checked_campaign_plan(&plan)?;
     let plan_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(fs::read(
         &args.plan_path,
     )?));
@@ -1274,6 +1516,7 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
         WritePolicyV1::ReadsOnly
     };
     let mut rpc = Rpc::connect_cluster(&args.origin, policy)?;
+    authenticate_checked_live_substrate(&mut rpc, &plan)?;
 
     let forge = KeyForge::persisted(args.keypairs.clone(), REQUIRED_ROLES)?;
     let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
@@ -1629,6 +1872,134 @@ pub(crate) fn acknowledgment_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rpc_account(
+        owner: Pubkey,
+        lamports: u64,
+        executable: bool,
+        data: &[u8],
+    ) -> crate::rpc::RpcAccount {
+        crate::rpc::RpcAccount {
+            lamports,
+            owner,
+            executable,
+            rent_epoch: 0,
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn profile_budget_prices_only_a_missing_exact_coordinate() {
+        let core = Pubkey::new_unique();
+        let body = [7_u8; 144];
+        let minimum = 1_893_120;
+        assert_eq!(
+            remaining_profile_rent(None, core, &body, minimum).expect("missing profile"),
+            minimum
+        );
+        let exact = rpc_account(core, minimum, false, &body);
+        assert_eq!(
+            remaining_profile_rent(Some(&exact), core, &body, minimum).expect("exact profile"),
+            0,
+            "an authenticated carried singleton must not be budgeted a second time"
+        );
+    }
+
+    #[test]
+    fn profile_budget_refuses_every_conflicting_existing_shape() {
+        let core = Pubkey::new_unique();
+        let body = [9_u8; 144];
+        let minimum = 1_893_120;
+        let hostiles = [
+            rpc_account(Pubkey::new_unique(), minimum, false, &body),
+            rpc_account(core, minimum, true, &body),
+            rpc_account(core, minimum, false, &[8_u8; 144]),
+            rpc_account(core, minimum - 1, false, &body),
+        ];
+        for hostile in &hostiles {
+            let refusal = remaining_profile_rent(Some(hostile), core, &body, minimum)
+                .expect_err("conflicting profile must refuse");
+            assert!(refusal.0.contains("conflicts"), "{}", refusal.0);
+        }
+    }
+
+    #[test]
+    fn mutable_saved_plan_requires_checked_set_before_key_loading() {
+        require_checked_mutable_binding(false, false).expect("legacy immutable plan");
+        require_checked_mutable_binding(true, true).expect("checked mutable plan");
+        let refusal = require_checked_mutable_binding(true, false)
+            .expect_err("unbound mutable plan must refuse");
+        assert!(refusal.0.contains("not bound"), "{}", refusal.0);
+    }
+
+    #[test]
+    fn checked_live_role_binds_program_link_full_programdata_slot_authority_and_payload() {
+        let program_key = Pubkey::new_unique();
+        let programdata_key =
+            Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let authority = Pubkey::new_unique();
+        let candidate = b"\x7fELFchecked-live";
+        let mut live = candidate.to_vec();
+        live.extend_from_slice(&[0; 7]);
+        let programdata_bytes = crate::plan::loader_programdata_bytes(&live, 818, Some(authority));
+        let mut program_bytes = vec![0; 36];
+        program_bytes[..4].copy_from_slice(&2_u32.to_le_bytes());
+        program_bytes[4..].copy_from_slice(programdata_key.as_ref());
+        let mut pin = pin();
+        pin.program_id = program_key.to_string();
+        pin.programdata_id = programdata_key.to_string();
+        pin.checked_candidate_elf_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(candidate));
+        pin.elf_sha256 = pin.checked_candidate_elf_sha256.clone();
+        pin.live_elf_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(&live));
+        pin.live_elf_padding_bytes = 7;
+        pin.upgrade_authority = Some(authority.to_string());
+        pin.deployment_slot = 818;
+        pin.deployment_source = "observed-programdata-account".into();
+        pin.programdata_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(&programdata_bytes));
+        let program = rpc_account(bpf_loader_upgradeable::ID, 1, true, &program_bytes);
+        let programdata = rpc_account(bpf_loader_upgradeable::ID, 1, false, &programdata_bytes);
+        authenticate_live_checked_role("core", &pin, &program, &programdata, candidate)
+            .expect("exact live role");
+
+        let mut stale = pin.clone();
+        stale.deployment_slot += 1;
+        assert!(
+            authenticate_live_checked_role("core", &stale, &program, &programdata, candidate)
+                .is_err()
+        );
+        let mut substituted_authority = pin.clone();
+        substituted_authority.upgrade_authority = Some(Pubkey::new_unique().to_string());
+        assert!(
+            authenticate_live_checked_role(
+                "core",
+                &substituted_authority,
+                &program,
+                &programdata,
+                candidate,
+            )
+            .is_err()
+        );
+        let mut wrong_link_bytes = program_bytes;
+        wrong_link_bytes[4..].copy_from_slice(Pubkey::new_unique().as_ref());
+        let wrong_link = rpc_account(bpf_loader_upgradeable::ID, 1, true, &wrong_link_bytes);
+        assert!(
+            authenticate_live_checked_role("core", &pin, &wrong_link, &programdata, candidate)
+                .is_err()
+        );
+        let mut tampered_plan_pin = pin;
+        tampered_plan_pin.programdata_sha256 = "11".repeat(32);
+        assert!(
+            authenticate_live_checked_role(
+                "core",
+                &tampered_plan_pin,
+                &program,
+                &programdata,
+                candidate,
+            )
+            .is_err(),
+            "saved-plan ProgramData digest substitution must refuse"
+        );
+    }
 
     fn test_direct_compiler(registry: Pubkey) -> crate::direct_market::DirectMarketCompilerOwnedV1 {
         crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
@@ -2027,6 +2398,7 @@ mod tests {
                     post_revoke_programdata_sha256: String::new(),
                     release_recognition_requires_revoke: false,
                 },
+                checked_upgrade_set: None,
                 infrastructure_profile: crate::model::InfrastructureProfilePin {
                     address: String::new(),
                     schema_id: String::new(),

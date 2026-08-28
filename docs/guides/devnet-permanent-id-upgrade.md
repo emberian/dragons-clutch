@@ -4,6 +4,8 @@ You can update one of the seven permanent devnet program ids without closing or
 recycling it. The operator makes every write one role at a time. The tool accepts
 only Solana devnet, requires the cluster's exact genesis hash, and requires a
 second acknowledgement naming the role and program id you will change.
+Mutation also requires an exact acknowledgement that you kept the named fee
+payer exclusive for the whole opaque CLI window.
 
 The tool never discovers a wallet. You pass keypair paths to the Solana CLI, and
 the operator does not open those files itself. It checks the public addresses
@@ -125,6 +127,16 @@ acknowledgement has this exact value:
 ROLE:PROGRAM_ID
 ```
 
+Your execute-only payer acknowledgement has this exact value:
+
+```text
+--i-kept-fee-payer-exclusive ROLE:PROGRAM_ID:FEE_PAYER
+```
+
+From the finalized pre-observation until the finalized post-observation, do not
+use that payer for any unrelated transaction. This is an operator-stated
+exclusive window, not a fact the chain can prove after the fact.
+
 After the preflight passes, repeat the exact command with `--execute`. The
 mutation mode additionally verifies both keypair public addresses immediately
 before it calls `solana program deploy` for the existing id. Pass these source
@@ -148,30 +160,52 @@ Loader-v3 Upgrade instruction for the exact Program, ProgramData, retained
 authority, buffer, spill, rent sysvar, and clock sysvar. Its account keys and
 balance vectors must prove the explicit payer is signer/writable account zero,
 the payer delta equals the finalized transaction fee, and ProgramData lamports
-did not move. Wallet activity outside this exact transaction is irrelevant to
-the arithmetic. Finally, the operator dumps the deployed bytes and verifies the
-dump against the raw or exact zero-padded live image.
+did not move. Separately, the receipt bridges the wallet balance immediately
+before `solana program deploy` to the finalized wallet balance after the whole
+CLI invocation:
 
-## 6. Audit the ordered seven-role cycle
+```text
+operation_observed_net_spend_lamports = wallet_before - wallet_after
+unattributed_cli_net_cost_lamports = operation_observed_net_spend_lamports
+  - transaction_fee_lamports
+```
 
-Use `devnet-upgrade-set-journal-v1` to see which one role is next. This command
-is key-free and read-only. It has no `--execute`, keypair, signing, loop, or
-receipt-writing mode. It never replaces `devnet-upgrade-v1`: you still preflight
-and update exactly one role with that command.
+The final Upgrade fee is exact transaction evidence. The second value is only
+aggregate net cost under your exclusive-payer acknowledgement. It can include
+buffer creation/write/close fees and the net effect of buffer-rent funding and
+refunds; the receipt does not attribute those lifecycle transactions
+individually and never calls the final Upgrade fee the operation's total cost.
+Finally, the operator dumps the deployed bytes and verifies the dump against
+the raw or exact zero-padded live image.
 
-The set journal is an immutable reference manifest, not Upgrade acceptance. You
+## 6. Audit the mixed deployment set
+
+Use `devnet-deployment-set-journal-v2` to see which execution role is next.
+This command is key-free and read-only. It has no `--execute`, keypair,
+signing, loop, or receipt-writing mode. It never replaces
+`devnet-upgrade-v1`: you still preflight and update exactly one role with that
+command. Registry and Rent are not Upgrade targets in this iteration. They are
+explicit `carry-forward` rows authenticated from the existing DEPLOY-1 state.
+
+The deployment-set journal is an immutable reference manifest, not Upgrade
+acceptance. You
 may write it yourself because none of its fields can make a role complete. It
 contains no copied Loader poststate and no success boolean. A completed role is
 recognized only when its pinned one-role receipt and dump both rehash exactly,
 the receipt passes the normal checked-gate binding, and a fresh finalized read
 matches its exact Program, ProgramData, payload, authority, slot, transaction,
-arithmetic, and dump.
+arithmetic, and dump. Registry and Rent are recognized only when one pinned
+`getMultipleAccounts` snapshot rehashes and a fresh one-request finalized read
+matches all nine accounts: both Loader pairs, both artifact raw records, both
+absent staging accounts, and the singleton infrastructure profile. A staging
+account must be RPC `null`; a fabricated System-owned empty account is not
+absence.
 
 The manifest has this shape:
 
 ```json
 {
-  "schema": "dclutch-devnet-upgrade-set-journal-v1",
+  "schema": "dclutch-devnet-deployment-set-journal-v2",
   "checked_release_gate": {
     "canonical_path": "/absolute/release/CHECKED_UPGRADE_GATE.json",
     "sha256": "64_lowercase_hex"
@@ -182,54 +216,58 @@ The manifest has this shape:
   "solana_cli_version": "exact output of solana --version",
   "retained_upgrade_authority": "PUBLIC_KEY",
   "fee_payer": "PUBLIC_KEY",
+  "infrastructure_carry_forward": {
+    "canonical_path": "/absolute/evidence/carry-forward-snapshot.json",
+    "sha256": "64_lowercase_hex"
+  },
   "roles": [
     {
       "role": "registry",
+      "disposition": "carry-forward",
       "program_id": "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",
       "programdata_id": "ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz",
-      "baseline": {
-        "canonical_path": "/absolute/evidence/registry-baseline.json",
-        "sha256": "64_lowercase_hex"
-      },
+      "baseline": null,
       "receipt": {
         "canonical_path": "/absolute/evidence/registry-receipt.json",
         "sha256": null
       },
       "dump": {
-        "canonical_path": "/absolute/evidence/registry-dump.so",
-        "sha256": null
+        "canonical_path": "/absolute/evidence/live-registry.so",
+        "sha256": "e1f4a20f0fefb60ad8f809f153c4403363d298d5eb11b88e29abe404048ac6e1"
       }
     }
   ]
 }
 ```
 
-The example shows one role only so you can see each field. Your manifest must
-contain all seven entries in this exact order and with these permanent pairs:
+The example shows one CarryForward role only. Your manifest must contain all
+seven entries in this exact order and with these permanent pairs and tags:
 
-| order | role | Program | ProgramData |
-|---:|---|---|---|
-| 0 | registry | `Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj` | `ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz` |
-| 1 | rent | `DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3` | `78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy` |
-| 2 | custody | `34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH` | `EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf` |
-| 3 | resolution | `2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd` | `2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f` |
-| 4 | claims | `85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN` | `4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j` |
-| 5 | trading | `5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk` | `AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn` |
-| 6 | core | `HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N` | `AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN` |
+| order | role | tag | Program | ProgramData |
+|---:|---|---|---|---|
+| 0 | registry | `carry-forward` | `Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj` | `ENRSwrUEymWaXyrNtyD4QXXXk3tsTmcTGPTUFvnpsRVz` |
+| 1 | rent | `carry-forward` | `DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3` | `78MW6W4iPzBVLceAwTL51CtyLcpcFM2iGVMDbzZtUFmy` |
+| 2 | custody | `upgrade` | `34dhZkSUUhhFPL98KpWXaoG9aMs3EinZo5xN5epJEgGH` | `EhB7hHJ7vsCW3nCeqbxbJrn5Jsi6gbqwpVhoLMPZ8ENf` |
+| 3 | resolution | `upgrade` | `2GHmxBawHTmwDRzqXuqdeC9A9Gj2HzucRd29wGpfgzmd` | `2QFBQJdLBXAnJWTVK8KeeUtWZEFhQqqN2CbkrWjMjY6f` |
+| 4 | claims | `upgrade` | `85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN` | `4La2511ddSxUcAQfdhKvEeGEasih3TStbQWVFEQKd34j` |
+| 5 | trading | `upgrade` | `5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk` | `AE1cWbCvXedE23XH3otSxvDQ7xVx7WLNMYDc8y8rqkrn` |
+| 6 | core | `upgrade` | `HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N` | `AD6mb5SP6yqc5GFexf3xhpr1wKaZQhS7Hrt41iZhKxaN` |
 
 Use canonical absolute paths, as printed by `realpath`; a symlink in any path is
-refused. Pin each baseline's raw file SHA-256. For an unstarted role, keep the
-receipt and dump digests `null` and make sure neither target exists. After the
-one-role receipt is complete, pin the raw receipt and dump SHA-256 values. A
-later role may not pin either file before every earlier receipt is complete.
+refused. Registry and Rent have no baseline or receipt and pin their exact live
+DEPLOY-1 ELF dumps. Each Upgrade role pins a baseline. For an unstarted Upgrade,
+keep the receipt and dump digests `null` and make sure neither target exists.
+After its one-role receipt is complete, pin the raw receipt and dump SHA-256
+values. A later Upgrade may not pin either file before every earlier Upgrade
+receipt is complete.
 
 Run the audit with:
 
 ```text
-dclutch-local-successor-bootstrap devnet-upgrade-set-journal-v1 \
+dclutch-local-successor-bootstrap devnet-deployment-set-journal-v2 \
   --rpc-url https://api.devnet.solana.com \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
-  --journal /absolute/evidence/upgrade-set-journal.json \
+  --journal /absolute/evidence/deployment-set-journal.json \
   --solana-cli /absolute/pinned/solana
 ```
 
@@ -238,11 +276,62 @@ Before the set is complete, the report contains exactly one `next_role` and no
 resume action; it never authorizes a replay. If the next baseline says capacity
 must grow, the action tells you to extend and capture a fresh baseline. The old
 baseline will fail after extension because the ProgramData slot, width,
-lamports, and account digest moved. Only seven freshly valid complete receipts
-produce the final set digest. That digest binds the one gate/source/tree/devnet/
-CLI identity and every ordered Program, ProgramData, baseline, receipt, and dump
-path plus file hash; the one-role receipts remain the only owners of detailed
-poststate.
+lamports, and account digest moved. Only the fresh two-role CarryForward
+admission plus five freshly valid complete receipts produce the final set
+digest. The v2 digest binds every disposition, the one-context infrastructure
+snapshot, gate/source/tree/devnet/CLI identity, and every ordered Program,
+ProgramData, baseline, receipt, and dump reference. CarryForward can never
+masquerade as an Upgrade receipt.
+
+## 7. Prepare the mixed release plan
+
+Do not upgrade Registry or Rent. Even a byte-identical Upgrade advances the
+Loader slot and supersedes the ArtifactRelease binding stored in the immutable
+singleton `ProtocolInfrastructureProfileV1`. Core cannot overwrite that
+account, and Found reauthenticates its stored bindings against the current
+deployments.
+
+Checked `prepare --deployment-set-journal` rehashes the journal, snapshot, gate,
+five baselines and receipts, all seven dumps, and five canonical candidate ELFs
+again. It forbids every raw program, ELF, semantic, live-hash, authority, slot,
+and publication override. You supply current ProgramData bodies only for the
+five receipt-backed Upgrade roles. Registry and Rent ProgramData bytes come
+only from the authenticated CarryForward snapshot; their public observed-body
+flags are refused.
+
+Prepare derives Registry and Rent semantic IDs only by hostile-decoding their
+existing finalized `ArtifactReleaseV1` bodies. It must reproduce both artifact
+bodies, IDs, raw/staging PDAs, and the singleton profile address and body
+byte-for-byte. The execution release set contains only the five newly upgraded
+roles. Any Registry/Rent receipt, moved slot, substituted semantic, non-null
+staging account, or changed profile stops before plan emission.
+
+Treat the saved plan as an untrusted projection when you start the external
+campaign. Before it reads any keypair file, the campaign rehashes the complete
+mixed deployment-set evidence and binds every saved mutable program pin and
+artifact body back to it. It then reads all seven Program/ProgramData pairs in
+one finalized `getMultipleAccounts` context and requires exact Loader owner and
+privilege shape, Program-to-ProgramData linkage, full ProgramData digest,
+deployment slot, retained authority, live payload digest, and checked-candidate
+plus zero-padding geometry. A mutable saved plan with no checked set, or any
+edited pin, body, link, slot, authority, or payload, stops before key loading.
+
+The campaign's wallet budget is state-aware. Each record is priced by the same
+chain-derived publication planner the executor uses: an exact finalized record
+or valid in-flight cursor is not charged twice, a vacant coordinate is charged
+its exact remaining sponsor debit, and a conflict refuses. The carried
+Registry/Rent records and exact singleton profile therefore cost zero. A
+missing activation cache is charged at
+`ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1`; an exact rent-exempt partial or
+complete cache costs zero, while an underfunded or substituted cache refuses.
+
+Before activation, run the hybrid real-ELF gate with the exact authenticated
+live Registry/Rent dumps beside the five new checked ELFs. It must publish and
+activate the new five-role set, authenticate the unchanged profile, create
+RentCredit, and run DCLTGMF2 through Open. The founding census remains exactly
+59 unique keys and one signature; run every shipped-link frame diagnostic and
+report M-61 only as 20/20 plus its true 20-seed mean. A host-only plan test is
+not a substitute for that gate.
 
 ## Resume rules
 
