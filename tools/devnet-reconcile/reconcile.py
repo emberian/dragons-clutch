@@ -762,7 +762,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
             for ref in sorted(observed_token_states)
         ],
     }
-    if event["kind"] == "direct":
+    if "direct" in event:
         direct = exact_keys(event.get("direct"), {"fillAtoms", "executionPrice", "priceScale", "feeBasisPointsPerSide", "sellerToken", "buyerToken", "feeRecipientToken", "mint"}, set(), "direct facts")
         fill = decimal(direct["fillAtoms"], "Direct fillAtoms")
         price = decimal(direct["executionPrice"], "Direct executionPrice")
@@ -802,7 +802,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         if before["claimCount"] != after["claimCount"] or before["aggregateHex"] != after["aggregateHex"] or before["ownerHex"] != after["ownerHex"] or before["basisHex"] != after["basisHex"] or int(after["revision"]) != int(before["revision"]) + 1:
             refuse("Position transition substitutes identity, geometry, or exact next revision")
         projection["position"] = {"account": ref, "pre": before, "post": after}
-    if event["kind"] == "resolution":
+    if "certificate" in event:
         certificate = exact_keys(event.get("certificate"), {"account", "owner", "dataBase64", "market"}, set(), "certificate facts")
         ref = certificate["account"]
         if ref not in accounts or accounts[ref]["kind"] != "certificate":
@@ -813,7 +813,7 @@ def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], 
         if decoded["marketHex"] != b58decode(market, "certificate market").hex():
             refuse("ResolutionCertificateV2 substitutes its market")
         projection["certificate"] = {"account": ref, "owner": certificate["owner"], "dataSha256": sha256_bytes(b64(certificate["dataBase64"], "certificate data")), **decoded}
-    if event["kind"] == "payout":
+    if "payout" in event:
         payout = exact_keys(event.get("payout"), {"hoardToken", "recipientToken", "position", "principalAtoms", "claimsBurnedAtoms", "mint"}, set(), "payout facts")
         principal = decimal(payout["principalAtoms"], "payout principal")
         hoard = payout["hoardToken"]; recipient = payout["recipientToken"]
