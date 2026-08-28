@@ -451,6 +451,85 @@ function parseOperation(source: Uint8Array): FoundOperationV1 {
   return operation;
 }
 
+function participantLeasePath(outputPath: string): string {
+  return resolve(dirname(outputPath), `.${basename(outputPath)}.user-position.lock`);
+}
+
+function assertPreleasePathCensus(
+  operationPath: string,
+  journalPath: string,
+  binary: string,
+  operation: FoundOperationV1,
+): void {
+  const priceUpdateIndex = operation.market.arguments.indexOf('--price-update');
+  const nonSigners: Array<Readonly<{ label: string; path: string }>> = [
+    { label: 'operation', path: operationPath },
+    { label: 'successor plan', path: operation.plan },
+    { label: 'successor binary', path: binary },
+    { label: 'found journal', path: journalPath },
+    { label: 'Market output', path: operation.market.output },
+    { label: 'campaign evidence', path: operation.campaign.evidence },
+    { label: 'participant evidence', path: operation.participant.output },
+    { label: 'found journal lease', path: operationLockPath(journalPath) },
+    { label: 'campaign evidence lease', path: `${operation.campaign.evidence}.lock` },
+    { label: 'participant evidence lease', path: participantLeasePath(operation.participant.output) },
+  ];
+  if (priceUpdateIndex >= 0) {
+    nonSigners.push({
+      label: 'Market price input',
+      path: operation.market.arguments[priceUpdateIndex + 1] as string,
+    });
+  }
+  const occupied = new Map<string, string>();
+  for (const entry of nonSigners) {
+    const path = resolve(entry.path);
+    const prior = occupied.get(path);
+    if (prior !== undefined) {
+      throw new Error(`${entry.label} must not alias ${prior}`);
+    }
+    occupied.set(path, entry.label);
+  }
+
+  const signers: Array<Readonly<{ label: string; path: string; identity: string | null }>> = [
+    ...operation.campaign.keypairs.map((row) => ({
+      label: `campaign signer ${row.role}`,
+      path: row.path,
+      identity: null,
+    })),
+    {
+      label: 'participant position-owner signer',
+      path: operation.participant.positionOwnerKeypair,
+      identity: operation.participant.positionOwner,
+    },
+    {
+      label: 'participant fee-payer signer',
+      path: operation.participant.feePayerKeypair,
+      identity: operation.participant.feePayer,
+    },
+  ];
+  if (operation.participant.collateral !== null) {
+    signers.push({
+      label: 'participant collateral-owner signer',
+      path: operation.participant.collateral.sourceOwnerKeypair,
+      identity: operation.participant.collateral.sourceOwner,
+    });
+  }
+  const signerPaths = new Map<string, Readonly<{ label: string; identity: string | null }>>();
+  for (const signer of signers) {
+    const path = resolve(signer.path);
+    const nonSigner = occupied.get(path);
+    if (nonSigner !== undefined) {
+      throw new Error(`${signer.label} must not alias ${nonSigner}`);
+    }
+    const prior = signerPaths.get(path);
+    if (prior !== undefined
+      && (prior.identity === null || signer.identity === null || prior.identity !== signer.identity)) {
+      throw new Error(`${signer.label} must not alias ${prior.label}`);
+    }
+    signerPaths.set(path, Object.freeze({ label: signer.label, identity: signer.identity }));
+  }
+}
+
 function sha256(source: Uint8Array): string {
   return createHash('sha256').update(source).digest('hex');
 }
@@ -895,7 +974,8 @@ function runFoundOperationUnderLeaseV1(
   journalPath: string,
   sessionOut: string | null,
   execute: boolean,
-  dependencies: FoundOperationDependenciesV1 = DEFAULT_DEPENDENCIES,
+  dependencies: FoundOperationDependenciesV1,
+  preleaseOperationSource: Uint8Array,
 ): number {
   if (!isAbsolute(operationPath) || !isAbsolute(journalPath)) throw new Error('--found-operation and --found-journal must be absolute');
   if (typeof context.flags.rpc !== 'string') throw new Error('devnet founding requires an explicit --rpc URL');
@@ -903,6 +983,9 @@ function runFoundOperationUnderLeaseV1(
     throw new Error(`--i-mean-devnet must equal Solana devnet's full genesis hash ${SOLANA_DEVNET_GENESIS_HASH_V1}`);
   }
   const operationSource = readBounded(operationPath, MAX_OPERATION_BYTES, 'found operation');
+  if (!Buffer.from(operationSource).equals(Buffer.from(preleaseOperationSource))) {
+    throw new Error('found operation changed between its pre-lease path census and exact locked parse');
+  }
   const operation = parseOperation(operationSource);
   const planSource = readBounded(operation.plan, MAX_EVIDENCE_BYTES, 'successor plan');
   const binarySource = readBounded(binary, MAX_BINARY_BYTES, 'successor binary');
@@ -1078,6 +1161,9 @@ export function runFoundOperationV1(
   if (context.flags['i-mean-devnet'] !== SOLANA_DEVNET_GENESIS_HASH_V1) {
     throw new Error(`--i-mean-devnet must equal Solana devnet's full genesis hash ${SOLANA_DEVNET_GENESIS_HASH_V1}`);
   }
+  const preleaseOperationSource = readBounded(operationPath, MAX_OPERATION_BYTES, 'found operation');
+  const preleaseOperation = parseOperation(preleaseOperationSource);
+  assertPreleasePathCensus(operationPath, journalPath, binary, preleaseOperation);
   const lease = acquireOperationLease(operationPath, journalPath);
   let result: number | undefined;
   let failure: unknown;
@@ -1091,6 +1177,7 @@ export function runFoundOperationV1(
       sessionOut,
       execute,
       dependencies,
+      preleaseOperationSource,
     );
   } catch (error) {
     failure = error;

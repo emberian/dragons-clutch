@@ -355,6 +355,71 @@ describe('permanent-devnet founding exterior', () => {
       files.binary, files.operation, files.journal, null, false,
       successfulDependencies([]),
     )).toBe(0);
+
+    const replaced = fixture(root());
+    const replacementCalls: string[][] = [];
+    const replacementBase = successfulDependencies(replacementCalls);
+    const replacement = Buffer.from('replacement lock inode\n');
+    const replacingDependencies: FoundOperationDependenciesV1 = Object.freeze({
+      invoke(binary, arguments_) {
+        if (arguments_[0] === 'devnet-market') {
+          rmSync(`${replaced.journal}.lock`);
+          writeFileSync(`${replaced.journal}.lock`, replacement);
+        }
+        return replacementBase.invoke(binary, arguments_);
+      },
+    });
+    expect(runFoundOperationV1(
+      context(), { out: () => undefined, err: () => undefined },
+      replaced.binary, replaced.operation, replaced.journal, null, false,
+      replacingDependencies,
+    )).toBe(0);
+    expect(readFileSync(`${replaced.journal}.lock`)).toEqual(replacement);
+    rmSync(`${replaced.journal}.lock`);
+  });
+
+  it('refuses every journal and derived-lease alias before creating a lease or invoking a child', () => {
+    const hostile = (
+      mutate: (operation: {
+        campaign: { evidence: string; keypairs: Array<{ path: string }> };
+        participant: { output: string };
+      }, files: ReturnType<typeof fixture>) => void,
+      message: RegExp,
+    ): void => {
+      const files = fixture(root());
+      const operation = JSON.parse(readFileSync(files.operation, 'utf8')) as {
+        campaign: { evidence: string; keypairs: Array<{ path: string }> };
+        participant: { output: string };
+      };
+      mutate(operation, files);
+      writeFileSync(files.operation, JSON.stringify(operation));
+      const calls: string[][] = [];
+      expect(() => runFoundOperationV1(
+        context(), { out: () => undefined, err: () => undefined },
+        files.binary, files.operation, files.journal, null, false,
+        successfulDependencies(calls),
+      )).toThrow(message);
+      expect(calls).toHaveLength(0);
+      expect(existsSync(files.journal)).toBe(false);
+      expect(existsSync(`${files.journal}.lock`)).toBe(false);
+    };
+
+    hostile(
+      (operation, files) => { operation.campaign.keypairs[0]!.path = files.journal; },
+      /campaign signer.*must not alias found journal/,
+    );
+    hostile(
+      (operation, files) => { operation.campaign.keypairs[0]!.path = `${files.journal}.lock`; },
+      /campaign signer.*must not alias found journal lease/,
+    );
+    hostile(
+      (operation, files) => { operation.campaign.keypairs[0]!.path = `${files.evidence}.lock`; },
+      /campaign signer.*must not alias campaign evidence lease/,
+    );
+    hostile(
+      (operation, files) => { operation.participant.output = `${files.evidence}.lock`; },
+      /campaign evidence lease must not alias participant evidence/,
+    );
   });
 
   it('refuses wrong genesis, shared-flag injection, operation drift, and duplicate roles', () => {
