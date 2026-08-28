@@ -46,6 +46,43 @@ else
     not_ok "Hot CU runner lost locked-offline admission"
 fi
 
+mkdir -p "$SCRATCH/bin" "$SCRATCH/elf"
+cat > "$SCRATCH/bin/cargo" <<'SH'
+#!/usr/bin/env bash
+printf 'protocol default heap fixture seed 0: 1234567 CU consumed\n'
+printf 'test result: ok. 1 passed; 0 failed; 0 ignored\n'
+SH
+chmod +x "$SCRATCH/bin/cargo"
+printf 'base-trading\n' > "$SCRATCH/elf/dclutch_trading_sbf.so"
+printf 'final-direct\n' > "$SCRATCH/final-direct.so"
+base_sha="$(shasum -a 256 "$SCRATCH/elf/dclutch_trading_sbf.so" | cut -d' ' -f1)"
+override_sha="$(shasum -a 256 "$SCRATCH/final-direct.so" | cut -d' ' -f1)"
+if PATH="$SCRATCH/bin:$PATH" "$RUNNER" \
+    --work "$SCRATCH/work-overlay" \
+    --elf-dir "$SCRATCH/elf" \
+    --trading-elf "$SCRATCH/final-direct.so" \
+    --seeds 1 >"$SCRATCH/overlay-stdout" 2>"$SCRATCH/overlay-stderr" \
+    && [ "$(shasum -a 256 "$SCRATCH/elf/dclutch_trading_sbf.so" | cut -d' ' -f1)" = "$base_sha" ] \
+    && [ "$(shasum -a 256 "$SCRATCH/work-overlay/elf-with-trading-override/dclutch_trading_sbf.so" | cut -d' ' -f1)" = "$override_sha" ] \
+    && python3 - "$SCRATCH/work-overlay/summary-immutable.json" "$override_sha" <<'PY'
+import json
+import pathlib
+import sys
+
+summary = json.loads(pathlib.Path(sys.argv[1]).read_text())
+expected = sys.argv[2]
+assert summary["trading_elf_sha256"] == expected
+assert summary["trading_elf_override_sha256"] == expected
+assert summary["pass"] == 1
+assert summary["mean_cu"] == 1_234_567
+PY
+then
+    ok "Trading override uses a work-local exact-digest overlay"
+else
+    sed -n '1,12p' "$SCRATCH/overlay-stderr" >&2
+    not_ok "Trading override overlay or summary was not exact"
+fi
+
 if [ "$fail" -ne 0 ]; then
     printf '%s tests failed; %s passed\n' "$fail" "$pass" >&2
     exit 1
