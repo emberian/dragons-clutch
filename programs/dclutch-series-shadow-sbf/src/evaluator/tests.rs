@@ -182,7 +182,7 @@ impl SemanticFixture {
             },
             shape: ShadowRuntimeShapeV3 {
                 tail_count: 3,
-                account_count: 158,
+                account_count: 162,
                 scalar_count: 5,
                 identity_count: 1,
             },

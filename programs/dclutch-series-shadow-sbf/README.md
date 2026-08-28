@@ -15,7 +15,7 @@ silently fall back to caller-supplied artifact bytes.
 
 `generator` is a host-only nested workspace. It calls the canonical Series
 artifact constructors and emits a bounded `SeriesShadowSourceManifestV1`. The
-manifest contains the exact LifecycleV5, 157 fixed account-width rules, five
+manifest contains the exact LifecycleV5, 161 fixed account-width rules, five
 occurrence-specific child requests, and every generated artifact byte. It also
 binds the reviewed semantic source, generator-source manifest, pinned toolchain
 manifest, translation certificate, and a domain-separated complete-bundle

@@ -42,9 +42,13 @@ use solana_sdk_ids::system_program;
 
 use crate::{
     evaluator::{
-        SERIES_SHADOW_LOGICAL_ACCOUNT_BASE_V4, SERIES_SHADOW_MAXIMUM_FUNDING_COUNT_V4,
-        SERIES_SHADOW_MINIMUM_FUNDING_COUNT_V4, SeriesShadowAuthenticatedFactsV4,
-        SeriesShadowEvaluationV4, evaluate_series_shadow_aot_v4,
+        SERIES_CLOCK_COORDINATE_V4, SERIES_LINKED_BASIS_STAGING_COORDINATE_V4,
+        SERIES_OCCURRENCE_RAW_COORDINATE_V4, SERIES_OCCURRENCE_STAGING_COORDINATE_V4,
+        SERIES_RENT_SYSVAR_COORDINATE_V4, SERIES_SHADOW_LOGICAL_ACCOUNT_BASE_V4,
+        SERIES_SHADOW_MAXIMUM_FUNDING_COUNT_V4, SERIES_SHADOW_MINIMUM_FUNDING_COUNT_V4,
+        SERIES_TEMPLATE_RAW_COORDINATE_V4, SERIES_TEMPLATE_STAGING_COORDINATE_V4,
+        SERIES_TICKET_RAW_COORDINATE_V4, SERIES_TICKET_STAGING_COORDINATE_V4,
+        SeriesShadowAuthenticatedFactsV4, SeriesShadowEvaluationV4, evaluate_series_shadow_aot_v4,
     },
     release::{SelectedSeriesShadowReleaseV1, selected_series_shadow_release_v1},
 };
@@ -53,19 +57,10 @@ const CONFIG_COORDINATE: usize = 1;
 const PRODUCT_RAW_COORDINATE: usize = 2;
 const PORTFOLIO_RAW_COORDINATE: usize = 3;
 const LINKED_BASIS_RAW_COORDINATE: usize = 4;
-const RENT_SYSVAR_COORDINATE: usize = 41;
-const TEMPLATE_RAW_COORDINATE: usize = 54;
-const TEMPLATE_STAGING_COORDINATE: usize = 55;
-const OCCURRENCE_RAW_COORDINATE: usize = 56;
-const OCCURRENCE_STAGING_COORDINATE: usize = 57;
-const TICKET_RAW_COORDINATE: usize = 58;
-const TICKET_STAGING_COORDINATE: usize = 59;
-const CLOCK_COORDINATE: usize = 60;
 const PRODUCT_STAGING_COORDINATE: usize = 26;
 const RESULT_DOMAIN_RAW_COORDINATE: usize = 27;
 const RESULT_DOMAIN_STAGING_COORDINATE: usize = 28;
 const PORTFOLIO_STAGING_COORDINATE: usize = 30;
-const LINKED_BASIS_STAGING_BASE_COORDINATE: usize = 67;
 
 /// Stable physical refusal from the Series Shadow SBF adapter.
 #[repr(u32)]
@@ -171,7 +166,7 @@ fn evaluate_authenticated_invocation(
         return Err(SeriesShadowSbfErrorV4::Runtime);
     }
 
-    let rent = Rent::from_account_info(account(runtime, RENT_SYSVAR_COORDINATE)?)
+    let rent = Rent::from_account_info(account(runtime, SERIES_RENT_SYSVAR_COORDINATE_V4)?)
         .map_err(|_| SeriesShadowSbfErrorV4::FinalizedRecord)?;
     let series_request = SeriesActionRequestV3::decode(request.family_request)
         .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?;
@@ -181,8 +176,7 @@ fn evaluate_authenticated_invocation(
         return Err(SeriesShadowSbfErrorV4::Runtime);
     }
     authenticate_series_records(runtime, invocation.registry().key, &rent, series_request)?;
-    let product_runtime =
-        authenticate_product(runtime, invocation.registry().key, &rent, funding_count)?;
+    let product_runtime = authenticate_product(runtime, invocation.registry().key, &rent)?;
     let product = AuthenticatedProductProjectionV2::new(
         core_content_id(
             product_runtime
@@ -200,7 +194,7 @@ fn evaluate_authenticated_invocation(
                 .to_bytes(),
         )?,
     );
-    let now_slot = Clock::from_account_info(account(runtime, CLOCK_COORDINATE)?)
+    let now_slot = Clock::from_account_info(account(runtime, SERIES_CLOCK_COORDINATE_V4)?)
         .map_err(|_| SeriesShadowSbfErrorV4::Runtime)?
         .slot;
 
@@ -345,14 +339,10 @@ fn authenticate_product<'accounts, 'info>(
     runtime: &'accounts [AccountInfo<'info>],
     registry: &Pubkey,
     rent: &Rent,
-    funding_count: usize,
 ) -> Result<
     dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV3<'accounts, 'info>,
     SeriesShadowSbfErrorV4,
 > {
-    let basis_staging = LINKED_BASIS_STAGING_BASE_COORDINATE
-        .checked_add(funding_count)
-        .ok_or(SeriesShadowSbfErrorV4::Runtime)?;
     authenticate_content_addressed_product_runtime_v3(
         registry,
         rent,
@@ -371,7 +361,7 @@ fn authenticate_product<'accounts, 'info>(
             },
             linked_basis: FinalizedRecordFrameV2 {
                 raw: account(runtime, LINKED_BASIS_RAW_COORDINATE)?,
-                staging: account(runtime, basis_staging)?,
+                staging: account(runtime, SERIES_LINKED_BASIS_STAGING_COORDINATE_V4)?,
             },
         },
     )
@@ -392,20 +382,20 @@ fn authenticate_series_records(
         .ok_or(SeriesShadowSbfErrorV4::FinalizedRecord)?;
     for (raw_coordinate, staging_coordinate, schema, digest) in [
         (
-            TEMPLATE_RAW_COORDINATE,
-            TEMPLATE_STAGING_COORDINATE,
+            SERIES_TEMPLATE_RAW_COORDINATE_V4,
+            SERIES_TEMPLATE_STAGING_COORDINATE_V4,
             SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
             request.template().to_bytes(),
         ),
         (
-            OCCURRENCE_RAW_COORDINATE,
-            OCCURRENCE_STAGING_COORDINATE,
+            SERIES_OCCURRENCE_RAW_COORDINATE_V4,
+            SERIES_OCCURRENCE_STAGING_COORDINATE_V4,
             SERIES_OCCURRENCE_SCHEMA_RELEASE_ID_V3,
             occurrence.to_bytes(),
         ),
         (
-            TICKET_RAW_COORDINATE,
-            TICKET_STAGING_COORDINATE,
+            SERIES_TICKET_RAW_COORDINATE_V4,
+            SERIES_TICKET_STAGING_COORDINATE_V4,
             SERIES_TICKET_SCHEMA_RELEASE_ID_V3,
             ticket.to_bytes(),
         ),
@@ -529,27 +519,38 @@ mod tests {
             },
             shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
                 tail_count: 0,
-                account_count: 158,
+                account_count: 162,
                 scalar_count: 5,
                 identity_count: 1,
             },
             family_request: &family,
         };
         assert_eq!(funding_count(request), Ok(1));
-        let too_small = ShadowRequestV3 {
+        let underflow = ShadowRequestV3 {
             shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
-                account_count: 157,
+                account_count: 160,
                 ..request.shape
             },
             ..request
         };
         assert_eq!(
-            funding_count(too_small),
+            funding_count(underflow),
+            Err(SeriesShadowSbfErrorV4::Runtime)
+        );
+        let zero_funding = ShadowRequestV3 {
+            shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
+                account_count: 161,
+                ..request.shape
+            },
+            ..request
+        };
+        assert_eq!(
+            funding_count(zero_funding),
             Err(SeriesShadowSbfErrorV4::Runtime)
         );
         let too_large = ShadowRequestV3 {
             shape: dclutch_execution_strategy_contract::shadow_v3::ShadowRuntimeShapeV3 {
-                account_count: 174,
+                account_count: 178,
                 ..request.shape
             },
             ..request
