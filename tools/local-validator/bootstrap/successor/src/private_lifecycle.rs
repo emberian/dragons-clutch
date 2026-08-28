@@ -344,6 +344,7 @@ pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
         .iter()
         .find(|row| row.path == chaos_relative)
         .ok_or_else(|| Error::new("chaos-session journal was not projected"))?;
+    authenticate_session_journal_identity(chaos_journal, CHAOS_SESSION_SCHEMA_V1, "chaos session")?;
 
     let programs = authenticate_programs(&plan, &capture, retained_authority)?;
     let capture_relative = relative_evidence_path(&evidence_root, &capture_path, "capture")?;
@@ -367,6 +368,7 @@ pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
         .iter()
         .find(|row| &row.path == session_relative)
         .ok_or_else(|| Error::new("activity-session journal was not projected"))?;
+    authenticate_session_journal_identity(session, ACTIVITY_SESSION_SCHEMA_V1, "activity session")?;
     let completed_stages = authenticate_activity_session(
         &evidence_root,
         session_relative,
@@ -411,6 +413,22 @@ pub(crate) fn run(arguments: PrivateLifecycleArgs) -> Result<Value> {
     });
     write_new_json(&arguments.output, &receipt)?;
     Ok(receipt)
+}
+
+fn authenticate_session_journal_identity(
+    journal: &JournalReceipt,
+    expected_schema: &str,
+    label: &str,
+) -> Result<()> {
+    if journal.schema != expected_schema
+        || journal.completion_pointer != "/status"
+        || journal.completion_value != "finalized"
+    {
+        return Err(Error::new(format!(
+            "{label} journal does not bind its exact top-level finalized status"
+        )));
+    }
+    Ok(())
 }
 
 fn authenticate_activity_session(
@@ -1233,6 +1251,25 @@ mod tests {
         .expect("write substituted chaos session");
         assert!(authenticate_chaos(&path).is_err());
         fs::remove_file(path).expect("remove chaos session");
+
+        let mut journal = JournalReceipt {
+            path: "chaos.json".into(),
+            sha256: "11".repeat(32),
+            schema: CHAOS_SESSION_SCHEMA_V1.into(),
+            completion_pointer: "/status".into(),
+            completion_value: "finalized".into(),
+        };
+        authenticate_session_journal_identity(&journal, CHAOS_SESSION_SCHEMA_V1, "chaos session")
+            .expect("exact top-level status");
+        journal.completion_pointer = "/stages/0/status".into();
+        assert!(
+            authenticate_session_journal_identity(
+                &journal,
+                CHAOS_SESSION_SCHEMA_V1,
+                "chaos session",
+            )
+            .is_err()
+        );
     }
 
     #[test]
