@@ -258,7 +258,7 @@ export default function DirectTradeWorkspace() {
     if (inspection === null) return;
     try {
       const intent = compactIntent(form[side], side === 'seller' ? 0 : 1, form, inspection);
-      const next = await requestWalletMessageSignatureV1(wallets.handoff(endpoint), form[side].maker, encodeCompactIntentSigningMessageV2(intent));
+      const next = await requestWalletMessageSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), form[side].maker, encodeCompactIntentSigningMessageV2(intent));
       updateParticipant(side, 'signature', hex(next));
       setWalletStatus(`${side} intent signed by the connected maker after explicit request.`);
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
@@ -267,7 +267,7 @@ export default function DirectTradeWorkspace() {
   async function signTransaction() {
     if (plan === null || inspection === null) return;
     try {
-      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
+      const next = await requestWalletTransactionSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
       setSigned(next); setWalletStatus(next.complete ? 'Transaction payer signature complete. Nothing has been submitted.' : 'Wallet added one authorized signature; more signatures remain.');
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
   }

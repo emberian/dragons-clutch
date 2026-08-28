@@ -283,7 +283,7 @@ export type ClaimsCustodyReplayRequestV1 = Readonly<{
  * exist, return the complete signable creation plan.
  */
 export async function inspectClaimsCustodyReplayV1(
-  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption' | 'latestBlockhash'>,
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption' | 'latestMutationBlockhash'>,
   request: ClaimsCustodyReplayRequestV1,
 ): Promise<ClaimsCustodyReplayStateV1> {
   try {
@@ -433,7 +433,7 @@ export async function inspectClaimsCustodyReplayV1(
     const instructionData = encodeClaimsCustodyReplayRequestV1(marketAddress);
     const instruction = new TransactionInstruction({ programId: claimsProgram, keys, data: instructionData as Buffer });
     const budget = ComputeBudgetProgram.setComputeUnitLimit({ units: CLAIMS_CUSTODY_REPLAY_COMPUTE_UNIT_LIMIT_V1 });
-    const latest = await client.latestBlockhash(floor);
+    const latest = await client.latestMutationBlockhash(floor);
     // Deliberately LEGACY: this instruction must never depend on a published
     // address-lookup table (ADR-0008 §7), and it fits with room to spare.
     const transaction = new VersionedTransaction(new TransactionMessage({

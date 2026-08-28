@@ -144,7 +144,7 @@ function fakeClient(accounts: Record<string, RpcAccount>) {
     async minimumBalanceForRentExemption(dataLength: number) {
       return Object.freeze({ dataLength, lamports: '2895840' });
     },
-    async latestBlockhash() {
+    async latestMutationBlockhash() {
       return Object.freeze({ slot: '90', blockhash: BLOCKHASH, lastValidBlockHeight: '120' });
     },
   };

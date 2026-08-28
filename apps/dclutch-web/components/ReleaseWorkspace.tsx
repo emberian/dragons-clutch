@@ -141,7 +141,7 @@ export default function ReleaseWorkspace() {
     const packet = plan.packets.find((candidate) => candidate.role === name);
     if (packet === undefined) { setWalletStatus(`Refused: the plan carries no ${name} packet.`); return; }
     try {
-      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), packet.transaction, plan.payer);
+      const next = await requestWalletTransactionSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), packet.transaction, plan.payer);
       setSigned((current) => Object.freeze({ ...current, [name]: next }));
       setWalletStatus(`${name} packet signed by the connected fee payer${next.complete ? '' : ' (signature set still incomplete)'}. Nothing has been submitted; export it for an external submitter.`);
     } catch (error) { setWalletStatus(`Refused: ${message(error)}`); }

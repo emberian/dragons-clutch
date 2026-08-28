@@ -179,7 +179,7 @@ function client(accounts: ReadonlyMap<string, RpcAccount>) {
       accounts: Object.freeze(addresses.map((address) => Object.freeze({ address, account: accounts.get(address) ?? null }))),
     }),
     minimumBalanceForRentExemption: async (dataLength: number) => Object.freeze({ dataLength, lamports: '1' }),
-    latestBlockhash: async () => Object.freeze({ slot: '900', blockhash: publicKey(32), lastValidBlockHeight: '1000' }),
+    latestMutationBlockhash: async () => Object.freeze({ slot: '900', blockhash: publicKey(32), lastValidBlockHeight: '1000' }),
   };
 }
 

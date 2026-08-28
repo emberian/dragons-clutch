@@ -88,7 +88,7 @@ export default function RationalRepresentationWorkspace() {
     setPlan(null); setSigned(null);
     try {
       const client = new SolanaRpcClient(endpoint);
-      const blockhash = await client.latestBlockhash(inspection.observedSlot);
+      const blockhash = await client.latestMutationBlockhash(inspection.observedSlot);
       const next = buildUnsignedBearerTransferV2(inspection, blockhash.blockhash, parseRawU64(rawAmount));
       setPlan(next);
       setBuildStatus(`Unsigned v0 TransferChecked packet: ${next.wireBytes.length} / 1232 bytes · ${next.loadedAddresses} ALT addresses · ${next.rawAmount.toString()} raw atoms.`);
@@ -111,7 +111,7 @@ export default function RationalRepresentationWorkspace() {
       return;
     }
     try {
-      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, authority);
+      const next = await requestWalletTransactionSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), plan.transaction, authority);
       setSigned(next);
       setWalletStatus(next.complete ? 'The sole required signature is complete. Nothing has been submitted.' : 'Wallet signed its authorized slot; more signatures remain.');
     } catch (error) {

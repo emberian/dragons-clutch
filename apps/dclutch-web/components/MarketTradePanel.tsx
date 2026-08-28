@@ -178,7 +178,7 @@ export default function MarketTradePanel({
     if (ticketState.kind !== 'crossed' || wallets.address === null) return;
     try {
       const message = encodeCompactIntentSigningMessageV2(ticketState.plan.taker);
-      const signed = await requestWalletMessageSignatureV1(wallets.handoff(endpoint), wallets.address, message);
+      const signed = await requestWalletMessageSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), wallets.address, message);
       setSignature(signed);
     } catch (error) {
       setExecution({ kind: 'refused', reason: errorMessage(error) });
@@ -205,7 +205,7 @@ export default function MarketTradePanel({
         clockSlot: BigInt(inspection.observedSlot),
       });
       setExecution({ kind: 'working', message: `Unsigned ${plan.wireBytes.length}-byte packet compiled; requesting the payer signature…` });
-      const signed = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
+      const signed = await requestWalletTransactionSignatureV1(client, wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
       if (!signed.complete) throw new Error('the wallet did not complete the payer signature');
       setExecution({ kind: 'working', message: 'Submitting the signed packet through the one RPC seam…' });
       const submitted = await submitSignedTransactionV1(client, signed.transaction);

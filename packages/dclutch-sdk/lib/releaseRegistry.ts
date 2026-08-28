@@ -281,7 +281,7 @@ export type RegistryReauthenticationPlanV1 = Readonly<{
   computeUnitLimit: number;
 }>;
 
-type RegistryRpc = Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption' | 'latestBlockhash'>;
+type RegistryRpc = Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption' | 'latestMutationBlockhash'>;
 
 function key(text: string, field: string): PublicKey {
   const value = new PublicKey(text);
@@ -677,7 +677,7 @@ export async function prepareRegistryActivation(client: RegistryRpc, input: Read
     activated = activationCacheProgressV1(cacheAccount.data, expected); mode = activated.length === REGISTRY_ROLES.length ? 'complete' : 'partial'; debit = 0n;
   }
   const remaining = Object.freeze(REGISTRY_ROLES.filter((role) => !activated.includes(role)));
-  const blockhash = await client.latestBlockhash(observation.slot);
+  const blockhash = await client.latestMutationBlockhash(observation.slot);
   const packets = REGISTRY_ROLES.map((role, index) => {
     const compiled = compileRegistryRoleActivationTransaction({ payer: input.payer, registryProgram: input.registryProgram, recentBlockhash: blockhash.blockhash, computeUnitLimit: input.computeUnitLimit, cache, releaseSetRecord: releasePdas.record, releaseSetStaging: releasePdas.staging, role, addresses: roles[role] });
     return Object.freeze({ role, alreadyActivated: activated.includes(role), elfBytesHashed: elfBytesByRole[index], addresses: roles[role], transaction: compiled.transaction, wireBytes: compiled.wireBytes, requiredSigners: compiled.requiredSigners });
@@ -694,6 +694,6 @@ export async function prepareRegistryReauthentication(client: RegistryRpc, input
   const registryAccount = required(accounts, input.registryProgram, 'Registry Program'); if (registryAccount.owner !== UPGRADEABLE_LOADER_ID || !registryAccount.executable || registryAccount.data.length !== LOADER_V3_PROGRAM_BYTES || new DataView(registryAccount.data.buffer, registryAccount.data.byteOffset, 4).getUint32(0, true) !== 2) throw new Error('Registry Program is not current Loader-v3 executable state');
   const cacheAccount = required(accounts, input.cache, 'activation cache'); if (!same(cacheAccount.data, initialCache.data) || cacheAccount.owner !== input.registryProgram || cacheAccount.executable) throw new Error('activation cache changed during finalized reacquisition');
   await authenticateDeployment(required(accounts, artifact.program, `${input.role} Program`), artifact.program, required(accounts, artifact.programData, `${input.role} ProgramData`), artifact.programData, artifact);
-  const blockhash = await client.latestBlockhash(observation.slot); const compiled = compileRegistryReauthenticationTransaction({ payer: input.payer, registryProgram: input.registryProgram, recentBlockhash: blockhash.blockhash, computeUnitLimit: input.computeUnitLimit, cache: input.cache, role: input.role, program: artifact.program, programData: artifact.programData });
+  const blockhash = await client.latestMutationBlockhash(observation.slot); const compiled = compileRegistryReauthenticationTransaction({ payer: input.payer, registryProgram: input.registryProgram, recentBlockhash: blockhash.blockhash, computeUnitLimit: input.computeUnitLimit, cache: input.cache, role: input.role, program: artifact.program, programData: artifact.programData });
   return Object.freeze({ observedSlot: observation.slot, registryProgram: input.registryProgram, payer: input.payer, cache: input.cache, role: input.role, releaseSetId: projected.releaseSetId, artifactReleaseId: projected.artifactIds[input.role], artifact, transaction: compiled.transaction, wireBytes: compiled.wireBytes, requiredSigners: compiled.requiredSigners, computeUnitLimit: input.computeUnitLimit });
 }

@@ -91,7 +91,7 @@ export default function RationalOpenPanel() {
     if (inspection === null) return;
     setCandidate(null);
     try {
-      const latest = await new SolanaRpcClient(endpoint).latestBlockhash(inspection.observedSlot);
+      const latest = await new SolanaRpcClient(endpoint).latestMutationBlockhash(inspection.observedSlot);
       const next = buildRationalOpenCandidateV4(inspection, latest.blockhash);
       setCandidate(next);
       setBuildStatus(`Unsigned v0 candidate: ${next.wireBytes.length} / 1232 bytes · ${next.loadedAddresses} ALT addresses · Claims ${next.logicalClaimsAccounts} logical → ${next.physicalClaimsAccounts} physical.`);
