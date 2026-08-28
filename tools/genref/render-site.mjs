@@ -564,10 +564,11 @@ fs.writeFileSync(
 executed, against which chain or harness, and what it produced. They are
 kept beside the code they were run against, and each one states its own
 scope -- including what it did <em>not</em> establish.</p>
-<div class="unreleased"><strong>Not live yet.</strong> dClutch is not
-deployed on any network. These runs were made on local test chains and in
-test harnesses. A run here is evidence about software, not about a
-deployment, and none of it is an offer of anything.</div>
+<div class="unreleased"><strong>Live on Solana devnet.</strong> You can
+inspect seven protocol programs at permanent devnet addresses. The first
+open market is not live yet. Each document below tells you whether its
+evidence came from devnet, a local test chain, or a test harness. None of
+this is mainnet evidence, an investment, or an offer of anything.</div>
 <ul class="cards">
 ${items}
 </ul>
@@ -576,6 +577,35 @@ live beside it in the
 <a href="${repoUrl}/docs/evidence/">repository</a>.</p>`,
     }),
   );
+}
+
+// These pages describe the project's current public state. Historical evidence
+// may accurately say that a named candidate was not deployed, but these five
+// reader entry points must not regress to the pre-DEPLOY-1 blanket claim.
+const currentDeploymentTruthPages = [
+  "evidence.html",
+  `${DOCS}/guides/operator.html`,
+  `${DOCS}/guides/trader.html`,
+  `${DOCS}/guides/reader.html`,
+  `${DOCS}/guides/trencher.html`,
+];
+const retiredDeploymentClaims = [
+  "dclutch is not deployed on any network",
+  "nothing is deployed yet",
+  "dclutch is not deployed anywhere",
+  "none of this is deployed",
+  "not deployed. no token. local validators only",
+];
+for (const relative of currentDeploymentTruthPages) {
+  const rendered = fs.readFileSync(path.join(outDir, relative), "utf8").toLowerCase();
+  for (const claim of retiredDeploymentClaims) {
+    if (rendered.includes(claim)) {
+      console.error(
+        `render-site: ${relative} regressed to the retired pre-devnet claim ${JSON.stringify(claim)}`,
+      );
+      process.exit(1);
+    }
+  }
 }
 
 if (!appDir) {

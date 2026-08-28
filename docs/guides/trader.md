@@ -3,8 +3,10 @@
 What you hold when you hold a dClutch claim, what it can and cannot do to
 you, and how to read what the protocol tells you.
 
-Nothing is tradeable yet — dClutch is not deployed. This is how trading
-works in the protocol as it runs today on a local test chain.
+Nothing is tradeable yet. Seven protocol programs are deployed on Solana
+devnet, but no devnet market is open for trading. This guide describes the
+trading path exercised on local test chains and in test harnesses while the
+first public test market is being prepared.
 
 ## What a claim is
 

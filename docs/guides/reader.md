@@ -19,39 +19,40 @@ was published and funded before it opened.
 
 ## What works today
 
-dClutch is not deployed anywhere. There is no live market and nothing to
-buy. What exists runs on a local test chain, and all of it is in this
-repository:
+Seven protocol programs are deployed at permanent addresses on Solana
+devnet. There is no open devnet market and nothing to buy. You can use the
+public app to inspect the deployed programs and the Market accounts they
+own; the app labels anything it cannot authenticate instead of filling in
+missing facts.
 
-- On a local test chain, a market is created, funded, opened, and
-  resolved on chain, after which it begins winding down. Resolution runs
-  through the same Pyth and Wormhole programs that are deployed on
-  mainnet, and they really do check the signatures — but the price they
-  check is a recorded one signed by a test key, not a live Pyth
-  publication.
+The broader execution evidence is still local:
+
+- On a local test chain, a market is created, funded, opened, and resolved
+  on chain, after which it begins winding down. The recorded resolution
+  fixtures exercise the Pyth and Wormhole verification paths, but they are
+  not live devnet price publications.
 - Trading between two counterparties, moving claims between holders, and
-  paying out a winning claim run against those same programs in a test
-  harness, at the real compute and memory limits. None of the three has
-  been driven on a test chain yet, and winding a market all the way down
-  to retired has not run anywhere yet.
-- The web app connects a wallet, lists markets, shows a market's cells
-  and prices, and reads your portfolio straight from chain state.
-- A TypeScript SDK and a command-line client drive the same flows.
+  paying out a winning claim run in test harnesses at Solana's compute and
+  memory limits. Those runs are software evidence, not devnet executions.
+- The web app reads the live devnet deployment, lists compatible markets,
+  and reads portfolio state from chain. Static browser data remains an
+  untrusted view of the onchain accounts.
+- A TypeScript SDK and command-line client build and check the same flows.
 
-Still to come: the Structured product family, the General and Dealer
-trading paths, a market discovery index, and the devnet deployment
-itself.
+Still to come: the first open devnet market, its first public trade,
+resolution and wallet payout, followed by the broader product and trading
+families.
 
 ## The plan
 
-The demo is the protocol live on Solana devnet, resolving markets about
-the state of Solana mainnet — pool prices, token graduations, the major
-feeds. Pyth's devnet feeds already carry mainnet prices for the majors;
-everything else arrives through a relayer that publishes signed copies of
-mainnet account data, checked and decoded on chain
+The next public milestone is an open market on Solana devnet, resolving a
+question about the state of Solana mainnet. Pyth's devnet feeds already
+carry mainnet prices for the majors; everything else can arrive through a
+relayer that publishes signed copies of mainnet account data, checked and
+decoded on chain
 ([`docs/design/MAINNET_STATE_RELAY.md`](../design/MAINNET_STATE_RELAY.md)).
-Even live, it will be a devnet demo: unaudited, and not a place to put
-money at risk.
+It remains an unaudited devnet demonstration, not a place to put money at
+risk.
 
 ## See it run
 
