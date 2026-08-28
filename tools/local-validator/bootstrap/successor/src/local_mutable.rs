@@ -15,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use dclutch_pyth_svm::local_validator_release_v1;
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -29,8 +30,8 @@ use crate::{
     Error, Result,
     model::{CheckedLocalMutableRolePinV1, CheckedLocalMutableSetPinV1, ProgramPin, SuccessorPlan},
     plan::{
-        PrepareArgs, RecordPublicationV1, RoleDeploymentInputV1, RoleDeploymentsV1, hex, hex32,
-        loader_programdata_bytes, pubkey,
+        LOCAL_PYTH_RECEIVER_ELF, LOCAL_PYTH_ROUTER_ELF, PrepareArgs, RecordPublicationV1,
+        RoleDeploymentInputV1, RoleDeploymentsV1, hex, hex32, loader_programdata_bytes, pubkey,
     },
     upgrade::{authenticate_checked_release_gate_role_for_local_v1, checked_semantic_release_id},
 };
@@ -239,7 +240,11 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
         expected_labels.insert(format!("loader.{loader_label}.program"));
         expected_labels.insert(format!("loader.{loader_label}.programdata"));
     }
-    if plan.genesis_accounts.len() != 14
+    for role in ["pyth-receiver", "pyth-router"] {
+        expected_labels.insert(format!("loader.{role}.program"));
+        expected_labels.insert(format!("loader.{role}.programdata"));
+    }
+    if plan.genesis_accounts.len() != 18
         || plan
             .genesis_accounts
             .keys()
@@ -248,7 +253,7 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             != expected_labels
     {
         return Err(Error::new(
-            "checked local plan does not contain the exact fourteen Loader account pins",
+            "checked local plan does not contain the exact eighteen Loader account pins",
         ));
     }
 
@@ -346,9 +351,97 @@ pub(crate) fn authenticate_exact_local_account_dir_v1(
             )));
         }
     }
-    if coordinates.len() != 14 {
+    let provider = local_validator_release_v1()
+        .map_err(|error| Error::new(format!("local Pyth release projection: {error:?}")))?;
+    let provider = provider.release();
+    for (role, program_key, programdata_key, deployment_slot, elf_sha256, elf) in [
+        (
+            "pyth-receiver",
+            Pubkey::new_from_array(provider.receiver_program()),
+            Pubkey::new_from_array(provider.receiver_programdata()),
+            provider.receiver_deployment_slot(),
+            provider.receiver_abi_id(),
+            LOCAL_PYTH_RECEIVER_ELF,
+        ),
+        (
+            "pyth-router",
+            Pubkey::new_from_array(provider.router_program()),
+            Pubkey::new_from_array(provider.router_programdata()),
+            provider.router_deployment_slot(),
+            provider.router_abi_id(),
+            LOCAL_PYTH_ROUTER_ELF,
+        ),
+    ] {
+        let program_label = format!("loader.{role}.program");
+        let programdata_label = format!("loader.{role}.programdata");
+        let program_pin = plan
+            .genesis_accounts
+            .get(&program_label)
+            .ok_or_else(|| Error::new(format!("checked local plan omitted {program_label}")))?;
+        let programdata_pin = plan
+            .genesis_accounts
+            .get(&programdata_label)
+            .ok_or_else(|| Error::new(format!("checked local plan omitted {programdata_label}")))?;
+        let program = crate::plan::authenticate_cli_account_file_v1(
+            &directory.join(format!("{}.json", program_pin.address)),
+            program_pin,
+        )?;
+        let programdata = crate::plan::authenticate_cli_account_file_v1(
+            &directory.join(format!("{}.json", programdata_pin.address)),
+            programdata_pin,
+        )?;
+        let derived_programdata =
+            Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let expected_programdata_body = loader_programdata_bytes(elf, 0, None);
+        let mut expected_program_body = [0_u8; 36];
+        expected_program_body[..4].copy_from_slice(&2_u32.to_le_bytes());
+        expected_program_body[4..].copy_from_slice(programdata_key.as_ref());
+        let program_view = ProgramV3View::parse(&program.data)
+            .map_err(|error| Error::new(format!("{role} Program: {error:?}")))?;
+        let programdata_view = ProgramDataV3View::parse(&programdata.data)
+            .map_err(|error| Error::new(format!("{role} ProgramData: {error:?}")))?;
+        for coordinate in [program_key, programdata_key] {
+            if coordinate == Pubkey::default()
+                || coordinate == system_program::ID
+                || coordinate == bpf_loader_upgradeable::ID
+                || !coordinates.insert(coordinate)
+            {
+                return Err(Error::new(
+                    "checked local provider Loader coordinates are aliased or reserved",
+                ));
+            }
+        }
+        if deployment_slot != 0
+            || programdata_key != derived_programdata
+            || hex(&Sha256::digest(elf)) != hex(&elf_sha256)
+            || program.pubkey != program_key
+            || program_pin.address != program_key.to_string()
+            || program.owner != bpf_loader_upgradeable::ID
+            || !program.executable
+            || program.rent_epoch != 0
+            || program.lamports != Rent::default().minimum_balance(program.data.len())
+            || program.data != expected_program_body
+            || program_view.programdata() != programdata_key.to_bytes()
+            || programdata.pubkey != programdata_key
+            || programdata_pin.address != programdata_key.to_string()
+            || programdata.owner != bpf_loader_upgradeable::ID
+            || programdata.executable
+            || programdata.rent_epoch != 0
+            || programdata.lamports != Rent::default().minimum_balance(programdata.data.len())
+            || programdata.data != expected_programdata_body
+            || programdata_view.deployment_slot() != 0
+            || programdata_view.upgrade_authority().is_some()
+            || hex(&Sha256::digest(programdata_view.elf())) != hex(&elf_sha256)
+            || programdata_pin.data_sha256 != hex(&Sha256::digest(&programdata.data))
+        {
+            return Err(Error::new(format!(
+                "checked local {role} Loader pair is not the exact immutable slot-zero fixture"
+            )));
+        }
+    }
+    if coordinates.len() != 18 {
         return Err(Error::new(
-            "checked local account directory does not close over fourteen distinct coordinates",
+            "checked local account directory does not close over eighteen distinct coordinates",
         ));
     }
     Ok(())
