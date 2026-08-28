@@ -11,9 +11,9 @@ The current lifecycle tools persist operation-scoped evidence. A small adapter
 projects the exact facts owned by those journals into the cluster-specific
 reconcile manifest. Every projected event carries the SHA-256 digest of its
 source journal. The reconciler does not trust a static client as a source of
-chain truth. The owned-loopback producer remains gated on the accepted PRIVATE
-session and Direct completion schemas; a synthetic test receipt proves the
-parser, not a completed protocol lifecycle.
+chain truth. The owned-loopback producer remains gated on the frozen Direct
+completion schema and a successful full private-validator run. Synthetic
+receipt tests prove the parser, not a completed protocol lifecycle.
 
 ## What is checked
 
@@ -102,10 +102,15 @@ journal, capture, or receipt after PRIVATE publishes its digest refuses.
 The receipt carries one clean source commit, checked-release digest, the exact
 ordered seven dClutch plus Pyth Receiver/Router program closure, each Program
 and ProgramData identity, deployment slot, ELF digest, and genesis ProgramData
-digest. It also binds the exact manifest bytes, finalized capture and slot,
-canonical ordered source-journal set, and one finalized complete PRIVATE
-session. Missing programs or journals, substituted bytes, provisional evidence,
-and partial lifecycle stage sets refuse before reconciliation.
+digest. It separately reopens the immutable local Pyth provider closure, its
+checked successor plan and local-validator profile, and the same singular
+finalized capture. It also binds the exact manifest bytes, canonical ordered
+source-journal set, one finalized eight-stage PRIVATE activity session, and one
+separately typed eight-stage chaos session. Every activity-stage source is
+reopened by path, SHA-256, schema, completion pointer, and finalized value;
+`stageSetSha256` is recomputed. Missing programs or journals, substituted bytes,
+provisional evidence, nested session completion substitutions, and partial
+lifecycle or chaos stage sets refuse before reconciliation.
 
 The receipt must include exactly one
 `dclutch-owned-loopback-terminal-sequence-completion-v1` journal. The reconciler
@@ -165,8 +170,9 @@ symlink escapes, non-JSON journals, and digest substitutions refuse before any
 RPC read.
 
 The owned-loopback capture additionally carries `commitment: "finalized"` and
-one `finalizedSlot`. Every captured transaction and final account observation
-must be at or below that boundary. Its dossier says
+one `finalizedSlot`. Every account row must have that exact `contextSlot`; a
+mixture of individually finalized account reads is not a singular capture.
+Every captured transaction must be at or below that boundary. Its dossier says
 `owned-loopback-local-evidence-not-public-devnet-or-live-observation` and uses
 `owned-loopback-captured-finalized-rpc-replay` provenance.
 
