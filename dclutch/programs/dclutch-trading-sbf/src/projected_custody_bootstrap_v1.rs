@@ -575,15 +575,48 @@ fn stage_founding_capability_funding_v2(
         trading_mask,
         &rent,
     )?;
-    let keys = [
-        Identity::new(resolution_ledger.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
-        Identity::new(trading_ledger.key.to_bytes()).map_err(|_| TradingSbfError::Content)?,
-    ];
-    let list = generic_founding_funding_list_id_v1(&keys).map_err(|_| TradingSbfError::Content)?;
+    let list = canonical_funding_list_id_v2(
+        resolution_mask,
+        resolution_ledger.key,
+        trading_mask,
+        trading_ledger.key,
+    )?;
     if list != facts.funding_list_id {
         return Err(TradingSbfError::Content.into());
     }
     Ok(())
+}
+
+/// Reconstruct the founding artifact's physical FundingLedgerV2 order.
+///
+/// Controller identity is not an ordering convention. The semantic owner in
+/// the founding compiler orders each nonempty controller subset by the lowest
+/// manifest bit in its authenticated mask. Repeating that rule here keeps the
+/// post-CPI join invariant when the selected Trading entry moves to any of the
+/// four canonical manifest positions.
+fn canonical_funding_list_id_v2(
+    resolution_mask: u16,
+    resolution_ledger: &Pubkey,
+    trading_mask: u16,
+    trading_ledger: &Pubkey,
+) -> Result<Identity, ProgramError> {
+    if resolution_mask == 0 || trading_mask == 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let resolution_bit = resolution_mask.trailing_zeros();
+    let trading_bit = trading_mask.trailing_zeros();
+    if resolution_bit == trading_bit {
+        return Err(TradingSbfError::Content.into());
+    }
+    let resolution =
+        Identity::new(resolution_ledger.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+    let trading = Identity::new(trading_ledger.to_bytes()).map_err(|_| TradingSbfError::Content)?;
+    let ordered = if resolution_bit < trading_bit {
+        [resolution, trading]
+    } else {
+        [trading, resolution]
+    };
+    generic_founding_funding_list_id_v1(&ordered).map_err(|_| TradingSbfError::Content.into())
 }
 
 /// Partition the exact four-entry founding manifest by semantic ownership.
@@ -1624,7 +1657,12 @@ mod tests {
         );
     }
 
-    fn funding_list(manifest_bytes: &[u8], market: [u8; 32], generation: u64) -> Identity {
+    fn funding_list(
+        manifest_bytes: &[u8],
+        market: [u8; 32],
+        generation: u64,
+        trading_index: u16,
+    ) -> Identity {
         let manifest = CapabilityManifestV1::decode(manifest_bytes).expect("manifest");
         let manifest_id = ContentId::new(hash(manifest_bytes).to_bytes()).expect("manifest id");
         let facts = FoundingFundingFactsV1 {
@@ -1632,7 +1670,7 @@ mod tests {
             market,
             generation,
             funding_list_id: Identity::new([1; 32]).expect("placeholder"),
-            capability_entry_index: 3,
+            capability_entry_index: trading_index,
         };
         let rent = Rent::default();
         let resolution = plan_funding_ledger_v2(
@@ -1640,18 +1678,27 @@ mod tests {
             manifest,
             manifest_id,
             &facts,
-            0b0111,
+            0b1111 ^ (1_u16 << trading_index),
             &rent,
         )
         .expect("Resolution ledger");
-        let trading =
-            plan_funding_ledger_v2(&trading(), manifest, manifest_id, &facts, 0b1000, &rent)
-                .expect("Trading ledger");
-        let keys = [
-            Identity::new(resolution.address.to_bytes()).expect("Resolution key"),
-            Identity::new(trading.address.to_bytes()).expect("Trading key"),
-        ];
-        generic_founding_funding_list_id_v1(&keys).expect("list")
+        let trading_mask = 1_u16 << trading_index;
+        let trading = plan_funding_ledger_v2(
+            &trading(),
+            manifest,
+            manifest_id,
+            &facts,
+            trading_mask,
+            &rent,
+        )
+        .expect("Trading ledger");
+        canonical_funding_list_id_v2(
+            0b1111 ^ trading_mask,
+            &resolution.address,
+            trading_mask,
+            &trading.address,
+        )
+        .expect("list")
     }
 
     /// The capability-funding tail this route creates is pinned to exactly one
@@ -1666,14 +1713,14 @@ mod tests {
     fn the_capability_funding_tail_is_pinned_to_one_founding() {
         let manifest = demo_manifest(4);
         let market = [0x11; 32];
-        let honest = funding_list(&manifest, market, 7);
+        let honest = funding_list(&manifest, market, 7, 3);
 
         // A different Market, or a different generation, is a different tail.
-        assert_ne!(honest, funding_list(&manifest, [0x12; 32], 7));
-        assert_ne!(honest, funding_list(&manifest, market, 8));
+        assert_ne!(honest, funding_list(&manifest, [0x12; 32], 7, 3));
+        assert_ne!(honest, funding_list(&manifest, market, 8, 3));
         // A manifest whose entries differ is a different tail, because the
         // config and release identities are PDA seeds.
-        assert_ne!(honest, funding_list(&demo_manifest(5), market, 7));
+        assert_ne!(honest, funding_list(&demo_manifest(5), market, 7, 3));
 
         // Order is load-bearing: the list identity refuses a permuted set.
         let bytes = manifest.clone();
@@ -1716,6 +1763,44 @@ mod tests {
         // something.
         let aliased = *keys.first().expect("the funding key list is non-empty");
         assert!(generic_founding_funding_list_id_v1(&[aliased, aliased]).is_err());
+    }
+
+    /// The controller names never decide the physical tail order. For each
+    /// possible selected Direct bit, the helper must reproduce the compiler's
+    /// lowest-bit ordering; bit zero is the regression that a fresh validator
+    /// exposed because it puts Trading before Resolution.
+    #[test]
+    fn funding_list_order_follows_lowest_authenticated_mask_bit() {
+        let resolution = Pubkey::new_from_array([0x52; 32]);
+        let trading = Pubkey::new_from_array([0x53; 32]);
+        for trading_index in 0_u16..4 {
+            let trading_mask = 1_u16 << trading_index;
+            let resolution_mask = 0b1111 ^ trading_mask;
+            let resolution_id = Identity::new(resolution.to_bytes()).expect("Resolution");
+            let trading_id = Identity::new(trading.to_bytes()).expect("Trading");
+            let expected = if resolution_mask.trailing_zeros() < trading_mask.trailing_zeros() {
+                [resolution_id, trading_id]
+            } else {
+                [trading_id, resolution_id]
+            };
+            assert_eq!(
+                canonical_funding_list_id_v2(resolution_mask, &resolution, trading_mask, &trading,),
+                generic_founding_funding_list_id_v1(&expected)
+                    .map_err(|_| TradingSbfError::Content.into())
+            );
+        }
+    }
+
+    #[test]
+    fn funding_list_order_refuses_empty_or_ambiguous_lowest_bits() {
+        let resolution = Pubkey::new_from_array([0x52; 32]);
+        let trading = Pubkey::new_from_array([0x53; 32]);
+        for (resolution_mask, trading_mask) in [(0, 1), (1, 0), (0b0011, 0b0001)] {
+            assert_eq!(
+                canonical_funding_list_id_v2(resolution_mask, &resolution, trading_mask, &trading,),
+                Err(TradingSbfError::Content.into())
+            );
+        }
     }
 
     #[test]

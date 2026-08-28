@@ -695,6 +695,40 @@ def validate_session(spec: Spec, case_work: Path) -> dict[str, Any]:
     return value
 
 
+def validate_refusal_journals(spec: Spec, case: str, case_work: Path) -> None:
+    root = case_work / spec.journal_relative
+    actual = tuple(
+        (value["phase"] if (value := stable_journal(root / f"{stage}.json", stage)) else None)
+        for stage in BOUNDARIES
+    )
+    if case in {
+        "corrupted-evidence",
+        "replaced-evidence",
+        "wallet-underfund",
+        "wallet-surplus",
+    }:
+        expected: tuple[str | None, ...] = (None,) * len(BOUNDARIES)
+    elif case == "blockhash-expiry":
+        expected = (
+            "finalized",
+            "finalized",
+            "finalized",
+            "finalized",
+            "submitted",
+            None,
+            None,
+            None,
+        )
+    elif case == "late-child-refusal":
+        expected = (*(("finalized",) * 7), None)
+    else:
+        raise Refusal(f"{case} has no frozen refusal journal boundary")
+    if actual != expected:
+        raise Refusal(
+            f"{case} refusal journal prefix disagreed: expected {expected}, observed {actual}"
+        )
+
+
 def corrupt_evidence(path: Path) -> str:
     if path.is_symlink() or not path.is_file():
         raise Refusal("corruption target is not one regular evidence file")
@@ -1123,7 +1157,12 @@ def prestart_fault(spec: Spec, case: str, case_work: Path) -> str | None:
             case_work / spec.evidence_relative,
             case_work / spec.replacement_relative,
         )
-    if case in {"wallet-underfund", "wallet-surplus", "late-child-refusal"}:
+    if case in {
+        "wallet-underfund",
+        "wallet-surplus",
+        "blockhash-expiry",
+        "late-child-refusal",
+    }:
         # The opaque driver owns the local-only mutation.  The harness states the
         # fault in the fsynced control file and later proves that a refusal moved
         # no tracked account.  No private key or packet crosses this seam.
@@ -1166,7 +1205,7 @@ def run_with_handshake(
             wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
             before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
             atomic_json(control / "GO.json", go)
-        elif case == "late-child-refusal":
+        elif case in {"blockhash-expiry", "late-child-refusal"}:
             atomic_json(control / "GO.json", go)
             wait_fault_armed(control, child, case, spec.journal_timeout_seconds)
             before_snapshot = observe(spec, case, case_work, rpc_url, control, "before")
@@ -1260,6 +1299,8 @@ def case_result(
             raise Refusal(f"{case} changed canonical account bytes or lamports from {comparison}")
         if expected_refusal and (case_work / spec.session_relative).exists():
             raise Refusal(f"{case} wrote a terminal finalized session on refusal")
+        if expected_refusal:
+            validate_refusal_journals(spec, case, case_work)
         session_digest = None
         if not expected_refusal:
             session = validate_session(spec, case_work)

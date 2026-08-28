@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import dataclasses
+import datetime as dt
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
@@ -35,11 +36,13 @@ SPEC.loader.exec_module(activity)
 FUNDER = "F" * 32
 WALLET = "2" * 32
 SIGNATURE = "3" * 64
+ACTIVITY_SIGNATURE = "4" * 64
+SUBSTITUTED_SIGNATURE = "5" * 64
 SECRET_MARKER = "THIS_IS_TEST_SECRET_KEY_MATERIAL"
 
 
 def write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
 def digest(path: Path) -> str:
@@ -57,16 +60,30 @@ def limits(target: str = "owned-loopback") -> dict[str, int]:
 
 
 def operation(identifier: str, kind: str, depends: list[str]) -> dict[str, object]:
+    operation_input: dict[str, object] = {"kind": kind}
+    if kind in {"participant", "redeem"}:
+        operation_input["walletRef"] = "alice"
+    elif kind == "direct":
+        operation_input.update({"sellerWalletRef": "alice", "buyerWalletRef": "alice"})
+    elif kind == "retire":
+        operation_input["rentRefundWalletRef"] = "alice"
+    empty_delta = {"lamportDeltas": [], "tokenDeltas": [], "accountStateChanges": [], "positionChanges": []}
     return {
         "id": identifier,
+        "order": 0,
         "kind": kind,
-        "wallets": ["alice"],
-        "dependsOn": depends,
-        "mutationExpected": True,
-        "inputs": {},
-        "expectedLamportDeltas": {"alice": "0"},
-        "expectedTokenDeltas": [],
-        "receiptRef": f"{identifier}-receipt",
+        "predecessorId": depends[0] if depends else None,
+        "dependencyIds": depends,
+        "feePayerWalletRef": "alice",
+        "callerTarget": f"test/{identifier}",
+        "callerSchema": None if kind == "direct" else f"dclutch-test-{identifier}-v1",
+        "callerAvailability": "adapter-required" if kind == "direct" else "public-executable",
+        "mutationExpected": kind != "direct",
+        "evidenceOutputRef": f"receipt.{identifier}",
+        "capture": {"signature": None, "finalizedSlot": None, "transactionFeeLamports": None},
+        "input": operation_input,
+        "expectedObservedDelta": empty_delta,
+        "projectedAcceptedDelta": empty_delta,
     }
 
 
@@ -81,16 +98,56 @@ def scenario_value(target: str = "owned-loopback") -> dict[str, object]:
         ("redeem", "redeem"),
         ("retire", "retire"),
     ]:
-        rows.append(operation(identifier, kind, parent))
+        row = operation(identifier, kind, parent)
+        row["order"] = len(rows)
+        rows.append(row)
         parent = [identifier]
-    return {
-        "schema": "dclutch-economic-activity-scenario-v1",
+    body: dict[str, object] = {
         "scenarioId": "test-lifecycle",
+        "title": "Test lifecycle",
+        "description": "A deterministic test-only lifecycle.",
         "clusterTarget": target,
-        "marketRef": "flagship",
-        "wallets": [{"id": "alice", "roles": ["participant", "trader"], "fundingLamports": "10000"}],
-        "operations": rows,
+        "genesisHash": activity.DEVNET_GENESIS_HASH if target == "devnet" else "owned-loopback-test-genesis",
+        "evidenceLevel": "scenario-only",
+        "market": {
+            "profile": "flagship",
+            "marketRef": "market.test-lifecycle",
+            "inputArtifact": None,
+            "outcomeCount": 4,
+            "collateralMintRef": "mint.collateral",
+            "claimMintRefs": ["mint.claim.0", "mint.claim.1", "mint.claim.2", "mint.claim.3"],
+            "resolution": {"kind": "categorical", "selector": 0, "payoutAtomsPerClaim": ["1", "0", "0", "0"]},
+            "priceScaleAtoms": "1000",
+            "feeDenominator": "10000",
+            "feeBasisPointsPerSide": 50,
+            "feeRecipientAccountRef": "token.test-lifecycle.alice.collateral",
+            "hoardPrincipalAccountRef": "token.test-lifecycle.hoard",
+        },
         "limits": limits(target),
+        "wallets": [{
+            "id": "alice",
+            "roles": ["participant", "trader"],
+            "fundingLamports": "10000",
+            "collateralAccountRef": "token.test-lifecycle.alice.collateral",
+            "claimAccountRefs": [f"token.test-lifecycle.alice.claim.{index}" for index in range(4)],
+            "positionAccountRef": "position.test-lifecycle.alice",
+        }],
+        "accounts": [
+            {"id": "wallet.alice", "kind": "wallet", "address": None, "expectedOwnerRef": "solana-system-program", "mintRef": None, "tokenAuthorityWalletRef": None},
+        ],
+        "initialSnapshot": {"accountStates": [], "tokenBalances": [], "positionRevisions": []},
+        "operations": rows,
+        "finalSnapshot": {"accountStates": [], "tokenBalances": [], "positionRevisions": []},
+        "retireEligible": True,
+    }
+    body_sha = hashlib.sha256(json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    return {
+        "schema": "dclutch-devnet-economic-scenario-v1",
+        "version": 1,
+        "scenarioId": "test-lifecycle",
+        "bodyDigestScope": "canonical-compact-scenario-body-json-v1",
+        "bodySha256": body_sha,
+        "body": body,
     }
 
 
@@ -104,19 +161,22 @@ def manifest_value(scenario: Path, target: str = "owned-loopback", rpc_url: str 
             "devnetGenesisHash": activity.DEVNET_GENESIS_HASH if target == "devnet" else None,
         },
         "inputs": [],
+        "addressBindings": [
+            {"ref": "wallet.alice", "source": {"kind": "wallet", "walletRef": "alice"}},
+        ],
         "adapters": [
             {
                 "id": "private-lifecycle",
                 "covers": ["found", "participant", "direct", "resolve", "redeem", "retire"],
                 "caller": "successor",
-                "argv": ["local-private-validator-lifecycle-v1", "--execute"],
+                "argv": ["local-private-validator-lifecycle-v1", "--work", "{{work}}", "--execute"],
                 "dependsOn": [],
                 "wallets": ["alice"],
                 "mutation": True,
                 "completion": {
                     "path": "{{work}}/receipts/private-lifecycle.json",
                     "schema": "dclutch-local-private-validator-lifecycle-v1",
-                    "signaturePointers": [],
+                    "signaturePointers": ["/signature"],
                     "requiredValues": {"/completed": True},
                 },
             }
@@ -160,6 +220,28 @@ raise SystemExit({exit_code})
     )
 
 
+def fake_caller(path: Path, *, exit_code: int = 0, schema: str = "dclutch-local-private-validator-lifecycle-v1") -> Path:
+    return executable(
+        path,
+        f"""#!/usr/bin/env python3
+import json, pathlib, sys
+if '--help' in sys.argv:
+    print('local-private-validator-lifecycle-v1')
+    raise SystemExit(0)
+work = pathlib.Path(sys.argv[sys.argv.index('--work') + 1])
+count = work / 'private' / 'caller-count'
+count.parent.mkdir(parents=True, exist_ok=True)
+count.write_text(str(int(count.read_text()) + 1) if count.exists() else '1')
+print('{SECRET_MARKER}')
+if {exit_code} == 0:
+    receipt = work / 'receipts' / 'private-lifecycle.json'
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(json.dumps({{'schema': '{schema}', 'completed': True, 'signature': '{ACTIVITY_SIGNATURE}'}}))
+raise SystemExit({exit_code})
+""",
+    )
+
+
 def funding_transaction(amount: int = 10_000, fee: int = 5_000, memo: str = "") -> dict[str, object]:
     return {
         "slot": 99,
@@ -187,11 +269,33 @@ def funding_transaction(amount: int = 10_000, fee: int = 5_000, memo: str = "") 
     }
 
 
+def activity_transaction(signature: str = ACTIVITY_SIGNATURE, *, embedded_signature: str | None = None) -> dict[str, object]:
+    return {
+        "slot": 100,
+        "transaction": {
+            "signatures": [signature if embedded_signature is None else embedded_signature],
+            "message": {
+                "accountKeys": [{"pubkey": WALLET, "signer": True, "writable": True}],
+                "instructions": [],
+            },
+        },
+        "meta": {
+            "err": None,
+            "fee": 1_000,
+            "preBalances": [10_000],
+            "postBalances": [9_000],
+            "preTokenBalances": [],
+            "postTokenBalances": [],
+        },
+    }
+
+
 class RpcState:
     def __init__(self) -> None:
         self.genesis = "loopback-test-genesis"
         self.transactions: dict[str, dict[str, object]] = {}
         self.signatures: list[str] = []
+        self.balances: dict[str, int] = {}
 
 
 @contextmanager
@@ -207,7 +311,7 @@ def rpc_server(state: RpcState):
             if method == "getGenesisHash":
                 result: object = state.genesis
             elif method == "getBalance":
-                result = {"context": {"slot": 98}, "value": 0}
+                result = {"context": {"slot": 101}, "value": state.balances.get(body["params"][0], 0)}
             elif method == "getTransaction":
                 result = state.transactions.get(body["params"][0])
             elif method == "getSignaturesForAddress":
@@ -253,6 +357,16 @@ class ActivityTests(unittest.TestCase):
     def parsed(self):
         return activity.parse_manifest(self.manifest)
 
+    def prepare_finalized_funding(self, manifest, state: RpcState) -> None:
+        activity.prepare_wallets(manifest, self.work, self.keygen)
+        journal = activity.new_funding_journal(manifest, "alice", WALLET, FUNDER, 10_000, None)
+        transaction = funding_transaction(memo=journal["memo"])
+        state.transactions[SIGNATURE] = transaction
+        state.signatures = [SIGNATURE]
+        state.balances[WALLET] = 10_000
+        final = activity.verify_funding_transaction(transaction, journal, SIGNATURE)
+        activity.atomic_write_json(activity.funding_journal_path(self.work, "alice"), final)
+
     def test_strict_manifest_covers_the_six_stage_private_lifecycle(self) -> None:
         manifest = self.parsed()
         self.assertEqual(manifest.scenario.cluster_target, "owned-loopback")
@@ -269,10 +383,12 @@ class ActivityTests(unittest.TestCase):
 
     def test_cycle_and_preflight_only_direct_refuse(self) -> None:
         changed = scenario_value()
-        changed["operations"][0]["dependsOn"] = ["retire"]  # type: ignore[index]
+        changed["body"]["operations"][0]["predecessorId"] = "retire"  # type: ignore[index]
+        changed["body"]["operations"][0]["dependencyIds"] = ["retire"]  # type: ignore[index]
+        changed["bodySha256"] = hashlib.sha256(json.dumps(changed["body"], separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
         write_json(self.scenario, changed)
         write_json(self.manifest, manifest_value(self.scenario))
-        with self.assertRaisesRegex(activity.Refusal, "cycle"):
+        with self.assertRaisesRegex(activity.Refusal, "canonical|cycle"):
             self.parsed()
 
         devnet_scenario = scenario_value("devnet")
@@ -358,6 +474,16 @@ class ActivityTests(unittest.TestCase):
         with self.assertRaisesRegex(activity.Refusal, "held until --live-authorization"):
             activity.require_live_authorization(devnet, None)
 
+        activity.validate_supervisor_rpc_join(
+            "https://api.devnet.solana.com/",
+            "https://api.devnet.solana.com:443/",
+        )
+        with self.assertRaisesRegex(activity.Refusal, "frozen devnet join"):
+            activity.validate_supervisor_rpc_join(
+                "https://api.devnet.solana.com:443/",
+                "https://api.devnet.solana.com:443/",
+            )
+
     def test_cleanup_requires_final_journal_and_removes_only_secret_keys(self) -> None:
         manifest = self.parsed()
         activity.prepare_wallets(manifest, self.work, self.keygen)
@@ -367,10 +493,263 @@ class ActivityTests(unittest.TestCase):
             activity.cleanup_keys(manifest, self.work, self.keygen, manifest.scenario.scenario_id)
         final = activity.verify_funding_transaction(funding_transaction(memo=journal["memo"]), journal, SIGNATURE)
         activity.atomic_write_json(activity.funding_journal_path(self.work, "alice"), final)
+        activity.atomic_write_json(
+            activity.adapter_journal_path(self.work, "private-lifecycle"),
+            {
+                "schema": activity.ADAPTER_JOURNAL_SCHEMA,
+                "manifestSha256": manifest.sha256,
+                "scenarioSha256": manifest.scenario.sha256,
+                "adapterId": "private-lifecycle",
+                "phase": "finalized",
+            },
+        )
         activity.cleanup_keys(manifest, self.work, self.keygen, manifest.scenario.scenario_id)
         self.assertFalse((self.work / "private" / "wallets" / "alice.json").exists())
         self.assertTrue((self.work / "public" / "wallet-ledger.json").exists())
         self.assertTrue((self.work / "public" / "wallet-cleanup.json").exists())
+
+    def test_scheduler_capability_journal_and_exact_reconciliation(self) -> None:
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            self.prepare_finalized_funding(manifest, state)
+            caller = fake_caller(self.root / "successor")
+            state.transactions[ACTIVITY_SIGNATURE] = activity_transaction()
+            state.signatures = [ACTIVITY_SIGNATURE, SIGNATURE]
+            state.balances[WALLET] = 9_000
+
+            activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+            journal = activity.authenticated_state(activity.adapter_journal_path(self.work, "private-lifecycle"), "adapter")
+            self.assertEqual(journal["phase"], "finalized")
+            self.assertEqual(journal["signatures"], [ACTIVITY_SIGNATURE])
+            self.assertNotIn(SECRET_MARKER, json.dumps(journal))
+            self.assertIn(SECRET_MARKER, (self.work / "private" / "logs" / "private-lifecycle.log").read_text())
+
+            result = activity.reconcile_activity(manifest, self.work, caller, caller, self.keygen)
+            self.assertEqual(result["schema"], activity.RECONCILIATION_SCHEMA)
+            self.assertEqual(result["wallets"][0]["activityLamportDelta"], "-1000")
+            self.assertEqual(result["wallets"][0]["finalLamports"], "9000")
+            self.assertFalse(result["untrustedProjectionUsed"])
+
+    def test_reconciliation_refuses_foreign_history_and_final_balance_mismatch(self) -> None:
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            self.prepare_finalized_funding(manifest, state)
+            caller = fake_caller(self.root / "successor")
+            state.transactions[ACTIVITY_SIGNATURE] = activity_transaction()
+            state.signatures = [ACTIVITY_SIGNATURE, SIGNATURE]
+            state.balances[WALLET] = 8_999
+            activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+            with self.assertRaisesRegex(activity.Refusal, "final lamports"):
+                activity.reconcile_activity(manifest, self.work, caller, caller, self.keygen)
+            state.balances[WALLET] = 9_000
+            state.signatures = [SUBSTITUTED_SIGNATURE, ACTIVITY_SIGNATURE, SIGNATURE]
+            with self.assertRaisesRegex(activity.Refusal, "foreign signatures"):
+                activity.reconcile_activity(manifest, self.work, caller, caller, self.keygen)
+
+    def test_dispatch_crash_can_only_resume_by_polling_completion(self) -> None:
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            self.prepare_finalized_funding(manifest, state)
+            caller = fake_caller(self.root / "successor", exit_code=1)
+            with self.assertRaisesRegex(activity.Refusal, "ambiguous|poll-only"):
+                activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+            self.assertEqual((self.work / "private" / "caller-count").read_text(), "1")
+            receipt = self.work / "receipts" / "private-lifecycle.json"
+            receipt.parent.mkdir(parents=True, exist_ok=True)
+            write_json(receipt, {"schema": "dclutch-local-private-validator-lifecycle-v1", "completed": True, "signature": ACTIVITY_SIGNATURE})
+            state.transactions[ACTIVITY_SIGNATURE] = activity_transaction()
+            state.signatures = [ACTIVITY_SIGNATURE, SIGNATURE]
+            activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=True)
+            self.assertEqual((self.work / "private" / "caller-count").read_text(), "1")
+            final = activity.authenticated_state(activity.adapter_journal_path(self.work, "private-lifecycle"), "adapter")
+            self.assertEqual(final["phase"], "finalized")
+
+    def test_caller_probe_and_stop_refuse_before_dispatch(self) -> None:
+        manifest = self.parsed()
+        absent = executable(self.root / "absent-caller", "#!/bin/sh\nexit 2\n")
+        with self.assertRaisesRegex(activity.Refusal, "does not dispatch"):
+            activity.run_activity(manifest, self.work, absent, absent, self.keygen, None, poll_only=False)
+        self.assertFalse((self.work / "private").exists())
+
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            self.prepare_finalized_funding(manifest, state)
+            caller = fake_caller(self.root / "stopped-successor")
+            activity.stop(self.work, "test stop")
+            with self.assertRaisesRegex(activity.Refusal, "STOP"):
+                activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+            self.assertFalse((self.work / "private" / "caller-count").exists())
+
+    def test_poll_only_fresh_and_partial_states_never_dispatch(self) -> None:
+        manifest = self.parsed()
+        caller = fake_caller(self.root / "recovery-caller")
+        self.assertEqual(
+            activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=True),
+            "no-pending-submissions",
+        )
+        self.assertFalse((self.work / "private").exists())
+
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            second = dataclasses.replace(
+                manifest.adapters[0],
+                adapter_id="later-undispatched",
+                completion=dataclasses.replace(
+                    manifest.adapters[0].completion,
+                    path="{{work}}/receipts/later-undispatched.json",
+                ),
+            )
+            partial_manifest = dataclasses.replace(manifest, adapters=(manifest.adapters[0], second))
+            self.prepare_finalized_funding(partial_manifest, state)
+            private, public = activity.load_wallet_indexes(partial_manifest, self.work, self.keygen)
+            private_rows = {row["id"]: row for row in private["wallets"]}
+            public_rows = {row["id"]: row for row in public["wallets"]}
+            argv, completion = activity.expanded_adapter(
+                partial_manifest.adapters[0], partial_manifest, self.work, private_rows, public_rows
+            )
+            journal = activity.new_adapter_journal(
+                partial_manifest,
+                partial_manifest.adapters[0],
+                digest(caller),
+                argv,
+                completion,
+                None,
+            )
+            journal["phase"] = "dispatching"
+            activity.atomic_write_json(activity.adapter_journal_path(self.work, "private-lifecycle"), journal)
+            completion.parent.mkdir(parents=True, exist_ok=True)
+            write_json(completion, {"schema": "dclutch-local-private-validator-lifecycle-v1", "completed": True, "signature": ACTIVITY_SIGNATURE})
+            state.transactions[ACTIVITY_SIGNATURE] = activity_transaction()
+            state.signatures = [ACTIVITY_SIGNATURE, SIGNATURE]
+            recovery = activity.run_activity(
+                partial_manifest, self.work, caller, caller, self.keygen, None, poll_only=True
+            )
+            self.assertEqual(recovery, "partial-recovery")
+            self.assertFalse(activity.adapter_journal_path(self.work, "later-undispatched").exists())
+            self.assertFalse((self.work / "private" / "caller-count").exists())
+
+    def test_poll_only_recovers_ambiguous_funding_without_any_key_path(self) -> None:
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            caller = fake_caller(self.root / "funding-recovery-caller")
+            journal = activity.new_funding_journal(manifest, "alice", WALLET, FUNDER, 10_000, None)
+            journal["phase"] = "dispatching"
+            activity.atomic_write_json(activity.funding_journal_path(self.work, "alice"), journal)
+            self.assertEqual(
+                activity.run_activity(manifest, self.work, caller, caller, None, None, poll_only=True),
+                "pending-funding",
+            )
+            self.assertFalse((self.work / "private").exists())
+            state.transactions[SIGNATURE] = funding_transaction(memo=journal["memo"])
+            state.signatures = [SIGNATURE]
+            self.assertEqual(
+                activity.run_activity(manifest, self.work, caller, caller, None, None, poll_only=True),
+                "funding-finalized",
+            )
+            final = activity.authenticated_state(activity.funding_journal_path(self.work, "alice"), "funding")
+            self.assertEqual(final["phase"], "finalized")
+            self.assertFalse((self.work / "private").exists())
+
+    def test_substituted_completion_schema_and_transaction_signature_refuse(self) -> None:
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            self.prepare_finalized_funding(manifest, state)
+            caller = fake_caller(self.root / "successor", schema="legacy-local-v2")
+            with self.assertRaisesRegex(activity.Refusal, "completion schema"):
+                activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+
+        # Use a fresh run because the hostile dispatch is permanently poll-only.
+        self.tearDown()
+        self.setUp()
+        state = RpcState()
+        with rpc_server(state) as rpc_url:
+            write_json(self.manifest, manifest_value(self.scenario, rpc_url=rpc_url))
+            manifest = self.parsed()
+            self.prepare_finalized_funding(manifest, state)
+            caller = fake_caller(self.root / "successor")
+            state.transactions[ACTIVITY_SIGNATURE] = activity_transaction(embedded_signature=SUBSTITUTED_SIGNATURE)
+            with self.assertRaisesRegex(activity.Refusal, "substitutes activity signature"):
+                activity.run_activity(manifest, self.work, caller, caller, self.keygen, None, poll_only=False)
+
+    def test_expired_capability_allows_only_original_journal_recovery(self) -> None:
+        manifest = self.parsed()
+        state = RpcState()
+        state.genesis = activity.DEVNET_GENESIS_HASH
+        with rpc_server(state) as rpc_url:
+            devnet = dataclasses.replace(
+                manifest,
+                scenario=dataclasses.replace(manifest.scenario, cluster_target="devnet"),
+                rpc_url=rpc_url,
+                devnet_genesis_hash=activity.DEVNET_GENESIS_HASH,
+            )
+            expired = self.root / "expired-authorization.json"
+            not_before = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=3)
+            expires = not_before + dt.timedelta(hours=1)
+            auth_value = {
+                "schema": activity.AUTHORIZATION_SCHEMA,
+                "manifestSha256": devnet.sha256,
+                "scenarioSha256": devnet.scenario.sha256,
+                "devnetGenesisHash": activity.DEVNET_GENESIS_HASH,
+                "marketRef": devnet.scenario.market_ref,
+                "notBefore": not_before.isoformat().replace("+00:00", "Z"),
+                "expiresAt": expires.isoformat().replace("+00:00", "Z"),
+                "authorization": "authorize-one-devnet-activity-run",
+            }
+            write_json(expired, auth_value)
+            with self.assertRaisesRegex(activity.Refusal, "outside its current window"):
+                activity.require_live_authorization(devnet, expired)
+            authorization_sha = activity.require_live_authorization(devnet, expired, allow_expired=True)
+            self.assertEqual(authorization_sha, digest(expired))
+
+            activity.prepare_wallets(devnet, self.work, self.keygen)
+            funding = activity.new_funding_journal(devnet, "alice", WALLET, FUNDER, 10_000, authorization_sha)
+            funding_tx = funding_transaction(memo=funding["memo"])
+            state.transactions[SIGNATURE] = funding_tx
+            activity.atomic_write_json(
+                activity.funding_journal_path(self.work, "alice"),
+                activity.verify_funding_transaction(funding_tx, funding, SIGNATURE),
+            )
+            caller = fake_caller(self.root / "capability-caller")
+            private, public = activity.load_wallet_indexes(devnet, self.work, self.keygen)
+            private_rows = {row["id"]: row for row in private["wallets"]}
+            public_rows = {row["id"]: row for row in public["wallets"]}
+            adapter = devnet.adapters[0]
+            argv, completion = activity.expanded_adapter(adapter, devnet, self.work, private_rows, public_rows)
+            journal = activity.new_adapter_journal(devnet, adapter, digest(caller), argv, completion, authorization_sha)
+            journal["phase"] = "dispatching"
+            activity.atomic_write_json(activity.adapter_journal_path(self.work, adapter.adapter_id), journal)
+            completion.parent.mkdir(parents=True, exist_ok=True)
+            write_json(completion, {"schema": "dclutch-local-private-validator-lifecycle-v1", "completed": True, "signature": ACTIVITY_SIGNATURE})
+            state.transactions[ACTIVITY_SIGNATURE] = activity_transaction()
+            state.signatures = [ACTIVITY_SIGNATURE, SIGNATURE]
+
+            activity.run_activity(devnet, self.work, caller, caller, self.keygen, expired, poll_only=True)
+            saved = activity.authenticated_state(activity.adapter_journal_path(self.work, adapter.adapter_id), "adapter")
+            self.assertEqual(saved["phase"], "finalized")
+            self.assertFalse((self.work / "private" / "caller-count").exists())
+            with self.assertRaisesRegex(activity.Refusal, "outside its current window"):
+                activity.run_activity(devnet, self.work, caller, caller, self.keygen, expired, poll_only=False)
+            self.assertFalse((self.work / "private" / "caller-count").exists())
+
+            substituted = self.root / "substituted-authorization.json"
+            substituted.write_text(json.dumps(auth_value, indent=4) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(activity.Refusal, "exact finalized funding|another live authorization"):
+                activity.run_activity(devnet, self.work, caller, caller, self.keygen, substituted, poll_only=True)
+            self.assertFalse((self.work / "private" / "caller-count").exists())
 
 
 if __name__ == "__main__":

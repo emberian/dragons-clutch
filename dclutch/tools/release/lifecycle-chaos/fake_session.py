@@ -182,6 +182,12 @@ def run_session(case_work: Path, rpc_url: str) -> int:
                 return 30
 
         if stage == "hot" and case in {"rpc-timeout", "duplicate-send", "blockhash-expiry"}:
+            if case == "blockhash-expiry":
+                write_atomic(
+                    control / "FAULT_ARMED.json",
+                    {"schema": CONTROL_SCHEMA, "state": "fault-armed", "fault": case},
+                )
+                wait_for(control / "FAULT_GO.json")
             latest = rpc(
                 url=rpc_url,
                 method="getLatestBlockhash",

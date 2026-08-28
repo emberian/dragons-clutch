@@ -209,6 +209,18 @@ class LifecycleChaosTests(unittest.TestCase):
             )
             self.assertGreater(expired["observedBlockHeight"], expired["lastValidBlockHeight"])
             self.assertEqual(expired["transactionSignature"], MODULE.base58_encode(b"\0" * 64))
+            late = work / "cases" / "late-child-refusal"
+            MODULE.write_json_new(
+                late / "journals" / "retire.json",
+                {
+                    "schema": MODULE.STAGE_JOURNAL_SCHEMA,
+                    "stage": "retire",
+                    "phase": "planned",
+                    "intentSha256": MODULE.sha256_bytes(b"hostile-retire"),
+                },
+            )
+            with self.assertRaisesRegex(MODULE.Refusal, "prefix disagreed"):
+                MODULE.validate_refusal_journals(spec, "late-child-refusal", late)
 
     def test_snapshot_refuses_digest_total_and_order_substitutions(self) -> None:
         canonical = json.loads((ROOT / "fixture" / "state.json").read_text())
