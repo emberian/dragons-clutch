@@ -108,6 +108,9 @@ fn run() -> Result<()> {
         Some("devnet-user-position-admission-v1") => {
             user_position_admission::run(arguments.collect())
         }
+        Some("local-private-validator-user-position-admission-v1") => {
+            user_position_admission::run_owned_loopback(arguments.collect())
+        }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-pyth-vaa-provision-v1") => pyth_vaa_provisioning::run(arguments.collect()),
         Some("local-mutable-prepare-v1") => local_mutable::run_prepare(arguments.collect()),
@@ -1256,6 +1259,7 @@ fn usage() {
     println!("{}", terminal_lifecycle::usage());
     println!("{}", terminal_sequence::usage());
     println!("{}", user_position_admission::usage());
+    println!("{}", user_position_admission::local_usage());
     println!("{}", pyth_vaa_provisioning::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", wallet_terminal::usage());

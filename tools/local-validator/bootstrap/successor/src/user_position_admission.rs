@@ -73,13 +73,14 @@ use solana_system_interface::instruction::create_account_with_seed;
 
 use crate::{
     Error, Result, campaign,
-    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
+    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, ExpectedClusterV1},
     model::SuccessorPlan,
     plan::{hex, pubkey},
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
 
 const REPORT_SCHEMA_V1: &str = "dclutch-devnet-user-position-admission-execution-v1";
+const LOCAL_REPORT_SCHEMA_V1: &str = "dclutch-owned-loopback-user-position-admission-execution-v1";
 const FINALITY_WAIT: Duration = Duration::from_secs(300);
 const DIRECT_COLLATERAL_SEED_DOMAIN_V1: &[u8] = b"dclutch:direct-collateral:v1";
 
@@ -384,12 +385,19 @@ struct ReportJournalV1 {
 }
 
 pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
+    run_with_expected_cluster(arguments, ExpectedClusterV1::Devnet)
+}
+
+pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run_with_expected_cluster(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run_with_expected_cluster(
+    arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
     let arguments = parse_arguments(arguments)?;
-    if arguments.origin.label() != "devnet" {
-        return Err(Error::new(
-            "User Position admission is devnet-only; loopback rehearsal uses the ProgramTest campaign",
-        ));
-    }
+    expected_cluster.authenticate(&arguments.origin)?;
     let plan_source = fs::read(&arguments.plan)?;
     let plan_sha256 = sha256_hex(&plan_source);
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
@@ -418,6 +426,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             &evidence_sha256,
             &plan,
             &evidence,
+            expected_cluster,
         )?;
         if arguments.execute && !report.authorized_mutation {
             // A read-only planning invocation may be resumed later under a
@@ -447,6 +456,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         &evidence_sha256,
         &snapshot,
         &unsigned,
+        expected_cluster,
     )?;
     let mut journal = ReportJournalV1::vacant(arguments.output.clone());
     journal.persist(&mut report)?;
@@ -3006,6 +3016,7 @@ fn build_report(
     evidence_sha256: &str,
     snapshot: &SnapshotBundleV1,
     unsigned: &UserPositionAdmissionPlanV1,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<ReportV1> {
     if unsigned.required_signer != arguments.position_owner {
         return Err(Error::new("operator selected a substituted Position owner"));
@@ -3114,8 +3125,8 @@ fn build_report(
     };
     let intent_sha256 = sha256_hex(&serde_json::to_vec(&intent)?);
     Ok(ReportV1 {
-        schema: REPORT_SCHEMA_V1.into(),
-        cluster: "devnet".into(),
+        schema: report_schema_v1(expected_cluster).into(),
+        cluster: expected_cluster.evidence_label().into(),
         rpc_url: arguments.origin.redacted_url(),
         authorized_mutation: arguments.execute,
         phase: PhaseV1::Planned,
@@ -4025,10 +4036,11 @@ fn authenticate_existing_report(
     evidence_sha256: &str,
     plan: &SuccessorPlan,
     evidence: &Value,
+    expected_cluster: ExpectedClusterV1,
 ) -> Result<()> {
     authenticate_report_phase_envelopes(report)?;
-    if report.schema != REPORT_SCHEMA_V1
-        || report.cluster != "devnet"
+    if report.schema != report_schema_v1(expected_cluster)
+        || report.cluster != expected_cluster.evidence_label()
         || report.intent.plan_sha256 != plan_sha256
         || report.intent.campaign_evidence_sha256 != evidence_sha256
         || report.intent.position_owner != arguments.position_owner.to_string()
@@ -4048,6 +4060,13 @@ fn authenticate_existing_report(
             authenticate_collateral_arguments(report, arguments, plan, evidence)
         }
         _ => Ok(()),
+    }
+}
+
+fn report_schema_v1(expected_cluster: ExpectedClusterV1) -> &'static str {
+    match expected_cluster {
+        ExpectedClusterV1::Devnet => REPORT_SCHEMA_V1,
+        ExpectedClusterV1::OwnedLoopback => LOCAL_REPORT_SCHEMA_V1,
     }
 }
 
@@ -4302,11 +4321,6 @@ fn authenticate_genesis_again(rpc: &mut Rpc, origin: &ClusterOriginV1) -> Result
         .as_str()
         .ok_or_else(|| Error::new("getGenesisHash result was not a string"))?
         .to_owned();
-    if genesis != DEVNET_GENESIS_HASH {
-        return Err(Error::new(format!(
-            "User Position executor expected devnet genesis {DEVNET_GENESIS_HASH}, observed {genesis}"
-        )));
-    }
     origin.authenticate_genesis(&genesis)
 }
 
@@ -4713,9 +4727,25 @@ pub(crate) fn usage() -> &'static str {
     )
 }
 
+pub(crate) fn local_usage() -> &'static str {
+    concat!(
+        "Usage:\n  dclutch-local-successor-bootstrap local-private-validator-user-position-admission-v1 \\\n",
+        "     --rpc-url http://127.0.0.1:PORT --plan ABSOLUTE_JSON \\\n",
+        "     --campaign-evidence ABSOLUTE_JSON --position-owner PUBKEY \\\n",
+        "     --position-owner-keypair ABSOLUTE_JSON --fee-payer PUBKEY \\\n",
+        "     --fee-payer-keypair ABSOLUTE_JSON --minimum-finalized-slot U64 \\\n",
+        "     --output ABSOLUTE_JSON [--execute] \\\n",
+        "     [--collateral-source-owner PUBKEY \\\n",
+        "      --collateral-source-owner-keypair ABSOLUTE_JSON \\\n",
+        "      --collateral-source-account PUBKEY --collateral-quantity-atoms U64]\n\n",
+        "This command is exclusively for a supervisor-owned loopback validator. It invokes the same admission and collateral semantic owners as the public devnet command, but writes the distinct dclutch-owned-loopback-user-position-admission-execution-v1 report and refuses every external RPC origin."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::DEVNET_GENESIS_HASH;
     use dclutch_claims_svm::protocol_position_v2::{
         ProtocolPositionActionV2, ProtocolPositionAdmissionEvidenceV2, ProtocolPositionOwnerKindV2,
         ProtocolPositionPresenceV2, ProtocolPositionRequestV2,
@@ -6629,6 +6659,22 @@ mod tests {
         let mut args = base_args();
         args[1] = "http://127.0.0.1:20990".into();
         assert!(parse_arguments(args).is_err());
+    }
+
+    #[test]
+    fn owned_loopback_report_is_not_a_public_devnet_report() {
+        assert_eq!(
+            report_schema_v1(ExpectedClusterV1::Devnet),
+            "dclutch-devnet-user-position-admission-execution-v1"
+        );
+        assert_eq!(
+            report_schema_v1(ExpectedClusterV1::OwnedLoopback),
+            "dclutch-owned-loopback-user-position-admission-execution-v1"
+        );
+        assert_ne!(
+            report_schema_v1(ExpectedClusterV1::Devnet),
+            report_schema_v1(ExpectedClusterV1::OwnedLoopback)
+        );
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
