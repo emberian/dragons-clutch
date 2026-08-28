@@ -14,7 +14,7 @@ reachable inside an entry route's request.
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claims` | `dclutch-claims-sbf` | 0x5 | 12 | 2 | 82 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:55) |
-| `core` | `dclutch-core-sbf` | 0x3 | 15 | 11 | 17 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:164) |
+| `core` | `dclutch-core-sbf` | 0x3 | 15 | 11 | 17 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:170) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 8 | 9 | 13 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:164) |
 | `dealer` | `dclutch-dealer-sbf` | 0x7 | 1 | 0 | 11 | `process_instruction` (programs/dclutch-dealer-sbf/src/lib.rs:343) |
 | `dealer-accelerator` | `dclutch-dealer-accelerator-sbf` | 0xD | 1 | 0 | 3 | `program_entrypoint` (programs/dclutch-dealer-accelerator-sbf/src/lib.rs:67) |
@@ -23,6 +23,6 @@ reachable inside an entry route's request.
 | `product-runtime-v2` | `dclutch-product-runtime-v2-sbf` | 0x9 | 1 | 0 | 9 | `process_instruction` (programs/dclutch-product-runtime-v2-sbf/src/lib.rs:81) |
 | `registry` | `dclutch-registry-sbf` | 0x1 | 6 | 3 | 14 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:151) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:128) |
-| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 5 | 12 | 21 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:143) |
+| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 6 | 12 | 21 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:144) |
 | `series-shadow` | `dclutch-series-shadow-sbf` | 0xB | 1 | 0 | 5 | `program_entrypoint` (programs/dclutch-series-shadow-sbf/src/lib.rs:24) |
 | `trading` | `dclutch-trading-sbf` | 0x4 | 7 | 0 | 13 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1716) |

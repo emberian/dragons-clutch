@@ -24,13 +24,17 @@ Regenerate with: npm run abi:found
 | `RESULT_DOMAIN_SCHEMA_ID_V2` | 32 | -- | `39 9c c5 74 0f 62 1e a5 c3 0f 96 0a 14 af 83 9b 0b 5c fd 58 a9 30 5d cc 09 c6 1f d1 67 81 b7 c2` |
 | `PORTFOLIO_SCHEMA_ID_V2` | 32 | -- | `76 70 6d df 08 91 7b b3 df 08 6b 8c 65 04 92 83 bb ab 69 75 9c 5b 24 b0 75 29 7c 47 0f e3 d6 65` |
 | `REALM_SCHEMA_RELEASE_ID_V1` | 32 | -- | `94 fe 1f d6 d7 25 9f 47 50 3d 6a c5 7e c7 da 78 dc 38 06 a5 ed 49 8f ea e4 3e d3 78 5b 5d 0c 69` |
-| `SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2` | 32 | -- | `5d 98 9b 8d 65 ac bf ee 49 70 08 dd 08 99 41 ea 7b 45 3f 6c 98 2b 59 e7 fa 91 f1 cf 5a 3e ff f2` |
+| `SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3` | 32 | -- | `46 41 59 e8 e2 e5 d3 18 1b 57 6b b2 21 65 65 1d 4c da 0b 54 f5 9d 6f e0 d1 a4 88 2a b8 18 a3 cc` |
+| `SOURCE_SPEC_SCHEMA_ID_V1` | 32 | -- | `cc ea f8 db c2 ac 3a e8 11 b5 22 19 72 92 9c f3 fc 34 13 72 1b 08 0d 56 0f f9 54 b8 ab 81 86 b6` |
+| `SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1` | 32 | -- | `92 fa dd 2f 51 54 82 b7 6e 25 55 52 4d 57 75 3e 61 cd 42 de 40 a3 98 f9 6a 17 28 c6 4f 28 4e 01` |
+| `MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1` | 32 | -- | `9c 1d c9 00 e6 b6 bf 2c 7e f2 fe be be 2c 0a a0 85 29 af 8c 44 c4 fd 1d 22 ab b7 65 b1 da 16 00` |
+| `GRADED_BASIS_RECORD_SCHEMA_ID_V3` | 32 | -- | `0b 68 d1 a8 31 e9 ee 4b 7c 7f 04 7f 69 82 ea de 18 01 c7 59 68 cd 2e 49 8b 76 62 e7 ee 62 d0 e8` |
 | `CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1` | 32 | -- | `6b ce f7 b2 83 67 cb 8d 08 97 10 ba 58 e6 84 31 2f 43 4c 4b c4 20 ee fd 0f 7a 15 0a 90 82 88 df` |
 | `EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1` | 32 | -- | `8b a3 bc 19 7f ea a1 87 a0 a3 92 7b 16 b2 5d 83 79 2c 5f 33 5a f2 43 39 a5 4c 38 cc 07 23 03 58` |
 | `ARTIFACT_RELEASE_SCHEMA_ID_V1` | 32 | -- | `ae 19 a6 0d b5 50 b1 a8 a5 1d 46 18 c7 7d ea 54 21 17 4a 2a 85 5e e6 77 89 4f a9 1b 3c fd 3b 6c` |
 | `LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2` | 8 | `DCLRNCI2` | `44 43 4c 52 4e 43 49 32` |
 | `LIFECYCLE_RENT_CREDIT_MAGIC_V2` | 8 | `DCLRNTL2` | `44 43 4c 52 4e 54 4c 32` |
-| `CORE_STATE_MAGIC` | 8 | `DCLTCOR2` | `44 43 4c 54 43 4f 52 32` |
+| `CORE_STATE_MAGIC` | 8 | `DCLTCOR3` | `44 43 4c 54 43 4f 52 33` |
 | `LIABILITY_BASIS_MARKET_MAGIC_V2` | 8 | `DCLLBM02` | `44 43 4c 4c 42 4d 30 32` |
 | `LIABILITY_BASIS_POSITION_MAGIC_V2` | 8 | `DCLLBP02` | `44 43 4c 4c 42 50 30 32` |
 
@@ -48,14 +52,14 @@ Regenerate with: npm run abi:found
 
 | name | value |
 | --- | ---: |
-| `CORE_VERSION` | 2 |
+| `CORE_VERSION` | 3 |
 | `CORE_REQUEST_BYTES` | 72 |
-| `CORE_STATE_BYTES` | 352 |
+| `CORE_STATE_BYTES` | 360 |
 | `CORE_ACTION_FOUND_TAG` | 0 |
 | `LIFECYCLE_RENT_CREDIT_BYTES_V2` | 128 |
 | `CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2` | 128 |
 | `LIFECYCLE_RENT_SCHEMA_VERSION_V2` | 2 |
-| `CORE_FOUND_ACCOUNT_COUNT_V2` | 31 |
+| `CORE_FOUND_ACCOUNT_COUNT_V3` | 37 |
 | `LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2` | 0 |
 | `LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2` | 10 |
 | `LIFECYCLE_RENT_ACTION_CREATE_V2` | 1 |
@@ -73,8 +77,9 @@ Regenerate with: npm run abi:found
 | `CORE_STATE_REGISTRY_PROGRAM_OFFSET` | 240 |
 | `CORE_STATE_GENERATION_OFFSET` | 272 |
 | `CORE_STATE_OUTSTANDING_CAPABILITIES_OFFSET` | 280 |
-| `CORE_STATE_RENT_BENEFICIARY_OFFSET` | 288 |
-| `CORE_STATE_TERMINAL_RECEIPT_OFFSET` | 320 |
+| `CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET` | 288 |
+| `CORE_STATE_RENT_BENEFICIARY_OFFSET` | 296 |
+| `CORE_STATE_TERMINAL_RECEIPT_OFFSET` | 328 |
 | `CORE_PHASE_FOUNDING_TAG` | 0 |
 | `CORE_PHASE_OPEN_TAG` | 1 |
 | `CORE_PHASE_TERMINAL_TAG` | 2 |
@@ -104,7 +109,7 @@ Regenerate with: npm run abi:found
 | `LIABILITY_BASIS_POSITION_RESERVED_OFFSET` | 120 |
 | `CUSTODY_COMPARTMENT_HOARD_PRINCIPAL_TAG_V1` | 3 |
 
-## Account table: `CORE_FOUND_ACCOUNT_LABELS_V2` / `CORE_FOUND_ACCOUNT_ROLES_V2`
+## Account table: `CORE_FOUND_ACCOUNT_LABELS_V3` / `CORE_FOUND_ACCOUNT_ROLES_V3`
 
 | # | account | signer | writable |
 | --- | --- | --- | --- |
@@ -120,22 +125,28 @@ Regenerate with: npm run abi:found
 | 9 | result domain staging |  |  |
 | 10 | portfolio raw |  |  |
 | 11 | portfolio staging |  |  |
-| 12 | Source material raw |  |  |
-| 13 | Source staging |  |  |
-| 14 | capability manifest raw |  |  |
-| 15 | capability staging |  |  |
-| 16 | execution release set raw |  |  |
-| 17 | release-set staging |  |  |
-| 18 | activation cache |  |  |
-| 19 | Core program |  |  |
-| 20 | Core ProgramData |  |  |
-| 21 | Registry program |  |  |
-| 22 | Rent sysvar |  |  |
-| 23 | System program |  |  |
-| 24 | infrastructure profile |  |  |
-| 25 | Registry artifact raw |  |  |
-| 26 | Registry artifact staging |  |  |
-| 27 | Registry ProgramData |  |  |
-| 28 | Rent artifact raw |  |  |
-| 29 | Rent artifact staging |  |  |
-| 30 | Rent ProgramData |  |  |
+| 12 | linked basis raw |  |  |
+| 13 | linked basis staging |  |  |
+| 14 | Source material raw |  |  |
+| 15 | Source staging |  |  |
+| 16 | Source spec raw |  |  |
+| 17 | Source spec staging |  |  |
+| 18 | capacity profile raw |  |  |
+| 19 | capacity profile staging |  |  |
+| 20 | manipulation floor raw |  |  |
+| 21 | manipulation floor staging |  |  |
+| 22 | capability manifest raw |  |  |
+| 23 | capability staging |  |  |
+| 24 | activation cache |  |  |
+| 25 | Core program |  |  |
+| 26 | Core ProgramData |  |  |
+| 27 | Registry program |  |  |
+| 28 | Rent sysvar |  |  |
+| 29 | System program |  |  |
+| 30 | infrastructure profile |  |  |
+| 31 | Registry artifact raw |  |  |
+| 32 | Registry artifact staging |  |  |
+| 33 | Registry ProgramData |  |  |
+| 34 | Rent artifact raw |  |  |
+| 35 | Rent artifact staging |  |  |
+| 36 | Rent ProgramData |  |  |

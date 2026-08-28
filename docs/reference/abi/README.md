@@ -30,5 +30,7 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [protocolInfrastructure](protocolInfrastructure.md) | from the Lean-emitted ProtocolInfrastructureProfile Rust ABI; do not edit. | npm run abi:infrastructure |
 | [rationalTerminalHotV3](rationalTerminalHotV3.md) | from the Lean-owned Rational terminal Hot V3 and Claims-child ABIs; do not edit. | npm run abi:rational-terminal-v3 |
 | [realmPositionV1](realmPositionV1.md) | by formal/dclutch-semantics/EmitRealmPositionAbiTs.lean; do not edit. | npm run abi:realm-position |
+| [refusalRegistryV1](refusalRegistryV1.md) | from crates/dclutch-refusal-registry/src/lib.rs and docs/reference/refusals.md; do not edit. | npm run abi:refusal-registry |
 | [registeredDirect](registeredDirect.md) | from dclutch-direct-codec Lean-emitted Rust ABI; do not edit. | npm run abi:registered |
 | [routeCensus](routeCensus.md) | by scripts/generate-route-census.mjs from `dclutch-route-census inventory`; do not edit. | npm run abi:route-census |
+| [walletTerminalPayoutV3](walletTerminalPayoutV3.md) | by scripts/generate-wallet-terminal-payout-v3.mjs; do not edit. |  |
