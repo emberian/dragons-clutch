@@ -25,6 +25,7 @@ pub mod config;
 pub mod derive;
 pub mod error;
 pub mod id32;
+pub mod keeper;
 pub mod keys;
 pub mod observe;
 pub mod publog;

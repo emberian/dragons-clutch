@@ -301,6 +301,26 @@ name = "dclutch-core-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
+]
+
+[[package]]
+name = "dclutch-product-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-product-runtime-v2"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-record-contract"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-registry-contract"
 version = "0.1.0"
 dependencies = [
@@ -334,7 +354,12 @@ dependencies = [
  "bincode",
  "bs58",
  "clap",
+ "dclutch-market-core-codec",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
  "dclutch-relay-contract",
+ "dclutch-release-set-contract",
+ "dclutch-source-contract",
  "ed25519-dalek",
  "hex",
  "rand_core 0.6.4",
@@ -346,6 +371,7 @@ dependencies = [
  "solana-hash",
  "solana-instruction",
  "solana-message",
+ "solana-rent",
  "solana-signature",
  "solana-transaction",
  "tempfile",
@@ -359,6 +385,22 @@ name = "dclutch-release-set-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+]
+
+[[package]]
+name = "dclutch-sha256-adapter"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "solana-sha256-hasher",
+]
+
+[[package]]
+name = "dclutch-source-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-product-contract",
+ "dclutch-product-runtime-v2",
 ]
 
 [[package]]
@@ -1401,6 +1443,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "solana-rent"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e860d5499a705369778647e97d760f7670adfb6fc8419dd3d568deccd46d5487"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "solana-sdk-macro",
+]
+
+[[package]]
 name = "solana-sanitize"
 version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1413,6 +1466,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "def234c1956ff616d46c9dd953f251fa7096ddbaa6d52b165218de97882b7280"
 dependencies = [
  "solana-address",
+]
+
+[[package]]
+name = "solana-sdk-macro"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8765316242300c48242d84a41614cb3388229ec353ba464f6fe62a733e41806f"
+dependencies = [
+ "bs58",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
