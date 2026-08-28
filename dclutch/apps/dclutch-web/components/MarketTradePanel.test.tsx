@@ -44,4 +44,13 @@ describe('the market-detail trade panel', () => {
       expect(html).not.toContain(forbidden);
     }
   });
+
+  it('keeps public Direct execution fail-closed until its canonical route and finalizer exist', () => {
+    expect(html).toContain('does not accept a pasted route or ask for a signature');
+    expect(html).toContain('canonical public route manifest');
+    expect(html).toContain('exact finalized receipt and poststate');
+    expect(html).toContain('Browser data is an untrusted projection');
+    expect(html).not.toContain('Route manifest JSON');
+    expect(html).not.toContain('Build, sign as payer, and submit');
+  });
 });

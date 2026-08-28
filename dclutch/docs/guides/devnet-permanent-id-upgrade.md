@@ -51,8 +51,11 @@ The baseline's canonical digest commits:
 - the target width, additional bytes, current and target rent minima, and exact
   rent top-up.
 
-The update command reads the accounts again immediately before the write and
-requires every baseline fact to remain exact.
+The preflight and update commands read Program, ProgramData, and the explicit
+fee payer together with one finalized `getMultipleAccounts` call. Every
+prestate and poststate call carries a nonzero `minContextSlot`; no result may
+mix accounts from different RPC contexts. The update requires every baseline
+fact to remain exact.
 
 ## 3. Extend only when the candidate does not fit
 
@@ -80,16 +83,38 @@ checked `solana program extend`, then requires all of these postconditions:
   delta plus the transaction fee.
 
 The Solana CLI's extension message does not contain a transaction signature.
-The receipt therefore never extracts one from prose. It finds one unambiguous
-finalized ProgramData signature at the new deployment slot and verifies its
-full transaction and metadata before recording it.
+The receipt therefore never extracts one from prose. The operator pages
+finalized ProgramData signatures, 1,000 rows at a time, until history crosses
+below the new deployment slot. It refuses nonmonotonic pages, repeated rows,
+more than one successful same-slot candidate, or a history that does not cross
+the target within the explicit sixteen-page operational bound. It then verifies
+the selected full transaction and metadata before recording it.
 
 After extension, discard the old baseline and capture a new one. Extension
 advances the Loader deployment slot. Upgrade advances it again. You mint and
 activate release records only from the final post-Upgrade ProgramData
 observation.
 
-## 4. Upgrade the existing id
+## 4. Run the read-only preflight
+
+Run the same `devnet-upgrade-v1` arguments with `--preflight` instead of
+`--execute`. Exactly one mode is required.
+
+Preflight is structurally key-free: it does not invoke `solana address`, open a
+keypair path, call `solana program`, create a receipt, or create a dump. It does
+rehash the complete checked-release gate, authenticate the pinned CLI version
+and exact devnet genesis, validate the source and baseline, derive the only
+admitted live image, and read Program, ProgramData, and payer in one finalized
+context. Its JSON report always carries `mutation_permitted: false`.
+
+If a receipt already exists, preflight validates its canonical phase digest. A
+prepared receipt must still match its complete prestate. A submitted receipt
+must already have the exact payload, authority, rent, slot advance, and
+finalized Upgrade transaction. A complete receipt must also match the current
+Loader accounts, stored transaction, and existing dump. Preflight never resumes
+or writes any phase.
+
+## 5. Upgrade the existing id
 
 Run `devnet-upgrade-v1` with the new baseline, generated checked-release gate,
 its separately recorded digest, the exact source commit/tree, the gate's role
@@ -100,12 +125,10 @@ acknowledgement has this exact value:
 ROLE:PROGRAM_ID
 ```
 
-The command verifies the pinned Solana CLI version, exact devnet genesis,
-keypair public addresses, Program-to-ProgramData link, Loader owners and
-privileges, retained authority, baseline, complete gate, selected raw ELF,
-derived live digest, and zero padding before it calls `solana program deploy`
-for that existing program id. Pass these source admissions exactly as printed
-by the release runner:
+After the preflight passes, repeat the exact command with `--execute`. The
+mutation mode additionally verifies both keypair public addresses immediately
+before it calls `solana program deploy` for the existing id. Pass these source
+admissions exactly as printed by the release runner:
 
 ```text
 --checked-release-gate ABSOLUTE_WORK_ROOT/CHECKED_UPGRADE_GATE.json
@@ -115,19 +138,33 @@ by the release runner:
 ```
 
 After the CLI returns a JSON program id and signature, the command rechecks the
-cluster and accounts. It requires the deployment slot to advance, requires the
-live payload to equal the checked raw ELF plus zero padding, requires parked
-ProgramData rent to remain unchanged, dumps the deployed bytes, and verifies
-that dump against the raw or exact live image. The complete receipt carries the
-before and after wallet and ProgramData lamports with checked arithmetic.
+cluster and reads Program, ProgramData, and payer in one finalized context. It
+requires the deployment slot to advance, the live payload to equal the checked
+raw ELF plus zero padding, and parked ProgramData rent to remain unchanged.
+
+The CLI-returned signature is authority for transaction lookup, not prose. The
+operator fetches that exact finalized transaction and requires one parsed
+Loader-v3 Upgrade instruction for the exact Program, ProgramData, retained
+authority, buffer, spill, rent sysvar, and clock sysvar. Its account keys and
+balance vectors must prove the explicit payer is signer/writable account zero,
+the payer delta equals the finalized transaction fee, and ProgramData lamports
+did not move. Wallet activity outside this exact transaction is irrelevant to
+the arithmetic. Finally, the operator dumps the deployed bytes and verifies the
+dump against the raw or exact zero-padded live image.
 
 ## Resume rules
 
 Receipts move through `prepared`, `submitted`, and `complete` phases and are
-written atomically.
+written atomically. Every phase has a canonical SHA-256 over its complete
+contents. Prepared and submitted receipts must have every later-only field
+absent; a complete digest covers the CLI signature/output, finalized
+transaction and its digest, poststate/context slot, exact arithmetic, and dump
+digest/shape.
 
-- A complete receipt is idempotent. Re-running with the same exact inputs makes
-  no CLI call.
+- A complete receipt is idempotent with respect to writes, not history. Every
+  rerun freshly checks the exact CLI version, devnet genesis, Program,
+  ProgramData, payload, authority, deployment slot, finalized transaction, and
+  dump. Drift is reported and no write is attempted.
 - A submitted receipt resumes only poststate and transaction verification. It
   never submits the write again.
 - A prepared receipt resumes only while the complete account and wallet
@@ -135,7 +172,8 @@ written atomically.
 - If chain state moved behind a prepared receipt, the previous submission
   outcome is ambiguous. The tool stops and tells you not to replay it.
 - A changed role, program id, ProgramData id, authority, payer, genesis,
-  baseline, artifact, payload, or canonical operation id is a substitution and
+  baseline, artifact, payload, canonical operation id, receipt digest,
+  signature, transaction, poststate, arithmetic, or dump is a substitution and
   is refused.
 
 There is no force flag, multi-role mode, program close, recycle, authority

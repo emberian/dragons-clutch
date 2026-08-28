@@ -43,4 +43,11 @@ describe('wallet redemption flow', () => {
     expect(html).not.toContain('Redeem 2 winning atoms');
     expect(html).not.toContain('payout itself, is not wallet-ready');
   });
+
+  it('explains crash recovery without treating browser storage as authority', () => {
+    expect(html).toContain('saves the signed transaction id');
+    expect(html).toContain('Reloading resumes only that exact signature');
+    expect(html).toContain('it never submits it again');
+    expect(html).toContain('Browser data is an untrusted projection');
+  });
 });

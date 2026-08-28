@@ -7,6 +7,7 @@ use solana_sdk::pubkey::Pubkey;
 mod campaign;
 mod cluster;
 mod direct_market;
+mod flagship_resolution;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
 // helpers stay allowed the way every #[path] include here is.
@@ -94,6 +95,7 @@ fn run() -> Result<()> {
         Some("devnet-user-position-admission-v1") => {
             user_position_admission::run(arguments.collect())
         }
+        Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -928,6 +930,7 @@ fn usage() {
     println!("{}", terminal_lifecycle::usage());
     println!("{}", terminal_lifecycle::lifecycle_usage());
     println!("{}", user_position_admission::usage());
+    println!("{}", flagship_resolution::usage());
     println!("{}", wallet_terminal::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \

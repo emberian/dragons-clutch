@@ -21,13 +21,12 @@ use std::{
     str::FromStr as _,
 };
 
-use base64::Engine as _;
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
-use solana_sdk_ids::bpf_loader_upgradeable;
+use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
 
 use crate::{
     Error, Result,
@@ -37,16 +36,23 @@ use crate::{
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
 
-const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v2";
+const SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-receipt-v3";
+const PREFLIGHT_SCHEMA: &str = "dclutch-devnet-permanent-id-upgrade-preflight-v1";
 const CHECKED_GATE_SCHEMA: &str = "dclutch-checked-upgrade-gate-v1";
 const BASELINE_SCHEMA: &str = "dclutch-devnet-upgrade-baseline-v1";
-const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v1";
+const EXTENSION_SCHEMA: &str = "dclutch-devnet-programdata-extension-receipt-v2";
 const TARGET_ACK_FLAG: &str = "--i-accept-upgrade";
 const EXTENSION_ACK_FLAG: &str = "--i-accept-extension";
 /// A provisional operator reserve above the exact rent top-up. The receipt
 /// records the actual fee separately; this bound is lifted by measured devnet
 /// extension receipts rather than guessed downward during an operation.
 const EXTENSION_FEE_RESERVE_LAMPORTS: u64 = 1_000_000;
+/// Operational bound, not a chain bound. One page carries the RPC maximum of
+/// 1,000 signature rows; sixteen pages cover 16,000 ProgramData touches while
+/// still refusing an unbounded history walk. A refusal reports the target slot
+/// so the operator can preserve the evidence and lift this bound explicitly.
+const SIGNATURE_HISTORY_MAX_PAGES: usize = 16;
+const SIGNATURE_HISTORY_PAGE_ROWS: u64 = 1_000;
 const ROLES: &[&str] = &[
     "registry",
     "rent",
@@ -101,6 +107,7 @@ struct UpgradeArgsV1 {
     solana_cli: PathBuf,
     target_acknowledgment: String,
     execute: bool,
+    preflight: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,6 +193,14 @@ struct ValidatedUpgradeGateV1 {
     raw_elf_sha256: String,
 }
 
+struct UpgradeAdmissionV1 {
+    gate: ValidatedUpgradeGateV1,
+    baseline: UpgradeBaselineV1,
+    candidate_live: Vec<u8>,
+    live_elf_sha256: String,
+    live_elf_padding_bytes: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ReceiptPhaseV1 {
@@ -238,9 +253,10 @@ struct UpgradeBaselineV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct UpgradeArithmeticV1 {
-    wallet_before_lamports: u64,
-    wallet_after_lamports: u64,
-    wallet_spend_lamports: u64,
+    transaction_payer_pre_lamports: u64,
+    transaction_payer_post_lamports: u64,
+    transaction_fee_lamports: u64,
+    payer_fee_delta_lamports: u64,
     programdata_before_lamports: u64,
     programdata_after_lamports: u64,
     programdata_delta_lamports: i128,
@@ -281,13 +297,17 @@ struct ExtensionReceiptV1 {
     extension_additional_bytes: u64,
     target_rent_exempt_minimum_lamports: u64,
     expected_rent_top_up_lamports: u64,
+    before_context_slot: u64,
     before: LoaderObservationV1,
     wallet_before_lamports: u64,
     transaction_signature: Option<String>,
     solana_cli_output: Option<Value>,
     finalized_transaction: Option<Value>,
+    finalized_transaction_sha256: Option<String>,
+    after_context_slot: Option<u64>,
     after: Option<LoaderObservationV1>,
     arithmetic: Option<ExtensionArithmeticV1>,
+    receipt_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -312,14 +332,45 @@ struct UpgradeReceiptV1 {
     live_elf_sha256: String,
     live_elf_padding_bytes: u64,
     solana_cli_version: String,
+    before_context_slot: u64,
     before: LoaderObservationV1,
     wallet_before_lamports: u64,
     transaction_signature: Option<String>,
     solana_cli_output: Option<Value>,
+    finalized_transaction: Option<Value>,
+    finalized_transaction_sha256: Option<String>,
+    after_context_slot: Option<u64>,
     after: Option<LoaderObservationV1>,
     arithmetic: Option<UpgradeArithmeticV1>,
     dump_sha256: Option<String>,
     dump_shape: Option<String>,
+    receipt_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct UpgradePreflightV1 {
+    schema: String,
+    role: String,
+    program_id: String,
+    programdata_id: String,
+    retained_upgrade_authority: String,
+    fee_payer: String,
+    rpc_origin_redacted: String,
+    genesis_hash: String,
+    solana_cli_version: String,
+    source_revision: String,
+    source_tree_sha256: String,
+    checked_release_gate_sha256: String,
+    baseline_sha256: String,
+    observation_context_slot: u64,
+    observation: LoaderObservationV1,
+    wallet_lamports: u64,
+    raw_elf_sha256: String,
+    live_elf_sha256: String,
+    live_elf_padding_bytes: u64,
+    receipt_phase: Option<ReceiptPhaseV1>,
+    mutation_permitted: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -343,9 +394,42 @@ impl From<RpcAccount> for RpcAccountV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SnapshotV1 {
+    context_slot: u64,
     loader: LoaderObservationV1,
     wallet_lamports: u64,
     live_elf: Vec<u8>,
+}
+
+struct SnapshotQueryV1<'a> {
+    origin: &'a ClusterOriginV1,
+    program_id: Pubkey,
+    programdata_id: Pubkey,
+    expected_upgrade_authority: Pubkey,
+    payer: Pubkey,
+    minimum_context_slot: u64,
+}
+
+struct UpgradeTransactionQueryV1<'a> {
+    origin: &'a ClusterOriginV1,
+    signature: &'a str,
+    program_id: Pubkey,
+    programdata_id: Pubkey,
+    authority: Pubkey,
+    payer: Pubkey,
+    deployment_slot: u64,
+    programdata_before_lamports: u64,
+    programdata_after_lamports: u64,
+}
+
+#[derive(Clone, Debug)]
+struct UpgradeTransactionEvidenceV1 {
+    transaction: Value,
+    transaction_sha256: String,
+    fee_lamports: u64,
+    payer_pre_lamports: u64,
+    payer_post_lamports: u64,
+    programdata_pre_lamports: u64,
+    programdata_post_lamports: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -381,6 +465,21 @@ struct ExtensionTransactionEvidenceV1 {
 trait CliRunner {
     fn run(&mut self, arguments: &[String]) -> Result<CliOutput>;
 
+    fn read_snapshot(&mut self, _query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
+        Err(Error::new(
+            "CLI runner does not provide one-context finalized account observation",
+        ))
+    }
+
+    fn resolve_upgrade_transaction(
+        &mut self,
+        _query: &UpgradeTransactionQueryV1<'_>,
+    ) -> Result<UpgradeTransactionEvidenceV1> {
+        Err(Error::new(
+            "CLI runner does not provide finalized Upgrade transaction resolution",
+        ))
+    }
+
     fn resolve_extension_transaction(
         &mut self,
         _query: &ExtensionTransactionQueryV1<'_>,
@@ -405,6 +504,17 @@ impl CliRunner for SystemCliRunner {
         })
     }
 
+    fn read_snapshot(&mut self, query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
+        read_snapshot_via_rpc(query)
+    }
+
+    fn resolve_upgrade_transaction(
+        &mut self,
+        query: &UpgradeTransactionQueryV1<'_>,
+    ) -> Result<UpgradeTransactionEvidenceV1> {
+        resolve_upgrade_transaction_via_rpc(query)
+    }
+
     fn resolve_extension_transaction(
         &mut self,
         query: &ExtensionTransactionQueryV1<'_>,
@@ -419,9 +529,14 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let mut runner = SystemCliRunner {
         executable: args.solana_cli.clone(),
     };
-    let receipt = execute_with_runner(&args, &mut runner)?;
     let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer_pretty(&mut stdout, &receipt)?;
+    if args.preflight {
+        let report = preflight_with_runner(&args, &mut runner)?;
+        serde_json::to_writer_pretty(&mut stdout, &report)?;
+    } else {
+        let receipt = execute_with_runner(&args, &mut runner)?;
+        serde_json::to_writer_pretty(&mut stdout, &receipt)?;
+    }
     stdout.write_all(b"\n")?;
     Ok(())
 }
@@ -555,8 +670,12 @@ pub(crate) fn usage() -> &'static str {
      --expected-source-revision GIT_COMMIT --expected-source-tree-sha256 SHA256 \\
      --baseline ABSOLUTE_JSON \\
      --receipt ABSOLUTE_JSON --dump ABSOLUTE_SO \\
-     --solana-cli ABSOLUTE_EXECUTABLE --i-accept-upgrade ROLE:PUBKEY --execute\n\n\
-     You update exactly one existing decision-0012 devnet program. Both acknowledgements are \
+     --solana-cli ABSOLUTE_EXECUTABLE --i-accept-upgrade ROLE:PUBKEY \
+     (--preflight | --execute)\n\n\
+     With --preflight, you run the complete gate, source, baseline, CLI-version, devnet-genesis, \
+     and one-context Program/ProgramData/payer admission without opening either keypair path, \
+     writing a receipt or dump, or invoking a program command. With --execute, you update exactly \
+     one existing decision-0012 devnet program. Both acknowledgements are \
      mandatory: the exact devnet genesis hash names the cluster, and ROLE:PUBKEY names the \
      permanent program you accept updating. The command checks the Loader-v3 Program link, the \
      non-executable ProgramData account, every fact in the canonical baseline, the retained \
@@ -567,22 +686,31 @@ pub(crate) fn usage() -> &'static str {
      handwritten acceptance, path escape, symlinks, missing links, and changed evidence. It pads \
      the checked raw ELF with zeros only to the separately captured baseline width. After the CLI \
      returns, the command \
-     re-checks devnet, requires the deployment slot to advance, dumps the deployed bytes, verifies \
-     them, records wallet and ProgramData lamport arithmetic, and completes an atomic resumable \
-     receipt. There is no force, recycle, close, set-upgrade-authority, mainnet, testnet, unknown \
-     cluster, multi-role, or implicit-wallet path."
+     re-checks devnet, requires the deployment slot to advance, resolves the exact CLI-returned \
+     finalized transaction, proves its payer delta equals its fee and ProgramData rent is \
+     unchanged, dumps the deployed bytes, verifies them, and completes an atomic digest-bound \
+     receipt. Every complete resume freshly rechecks CLI identity, devnet, current Loader state, \
+     transaction, payload, authority, deployment slot, and dump. There is no force, recycle, \
+     close, set-upgrade-authority, mainnet, testnet, unknown cluster, multi-role, or \
+     implicit-wallet path."
 }
 
 fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
     let mut values = std::collections::BTreeMap::<String, String>::new();
     let mut execute = false;
+    let mut preflight = false;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
-        if argument == "--execute" {
-            if execute {
-                return Err(Error::new("--execute may be supplied only once"));
+        if matches!(argument.as_str(), "--execute" | "--preflight") {
+            let selected = if argument == "--execute" {
+                &mut execute
+            } else {
+                &mut preflight
+            };
+            if *selected {
+                return Err(Error::new(format!("{argument} may be supplied only once")));
             }
-            execute = true;
+            *selected = true;
             continue;
         }
         let value = iterator
@@ -618,10 +746,10 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
             return Err(Error::new(format!("{argument} may be supplied only once")));
         }
     }
-    if !execute {
+    if execute == preflight {
         return Err(Error::new(
-            "devnet-upgrade-v1 requires --execute; use the checked gate and receipt paths as \
-             a reviewable dry-run boundary rather than an implicit write mode",
+            "devnet-upgrade-v1 requires exactly one of --preflight (read-only and key-free) or \
+             --execute (the separately acknowledged mutation)",
         ));
     }
     let take = |label: &str| {
@@ -666,6 +794,7 @@ fn parse_args(arguments: Vec<String>) -> Result<UpgradeArgsV1> {
         solana_cli: absolute(&take("--solana-cli")?, "--solana-cli")?,
         target_acknowledgment: take(TARGET_ACK_FLAG)?,
         execute,
+        preflight,
     })
 }
 
@@ -843,6 +972,7 @@ fn extension_shadow_args(args: &ExtensionArgsV1) -> UpgradeArgsV1 {
         solana_cli: args.solana_cli.clone(),
         target_acknowledgment: String::new(),
         execute: args.execute,
+        preflight: false,
     }
 }
 
@@ -850,47 +980,26 @@ fn execute_with_runner(
     args: &UpgradeArgsV1,
     runner: &mut impl CliRunner,
 ) -> Result<UpgradeReceiptV1> {
-    if !args.execute {
+    if !args.execute || args.preflight {
         return Err(Error::new("Upgrade runner reached without --execute"));
     }
-    require_role(&args.role)?;
-    let expected_target_ack = format!("{}:{}", args.role, args.program_id);
-    if args.target_acknowledgment != expected_target_ack {
-        return Err(Error::new(format!(
-            "{TARGET_ACK_FLAG} must be the exact target {expected_target_ack}; it was {:?}",
-            args.target_acknowledgment
-        )));
-    }
-
-    let gate = validate_checked_release_gate(args)?;
-    let baseline_bytes = fs::read(&args.baseline_path)?;
-    let baseline: UpgradeBaselineV1 = serde_json::from_slice(&baseline_bytes)?;
-    validate_baseline(args, &baseline)?;
-    let candidate_live = candidate_live_image(&gate.raw_elf, baseline.target_live_elf_bytes)?;
-    let live_elf_sha256 = digest(&candidate_live);
-    let live_elf_padding_bytes = u64::try_from(candidate_live.len() - gate.raw_elf.len())
-        .map_err(|_| Error::new("live ELF padding does not fit u64"))?;
-    if u64::try_from(candidate_live.len()).ok() != Some(baseline.target_live_elf_bytes) {
-        return Err(Error::new(format!(
-            "checked candidate live width is {}, baseline planned {}",
-            candidate_live.len(),
-            baseline.target_live_elf_bytes
-        )));
-    }
+    let admission = admit_upgrade(args)?;
+    let gate = &admission.gate;
+    let baseline = &admission.baseline;
+    let candidate_live = &admission.candidate_live;
+    let live_elf_sha256 = &admission.live_elf_sha256;
+    let live_elf_padding_bytes = admission.live_elf_padding_bytes;
 
     let existing = load_receipt(&args.receipt_path)?;
     if let Some(receipt) = &existing {
         validate_receipt_binding(
             args,
-            &gate,
-            &baseline,
-            &live_elf_sha256,
+            gate,
+            baseline,
+            live_elf_sha256,
             live_elf_padding_bytes,
             receipt,
         )?;
-        if receipt.phase == ReceiptPhaseV1::Complete {
-            return Ok(receipt.clone());
-        }
     } else if args.dump_path.exists() {
         return Err(Error::new(format!(
             "dump target {} already exists without this operation's receipt; refusing to \
@@ -908,6 +1017,18 @@ fn execute_with_runner(
         )));
     }
     authenticate_devnet(runner, args)?;
+    if existing
+        .as_ref()
+        .is_some_and(|receipt| receipt.phase == ReceiptPhaseV1::Complete)
+    {
+        return verify_complete_receipt_live(
+            runner,
+            args,
+            gate,
+            candidate_live,
+            existing.as_ref().expect("checked complete receipt"),
+        );
+    }
     authenticate_keypair(
         runner,
         args,
@@ -925,10 +1046,10 @@ fn execute_with_runner(
 
     match existing {
         None => {
-            let before = read_snapshot(runner, args)?;
-            require_baseline_prestate(&baseline, &before.loader)?;
-            require_candidate_fits(&before, &candidate_live)?;
-            if before.loader.live_elf_sha256 == live_elf_sha256 {
+            let before = read_snapshot(runner, args, baseline.context_slot)?;
+            require_baseline_prestate(baseline, &before.loader)?;
+            require_candidate_fits(&before, candidate_live)?;
+            if before.loader.live_elf_sha256 == *live_elf_sha256 {
                 return Err(Error::new(
                     "the current live payload already equals the candidate but no receipt binds \
                      an Upgrade; refusing replay ambiguity",
@@ -955,20 +1076,25 @@ fn execute_with_runner(
                 live_elf_sha256: live_elf_sha256.clone(),
                 live_elf_padding_bytes,
                 solana_cli_version: gate.solana_cli_version.clone(),
+                before_context_slot: before.context_slot,
                 before: before.loader.clone(),
                 wallet_before_lamports: before.wallet_lamports,
                 transaction_signature: None,
                 solana_cli_output: None,
+                finalized_transaction: None,
+                finalized_transaction_sha256: None,
+                after_context_slot: None,
                 after: None,
                 arithmetic: None,
                 dump_sha256: None,
                 dump_shape: None,
+                receipt_sha256: String::new(),
             };
-            write_receipt(&args.receipt_path, &receipt)?;
-            submit_and_finish(runner, args, &gate, &candidate_live, &mut receipt)
+            write_receipt(&args.receipt_path, &mut receipt)?;
+            submit_and_finish(runner, args, gate, candidate_live, &mut receipt)
         }
         Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Prepared => {
-            let current = read_snapshot(runner, args)?;
+            let current = read_snapshot(runner, args, receipt.before_context_slot)?;
             if current.loader != receipt.before
                 || current.wallet_lamports != receipt.wallet_before_lamports
             {
@@ -978,15 +1104,189 @@ fn execute_with_runner(
                      and attach the original CLI output, or start a separately reviewed operation.",
                 ));
             }
-            require_baseline_prestate(&baseline, &current.loader)?;
-            require_candidate_fits(&current, &candidate_live)?;
-            submit_and_finish(runner, args, &gate, &candidate_live, &mut receipt)
+            require_baseline_prestate(baseline, &current.loader)?;
+            require_candidate_fits(&current, candidate_live)?;
+            submit_and_finish(runner, args, gate, candidate_live, &mut receipt)
         }
         Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Submitted => {
-            finish_submitted(runner, args, &gate, &candidate_live, &mut receipt)
+            finish_submitted(runner, args, gate, candidate_live, &mut receipt)
         }
         Some(_) => Err(Error::new("unknown Upgrade receipt phase")),
     }
+}
+
+fn admit_upgrade(args: &UpgradeArgsV1) -> Result<UpgradeAdmissionV1> {
+    require_role(&args.role)?;
+    let expected_target_ack = format!("{}:{}", args.role, args.program_id);
+    if args.target_acknowledgment != expected_target_ack {
+        return Err(Error::new(format!(
+            "{TARGET_ACK_FLAG} must be the exact target {expected_target_ack}; it was {:?}",
+            args.target_acknowledgment
+        )));
+    }
+    let gate = validate_checked_release_gate(args)?;
+    let baseline_bytes = fs::read(&args.baseline_path)?;
+    let baseline: UpgradeBaselineV1 = serde_json::from_slice(&baseline_bytes)?;
+    validate_baseline(args, &baseline)?;
+    let candidate_live = candidate_live_image(&gate.raw_elf, baseline.target_live_elf_bytes)?;
+    let live_elf_sha256 = digest(&candidate_live);
+    let live_elf_padding_bytes = u64::try_from(candidate_live.len() - gate.raw_elf.len())
+        .map_err(|_| Error::new("live ELF padding does not fit u64"))?;
+    if u64::try_from(candidate_live.len()).ok() != Some(baseline.target_live_elf_bytes) {
+        return Err(Error::new(format!(
+            "checked candidate live width is {}, baseline planned {}",
+            candidate_live.len(),
+            baseline.target_live_elf_bytes
+        )));
+    }
+    Ok(UpgradeAdmissionV1 {
+        gate,
+        baseline,
+        candidate_live,
+        live_elf_sha256,
+        live_elf_padding_bytes,
+    })
+}
+
+fn preflight_with_runner(
+    args: &UpgradeArgsV1,
+    runner: &mut impl CliRunner,
+) -> Result<UpgradePreflightV1> {
+    if args.execute || !args.preflight {
+        return Err(Error::new("preflight runner reached without --preflight"));
+    }
+    let admission = admit_upgrade(args)?;
+    let existing = load_receipt(&args.receipt_path)?;
+    if let Some(receipt) = &existing {
+        validate_receipt_binding(
+            args,
+            &admission.gate,
+            &admission.baseline,
+            &admission.live_elf_sha256,
+            admission.live_elf_padding_bytes,
+            receipt,
+        )?;
+    } else if args.dump_path.exists() {
+        return Err(Error::new(
+            "preflight dump target already exists without a bound receipt",
+        ));
+    }
+    let cli_version = invoke(runner, args, &["--version".into()])?;
+    if cli_version.stdout.trim() != admission.gate.solana_cli_version {
+        return Err(Error::new(format!(
+            "Solana CLI version is {:?} but artifact evidence pins {:?}",
+            cli_version.stdout.trim(),
+            admission.gate.solana_cli_version
+        )));
+    }
+    authenticate_devnet(runner, args)?;
+    let minimum_context_slot = existing
+        .as_ref()
+        .and_then(|receipt| receipt.after_context_slot)
+        .unwrap_or(admission.baseline.context_slot);
+    let observation = read_snapshot(runner, args, minimum_context_slot)?;
+    match &existing {
+        Some(receipt) if receipt.phase == ReceiptPhaseV1::Complete => {
+            verify_complete_observation(
+                args,
+                &admission.gate,
+                &admission.candidate_live,
+                receipt,
+                &observation,
+            )?;
+            verify_recorded_upgrade_transaction(runner, args, receipt, &observation)?;
+        }
+        Some(receipt) if receipt.phase == ReceiptPhaseV1::Prepared => {
+            if observation.loader != receipt.before
+                || observation.wallet_lamports != receipt.wallet_before_lamports
+            {
+                return Err(Error::new(
+                    "preflight found drift from the prepared receipt prestate",
+                ));
+            }
+        }
+        Some(receipt) if receipt.phase == ReceiptPhaseV1::Submitted => {
+            verify_submitted_observation_read_only(
+                runner,
+                args,
+                &admission.candidate_live,
+                receipt,
+                &observation,
+            )?;
+        }
+        Some(_) => return Err(Error::new("preflight found an unknown receipt phase")),
+        None => {
+            require_baseline_prestate(&admission.baseline, &observation.loader)?;
+            require_candidate_fits(&observation, &admission.candidate_live)?;
+            if observation.loader.live_elf_sha256 == admission.live_elf_sha256 {
+                return Err(Error::new(
+                    "current live payload already equals candidate without a bound receipt",
+                ));
+            }
+        }
+    }
+    Ok(UpgradePreflightV1 {
+        schema: PREFLIGHT_SCHEMA.into(),
+        role: args.role.clone(),
+        program_id: args.program_id.to_string(),
+        programdata_id: args.programdata_id.to_string(),
+        retained_upgrade_authority: args.expected_upgrade_authority.to_string(),
+        fee_payer: args.fee_payer.to_string(),
+        rpc_origin_redacted: args.origin.redacted_url(),
+        genesis_hash: DEVNET_GENESIS_HASH.into(),
+        solana_cli_version: admission.gate.solana_cli_version,
+        source_revision: admission.gate.source_revision,
+        source_tree_sha256: admission.gate.source_tree_sha256,
+        checked_release_gate_sha256: admission.gate.gate_sha256,
+        baseline_sha256: admission.baseline.baseline_sha256,
+        observation_context_slot: observation.context_slot,
+        observation: observation.loader,
+        wallet_lamports: observation.wallet_lamports,
+        raw_elf_sha256: admission.gate.raw_elf_sha256,
+        live_elf_sha256: admission.live_elf_sha256,
+        live_elf_padding_bytes: admission.live_elf_padding_bytes,
+        receipt_phase: existing.map(|receipt| receipt.phase),
+        mutation_permitted: false,
+    })
+}
+
+fn verify_submitted_observation_read_only(
+    runner: &mut impl CliRunner,
+    args: &UpgradeArgsV1,
+    candidate_live: &[u8],
+    receipt: &UpgradeReceiptV1,
+    observation: &SnapshotV1,
+) -> Result<()> {
+    if observation.loader.deployment_slot <= receipt.before.deployment_slot {
+        return Err(Error::new(
+            "preflight found no finalized deployment-slot advance for submitted receipt",
+        ));
+    }
+    if observation.live_elf != candidate_live
+        || observation.loader.live_elf_sha256 != receipt.live_elf_sha256
+        || observation.loader.upgrade_authority != args.expected_upgrade_authority.to_string()
+        || observation.loader.programdata_lamports != receipt.before.programdata_lamports
+    {
+        return Err(Error::new(
+            "preflight found submitted Upgrade payload, authority, or parked rent drift",
+        ));
+    }
+    let signature = receipt
+        .transaction_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("submitted receipt omitted Upgrade signature"))?;
+    let _ = runner.resolve_upgrade_transaction(&UpgradeTransactionQueryV1 {
+        origin: &args.origin,
+        signature,
+        program_id: args.program_id,
+        programdata_id: args.programdata_id,
+        authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        deployment_slot: observation.loader.deployment_slot,
+        programdata_before_lamports: receipt.before.programdata_lamports,
+        programdata_after_lamports: observation.loader.programdata_lamports,
+    })?;
+    Ok(())
 }
 
 fn execute_extension_with_runner(
@@ -1020,9 +1320,6 @@ fn execute_extension_with_runner(
     let existing = load_extension_receipt(&args.receipt_path)?;
     if let Some(receipt) = &existing {
         validate_extension_receipt_binding(args, &baseline, receipt)?;
-        if receipt.phase == ReceiptPhaseV1::Complete {
-            return Ok(receipt.clone());
-        }
     }
 
     let cli_version = invoke(runner, &shadow, &["--version".into()])?;
@@ -1034,6 +1331,17 @@ fn execute_extension_with_runner(
         )));
     }
     authenticate_devnet(runner, &shadow)?;
+    if existing
+        .as_ref()
+        .is_some_and(|receipt| receipt.phase == ReceiptPhaseV1::Complete)
+    {
+        return verify_complete_extension_live(
+            runner,
+            args,
+            &shadow,
+            existing.as_ref().expect("checked complete extension"),
+        );
+    }
     authenticate_keypair(
         runner,
         &shadow,
@@ -1051,7 +1359,7 @@ fn execute_extension_with_runner(
 
     match existing {
         None => {
-            let before = read_snapshot(runner, &shadow)?;
+            let before = read_snapshot(runner, &shadow, baseline.context_slot)?;
             require_baseline_prestate(&baseline, &before.loader)?;
             let required = baseline
                 .extension_lamport_top_up
@@ -1083,19 +1391,23 @@ fn execute_extension_with_runner(
                 extension_additional_bytes: baseline.extension_additional_bytes,
                 target_rent_exempt_minimum_lamports: baseline.target_rent_exempt_minimum_lamports,
                 expected_rent_top_up_lamports: baseline.extension_lamport_top_up,
+                before_context_slot: before.context_slot,
                 before: before.loader,
                 wallet_before_lamports: before.wallet_lamports,
                 transaction_signature: None,
                 solana_cli_output: None,
                 finalized_transaction: None,
+                finalized_transaction_sha256: None,
+                after_context_slot: None,
                 after: None,
                 arithmetic: None,
+                receipt_sha256: String::new(),
             };
-            write_extension_receipt(&args.receipt_path, &receipt)?;
+            write_extension_receipt(&args.receipt_path, &mut receipt)?;
             submit_extension_and_finish(runner, args, &shadow, &baseline, &mut receipt)
         }
         Some(mut receipt) if receipt.phase == ReceiptPhaseV1::Prepared => {
-            let current = read_snapshot(runner, &shadow)?;
+            let current = read_snapshot(runner, &shadow, receipt.before_context_slot)?;
             require_baseline_prestate(&baseline, &current.loader)?;
             if current.wallet_lamports != receipt.wallet_before_lamports {
                 return Err(Error::new(
@@ -1110,6 +1422,52 @@ fn execute_extension_with_runner(
         }
         Some(_) => Err(Error::new("unknown extension receipt phase")),
     }
+}
+
+fn verify_complete_extension_live(
+    runner: &mut impl CliRunner,
+    args: &ExtensionArgsV1,
+    shadow: &UpgradeArgsV1,
+    receipt: &ExtensionReceiptV1,
+) -> Result<ExtensionReceiptV1> {
+    let after_context_slot = receipt
+        .after_context_slot
+        .ok_or_else(|| Error::new("complete extension omitted after context slot"))?;
+    let current = read_snapshot(runner, shadow, after_context_slot)?;
+    if receipt.after.as_ref() != Some(&current.loader)
+        || current.loader.upgrade_authority != args.expected_upgrade_authority.to_string()
+    {
+        return Err(Error::new(
+            "complete extension receipt drifted from current Program/ProgramData state, authority, or slot",
+        ));
+    }
+    let transaction = runner.resolve_extension_transaction(&ExtensionTransactionQueryV1 {
+        origin: &args.origin,
+        program_id: args.program_id,
+        programdata_id: args.programdata_id,
+        authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        additional_bytes: receipt.extension_additional_bytes,
+        deployment_slot: current.loader.deployment_slot,
+        programdata_before_lamports: receipt.before.programdata_lamports,
+        programdata_after_lamports: current.loader.programdata_lamports,
+        wallet_before_lamports: receipt.wallet_before_lamports,
+        wallet_after_lamports: receipt
+            .arithmetic
+            .as_ref()
+            .ok_or_else(|| Error::new("complete extension omitted arithmetic"))?
+            .wallet_after_lamports,
+    })?;
+    if receipt.transaction_signature.as_deref() != Some(transaction.signature.as_str())
+        || receipt.finalized_transaction.as_ref() != Some(&transaction.transaction)
+        || receipt.finalized_transaction_sha256.as_deref()
+            != Some(digest(&serde_json::to_vec(&transaction.transaction)?).as_str())
+    {
+        return Err(Error::new(
+            "complete extension receipt drifted from its exact finalized transaction",
+        ));
+    }
+    Ok(receipt.clone())
 }
 
 fn submit_extension_and_finish(
@@ -1170,7 +1528,7 @@ fn finish_submitted_extension(
     receipt: &mut ExtensionReceiptV1,
 ) -> Result<ExtensionReceiptV1> {
     authenticate_devnet(runner, shadow)?;
-    let after = read_snapshot(runner, shadow)?;
+    let after = read_snapshot(runner, shadow, receipt.before_context_slot)?;
     if after.loader.deployment_slot <= receipt.before.deployment_slot {
         return Err(Error::new(format!(
             "extension deployment slot did not advance: before {}, after {}. Agave 4.0.2 \
@@ -1269,7 +1627,10 @@ fn finish_submitted_extension(
     }
     receipt.phase = ReceiptPhaseV1::Complete;
     receipt.transaction_signature = Some(transaction.signature);
+    receipt.finalized_transaction_sha256 =
+        Some(digest(&serde_json::to_vec(&transaction.transaction)?));
     receipt.finalized_transaction = Some(transaction.transaction);
+    receipt.after_context_slot = Some(after.context_slot);
     receipt.after = Some(after.loader.clone());
     receipt.arithmetic = Some(ExtensionArithmeticV1 {
         wallet_before_lamports: receipt.wallet_before_lamports,
@@ -1350,7 +1711,7 @@ fn finish_submitted(
     receipt: &mut UpgradeReceiptV1,
 ) -> Result<UpgradeReceiptV1> {
     authenticate_devnet(runner, args)?;
-    let after = read_snapshot(runner, args)?;
+    let after = read_snapshot(runner, args, receipt.before_context_slot)?;
     if after.loader.deployment_slot <= receipt.before.deployment_slot {
         return Err(Error::new(format!(
             "deployment slot did not advance: before {}, after {}. The CLI returned a signature, \
@@ -1374,39 +1735,143 @@ fn finish_submitted(
             receipt.before.programdata_lamports, after.loader.programdata_lamports
         )));
     }
-    let wallet_spend = receipt
-        .wallet_before_lamports
-        .checked_sub(after.wallet_lamports)
-        .ok_or_else(|| {
-            Error::new(
-                "fee-payer wallet increased across the Upgrade window; fee arithmetic would be \
-                 ambiguous",
-            )
-        })?;
-    if wallet_spend == 0 {
-        return Err(Error::new(
-            "fee-payer wallet spent zero lamports across an Upgrade that returned a signature",
-        ));
-    }
+    let signature = receipt
+        .transaction_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("submitted Upgrade receipt omitted transaction signature"))?;
+    let transaction = runner.resolve_upgrade_transaction(&UpgradeTransactionQueryV1 {
+        origin: &args.origin,
+        signature,
+        program_id: args.program_id,
+        programdata_id: args.programdata_id,
+        authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        deployment_slot: after.loader.deployment_slot,
+        programdata_before_lamports: receipt.before.programdata_lamports,
+        programdata_after_lamports: after.loader.programdata_lamports,
+    })?;
     let programdata_delta = i128::from(after.loader.programdata_lamports)
         .checked_sub(i128::from(receipt.before.programdata_lamports))
         .ok_or_else(|| Error::new("ProgramData lamport delta overflow"))?;
 
     let (dump_sha256, dump_shape) = verify_dump(runner, args, &gate.raw_elf, candidate_live)?;
     receipt.phase = ReceiptPhaseV1::Complete;
+    receipt.finalized_transaction = Some(transaction.transaction);
+    receipt.finalized_transaction_sha256 = Some(transaction.transaction_sha256);
+    receipt.after_context_slot = Some(after.context_slot);
     receipt.after = Some(after.loader.clone());
     receipt.arithmetic = Some(UpgradeArithmeticV1 {
-        wallet_before_lamports: receipt.wallet_before_lamports,
-        wallet_after_lamports: after.wallet_lamports,
-        wallet_spend_lamports: wallet_spend,
-        programdata_before_lamports: receipt.before.programdata_lamports,
-        programdata_after_lamports: after.loader.programdata_lamports,
+        transaction_payer_pre_lamports: transaction.payer_pre_lamports,
+        transaction_payer_post_lamports: transaction.payer_post_lamports,
+        transaction_fee_lamports: transaction.fee_lamports,
+        payer_fee_delta_lamports: transaction
+            .payer_pre_lamports
+            .checked_sub(transaction.payer_post_lamports)
+            .ok_or_else(|| Error::new("validated Upgrade payer delta underflow"))?,
+        programdata_before_lamports: transaction.programdata_pre_lamports,
+        programdata_after_lamports: transaction.programdata_post_lamports,
         programdata_delta_lamports: programdata_delta,
     });
     receipt.dump_sha256 = Some(dump_sha256);
     receipt.dump_shape = Some(dump_shape);
     write_receipt(&args.receipt_path, receipt)?;
     Ok(receipt.clone())
+}
+
+fn verify_complete_receipt_live(
+    runner: &mut impl CliRunner,
+    args: &UpgradeArgsV1,
+    gate: &ValidatedUpgradeGateV1,
+    candidate_live: &[u8],
+    receipt: &UpgradeReceiptV1,
+) -> Result<UpgradeReceiptV1> {
+    let minimum_context_slot = receipt
+        .after_context_slot
+        .ok_or_else(|| Error::new("complete receipt omitted after context slot"))?;
+    let observation = read_snapshot(runner, args, minimum_context_slot)?;
+    verify_complete_observation(args, gate, candidate_live, receipt, &observation)?;
+    verify_recorded_upgrade_transaction(runner, args, receipt, &observation)?;
+    Ok(receipt.clone())
+}
+
+fn verify_recorded_upgrade_transaction(
+    runner: &mut impl CliRunner,
+    args: &UpgradeArgsV1,
+    receipt: &UpgradeReceiptV1,
+    observation: &SnapshotV1,
+) -> Result<()> {
+    let signature = receipt
+        .transaction_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("complete receipt omitted Upgrade signature"))?;
+    let transaction = runner.resolve_upgrade_transaction(&UpgradeTransactionQueryV1 {
+        origin: &args.origin,
+        signature,
+        program_id: args.program_id,
+        programdata_id: args.programdata_id,
+        authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        deployment_slot: observation.loader.deployment_slot,
+        programdata_before_lamports: receipt.before.programdata_lamports,
+        programdata_after_lamports: observation.loader.programdata_lamports,
+    })?;
+    let arithmetic = receipt
+        .arithmetic
+        .as_ref()
+        .ok_or_else(|| Error::new("complete receipt omitted Upgrade arithmetic"))?;
+    if receipt.finalized_transaction.as_ref() != Some(&transaction.transaction)
+        || receipt.finalized_transaction_sha256.as_deref()
+            != Some(transaction.transaction_sha256.as_str())
+        || arithmetic.transaction_payer_pre_lamports != transaction.payer_pre_lamports
+        || arithmetic.transaction_payer_post_lamports != transaction.payer_post_lamports
+        || arithmetic.transaction_fee_lamports != transaction.fee_lamports
+        || arithmetic.payer_fee_delta_lamports != transaction.fee_lamports
+        || arithmetic.programdata_before_lamports != transaction.programdata_pre_lamports
+        || arithmetic.programdata_after_lamports != transaction.programdata_post_lamports
+        || arithmetic.programdata_delta_lamports != 0
+    {
+        return Err(Error::new(
+            "complete receipt drifted from its exact finalized Upgrade transaction or arithmetic",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_complete_observation(
+    args: &UpgradeArgsV1,
+    gate: &ValidatedUpgradeGateV1,
+    candidate_live: &[u8],
+    receipt: &UpgradeReceiptV1,
+    observation: &SnapshotV1,
+) -> Result<()> {
+    let recorded_after = receipt
+        .after
+        .as_ref()
+        .ok_or_else(|| Error::new("complete receipt omitted poststate"))?;
+    if &observation.loader != recorded_after
+        || observation.live_elf != candidate_live
+        || observation.loader.live_elf_sha256 != receipt.live_elf_sha256
+        || observation.loader.upgrade_authority != args.expected_upgrade_authority.to_string()
+    {
+        return Err(Error::new(
+            "complete Upgrade receipt drifted from current Program/ProgramData payload, authority, or deployment slot",
+        ));
+    }
+    let dump = read_dump_regular(&args.dump_path).map_err(|error| {
+        Error::new(format!(
+            "complete Upgrade dump {} is unavailable: {error}",
+            args.dump_path.display()
+        ))
+    })?;
+    let (dump_sha256, dump_shape) = classify_dump(&dump, &gate.raw_elf, candidate_live)?;
+    if receipt.dump_sha256.as_deref() != Some(dump_sha256.as_str())
+        || receipt.dump_shape.as_deref() != Some(dump_shape.as_str())
+    {
+        return Err(Error::new(
+            "complete Upgrade dump bytes or recorded dump shape drifted",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_checked_release_gate(args: &UpgradeArgsV1) -> Result<ValidatedUpgradeGateV1> {
@@ -1991,20 +2456,57 @@ fn authenticate_keypair(
     Ok(())
 }
 
-fn read_snapshot(runner: &mut impl CliRunner, args: &UpgradeArgsV1) -> Result<SnapshotV1> {
-    let program = read_account(runner, args, args.program_id, "Program")?;
-    let programdata = read_account(runner, args, args.programdata_id, "ProgramData")?;
+fn read_snapshot(
+    runner: &mut impl CliRunner,
+    args: &UpgradeArgsV1,
+    minimum_context_slot: u64,
+) -> Result<SnapshotV1> {
+    runner.read_snapshot(&SnapshotQueryV1 {
+        origin: &args.origin,
+        program_id: args.program_id,
+        programdata_id: args.programdata_id,
+        expected_upgrade_authority: args.expected_upgrade_authority,
+        payer: args.fee_payer,
+        minimum_context_slot,
+    })
+}
+
+fn read_snapshot_via_rpc(query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
+    let mut rpc = Rpc::connect_cluster(query.origin, WritePolicyV1::ReadsOnly)?;
+    let (context_slot, accounts) = rpc.finalized_accounts(
+        &[query.program_id, query.programdata_id, query.payer],
+        query.minimum_context_slot,
+    )?;
+    let mut accounts = accounts.into_iter();
+    let program = RpcAccountV1::from(
+        accounts
+            .next()
+            .flatten()
+            .ok_or_else(|| Error::new(format!("missing Program account {}", query.program_id)))?,
+    );
+    let programdata = RpcAccountV1::from(accounts.next().flatten().ok_or_else(|| {
+        Error::new(format!(
+            "missing ProgramData account {}",
+            query.programdata_id
+        ))
+    })?);
+    let wallet = RpcAccountV1::from(
+        accounts
+            .next()
+            .flatten()
+            .ok_or_else(|| Error::new(format!("missing fee payer account {}", query.payer)))?,
+    );
     let loader = loader_observation(
-        args.program_id,
-        args.programdata_id,
-        args.expected_upgrade_authority,
+        query.program_id,
+        query.programdata_id,
+        query.expected_upgrade_authority,
         &program,
         &programdata,
     )?;
     let view = ProgramDataV3View::parse(&programdata.data)
         .map_err(|_| Error::new("ProgramData is not exact Loader-v3 ProgramData state"))?;
-    let wallet = read_account(runner, args, args.fee_payer, "fee-payer wallet")?;
     Ok(SnapshotV1 {
+        context_slot,
         loader,
         wallet_lamports: wallet.lamports,
         live_elf: view.elf().to_vec(),
@@ -2069,81 +2571,6 @@ fn loader_observation(
     })
 }
 
-fn read_account(
-    runner: &mut impl CliRunner,
-    args: &UpgradeArgsV1,
-    address: Pubkey,
-    label: &str,
-) -> Result<RpcAccountV1> {
-    let output = invoke(
-        runner,
-        args,
-        &[
-            "account".into(),
-            address.to_string(),
-            "--url".into(),
-            args.origin.url().into(),
-            "--output".into(),
-            "json".into(),
-            "--commitment".into(),
-            "finalized".into(),
-        ],
-    )?;
-    parse_account_json(output.stdout.trim(), address, label)
-}
-
-fn parse_account_json(json_text: &str, expected: Pubkey, label: &str) -> Result<RpcAccountV1> {
-    let value: Value = serde_json::from_str(json_text)
-        .map_err(|error| Error::new(format!("{label} account JSON: {error}")))?;
-    let pubkey = value
-        .get("pubkey")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new(format!("{label} account JSON omitted pubkey")))?;
-    if parse_pubkey(pubkey, label)? != expected {
-        return Err(Error::new(format!(
-            "{label} account response substituted pubkey {pubkey}; expected {expected}"
-        )));
-    }
-    let account = value
-        .get("account")
-        .and_then(Value::as_object)
-        .ok_or_else(|| Error::new(format!("{label} account JSON omitted account")))?;
-    let lamports = account
-        .get("lamports")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| Error::new(format!("{label} account JSON omitted u64 lamports")))?;
-    let owner = account
-        .get("owner")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new(format!("{label} account JSON omitted owner")))?;
-    let executable = account
-        .get("executable")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| Error::new(format!("{label} account JSON omitted executable")))?;
-    let data = account
-        .get("data")
-        .and_then(Value::as_array)
-        .filter(|values| {
-            values.len() == 2 && values.get(1).and_then(Value::as_str) == Some("base64")
-        })
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            Error::new(format!(
-                "{label} account JSON data must be [STRING, \"base64\"]"
-            ))
-        })?;
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .map_err(|_| Error::new(format!("{label} account JSON carried invalid base64")))?;
-    Ok(RpcAccountV1 {
-        lamports,
-        owner: parse_pubkey(owner, label)?,
-        executable,
-        data,
-    })
-}
-
 fn require_candidate_fits(before: &SnapshotV1, candidate_live: &[u8]) -> Result<()> {
     if before.live_elf.len() != candidate_live.len() {
         return Err(Error::new(format!(
@@ -2163,7 +2590,7 @@ fn verify_dump(
     candidate_live: &[u8],
 ) -> Result<(String, String)> {
     let dump = if args.dump_path.exists() {
-        fs::read(&args.dump_path)?
+        read_dump_regular(&args.dump_path)?
     } else {
         invoke(
             runner,
@@ -2177,13 +2604,28 @@ fn verify_dump(
                 args.origin.url().into(),
             ],
         )?;
-        fs::read(&args.dump_path).map_err(|error| {
+        read_dump_regular(&args.dump_path).map_err(|error| {
             Error::new(format!(
                 "Solana CLI reported a successful dump but {} could not be read: {error}",
                 args.dump_path.display()
             ))
         })?
     };
+    classify_dump(&dump, raw_elf, candidate_live)
+}
+
+fn read_dump_regular(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(Error::new(format!(
+            "deployed-byte dump {} is not one regular non-symlink file",
+            path.display()
+        )));
+    }
+    Ok(fs::read(path)?)
+}
+
+fn classify_dump(dump: &[u8], raw_elf: &[u8], candidate_live: &[u8]) -> Result<(String, String)> {
     let shape = if dump == raw_elf {
         "raw-elf"
     } else if dump == candidate_live {
@@ -2194,7 +2636,7 @@ fn verify_dump(
              raw-plus-zero-padding image",
         ));
     };
-    Ok((digest(&dump), shape.into()))
+    Ok((digest(dump), shape.into()))
 }
 
 fn invoke(
@@ -2213,49 +2655,303 @@ fn invoke(
     Ok(output)
 }
 
-fn resolve_extension_transaction_via_rpc(
-    query: &ExtensionTransactionQueryV1<'_>,
-) -> Result<ExtensionTransactionEvidenceV1> {
+fn resolve_upgrade_transaction_via_rpc(
+    query: &UpgradeTransactionQueryV1<'_>,
+) -> Result<UpgradeTransactionEvidenceV1> {
     let mut rpc = Rpc::connect_cluster(query.origin, WritePolicyV1::ReadsOnly)?;
-    let rows = rpc.call(
-        "getSignaturesForAddress",
-        &serde_json::json!([query.programdata_id.to_string(), {
-            "commitment": "finalized",
-            "limit": 20
-        }]),
-    )?;
-    let candidates = rows
-        .as_array()
-        .ok_or_else(|| Error::new("getSignaturesForAddress did not return an array"))?
-        .iter()
-        .filter(|row| {
-            row.get("slot").and_then(Value::as_u64) == Some(query.deployment_slot)
-                && row.get("err").is_none_or(Value::is_null)
-        })
-        .collect::<Vec<_>>();
-    if candidates.len() != 1 {
-        return Err(Error::new(format!(
-            "expected one successful ProgramData signature at extension slot {}, observed {}; \
-             signature attribution is ambiguous",
-            query.deployment_slot,
-            candidates.len()
-        )));
-    }
-    let signature = candidates[0]
-        .get("signature")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("extension signature row omitted signature"))?;
-    Signature::from_str(signature)
-        .map_err(|_| Error::new("extension history returned an invalid signature"))?;
     let transaction = rpc.call(
         "getTransaction",
-        &serde_json::json!([signature, {
+        &serde_json::json!([query.signature, {
             "encoding": "jsonParsed",
             "commitment": "finalized",
             "maxSupportedTransactionVersion": 0
         }]),
     )?;
-    validate_extension_transaction(query, signature, transaction)
+    validate_upgrade_transaction(query, transaction)
+}
+
+fn validate_upgrade_transaction(
+    query: &UpgradeTransactionQueryV1<'_>,
+    transaction: Value,
+) -> Result<UpgradeTransactionEvidenceV1> {
+    if transaction.get("slot").and_then(Value::as_u64) != Some(query.deployment_slot) {
+        return Err(Error::new(
+            "finalized Upgrade transaction slot differs from ProgramData deployment slot",
+        ));
+    }
+    let meta = transaction
+        .get("meta")
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new("Upgrade transaction omitted meta"))?;
+    if meta.get("err").is_some_and(|value| !value.is_null()) {
+        return Err(Error::new("finalized Upgrade transaction failed"));
+    }
+    let message = transaction
+        .get("transaction")
+        .and_then(|value| value.get("message"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new("Upgrade transaction omitted parsed message"))?;
+    let signatures = transaction
+        .get("transaction")
+        .and_then(|value| value.get("signatures"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("Upgrade transaction omitted signatures"))?;
+    if signatures.first().and_then(Value::as_str) != Some(query.signature) {
+        return Err(Error::new(
+            "CLI-returned Upgrade signature is not the transaction fee-payer signature",
+        ));
+    }
+    let account_keys = message
+        .get("accountKeys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("Upgrade transaction omitted account keys"))?;
+    let key_index = |wanted: Pubkey, signer: bool, writable: bool| -> Result<usize> {
+        let wanted = wanted.to_string();
+        let matches = account_keys
+            .iter()
+            .enumerate()
+            .filter(|(_, key)| {
+                key.get("pubkey").and_then(Value::as_str) == Some(wanted.as_str())
+                    && (!signer || key.get("signer").and_then(Value::as_bool) == Some(true))
+                    && (!writable || key.get("writable").and_then(Value::as_bool) == Some(true))
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(Error::new(format!(
+                "Upgrade transaction did not contain one exact{}{} account key {wanted}",
+                if signer { " signer" } else { "" },
+                if writable { " writable" } else { "" }
+            )));
+        }
+        Ok(matches[0])
+    };
+    let payer_index = key_index(query.payer, true, true)?;
+    if payer_index != 0 {
+        return Err(Error::new(
+            "Upgrade transaction payer is not canonical account key zero",
+        ));
+    }
+    let programdata_index = key_index(query.programdata_id, false, true)?;
+    let _program_index = key_index(query.program_id, false, true)?;
+    let _authority_index = key_index(query.authority, true, false)?;
+
+    let instructions = message
+        .get("instructions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new("Upgrade transaction omitted instructions"))?;
+    let matching = instructions
+        .iter()
+        .filter(|instruction| {
+            instruction.get("programId").and_then(Value::as_str)
+                == Some(bpf_loader_upgradeable::ID.to_string().as_str())
+                && instruction
+                    .get("parsed")
+                    .and_then(|value| value.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("upgrade")
+        })
+        .collect::<Vec<_>>();
+    if matching.len() != 1 {
+        return Err(Error::new(format!(
+            "Upgrade transaction contains {} Loader-v3 Upgrade instructions, expected one",
+            matching.len()
+        )));
+    }
+    let info = matching[0]
+        .get("parsed")
+        .and_then(|value| value.get("info"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new("Loader-v3 Upgrade instruction omitted parsed info"))?;
+    if info.get("programDataAccount").and_then(Value::as_str)
+        != Some(query.programdata_id.to_string().as_str())
+        || info.get("programAccount").and_then(Value::as_str)
+            != Some(query.program_id.to_string().as_str())
+        || info.get("authority").and_then(Value::as_str)
+            != Some(query.authority.to_string().as_str())
+        || info.get("rentSysvar").and_then(Value::as_str)
+            != Some(sysvar::rent::ID.to_string().as_str())
+        || info.get("clockSysvar").and_then(Value::as_str)
+            != Some(sysvar::clock::ID.to_string().as_str())
+    {
+        return Err(Error::new(
+            "Loader-v3 Upgrade instruction substituted Program, ProgramData, authority, or sysvars",
+        ));
+    }
+    for label in ["bufferAccount", "spillAccount"] {
+        let key = info
+            .get(label)
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new(format!("Loader-v3 Upgrade omitted {label}")))?;
+        let key = parse_pubkey(key, label)?;
+        let _ = key_index(key, false, true)?;
+    }
+
+    let balances = |field: &str| -> Result<&Vec<Value>> {
+        meta.get(field)
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new(format!("Upgrade transaction meta omitted {field}")))
+    };
+    let pre = balances("preBalances")?;
+    let post = balances("postBalances")?;
+    if pre.len() != account_keys.len() || post.len() != account_keys.len() {
+        return Err(Error::new(
+            "Upgrade transaction balance vector width differs from account keys",
+        ));
+    }
+    let balance = |values: &Vec<Value>, index: usize, label: &str| -> Result<u64> {
+        values[index]
+            .as_u64()
+            .ok_or_else(|| Error::new(format!("Upgrade {label} balance is not u64")))
+    };
+    let payer_pre = balance(pre, payer_index, "pre payer")?;
+    let payer_post = balance(post, payer_index, "post payer")?;
+    let programdata_pre = balance(pre, programdata_index, "pre ProgramData")?;
+    let programdata_post = balance(post, programdata_index, "post ProgramData")?;
+    if programdata_pre != query.programdata_before_lamports
+        || programdata_post != query.programdata_after_lamports
+        || programdata_pre != programdata_post
+    {
+        return Err(Error::new(
+            "Upgrade transaction did not preserve and bridge exact ProgramData rent",
+        ));
+    }
+    let fee = meta
+        .get("fee")
+        .and_then(Value::as_u64)
+        .filter(|fee| *fee != 0)
+        .ok_or_else(|| Error::new("Upgrade transaction omitted a nonzero fee"))?;
+    let payer_delta = payer_pre
+        .checked_sub(payer_post)
+        .ok_or_else(|| Error::new("Upgrade transaction payer increased"))?;
+    if payer_delta != fee {
+        return Err(Error::new(
+            "Upgrade transaction payer delta is not exactly its finalized fee",
+        ));
+    }
+    let transaction_sha256 = digest(&serde_json::to_vec(&transaction)?);
+    Ok(UpgradeTransactionEvidenceV1 {
+        transaction,
+        transaction_sha256,
+        fee_lamports: fee,
+        payer_pre_lamports: payer_pre,
+        payer_post_lamports: payer_post,
+        programdata_pre_lamports: programdata_pre,
+        programdata_post_lamports: programdata_post,
+    })
+}
+
+fn resolve_extension_transaction_via_rpc(
+    query: &ExtensionTransactionQueryV1<'_>,
+) -> Result<ExtensionTransactionEvidenceV1> {
+    let mut rpc = Rpc::connect_cluster(query.origin, WritePolicyV1::ReadsOnly)?;
+    let signature = find_extension_signature(query.deployment_slot, |before| {
+        let mut options = serde_json::Map::new();
+        options.insert("commitment".into(), Value::String("finalized".into()));
+        options.insert(
+            "limit".into(),
+            Value::Number(SIGNATURE_HISTORY_PAGE_ROWS.into()),
+        );
+        if let Some(before) = before {
+            options.insert("before".into(), Value::String(before.into()));
+        }
+        let rows = rpc.call(
+            "getSignaturesForAddress",
+            &Value::Array(vec![
+                Value::String(query.programdata_id.to_string()),
+                Value::Object(options),
+            ]),
+        )?;
+        rows.as_array()
+            .cloned()
+            .ok_or_else(|| Error::new("getSignaturesForAddress did not return an array"))
+    })?;
+    let transaction = rpc.call(
+        "getTransaction",
+        &serde_json::json!([&signature, {
+            "encoding": "jsonParsed",
+            "commitment": "finalized",
+            "maxSupportedTransactionVersion": 0
+        }]),
+    )?;
+    validate_extension_transaction(query, &signature, transaction)
+}
+
+fn find_extension_signature(
+    target_slot: u64,
+    mut fetch_page: impl FnMut(Option<&str>) -> Result<Vec<Value>>,
+) -> Result<String> {
+    let mut before = None::<String>;
+    let mut previous_slot = None::<u64>;
+    let mut seen = BTreeSet::<String>::new();
+    let mut candidates = Vec::<String>::new();
+    let mut crossed_target = false;
+    for _ in 0..SIGNATURE_HISTORY_MAX_PAGES {
+        let rows = fetch_page(before.as_deref())?;
+        if rows.len() > usize::try_from(SIGNATURE_HISTORY_PAGE_ROWS).expect("page bound") {
+            return Err(Error::new(
+                "ProgramData signature page exceeded the requested bounded width",
+            ));
+        }
+        if rows.is_empty() {
+            crossed_target = true;
+            break;
+        }
+        for row in &rows {
+            let slot = row
+                .get("slot")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| Error::new("extension signature row omitted u64 slot"))?;
+            if previous_slot.is_some_and(|previous| slot > previous) {
+                return Err(Error::new(
+                    "ProgramData signature history is not monotonically newest-to-oldest",
+                ));
+            }
+            previous_slot = Some(slot);
+            let signature = row
+                .get("signature")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::new("extension signature row omitted signature"))?;
+            Signature::from_str(signature)
+                .map_err(|_| Error::new("extension history returned an invalid signature"))?;
+            if !seen.insert(signature.into()) {
+                return Err(Error::new(
+                    "ProgramData signature history repeated a cursor row",
+                ));
+            }
+            let row_error = row
+                .get("err")
+                .ok_or_else(|| Error::new("extension signature row omitted err status"))?;
+            if slot == target_slot && row_error.is_null() {
+                candidates.push(signature.into());
+            }
+            if slot < target_slot {
+                crossed_target = true;
+            }
+        }
+        before = rows
+            .last()
+            .and_then(|row| row.get("signature"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if crossed_target {
+            break;
+        }
+    }
+    if !crossed_target {
+        return Err(Error::new(format!(
+            "ProgramData signature history did not cross target slot {target_slot} within the \
+             provisional {SIGNATURE_HISTORY_MAX_PAGES}-page bound"
+        )));
+    }
+    if candidates.len() != 1 {
+        return Err(Error::new(format!(
+            "expected one successful ProgramData signature at extension slot {target_slot}, \
+             observed {}; signature attribution is ambiguous",
+            candidates.len()
+        )));
+    }
+    Ok(candidates.remove(0))
 }
 
 fn validate_extension_transaction(
@@ -2445,12 +3141,21 @@ fn validate_receipt_binding(
     live_elf_padding_bytes: u64,
     receipt: &UpgradeReceiptV1,
 ) -> Result<()> {
+    require_digest(&receipt.receipt_sha256, "Upgrade receipt SHA-256")?;
+    let mut canonical_receipt = receipt.clone();
+    canonical_receipt.receipt_sha256.clear();
+    if receipt.receipt_sha256 != digest(&serde_json::to_vec(&canonical_receipt)?) {
+        return Err(Error::new(
+            "Upgrade receipt SHA-256 does not bind its canonical phase fields",
+        ));
+    }
     if receipt.schema != SCHEMA
         || receipt.role != args.role
         || receipt.program_id != args.program_id.to_string()
         || receipt.programdata_id != args.programdata_id.to_string()
         || receipt.retained_upgrade_authority != args.expected_upgrade_authority.to_string()
         || receipt.fee_payer != args.fee_payer.to_string()
+        || receipt.rpc_origin_redacted != args.origin.redacted_url()
         || receipt.genesis_hash != DEVNET_GENESIS_HASH
         || receipt.source_revision != gate.source_revision
         || receipt.source_tree_sha256 != gate.source_tree_sha256
@@ -2461,6 +3166,8 @@ fn validate_receipt_binding(
         || receipt.live_elf_sha256 != live_elf_sha256
         || receipt.live_elf_padding_bytes != live_elf_padding_bytes
         || receipt.solana_cli_version != gate.solana_cli_version
+        || receipt.before_context_slot < baseline.context_slot
+        || receipt.before != baseline.observation
     {
         return Err(Error::new(
             "existing Upgrade receipt does not bind this exact role, deployment, authority, \
@@ -2476,8 +3183,13 @@ fn validate_receipt_binding(
         ReceiptPhaseV1::Prepared => {
             if receipt.transaction_signature.is_some()
                 || receipt.solana_cli_output.is_some()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
                 || receipt.after.is_some()
                 || receipt.arithmetic.is_some()
+                || receipt.dump_sha256.is_some()
+                || receipt.dump_shape.is_some()
             {
                 return Err(Error::new(
                     "prepared Upgrade receipt carries later-phase fields",
@@ -2487,15 +3199,24 @@ fn validate_receipt_binding(
         ReceiptPhaseV1::Submitted => {
             if receipt.transaction_signature.is_none()
                 || receipt.solana_cli_output.is_none()
+                || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
                 || receipt.after.is_some()
                 || receipt.arithmetic.is_some()
+                || receipt.dump_sha256.is_some()
+                || receipt.dump_shape.is_some()
             {
                 return Err(Error::new("submitted Upgrade receipt phase is incomplete"));
             }
+            validate_recorded_deploy_output(receipt)?;
         }
         ReceiptPhaseV1::Complete => {
             if receipt.transaction_signature.is_none()
                 || receipt.solana_cli_output.is_none()
+                || receipt.finalized_transaction.is_none()
+                || receipt.finalized_transaction_sha256.is_none()
+                || receipt.after_context_slot.is_none()
                 || receipt.after.is_none()
                 || receipt.arithmetic.is_none()
                 || receipt.dump_sha256.is_none()
@@ -2503,14 +3224,88 @@ fn validate_receipt_binding(
             {
                 return Err(Error::new("complete Upgrade receipt phase is incomplete"));
             }
+            validate_recorded_deploy_output(receipt)?;
+            let transaction = receipt
+                .finalized_transaction
+                .as_ref()
+                .expect("checked complete transaction");
+            if receipt.finalized_transaction_sha256.as_deref()
+                != Some(digest(&serde_json::to_vec(transaction)?).as_str())
+                || receipt
+                    .after_context_slot
+                    .is_some_and(|slot| slot < receipt.before_context_slot)
+            {
+                return Err(Error::new(
+                    "complete Upgrade receipt transaction hash or context-slot order is invalid",
+                ));
+            }
+            validate_complete_receipt_shape(receipt)?;
         }
+    }
+    Ok(())
+}
+
+fn validate_complete_receipt_shape(receipt: &UpgradeReceiptV1) -> Result<()> {
+    let after = receipt.after.as_ref().expect("checked complete poststate");
+    let arithmetic = receipt
+        .arithmetic
+        .as_ref()
+        .expect("checked complete arithmetic");
+    let payer_delta = arithmetic
+        .transaction_payer_pre_lamports
+        .checked_sub(arithmetic.transaction_payer_post_lamports)
+        .ok_or_else(|| Error::new("complete Upgrade receipt payer increased"))?;
+    if after.deployment_slot <= receipt.before.deployment_slot
+        || after.upgrade_authority != receipt.retained_upgrade_authority
+        || after.live_elf_sha256 != receipt.live_elf_sha256
+        || after.programdata_lamports != receipt.before.programdata_lamports
+        || arithmetic.transaction_fee_lamports == 0
+        || arithmetic.payer_fee_delta_lamports != payer_delta
+        || payer_delta != arithmetic.transaction_fee_lamports
+        || arithmetic.programdata_before_lamports != receipt.before.programdata_lamports
+        || arithmetic.programdata_after_lamports != after.programdata_lamports
+        || arithmetic.programdata_delta_lamports != 0
+        || receipt
+            .dump_sha256
+            .as_deref()
+            .is_none_or(|digest| require_digest(digest, "complete dump SHA-256").is_err())
+        || !matches!(
+            receipt.dump_shape.as_deref(),
+            Some("raw-elf" | "live-elf-with-zero-padding")
+        )
+    {
+        return Err(Error::new(
+            "complete Upgrade receipt poststate, transaction arithmetic, or dump shape is not canonical",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_recorded_deploy_output(receipt: &UpgradeReceiptV1) -> Result<()> {
+    let signature = receipt
+        .transaction_signature
+        .as_deref()
+        .ok_or_else(|| Error::new("Upgrade receipt omitted signature"))?;
+    Signature::from_str(signature)
+        .map_err(|_| Error::new("Upgrade receipt signature is not a Solana signature"))?;
+    let output = receipt
+        .solana_cli_output
+        .as_ref()
+        .and_then(Value::as_object)
+        .ok_or_else(|| Error::new("Upgrade receipt omitted CLI JSON object"))?;
+    if output.get("programId").and_then(Value::as_str) != Some(receipt.program_id.as_str())
+        || output.get("signature").and_then(Value::as_str) != Some(signature)
+    {
+        return Err(Error::new(
+            "Upgrade receipt CLI output does not bind its exact Program and signature",
+        ));
     }
     Ok(())
 }
 
 fn operation_id(args: &UpgradeArgsV1, gate_sha256: &str, before: &SnapshotV1) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v2\0");
+    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v3\0");
     hasher.update(args.role.as_bytes());
     hasher.update([0]);
     hasher.update(args.program_id.as_ref());
@@ -2518,6 +3313,7 @@ fn operation_id(args: &UpgradeArgsV1, gate_sha256: &str, before: &SnapshotV1) ->
     hasher.update(args.expected_upgrade_authority.as_ref());
     hasher.update(args.fee_payer.as_ref());
     hasher.update(gate_sha256.as_bytes());
+    hasher.update(before.context_slot.to_le_bytes());
     hasher.update(before.loader.deployment_slot.to_le_bytes());
     hasher.update(before.loader.programdata_account_sha256.as_bytes());
     hasher.update(before.wallet_lamports.to_le_bytes());
@@ -2533,7 +3329,7 @@ fn operation_id_from_receipt(receipt: &UpgradeReceiptV1) -> String {
         Pubkey::from_str(&receipt.retained_upgrade_authority).expect("validated receipt authority");
     let payer = Pubkey::from_str(&receipt.fee_payer).expect("validated receipt payer");
     let mut hasher = Sha256::new();
-    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v2\0");
+    hasher.update(b"dclutch/devnet-permanent-id-upgrade/operation/v3\0");
     hasher.update(role);
     hasher.update([0]);
     hasher.update(program.as_ref());
@@ -2541,6 +3337,7 @@ fn operation_id_from_receipt(receipt: &UpgradeReceiptV1) -> String {
     hasher.update(authority.as_ref());
     hasher.update(payer.as_ref());
     hasher.update(receipt.checked_release_gate_sha256.as_bytes());
+    hasher.update(receipt.before_context_slot.to_le_bytes());
     hasher.update(receipt.before.deployment_slot.to_le_bytes());
     hasher.update(receipt.before.programdata_account_sha256.as_bytes());
     hasher.update(receipt.wallet_before_lamports.to_le_bytes());
@@ -2562,6 +3359,7 @@ fn extension_operation_id(
     hasher.update(args.fee_payer.as_ref());
     hasher.update(baseline.baseline_sha256.as_bytes());
     hasher.update(baseline.extension_additional_bytes.to_le_bytes());
+    hasher.update(before.context_slot.to_le_bytes());
     hasher.update(before.loader.programdata_account_sha256.as_bytes());
     hasher.update(before.wallet_lamports.to_le_bytes());
     hex(&hasher.finalize())
@@ -2584,6 +3382,7 @@ fn extension_operation_id_from_receipt(receipt: &ExtensionReceiptV1) -> Result<S
     hasher.update(parse_pubkey(&receipt.fee_payer, "extension receipt payer")?.as_ref());
     hasher.update(receipt.baseline_sha256.as_bytes());
     hasher.update(receipt.extension_additional_bytes.to_le_bytes());
+    hasher.update(receipt.before_context_slot.to_le_bytes());
     hasher.update(receipt.before.programdata_account_sha256.as_bytes());
     hasher.update(receipt.wallet_before_lamports.to_le_bytes());
     Ok(hex(&hasher.finalize()))
@@ -2594,12 +3393,21 @@ fn validate_extension_receipt_binding(
     baseline: &UpgradeBaselineV1,
     receipt: &ExtensionReceiptV1,
 ) -> Result<()> {
+    require_digest(&receipt.receipt_sha256, "extension receipt SHA-256")?;
+    let mut canonical_receipt = receipt.clone();
+    canonical_receipt.receipt_sha256.clear();
+    if receipt.receipt_sha256 != digest(&serde_json::to_vec(&canonical_receipt)?) {
+        return Err(Error::new(
+            "extension receipt SHA-256 does not bind its canonical phase fields",
+        ));
+    }
     if receipt.schema != EXTENSION_SCHEMA
         || receipt.role != args.role
         || receipt.program_id != args.program_id.to_string()
         || receipt.programdata_id != args.programdata_id.to_string()
         || receipt.retained_upgrade_authority != args.expected_upgrade_authority.to_string()
         || receipt.fee_payer != args.fee_payer.to_string()
+        || receipt.rpc_origin_redacted != args.origin.redacted_url()
         || receipt.genesis_hash != DEVNET_GENESIS_HASH
         || receipt.baseline_sha256 != baseline.baseline_sha256
         || receipt.baseline_context_slot != baseline.context_slot
@@ -2609,6 +3417,7 @@ fn validate_extension_receipt_binding(
             != baseline.target_rent_exempt_minimum_lamports
         || receipt.expected_rent_top_up_lamports != baseline.extension_lamport_top_up
         || receipt.before != baseline.observation
+        || receipt.before_context_slot < baseline.context_slot
         || receipt.operation_id != extension_operation_id_from_receipt(receipt)?
     {
         return Err(Error::new(
@@ -2621,6 +3430,8 @@ fn validate_extension_receipt_binding(
             if receipt.transaction_signature.is_some()
                 || receipt.solana_cli_output.is_some()
                 || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
                 || receipt.after.is_some()
                 || receipt.arithmetic.is_some()
             {
@@ -2633,6 +3444,8 @@ fn validate_extension_receipt_binding(
             if receipt.transaction_signature.is_some()
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_some()
+                || receipt.finalized_transaction_sha256.is_some()
+                || receipt.after_context_slot.is_some()
                 || receipt.after.is_some()
                 || receipt.arithmetic.is_some()
             {
@@ -2643,10 +3456,26 @@ fn validate_extension_receipt_binding(
             if receipt.transaction_signature.is_none()
                 || receipt.solana_cli_output.is_none()
                 || receipt.finalized_transaction.is_none()
+                || receipt.finalized_transaction_sha256.is_none()
+                || receipt.after_context_slot.is_none()
                 || receipt.after.is_none()
                 || receipt.arithmetic.is_none()
             {
                 return Err(Error::new("complete extension receipt is incomplete"));
+            }
+            let transaction = receipt
+                .finalized_transaction
+                .as_ref()
+                .expect("checked complete extension transaction");
+            if receipt.finalized_transaction_sha256.as_deref()
+                != Some(digest(&serde_json::to_vec(transaction)?).as_str())
+                || receipt
+                    .after_context_slot
+                    .is_some_and(|slot| slot < receipt.before_context_slot)
+            {
+                return Err(Error::new(
+                    "complete extension receipt transaction hash or context-slot order is invalid",
+                ));
             }
         }
     }
@@ -2679,11 +3508,15 @@ fn load_extension_receipt(path: &Path) -> Result<Option<ExtensionReceiptV1>> {
     }
 }
 
-fn write_receipt(path: &Path, receipt: &UpgradeReceiptV1) -> Result<()> {
+fn write_receipt(path: &Path, receipt: &mut UpgradeReceiptV1) -> Result<()> {
+    receipt.receipt_sha256.clear();
+    receipt.receipt_sha256 = digest(&serde_json::to_vec(receipt)?);
     write_json_atomic_replace(path, receipt)
 }
 
-fn write_extension_receipt(path: &Path, receipt: &ExtensionReceiptV1) -> Result<()> {
+fn write_extension_receipt(path: &Path, receipt: &mut ExtensionReceiptV1) -> Result<()> {
+    receipt.receipt_sha256.clear();
+    receipt.receipt_sha256 = digest(&serde_json::to_vec(receipt)?);
     write_json_atomic_replace(path, receipt)
 }
 
@@ -2852,6 +3685,8 @@ mod tests {
         after_live: Vec<u8>,
         before_slot: u64,
         after_slot: u64,
+        before_context_slot: u64,
+        after_context_slot: u64,
         before_wallet: u64,
         after_wallet: u64,
         before_programdata_lamports: u64,
@@ -2860,9 +3695,12 @@ mod tests {
         deploy_success: bool,
         deploy_program: Pubkey,
         dump: Vec<u8>,
+        upgrade_fee_lamports: u64,
+        upgrade_transaction_override: Option<Value>,
         extension_fee_lamports: u64,
         extension_instruction_bytes: Option<u64>,
         calls: Vec<Vec<String>>,
+        snapshot_minimum_slots: Vec<u64>,
         forced: VecDeque<CliOutput>,
     }
 
@@ -2880,6 +3718,8 @@ mod tests {
                 after_live: fixture.candidate_live.clone(),
                 before_slot: 91,
                 after_slot: 92,
+                before_context_slot: 489_212_834,
+                after_context_slot: 489_212_835,
                 before_wallet: 1_000_000,
                 after_wallet: 985_000,
                 before_programdata_lamports: 77_000,
@@ -2888,14 +3728,17 @@ mod tests {
                 deploy_success: true,
                 deploy_program: fixture.program,
                 dump: fixture.raw_elf.clone(),
+                upgrade_fee_lamports: 15_000,
+                upgrade_transaction_override: None,
                 extension_fee_lamports: 5_000,
                 extension_instruction_bytes: None,
                 calls: Vec::new(),
+                snapshot_minimum_slots: Vec::new(),
                 forced: VecDeque::new(),
             }
         }
 
-        fn account_json(&self, address: Pubkey) -> String {
+        fn account(&self, address: Pubkey) -> RpcAccountV1 {
             let (lamports, owner, executable, data) = if address == self.program {
                 let mut program = vec![0_u8; 36];
                 program[..4].copy_from_slice(&2_u32.to_le_bytes());
@@ -2936,17 +3779,12 @@ mod tests {
             } else {
                 panic!("unexpected fake account {address}");
             };
-            json!({
-                "pubkey": address.to_string(),
-                "account": {
-                    "lamports": lamports,
-                    "owner": owner.to_string(),
-                    "executable": executable,
-                    "rentEpoch": 0,
-                    "data": [base64::engine::general_purpose::STANDARD.encode(data), "base64"]
-                }
-            })
-            .to_string()
+            RpcAccountV1 {
+                lamports,
+                owner,
+                executable,
+                data,
+            }
         }
     }
 
@@ -2972,11 +3810,6 @@ mod tests {
                         self.payer
                     };
                     Ok(success(format!("{address}\n")))
-                }
-                Some("account") => {
-                    let address = Pubkey::from_str(arguments.get(1).expect("account address"))
-                        .expect("fake account pubkey");
-                    Ok(success(self.account_json(address)))
                 }
                 Some("program") if arguments.get(1).map(String::as_str) == Some("deploy") => {
                     if !self.deploy_success {
@@ -3024,6 +3857,109 @@ mod tests {
                 }
                 command => panic!("unexpected fake Solana CLI command {command:?}: {arguments:?}"),
             }
+        }
+
+        fn read_snapshot(&mut self, query: &SnapshotQueryV1<'_>) -> Result<SnapshotV1> {
+            assert_eq!(query.program_id, self.program);
+            assert_eq!(query.programdata_id, self.programdata);
+            assert_eq!(query.expected_upgrade_authority, self.authority);
+            assert_eq!(query.payer, self.payer);
+            self.snapshot_minimum_slots.push(query.minimum_context_slot);
+            let context_slot = if self.deployed {
+                self.after_context_slot
+            } else {
+                self.before_context_slot
+            };
+            if context_slot < query.minimum_context_slot {
+                return Err(Error::new("synthetic snapshot is below minContextSlot"));
+            }
+            let program = self.account(self.program);
+            let programdata = self.account(self.programdata);
+            let wallet = self.account(self.payer);
+            let loader = loader_observation(
+                self.program,
+                self.programdata,
+                self.authority,
+                &program,
+                &programdata,
+            )?;
+            let view = ProgramDataV3View::parse(&programdata.data)
+                .map_err(|_| Error::new("synthetic ProgramData parse"))?;
+            Ok(SnapshotV1 {
+                context_slot,
+                loader,
+                wallet_lamports: wallet.lamports,
+                live_elf: view.elf().to_vec(),
+            })
+        }
+
+        fn resolve_upgrade_transaction(
+            &mut self,
+            query: &UpgradeTransactionQueryV1<'_>,
+        ) -> Result<UpgradeTransactionEvidenceV1> {
+            let buffer = Pubkey::new_from_array([11; 32]);
+            let spill = Pubkey::new_from_array([12; 32]);
+            let transaction = self.upgrade_transaction_override.clone().unwrap_or_else(|| {
+                json!({
+                    "slot": query.deployment_slot,
+                    "transaction": {
+                        "signatures": [query.signature],
+                        "message": {
+                            "accountKeys": [
+                                {"pubkey": query.payer.to_string(), "signer": true, "writable": true},
+                                {"pubkey": query.programdata_id.to_string(), "signer": false, "writable": true},
+                                {"pubkey": query.program_id.to_string(), "signer": false, "writable": true},
+                                {"pubkey": query.authority.to_string(), "signer": true, "writable": false},
+                                {"pubkey": buffer.to_string(), "signer": false, "writable": true},
+                                {"pubkey": spill.to_string(), "signer": false, "writable": true},
+                                {"pubkey": sysvar::rent::ID.to_string(), "signer": false, "writable": false},
+                                {"pubkey": sysvar::clock::ID.to_string(), "signer": false, "writable": false}
+                            ],
+                            "instructions": [{
+                                "program": "bpf-upgradeable-loader",
+                                "programId": bpf_loader_upgradeable::ID.to_string(),
+                                "parsed": {
+                                    "type": "upgrade",
+                                    "info": {
+                                        "programDataAccount": query.programdata_id.to_string(),
+                                        "programAccount": query.program_id.to_string(),
+                                        "bufferAccount": buffer.to_string(),
+                                        "spillAccount": spill.to_string(),
+                                        "rentSysvar": sysvar::rent::ID.to_string(),
+                                        "clockSysvar": sysvar::clock::ID.to_string(),
+                                        "authority": query.authority.to_string()
+                                    }
+                                }
+                            }]
+                        }
+                    },
+                    "meta": {
+                        "err": null,
+                        "fee": self.upgrade_fee_lamports,
+                        "preBalances": [
+                            self.before_wallet,
+                            query.programdata_before_lamports,
+                            1_140,
+                            0,
+                            10_000,
+                            0,
+                            1,
+                            1
+                        ],
+                        "postBalances": [
+                            self.before_wallet - self.upgrade_fee_lamports,
+                            query.programdata_after_lamports,
+                            1_140,
+                            0,
+                            0,
+                            10_000,
+                            1,
+                            1
+                        ]
+                    }
+                })
+            });
+            validate_upgrade_transaction(query, transaction)
         }
 
         fn resolve_extension_transaction(
@@ -3318,6 +4254,7 @@ mod tests {
                 solana_cli: directory.0.join("missing-solana-cli"),
                 target_acknowledgment: format!("trading:{program}"),
                 execute: true,
+                preflight: false,
             };
             Self {
                 _directory: directory,
@@ -3416,9 +4353,10 @@ mod tests {
         assert_eq!(
             receipt.arithmetic,
             Some(UpgradeArithmeticV1 {
-                wallet_before_lamports: 1_000_000,
-                wallet_after_lamports: 985_000,
-                wallet_spend_lamports: 15_000,
+                transaction_payer_pre_lamports: 1_000_000,
+                transaction_payer_post_lamports: 985_000,
+                transaction_fee_lamports: 15_000,
+                payer_fee_delta_lamports: 15_000,
                 programdata_before_lamports: 77_000,
                 programdata_after_lamports: 77_000,
                 programdata_delta_lamports: 0,
@@ -3431,15 +4369,242 @@ mod tests {
                 && call.get(1).map(String::as_str) == Some("deploy")
                 && call.contains(&fixture.program.to_string())
         }));
-        assert!(
-            runner
-                .calls
-                .iter()
-                .filter(|call| { call.first().map(String::as_str) == Some("account") })
-                .all(|call| call
-                    .windows(2)
-                    .any(|pair| { pair == ["--commitment".to_owned(), "finalized".to_owned()] }))
+        assert_eq!(
+            runner.snapshot_minimum_slots,
+            vec![489_212_834, 489_212_834]
         );
+    }
+
+    #[test]
+    fn preflight_is_key_free_read_only_and_runs_full_candidate_admission() {
+        let mut fixture = Fixture::new();
+        fixture.args.execute = false;
+        fixture.args.preflight = true;
+        let mut runner = FakeRunner::new(&fixture);
+        let report = preflight_with_runner(&fixture.args, &mut runner).expect("preflight");
+        assert_eq!(report.schema, PREFLIGHT_SCHEMA);
+        assert_eq!(
+            report.checked_release_gate_sha256,
+            fixture.args.expected_checked_release_gate_sha256
+        );
+        assert!(!report.mutation_permitted);
+        assert_eq!(report.receipt_phase, None);
+        assert!(!fixture.args.receipt_path.exists());
+        assert!(!fixture.args.dump_path.exists());
+        assert_eq!(runner.snapshot_minimum_slots, vec![489_212_834]);
+        assert!(runner.calls.iter().all(|call| {
+            call.first().map(String::as_str) != Some("address")
+                && call.first().map(String::as_str) != Some("program")
+        }));
+    }
+
+    #[test]
+    fn exact_upgrade_transaction_refuses_fee_signature_and_instruction_substitution() {
+        let make_transaction = |fixture: &Fixture, runner: &mut FakeRunner| {
+            let signature = Signature::from([7_u8; 64]).to_string();
+            let query = UpgradeTransactionQueryV1 {
+                origin: &fixture.args.origin,
+                signature: &signature,
+                program_id: fixture.program,
+                programdata_id: fixture.programdata,
+                authority: fixture.authority,
+                payer: fixture.payer,
+                deployment_slot: runner.after_slot,
+                programdata_before_lamports: runner.before_programdata_lamports,
+                programdata_after_lamports: runner.after_programdata_lamports,
+            };
+            runner
+                .resolve_upgrade_transaction(&query)
+                .expect("valid synthetic Upgrade transaction")
+                .transaction
+        };
+
+        let fee = Fixture::new();
+        let mut fee_runner = FakeRunner::new(&fee);
+        let mut fee_transaction = make_transaction(&fee, &mut fee_runner);
+        fee_transaction["meta"]["fee"] = json!(14_999);
+        fee_runner.upgrade_transaction_override = Some(fee_transaction);
+        let error = execute_with_runner(&fee.args, &mut fee_runner)
+            .expect_err("payer delta must equal finalized fee");
+        assert!(error.to_string().contains("payer delta is not exactly"));
+
+        let signature = Fixture::new();
+        let mut signature_runner = FakeRunner::new(&signature);
+        let mut signature_transaction = make_transaction(&signature, &mut signature_runner);
+        signature_transaction["transaction"]["signatures"][0] =
+            json!(Signature::from([9_u8; 64]).to_string());
+        signature_runner.upgrade_transaction_override = Some(signature_transaction);
+        let error = execute_with_runner(&signature.args, &mut signature_runner)
+            .expect_err("CLI signature substitution must refuse");
+        assert!(error.to_string().contains("fee-payer signature"));
+
+        let instruction = Fixture::new();
+        let mut instruction_runner = FakeRunner::new(&instruction);
+        let mut instruction_transaction = make_transaction(&instruction, &mut instruction_runner);
+        instruction_transaction["transaction"]["message"]["instructions"][0]["parsed"]["info"]["programAccount"] =
+            json!(Pubkey::new_unique().to_string());
+        instruction_runner.upgrade_transaction_override = Some(instruction_transaction);
+        let error = execute_with_runner(&instruction.args, &mut instruction_runner)
+            .expect_err("instruction Program substitution must refuse");
+        assert!(error.to_string().contains("substituted Program"));
+
+        let rent = Fixture::new();
+        let mut rent_runner = FakeRunner::new(&rent);
+        let mut rent_transaction = make_transaction(&rent, &mut rent_runner);
+        rent_transaction["meta"]["postBalances"][1] = json!(77_001);
+        rent_runner.upgrade_transaction_override = Some(rent_transaction);
+        let error = execute_with_runner(&rent.args, &mut rent_runner)
+            .expect_err("transaction ProgramData rent movement must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("preserve and bridge exact ProgramData rent")
+        );
+    }
+
+    #[test]
+    fn canonical_receipt_digest_and_phase_shape_refuse_tampering() {
+        let fixture = Fixture::new();
+        let mut runner = FakeRunner::new(&fixture);
+        let accepted = execute_with_runner(&fixture.args, &mut runner).expect("complete Upgrade");
+        let mut hostile = accepted.clone();
+        hostile.dump_sha256 = Some("f".repeat(64));
+        fs::write(
+            &fixture.args.receipt_path,
+            serde_json::to_vec_pretty(&hostile).expect("hostile receipt"),
+        )
+        .expect("write hostile receipt");
+        let mut replay = FakeRunner::new(&fixture);
+        replay.deployed = true;
+        let error = execute_with_runner(&fixture.args, &mut replay)
+            .expect_err("changed completion field must break canonical digest");
+        assert!(error.to_string().contains("receipt SHA-256"));
+        assert!(replay.calls.is_empty());
+
+        let prepared = Fixture::new();
+        let mut interrupted = FakeRunner::new(&prepared);
+        interrupted.deploy_success = false;
+        let _ = execute_with_runner(&prepared.args, &mut interrupted)
+            .expect_err("leave prepared receipt");
+        let mut receipt = load_receipt(&prepared.args.receipt_path)
+            .expect("read prepared")
+            .expect("prepared");
+        receipt.dump_sha256 = Some(digest(b"later-only"));
+        write_receipt(&prepared.args.receipt_path, &mut receipt)
+            .expect("canonical hostile receipt");
+        let mut resume = FakeRunner::new(&prepared);
+        let error = execute_with_runner(&prepared.args, &mut resume)
+            .expect_err("prepared receipt cannot carry dump evidence");
+        assert!(error.to_string().contains("later-phase fields"));
+        assert!(resume.calls.is_empty());
+
+        let late = Fixture::new();
+        let mut first = FakeRunner::new(&late);
+        let accepted = execute_with_runner(&late.args, &mut first).expect("complete Upgrade");
+        let mut receipt = accepted;
+        receipt
+            .arithmetic
+            .as_mut()
+            .expect("complete arithmetic")
+            .transaction_fee_lamports += 1;
+        write_receipt(&late.args.receipt_path, &mut receipt).expect("rehash hostile receipt");
+        let mut replay = FakeRunner::new(&late);
+        replay.deployed = true;
+        let error = execute_with_runner(&late.args, &mut replay)
+            .expect_err("rehashed self-declared arithmetic cannot replace transaction truth");
+        assert!(error.to_string().contains("transaction arithmetic"));
+    }
+
+    #[test]
+    fn complete_receipt_reports_cli_payload_dump_and_context_drift() {
+        let cli = Fixture::new();
+        let mut first = FakeRunner::new(&cli);
+        let _ = execute_with_runner(&cli.args, &mut first).expect("complete Upgrade");
+        let mut replay = FakeRunner::new(&cli);
+        replay.deployed = true;
+        replay.version.push_str(" drift");
+        let error = execute_with_runner(&cli.args, &mut replay).expect_err("CLI drift");
+        assert!(error.to_string().contains("artifact evidence pins"));
+
+        let payload = Fixture::new();
+        let mut first = FakeRunner::new(&payload);
+        let _ = execute_with_runner(&payload.args, &mut first).expect("complete Upgrade");
+        let mut replay = FakeRunner::new(&payload);
+        replay.deployed = true;
+        replay.after_live[4] ^= 1;
+        let error = execute_with_runner(&payload.args, &mut replay).expect_err("payload drift");
+        assert!(error.to_string().contains("receipt drifted"));
+
+        let dump = Fixture::new();
+        let mut first = FakeRunner::new(&dump);
+        let _ = execute_with_runner(&dump.args, &mut first).expect("complete Upgrade");
+        fs::write(&dump.args.dump_path, b"changed dump").expect("change dump");
+        let mut replay = FakeRunner::new(&dump);
+        replay.deployed = true;
+        let error = execute_with_runner(&dump.args, &mut replay).expect_err("dump drift");
+        assert!(error.to_string().contains("deployed-byte dump is neither"));
+
+        let context = Fixture::new();
+        let mut first = FakeRunner::new(&context);
+        let _ = execute_with_runner(&context.args, &mut first).expect("complete Upgrade");
+        let mut replay = FakeRunner::new(&context);
+        replay.deployed = true;
+        replay.after_context_slot = 489_212_834;
+        let error = execute_with_runner(&context.args, &mut replay).expect_err("stale context");
+        assert!(error.to_string().contains("below minContextSlot"));
+    }
+
+    #[test]
+    fn extension_signature_history_paginates_until_below_target_and_refuses_ambiguity() {
+        let signature = |byte| Signature::from([byte; 64]).to_string();
+        let mut pages = VecDeque::from([
+            vec![
+                json!({"signature": signature(1), "slot": 100, "err": null}),
+                json!({"signature": signature(2), "slot": 99, "err": null}),
+            ],
+            vec![
+                json!({"signature": signature(3), "slot": 92, "err": null}),
+                json!({"signature": signature(4), "slot": 91, "err": null}),
+            ],
+        ]);
+        let mut cursors = Vec::new();
+        let selected = find_extension_signature(92, |before| {
+            cursors.push(before.map(str::to_owned));
+            Ok(pages.pop_front().expect("bounded page"))
+        })
+        .expect("second page target");
+        assert_eq!(selected, signature(3));
+        assert_eq!(cursors, vec![None, Some(signature(2))]);
+
+        let ambiguous = vec![
+            json!({"signature": signature(5), "slot": 92, "err": null}),
+            json!({"signature": signature(6), "slot": 92, "err": null}),
+            json!({"signature": signature(7), "slot": 91, "err": null}),
+        ];
+        let error = find_extension_signature(92, |_| Ok(ambiguous.clone()))
+            .expect_err("two same-slot candidates must refuse");
+        assert!(error.to_string().contains("observed 2"));
+
+        let nonmonotonic = vec![
+            json!({"signature": signature(8), "slot": 91, "err": null}),
+            json!({"signature": signature(9), "slot": 93, "err": null}),
+        ];
+        let error = find_extension_signature(92, |_| Ok(nonmonotonic.clone()))
+            .expect_err("nonmonotonic provider history must refuse");
+        assert!(error.to_string().contains("not monotonically"));
+
+        let mut page = 0_u8;
+        let error = find_extension_signature(92, |_| {
+            page = page.checked_add(1).expect("bounded test page");
+            Ok(vec![json!({
+                "signature": signature(page.checked_add(20).expect("signature byte")),
+                "slot": 200_u64.checked_sub(u64::from(page)).expect("slot"),
+                "err": null
+            })])
+        })
+        .expect_err("history that never crosses target must stop at page bound");
+        assert!(error.to_string().contains("16-page bound"));
+        assert_eq!(usize::from(page), SIGNATURE_HISTORY_MAX_PAGES);
     }
 
     #[test]
@@ -3490,14 +4655,20 @@ mod tests {
     }
 
     #[test]
-    fn completed_receipt_is_idempotent_without_another_cli_call() {
+    fn completed_receipt_rechecks_live_state_without_another_write_or_key_read() {
         let fixture = Fixture::new();
         let mut first = FakeRunner::new(&fixture);
         let accepted = execute_with_runner(&fixture.args, &mut first).expect("first run");
         let mut second = FakeRunner::new(&fixture);
+        second.deployed = true;
         let replay = execute_with_runner(&fixture.args, &mut second).expect("receipt replay");
         assert_eq!(replay, accepted);
-        assert!(second.calls.is_empty());
+        assert!(second.calls.iter().all(|call| {
+            call.first().map(String::as_str) != Some("address")
+                && call.get(1).map(String::as_str) != Some("deploy")
+                && call.get(1).map(String::as_str) != Some("dump")
+        }));
+        assert_eq!(second.snapshot_minimum_slots, vec![489_212_835]);
     }
 
     #[test]
@@ -4067,10 +5238,15 @@ mod tests {
         let accepted = execute_extension_with_runner(&complete_args, &mut complete_runner)
             .expect("complete extension");
         let mut replay_runner = FakeRunner::new(&complete);
+        configure_extension_runner(&complete, &mut replay_runner, 128);
+        replay_runner.deployed = true;
         let replay = execute_extension_with_runner(&complete_args, &mut replay_runner)
             .expect("complete receipt replay");
         assert_eq!(replay, accepted);
-        assert!(replay_runner.calls.is_empty());
+        assert!(replay_runner.calls.iter().all(|call| {
+            call.first().map(String::as_str) != Some("address")
+                && call.get(1).map(String::as_str) != Some("extend")
+        }));
 
         let mut hostile = serde_json::to_value(&accepted).expect("receipt value");
         hostile
@@ -4085,18 +5261,18 @@ mod tests {
         let mut hostile_runner = FakeRunner::new(&complete);
         let error = execute_extension_with_runner(&complete_args, &mut hostile_runner)
             .expect_err("complete receipt without transaction must refuse");
-        assert!(
-            error
-                .to_string()
-                .contains("complete extension receipt is incomplete")
-        );
+        assert!(error.to_string().contains("receipt SHA-256"));
         assert!(hostile_runner.calls.is_empty());
     }
 
     #[test]
-    fn command_parser_refuses_loopback_and_requires_execute() {
+    fn command_parser_refuses_loopback_and_requires_one_mode() {
         let no_execute = parse_args(Vec::new()).expect_err("execute is required");
-        assert!(no_execute.to_string().contains("requires --execute"));
+        assert!(
+            no_execute
+                .to_string()
+                .contains("exactly one of --preflight")
+        );
 
         let fixture = Fixture::new();
         let arguments = vec![
