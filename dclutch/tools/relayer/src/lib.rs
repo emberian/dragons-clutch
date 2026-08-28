@@ -29,6 +29,7 @@ pub mod keys;
 pub mod observe;
 pub mod publog;
 pub mod rpc;
+pub mod segments;
 pub mod skew;
 pub mod submit;
 pub mod txn;

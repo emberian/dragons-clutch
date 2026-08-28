@@ -65,8 +65,40 @@ gates. It is not release evidence.
 | LB liability-basis-v2 | ramp/complement theorem + kernel + corpus | active |
 | RL checked release | release-tool pipeline + candidate + rerun script | active |
 | reviewer | batched Opus review of the four Sonnet outputs | active |
+| VX vinext-upgrade | unblock client-side `<Link>`: vinext beta.8 + `@vitejs/plugin-rsc` + rolldown, together | **queued** |
 
 Cross-lane board: /private/tmp/dclutch-wave-board.md (append-only, not authority).
+
+### VX — the vinext upgrade, queued not taken (2026-08-27, NAV-FIX)
+
+**What is broken.** vinext 1.0.0-beta.3's `next/link` shim is inert in every
+production bundle. Its click handler calls `preventDefault()` and then awaits
+`import("./navigation.js")` for `navigateClientSide`; in the built bundle that
+specifier resolves to an export-less namespace, the prefetch throws, and the
+click is swallowed with no navigation. Measured under `vinext start` and
+against the Pages artifact alike, so it is the shim and not the host. Typed
+URLs and plain `<a>` were unaffected throughout — which is how it was isolated,
+and what the fix rests on.
+
+**What was done instead, and why it is not a workaround.** The app ships as a
+static export: every route is a separate prerendered document that reads
+whatever chain the viewer points it at, and no route carries state another
+route needs. A full page load *is* the navigation model here. So the app
+navigates through plain anchors (`apps/dclutch-web/components/Anchor.tsx`), and
+`next/link` appears nowhere in it. That is correct on its own terms and would
+be worth keeping even with a working shim; this lane is not blocked on VX.
+
+**What VX is for.** Three packages have to move together and none of them moves
+alone: beta.8 does not drop in — it requires `@vitejs/plugin-rsc` >= 0.5.34,
+which then breaks `rolldown:vite-resolve`. Take it as one coordination, with a
+measurement of what the upgrade actually buys before adopting `<Link>` anywhere:
+today the answer is nothing the export needs.
+
+**What holds the line meanwhile.** `tools/gauntlet/frontend/pages-nav-check.mjs`
+clicks every link in the assembled artifact in a real browser. The static link
+checker in `tools/genref/render-site.mjs` proves an href RESOLVES; only this
+proves clicking it navigates, which is the exact gap the live breakage fell
+through.
 
 ## Cycle-1 results (LINGER₂ snapshot, 2026-08-26 evening)
 

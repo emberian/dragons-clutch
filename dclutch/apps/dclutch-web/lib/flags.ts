@@ -34,6 +34,21 @@ export function docsHrefV1(rendered: string, source: string): string {
     : `${REPOSITORY_V1}/blob/main/dclutch/${source}`;
 }
 
+/**
+ * The documentation's front door, for the nav bar.
+ *
+ * Unlike {@link docsHrefV1} this names no document: the Pages artifact's
+ * documentation landing is authored by `tools/genref/render-site.mjs` and has
+ * no Markdown source, so the build without a docs base sends the reader to the
+ * directory in the repository instead.
+ */
+export function docsIndexHrefV1(): string {
+  const base = process.env.NEXT_PUBLIC_DCLUTCH_DOCS_BASE;
+  return base
+    ? `${base.replace(/\/+$/, '')}/`
+    : `${REPOSITORY_V1}/tree/main/dclutch/docs`;
+}
+
 /** The repository itself. */
 export function repositoryHrefV1(): string {
   return REPOSITORY_V1;

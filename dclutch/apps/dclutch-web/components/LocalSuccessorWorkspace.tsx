@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { LOCAL_SUCCESSOR_CHECKPOINT, discoverLocalSuccessor, type LocalSuccessorSnapshot, type SuccessorAccountObservation, type SuccessorOrigin } from '@/lib/localSuccessor';
@@ -45,7 +46,7 @@ export default function LocalSuccessorWorkspace() {
   const statusMessage = discovery.kind === 'ready' ? '' : discovery.message;
 
   return <main className="product-shell direct-workspace local-successor-shell">
-    <header className="product-nav"><Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link><nav><Link href="/direct">Direct</Link><Link href="/product-v2">Product V2</Link><Link href="/release">Release</Link><Link className="active" href="/local">Local</Link></nav><span className="preview-control"><i className="preview-dot" />localhost RPC</span></header>
+    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor href="/direct">Direct</Anchor><Anchor href="/product-v2">Product V2</Anchor><Anchor href="/release">Release</Anchor><Anchor className="active" href="/local">Local</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />localhost RPC</span></header>
     <section className="market-heading local-heading"><div><div className="market-kicker"><span>real SBF</span><span>real Pyth packet</span><span>finalized RPC</span></div><h1>The local chain, with its evidence boundaries left intact.</h1><p>This profile reads the live immutable Registry and Resolution programs, their present accounts, and the checkpointed transaction lineage. Genesis-prepared records remain labeled as prepared inputs. Only the activation cache and valid Resolution certificates are described as transaction-created.</p></div><aside className="local-endpoint"><span>Fixed profile</span><strong>{LOCAL_SUCCESSOR_CHECKPOINT.network.rpc_url}</strong><code>{LOCAL_SUCCESSOR_CHECKPOINT.network.genesis_hash}</code><button type="button" onClick={() => void refresh()} disabled={discovery.kind === 'loading'}>{discovery.kind === 'loading' ? 'Reading finalized state…' : 'Refresh exact state'}</button></aside></section>
     <section className="local-status-strip" aria-live="polite"><i className={snapshot ? 'online' : discovery.kind === 'error' ? 'offline' : ''} /><strong>{snapshot ? 'Immutable successor validator reacquired' : statusMessage}</strong>{snapshot && <span>slot {snapshot.observedSlot} · Agave {snapshot.facts.solanaCore} · feature {snapshot.facts.featureSet}</span>}</section>
     {snapshot && <>

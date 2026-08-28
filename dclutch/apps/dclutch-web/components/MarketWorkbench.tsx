@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
 import { FormEvent, useMemo, useState } from 'react';
 
 import {
@@ -14,7 +14,7 @@ import {
   evaluateCapabilityV1,
   type CapabilityStage,
 } from '@/lib/capabilityModel';
-import { smokeStoryEnabledV1 } from '@/lib/flags';
+import { docsIndexHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
 import { SolanaRpcClient } from '@/lib/rpc';
 import { DEFAULT_RPC_ENDPOINT_V1 } from '@/lib/rpcDefault';
 
@@ -57,13 +57,13 @@ export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ 
 
   const snapshot = state.kind === 'ready' ? state.snapshot : null;
   return <main className="product-shell workbench-shell">
-    <header className="product-nav"><Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link><nav><Link href="/markets">Markets</Link><Link className={stageId === 'author' ? 'active' : ''} href="/create">Create</Link><Link className={stageId === 'trade' ? 'active' : ''} href="/liquidity">Trade</Link><Link className={stageId === 'resolve' ? 'active' : ''} href="/resolution">Resolve</Link><Link className={stageId === 'claim' ? 'active' : ''} href="/redeem">Redeem</Link><Link href="/operate">Operate</Link></nav><span className="preview-control"><i className="preview-dot" />chain workbench</span></header>
+    <header className="product-nav"><Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor><nav><Anchor href="/markets">Markets</Anchor><Anchor className={stageId === 'author' ? 'active' : ''} href="/create">Create</Anchor><Anchor className={stageId === 'trade' ? 'active' : ''} href="/liquidity">Trade</Anchor><Anchor className={stageId === 'resolve' ? 'active' : ''} href="/resolution">Resolve</Anchor><Anchor className={stageId === 'claim' ? 'active' : ''} href="/redeem">Redeem</Anchor><Anchor href="/operate">Operate</Anchor><Anchor href={docsIndexHrefV1()}>Docs</Anchor></nav><span className="preview-control"><i className="preview-dot" />chain workbench</span></header>
     <section className="workbench-heading"><div><p className="eyebrow">Market lifecycle workbench</p><h1>From exact terms<br />to terminal claims.</h1></div><p>No sample market, price, pool, provider, balance, or wallet authority appears here. Observe six program roles plus an optional Realm and Market; each concrete workspace must still prove its exact Registry, artifact, and Loader joins.</p></section>
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
       <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
       <div className="direct-actions">
-        <Link className="secondary-action" href="/smoke">Read the story →</Link>
-        <Link className="secondary-action" href="/bounty">How the bounty works →</Link>
+        <Anchor className="secondary-action" href="/smoke">Read the story →</Anchor>
+        <Anchor className="secondary-action" href="/bounty">How the bounty works →</Anchor>
       </div>
     </section>}
     <nav className="workbench-stages" aria-label="Market lifecycle stages">{STAGES.map((candidate) => <button type="button" className={candidate.id === stageId ? 'active' : ''} onClick={() => setStageId(candidate.id)} key={candidate.id}><span>{candidate.number}</span><strong>{candidate.title}</strong><small>{candidate.summary}</small></button>)}</nav>
@@ -73,7 +73,7 @@ export default function MarketWorkbench({ initialStage = 'author' }: Readonly<{ 
       <section className="workbench-actions"><header><span>{stage.number} · current stage</span><h2>{stage.title}</h2><p>{stage.summary}</p></header><div>{actions.map((action) => {
         const verdict = evaluateCapabilityV1(action, snapshot);
         const accepted = verdict.status === 'ready-to-preflight' && action.workspace !== null;
-        return <article className={accepted ? 'ready' : ''} key={action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{action.action}</h3></div><p>{verdict.reason}</p>{accepted && action.workspace ? <Link href={action.workspace}>Open exact preflight →</Link> : verdict.status === 'rust-only' && action.workspace ? <Link href={action.workspace}>Inspect current boundary →</Link> : <button type="button" disabled>Transaction unavailable</button>}</article>;
-      })}</div><footer><strong>Transaction handoff</strong><span>Every accepted builder emits unsigned bytes. Inspect dependencies and download the exact packet in the <Link href="/operate">operator console →</Link></span></footer></section></div>
+        return <article className={accepted ? 'ready' : ''} key={action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{action.action}</h3></div><p>{verdict.reason}</p>{accepted && action.workspace ? <Anchor href={action.workspace}>Open exact preflight →</Anchor> : verdict.status === 'rust-only' && action.workspace ? <Anchor href={action.workspace}>Inspect current boundary →</Anchor> : <button type="button" disabled>Transaction unavailable</button>}</article>;
+      })}</div><footer><strong>Transaction handoff</strong><span>Every accepted builder emits unsigned bytes. Inspect dependencies and download the exact packet in the <Anchor href="/operate">operator console →</Anchor></span></footer></section></div>
   </main>;
 }

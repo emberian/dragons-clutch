@@ -96,7 +96,13 @@ dclutch-relayer submit-artifacts --config relayer.toml \
     --slot-dir ./out/artifacts/dbc-graduation/slot-423941138
 
 # Push the publication log to a local directory meant for static serving.
+# The published log is segmented; --segment-bytes defaults to 4 MiB and exists
+# so a rehearsal directory can exercise the seal path without waiting.
 dclutch-relayer publish-log --config relayer.toml --to ./public
+
+# Verify a served directory end to end. Offline: no config, no network, no key,
+# so anyone can run it on a copy they downloaded.
+dclutch-relayer verify-log --dir ./public --against ./out/publication_log.jsonl
 
 # Read-only: sample two clusters' Clock sysvars and report max |a - b|.
 dclutch-relayer measure-skew --endpoint-a URL --endpoint-b URL \
@@ -240,16 +246,84 @@ that this is the entire mitigation for "the relayer can lie": an attestation
 nobody can check against mainnet is a trust assumption; one that is published is
 a falsifiable claim.
 
-**The push has a local file target**: `publish-log --to <dir>` copies the log
-into a directory meant to be served statically, refusing to overwrite a public
-copy that is not a byte-prefix of the local log (append-only or nothing), and
-writes a `LATEST.json` carrying the line count, byte length and SHA-256 so a
-verifier can poll for growth and detect a rewritten history. The layout is:
+**The push has a local file target**: `publish-log --to <dir>` publishes the
+log into a directory meant to be served statically, refusing to overwrite a
+public copy that is not a byte-prefix of the local log (append-only or nothing).
+
+### The published log is segmented
+
+A flat file is a shape a reader learns and then cannot be taken away from them,
+so the served log was segmented before it had any readers to break. The layout:
 
 ```text
-<dir>/publication_log.jsonl   the log, verbatim, append-only across pushes
-<dir>/LATEST.json             {lines, byte_len, sha256_hex, updated_wall_unix_seconds}
+<dir>/LATEST.json                     liveness; small, and small forever
+<dir>/segments.json                   the index, one entry per sealed segment
+<dir>/publication_log.NNNNN.jsonl     sealed; these bytes never change again
+<dir>/publication_log.current.jsonl   the active segment; it only grows
+<dir>/README.txt                      the reader's instructions, served with the data
 ```
+
+The active segment seals when the **next** record would take it past
+`--segment-bytes` (default 4 MiB, argued against the measured line size in
+`segments::DEFAULT_SEGMENT_BYTES`): it is renamed to a number it keeps forever,
+and the successor's first line is a header carrying the sealed segment's
+SHA-256, byte length, record count and slot span. So the segments form a chain,
+
+```text
+chain(0) = sha256("dclutch/relayer/publication-log/segment-chain/v1")
+chain(n) = sha256( chain(n-1) || sha256(segment n's bytes as served) )
+```
+
+and one value — `chain_head_sha256_hex`, in both `LATEST.json` and
+`segments.json` — commits to every sealed byte in order. A reader who verified
+through segment *k* yesterday and sees segment *k*'s chain value unchanged today
+knows nothing at or before *k* was disturbed, without refetching any of it.
+
+`segments.json` is rewritten only at a seal, and an entry that already exists is
+never altered — the publisher refuses to write an index whose existing prefix
+changed, which is "sealed means sealed" as an executable check rather than a
+comment.
+
+Three properties follow, in this order of importance: **nothing published ever
+changes** (the active segment is the one file that moves, and it only grows);
+**any prefix verifies without refetching the rest**; **liveness costs one small
+request**, forever.
+
+`publish-log` is also **incremental**. It reads only the local log's
+unpublished tail — the offset comes from the served directory's own index — and
+writes only the active segment, so a cycle's work is O(new bytes) and bounded by
+`MAX_PUBLISH_TAIL_BYTES` even for a publisher catching up. The old push read and
+rewrote the entire history every cycle, which is fine at eight lines and is not
+fine inside a unit with `MemoryMax=256M`. A partial final line in the local log
+(the one thing a crash mid-append can leave) is held back until it is complete;
+a segment only ever receives whole records.
+
+### `verify-log`
+
+```bash
+dclutch-relayer verify-log --dir <served dir> [--against <local publication_log.jsonl>]
+```
+
+Offline: no config, no network, no key — run it on a directory you downloaded.
+It checks every property the served `README.txt` claims: each segment hashes to
+what the index recorded, each header names the predecessor the index names, the
+chain folds to the published head, slots do not go backwards, and `LATEST.json`
+describes exactly what is on disk. `--against` adds the whole-history
+comparison — every published byte is the local log's byte at the same offset —
+which is the unbounded form of the bounded check each push performs.
+
+### Migrating a flat log that was already served
+
+A directory that already carries a flat `publication_log.jsonl` is adopted
+without moving a byte. Those bytes **are** segment 1: while segment 1 is active
+the flat name is maintained beside it and is still the whole log, and when
+segment 1 seals the flat file is left holding exactly those bytes at exactly
+those offsets, plus one final continuation record naming the segment it became
+and the index that continues it. The claim attached to the flat deployment's
+digest was always a *prefix* claim, so it stays true — and a reader who only
+ever learned the old name finds out where the log went in band, in the format
+they were already parsing, instead of quietly reading a file that stopped
+growing.
 
 Actually SERVING that directory from a public location is still a separately
 authorized act, and until a release names one, this daemon satisfies §4.11's

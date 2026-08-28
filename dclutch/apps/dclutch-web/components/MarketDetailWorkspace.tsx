@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useState } from 'react';
 
 import { type CapabilityFundingQuoteV1 } from '@/lib/capabilityManifest';
@@ -188,24 +189,25 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
 
   return <main className="product-shell trade-v3-shell">
     <header className="product-nav">
-      <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav>
-        <Link className="active" href="/markets">Markets</Link>
-        <Link href="/portfolio">Portfolio</Link>
-        <Link href="/activity">Activity</Link>
-        <Link href="/create">Create</Link>
-        <Link href="/trade">Trade</Link>
-        <Link href="/liquidity">Liquidity</Link>
-        <Link href="/redeem">Represent</Link>
-        <Link href="/release">Release</Link>
-        <Link href="/explorer">Explorer</Link>
+        <Anchor className="active" href="/markets">Markets</Anchor>
+        <Anchor href="/portfolio">Portfolio</Anchor>
+        <Anchor href="/activity">Activity</Anchor>
+        <Anchor href="/create">Create</Anchor>
+        <Anchor href="/trade">Trade</Anchor>
+        <Anchor href="/liquidity">Liquidity</Anchor>
+        <Anchor href="/redeem">Represent</Anchor>
+        <Anchor href="/release">Release</Anchor>
+        <Anchor href="/explorer">Explorer</Anchor>
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
       </nav>
       <span className="preview-control"><i className="preview-dot" />raw-u64 economics</span>
     </header>
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow"><Link href="/markets">← all Markets</Link> · one Market, decoded field by field</p>
+        <p className="eyebrow"><Anchor href="/markets">← all Markets</Anchor> · one Market, decoded field by field</p>
         <h1>{shortAddressV1(address, 8)}<br /><em>{decoded === null ? 'unread' : decoded.phase}</em></h1>
         <p>Every field below is decoded from a finalized account this browser read, or the section carries REFUSED and its exact reason. Nothing here is aggregated, estimated, or carried over from a previous observation, and no sub-state renders as empty-but-fine.</p>
       </div>
@@ -216,9 +218,9 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         {/* The five program ids live in this component's state and nowhere
             else, so the link carries them: the explorer is URL-addressable
             exactly so a reader does not have to retype them. */}
-        <p><Link href={`/explorer?view=market&q=${encodeURIComponent(address)}&rpc=${encodeURIComponent(endpoint)}${coreProgram === '' ? '' : `&core=${encodeURIComponent(coreProgram)}`}${registryProgram === '' ? '' : `&registry=${encodeURIComponent(registryProgram)}`}${claimsProgram === '' ? '' : `&claims=${encodeURIComponent(claimsProgram)}`}${custodyProgram === '' ? '' : `&custody=${encodeURIComponent(custodyProgram)}`}`}>
+        <p><Anchor href={`/explorer?view=market&q=${encodeURIComponent(address)}&rpc=${encodeURIComponent(endpoint)}${coreProgram === '' ? '' : `&core=${encodeURIComponent(coreProgram)}`}${registryProgram === '' ? '' : `&registry=${encodeURIComponent(registryProgram)}`}${claimsProgram === '' ? '' : `&claims=${encodeURIComponent(claimsProgram)}`}${custodyProgram === '' ? '' : `&custody=${encodeURIComponent(custodyProgram)}`}`}>
           Open the record graph in the explorer →
-        </Link></p>
+        </Anchor></p>
       </aside>
     </section>
 

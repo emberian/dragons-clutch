@@ -24,6 +24,10 @@
 //   index.html            the app's own landing (apps/dclutch-web app/page.tsx)
 //   markets.html, create.html, trade.html, …   the app's other routes
 //   _next/…               the app's assets
+//   404.html              the app's not-found shell, which also resolves the
+//                          dynamic routes the export cannot prerender
+//   evidence.html         the run-evidence index, at the URL a filed public
+//                          comment cites
 //   docs/index.html       the documentation landing (authored in this file)
 //   docs/readme.html      the repository README, rendered
 //   docs/reference/…      docs/reference rendered (same tree shape)
@@ -107,6 +111,10 @@ renderSet.set("tools/sbom/NOTICES.md", "notices.html");
     }
   };
   walk("docs/guides");
+  // The run evidence renders too. A filed public comment cites the Evidence
+  // page by URL, so these documents have to be readable on the site and not
+  // only in the repository -- see the `/evidence` index below.
+  walk("docs/evidence");
 }
 // The generated reference is rendered selectively. Error meanings and byte
 // layouts are the reference a client developer actually needs, so they stay
@@ -430,6 +438,9 @@ it's going.</li>
 <a href="reference/abi/README.html">the exact byte layouts</a>, generated
 from the code. The rest of the generated reference lives in the
 <a href="${repoUrl}/docs/reference/README.md">repository</a>.</li>
+<li><strong><a href="../evidence.html">Evidence</a></strong>
+The write-up of every run behind a claim on this site: what was executed,
+against which chain or harness, and what it did not establish.</li>
 <li><strong><a href="notices.html">Third-party notices</a></strong>
 The licenses of everything this project ships.</li>
 </ul>
@@ -497,6 +508,73 @@ fs.writeFileSync(
   }),
 );
 
+// ------------------------------------------------------- the evidence index
+//
+// `/evidence` at the artifact ROOT, which is otherwise the app's alone.
+//
+// A filed public comment cites "the explanation's Evidence page" by that URL.
+// A citation in a public record is not a thing this repository gets to move,
+// so the page is written where the citation points. It is the one document
+// rendered beside the app instead of under `docs/`, and this comment is the
+// reason it is allowed to be.
+//
+// The list is GENERATED from what actually rendered out of `docs/evidence/`.
+// A hand-kept index on a page a regulator may open is an index that drifts,
+// and a stale one here would be a claim about what was run.
+{
+  const evidence = [...renderSet]
+    .filter(([src]) => src.startsWith("docs/evidence/"))
+    .map(([, dst]) => dst)
+    .sort();
+  if (evidence.length === 0) {
+    console.error(
+      "render-site: docs/evidence rendered no documents, but /evidence is a " +
+        "cited URL; refusing the artifact.",
+    );
+    process.exit(1);
+  }
+  const target = path.join(outDir, "evidence.html");
+  if (fs.existsSync(target)) {
+    // The app grew a route of its own here. Two pages cannot answer one cited
+    // URL; decide which, rather than letting a copy order decide.
+    console.error(
+      "render-site: the app export already provides evidence.html and this " +
+        "would overwrite it; refusing the artifact.",
+    );
+    process.exit(1);
+  }
+  const items = evidence
+    .map(
+      (dst) =>
+        `<li><strong><a href="${DOCS}/${dst}">${escapeHtml(titles.get(dst))}</a></strong></li>`,
+    )
+    .join("\n");
+  fs.writeFileSync(
+    target,
+    page({
+      title: "Evidence - dClutch",
+      depth: 0,
+      crumbs: `<a href="index.html">dClutch</a>`,
+      style: `${DOCS}/style.css`,
+      body: `<h1>Evidence</h1>
+<p>Every document below is the write-up of a run that happened: what was
+executed, against which chain or harness, and what it produced. They are
+kept beside the code they were run against, and each one states its own
+scope -- including what it did <em>not</em> establish.</p>
+<div class="unreleased"><strong>Not live yet.</strong> dClutch is not
+deployed on any network. These runs were made on local test chains and in
+test harnesses. A run here is evidence about software, not about a
+deployment, and none of it is an offer of anything.</div>
+<ul class="cards">
+${items}
+</ul>
+<p>The raw artifacts each document cites -- transcripts, images, JSON --
+live beside it in the
+<a href="${repoUrl}/docs/evidence/">repository</a>.</p>`,
+    }),
+  );
+}
+
 if (!appDir) {
   fs.writeFileSync(
     path.join(outDir, "index.html"),
@@ -545,6 +623,11 @@ function servedBy(abs) {
 // Routes the export declares dynamic: `/markets/:address` is rendered from a
 // path parameter, so no prerendered file exists and no href in a STATIC page
 // can name one. If one ever does, this list is the place to justify it.
+//
+// These are not broken links. The host answers them with 404.html, which the
+// app builds (app/not-found.tsx) as a shell that reads location.pathname and
+// renders the route it names -- `apps/dclutch-web/lib/exportRouting.ts` holds
+// the same list on the app's side. A new dynamic route belongs in both.
 const DYNAMIC_PREFIXES = ["/markets/"];
 
 let checkedPages = 0;
@@ -579,10 +662,17 @@ if (broken > 0) {
 }
 
 // The mount's own invariant, stated once instead of inferred from the links:
-// the app's front door is the artifact's, and its assets sit where its pages
-// say they do.
+// the app's front door is the artifact's, its assets sit where its pages say
+// they do, and its 404 document exists -- that last one because 404.html is
+// what a static host serves for `/markets/<address>`, the app's one dynamic
+// route, and the app builds it (app/not-found.tsx) as a shell that resolves
+// the path client-side. Without it a shared permalink is a dead end again.
 if (appDir) {
-  for (const required of ["index.html", path.join("_next", "static")]) {
+  for (const required of [
+    "index.html",
+    "404.html",
+    path.join("_next", "static"),
+  ]) {
     if (!fs.existsSync(path.join(outDir, required))) {
       console.error(
         `render-site: the app export is mounted at the root but ${required} is missing; refusing the artifact.`,

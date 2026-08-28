@@ -23,8 +23,17 @@ dClutch is not deployed anywhere. There is no live market and nothing to
 buy. What exists runs on a local test chain, and all of it is in this
 repository:
 
-- A market's whole life runs end to end: created, funded, opened, traded,
-  resolved against a real Pyth price, redeemed, and retired.
+- On a local test chain, a market is created, funded, opened, and
+  resolved on chain, after which it begins winding down. Resolution runs
+  through the same Pyth and Wormhole programs that are deployed on
+  mainnet, and they really do check the signatures — but the price they
+  check is a recorded one signed by a test key, not a live Pyth
+  publication.
+- Trading between two counterparties, moving claims between holders, and
+  paying out a winning claim run against those same programs in a test
+  harness, at the real compute and memory limits. None of the three has
+  been driven on a test chain yet, and winding a market all the way down
+  to retired has not run anywhere yet.
 - The web app connects a wallet, lists markets, shows a market's cells
   and prices, and reads your portfolio straight from chain state.
 - A TypeScript SDK and a command-line client drive the same flows.

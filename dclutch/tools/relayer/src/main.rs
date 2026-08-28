@@ -22,6 +22,7 @@ use dclutch_relayer::keys::{AttestationSigner, generate_keypair_file};
 use dclutch_relayer::observe::{ObservationCycle, SetWatcher};
 use dclutch_relayer::publog::{MessageKind, PublicationLog, RpcReadLog};
 use dclutch_relayer::rpc::{RpcClient, base64_encode};
+use dclutch_relayer::segments;
 use dclutch_relayer::skew::measure_skew;
 use dclutch_relayer::submit::require_submission_admitted;
 use dclutch_relayer::txn::{
@@ -70,7 +71,22 @@ enum Command {
     /// refuses to overwrite a divergent public copy (append-only or nothing),
     /// and writes a `LATEST.json` a verifier can poll.  Serving the directory
     /// is the operator's act; no external service is contacted here.
+    ///
+    /// The published log is **segmented**: the active segment seals at a size
+    /// threshold and is renamed to a number it keeps forever, and each segment
+    /// after the first opens with a header carrying its predecessor's SHA-256,
+    /// so the segments form a chain a reader can verify a prefix of.  See
+    /// `segments.rs`.
     PublishLog(PublishLogArgs),
+    /// Verify a served publication-log directory, offline.
+    ///
+    /// No config, no network, no key: this reads a directory (the one on the
+    /// box, or one a stranger downloaded) and checks every property the served
+    /// `README.txt` claims — segment digests, the chain fold, slot order, and
+    /// that `LATEST.json` describes exactly what is on disk.  With `--against`
+    /// it additionally proves every published byte is the local log's byte at
+    /// the same offset.
+    VerifyLog(VerifyLogArgs),
     /// Measure the maximum |a_now - b_now| between two clusters' Clock sysvars.
     MeasureSkew(SkewArgs),
 }
@@ -123,6 +139,26 @@ struct PublishLogArgs {
     /// The directory whose contents will be served publicly.
     #[arg(long)]
     to: PathBuf,
+    /// Seal the active segment when the next record would take it past this
+    /// many bytes.
+    ///
+    /// The default is argued in `segments::DEFAULT_SEGMENT_BYTES` against the
+    /// measured line size.  Lower it in a *rehearsal* directory to exercise the
+    /// seal path; changing it never invalidates anything already sealed.
+    #[arg(long, default_value_t = dclutch_relayer::segments::DEFAULT_SEGMENT_BYTES)]
+    segment_bytes: u64,
+}
+
+#[derive(Args)]
+struct VerifyLogArgs {
+    /// A served publication-log directory.
+    #[arg(long)]
+    dir: PathBuf,
+    /// Additionally prove every published byte is this local log's byte at the
+    /// same offset.  This is the whole-history comparison; the per-cycle push
+    /// makes a bounded version of it.
+    #[arg(long)]
+    against: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -163,6 +199,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Command::Run(args) => run(&args).await,
         Command::SubmitArtifacts(args) => submit_artifacts(&args).await,
         Command::PublishLog(args) => publish_log(&args),
+        Command::VerifyLog(args) => verify_log(&args),
         Command::MeasureSkew(args) => skew(&args).await,
     }
 }
@@ -855,61 +892,75 @@ async fn submit_artifacts(args: &SubmitArtifactsArgs) -> Result<()> {
 }
 
 /// Push the publication log to a local public-serve directory.
+///
+/// The push is incremental: only the local log's unpublished tail is read, and
+/// only the active segment is written.  A flat push read and rewrote the whole
+/// history every cycle, which is fine at eight lines and is not fine inside a
+/// unit with `MemoryMax=256M` once the log is measured in hundreds of megabytes.
 fn publish_log(args: &PublishLogArgs) -> Result<()> {
     let config = Config::load(&args.config, home().as_deref())?;
-    let source = config.output_dir.join("publication_log.jsonl");
-    let bytes =
-        std::fs::read(&source).map_err(|source_error| RelayerError::io(&source, source_error))?;
+    let source = config.output_dir.join(segments::LOCAL_LOG_FILE);
 
-    std::fs::create_dir_all(&args.to)
-        .map_err(|source_error| RelayerError::io(&args.to, source_error))?;
-    let destination = args.to.join("publication_log.jsonl");
-    if destination.exists() {
-        let published = std::fs::read(&destination)
-            .map_err(|source_error| RelayerError::io(&destination, source_error))?;
-        if bytes.len() < published.len() || bytes.get(..published.len()) != Some(&published[..]) {
-            return Err(RelayerError::config(format!(
-                "{} is not a prefix of the local log; a published history is append-only, and a \
-                 divergent copy means one of the two was rewritten. Refusing to overwrite the \
-                 public copy — resolve which history is real first",
-                destination.display()
-            )));
-        }
+    let mut published = segments::PublishedLog::open(&args.to, args.segment_bytes)?;
+    let outcome = published.publish(&source, args.segment_bytes)?;
+
+    for sealed in &outcome.sealed_this_run {
+        println!(
+            "sealed {} — immutable from here; the next segment opens with its digest",
+            segments::segment_file_name(*sealed)
+        );
     }
-    let staging = args.to.join("publication_log.jsonl.tmp");
-    std::fs::write(&staging, &bytes)
-        .map_err(|source_error| RelayerError::io(&staging, source_error))?;
-    std::fs::rename(&staging, &destination)
-        .map_err(|source_error| RelayerError::io(&destination, source_error))?;
-
-    let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
-    let digest = dclutch_relayer::derive::sha256(&bytes);
-    let latest = serde_json::json!({
-        "schema": "dclutch.relayer.publication-push.v1",
-        "log_file": "publication_log.jsonl",
-        "lines": lines,
-        "byte_len": bytes.len(),
-        "sha256_hex": to_hex(&digest),
-        "updated_wall_unix_seconds": dclutch_relayer::publog::wall_unix_seconds(),
-    });
-    let latest_path = args.to.join("LATEST.json");
-    let text = serde_json::to_string_pretty(&latest)
-        .map_err(|source_error| RelayerError::Serialization(source_error.to_string()))?;
-    std::fs::write(&latest_path, text)
-        .map_err(|source_error| RelayerError::io(&latest_path, source_error))?;
-
+    if outcome.retired_flat_log {
+        println!(
+            "{} is complete: it holds exactly the bytes of {} plus one continuation record naming \
+             where the log goes next. Every byte ever served at that path is still at the offset \
+             it was served at",
+            segments::LEGACY_FLAT_LOG_FILE,
+            segments::segment_file_name(1)
+        );
+    }
     println!(
-        "pushed {} lines ({} bytes, sha256 {}) to {}",
-        lines,
-        bytes.len(),
-        to_hex(&digest),
-        destination.display()
+        "published {} new record(s); segment {} now {} bytes; {} record(s) and {} record bytes in \
+         all; chain head {}",
+        outcome.records_appended,
+        outcome.current_segment,
+        outcome.current_bytes,
+        outcome.total_records,
+        outcome.total_record_bytes,
+        outcome.chain_head_sha256_hex
     );
+    if outcome.deferred_bytes > 0 {
+        println!(
+            "{} local byte(s) remain unpublished this cycle (the per-run cap keeps a catch-up \
+             bounded); the next cycle continues",
+            outcome.deferred_bytes
+        );
+    }
     println!(
-        "serve {} statically (any static host works); a verifier fetches LATEST.json, then the \
-         log, and checks each line's signature against the pinned relayer key set and each \
-         attested account against the observed cluster",
-        args.to.display()
+        "serve {} statically (any static host works). A reader fetches {} for liveness, {} for \
+         the segment index, and checks each record's signature against the pinned relayer key set \
+         and each attested account against the observed cluster; {} in that directory says how",
+        args.to.display(),
+        segments::LATEST_FILE,
+        segments::INDEX_FILE,
+        segments::README_FILE
+    );
+    Ok(())
+}
+
+/// Verify a served publication-log directory, offline.
+fn verify_log(args: &VerifyLogArgs) -> Result<()> {
+    let report = segments::verify_directory(&args.dir, args.against.as_deref())?;
+    for check in &report.checks {
+        println!("ok  {check}");
+    }
+    println!(
+        "verified {}: {} sealed segment(s), {} record(s), {} record bytes, chain head {}",
+        args.dir.display(),
+        report.sealed_segments,
+        report.records,
+        report.record_bytes,
+        report.chain_head_sha256_hex
     );
     Ok(())
 }

@@ -28,6 +28,7 @@ dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
+dclutch-relay-contract = { path = "../../../../crates/dclutch-relay-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }

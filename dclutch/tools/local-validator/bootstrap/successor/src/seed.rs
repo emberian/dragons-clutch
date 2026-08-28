@@ -50,7 +50,10 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
 use sha2::{Digest as _, Sha256};
-use solana_sdk::signature::Keypair;
+use solana_sdk::{
+    pubkey::Pubkey,
+    signature::{Keypair, Signer as _},
+};
 
 use crate::{
     Error, Result, cluster::seeded_keys_admissible as cluster_admits_seeded_keys, plan::hex,
@@ -268,6 +271,50 @@ impl KeyForge {
         }
     }
 
+    /// The public key the NEXT `keypair(role)` call would return, without
+    /// issuing it.
+    ///
+    /// The founding detector derives WHERE a founding will land before
+    /// anything is written, and it must look at exactly the key the executor
+    /// will draw. Reading through `keypair` CONSUMES an issuance index, which
+    /// shifts the executor onto a different key and turns the detector into
+    /// the drift it exists to prevent — measured on the first driven founding
+    /// (2026-08-27): the preflight consumed `collateral-mint[0]`, the
+    /// campaign founded on `collateral-mint[1]`, and the post-execution
+    /// verifier then peeked index 2 and reported the freshly opened Market
+    /// absent.
+    ///
+    /// A random forge is refused: its next key does not exist until drawn,
+    /// and a detector that pretended otherwise would be lying about the
+    /// future.
+    pub(crate) fn peek_pubkey(&self, role: &'static str) -> Result<Pubkey> {
+        let index = self.issued.borrow().get(role).copied().unwrap_or(0);
+        match &self.origin {
+            KeyOriginV1::Random => Err(Error::new(format!(
+                "peek_pubkey({role}) on a random forge: an unreproducible forge's next key does \
+                 not exist until it is drawn"
+            ))),
+            KeyOriginV1::Seeded(seed) => {
+                Ok(Keypair::new_from_array(derive(KEYPAIR_SEED_DOMAIN_V1, seed, role, index))
+                    .pubkey())
+            }
+            KeyOriginV1::Persisted(secrets) => match secrets.get(role) {
+                None => Err(Error::new(format!(
+                    "peek_pubkey({role}) outside the persisted role set: the campaign has not \
+                     been handed a keypair file for it"
+                ))),
+                Some(secret) if index == 0 => Ok(Keypair::new_from_array(*secret).pubkey()),
+                Some(secret) => Ok(Keypair::new_from_array(derive(
+                    PERSISTED_KEY_DOMAIN_V1,
+                    secret,
+                    role,
+                    index,
+                ))
+                .pubkey()),
+            },
+        }
+    }
+
     /// How the evidence document must describe this campaign's keys.
     pub(crate) fn derivation_label(&self) -> &'static str {
         match self.origin {
@@ -364,6 +411,32 @@ mod tests {
             seeded().keypair("core-upgrade-authority").pubkey(),
             other.keypair("core-upgrade-authority").pubkey()
         );
+    }
+
+    #[test]
+    fn peeking_never_issues_and_names_exactly_the_next_draw() {
+        // Persisted: peek == the file's own key at index 0, twice (no issue),
+        // then the draw returns exactly the peeked key, and the next peek
+        // names the derived index-1 key the next draw returns.
+        let secret = [9_u8; 32];
+        let forge = KeyForge::persisted(
+            BTreeMap::from([("collateral-mint".to_owned(), secret)]),
+            &["collateral-mint"],
+        )
+        .expect("persisted forge");
+        let first_peek = forge.peek_pubkey("collateral-mint").expect("peek");
+        let second_peek = forge.peek_pubkey("collateral-mint").expect("peek again");
+        assert_eq!(first_peek, second_peek, "a peek must not issue");
+        assert_eq!(forge.keypair("collateral-mint").pubkey(), first_peek);
+        let after_draw = forge.peek_pubkey("collateral-mint").expect("peek after draw");
+        assert_ne!(after_draw, first_peek);
+        assert_eq!(forge.keypair("collateral-mint").pubkey(), after_draw);
+        // Random: refused, because the future key does not exist.
+        assert!(KeyForge::random().peek_pubkey("collateral-mint").is_err());
+        // Seeded: peekable the same way.
+        let seeded = seeded();
+        let peek = seeded.peek_pubkey("collateral-mint").expect("seeded peek");
+        assert_eq!(seeded.keypair("collateral-mint").pubkey(), peek);
     }
 
     #[test]

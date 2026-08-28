@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useState } from 'react';
 
 import {
@@ -46,7 +47,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
   if (card.status === 'refused') {
     return <article className="market-discovery-card refused">
       <div className="market-card-top"><span className="provenance-chip refused">{provenanceChipV1(card.provenance)}</span><span className="phase-chip">no phase</span></div>
-      <h3><Link href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Link></h3>
+      <h3><Anchor href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
       <p className="market-refusal">{card.refusal}</p>
       <p className="market-observation">Finalized observation slot {card.observedSlot}</p>
     </article>;
@@ -56,7 +57,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
       <span className={`phase-chip phase-${card.phase.toLowerCase()}`}>{card.phase}</span>
     </div>
-    <h3><Link href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Link></h3>
+    <h3><Anchor href={`/markets/${card.address}`} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
     <dl className="market-card-facts">
       <div><dt>Generation</dt><dd>{card.generation}</dd></div>
       <div><dt>Founding readiness</dt><dd>{card.readiness}</dd></div>
@@ -77,7 +78,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
     {card.hoard.status === 'derived'
       ? <p className="market-hoard-note">Hoard principal <strong>{card.hoard.principalAtoms}</strong> atoms, held by this Market&apos;s Custody transfer authority at <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>, in the Custody namespace the Claims aggregate records.</p>
       : <p className="market-capability-refusal"><span>Hoard {card.hoard.status}</span>{card.hoard.reason}</p>}
-    <p className="market-observation"><Link href={`/markets/${card.address}`}>Open this Market field by field →</Link></p>
+    <p className="market-observation"><Anchor href={`/markets/${card.address}`}>Open this Market field by field →</Anchor></p>
     {card.collateral.status !== 'bound' && <p className="market-refusal">{card.collateral.reason}</p>}
     {card.liability.status !== 'bound' && <p className="market-refusal">{card.liability.reason}</p>}
     <CapabilityBadges capabilities={card.capabilities} />
@@ -140,17 +141,18 @@ export default function MarketDiscoveryWorkspace() {
 
   return <main className="product-shell trade-v3-shell">
     <header className="product-nav">
-      <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav>
-        <Link className="active" href="/markets">Markets</Link>
-        <Link href="/portfolio">Portfolio</Link>
-        <Link href="/activity">Activity</Link>
-        <Link href="/create">Create</Link>
-        <Link href="/trade">Trade</Link>
-        <Link href="/liquidity">Liquidity</Link>
-        <Link href="/redeem">Represent</Link>
-        <Link href="/release">Release</Link>
-        <Link href="/explorer">Explorer</Link>
+        <Anchor className="active" href="/markets">Markets</Anchor>
+        <Anchor href="/portfolio">Portfolio</Anchor>
+        <Anchor href="/activity">Activity</Anchor>
+        <Anchor href="/create">Create</Anchor>
+        <Anchor href="/trade">Trade</Anchor>
+        <Anchor href="/liquidity">Liquidity</Anchor>
+        <Anchor href="/redeem">Represent</Anchor>
+        <Anchor href="/release">Release</Anchor>
+        <Anchor href="/explorer">Explorer</Anchor>
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
       </nav>
       <span className="preview-control"><i className="preview-dot" />raw-u64 economics</span>
     </header>

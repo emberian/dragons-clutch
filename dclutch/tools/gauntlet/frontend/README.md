@@ -21,6 +21,7 @@ Nothing here imports anything from `apps/`.
 | `campaign-checked-release.sh` | builds checked-release evidence bound to a campaign's deployed artifacts |
 | `loader-prediction.mjs` | constructed Loader V3 bytes vs the deployed accounts |
 | `ungate.mjs` | exercises the activation un-gate: honest, tampered, and wrong-artifact |
+| `pages-nav-check.mjs` | clicks every link in the assembled Pages artifact against a host-shaped server; also hard-loads a Market permalink and an unknown path |
 
 Playwright is deliberately **not** a repository dependency — this is evidence
 tooling, not shipped code. Pass `--playwright /abs/path/to/playwright/index.mjs`

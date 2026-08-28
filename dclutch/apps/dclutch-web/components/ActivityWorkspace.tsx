@@ -1,6 +1,7 @@
 'use client';
 
-import Link from 'next/link';
+import Anchor from '@/components/Anchor';
+import { docsIndexHrefV1 } from '@/lib/flags';
 import { FormEvent, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
@@ -84,14 +85,15 @@ export default function ActivityWorkspace() {
 
   return <main className="product-shell trade-v3-shell">
     <header className="product-nav">
-      <Link className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Link>
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav>
-        <Link href="/markets">Markets</Link>
-        <Link href="/portfolio">Portfolio</Link>
-        <Link className="active" href="/activity">Activity</Link>
-        <Link href="/create">Create</Link>
-        <Link href="/trade">Trade</Link>
-        <Link href="/explorer">Explorer</Link>
+        <Anchor href="/markets">Markets</Anchor>
+        <Anchor href="/portfolio">Portfolio</Anchor>
+        <Anchor className="active" href="/activity">Activity</Anchor>
+        <Anchor href="/create">Create</Anchor>
+        <Anchor href="/trade">Trade</Anchor>
+        <Anchor href="/explorer">Explorer</Anchor>
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
       </nav>
       <span className="preview-control"><i className="preview-dot" />node history · not a protocol index</span>
     </header>
