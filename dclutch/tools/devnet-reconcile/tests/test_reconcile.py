@@ -293,7 +293,7 @@ def owned_loopback_fixture(root: pathlib.Path):
     ]
     programs = []
     loader = reconcile.LOADER_V3_PROGRAM_ID
-    _, authority_raw = key(81)
+    authority, authority_raw = key(81)
     for index, role in enumerate(reconcile.OWNED_LOOPBACK_PROGRAM_ROLES):
         program_id, _ = key(100 + index)
         programdata, programdata_raw = key(120 + index)
@@ -303,8 +303,10 @@ def owned_loopback_fixture(root: pathlib.Path):
         programdata_bytes = bytearray(45)
         struct.pack_into("<I", programdata_bytes, 0, 3)
         struct.pack_into("<Q", programdata_bytes, 4, slot)
-        programdata_bytes[12] = 1
-        programdata_bytes[13:45] = authority_raw
+        retained = not role.startswith("pyth-")
+        programdata_bytes[12] = 1 if retained else 0
+        if retained:
+            programdata_bytes[13:45] = authority_raw
         programdata_bytes.extend(elf)
         program_account = rpc_account(loader, 1_140_000, program_bytes)
         program_account["executable"] = True
@@ -321,6 +323,7 @@ def owned_loopback_fixture(root: pathlib.Path):
                 "deploymentSlot": str(slot),
                 "elfSha256": hashlib.sha256(elf).hexdigest(),
                 "genesisProgramDataSha256": hashlib.sha256(programdata_bytes).hexdigest(),
+                "upgradeAuthority": authority if retained else None,
             }
         )
     capture_path.write_bytes(reconcile.canonical_bytes(capture))
@@ -680,6 +683,51 @@ class ReconcileTest(unittest.TestCase):
             receipt["capture"]["sha256"] = hashlib.sha256(capture_path.read_bytes()).hexdigest()
             rewrite_owned_loopback_receipt(receipt, receipt_path)
             with self.assertRaisesRegex(reconcile.Refusal, "exact Loader-v3 ProgramData link"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence,
+                    manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_self_consistent_authority_divergence_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, capture, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            program = receipt["programs"][1]
+            programdata = program["programDataAddress"]
+            body = bytearray(base64.b64decode(capture["accounts"][programdata]["value"]["data"][0]))
+            substituted_authority, substituted_raw = key(82)
+            body[13:45] = substituted_raw
+            capture["accounts"][programdata]["value"]["data"][0] = base64.b64encode(body).decode()
+            program["upgradeAuthority"] = substituted_authority
+            program["genesisProgramDataSha256"] = hashlib.sha256(body).hexdigest()
+            capture_path.write_bytes(reconcile.canonical_bytes(capture))
+            receipt["capture"]["sha256"] = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "share one retained disposable authority"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence,
+                    manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_self_consistent_provider_authority_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, capture, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            program = receipt["programs"][-2]
+            programdata = program["programDataAddress"]
+            body = bytearray(base64.b64decode(capture["accounts"][programdata]["value"]["data"][0]))
+            substituted_authority, substituted_raw = key(83)
+            body[12] = 1
+            body[13:45] = substituted_raw
+            capture["accounts"][programdata]["value"]["data"][0] = base64.b64encode(body).decode()
+            program["upgradeAuthority"] = substituted_authority
+            program["genesisProgramDataSha256"] = hashlib.sha256(body).hexdigest()
+            capture_path.write_bytes(reconcile.canonical_bytes(capture))
+            receipt["capture"]["sha256"] = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "Pyth provider programs must be immutable"):
                 reconcile.authenticate_owned_loopback_session(
                     receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence,
                     manifest_path, capture_path, manifest,

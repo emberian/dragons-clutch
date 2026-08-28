@@ -117,7 +117,10 @@ may retain its own Hot/retire vocabulary.
 All eighteen Program/ProgramData accounts must be present in the finalized
 capture. The consumer hostile-decodes each Loader-v3 Program link and
 ProgramData header, then recomputes the full ProgramData and ELF-tail digests.
-Receipt strings alone are not Loader evidence.
+It also decodes the ProgramData upgrade-authority option: the seven dClutch
+programs must share one non-null retained disposable authority, while Pyth
+Receiver and Router must be immutable. Receipt strings alone are not Loader
+evidence.
 
 ## Adapter and capture shapes
 

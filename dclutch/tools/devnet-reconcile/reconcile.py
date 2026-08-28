@@ -1010,6 +1010,7 @@ def authenticate_loader_v3_program(
     deployment_slot: int,
     elf_sha256: str,
     genesis_programdata_sha256: str,
+    upgrade_authority: str | None,
 ) -> None:
     program_slot, program_value = rpc_capture.account(program_id)
     programdata_slot, programdata_value = rpc_capture.account(programdata_id)
@@ -1046,15 +1047,25 @@ def authenticate_loader_v3_program(
         or program_bytes[4:36] != b58decode(programdata_id, f"{role} ProgramData link")
     ):
         refuse(f"{role} Program does not carry its exact Loader-v3 ProgramData link")
+    authority_tag = programdata_bytes[12] if len(programdata_bytes) > 12 else -1
+    authority_matches = (
+        authority_tag == 0
+        if upgrade_authority is None
+        else (
+            authority_tag == 1
+            and programdata_bytes[13:45]
+            == b58decode(upgrade_authority, f"{role} upgrade authority")
+        )
+    )
     if (
         len(programdata_bytes) <= 45
         or struct.unpack_from("<I", programdata_bytes, 0)[0] != 3
-        or programdata_bytes[12] not in (0, 1)
+        or not authority_matches
         or u64(programdata_bytes, 4) != deployment_slot
         or sha256_bytes(programdata_bytes) != genesis_programdata_sha256
         or sha256_bytes(programdata_bytes[45:]) != elf_sha256
     ):
-        refuse(f"{role} ProgramData slot, genesis bytes, or exact ELF tail differs")
+        refuse(f"{role} ProgramData slot, authority, genesis bytes, or exact ELF tail differs")
 
 
 def authenticate_owned_loopback_session(
@@ -1105,13 +1116,14 @@ def authenticate_owned_loopback_session(
         refuse("owned-loopback receipt omitted the exact seven-plus-provider program closure")
     program_ids: set[str] = set()
     programdata_ids: set[str] = set()
-    projected_programs: list[dict[str, str]] = []
+    retained_authorities: set[str] = set()
+    projected_programs: list[dict[str, Any]] = []
     for index, (raw_program, expected_role) in enumerate(zip(programs, OWNED_LOOPBACK_PROGRAM_ROLES, strict=True)):
         program = exact_keys(
             raw_program,
             {
                 "role", "programId", "programDataAddress", "deploymentSlot", "elfSha256",
-                "genesisProgramDataSha256",
+                "genesisProgramDataSha256", "upgradeAuthority",
             },
             set(),
             f"owned-loopback program {index}",
@@ -1131,6 +1143,19 @@ def authenticate_owned_loopback_session(
         genesis_programdata_sha256 = digest(
             program["genesisProgramDataSha256"], f"{expected_role} genesisProgramDataSha256"
         )
+        raw_authority = program["upgradeAuthority"]
+        upgrade_authority = (
+            None
+            if raw_authority is None
+            else pubkey(raw_authority, f"{expected_role} upgradeAuthority")
+        )
+        if expected_role.startswith("pyth-"):
+            if upgrade_authority is not None:
+                refuse("owned-loopback Pyth provider programs must be immutable at genesis")
+        elif upgrade_authority is None:
+            refuse("owned-loopback dClutch programs omitted their retained disposable authority")
+        else:
+            retained_authorities.add(upgrade_authority)
         projected_programs.append(
             {
                 "role": expected_role,
@@ -1139,6 +1164,7 @@ def authenticate_owned_loopback_session(
                 "deploymentSlot": str(slot),
                 "elfSha256": elf_sha256,
                 "genesisProgramDataSha256": genesis_programdata_sha256,
+                "upgradeAuthority": upgrade_authority,
             }
         )
         authenticate_loader_v3_program(
@@ -1149,7 +1175,10 @@ def authenticate_owned_loopback_session(
             slot,
             elf_sha256,
             genesis_programdata_sha256,
+            upgrade_authority,
         )
+    if len(retained_authorities) != 1:
+        refuse("owned-loopback dClutch programs do not share one retained disposable authority")
     if program_ids & programdata_ids:
         refuse("owned-loopback Program and ProgramData closures overlap")
 
