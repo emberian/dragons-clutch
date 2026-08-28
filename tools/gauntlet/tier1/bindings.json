@@ -221,9 +221,9 @@
       "note": "The generic founding runs at its own generation against a Market that does not exist yet, so it needs its own Market-scoped LifecycleRentCreditV2. Its refund wallet is the founding's beneficiary, which Core's Found stage requires to equal the artifact's own `beneficiary`."
     },
     {
-      "label": "DCLTPCB1 refuses a non-terminal projected-Custody request",
+      "label": "DCLTPCB2 refuses a non-terminal projected-Custody request",
       "routes": [
-        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2",
         "trading/process_instruction"
       ],
       "program": "trading",
@@ -232,20 +232,20 @@
       "note": "HOSTILE. The bootstrap admits exactly one request: the terminal LockHoardAndCloseSource its founding artifact determines. A well-formed but NON-TERMINAL prestate request in that slot refuses in `decode_projected_request`, before any CPI and nowhere near the allocator."
     },
     {
-      "label": "DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back",
+      "label": "DCLTPCB2 refuses a reordered FundingLedgerV2 tail and rolls the transaction back",
       "routes": [
-        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2",
         "trading/process_instruction"
       ],
       "program": "trading",
       "outcome": "refused",
       "refusal": "trading/TradingSbfError::Content",
-      "note": "HOSTILE. The FundingState tail is the manifest binding: reordering it derives an address the manifest entry at that position does not name, and the ordered-list digest cannot equal the artifact's `funding_list_id`. The whole four-stage bootstrap must roll back with no funded account left behind, and the runner asserts a fee-only debit. NOTE, 2026-08-27: this case was recorded as NOT attributable in runs 2 and 3, because it refused within a few hundred CU of an out-of-memory death at the same point. It is attributable now: the honest transaction succeeds with an identical frame shape, and the refusal is 68,921 CU short of it."
+      "note": "HOSTILE. The two FundingLedgerV2 accounts are the manifest binding: Resolution owns the exact 0b0111 subset and Trading owns the exact 0b1000 subset. Swapping them breaks that canonical controller partition and the artifact's ordered `funding_list_id` join. The whole bootstrap must roll back with neither ledger nor any projected-Custody account left behind, and the runner asserts a fee-only debit."
     },
     {
-      "label": "create the projected-Custody founding prestate (DCLTPCB1)",
+      "label": "create projected custody and controller funding (DCLTPCB2)",
       "routes": [
-        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2",
         "trading/process_instruction",
         "custody/process_instruction",
         "custody/projected::process",
@@ -259,7 +259,7 @@
       ],
       "program": "trading",
       "outcome": "executed",
-      "note": "Four projected-Custody transitions in one rollback domain against a Market that does not exist: Initialize (with Core's ProjectFound projection CPI), OpenHoard, OpenSourceCompartment, and the FundingState staging Trading performs itself. This is the route commit 328fead measured dying out of memory entering its third stage; it completes here because the transaction carries ComputeBudget::RequestHeapFrame and the route presents the instructions sysvar its own entrypoint adapter re-derives the grant from."
+      "note": "Projected Custody and controller funding in one rollback domain against a Market that does not exist: Initialize (with Core's ProjectFound37 projection CPI), OpenHoard, OpenSourceCompartment, then a Resolution-owned 0b0111 FundingLedgerV2 through a release-authenticated Resolution CPI and a Trading-owned 0b1000 FundingLedgerV2. The transaction carries ComputeBudget::RequestHeapFrame, and the route presents the instructions sysvar its entrypoint adapter uses to re-derive that grant."
     },
     {
       "label": "pre-fund the founding's five program-allocated accounts",
@@ -269,9 +269,9 @@
       "note": "Five System transfers. Core allocates the Market and the one-shot founding permit and Claims allocates the aggregate, the founder Position, and the admission with `allocate` and `assign` only, never a transfer, so each must already hold its rent. The Market and the permit are compared for EXACT equality with their rent minima, and all three Claims balances are folded byte-exactly into the Claims request Core commits to inside the permit."
     },
     {
-      "label": "DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back",
+      "label": "DCLTGMF2 refuses a substituted Claims request and rolls the whole founding back",
       "routes": [
-        "trading/generic_market_founding_v1::process_generic_market_founding_v1",
+        "trading/generic_market_founding_v1::process_generic_market_founding_v2",
         "trading/process_instruction"
       ],
       "program": "trading",
@@ -280,9 +280,9 @@
       "note": "HOSTILE, and the one this campaign existed to reach. The substituted readonly Claims request record names a DIFFERENT FOUNDER and is otherwise byte-identical, so the Position and the admission it would mint belong to somebody else. The outer's cross-request join is the only thing between that record and a stolen Position; it refuses before its first CPI, and the refusal has to take Lock, Found, Realize, and Claims with it. The runner asserts a fee-only debit and that all five allocated accounts are still vacant."
     },
     {
-      "label": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1)",
+      "label": "found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF2)",
       "routes": [
-        "trading/generic_market_founding_v1::process_generic_market_founding_v1",
+        "trading/generic_market_founding_v1::process_generic_market_founding_v2",
         "trading/process_instruction",
         "custody/process_instruction",
         "custody/projected::process",
@@ -302,9 +302,9 @@
       "note": "The first Open Market. Five stages in one rollback domain and one transaction: Custody LockHoardAndCloseSource, Core Found-and-permit, Custody RealizeAndClose, Claims FoundingV5, and Core Open LAST so that any late refusal rolls the whole chain back. It creates the Market, mints the liability aggregate, the founder Position, and the admission, moves the collateral into the Hoard, closes the source compartment, realizes the projection into the Market's normal Custody replay, and consumes the one-shot permit."
     },
     {
-      "label": "stage a second projected-Custody prestate for the expiry abort (DCLTPCB1)",
+      "label": "stage projected custody and controller funding for the expiry abort (DCLTPCB2)",
       "routes": [
-        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1",
+        "trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2",
         "trading/process_instruction",
         "custody/process_instruction",
         "custody/projected::process",
@@ -318,7 +318,7 @@
       ],
       "program": "trading",
       "outcome": "executed",
-      "note": "The same four-stage ladder as the founding lane, at its own generation and with a SHORT expiry. It exists to be abandoned: the campaign stages it, proves it cannot be unwound while its founding is still satisfiable, waits for the expiry, and then unwinds it. Every projected-Custody stage asserts the inverse of a live Market, so each lane needs its own still-vacant Market PDA and therefore its own generation."
+      "note": "The same projected-Custody and controller-ledger bootstrap as the founding lane, at its own generation and with a SHORT expiry. It exists to be abandoned: the campaign stages it, proves it cannot be unwound while its founding is still satisfiable, waits for the expiry, and then unwinds it. Every projected-Custody stage asserts the inverse of a live Market, so each lane needs its own still-vacant Market PDA and therefore its own generation."
     },
     {
       "label": "DCLTPCA1 refuses to abort a funded source before expiry",

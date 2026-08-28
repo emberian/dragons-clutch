@@ -18,7 +18,7 @@ stands:
 - **NEVER-EXECUTED** -- no campaign has run it and no reason is recorded
   yet.
 
-Currently **6** of **101**
+Currently **4** of **101**
 routes are in that last group.
 
 ## claims
@@ -128,7 +128,7 @@ routes are in that last group.
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
 | `registry/continuation_v1::process` | entry | magic `DCLRGCI1` | blocked by rule `registry/continuation_v1::process`: DCLRGCI1, the Registry continuation route. | `programs/dclutch-registry-sbf/src/lib.rs:181` |
-| `registry/hot_continuation_v2::process` | entry | magic `DCLTHOT3` | blocked by rule `registry/hot_continuation_v2::process`: The Registry Hot continuation is only reachable behind a Hot execution, which refuses on the Direct Profile14 emitter defects above. | `programs/dclutch-registry-sbf/src/lib.rs:163` |
+| `registry/hot_continuation_v2::process` | entry | magic `DCLTHOT3` | blocked by rule `registry/hot_continuation_v2::process`: No gauntlet campaign drives this route yet. | `programs/dclutch-registry-sbf/src/lib.rs:163` |
 | `registry/process_activate_role#ActivateRole` | entry | variant `RegistryInstructionV1::ActivateRole` | executed (tier1); refused (tier1) | `programs/dclutch-registry-sbf/src/lib.rs:185` |
 | `registry/process_append#2` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:52` |
 | `registry/process_begin#1` | action | tag `` | executed (tier1) | `programs/dclutch-registry-sbf/src/record_v1.rs:49` |
@@ -179,25 +179,10 @@ routes are in that last group.
 
 | route | kind | selector | status | provenance |
 | --- | --- | --- | --- | --- |
-| `trading/generic_market_founding_v1::process_generic_market_founding_v2` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:273` |
+| `trading/generic_market_founding_v1::process_generic_market_founding_v2` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:273` |
 | `trading/hot_v3::process_capability_seal_v1` | entry | predicate `` | blocked by rule `trading/hot_v3::process_capability_seal_v1`: RELAY-REHOME's census fix (2026-08-27) restored Trading's real dispatch surface and left four routes with no stated reason: `trading/process_instruction`, `hot_v3::process_capability_seal_v1`, `generic_market_founding_v1::...`, `projected_custody_bootstrap_v1::...`. | `programs/dclutch-trading-sbf/src/lib.rs:313` |
-| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses `TradingSbfError::Content` (0x4003) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). | `programs/dclutch-trading-sbf/src/lib.rs:316` |
+| `trading/hot_v3::process_hot_execution_v3` | entry | predicate `` | blocked by rule `trading/hot_v3::process_hot_execution_v3`: No gauntlet campaign drives this route yet. | `programs/dclutch-trading-sbf/src/lib.rs:316` |
 | `trading/outer::process_capability_lifecycle#else` | entry | fallthrough `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:318` |
 | `trading/process_instruction` | entry | -- | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:1` |
 | `trading/projected_custody_bootstrap_v1::process_projected_custody_abort_v1` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:302` |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | entry | predicate `` | NEVER-EXECUTED, no stated reason | `programs/dclutch-trading-sbf/src/lib.rs:285` |
-
-## Campaign records naming routes the code does not
-
-These route names appear in a campaign's records but match no route in
-the current code. Each one is stale or a gap; it is listed here so it gets
-fixed rather than dropped.
-
-| reference | bindings file | binding label |
-| --- | --- | --- |
-| `trading/generic_market_founding_v1::process_generic_market_founding_v1` | `tools/gauntlet/tier1/bindings.json` | DCLTGMF1 refuses a substituted Claims request and rolls the whole founding back |
-| `trading/generic_market_founding_v1::process_generic_market_founding_v1` | `tools/gauntlet/tier1/bindings.json` | found the Market atomically: Lock, Found, Realize, Claims, Open (DCLTGMF1) |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | `tools/gauntlet/tier1/bindings.json` | DCLTPCB1 refuses a non-terminal projected-Custody request |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | `tools/gauntlet/tier1/bindings.json` | DCLTPCB1 refuses a reordered FundingState tail and rolls the transaction back |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | `tools/gauntlet/tier1/bindings.json` | create the projected-Custody founding prestate (DCLTPCB1) |
-| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1` | `tools/gauntlet/tier1/bindings.json` | stage a second projected-Custody prestate for the expiry abort (DCLTPCB1) |
+| `trading/projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2` | entry | predicate `` | executed (tier1); refused (tier1) | `programs/dclutch-trading-sbf/src/lib.rs:285` |

@@ -78,13 +78,13 @@
     },
     {
       "route": "trading/hot_v3::process_hot_execution_v3",
-      "reason": "Measured at HEAD on the real 32,768-byte heap at COMPUTE_LIMIT 1,400,000, the canonical Direct bundle refuses `TradingSbfError::Content` (0x4003) at 1,219,240 CU of 1,304,545 available: the Direct Profile14 emitter does not give the lifecycle payer coordinate EFFECT_PERMISSION_DEBIT_LAMPORTS, and behind that sits the RentCredit V1/V2 width skew at coordinates 7/10 (board, W2c 2026-08-27 03:2x). Compute and heap are no longer the blocker; the emitter is.",
-      "owner": "DP2 (Direct emitter repairs); W2d (per-Market authentication cache) for the remaining ~640,861 CU of repeated artifact decode-and-validate"
+      "reason": "No gauntlet campaign drives this route yet. The former Content refusal is resolved: the canonical Direct Hot continuation now executes to completion through the real SBF programs at the protocol-default 32 KiB heap, and the seeded compute instrument has passed 20/20 under the 1,400,000-CU ceiling. That instrument is deliberately not a census campaign and ProgramTest has no finalized validator transaction, so neither can mark this route EXECUTED here. The remaining work is outside-in wiring that records finalized transaction logs and poststate without weakening the existing Hot refusals.",
+      "owner": "gauntlet owner for a Direct-Hot validator tier; SMOKE-1 may discharge it first with equivalent finalized evidence"
     },
     {
       "route": "registry/hot_continuation_v2::process",
-      "reason": "The Registry Hot continuation is only reachable behind a Hot execution, which refuses on the Direct Profile14 emitter defects above.",
-      "owner": "DP2, then W2d"
+      "reason": "No gauntlet campaign drives this route yet. The former dependency on a refusing Direct Hot execution is resolved: the canonical continuation now completes through Registry, Trading, and its children in the real-SBF ProgramTest harness. The 20-seed compute instrument emits no census evidence, and ProgramTest supplies no finalized validator transaction, so this route remains honestly NEVER-EXECUTED until an outside-in tier records the chain logs and poststate.",
+      "owner": "gauntlet owner for a Direct-Hot validator tier; SMOKE-1 may discharge it first with equivalent finalized evidence"
     },
     {
       "route": "custody/lock_hoard#LockHoard",
