@@ -187,6 +187,28 @@ The final M-61 sweep must use the Trading ELF after Direct `InitializeReplay`
 and its caller freeze. Report pass count and the 20-seed mean beside the exact
 ELF SHA-256; do not report one draw or an observed minimum as a margin.
 
+## Current integrated candidate evidence
+
+- Source `2b0e6c29b9adea55b979585e20cfc024ea07816c` includes the Resolution
+  duplicate-work repair and Trading's authenticated duplicate-preplan removal.
+  Its exact archived-source gate is
+  `/tank/dregg-build/dclutch-checked-2b0e6c29-run1/work/CHECKED_UPGRADE_GATE.json`
+  (SHA-256
+  `ed013070f4f0194d84ec49a954cc64cc0184d5b0974aea4f65a93456145c2997`).
+  All 13 links were fresh, diagnostics were zero, and all 60 Cargo locks were
+  unchanged with before/after set SHA-256
+  `6e22305800897e66bb05e20d1c9e69b0690a7ac8aa4c32d0172cbf97576dc4b2`.
+  Trading measured 732 frames below 4,096 bytes, deepest 4,032 bytes. The exact
+  Trading ELF is 1,690,680 bytes with SHA-256
+  `675c9c45bde6089ef4b57daf770ece7d2bd33870a0043e42e5d0e2119c229d2a`.
+- The fresh immutable-substrate M-61 sweep for those exact Trading bytes passed
+  20/20 seeds with arithmetic mean 1,359,277 CU. Its summary is
+  `/tank/dregg-build/dclutch-m61-2b0e6c29-run1/summary-immutable.json`
+  (SHA-256
+  `af21319eb4a06af7371ae9b9b0eccc0ac013979da436145407c234ab1746dc70`).
+  This is compute evidence, not a private-validator lifecycle acceptance. The
+  exact one-seed participant-through runtime remains the next acceptance gate.
+
 ## Other preserved intermediate evidence
 
 - `5cad4bb6` had a green checked gate and byte-identical onchain artifacts to
