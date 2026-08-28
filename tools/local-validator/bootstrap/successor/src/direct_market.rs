@@ -337,6 +337,12 @@ fn authenticate_local_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result<
         .ok_or_else(|| Error::new("checked local mutable set omitted every deployment slot"))
 }
 
+fn authenticated_resolution_release_v1(plan: &SuccessorPlan) -> Result<[u8; 32]> {
+    decode_hex(&plan.resolution.semantic_release_id)?
+        .try_into()
+        .map_err(|_| Error::new("Resolution semantic release ID was not exactly 32 bytes"))
+}
+
 fn checked_plan_roles_v1(
     plan: &SuccessorPlan,
 ) -> [(&'static str, &ProgramPin, CheckedDeploymentDispositionV1); 7] {
@@ -560,6 +566,7 @@ fn direct_execution_config_v1(
 pub(crate) struct DirectMarketCompilerOwnedV1 {
     deployment: DirectDeploymentWidthsV1,
     fee: DirectFeeSelectionV1,
+    resolution_release: [u8; 32],
     activation_deadline_slot: u64,
     root_rent_minimum_lamports: u64,
     lifetime: (),
@@ -619,6 +626,7 @@ impl DirectMarketCompilerOwnedV1 {
         Ok(Self {
             deployment: observation.deployment,
             fee,
+            resolution_release: authenticated_resolution_release_v1(&plan)?,
             activation_deadline_slot: activation_deadline_v1(observation.finalized_slot)?,
             root_rent_minimum_lamports: observation.root_rent_minimum_lamports,
             lifetime: (),
@@ -655,6 +663,7 @@ impl DirectMarketCompilerOwnedV1 {
         Ok(Self {
             deployment: observation.deployment,
             fee,
+            resolution_release: authenticated_resolution_release_v1(&plan)?,
             activation_deadline_slot: activation_deadline_v1(observation.finalized_slot)?,
             root_rent_minimum_lamports: observation.root_rent_minimum_lamports,
             lifetime: (),
@@ -665,6 +674,7 @@ impl DirectMarketCompilerOwnedV1 {
         DirectMarketCompilerInputV1 {
             deployment: self.deployment,
             fee: self.fee,
+            resolution_release: self.resolution_release,
             activation_deadline_slot: self.activation_deadline_slot,
             root_rent_minimum_lamports: self.root_rent_minimum_lamports,
             _lifetime: &self.lifetime,
@@ -677,6 +687,7 @@ impl DirectMarketCompilerOwnedV1 {
             deployment,
             fee: DirectFeeSelectionV1::explicit(Some(0), Some(registry))
                 .expect("test Direct fee policy"),
+            resolution_release: dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
             activation_deadline_slot: u64::MAX,
             root_rent_minimum_lamports: Rent::default()
                 .minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1),
@@ -686,10 +697,9 @@ impl DirectMarketCompilerOwnedV1 {
 
     #[cfg(test)]
     pub(crate) fn for_test_plan(registry: Pubkey, plan: &SuccessorPlan) -> Result<Self> {
-        Ok(Self::for_test(
-            registry,
-            DirectDeploymentWidthsV1::from_plan(plan)?,
-        ))
+        let mut compiler = Self::for_test(registry, DirectDeploymentWidthsV1::from_plan(plan)?);
+        compiler.resolution_release = authenticated_resolution_release_v1(plan)?;
+        Ok(compiler)
     }
 }
 
@@ -697,6 +707,7 @@ impl DirectMarketCompilerOwnedV1 {
 pub(crate) struct DirectMarketCompilerInputV1<'a> {
     pub(crate) deployment: DirectDeploymentWidthsV1,
     fee: DirectFeeSelectionV1,
+    pub(crate) resolution_release: [u8; 32],
     pub(crate) activation_deadline_slot: u64,
     pub(crate) root_rent_minimum_lamports: u64,
     _lifetime: &'a (),
@@ -1755,6 +1766,10 @@ mod tests {
         );
 
         let compiler = loaded.compiler();
+        assert_eq!(
+            compiler.resolution_release,
+            dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5
+        );
         assert_eq!(
             compiler.activation_deadline_slot,
             fixture.finalized_slot + DEVNET_DIRECT_ACTIVATION_WINDOW_SLOTS_V1

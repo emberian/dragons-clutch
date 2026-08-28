@@ -5768,7 +5768,6 @@ fn pyth_market_input(
         MAX_DEPENDENCIES_PER_CAPABILITY,
     };
     use dclutch_pyth_svm::FullPriceUpdateV2;
-    use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
     use dclutch_source_contract::{
         CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
         RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
@@ -6058,7 +6057,11 @@ fn pyth_market_input(
         .map_err(|error| Error::new(format!("demo funding amounts: {error:?}")))?;
     let quote = FundingQuoteV1::new(amounts, None)
         .map_err(|error| Error::new(format!("demo funding quote: {error:?}")))?;
-    let release = CapabilityContentId::new(RESOLUTION_CONTROLLER_RELEASE_ID_V4)
+    // The companion release is projected from the exact authenticated plan
+    // that produced the Direct compiler. A stale hard-coded V4 here once let
+    // the read-only market compiler succeed and then made real founding refuse
+    // only after collateral, records, RentCredit, ALT, and Found37 existed.
+    let release = CapabilityContentId::new(direct.resolution_release)
         .map_err(|error| Error::new(format!("demo Resolution release: {error:?}")))?;
     let mut entries_input: Vec<([u8; 32], [u8; 32])> = vec![
         (
@@ -6233,6 +6236,22 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn compiled_demo_manifest_uses_exact_resolution_release_and_refuses_substitution() {
+        let registry = Pubkey::new_unique();
+        let direct = crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            crate::direct_market::DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test Direct deployment widths"),
+        );
+        let input = demo_market_input(registry, direct.compiler()).expect("demo market input");
+        let bytes = decode_hex(&input.capability_manifest_hex).expect("manifest bytes");
+        let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
+        let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5;
+        assert!(direct_founding_controller_masks_v1(manifest, expected).is_ok());
+        assert!(direct_founding_controller_masks_v1(manifest, [0x5a; 32]).is_err());
     }
 
     fn projected_bootstrap_census_fixture_v2() -> (Pubkey, Instruction) {
