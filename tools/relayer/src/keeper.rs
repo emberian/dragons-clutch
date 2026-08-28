@@ -2196,6 +2196,7 @@ mod tests {
             compute_unit_limit: Some(2),
             compute_unit_price_micro_lamports: Some(1_000_001),
             address_lookup_table: None,
+            launch_capability: None,
         }
     }
 

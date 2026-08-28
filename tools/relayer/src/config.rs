@@ -110,6 +110,20 @@ struct RawSubmit {
     compute_unit_limit: Option<u32>,
     compute_unit_price_micro_lamports: Option<u64>,
     address_lookup_table: Option<RawAddressLookupTable>,
+    launch_capability: Option<RawLaunchCapability>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLaunchCapability {
+    submission_enabled: bool,
+    relay_program_data: String,
+    relay_program_deployment_slot: u64,
+    market_owner: String,
+    source_material_id: String,
+    provider_release_id: String,
+    accepted_caller_receipt_path: String,
+    accepted_caller_receipt_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,6 +272,35 @@ pub struct SubmitConfig {
     pub compute_unit_price_micro_lamports: Option<u64>,
     /// Optional Market address lookup table.
     pub address_lookup_table: Option<AddressLookupTableConfig>,
+    /// The separately supplied live-launch capability.
+    ///
+    /// Its absence leaves the daemon armed-no-send even when the endpoint
+    /// table itself is complete.  This keeps endpoint authority separate from
+    /// proof that the accepted caller and live Market actually exist.
+    pub launch_capability: Option<LaunchCapabilityConfig>,
+}
+
+/// Exact facts that turn an otherwise valid submit configuration from
+/// armed-no-send into send-capable.
+#[derive(Clone, Debug)]
+pub struct LaunchCapabilityConfig {
+    /// Explicit operator enable bit.  The example and deployed template keep
+    /// this false until the accepted public caller has landed.
+    pub submission_enabled: bool,
+    /// Loader-v3 ProgramData linked by the relay program.
+    pub relay_program_data: [u8; ID_BYTES],
+    /// Exact accepted deployment slot under decision 0012.
+    pub relay_program_deployment_slot: u64,
+    /// Program expected to own the live Market account.
+    pub market_owner: [u8; ID_BYTES],
+    /// Source material bound into every record the daemon may acknowledge.
+    pub source_material_id: [u8; ID_BYTES],
+    /// Provider release bound into every record the daemon may acknowledge.
+    pub provider_release_id: [u8; ID_BYTES],
+    /// Exact accepted-caller receipt named by the caller lane.
+    pub accepted_caller_receipt_path: PathBuf,
+    /// SHA-256 of that receipt's complete bytes.
+    pub accepted_caller_receipt_sha256: [u8; ID_BYTES],
 }
 
 /// One address lookup table the v0 message compiles against.
@@ -699,6 +742,60 @@ fn resolve_submit(raw: RawSubmit, observed_endpoints: &[String]) -> Result<Submi
             Some(AddressLookupTableConfig { key, addresses })
         }
     };
+    let launch_capability = match raw.launch_capability {
+        None => None,
+        Some(capability) => {
+            let relay_program_data = parse_id32(
+                "submit.launch_capability.relay_program_data",
+                &capability.relay_program_data,
+            )?;
+            let market_owner = parse_id32(
+                "submit.launch_capability.market_owner",
+                &capability.market_owner,
+            )?;
+            let source_material_id = parse_id32(
+                "submit.launch_capability.source_material_id",
+                &capability.source_material_id,
+            )?;
+            let provider_release_id = parse_id32(
+                "submit.launch_capability.provider_release_id",
+                &capability.provider_release_id,
+            )?;
+            let accepted_caller_receipt_sha256 = parse_id32(
+                "submit.launch_capability.accepted_caller_receipt_sha256",
+                &capability.accepted_caller_receipt_sha256,
+            )?;
+            if capability.relay_program_deployment_slot == 0
+                || capability.accepted_caller_receipt_path.is_empty()
+                || [
+                    relay_program_data,
+                    market_owner,
+                    source_material_id,
+                    provider_release_id,
+                    accepted_caller_receipt_sha256,
+                ]
+                .iter()
+                .any(is_zero)
+            {
+                return Err(RelayerError::config(
+                    "submit.launch_capability identities, deployment slot, receipt path and \
+                     receipt digest must all be nonzero/nonempty",
+                ));
+            }
+            Some(LaunchCapabilityConfig {
+                submission_enabled: capability.submission_enabled,
+                relay_program_data,
+                relay_program_deployment_slot: capability.relay_program_deployment_slot,
+                market_owner,
+                source_material_id,
+                provider_release_id,
+                accepted_caller_receipt_path: PathBuf::from(
+                    capability.accepted_caller_receipt_path,
+                ),
+                accepted_caller_receipt_sha256,
+            })
+        }
+    };
     Ok(SubmitConfig {
         endpoint: raw.endpoint,
         expected_genesis_hash,
@@ -714,6 +811,7 @@ fn resolve_submit(raw: RawSubmit, observed_endpoints: &[String]) -> Result<Submi
         compute_unit_limit: raw.compute_unit_limit,
         compute_unit_price_micro_lamports: raw.compute_unit_price_micro_lamports,
         address_lookup_table,
+        launch_capability,
     })
 }
 

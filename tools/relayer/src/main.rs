@@ -13,14 +13,15 @@ use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 
-use dclutch_relay_contract::record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1};
 use dclutch_relayer::artifacts::ArtifactWriter;
 use dclutch_relayer::config::{Config, endpoint_host_for_display};
+use dclutch_relayer::delivery::{
+    DeliveryAction, DeliveryExpectation, DeliveryJournal, LaunchExpectation,
+    reconcile_finalized_record, require_live_launch_accounts,
+};
 use dclutch_relayer::error::{RelayerError, Result};
 use dclutch_relayer::id32::{ID_BYTES, base58, parse_id32, to_hex};
-use dclutch_relayer::keeper::{
-    CreateRecordKeeperRequest, RecordResumeV1, inspect_record_resume_v1, run_create_record_keeper,
-};
+use dclutch_relayer::keeper::{CreateRecordKeeperRequest, run_create_record_keeper};
 use dclutch_relayer::keys::{AttestationSigner, generate_keypair_file};
 use dclutch_relayer::observe::{ObservationCycle, SetWatcher};
 use dclutch_relayer::publog::{MessageKind, PublicationLog, RpcReadLog};
@@ -34,6 +35,13 @@ use dclutch_relayer::txn::{
     seal_record_instruction, serialize_transaction, sign_transaction,
 };
 use solana_message::AddressLookupTableAccount;
+
+// PROVISIONAL operational bounds: one action occupies at most 5 * 30 seconds
+// before it yields a named refusal. The lifting plan is configuration only
+// after the loopback/runtime evidence supplies an observed finalization tail;
+// neither value is an economic or protocol bound.
+const MAX_DELIVERY_SEND_ATTEMPTS: u8 = 5;
+const ACK_POLLS_PER_SEND_ATTEMPT: u8 = 30;
 
 #[derive(Parser)]
 #[command(
@@ -306,10 +314,19 @@ fn print_config(config: &Config) {
     }
     match &config.submit {
         Some(submit) => println!(
-            "submit host:           {} (allow_public_submission = {}, genesis {})",
+            "submit host:           {} (allow_public_submission = {}, genesis {}, mode = {})",
             endpoint_host_for_display(&submit.endpoint),
             submit.allow_public_submission,
-            base58(&submit.expected_genesis_hash)
+            base58(&submit.expected_genesis_hash),
+            if submit
+                .launch_capability
+                .as_ref()
+                .is_some_and(|capability| capability.submission_enabled)
+            {
+                "send-capable after live checks"
+            } else {
+                "armed-no-send"
+            }
         ),
         None => println!("submit:                (not configured)"),
     }
@@ -509,6 +526,11 @@ struct Submitter {
     relayer_key_set_staging_vacancy: [u8; ID_BYTES],
     compute_budget: ComputeBudget,
     lookup_tables: Vec<AddressLookupTableAccount>,
+    output_dir: PathBuf,
+    submit_cluster_id: [u8; ID_BYTES],
+    observed_cluster_id: [u8; ID_BYTES],
+    source_material_id: [u8; ID_BYTES],
+    provider_release_id: [u8; ID_BYTES],
 }
 
 async fn prepare_submission(config: &Config) -> Result<Submitter> {
@@ -518,6 +540,32 @@ async fn prepare_submission(config: &Config) -> Result<Submitter> {
         )
     })?;
     require_submission_admitted(submit)?;
+
+    let capability = submit.launch_capability.as_ref().ok_or_else(|| {
+        RelayerError::MissingCapability(
+            "submission is armed-no-send: [submit.launch_capability] is absent; add it only after \
+             the accepted public caller and live Market exist"
+                .to_owned(),
+        )
+    })?;
+    if !capability.submission_enabled {
+        return Err(RelayerError::MissingCapability(
+            "submission is armed-no-send: submit.launch_capability.submission_enabled is false"
+                .to_owned(),
+        ));
+    }
+    let receipt = std::fs::read(&capability.accepted_caller_receipt_path)
+        .map_err(|source| RelayerError::io(&capability.accepted_caller_receipt_path, source))?;
+    let receipt_digest = dclutch_relayer::derive::sha256(&receipt);
+    if receipt_digest != capability.accepted_caller_receipt_sha256 {
+        return Err(RelayerError::MissingCapability(format!(
+            "accepted caller receipt {} has SHA-256 {}, not the capability-pinned {}; submission \
+             remains armed-no-send",
+            capability.accepted_caller_receipt_path.display(),
+            to_hex(&receipt_digest),
+            to_hex(&capability.accepted_caller_receipt_sha256)
+        )));
+    }
 
     let fee_payer_path = config.fee_payer_keypair_path.as_ref().ok_or_else(|| {
         RelayerError::MissingCapability(
@@ -564,6 +612,7 @@ async fn prepare_submission(config: &Config) -> Result<Submitter> {
         "verified submit-cluster genesis hash {}",
         base58(&submit.expected_genesis_hash)
     );
+    require_live_launch_contract(&rpc, submit, capability).await?;
 
     Ok(Submitter {
         rpc,
@@ -578,7 +627,65 @@ async fn prepare_submission(config: &Config) -> Result<Submitter> {
             unit_price_micro_lamports: submit.compute_unit_price_micro_lamports,
         },
         lookup_tables,
+        output_dir: config.output_dir.clone(),
+        submit_cluster_id: submit.expected_genesis_hash,
+        observed_cluster_id: config.attested_cluster_id(),
+        source_material_id: capability.source_material_id,
+        provider_release_id: capability.provider_release_id,
     })
+}
+
+async fn require_live_launch_contract(
+    rpc: &RpcClient,
+    submit: &dclutch_relayer::config::SubmitConfig,
+    capability: &dclutch_relayer::config::LaunchCapabilityConfig,
+) -> Result<()> {
+    let read = rpc
+        .get_multiple_accounts(
+            &[
+                submit.relay_program_id,
+                capability.relay_program_data,
+                submit.market,
+            ],
+            45,
+            None,
+        )
+        .await?;
+    let program = read
+        .accounts
+        .first()
+        .and_then(Option::as_ref)
+        .ok_or_else(|| RelayerError::MissingCapability("relay program is absent".to_owned()))?;
+    let programdata = read
+        .accounts
+        .get(1)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| RelayerError::MissingCapability("relay ProgramData is absent".to_owned()))?;
+    let market = read
+        .accounts
+        .get(2)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| RelayerError::MissingCapability("live Market is absent".to_owned()))?;
+    require_live_launch_accounts(
+        LaunchExpectation {
+            relay_program_id: submit.relay_program_id,
+            relay_program_data: capability.relay_program_data,
+            relay_program_deployment_slot: capability.relay_program_deployment_slot,
+            market: submit.market,
+            market_owner: capability.market_owner,
+        },
+        program,
+        programdata,
+        market,
+    )?;
+    println!(
+        "launch capability: accepted caller receipt {}, relay slot {}, live Market finalized at \
+         slot {}",
+        to_hex(&capability.accepted_caller_receipt_sha256),
+        capability.relay_program_deployment_slot,
+        read.slot
+    );
+    Ok(())
 }
 
 /// One complete signed observation set, however it reached this process —
@@ -615,6 +722,66 @@ impl SignedObservationSet {
             seal_signature: cycle.seal_signature,
         }
     }
+
+    fn expectation(&self, submitter: &Submitter) -> Result<DeliveryExpectation> {
+        let expected_count = u16::try_from(self.attestations.len())
+            .map_err(|_| RelayerError::config("attestation count does not fit in u16"))?;
+        let mut bodies = Vec::with_capacity(self.attestations.len());
+        for (expected_index, (set_index, message_bytes, _)) in self.attestations.iter().enumerate()
+        {
+            let expected_index = u16::try_from(expected_index)
+                .map_err(|_| RelayerError::config("attestation index does not fit in u16"))?;
+            if *set_index != expected_index {
+                return Err(RelayerError::config(format!(
+                    "attestations are reordered or discontinuous: expected position \
+                     {expected_index}, found {set_index}"
+                )));
+            }
+            let message = dclutch_relay_contract::wire::AttestationMessageV1::decode(message_bytes)
+                .map_err(|error| RelayerError::wire("delivery attestation", error))?;
+            if message.observed_cluster_id() != submitter.observed_cluster_id
+                || message.account_set_id() != self.account_set_id
+                || message.observed_slot() != self.observed_slot
+                || message.set_index() != expected_index
+                || message.set_count() != expected_count
+            {
+                return Err(RelayerError::config(format!(
+                    "attestation {expected_index} does not carry the delivery's exact \
+                     cluster/set/slot/order/count binding"
+                )));
+            }
+            let body = message.body();
+            let mut encoded = vec![0u8; body.encoded_len()];
+            body.encode_into(&mut encoded)
+                .map_err(|error| RelayerError::wire("delivery body", error))?;
+            bodies.push(encoded);
+        }
+        let seal = dclutch_relay_contract::wire::ObservationSetSealV1::decode(&self.seal_bytes)
+            .map_err(|error| RelayerError::wire("delivery seal", error))?;
+        if seal.observed_cluster_id() != submitter.observed_cluster_id
+            || seal.account_set_id() != self.account_set_id
+            || seal.observed_slot() != self.observed_slot
+            || seal.set_count() != expected_count
+        {
+            return Err(RelayerError::config(
+                "seal does not carry the delivery's exact cluster/set/slot/count binding",
+            ));
+        }
+        Ok(DeliveryExpectation {
+            submit_cluster_id: submitter.submit_cluster_id,
+            relay_program_id: submitter.relay_program_id,
+            market: submitter.market,
+            generation: submitter.generation,
+            source_material_id: submitter.source_material_id,
+            account_set_id: self.account_set_id,
+            provider_release_id: submitter.provider_release_id,
+            relayer_key_set_id: submitter.relayer_key_set,
+            observed_cluster_id: submitter.observed_cluster_id,
+            observed_slot: self.observed_slot,
+            bodies,
+            set_digest: seal.set_digest(),
+        })
+    }
 }
 
 impl Submitter {
@@ -638,147 +805,192 @@ impl Submitter {
             relayer_key_set: self.relayer_key_set,
             relayer_key_set_staging_vacancy: self.relayer_key_set_staging_vacancy,
         };
-
-        let resume = self.inspect_record_resume(record, set).await?;
-        let first_unpersisted = match resume {
-            RecordResumeV1::Complete => {
-                println!(
-                    "  record is already the exact signed artifact in phase Sealed at finalized commitment; submitting nothing"
-                );
-                return Ok(());
-            }
-            RecordResumeV1::AppendFrom(index) => index,
-        };
-        if first_unpersisted > 0 {
-            println!(
-                "  finalized record already carries the exact signed prefix through position {}; resuming at position {first_unpersisted}",
-                first_unpersisted.saturating_sub(1)
-            );
-        }
-
-        for (set_index, message_bytes, signature) in &set.attestations {
-            if *set_index < first_unpersisted {
-                continue;
-            }
-            let plan = append_observation_instruction(
-                self.relay_program_id,
-                &addresses,
-                self.generation,
-                set.observed_slot,
-                message_bytes,
-            )?;
-            let context = format!("append position {set_index}");
-            let signature = self.send(&context, &plan, &set.signer, signature).await?;
-            println!("  appended position {set_index} in {signature}");
-            // Appends fill strictly increasing positions and the NEXT append's
-            // preflight simulates against the FINALIZED bank, so an append
-            // submitted before its predecessor finalizes is refused as
-            // out-of-order -- correctly, by the record's own replay rule. The
-            // record's state is the precondition, so the record's state is
-            // what this waits on, not a signature status.
-            let expected = set_index
-                .checked_add(1)
-                .ok_or_else(|| RelayerError::config("append position overflowed"))?;
-            self.await_filled(record, expected).await?;
-        }
-
-        let plan = seal_record_instruction(
-            self.relay_program_id,
-            &addresses,
-            self.generation,
-            set.observed_slot,
-            &set.seal_bytes,
+        let expectation = set.expectation(self)?;
+        let mut journal = DeliveryJournal::open(&self.output_dir, record)?;
+        journal.record(
+            "delivery-open",
+            serde_json::json!({
+                "record": base58(&record),
+                "account_set_id": to_hex(&set.account_set_id),
+                "observed_slot": set.observed_slot,
+                "body_count": set.attestations.len(),
+            }),
         )?;
-        let signature = self
-            .send("seal", &plan, &set.signer, &set.seal_signature)
-            .await?;
-        println!("  sealed in {signature}");
-        // Exit only once the seal is FINAL: the process boundary is the
-        // contract, and a caller that reads the record after this command
-        // returns success must find it Sealed rather than race the bank.
-        self.await_sealed(record).await?;
-        Ok(())
+
+        loop {
+            let action = self.reconcile(record, &expectation).await?;
+            journal.record(
+                "finalized-reconcile",
+                serde_json::json!({ "action": format!("{action:?}") }),
+            )?;
+            match action {
+                DeliveryAction::AwaitRecord => {
+                    return Err(RelayerError::MissingCapability(format!(
+                        "observation record {} does not exist at finalized commitment; create it \
+                         for this exact set and slot, then rerun the same artifact",
+                        base58(&record)
+                    )));
+                }
+                DeliveryAction::Complete => {
+                    journal.record(
+                        "delivery-complete",
+                        serde_json::json!({ "record": base58(&record) }),
+                    )?;
+                    return Ok(());
+                }
+                DeliveryAction::Append(index) => {
+                    let (set_index, message, signature) = set
+                        .attestations
+                        .get(usize::from(index))
+                        .ok_or_else(|| RelayerError::config("next append is outside artifact"))?;
+                    if *set_index != index {
+                        return Err(RelayerError::config("next append index is reordered"));
+                    }
+                    let plan = append_observation_instruction(
+                        self.relay_program_id,
+                        &addresses,
+                        self.generation,
+                        set.observed_slot,
+                        message,
+                    )?;
+                    self.send_until_advanced(
+                        record,
+                        &expectation,
+                        action,
+                        &format!("append position {index}"),
+                        &plan,
+                        &set.signer,
+                        signature,
+                        &mut journal,
+                    )
+                    .await?;
+                }
+                DeliveryAction::Seal => {
+                    let plan = seal_record_instruction(
+                        self.relay_program_id,
+                        &addresses,
+                        self.generation,
+                        set.observed_slot,
+                        &set.seal_bytes,
+                    )?;
+                    self.send_until_advanced(
+                        record,
+                        &expectation,
+                        action,
+                        "seal",
+                        &plan,
+                        &set.signer,
+                        &set.seal_signature,
+                        &mut journal,
+                    )
+                    .await?;
+                }
+            }
+        }
     }
 
-    async fn inspect_record_resume(
+    async fn reconcile(
         &self,
         record: [u8; ID_BYTES],
-        set: &SignedObservationSet,
-    ) -> Result<RecordResumeV1> {
+        expectation: &DeliveryExpectation,
+    ) -> Result<DeliveryAction> {
         let read = self
             .rpc
             .get_multiple_accounts(&[record], u16::MAX, None)
             .await?;
-        let account = read
-            .accounts
-            .first()
-            .and_then(Option::as_ref)
-            .ok_or_else(|| {
-                RelayerError::MissingCapability(
-                    "the slot-seeded observation record is absent; run create-record first"
-                        .to_owned(),
-                )
-            })?;
-        let messages: Vec<&[u8]> = set
-            .attestations
-            .iter()
-            .map(|(_, bytes, _)| bytes.as_slice())
-            .collect();
-        inspect_record_resume_v1(
-            self.relay_program_id,
-            record,
-            self.market,
-            self.generation,
-            set.account_set_id,
-            set.observed_slot,
-            account,
-            &messages,
-            &set.seal_bytes,
+        let account = read.accounts.first().and_then(Option::as_ref);
+        if account.is_some_and(|account| account.executable) {
+            return Err(RelayerError::config(
+                "record acknowledgement account is unexpectedly executable",
+            ));
+        }
+        reconcile_finalized_record(
+            expectation,
+            account.map(|account| account.owner),
+            account.map(|account| account.data.as_slice()),
         )
     }
 
-    /// Poll the record at finalized commitment until `expected` positions are
-    /// filled.
-    async fn await_filled(&self, record: [u8; ID_BYTES], expected: u16) -> Result<()> {
-        self.await_record(record, &format!("filled_count {expected}"), |view| {
-            view.filled_count() == Ok(expected)
-        })
-        .await
-    }
-
-    /// Poll the record at finalized commitment until it is Sealed.
-    async fn await_sealed(&self, record: [u8; ID_BYTES]) -> Result<()> {
-        self.await_record(record, "phase Sealed", |view| {
-            view.phase() == Ok(RelayedRecordPhaseV1::Sealed)
-        })
-        .await
-    }
-
-    async fn await_record(
+    #[allow(clippy::too_many_arguments)]
+    async fn send_until_advanced(
         &self,
         record: [u8; ID_BYTES],
-        condition: &str,
-        reached: impl Fn(RelayedObservationRecordViewV1<'_>) -> bool,
+        expectation: &DeliveryExpectation,
+        before: DeliveryAction,
+        context: &str,
+        plan: &RelayInstructionPlan,
+        attestation_signer: &[u8; ID_BYTES],
+        attestation_signature: &[u8; 64],
+        journal: &mut DeliveryJournal,
     ) -> Result<()> {
-        // 300 seconds at one read per second, matching the campaign's own
-        // finalization patience: a co-tenant laptop can stall finalization
-        // past a minute while the validator is healthy.
-        for _ in 0..300 {
-            let read = self
-                .rpc
-                .get_multiple_accounts(&[record], u16::MAX, None)
-                .await?;
-            if let Some(Some(account)) = read.accounts.first()
-                && let Ok(view) = RelayedObservationRecordViewV1::decode(&account.data)
-                && reached(view)
-            {
-                return Ok(());
+        for attempt in 1..=MAX_DELIVERY_SEND_ATTEMPTS {
+            journal.record(
+                "send-attempt",
+                serde_json::json!({ "context": context, "attempt": attempt }),
+            )?;
+            let send = self
+                .send(context, plan, attestation_signer, attestation_signature)
+                .await;
+            match &send {
+                Ok(signature) => {
+                    println!("  {context} submitted as {signature}");
+                    journal.record(
+                        "send-response",
+                        serde_json::json!({
+                            "context": context,
+                            "attempt": attempt,
+                            "signature": signature,
+                        }),
+                    )?;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "  {context} attempt {attempt} returned {error}; checking finalized state \
+                         before any retry"
+                    );
+                    journal.record(
+                        "send-response-lost-or-refused",
+                        serde_json::json!({
+                            "context": context,
+                            "attempt": attempt,
+                            "diagnostic": error.to_string(),
+                        }),
+                    )?;
+                }
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            for _ in 0..ACK_POLLS_PER_SEND_ATTEMPT {
+                match self.reconcile(record, expectation).await {
+                    Ok(after) if after != before && after != DeliveryAction::AwaitRecord => {
+                        journal.record(
+                            "finalized-ack",
+                            serde_json::json!({
+                                "context": context,
+                                "attempt": attempt,
+                                "next_action": format!("{after:?}"),
+                            }),
+                        )?;
+                        return Ok(());
+                    }
+                    Ok(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+                    Err(error) => {
+                        journal.record(
+                            "ack-refused",
+                            serde_json::json!({
+                                "context": context,
+                                "attempt": attempt,
+                                "diagnostic": error.to_string(),
+                            }),
+                        )?;
+                        return Err(error);
+                    }
+                }
+            }
+            // A new iteration obtains a new blockhash and fee-payer signature,
+            // but `plan` still contains the identical signed observation.
         }
         Err(RelayerError::config(format!(
-            "the observation record did not reach {condition} within 300 seconds of the \
-             transaction landing; the validator may have stopped finalizing"
+            "{context} did not obtain an exact finalized record acknowledgement after \
+             {MAX_DELIVERY_SEND_ATTEMPTS} bounded attempts"
         )))
     }
 

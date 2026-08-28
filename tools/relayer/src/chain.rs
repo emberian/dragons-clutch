@@ -51,6 +51,10 @@ pub const CLOCK_UNIX_TIMESTAMP_OFFSET: usize = 32;
 /// offset 0.
 pub const LOADER_V3_PROGRAMDATA_DISCRIMINANT: u32 = 3;
 
+/// The `UpgradeableLoaderState::Program` enum discriminant, a `u32` LE at
+/// offset 0, followed by its 32-byte ProgramData address.
+pub const LOADER_V3_PROGRAM_DISCRIMINANT: u32 = 2;
+
 /// Offset of `deployment_slot` inside the `ProgramData` metadata prefix.
 pub const LOADER_V3_DEPLOYMENT_SLOT_OFFSET: usize = 4;
 
@@ -82,6 +86,18 @@ pub fn programdata_deployment_slot(prefix: &[u8]) -> Option<u64> {
         .try_into()
         .ok()?;
     Some(u64::from_le_bytes(raw))
+}
+
+/// Decode the ProgramData link out of an exact Loader-v3 Program account.
+pub fn program_programdata_link(bytes: &[u8]) -> Option<[u8; ID_BYTES]> {
+    if bytes.len() != 36 {
+        return None;
+    }
+    let discriminant: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    if u32::from_le_bytes(discriminant) != LOADER_V3_PROGRAM_DISCRIMINANT {
+        return None;
+    }
+    bytes.get(4..36)?.try_into().ok()
 }
 
 /// Whether a pinned position is a Loader V3 `ProgramData` position.
@@ -179,6 +195,17 @@ mod tests {
         prefix[4..12].copy_from_slice(&360_000_001u64.to_le_bytes());
         prefix[12] = 1;
         assert_eq!(programdata_deployment_slot(&prefix), Some(360_000_001));
+    }
+
+    #[test]
+    fn a_program_account_yields_only_its_exact_programdata_link() {
+        let mut program = [0u8; 36];
+        program[..4].copy_from_slice(&2u32.to_le_bytes());
+        program[4..].copy_from_slice(&[0x4a; ID_BYTES]);
+        assert_eq!(program_programdata_link(&program), Some([0x4a; ID_BYTES]));
+        assert_eq!(program_programdata_link(&program[..35]), None);
+        program[..4].copy_from_slice(&3u32.to_le_bytes());
+        assert_eq!(program_programdata_link(&program), None);
     }
 
     #[test]

@@ -22,6 +22,7 @@
 pub mod artifacts;
 pub mod chain;
 pub mod config;
+pub mod delivery;
 pub mod derive;
 pub mod error;
 pub mod id32;
