@@ -51,6 +51,17 @@ The checkpoint must include:
    resolution, payout, retire`. Do not merge or rename the two vocabularies.
 7. Crash/restart checks at every Submitted boundary. A restart may poll the one
    exact expected signature; it must never sign or send a second packet.
+8. Gate-authenticated five-role activation on Agave 4.0.2 with all seven role
+   ELF paths selected by one exact checked gate. Stop the validator after the
+   exact Core+Claims prefix, restart the same ledger without genesis inputs,
+   require chain-derived pending order Trading, Resolution, Custody, then
+   complete without replaying either admitted role. Record per-role CU and the
+   size-only headroom report; the latter is not a measured-CU substitute.
+9. Disposable-Loader Upgrade recovery at every durable boundary: interrupted
+   Buffer writer, lost send response after landing, `SignedNotSubmitted`,
+   pending `Submitted`, exact expiry/reprepare, and completed idempotent
+   observation. Require one writer, no second signature/send, exact payload and
+   slot advance, unchanged parked rent, and complete payer/fee arithmetic.
 
 ## Provider genesis and closure
 
@@ -93,3 +104,81 @@ The checkpoint must include:
 
 All entries above are private-validator or build evidence. They are not devnet
 execution evidence and must not be described as a public deployment result.
+
+## Final devnet rehearsal
+
+- At DEVNET-EXEC's final key-free freeze, run
+  `devnet-permanent-substrate-capture-v1` into a new no-clobber path at an
+  immediate finalized floor. Bind all seven fixed Program/ProgramData pairs
+  plus the explicit payer in its one context; compare authority, slots, payload
+  digests, Program residue, ProgramData rent, and payer balance to the execution
+  envelope before any signer boundary opens.
+- Rehearse the exact five-role mutation-permit order from the frozen checked
+  gate, then let DEVNET-EXEC alone perform the authorized Upgrades. Preserve
+  every baseline, receipt phase transition, finalized transaction, poststate,
+  dump, and wallet arithmetic. Registry and Rent remain CarryForward; no
+  Program is closed, recycled, or redeployed.
+- After the last Upgrade, recapture the seven+payer substrate in one finalized
+  context, authenticate the mixed release plan, and run campaign preflight
+  through activation before opening market keys. Only then run the first public
+  market/activity suite and verify the public site projects those exact live
+  addresses and finalized states.
+
+## Repository and release-authority convergence
+
+Run these rows at the same combined freeze as the private-validator checkpoint:
+
+1. Repair every stale Cargo graph from a detached copy, validate each result
+   with `cargo metadata --locked --offline`, then atomically install only the
+   exact generated `Cargo.lock` files. The last complete inventory found 45
+   workspaces and 60 tracked lockfiles, with 25 stale graphs.
+2. Populate the hbox Cargo cache with those exact locked graphs, then run
+   `tools/release/check-all-workspaces.py` from fresh archived source under
+   `swarm-build`. Require workspace pass count = workspace count and complete
+   lock immutability. The last baseline was 17/45; two additional reds were
+   hbox offline-cache misses (`spl-token-2022`, `lru 0.18.3`).
+3. Run `tools/release/checked-release-candidate.sh` from that same commit in a
+   new work root. Require all 13 shipped links freshly compiled, zero SBF frame
+   diagnostics, every measured frame below 4,096 bytes, and an emitted checked
+   Upgrade gate.
+4. Authenticate the exact release role map. Resolution is label `resolution`,
+   package `dclutch-resolution-proof-sbf`, canonical gate file
+   `elf/resolution.so`. Refuse the orphaned 9,034,536-byte `dclutch_sbf.so`
+   substitution. Preserve d66784f1's exact guard or its accepted successor.
+5. Build `dclutch-local-successor-bootstrap` separately from the same archived
+   source with `--release --locked --offline` in a fresh target. Record its
+   canonical nonsymlink path, SHA-256, toolchains, command, source commit/tree,
+   help output, and focused operator tests. This is operational evidence, not
+   checked-gate authority.
+6. Run the gate-authenticated mixed-real-ELF activation test, including ledger
+   process interruption and chain-derived resume. Record observed CU per role
+   without calling one observation a bound. The last canonical control observed
+   Core 565,457; Claims 535,732; Trading 828,069; Resolution 351,936; Custody
+   259,058 CU.
+7. Regenerate every affected browser ABI owner, then the route census, GENREF,
+   SBOM, and notices through their temp-file/atomic-replace generators. Require
+   the second generation/check pass to be byte-identical. The last known stale
+   route authority had 105 routes and 209 refusal codes.
+8. Produce the exact seven-row deployment disposition: Core, Claims, Trading,
+   Resolution, and Custody are `Upgrade`; Registry and Rent are `CarryForward`.
+   Bind each row to the checked gate and current finalized Loader observation.
+9. Only after every row above and the private checkpoint pass, hand the exact
+   candidate, host tool, generated authorities, M-61 evidence, and
+   five-Upgrade/two-CarryForward set to DEVNET-EXEC.
+
+The final M-61 sweep must use the Trading ELF after Direct `InitializeReplay`
+and its caller freeze. Report pass count and the 20-seed mean beside the exact
+ELF SHA-256; do not report one draw or an observed minimum as a margin.
+
+## Other preserved intermediate evidence
+
+- `5cad4bb6` had a green checked gate and byte-identical onchain artifacts to
+  c8. It is obsolete for the same lifecycle generation.
+- `b589f16b` had a green checked build/frame gate but is runtime-obsolete: an
+  intentional participant/Direct-buyer role overlap attempted duplicate local
+  key creation.
+- `00af1247` stopped during the first checked link and emitted no gate after a
+  cross-generation participant rent-credit label bug was found.
+- The 1,399,700-CU “Resolution” activation was an invalid manual control using
+  the orphaned 9 MB `dclutch_sbf.so` Source artifact. It is hostile oversized
+  substitution evidence only, not Resolution evidence.
