@@ -51,6 +51,7 @@
     "sbom:verify": "python3 ../../tools/sbom/sbom_check.py --verify"
   },
   "dependencies": {
+    "@dclutch/sdk": "file:../../packages/dclutch-sdk",
     "@solana/wallet-standard-features": "1.4.0",
     "@solana/web3.js": "1.98.4",
     "@wallet-standard/app": "1.1.1",
