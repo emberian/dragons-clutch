@@ -484,6 +484,143 @@ class ActivityTests(unittest.TestCase):
                 "https://api.devnet.solana.com:443/",
             )
 
+    def test_bounded_live_authorization_caps_the_exact_wallet_bankroll(self) -> None:
+        manifest = self.parsed()
+        devnet = dataclasses.replace(
+            manifest,
+            scenario=dataclasses.replace(manifest.scenario, cluster_target="devnet"),
+            rpc_url=activity.DEVNET_MANIFEST_RPC_URL,
+            devnet_genesis_hash=activity.DEVNET_GENESIS_HASH,
+        )
+        now = dt.datetime.now(dt.timezone.utc)
+        path = self.root / "bounded-live-authorization.json"
+        value = {
+            "schema": activity.BOUNDED_AUTHORIZATION_SCHEMA,
+            "manifestSha256": devnet.sha256,
+            "scenarioSha256": devnet.scenario.sha256,
+            "devnetGenesisHash": activity.DEVNET_GENESIS_HASH,
+            "marketRef": devnet.scenario.market_ref,
+            "notBefore": (now - dt.timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+            "expiresAt": (now + dt.timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            "maxCycles": 1,
+            "maxSpendLamports": "10000",
+            "maxFeeLamports": "5000",
+            "prefundedWalletClosureSha256": "2" * 64,
+            "checkedReleaseSha256": "3" * 64,
+            "marketSha256": "4" * 64,
+            "acceptedHarnessSha256": "5" * 64,
+            "acceptedHarnessSourceCommit": "6" * 40,
+            "dclutchSha256": "7" * 64,
+            "successorSha256": "8" * 64,
+            "solanaKeygenSha256": "9" * 64,
+            "authorization": "authorize-bounded-devnet-activity-live-send",
+        }
+        write_json(path, value)
+        self.assertEqual(
+            activity.bounded_live_authorization(path, devnet),
+            (digest(path), 1, 10_000, 5_000, "2" * 64),
+        )
+        value["maxSpendLamports"] = "10001"
+        write_json(path, value)
+        with self.assertRaisesRegex(activity.Refusal, "exceeds scenario wallet bankroll"):
+            activity.bounded_live_authorization(path, devnet)
+        value["maxSpendLamports"] = "10000"
+        value["maxCycles"] = 0
+        write_json(path, value)
+        with self.assertRaisesRegex(activity.Refusal, "maxCycles"):
+            activity.bounded_live_authorization(path, devnet)
+
+    def test_supervisor_mode_is_explicit_and_mutually_exclusive(self) -> None:
+        parser = activity.supervisor_parser()
+        required = [
+            "--manifest", "/tmp/manifest",
+            "--manifest-sha256", "1" * 64,
+            "--scenario-id", "scenario",
+            "--work", "/tank/dclutch-activity/runs/" + "1" * 64,
+            "--rpc-url", activity.DEVNET_SUPERVISOR_RPC_URL,
+            "--i-mean-devnet", activity.DEVNET_GENESIS_HASH,
+            "--journal", "/tank/dclutch-activity/request.json",
+            "--evidence-dir", "/tank/dclutch-activity/evidence",
+            "--accepted-harness-sha256", "2" * 64,
+            "--accepted-harness-source-commit", "3" * 40,
+            "--scenario-sha256", "4" * 64,
+            "--checked-release", "/tmp/release",
+            "--checked-release-sha256", "5" * 64,
+            "--market", "/tmp/market",
+            "--market-sha256", "6" * 64,
+            "--cycle-id", "cycle",
+            "--dclutch-bin", "/tmp/dclutch",
+            "--accepted-dclutch-sha256", "7" * 64,
+            "--successor-bin", "/tmp/successor",
+            "--accepted-successor-sha256", "8" * 64,
+            "--solana-keygen-bin", "/tmp/keygen",
+            "--accepted-solana-keygen-sha256", "9" * 64,
+        ]
+        with self.assertRaises(SystemExit):
+            parser.parse_args(required)
+        with self.assertRaises(SystemExit):
+            parser.parse_args([*required, "--no-send", "--live-send"])
+        self.assertTrue(parser.parse_args([*required, "--live-send"]).live_send)
+
+    def test_reconciled_wallet_debit_is_exact_and_bounded(self) -> None:
+        value = {
+            "schema": activity.RECONCILIATION_SCHEMA,
+            "wallets": [
+                {"activityLamportDelta": "-42"},
+                {"activityLamportDelta": "7"},
+                {"activityLamportDelta": "-8"},
+            ],
+        }
+        self.assertEqual(activity.reconciled_wallet_debit_lamports(value), 50)
+        value["wallets"][0]["activityLamportDelta"] = "-0"
+        with self.assertRaisesRegex(activity.Refusal, "canonical signed"):
+            activity.reconciled_wallet_debit_lamports(value)
+
+        fee_value = {
+            "schema": activity.RECONCILIATION_SCHEMA,
+            "activity": [
+                {"transactions": [{"feeLamports": "5000"}, {"feeLamports": "7000"}]},
+                {"transactions": [{"feeLamports": "3"}]},
+            ],
+        }
+        self.assertEqual(activity.reconciled_activity_fee_lamports(fee_value), 12_003)
+        fee_value["activity"][0]["transactions"][0]["feeLamports"] = "05000"
+        with self.assertRaisesRegex(activity.Refusal, "canonical unsigned decimal"):
+            activity.reconciled_activity_fee_lamports(fee_value)
+
+    def test_finalized_funding_closure_is_distinct_and_substitution_hostile(self) -> None:
+        manifest = self.parsed()
+        activity.prepare_wallets(manifest, self.work, self.keygen)
+        funding_authorization = "a" * 64
+        journal = activity.new_funding_journal(
+            manifest, "alice", WALLET, FUNDER, 10_000, funding_authorization
+        )
+        final = activity.verify_funding_transaction(
+            funding_transaction(memo=journal["memo"]), journal, SIGNATURE
+        )
+        journal_path = activity.funding_journal_path(self.work, "alice")
+        activity.atomic_write_json(journal_path, final)
+        closure = activity.write_funding_closure(
+            manifest,
+            self.work,
+            manifest.scenario.genesis_hash,
+            funding_authorization,
+            FUNDER,
+        )
+        closure_path = activity.funding_closure_path(self.work)
+        self.assertEqual(closure["schema"], activity.FUNDING_CLOSURE_SCHEMA)
+        self.assertEqual(closure["totalTransferLamports"], "10000")
+        self.assertEqual(closure["wallets"][0]["journalSha256"], digest(journal_path))
+        activity.authenticate_funding_closure(
+            manifest, self.work, digest(closure_path)
+        )
+        final["feeLamports"] = "1"
+        activity.atomic_write_json(journal_path, final)
+        with self.assertRaisesRegex(activity.Refusal, "wallet rows changed"):
+            activity.authenticate_funding_closure(
+                manifest, self.work, digest(closure_path)
+            )
+
     def test_cleanup_requires_final_journal_and_removes_only_secret_keys(self) -> None:
         manifest = self.parsed()
         activity.prepare_wallets(manifest, self.work, self.keygen)

@@ -41,6 +41,10 @@ rewrite a devnet fixture to create one.
 - Public devnet requires the full genesis hash, at most two concurrent callers,
   at least one second between dispatches, and a separate at-most-six-hour live
   authorization bound to the exact manifest, scenario, and Market.
+- The service-capable authorization additionally binds a finalized funding
+  closure, checked release, Market artifact, harness source/bytes, all three
+  executable digests, one lifecycle, a total wallet-debit ceiling, and a
+  separate activity-transaction-fee ceiling.
 - An ordinary run requires that authorization to be current. Poll-only recovery
   accepts it after expiry only when its exact file SHA-256 matches every
   pre-existing funding/activity journal. Recovery never creates a journal or
@@ -105,6 +109,15 @@ python3 tools/devnet-activity/activity.py \
   --live-authorization /private/authorization.json
 ```
 
+Funding is a separate authority boundary. `fund` is run once outside the
+supervisor with the authorized development funder. After every wallet transfer
+is finalized, it creates `public/funding-closure.json` with schema
+`dclutch-devnet-activity-funding-closure-v1`. That closure authenticates the
+public wallet ledger and every ordered funding journal, signature, slot,
+transfer, fee, funder, and journal SHA-256. A later bounded live-send
+authorization binds the closure SHA-256. The service receives disposable
+participant key paths only; it never receives the funder or deployer key.
+
 `resume` is poll-only. It does not probe or invoke a caller. Its terminal states
 are:
 
@@ -145,7 +158,8 @@ they do not open key files or invoke keygen.
 
 ## Supervisor cycle ABI
 
-The hbox child ABI is deliberately incapable of sending. Canonical argv order:
+The hbox child ABI has two explicit dispatch modes. Omitting the mode is a
+refusal; an environment value independently has to agree. Canonical argv order:
 
 ```text
 dclutch-wallet-harness supervisor-cycle-v1
@@ -157,10 +171,15 @@ dclutch-wallet-harness supervisor-cycle-v1
   --evidence-dir /tank/dclutch-activity/.../evidence
   --accepted-harness-sha256 HEX64
   --accepted-harness-source-commit HEX40
+  --scenario-sha256 HEX64
+  --checked-release ABS --checked-release-sha256 HEX64
+  --market ABS --market-sha256 HEX64
   --cycle-id ID
-  --dclutch-bin ABS --successor-bin ABS
+  --dclutch-bin ABS --accepted-dclutch-sha256 HEX64
+  --successor-bin ABS --accepted-successor-sha256 HEX64
+  --solana-keygen-bin ABS --accepted-solana-keygen-sha256 HEX64
   [--live-authorization ABS --live-authorization-sha256 HEX64]
-  --no-send [--poll-only]
+  (--no-send | --live-send) [--poll-only]
 ```
 
 The supervisor-facing spelling intentionally omits default port 443, while the
@@ -168,23 +187,40 @@ manifest spelling includes `:443`; the harness accepts only that exact pair and
 no other normalization.
 
 Infra owns and atomically creates one immutable request journal per cycle. Its
-schema is `dclutch-devnet-activity-supervisor-request-v1` with exact fields:
+schema is `dclutch-devnet-activity-supervisor-request-v2` with exact fields:
 
 ```text
 schema, manifestSha256, scenarioId, workPath,
 supervisorRpcUrl, manifestRpcUrl, devnetGenesisHash,
 acceptedHarnessSha256, acceptedHarnessSourceCommit,
-cycleId, requestedAt, mode, evidenceDirectory,
-liveAuthorizationSha256, stateSha256
+scenarioSha256, checkedReleaseSha256, marketSha256,
+dclutchSha256, successorSha256, solanaKeygenSha256,
+cycleId, requestedAt, mode, dispatchMode, evidenceDirectory,
+liveAuthorizationSha256, authorizationMaxCycles,
+authorizationMaxSpendLamports, authorizationMaxFeeLamports,
+prefundedWalletClosureSha256, stateSha256
 ```
 
-`mode` is `no-send` or `poll-only`. `no-send` requires a current exact live
+`dispatchMode` is `no-send` or `live-send`; `mode` is that value or
+`poll-only`. `no-send` requires a current exact live
 authorization and performs only manifest/input parsing, caller `--help`
 capability probes, and an RPC genesis read. `poll-only` with no submitted
 journals requires no authorization and returns `no-pending-submissions`.
 Recovery of an existing dispatching journal requires its original authorization
 but accepts that capability after expiry. It never accepts a current different
 capability as a retry.
+
+`live-send` accepts only
+`dclutch-devnet-activity-live-authorization-v2`, the exact phrase
+`authorize-bounded-devnet-activity-live-send`, `maxCycles: 1`, canonical
+positive `maxSpendLamports` and `maxFeeLamports`, the prefunded closure digest,
+and exact release/Market/harness/binary pins. It authenticates every pin and the
+closure before wallet verification or dispatch. STOP refuses each new
+dispatch. Activity journals become `dispatching` durably before a caller is
+started. After completion, finalized reconciliation must prove total disposable
+wallet debit no greater than `maxSpendLamports` and the sum of activity
+transaction fees no greater than `maxFeeLamports`. Funding fees are separately
+recorded in the outside-service funding closure.
 
 The harness never edits the request journal. It appends one authenticated status
 file per immutable request at:
@@ -193,9 +229,12 @@ file per immutable request at:
 <evidence-dir>/<manifest>.<cycle-id>.<request-sha256>.supervisor-status.json
 ```
 
-Status schema `dclutch-devnet-activity-supervisor-status-v1` records the request,
+Status schema `dclutch-devnet-activity-supervisor-status-v2` records the request,
 scenario, accepted source commit and byte hash, mode, terminal status, optional
-full-reconciliation digest, and `newDispatches: "0"`. Repeating the exact same
+full-reconciliation digest, authorization caps, prefunded closure, reconciled
+wallet debit, reconciled activity fees, and the exact new-dispatch count.
+Fresh live success is `complete-reconciled-live-send`; all later handling is
+poll/reconcile-only under the original capability. Repeating the exact same
 request is idempotent. A new mode uses a new request/cycle/status path, so a
 poll-only startup can transition to a later no-send readiness cycle without
 overwriting evidence. Success exits `0`; every refusal exits `2` and does not
