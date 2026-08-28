@@ -4,10 +4,9 @@
 # refuses it on any broken internal link). This replaces the gen-1 microsite
 # in archive/gen1/site/, which is no longer published.
 #
-# Publication is deliberately manual. A repository push is not release or
-# publication authority, and the site describes an unreleased local
-# implementation rather than an official deployment — the landing page and
-# every rendered page carry that labeling.
+# Publication is deliberately manual. A repository push is not publication
+# authority. The site describes seven programs deployed on Solana devnet, with
+# no open market or value at risk; it is not an official mainnet release.
 #
 # Two facts to know before dispatching:
 #   - This builds from the dclutch/ SUBTREE. If the subtree lags the live
@@ -18,10 +17,10 @@
 #     friends for navigation), and the rendered documentation is a section of
 #     it at /docs/. This REQUIRES a custom domain: served under the default
 #     /<repo>/ project-page subpath, nothing in the app resolves. Neither of
-#     vinext 1.0.0-beta.3's relocation knobs can save a subpath — basePath is
-#     incompatible with output:'export' (its prerenderer skips every route),
-#     and assetPrefix moves assets without moving routes. See
-#     dclutch/apps/dclutch-web/next.config.ts for the measurements.
+#     The beta.3 relocation measurements that established this mount found
+#     basePath incompatible with output:'export' and assetPrefix insufficient
+#     because it moves assets without moving routes. The current artifact's
+#     own link check enforces the version-independent root-mount invariant.
 #     Mounting the app under /app/ was the 2026-08-27 breakage: pages asking
 #     for /_next/… while the assets sat at /app/_next/…, so every workspace
 #     served raw unstyled HTML and never hydrated. render-site.mjs now
@@ -56,9 +55,9 @@ jobs:
         working-directory: dclutch/apps/dclutch-web
         env:
           # The rendered documentation ships in this artifact, so the app's
-          # landing links to the pages a reader can actually open. Unset (dev,
-          # the Cloudflare worker) it links the Markdown in the repository
-          # instead — see apps/dclutch-web/lib/flags.ts.
+          # landing links to the pages a reader can actually open. Unset in
+          # development or another worker-compatible build, it links the
+          # Markdown in the repository instead — see apps/dclutch-web/lib/flags.ts.
           NEXT_PUBLIC_DCLUTCH_DOCS_BASE: /docs
         run: |
           npm ci
