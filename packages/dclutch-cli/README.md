@@ -12,8 +12,7 @@ node bin/dclutch.mjs --help
 ## The loop
 
 ```sh
-# found a market via the run-spec producer (the founding client of record),
-# leaving a session file with the rpc url, program ids, and market addresses
+# Run a complete private-validator lifecycle from one run spec.
 dclutch found --spec run-spec.json --session-out session.json
 
 dclutch --session session.json markets ls
@@ -50,6 +49,80 @@ dclutch --session session.json walk --book walk-book.json \
 
 dclutch refusal 0x5000            # any custom code, named via the band registry
 ```
+
+## Found a permanent-devnet market
+
+You describe one market, its founding files, and its first participant in one
+operation document. The CLI passes that same document through the Rust market
+producer, founding campaign, and participant admission command. It does not
+recalculate any protocol value.
+
+Save this as an absolute path such as `/work/flagship-operation.json`:
+
+```json
+{
+  "schema": "dclutch-devnet-market-participant-operation-v1",
+  "plan": "/work/checked-devnet-plan.json",
+  "market": {
+    "kind": "flagship",
+    "arguments": [
+      "--registry-program-id", "REGISTRY_PROGRAM_ADDRESS",
+      "--direct-fee-basis-points", "25",
+      "--direct-fee-recipient", "FEE_RECIPIENT_ADDRESS",
+      "--price-update", "/work/pyth-price-update.bin",
+      "--window-start", "1800000000"
+    ],
+    "output": "/work/flagship-market.json"
+  },
+  "campaign": {
+    "evidence": "/work/flagship-campaign.json",
+    "keypairs": [
+      { "role": "core-upgrade-authority", "path": "/keys/core-upgrade-authority.json" },
+      { "role": "collateral-mint", "path": "/keys/collateral-mint.json" },
+      { "role": "collateral-wallet", "path": "/keys/collateral-wallet.json" },
+      { "role": "founding-beneficiary", "path": "/keys/founding-beneficiary.json" },
+      { "role": "founding-founder", "path": "/keys/founding-founder.json" },
+      { "role": "founding-projection-witness", "path": "/keys/founding-projection-witness.json" },
+      { "role": "founding-source-funder", "path": "/keys/founding-source-funder.json" },
+      { "role": "substituted-founder", "path": "/keys/substituted-founder.json" }
+    ]
+  },
+  "participant": {
+    "output": "/work/first-participant.json",
+    "positionOwner": "POSITION_OWNER_ADDRESS",
+    "positionOwnerKeypair": "/keys/position-owner.json",
+    "feePayer": "FEE_PAYER_ADDRESS",
+    "feePayerKeypair": "/keys/fee-payer.json",
+    "minimumFinalizedSlot": "123456789",
+    "collateral": null
+  }
+}
+```
+
+First prepare the exact market input. This path performs no mutation and does
+not read any key file:
+
+```sh
+dclutch --rpc https://api.devnet.solana.com \
+  --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
+  --bootstrap-bin /work/dclutch-local-successor-bootstrap \
+  found --found-operation /work/flagship-operation.json \
+  --found-journal /work/flagship-operation-journal.json
+```
+
+Review `/work/flagship-market.json`, then rerun the exact same command with
+`--execute`. You may also add `--session-out /work/flagship-session.json`.
+Execution records its authorization before the Rust campaign can read a key.
+If the process stops, rerun with the same operation and journal. The command
+reconciles a completed child report and resumes only a checkpoint-authenticated
+founding suffix; it never starts the participant step against a different
+plan or market.
+
+The journal finishes at `participant-complete`. Its saved digests bind the
+operation, successor binary, plan, RPC URL, authored market bytes, campaign
+evidence, and participant evidence. The command independently requires the
+full Solana devnet genesis hash. Neither this CLI entry nor either Rust child
+admits mainnet.
 
 ## Honesty notes
 
