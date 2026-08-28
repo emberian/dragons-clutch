@@ -139,10 +139,11 @@ over venue facts read off real mainnet.
 
 ### 6.1 The SOL/USD range-protection flagship
 
-**Status: founding IN PROGRESS on devnet (third attempt, the first with both
-execution-found driver defects fixed — §7 tells that story; the first two
+**Status: founding IN PROGRESS on devnet (fifth attempt, the first with the
+actual probe-address bug fixed — §7 tells the whole story; the earlier
 attempts' derived addresses are superseded and their small strands are named
-there).**
+there). The addresses below are the fifth attempt's derived targets and are
+updated if the lineage moves again.**
 
 The story: protection against SOL/USD leaving the 120.00–180.00 band at a
 real terminal window, resolved by the real devnet Pyth receiver. Founded
@@ -151,11 +152,11 @@ RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
 
 | fact | value |
 |---|---|
-| **Open Market** | `i8cvbLNy2er3qyDrqKq4xs67ZoKrZFToX5KRFyPab5G` |
-| Found31 Market (generation 1) | `Apim2SxmTQh8ChiBEj8BWG9r7FwNPiMD4C8rFaAxpbgE` |
-| abort-lane Market (generation 3, staged and unwound) | `FFCfUgnDxsTK7bFvsBzre13dDXWEZGfFAuH8kPbWgLLN` |
-| collateral mint (Token-2022, 6 decimals) | `84cKfptadusKXVjuf9SCrC2saCuxjPTzH1ksDYP7D6rs` |
-| realm record | `J4n7pzwoPDjkV1qHDQmCeRfe9rPufQL4ymSRNL7wEidX` |
+| **Open Market** | `EgpRigX7ryBMZmHv9CetiAA6hnomuuNeeV9jySBZzunS` |
+| Found31 Market (generation 1) | `8CvFsyJM2EZj9mqKhZKo98QRMbjTV2XyDZdtB4H6PdJC` |
+| abort-lane Market (generation 3, staged and unwound) | `4QZUjoH9G1VAmvfoN7i72Mx6nhNbkK7BnUV1JNUP2nqM` |
+| collateral mint (Token-2022, 6 decimals) | `DjgUpRBjvP8C411DL6jpuiMcmg3wSc9LCTHA2uSyGtE7` |
+| realm record | `JM8iYSbJSNPHNMk11wJLA4svDZLopVhRtJ3cjVQS3Xt` |
 | band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
 | terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
 | `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
@@ -190,16 +191,32 @@ cross-check.
   campaign peeks once and threads one value through detector, report, and
   verify. Found by the first driven founding; invisible to every unit test
   that had ever passed.
-- **A load-balanced public endpoint broke read-your-writes.** The first
-  devnet founding attempt died at the Found31 rollback equality: the hostile
-  probe refused exactly as designed (136,444 CU consumed), but the payer
-  balance was read back through a replica still catching up, and the check
-  called a correct rollback wrong. Fixed structurally: the driver's `Rpc`
-  carries a per-connection read floor — every confirmed transaction raises it
-  to its finalized slot, and every single-account read passes it as
+- **`Pubkey::new_unique()` is a test counter, and its addresses exist on
+  devnet.** Three consecutive founding attempts died at the Found31 rollback
+  check. The first diagnosis — a load-balanced endpoint's replica lag
+  breaking read-your-writes — was WRONG for this bug (it produced the
+  read-floor hardening below, which stays as correct discipline), and the
+  compound `if a || b || c || d` refusal with one sentence hid the truth for
+  two paid cycles. The instrumented refusal finally named it:
+  `recipient_exists=true` — the "fresh" rollback recipient and substituted
+  market key come from `Pubkey::new_unique()`, a **deterministic global
+  counter meant for unit tests**, so every process draws the same
+  low-counter addresses, and on a public cluster with years of history those
+  addresses EXIST. A fresh local ledger — where every such address is empty
+  by construction — can never catch this. The chain's own arithmetic was
+  exact on every attempt (payer −5,000, nothing else moved). Fixed: all
+  seven live probe sites draw a random keypair address
+  (`seed::fresh_probe_address`), and the four rollback proofs now read the
+  refused transaction's **own** `preBalances`/`postBalances` — one atomic
+  record the chain wrote, covering every account the transaction touched —
+  with every refusal printing its component values so a compound condition
+  can never again cost a diagnosis cycle.
+- **Read-your-writes, made structural anyway.** The driver's `Rpc` now
+  carries a per-connection read floor — every confirmed transaction raises
+  it to its finalized slot, and every single-account read passes it as
   `minContextSlot`, retrying the node's `-32016` not-yet-reached answer
-  inside the confirmation deadline. On a single-node loopback the floor is
-  always met; the class is invisible there by construction.
+  inside the confirmation deadline. Reasoned hardening for a load-balanced
+  endpoint, kept on its own merits; explicitly **not** the bug above.
 - **The second attempt found the probe the first had not needed**: attempt 1
   had also created `collateral-wallet[0]` (initialized against the index-1
   mint), and attempt 2 — peek fixed, mint back at index 0 — collided on that
@@ -209,12 +226,13 @@ cross-check.
   named. Attempt 3 runs on a fresh collateral key set (`sol2-*`), which is
   what moved §6.1's addresses.
 - **Strands from the paid lessons**, on devnet, never recycled per the
-  charter: attempt 1's index-1 collateral mint + `wallet[0]`
-  (`8Lng2CshnKa8fGUBac1svdGzSvif1HSt9U4DE7uys5o5`, holding the index-1
-  atoms), its realm record, one Market-scoped RentV2 credit, one Found31
-  routing table (≈ well under 0.01 SOL total). The mint-independent records
-  — product graph, source specs, manifest, basis — are content-addressed and
-  are **reused verbatim** by every retry.
+  charter: attempts 1–4 each left a collateral lineage (a mint + wallet, its
+  realm record, a Market-scoped RentV2 credit, a Found31 routing table —
+  attempt 1's wallet is `8Lng2CshnKa8fGUBac1svdGzSvif1HSt9U4DE7uys5o5`,
+  holding that lineage's atoms), ≈ 0.02 SOL in total across the four. The
+  mint-independent records — product graph, source specs, manifest, basis —
+  are content-addressed and were **reused verbatim** by every retry, which
+  is why each successive attempt was cheaper and faster than the last.
 - The relayed-vertical build was red at HEAD: DRIVER's `cluster.rs` split made
   the successor's `rpc.rs`/`seed.rs` import `crate::cluster`, and the
   vertical's `#[path]` module list never gained it (the journey's did). One
