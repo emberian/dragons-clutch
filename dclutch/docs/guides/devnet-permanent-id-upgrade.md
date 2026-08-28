@@ -11,40 +11,34 @@ the CLI derives from the paths before any write.
 
 ## 1. Build and check the candidate
 
-Run the checked-release build first. You need zero SBF build diagnostics and
-zero frame diagnostics for every shipped link. Create one artifact evidence
-file per role with this exact schema:
+Run `tools/release/checked-release-candidate.sh` with a new absolute work root.
+Do not create or edit Upgrade acceptance JSON yourself. The runner emits
+`CHECKED_UPGRADE_GATE.json` only after all thirteen shipped links freshly
+compile, report zero SBF overwrite diagnostics, and pass the static frame scan
+below the 4,096-byte SBPF v0 bound.
 
-```json
-{
-  "schema": "dclutch-checked-devnet-upgrade-artifact-v1",
-  "role": "trading",
-  "program_id": "PERMANENT_PROGRAM_ID",
-  "programdata_id": "PROGRAMDATA_ID",
-  "retained_upgrade_authority": "RETAINED_AUTHORITY",
-  "source_revision": "LOWERCASE_GIT_REVISION",
-  "solana_cli_version": "EXACT_OUTPUT_OF_SOLANA_VERSION",
-  "checked_release_accepted": true,
-  "sbf_build_diagnostics_total": 0,
-  "frame_diagnostics_total": 0,
-  "raw_elf_bytes": 123456,
-  "raw_elf_sha256": "64_LOWERCASE_HEX",
-  "live_elf_sha256": "64_LOWERCASE_HEX",
-  "live_elf_padding_bytes": 0
-}
-```
+The generated gate binds the exact source commit and tree, link identities,
+run stamps, top-package compile markers, diagnostic rows, frame-build logs,
+frame-report counts and hashes, every release ELF, and every checked manifest.
+Keep the complete work root together. You may move that directory as one unit;
+do not move individual files inside it, replace them with symlinks, or edit a
+log or report. Record the gate SHA-256 printed by the runner separately. The
+Upgrade command requires that exact digest, rehashes every referenced file,
+and refuses path escapes, symlinks, missing or unknown roles, changed evidence,
+and an ELF path that is not the selected role's exact file inside the gate.
 
-The raw digest covers the `.so` file. The live digest covers that same file
-followed by exactly `live_elf_padding_bytes` zero bytes. The live width must
-equal the existing ProgramData payload width after any separate extension.
+The old handwritten `checked_release_accepted: true` shape has no authority.
+Zeroes typed into a JSON file are not build or frame evidence.
 
 ## 2. Capture a fresh baseline
 
-Use `devnet-upgrade-baseline-v1` with the candidate's live width and a recent
+Use `devnet-upgrade-baseline-v1` with the candidate raw ELF byte length and a recent
 finalized context-slot floor. This command is key-free and read-only. After the
 health and genesis checks, it reads Program and ProgramData together in one
 finalized snapshot and makes two bounded rent queries for the current and target
-sizes.
+sizes. If the current allocation is wider, the baseline retains that live width
+and the Upgrade command derives the only admitted padding: zero bytes from the
+end of the gate-bound raw ELF to the existing allocation boundary.
 
 The baseline's canonical digest commits:
 
@@ -97,7 +91,8 @@ observation.
 
 ## 4. Upgrade the existing id
 
-Run `devnet-upgrade-v1` with the new baseline, checked artifact evidence, raw
+Run `devnet-upgrade-v1` with the new baseline, generated checked-release gate,
+its separately recorded digest, the exact source commit/tree, the gate's role
 ELF, output dump, receipt, fee payer, and retained authority. Your second
 acknowledgement has this exact value:
 
@@ -107,8 +102,17 @@ ROLE:PROGRAM_ID
 
 The command verifies the pinned Solana CLI version, exact devnet genesis,
 keypair public addresses, Program-to-ProgramData link, Loader owners and
-privileges, retained authority, baseline, raw digest, live digest, and padding
-before it calls `solana program deploy` for that existing program id.
+privileges, retained authority, baseline, complete gate, selected raw ELF,
+derived live digest, and zero padding before it calls `solana program deploy`
+for that existing program id. Pass these source admissions exactly as printed
+by the release runner:
+
+```text
+--checked-release-gate ABSOLUTE_WORK_ROOT/CHECKED_UPGRADE_GATE.json
+--expected-checked-release-gate-sha256 64_LOWERCASE_HEX
+--expected-source-revision 40_LOWERCASE_HEX
+--expected-source-tree-sha256 64_LOWERCASE_HEX
+```
 
 After the CLI returns a JSON program id and signature, the command rechecks the
 cluster and accounts. It requires the deployment slot to advance, requires the

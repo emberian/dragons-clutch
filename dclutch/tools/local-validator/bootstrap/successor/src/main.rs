@@ -22,6 +22,7 @@ mod runtime;
 mod seed;
 mod terminal_lifecycle;
 mod upgrade;
+mod user_position_admission;
 mod wallet_terminal;
 
 type Result<T> = core::result::Result<T, Error>;
@@ -90,6 +91,9 @@ fn run() -> Result<()> {
         Some("devnet-upgrade-baseline-v1") => upgrade::run_baseline(arguments.collect()),
         Some("devnet-upgrade-extend-v1") => upgrade::run_extension(arguments.collect()),
         Some("devnet-upgrade-v1") => upgrade::run(arguments.collect()),
+        Some("devnet-user-position-admission-v1") => {
+            user_position_admission::run(arguments.collect())
+        }
         Some("help" | "-h" | "--help") | None => {
             usage();
             Ok(())
@@ -923,6 +927,7 @@ fn usage() {
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
     println!("{}", terminal_lifecycle::lifecycle_usage());
+    println!("{}", user_position_admission::usage());
     println!("{}", wallet_terminal::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \

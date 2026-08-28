@@ -15,6 +15,8 @@
 pub mod hot_v3;
 /// Market-neutral V6 composition-admitted Trading Hot construction.
 pub mod hot_v6;
+/// Canonical Product-native categorical composition publication.
+pub mod native_categorical_v1;
 
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -131,6 +133,24 @@ pub struct RepresentationCompositionObservationV3<'a> {
     pub exposure: FinalizedRecordObservationV3<'a>,
 }
 
+/// Composition descriptor, DAG, translation, and exposure records without a
+/// Rational receipt-lifecycle descriptor.
+///
+/// Native categorical Claims positions are already the Product basis. They do
+/// not mint one Rational receipt recipe, so their terminal payout must not
+/// invent a receipt Mint merely to reuse the Rational lifecycle admission.
+#[derive(Clone, Copy, Debug)]
+pub struct CompositionOnlyObservationV3<'a> {
+    /// Composition descriptor owning Market, release, basis, and `K`.
+    pub descriptor: FinalizedRecordObservationV3<'a>,
+    /// Exact acyclic representation DAG.
+    pub graph: FinalizedRecordObservationV3<'a>,
+    /// Byte-identical canonical root translation.
+    pub translation: FinalizedRecordObservationV3<'a>,
+    /// Exact ordered `K x N` sparse Product exposure.
+    pub exposure: FinalizedRecordObservationV3<'a>,
+}
+
 /// One finalized chain observation sufficient for complete admission.
 #[derive(Clone, Copy, Debug)]
 pub struct CompositionChainObservationV3<'a> {
@@ -142,6 +162,18 @@ pub struct CompositionChainObservationV3<'a> {
     pub product: ProductCompositionObservationV3<'a>,
     /// Representation composition and exposure records.
     pub representation: RepresentationCompositionObservationV3<'a>,
+}
+
+/// One finalized chain observation sufficient for native composition
+/// admission, without asserting that the Market has a Rational receipt layer.
+#[derive(Clone, Copy, Debug)]
+pub struct CompositionOnlyChainObservationV3<'a> {
+    /// Current executable Registry/record program.
+    pub registry_program: &'a ObservedAccount,
+    /// Product records and ProductBasisV3.
+    pub product: ProductCompositionObservationV3<'a>,
+    /// Composition descriptor, graph, translation, and exposure records.
+    pub composition: CompositionOnlyObservationV3<'a>,
 }
 
 /// One exact finalized record coordinate projected for operator consumers.
@@ -166,16 +198,27 @@ struct AuthenticatedRecordV3<'a> {
 /// Fully admitted Product-to-Claims composition from one chain observation.
 #[derive(Clone, Copy)]
 pub struct AdmittedCompositionV3<'a> {
+    base: AdmittedCompositionOnlyV3<'a>,
+    execution_descriptor: RepresentationDescriptorV2<'a>,
+    execution_descriptor_record: FinalizedCoordinateV3,
+    claims_program: Pubkey,
+}
+
+/// Fully admitted Product-to-Claims composition without a Rational receipt
+/// descriptor.
+///
+/// This is the semantic boundary used by native categorical terminal payout.
+/// It preserves every Product, basis, descriptor, graph, translation, and
+/// exposure join from [`authenticate_composition_v3`].
+#[derive(Clone, Copy)]
+pub struct AdmittedCompositionOnlyV3<'a> {
     observation: Observation,
     product: AdmissionProjectionV2,
     product_basis: ProductBasisV3<'a>,
     composition: CompositionBundleV3<'a>,
     exposure: CompositionExposureBundleV3<'a>,
-    execution_descriptor: RepresentationDescriptorV2<'a>,
-    execution_descriptor_record: FinalizedCoordinateV3,
     descriptor_record: FinalizedCoordinateV3,
     exposure_record: FinalizedCoordinateV3,
-    claims_program: Pubkey,
 }
 
 /// Stateless admission plan over exact finalized semantic-owner records.
@@ -208,6 +251,68 @@ impl<'a> CompositionAdmissionPlanV3<'a> {
 impl<'a> AdmittedCompositionV3<'a> {
     /// One finalized observation shared by every authenticated account.
     pub const fn observation(self) -> Observation {
+        self.base.observation()
+    }
+
+    /// Independently admitted Product Runtime graph.
+    pub const fn product(self) -> AdmissionProjectionV2 {
+        self.base.product()
+    }
+
+    /// Independently hostile-decoded ProductBasisV3.
+    pub const fn product_basis(self) -> ProductBasisV3<'a> {
+        self.base.product_basis()
+    }
+
+    /// Completely joined descriptor, acyclic graph, and canonical translation.
+    pub const fn composition(self) -> CompositionBundleV3<'a> {
+        self.base.composition()
+    }
+
+    /// Exact admitted sparse Product-to-Claims exposure.
+    pub const fn exposure(self) -> CompositionExposureBundleV3<'a> {
+        self.base.exposure()
+    }
+
+    /// Rational execution descriptor selecting the exact exposure record.
+    pub const fn execution_descriptor(self) -> RepresentationDescriptorV2<'a> {
+        self.execution_descriptor
+    }
+
+    /// Finalized rational execution-descriptor coordinate.
+    pub const fn execution_descriptor_record(self) -> FinalizedCoordinateV3 {
+        self.execution_descriptor_record
+    }
+
+    /// Runtime Claims/representation width `K`.
+    pub const fn representation_width(self) -> u32 {
+        self.base.representation_width()
+    }
+
+    /// Runtime Product terminal width `N`.
+    pub const fn product_width(self) -> u32 {
+        self.base.product_width()
+    }
+
+    /// Finalized composition descriptor coordinate.
+    pub const fn descriptor_record(self) -> FinalizedCoordinateV3 {
+        self.base.descriptor_record()
+    }
+
+    /// Finalized exposure coordinate.
+    pub const fn exposure_record(self) -> FinalizedCoordinateV3 {
+        self.base.exposure_record()
+    }
+
+    /// Same-finalized executable Claims program used for PDA derivation.
+    pub const fn claims_program(self) -> Pubkey {
+        self.claims_program
+    }
+}
+
+impl<'a> AdmittedCompositionOnlyV3<'a> {
+    /// One finalized observation shared by every authenticated account.
+    pub const fn observation(self) -> Observation {
         self.observation
     }
 
@@ -231,16 +336,6 @@ impl<'a> AdmittedCompositionV3<'a> {
         self.exposure
     }
 
-    /// Rational execution descriptor selecting the exact exposure record.
-    pub const fn execution_descriptor(self) -> RepresentationDescriptorV2<'a> {
-        self.execution_descriptor
-    }
-
-    /// Finalized rational execution-descriptor coordinate.
-    pub const fn execution_descriptor_record(self) -> FinalizedCoordinateV3 {
-        self.execution_descriptor_record
-    }
-
     /// Runtime Claims/representation width `K`.
     pub const fn representation_width(self) -> u32 {
         self.composition.descriptor().outcome_count()
@@ -260,11 +355,6 @@ impl<'a> AdmittedCompositionV3<'a> {
     pub const fn exposure_record(self) -> FinalizedCoordinateV3 {
         self.exposure_record
     }
-
-    /// Same-finalized executable Claims program used for PDA derivation.
-    pub const fn claims_program(self) -> Pubkey {
-        self.claims_program
-    }
 }
 
 /// Authenticate one full production chain observation.
@@ -276,7 +366,73 @@ impl<'a> AdmittedCompositionV3<'a> {
 pub fn authenticate_composition_v3(
     observed: CompositionChainObservationV3<'_>,
 ) -> Result<AdmittedCompositionV3<'_>> {
-    let observation = common_observation(observed)?;
+    common_observation(observed)?;
+    let base = authenticate_composition_only_v3(CompositionOnlyChainObservationV3 {
+        registry_program: observed.registry_program,
+        product: observed.product,
+        composition: CompositionOnlyObservationV3 {
+            descriptor: observed.representation.descriptor,
+            graph: observed.representation.graph,
+            translation: observed.representation.translation,
+            exposure: observed.representation.exposure,
+        },
+    })?;
+    let registry = observed.registry_program.key;
+    let descriptor = base.composition().descriptor();
+    let exposure = base.exposure();
+    let execution_descriptor_record = authenticate_record(
+        registry,
+        observed.representation.execution_descriptor,
+        REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+    )?;
+    let representation_authority = Pubkey::find_program_address(
+        &[
+            RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
+            &execution_descriptor_record.coordinate.content_digest,
+        ],
+        &observed.claims_program.key,
+    )
+    .0;
+    let execution_descriptor = RepresentationDescriptorV2::decode(
+        execution_descriptor_record.bytes,
+        DescriptorAdmissionV2 {
+            selected_descriptor_id: execution_descriptor_record.coordinate.content_digest,
+            finalized_descriptor_id: execution_descriptor_record.coordinate.content_digest,
+            recomputed_descriptor_digest: execution_descriptor_record.coordinate.content_digest,
+            finalized_descriptor_digest: execution_descriptor_record.coordinate.content_digest,
+            record_authenticated: true,
+            derived_representation_authority: representation_authority.to_bytes(),
+            authority_derivation_authenticated: true,
+        },
+    )
+    .map_err(|_| Error::Composition)?;
+    execution_descriptor
+        .authenticate_exposure(exposure)
+        .map_err(|_| Error::CrossRecord)?;
+    if execution_descriptor.market_id() != descriptor.market()
+        || execution_descriptor.release_set_id() != descriptor.release_set()
+        || execution_descriptor.outcome_count() != descriptor.outcome_count()
+    {
+        return Err(Error::CrossRecord);
+    }
+    Ok(AdmittedCompositionV3 {
+        base,
+        execution_descriptor,
+        execution_descriptor_record: execution_descriptor_record.coordinate,
+        claims_program: observed.claims_program.key,
+    })
+}
+
+/// Authenticate one Product/Basis/composition chain without asserting a
+/// Rational receipt-lifecycle descriptor.
+///
+/// This preserves the full descriptor→graph→translation→exposure provenance
+/// chain and is therefore narrower than, not weaker than, the native terminal
+/// payout facts it admits.
+pub fn authenticate_composition_only_v3(
+    observed: CompositionOnlyChainObservationV3<'_>,
+) -> Result<AdmittedCompositionOnlyV3<'_>> {
+    let observation = common_composition_only_observation(observed)?;
     let registry = observed.registry_program.key;
     let product_record = authenticate_record(
         registry,
@@ -317,7 +473,7 @@ pub fn authenticate_composition_v3(
 
     let descriptor_record = authenticate_record(
         registry,
-        observed.representation.descriptor,
+        observed.composition.descriptor,
         COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
     )?;
     let descriptor_admission = admission(
@@ -328,12 +484,12 @@ pub fn authenticate_composition_v3(
         .map_err(|_| Error::Composition)?;
     let graph_record = authenticate_record(
         registry,
-        observed.representation.graph,
+        observed.composition.graph,
         COMPOSITION_GRAPH_SCHEMA_ID_V3,
     )?;
     let translation_record = authenticate_record(
         registry,
-        observed.representation.translation,
+        observed.composition.translation,
         COMPOSITION_TRANSLATION_SCHEMA_ID_V3,
     )?;
     let composition = decode_composition_bundle_v3(
@@ -353,7 +509,7 @@ pub fn authenticate_composition_v3(
     .map_err(|_| Error::Composition)?;
     let exposure_record = authenticate_record(
         registry,
-        observed.representation.exposure,
+        observed.composition.exposure,
         COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
     )?;
     let semantic_basis = semantic_basis_id(product_basis_record.bytes)?;
@@ -370,52 +526,14 @@ pub fn authenticate_composition_v3(
         composition,
         semantic_basis,
     )?;
-    let execution_descriptor_record = authenticate_record(
-        registry,
-        observed.representation.execution_descriptor,
-        REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-    )?;
-    let representation_authority = Pubkey::find_program_address(
-        &[
-            RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-            &execution_descriptor_record.coordinate.content_digest,
-        ],
-        &observed.claims_program.key,
-    )
-    .0;
-    let execution_descriptor = RepresentationDescriptorV2::decode(
-        execution_descriptor_record.bytes,
-        DescriptorAdmissionV2 {
-            selected_descriptor_id: execution_descriptor_record.coordinate.content_digest,
-            finalized_descriptor_id: execution_descriptor_record.coordinate.content_digest,
-            recomputed_descriptor_digest: execution_descriptor_record.coordinate.content_digest,
-            finalized_descriptor_digest: execution_descriptor_record.coordinate.content_digest,
-            record_authenticated: true,
-            derived_representation_authority: representation_authority.to_bytes(),
-            authority_derivation_authenticated: true,
-        },
-    )
-    .map_err(|_| Error::Composition)?;
-    execution_descriptor
-        .authenticate_exposure(exposure)
-        .map_err(|_| Error::CrossRecord)?;
-    if execution_descriptor.market_id() != descriptor.market()
-        || execution_descriptor.release_set_id() != descriptor.release_set()
-        || execution_descriptor.outcome_count() != descriptor.outcome_count()
-    {
-        return Err(Error::CrossRecord);
-    }
-    Ok(AdmittedCompositionV3 {
+    Ok(AdmittedCompositionOnlyV3 {
         observation,
         product,
         product_basis,
         composition,
         exposure,
-        execution_descriptor,
-        execution_descriptor_record: execution_descriptor_record.coordinate,
         descriptor_record: descriptor_record.coordinate,
         exposure_record: exposure_record.coordinate,
-        claims_program: observed.claims_program.key,
     })
 }
 
@@ -795,6 +913,25 @@ fn common_observation(observed: CompositionChainObservationV3<'_>) -> Result<Obs
     Ok(expected)
 }
 
+fn common_composition_only_observation(
+    observed: CompositionOnlyChainObservationV3<'_>,
+) -> Result<Observation> {
+    let expected = observed.registry_program.observation;
+    if expected.slot == 0
+        || expected.finality != Finality::Finalized
+        || !observed.registry_program.executable
+        || observed.registry_program.key == Pubkey::default()
+    {
+        return Err(Error::Registry);
+    }
+    for record in all_composition_only_records(observed) {
+        if record.raw.observation != expected || record.staging.observation != expected {
+            return Err(Error::Observation);
+        }
+    }
+    Ok(expected)
+}
+
 fn all_records(
     observed: CompositionChainObservationV3<'_>,
 ) -> [FinalizedRecordObservationV3<'_>; 9] {
@@ -808,6 +945,21 @@ fn all_records(
         observed.representation.graph,
         observed.representation.translation,
         observed.representation.exposure,
+    ]
+}
+
+fn all_composition_only_records(
+    observed: CompositionOnlyChainObservationV3<'_>,
+) -> [FinalizedRecordObservationV3<'_>; 8] {
+    [
+        observed.product.product,
+        observed.product.result_domain,
+        observed.product.portfolio,
+        observed.product.product_basis,
+        observed.composition.descriptor,
+        observed.composition.graph,
+        observed.composition.translation,
+        observed.composition.exposure,
     ]
 }
 

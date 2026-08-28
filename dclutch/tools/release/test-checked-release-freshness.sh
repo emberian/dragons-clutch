@@ -114,6 +114,16 @@ else
     not_ok "release runner lost its locked-build admission"
 fi
 
+if grep -Fq 'CHECKED_UPGRADE_GATE.json' "$RUNNER" \
+    && grep -Fq 'checked Upgrade admission requires the exact 13-link shipped set' "$RUNNER" \
+    && grep -Fq 'RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link"' "$RUNNER" \
+    && grep -Fq 'frames_at_or_over_bound=0' "$RUNNER" \
+    && grep -Fq 'checked_upgrade_gate_sha256=' "$RUNNER"; then
+    ok "generated Upgrade gate remains behind exact all-13 fresh frame admission"
+else
+    not_ok "generated Upgrade gate lost an all-link/frame admission seam"
+fi
+
 if [ "$fail" -ne 0 ]; then
     printf '%s tests failed; %s passed\n' "$fail" "$pass" >&2
     exit 1

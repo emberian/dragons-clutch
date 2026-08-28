@@ -13,6 +13,7 @@ use dclutch_capability_contract::{
 use dclutch_capability_program_contract::{CapabilityProgramV1, v4::CapabilityProgramV4};
 use dclutch_custody_contract::CustodyReplayLayoutV1;
 use dclutch_direct_codec::{
+    begin_retiring_bundle_v1::DirectBeginRetiringBundleV1,
     execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
     native_close_bundle_v1::DirectNativeCloseBundleV1,
     ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
@@ -25,9 +26,9 @@ use dclutch_direct_codec::{
     },
     ordinary_geometry_v3::{DirectOrdinaryGeometryErrorV3, DirectOrdinaryGeometryV3},
     program_set_v4::{
-        DirectInlineOrdinaryNativeCloseProgramSetV1,
-        build_direct_inline_ordinary_native_close_program_set_v1,
-        validate_direct_inline_ordinary_native_close_program_set_v1,
+        DirectInlineOrdinaryLifecycleProgramSetV1,
+        build_direct_inline_ordinary_lifecycle_program_set_v1,
+        validate_direct_inline_ordinary_lifecycle_program_set_v1,
     },
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DirectExecutionConfigV1,
@@ -37,6 +38,9 @@ use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_registry_svm::{LOADER_V3_PROGRAM_BYTES, LOADER_V3_PROGRAMDATA_METADATA_BYTES};
 use dclutch_rent_contract::lifecycle_v2::LIFECYCLE_RENT_CREDIT_BYTES_V2;
+use dclutch_representation_composition_v3_operator::native_categorical_v1::{
+    NativeCategoricalCompositionInputV1, compile_native_categorical_composition_v1,
+};
 use sha2::{Digest as _, Sha256};
 use solana_sdk::pubkey::Pubkey;
 use std::path::Path;
@@ -202,11 +206,8 @@ pub(crate) fn attach_direct_market_capability_v1(
             capacity_profile,
         })
         .map_err(|error| Error::new(format!("Direct ordinary bundle: {error:?}")))?;
-    let release =
-        build_direct_inline_ordinary_native_close_program_set_v1(ordinary, capacity_profile)
-            .map_err(|error| {
-                Error::new(format!("Direct ordinary/native-close release: {error:?}"))
-            })?;
+    let release = build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, capacity_profile)
+        .map_err(|error| Error::new(format!("Direct ordinary/native-close release: {error:?}")))?;
     let descriptor = CapabilityProgramV4::decode(&release.ordinary.descriptor)
         .map_err(|error| Error::new(format!("Direct CapabilityProgramV4: {error:?}")))?;
     let direct_entry = direct_manifest_entry_v1(
@@ -264,6 +265,9 @@ pub(crate) fn attach_direct_market_capability_v1(
         ordinary_strategy_hex: hex(&release.ordinary.strategy),
         ordinary_effect_hex: hex(&release.ordinary.effect),
         ordinary_descriptor_hex: hex(&release.ordinary.descriptor),
+        begin_retiring_account_profile_hex: hex(&release.begin_retiring.account_profile),
+        begin_retiring_effect_hex: hex(&release.begin_retiring.effect),
+        begin_retiring_descriptor_hex: hex(&release.begin_retiring.descriptor),
         native_close_account_profile_hex: hex(&release.native_close.account_profile),
         native_close_effect_hex: hex(&release.native_close.effect),
         native_close_descriptor_hex: hex(&release.native_close.descriptor),
@@ -298,8 +302,8 @@ pub(crate) fn validate_direct_market_capability_v1(input: &MarketRunInput) -> Re
         return Err(Error::new("Direct execution config was not canonical"));
     }
     let release = decode_direct_release_v1(payload, capacity_profile)?;
-    validate_direct_inline_ordinary_native_close_program_set_v1(&release, capacity_profile)
-        .map_err(|error| Error::new(format!("Direct ordinary/native-close release: {error:?}")))?;
+    validate_direct_inline_ordinary_lifecycle_program_set_v1(&release, capacity_profile)
+        .map_err(|error| Error::new(format!("Direct lifecycle release: {error:?}")))?;
     let descriptor = CapabilityProgramV4::decode(&release.ordinary.descriptor)
         .map_err(|error| Error::new(format!("Direct CapabilityProgramV4: {error:?}")))?;
     if descriptor.kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3
@@ -369,6 +373,7 @@ pub(crate) struct DirectPublicationRecordV1 {
 /// `validate_direct_market_capability_v1` before this function returns.
 pub(crate) fn direct_publication_records_v1(
     input: &MarketRunInput,
+    native_composition: NativeCategoricalCompositionInputV1<'_>,
 ) -> Result<Vec<DirectPublicationRecordV1>> {
     validate_direct_market_capability_v1(input)?;
     let payload = input
@@ -385,7 +390,7 @@ pub(crate) fn direct_publication_records_v1(
         schema,
         body: body.to_vec(),
     };
-    Ok(vec![
+    let mut records = vec![
         record(
             "direct_execution_config_record",
             descriptor.config_schema().to_bytes(),
@@ -427,6 +432,21 @@ pub(crate) fn direct_publication_records_v1(
             &release.ordinary.descriptor,
         ),
         record(
+            "direct_begin_retiring_account_profile_record",
+            dclutch_direct_codec::begin_retiring_bundle_v1::direct_begin_retiring_account_profile_schema_v1(),
+            &release.begin_retiring.account_profile,
+        ),
+        record(
+            "direct_begin_retiring_effect_record",
+            dclutch_direct_codec::begin_retiring_bundle_v1::direct_begin_retiring_effect_schema_v1(),
+            &release.begin_retiring.effect,
+        ),
+        record(
+            "direct_begin_retiring_descriptor_record",
+            dclutch_direct_codec::begin_retiring_bundle_v1::direct_begin_retiring_descriptor_schema_v1(),
+            &release.begin_retiring.descriptor,
+        ),
+        record(
             "direct_native_close_account_profile_record",
             dclutch_direct_codec::native_close_bundle_v1::direct_native_close_account_profile_schema_v1(),
             &release.native_close.account_profile,
@@ -446,11 +466,25 @@ pub(crate) fn direct_publication_records_v1(
             dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
             &release.program_set,
         ),
-    ])
+    ];
+    let native = compile_native_categorical_composition_v1(native_composition)
+        .map_err(|error| Error::new(format!("native categorical composition: {error:?}")))?;
+    for (label, target) in [
+        "terminal_composition_descriptor_record",
+        "terminal_composition_graph_record",
+        "terminal_composition_translation_record",
+        "terminal_composition_exposure_record",
+    ]
+    .into_iter()
+    .zip(native.publication_targets())
+    {
+        records.push(record(label, target.schema_id, target.bytes));
+    }
+    Ok(records)
 }
 
 fn direct_manifest_entry_v1(
-    release: &DirectInlineOrdinaryNativeCloseProgramSetV1,
+    release: &DirectInlineOrdinaryLifecycleProgramSetV1,
     descriptor: CapabilityProgramV4,
     config_id: [u8; 32],
     activation_deadline_slot: u64,
@@ -501,7 +535,7 @@ fn direct_manifest_entry_v1(
 fn decode_direct_release_v1(
     payload: &DirectMarketCapabilityV1,
     capacity_profile: [u8; 32],
-) -> Result<DirectInlineOrdinaryNativeCloseProgramSetV1> {
+) -> Result<DirectInlineOrdinaryLifecycleProgramSetV1> {
     let ordinary = DirectInlineOrdinaryHotBundleV4 {
         account_profile: exact_array(&payload.ordinary_account_profile_hex, "ordinary profile")?,
         lifecycle_policy: exact_array(
@@ -531,15 +565,30 @@ fn decode_direct_release_v1(
         effect,
         descriptor: close_descriptor,
     };
+    let begin_descriptor = decode_hex(&payload.begin_retiring_descriptor_hex)?;
+    let begin = CapabilityProgramV1::decode(&begin_descriptor)
+        .map_err(|error| Error::new(format!("Direct begin-retiring descriptor: {error:?}")))?;
+    let begin_account_profile = decode_hex(&payload.begin_retiring_account_profile_hex)?;
+    let begin_effect = decode_hex(&payload.begin_retiring_effect_hex)?;
+    let begin_retiring = DirectBeginRetiringBundleV1 {
+        account_profile_id: Sha256::digest(&begin_account_profile).into(),
+        effect_id: Sha256::digest(&begin_effect).into(),
+        descriptor_id: Sha256::digest(&begin_descriptor).into(),
+        account_profile: begin_account_profile,
+        transition: begin.transition_program().bytes().to_vec(),
+        effect: begin_effect,
+        descriptor: begin_descriptor,
+    };
     let program_set = decode_hex(&payload.program_set_hex)?;
-    let release = DirectInlineOrdinaryNativeCloseProgramSetV1 {
+    let release = DirectInlineOrdinaryLifecycleProgramSetV1 {
         ordinary,
+        begin_retiring,
         native_close,
         program_set_id: Sha256::digest(&program_set).into(),
         program_set,
     };
-    validate_direct_inline_ordinary_native_close_program_set_v1(&release, capacity_profile)
-        .map_err(|error| Error::new(format!("Direct ordinary/native-close release: {error:?}")))?;
+    validate_direct_inline_ordinary_lifecycle_program_set_v1(&release, capacity_profile)
+        .map_err(|error| Error::new(format!("Direct lifecycle release: {error:?}")))?;
     Ok(release)
 }
 
@@ -730,6 +779,11 @@ fn set_width(output: &mut [u32], coordinate: usize, value: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2;
+    use dclutch_direct_codec::{
+        native_close_bundle_v1::DIRECT_NATIVE_CLOSE_SELECTOR_V1,
+        retirement_v1::DIRECT_BEGIN_RETIRING_SELECTOR_V1,
+    };
 
     fn test_market() -> MarketRunInput {
         let registry = Pubkey::new_from_array([0x41; 32]);
@@ -779,12 +833,23 @@ mod tests {
                     capacity_profile,
                 })
                 .expect("ordinary bundle");
-            build_direct_inline_ordinary_native_close_program_set_v1(ordinary, capacity_profile)
-                .expect("ordinary/close ProgramSet")
+            build_direct_inline_ordinary_lifecycle_program_set_v1(ordinary, capacity_profile)
+                .expect("ordinary lifecycle ProgramSet")
         };
         let first = release([0x51; 32]);
         let second = release([0x52; 32]);
         assert_ne!(first.program_set_id, second.program_set_id);
+        let set = CapabilityProgramSetV2::decode(&first.program_set).expect("ProgramSetV2");
+        assert_eq!(set.entry_count(), 3);
+        assert_eq!(set.entry(0).expect("ordinary selector").selector(), 1);
+        assert_eq!(
+            set.entry(1).expect("begin-retiring selector").selector(),
+            DIRECT_BEGIN_RETIRING_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(2).expect("native-close selector").selector(),
+            DIRECT_NATIVE_CLOSE_SELECTOR_V1
+        );
         assert_eq!(
             dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1,
             dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1
@@ -795,13 +860,39 @@ mod tests {
     fn typed_direct_closure_refuses_every_independent_identity_substitution() {
         let input = test_market();
         validate_direct_market_capability_v1(&input).expect("canonical Direct closure");
-        let publication = direct_publication_records_v1(&input).expect("publication closure");
-        assert_eq!(publication.len(), 12);
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let (product, domain, portfolio, basis) =
+            crate::market::native_composition_bodies_for_test(registry, &input)
+                .expect("native composition bodies");
+        let publication = direct_publication_records_v1(
+            &input,
+            NativeCategoricalCompositionInputV1 {
+                market: [0x61; 32],
+                release_set: [0x62; 32],
+                product_record_bytes: &product,
+                result_domain_bytes: &domain,
+                portfolio_bytes: &portfolio,
+                product_basis_bytes: &basis,
+            },
+        )
+        .expect("publication closure");
+        assert_eq!(publication.len(), 19);
         let labels = publication
             .iter()
             .map(|record| record.label)
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(labels.len(), publication.len());
+        for label in [
+            "direct_begin_retiring_account_profile_record",
+            "direct_begin_retiring_effect_record",
+            "direct_begin_retiring_descriptor_record",
+            "terminal_composition_descriptor_record",
+            "terminal_composition_graph_record",
+            "terminal_composition_translation_record",
+            "terminal_composition_exposure_record",
+        ] {
+            assert!(labels.contains(label), "missing publication {label}");
+        }
         for record in &publication {
             assert_ne!(record.schema, [0; 32]);
             assert!(!record.body.is_empty());

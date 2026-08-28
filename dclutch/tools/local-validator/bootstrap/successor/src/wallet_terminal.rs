@@ -39,9 +39,7 @@ use dclutch_product_payoff_v2_codec::{
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_rational_representation_v2_kernel::{
-    REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3, product_v3::TerminalScenarioV3,
-};
+use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_activation_auth_v1::{
@@ -53,8 +51,8 @@ use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_GRAPH_SCHEMA_ID_V3, COMPOSITION_TRANSLATION_SCHEMA_ID_V3, RecordAdmissionV3,
 };
 use dclutch_representation_composition_v3_operator::{
-    CompositionChainObservationV3, FinalizedRecordObservationV3, ProductCompositionObservationV3,
-    RepresentationCompositionObservationV3, authenticate_composition_v3,
+    CompositionOnlyChainObservationV3, CompositionOnlyObservationV3, FinalizedRecordObservationV3,
+    ProductCompositionObservationV3, authenticate_composition_only_v3,
 };
 use dclutch_token_svm::{Mint, TokenProgram};
 use serde::{Deserialize, Serialize};
@@ -100,7 +98,6 @@ pub(crate) struct RecordSelectorsV1 {
     pub(crate) result_domain: String,
     pub(crate) portfolio: String,
     pub(crate) product_basis: String,
-    pub(crate) execution_descriptor: String,
     pub(crate) composition_descriptor: String,
     pub(crate) composition_graph: String,
     pub(crate) composition_translation: String,
@@ -167,7 +164,6 @@ pub(crate) struct SelectedInputV1 {
     pub(crate) result_domain: RecordPairV1,
     pub(crate) portfolio: RecordPairV1,
     pub(crate) product_basis: RecordPairV1,
-    pub(crate) execution_descriptor: RecordPairV1,
     pub(crate) composition_descriptor: RecordPairV1,
     pub(crate) composition_graph: RecordPairV1,
     pub(crate) composition_translation: RecordPairV1,
@@ -264,11 +260,6 @@ impl SelectedInputV1 {
             &input.records.product_basis,
             "productBasis",
         )?;
-        let execution_descriptor = record(
-            REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
-            &input.records.execution_descriptor,
-            "executionDescriptor",
-        )?;
         let composition_descriptor = record(
             COMPOSITION_DESCRIPTOR_SCHEMA_ID_V3,
             &input.records.composition_descriptor,
@@ -361,7 +352,6 @@ impl SelectedInputV1 {
             result_domain,
             portfolio,
             product_basis,
-            execution_descriptor,
             composition_descriptor,
             composition_graph,
             composition_translation,
@@ -409,7 +399,6 @@ impl SelectedInputV1 {
             self.result_domain,
             self.portfolio,
             self.product_basis,
-            self.execution_descriptor,
             self.composition_descriptor,
             self.composition_graph,
             self.composition_translation,
@@ -732,17 +721,15 @@ pub(crate) fn build_report(
         snapshot.required(selected.custody_programdata, "Custody ProgramData")?,
     )?;
 
-    let admitted = authenticate_composition_v3(CompositionChainObservationV3 {
+    let admitted = authenticate_composition_only_v3(CompositionOnlyChainObservationV3 {
         registry_program: registry,
-        claims_program: claims,
         product: ProductCompositionObservationV3 {
             product: snapshot.record(selected.product, &rent)?,
             result_domain: snapshot.record(selected.result_domain, &rent)?,
             portfolio: snapshot.record(selected.portfolio, &rent)?,
             product_basis: snapshot.record(selected.product_basis, &rent)?,
         },
-        representation: RepresentationCompositionObservationV3 {
-            execution_descriptor: snapshot.record(selected.execution_descriptor, &rent)?,
+        composition: CompositionOnlyObservationV3 {
             descriptor: snapshot.record(selected.composition_descriptor, &rent)?,
             graph: snapshot.record(selected.composition_graph, &rent)?,
             translation: snapshot.record(selected.composition_translation, &rent)?,
@@ -1392,7 +1379,6 @@ pub(crate) mod tests {
                 result_domain: id(22),
                 portfolio: id(23),
                 product_basis: id(24),
-                execution_descriptor: id(25),
                 composition_descriptor: id(26),
                 composition_graph: id(27),
                 composition_translation: id(28),
@@ -1627,8 +1613,8 @@ pub(crate) mod tests {
         assert_eq!(
             Sha256::digest(&encoded).as_slice(),
             &[
-                163, 28, 105, 100, 50, 126, 24, 26, 198, 83, 240, 15, 112, 202, 43, 188, 166, 245,
-                230, 199, 91, 194, 19, 118, 226, 104, 103, 22, 233, 224, 148, 142,
+                3, 115, 128, 77, 60, 173, 177, 59, 233, 107, 233, 83, 174, 224, 75, 4, 97, 53, 191,
+                94, 94, 79, 155, 48, 115, 118, 190, 142, 71, 38, 187, 164,
             ],
             "update only after inspecting the exact ordered ALT-plan JSON vector",
         );

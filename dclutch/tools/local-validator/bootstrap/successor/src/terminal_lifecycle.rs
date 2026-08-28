@@ -56,8 +56,7 @@ const PARENT_CONTEXT_DOMAIN_V1: &[u8] = b"dclutch/wallet-terminal-parent-context
 const LIFECYCLE_PLAN_FORMAT_V1: &str = "dclutch-terminal-lifecycle-plan-v1";
 const LIFECYCLE_PRESTATE_DOMAIN_V1: &[u8] = b"dclutch/terminal-lifecycle-prestate/v1";
 
-const TERMINAL_COMPOSITION_LABELS_V1: [&str; 5] = [
-    "terminal_execution_descriptor_record",
+const TERMINAL_COMPOSITION_LABELS_V1: [&str; 4] = [
     "terminal_composition_descriptor_record",
     "terminal_composition_graph_record",
     "terminal_composition_translation_record",
@@ -853,11 +852,10 @@ fn routed_input(
             result_domain: record_digest("result_domain_record")?,
             portfolio: record_digest("portfolio_record")?,
             product_basis: record_digest("linked_liability_basis_record")?,
-            execution_descriptor: record_digest(TERMINAL_COMPOSITION_LABELS_V1[0])?,
-            composition_descriptor: record_digest(TERMINAL_COMPOSITION_LABELS_V1[1])?,
-            composition_graph: record_digest(TERMINAL_COMPOSITION_LABELS_V1[2])?,
-            composition_translation: record_digest(TERMINAL_COMPOSITION_LABELS_V1[3])?,
-            composition_exposure: record_digest(TERMINAL_COMPOSITION_LABELS_V1[4])?,
+            composition_descriptor: record_digest(TERMINAL_COMPOSITION_LABELS_V1[0])?,
+            composition_graph: record_digest(TERMINAL_COMPOSITION_LABELS_V1[1])?,
+            composition_translation: record_digest(TERMINAL_COMPOSITION_LABELS_V1[2])?,
+            composition_exposure: record_digest(TERMINAL_COMPOSITION_LABELS_V1[3])?,
             terminal_record: record_digest("terminal_record")?,
         },
     })
@@ -875,22 +873,18 @@ fn authenticate_routing_hints(
         ("linked_liability_basis_record", selected.product_basis.raw),
         (
             TERMINAL_COMPOSITION_LABELS_V1[0],
-            selected.execution_descriptor.raw,
-        ),
-        (
-            TERMINAL_COMPOSITION_LABELS_V1[1],
             selected.composition_descriptor.raw,
         ),
         (
-            TERMINAL_COMPOSITION_LABELS_V1[2],
+            TERMINAL_COMPOSITION_LABELS_V1[1],
             selected.composition_graph.raw,
         ),
         (
-            TERMINAL_COMPOSITION_LABELS_V1[3],
+            TERMINAL_COMPOSITION_LABELS_V1[2],
             selected.composition_translation.raw,
         ),
         (
-            TERMINAL_COMPOSITION_LABELS_V1[4],
+            TERMINAL_COMPOSITION_LABELS_V1[3],
             selected.composition_exposure.raw,
         ),
         ("terminal_record", selected.terminal_coordinate.raw),
@@ -1372,7 +1366,7 @@ mod tests {
             "plan_sha256": hex(&[1; 32]),
             "foundingCustodyContext": hex(&[2; 32]),
             "accounts": {
-                "terminal_execution_descriptor_record": {
+                "terminal_composition_descriptor_record": {
                     "address": Pubkey::new_unique().to_string(),
                     "owner": Pubkey::new_unique().to_string(),
                     "data_sha256": hex(&[3; 32]),
