@@ -10,7 +10,7 @@ import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
  * This is `/` — the first page anyone who types the domain sees, so it owes
  * them two things before it owes them a control: what dClutch is, in words a
  * reader who has never opened the repository can follow, and the plain fact
- * that none of it is deployed. Both were already written and vetted for the
+ * that its current public deployment is a devnet preview. Both were written
  * hand-authored Pages landing (`tools/genref/render-site.mjs`); this is that
  * same copy, moved into the app because the app is what the domain root now
  * serves. The lifecycle workbench that used to sit here is unchanged and still
@@ -20,7 +20,7 @@ import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
  */
 export default function SiteLanding() {
   return <main className="product-shell trade-v3-shell">
-    <Nav current="/" />
+    <Nav current="/" status="live devnet programs" />
 
     <section className="trade-v3-hero">
       <div>
@@ -52,7 +52,7 @@ export default function SiteLanding() {
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>The app</h2><p>Point it at a chain and it shows you what is actually on that chain. No sample market, no made-up price. Since nothing is deployed yet, expect it to refuse — and to tell you why.</p></div></header>
+      <header><span>01</span><div><h2>The app</h2><p>It opens on the live devnet deployment and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are live; actions that still need an open market refuse and tell you what is missing.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
         <Anchor className="secondary-action" href="/create">Create a market →</Anchor>

@@ -48,7 +48,7 @@ export const CONSOLE_PATHS: readonly string[] = [
 
 export default function Nav({
   current,
-  status = 'not live yet',
+  status = 'devnet preview',
 }: Readonly<{
   /** The route this page is served at, e.g. `/markets`. Sets the active item. */
   current?: string;

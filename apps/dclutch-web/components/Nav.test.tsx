@@ -34,8 +34,8 @@ describe('the site nav', () => {
     }
   });
 
-  it('states one honest status, defaulting to not-live', () => {
-    expect(renderToStaticMarkup(<Nav />)).toContain('not live yet');
+  it('states one honest status, defaulting to the devnet preview', () => {
+    expect(renderToStaticMarkup(<Nav />)).toContain('devnet preview');
     expect(renderToStaticMarkup(<Nav status="operator tool" />)).toContain('operator tool');
   });
 });
