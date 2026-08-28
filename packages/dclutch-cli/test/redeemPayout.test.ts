@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -14,6 +14,7 @@ import { EMPTY_SESSION, type CliContext } from '../src/context';
 import {
   assertWalletTerminalPayoutMatchesPortfolioV3,
   produceWalletTerminalPayoutAltPlanV1,
+  produceWalletTerminalPayoutInputV1,
   produceWalletTerminalPayoutManifestV3,
   type SuccessorSpawn,
 } from '../src/commands/redeem';
@@ -92,6 +93,70 @@ function instruction(value: TransactionInstruction) {
 }
 
 describe('wallet terminal payout producer consumer', () => {
+  it('authenticates completed campaign evidence and binds the Rust flat projection to every payout coordinate', () => {
+    const directory = mkdtempSync(resolve(tmpdir(), 'dclutch-payout-projection-test-'));
+    try {
+      const planBytes = Buffer.from('{"exact":"campaign plan bytes"}\n');
+      const plan = resolve(directory, 'plan.json');
+      const evidence = resolve(directory, 'evidence.json');
+      const owner = key(2);
+      const recipient = key(3);
+      const projected = {
+        format: 'dclutch-wallet-terminal-payout-plan-input-v1', market: key(1), owner,
+        recipientOwner: owner, recipient, collateralMint: key(4), tokenProgram: key(5),
+        quantity: '7', claimIndex: 1, transferIndex: 0, parentContext: identity(6),
+        custodyContext: identity(7), releaseSet: identity(8),
+        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13) },
+        records: {
+          realm: identity(20), product: identity(21), resultDomain: identity(22), portfolio: identity(23),
+          productBasis: identity(24), compositionDescriptor: identity(26), compositionGraph: identity(27),
+          compositionTranslation: identity(28), compositionExposure: identity(29), terminalRecord: identity(30),
+        },
+      };
+      writeFileSync(plan, planBytes);
+      writeFileSync(evidence, JSON.stringify({
+        schema: 'dclutch-local-successor-run-evidence-v2', rpc_url: 'https://api.devnet.solana.com/',
+        ledger: '/tmp/ledger', validator_log: '/tmp/validator.log',
+        plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
+        core_upgrade_authority_pubkey: key(40), private_key_persisted: false,
+        keypair_derivation: 'random-per-run', keypair_seed_sha256: null,
+        foundingCustodyContext: identity(7), directSelectedManifestEntryIndex: 0,
+        completed: ['founding', 'open'], transactions: [],
+        accounts: {
+          market: {
+            address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
+            data_sha256: identity(41), account_sha256: identity(42),
+          },
+        },
+        remaining_execution_seam: 'none',
+      }));
+      const calls: Array<Readonly<{ binary: string; args: ReadonlyArray<string> }>> = [];
+      const result = produceWalletTerminalPayoutInputV1(context(), {}, {
+        plan, evidence, market: key(1), owner, recipient, claimIndex: 1, quantity: '7',
+      }, DEVNET, successfulSpawn(JSON.stringify(projected), calls));
+      expect(result.input).toEqual(projected);
+      expect(calls[0]?.args).toEqual([
+        'wallet-terminal-payout-input', '--rpc-url', 'https://api.devnet.solana.com/',
+        '--i-mean-devnet', DEVNET, '--plan', plan, '--evidence', evidence,
+        '--market', key(1), '--owner', owner, '--recipient', recipient,
+        '--claim-index', '1', '--quantity', '7',
+      ]);
+
+      expect(() => produceWalletTerminalPayoutInputV1(context(), {}, {
+        plan, evidence, market: key(1), owner, recipient, claimIndex: 1, quantity: '7',
+      }, DEVNET, successfulSpawn(JSON.stringify({ ...projected, recipient: key(99) }), [])))
+        .toThrow(/substituted/);
+      const changedEvidence = JSON.parse(readFileSync(evidence, 'utf8')) as Record<string, unknown>;
+      changedEvidence.plan_sha256 = identity(99);
+      writeFileSync(evidence, JSON.stringify(changedEvidence));
+      expect(() => produceWalletTerminalPayoutInputV1(context(), {}, {
+        plan, evidence, market: key(1), owner, recipient, claimIndex: 1, quantity: '7',
+      }, DEVNET, successfulSpawn(JSON.stringify(projected), []))).toThrow(/exact plan bytes/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('invokes the distinct read-only ALT planner and pins its source file byte-for-byte', () => {
     const directory = mkdtempSync(resolve(tmpdir(), 'dclutch-alt-test-'));
     try {
@@ -192,6 +257,7 @@ describe('wallet terminal payout producer consumer', () => {
       market: manifest.request.market,
       owner: manifest.request.owner,
       position: manifest.request.position,
+      recipient: manifest.request.recipient,
       winningClaim: manifest.request.claimIndex,
       availableQuantity: manifest.request.quantity,
     });
@@ -201,6 +267,7 @@ describe('wallet terminal payout producer consumer', () => {
       { ...manifest, route: { ...manifest.route, market: key(70) } },
       { ...manifest, request: { ...manifest.request, owner: key(71) } },
       { ...manifest, request: { ...manifest.request, position: key(72) } },
+      { ...manifest, route: { ...manifest.route, recipient: key(73) } },
       { ...manifest, request: { ...manifest.request, claimIndex: 2 } },
       { ...manifest, request: { ...manifest.request, quantity: '8' } },
     ] as ReadonlyArray<WalletTerminalPayoutManifestV3>;

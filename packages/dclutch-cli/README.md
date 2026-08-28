@@ -32,7 +32,8 @@ dclutch --session session.json buy --route route.json --take sell-intent.json \
 
 dclutch --session session.json portfolio
 dclutch --session session.json redeem --market <market> --keypair owner.json \
-  --payout-input payout-input.json \
+  --payer <owner-address> --recipient <collateral-token-account> \
+  --payout-input payout-input.json --payout-journal payout-operation.json \
   --payout-alt-plan payout-alt-plan.json \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
@@ -49,18 +50,20 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
 - Refusals render by NAME (band registry, decision 0007) on every error
   path; a refusal is the protocol working, and this tool says which program
   refused and why instead of printing a bare number.
-- `redeem` admits the Claims-role Custody replay, invokes the successor's
-  read-only payout producer against the explicitly named RPC endpoint, and
-  refuses unless its Market, owner, Position, winning claim, and full available
-  quantity match the finalized portfolio read. For a new payout, omit
-  `lookupTable` from the input and pass `--payout-alt-plan <path>`. The command
-  writes the checked owner-funded table plan there before submission, resumes
-  an exact finalized prefix after interruption, extends addresses in the
-  payout frame's first-use order, waits for a later finalized slot, and then
-  invokes `wallet-terminal-payout-plan` itself. Reuse the same command and plan
-  path to resume; you never construct or patch the phase-two input manually.
-  With `--json`, successful stdout is only the canonical manifest accepted by
-  the SDK and web payout flow.
+- `redeem` checks the market, your position, the receiving token account, the
+  winning claim, and the full available quantity at finalized commitment. You
+  can pass a completed campaign with `--spec <plan> --payout-evidence
+  <evidence>`, and the command asks the read-only Rust planner to derive the
+  payout input. An already-derived `--payout-input` remains available for
+  automation.
+- Keep the same `--payout-alt-plan` and `--payout-journal` paths when you rerun
+  the command. Replay and lookup-table setup finish in separate runs. Before
+  your key is read for the payout, the exact unsigned transaction and verifier
+  state are saved to the journal. Before the transaction is sent, its exact
+  signed ID is saved. If a submitted run is interrupted, rerunning only checks
+  that saved transaction at finalized commitment; it never signs or sends it
+  again. You may archive an unsigned plan with `--discard-unsigned-payout`, but
+  a submitted journal stays until the exact receipt and account changes pass.
 - The keypair is always an explicit `--keypair <path>` or `$DCLUTCH_KEYPAIR`;
   there is no default-wallet fallback, deliberately.
 - Every public-chain mutation (`buy`, `sell`, `redeem`, and `walk`) requires
