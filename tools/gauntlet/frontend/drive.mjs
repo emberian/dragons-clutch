@@ -31,6 +31,14 @@ const endpoint = argument('endpoint');
 const core = argument('core');
 const registry = argument('registry');
 const claims = argument('claims', '');
+// The app reads its whole deployment from one manifest now, so the driver
+// supplies all seven role programs. The defaults are the fixed-seed campaign
+// layout every tier-1 gauntlet run deploys (lib/deployments.ts LOCAL rows);
+// override any of them for a differently-keyed chain.
+const rent = argument('rent', '2gUDaLHEAdfs44vDWyjj3cCkJDVTEjrBPntDKHQxD9U8');
+const custody = argument('custody', '7H6H9NabHSQtLVpiAaMKgmuRV5VVWD5VPGzpFYNGDbiD');
+const resolution = argument('resolution', 'EBH6zun6a9PRcQtAaSHjTCArqUd8ArRGMciRHmJFu34x');
+const trading = argument('trading', 'H3yrZV5ekNATUhhydami88bahXYtrP5fZig31LEU8UM8');
 const market = argument('market');
 const owner = argument('owner');
 const outDir = argument('out-dir');
@@ -110,14 +118,34 @@ async function fill(page, labelPattern, value) {
 async function settle(page, shotPath) {
   await page.waitForFunction(() => {
     const regions = [...document.querySelectorAll('[aria-live]')].map((node) => (node.textContent ?? '').trim());
-    return regions.length > 0 && regions.every((text) => !/^Reading|^Probing|^Deriving|^Attempting/.test(text));
+    return regions.length > 0 && regions.every((text) => !/^Reading|^Probing|^Deriving|^Attempting|^Enumerating/.test(text));
   }, undefined, { timeout: 90_000 }).catch(() => {});
   await page.waitForTimeout(600);
   await page.screenshot({ path: shotPath, fullPage: true });
 }
 
-const browser = await chromium.launch();
+// A bundled chromium if playwright has one, otherwise the installed Chrome.
+const browser = await chromium.launch().catch(() => chromium.launch({ channel: argument('channel', 'chrome') }));
 const context = await browser.newContext({ viewport: { width: 1440, height: 1400 } });
+
+// FE-PRODUCT inverted the surfaces: they no longer render endpoint/program
+// forms — every read flows from the ACTIVE DEPLOYMENT (lib/deployments.ts,
+// selected in lib/deploymentStore.ts). The driver therefore does what a
+// bring-your-own operator does: store a Custom deployment in localStorage
+// through the app's own keys, before any page script runs. The surfaces then
+// load their content on their own, which is exactly the behavior under test.
+await context.addInitScript(({ clusterKey, customKey, custom }) => {
+  window.localStorage.setItem(customKey, JSON.stringify(custom));
+  window.localStorage.setItem(clusterKey, 'custom');
+}, {
+  clusterKey: 'dclutch.cluster.v1',
+  customKey: 'dclutch.customDeployment.v1',
+  custom: {
+    endpoint,
+    programs: { registry, rent, custody, resolution, claims: claims === '' ? '9fAcEn8fhVkmJmhx4xFfquNshTryNC6cQ9ieKwAPBMY6' : claims, trading, core },
+    activationCache: null,
+  },
+});
 const consoleErrors = [];
 context.on('console', (message) => {
   if (message.type() === 'error') consoleErrors.push(message.text());
@@ -130,19 +158,14 @@ context.on('requestfailed', (request) => {
 const captured = {};
 
 // ------------------------------------------------------------------ /markets
+// The list loads itself: enumeration and discovery are one auto-read now, so
+// one settled harvest serves both of compare.mjs's views of the page.
 {
   const page = await context.newPage();
   await open(page, '/markets');
-  await fill(page, /Finalized RPC endpoint/, endpoint);
-  await fill(page, /Core program/, core);
-  await fill(page, /Registry program/, registry);
-  if (claims !== '') await fill(page, /Claims program/, claims);
-  await page.getByRole('button', { name: 'Enumerate Markets from the Core program' }).click();
-  await settle(page, join(outDir, 'markets-enumerated.png'));
-  captured.enumeration = await harvest(page);
-  await page.getByRole('button', { name: 'Read finalized Market discovery' }).click();
   await settle(page, join(outDir, 'markets-discovery.png'));
-  captured.discovery = await harvest(page);
+  captured.enumeration = await harvest(page);
+  captured.discovery = captured.enumeration;
   await page.close();
 }
 
@@ -150,11 +173,6 @@ const captured = {};
 {
   const page = await context.newPage();
   await open(page, `/markets/${market}`);
-  await fill(page, /Finalized RPC endpoint/, endpoint);
-  await fill(page, /Core program/, core);
-  await fill(page, /Registry program/, registry);
-  if (claims !== '') await fill(page, /Claims program/, claims);
-  await page.getByRole('button', { name: 'Read this Market' }).click();
   await settle(page, join(outDir, 'market-detail.png'));
   // Capability drawers are <details>; open them so their facts are in the DOM.
   await page.evaluate(() => {
@@ -170,13 +188,8 @@ const captured = {};
 {
   const page = await context.newPage();
   await open(page, '/portfolio');
-  await fill(page, /Finalized RPC endpoint/, endpoint);
-  await fill(page, /Core program/, core);
-  if (claims !== '') await fill(page, /Claims program/, claims);
-  await fill(page, /Registry program/, registry);
-  await fill(page, /Owner address/, owner);
-  await fill(page, /Known Market addresses/, market);
-  await page.getByRole('button', { name: 'Derive and read Positions' }).click();
+  await fill(page, /Or paste any owner address/, owner);
+  await page.getByRole('button', { name: /Read this owner/ }).click();
   await settle(page, join(outDir, 'portfolio.png'));
   captured.portfolio = await harvest(page);
   await page.close();
