@@ -51,7 +51,7 @@ const CAMPAIGN_SCHEMA_V1: &str = "dclutch-successor-campaign-report-v1";
 const PARTICIPANT_SCHEMA_V1: &str = "dclutch-owned-loopback-user-position-admission-execution-v1";
 const RESOLUTION_INPUT_FORMAT_V1: &str = "dclutch-owned-loopback-flagship-resolution-input-v1";
 const RESOLUTION_CHECKPOINT_FORMAT_V1: &str =
-    "dclutch-owned-loopback-flagship-resolution-checkpoint-v1";
+    "dclutch-owned-loopback-flagship-resolution-checkpoint-v2";
 const PAYOUT_INPUT_FORMAT_V1: &str = "dclutch-wallet-terminal-payout-plan-input-v1";
 const PAYOUT_EVIDENCE_SCHEMA_V1: &str =
     "dclutch-local-private-validator-wallet-terminal-payout-evidence-v1";
@@ -917,17 +917,21 @@ fn adapt_resolution(
     let certificate_address = pubkey_field(accounts, "certificate", "resolution certificate")?;
     let market = pubkey_field(accounts, "market", "resolution market")?;
     let receipts = array(checkpoint.value.get("receipts"), "resolution receipts")?;
-    if receipts.len() != 2 {
+    if receipts.len() != 3 {
         return Err(Error::new(
-            "terminal resolution requires exact submit and execute receipts",
+            "terminal resolution requires exact submit, execute, and reclaim receipts",
         ));
     }
     let mut pending = Vec::new();
-    for (index, (raw, expected_stage)) in receipts.iter().zip(["submit", "execute"]).enumerate() {
+    for (index, (raw, expected_stage)) in receipts
+        .iter()
+        .zip(["submit", "execute", "reclaim"])
+        .enumerate()
+    {
         let row = object(Some(raw), "resolution receipt")?;
         if row.get("stage").and_then(Value::as_str) != Some(expected_stage) {
             return Err(Error::new(
-                "resolution receipts are not exact submit then execute",
+                "resolution receipts are not exact submit, execute, then reclaim",
             ));
         }
         pending.push(PendingEventV1 {
@@ -935,7 +939,11 @@ fn adapt_resolution(
             signature: signature_field(row, "signature", "resolution receipt")?,
             expected_slot: u64_field(row, "slot", "resolution receipt")?,
             expected_fee: u64_field(row, "feeLamports", "resolution receipt")?,
-            expected_compute: None,
+            expected_compute: Some(u64_field(
+                row,
+                "computeUnitsConsumed",
+                "resolution receipt",
+            )?),
             source_path: checkpoint.relative.clone(),
             source_sha256: sha256(&checkpoint.bytes),
             position: None,
@@ -2815,6 +2823,83 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn resolution_requires_v2_submit_execute_reclaim_with_exact_compute() {
+        let market = Pubkey::new_unique().to_string();
+        let certificate = Pubkey::new_unique().to_string();
+        let raw = |role: &str, value: Value| RawSourceV1 {
+            role: role.into(),
+            path: PathBuf::from(format!("/{role}.json")),
+            relative: format!("{role}.json"),
+            bytes: canonical_json(&value).unwrap(),
+            value,
+        };
+        let input = raw(
+            "input",
+            json!({
+                "format": RESOLUTION_INPUT_FORMAT_V1,
+                "accounts": {"market": market, "certificate": certificate},
+            }),
+        );
+        let receipt = |stage: &str, compute: u64| {
+            json!({
+                "stage": stage,
+                "signature": Signature::new_unique().to_string(),
+                "slot": compute,
+                "feeLamports": 5_000,
+                "computeUnitsConsumed": compute,
+            })
+        };
+        let checkpoint_value = json!({
+            "format": RESOLUTION_CHECKPOINT_FORMAT_V1,
+            "verifiedTerminal": true,
+            "receipts": [
+                receipt("submit", 101),
+                receipt("execute", 102),
+                receipt("reclaim", 103),
+            ],
+        });
+        let checkpoint = raw("checkpoint", checkpoint_value.clone());
+        let (_, pending, _) = adapt_resolution(&[input.clone(), checkpoint]).unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|event| event.operation.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "resolution-submit",
+                "resolution-execute",
+                "resolution-reclaim"
+            ]
+        );
+        assert_eq!(
+            pending
+                .iter()
+                .map(|event| event.expected_compute)
+                .collect::<Vec<_>>(),
+            [Some(101), Some(102), Some(103)]
+        );
+        assert!(pending[0].certificate.is_none());
+        assert!(pending[1].certificate.is_some());
+        assert!(pending[2].certificate.is_none());
+
+        let mut old = checkpoint_value.clone();
+        old["format"] =
+            Value::String("dclutch-owned-loopback-flagship-resolution-checkpoint-v1".into());
+        assert!(adapt_resolution(&[input.clone(), raw("checkpoint", old)]).is_err());
+
+        let mut missing_compute = checkpoint_value.clone();
+        missing_compute["receipts"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("computeUnitsConsumed");
+        assert!(adapt_resolution(&[input.clone(), raw("checkpoint", missing_compute)]).is_err());
+
+        let mut omitted_reclaim = checkpoint_value;
+        omitted_reclaim["receipts"].as_array_mut().unwrap().pop();
+        assert!(adapt_resolution(&[input, raw("checkpoint", omitted_reclaim)]).is_err());
     }
 
     #[test]
