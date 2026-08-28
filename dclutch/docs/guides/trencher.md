@@ -6,8 +6,9 @@ is the same failure: your money was somewhere a stranger could touch it.
 
 dClutch is a claims protocol built so there is no such place. This page
 tells you what you'd actually be holding, why the payout can't be walked
-back, and how there's a standing bounty you can collect just for paying
-attention.
+back, and how an open market can fund a bounty for the person who closes its
+failure case. There is no bounty to collect on devnet today because there is
+no open market there.
 
 First, the disclaimer you actually care about: **seven protocol programs
 are deployed on Solana devnet, but there is no open market, no token, and
@@ -75,7 +76,7 @@ $ dclutch refusal 0x5000
   were hostile or selected no supported family.
 ```
 
-## The failure walk: get paid for watching
+## The failure walk: how the bounty is designed to work
 
 Here's the outcome nobody else's protocol has: the oracle ghosting is **a
 priced outcome with a bounty on it.**
@@ -93,12 +94,14 @@ dclutch walk --book walk-book.json --generation 1 --terminal-sequence 1 \
     --keypair anyone.json
 ```
 
-Any wallet can be the walker. You pay one transaction fee; the market pays
-you the quoted bounty (the current demo market escrows 250,000 lamports).
-Too early? The program refuses and tells you so, and you're out one fee.
-It's a race worth scripting: watch deadlines, be first, collect. Free money
-for insomniacs, and it's not a bug — it's the mechanism that makes "the
-oracle ghosted" cost the market instead of costing you.
+Once an open market reaches that deadline, any wallet can be the walker. You
+pay one transaction fee and the market pays the bounty its creator funded.
+The archived demo input disclosed 250,000 lamports, but that input did not open
+on devnet, so the number is not a current offer or collectible bounty. Too
+early? The program refuses and tells you so, and you're out one fee. When a
+market is actually open, the race is worth scripting: watch deadlines, be
+first, collect. It is the mechanism that makes "the oracle ghosted" cost the
+market instead of costing you.
 
 ## The honest part
 

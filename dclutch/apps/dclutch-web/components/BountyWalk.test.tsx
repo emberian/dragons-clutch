@@ -43,14 +43,16 @@ describe('the smoke story and bounty pages speak to the reader', () => {
     expect(bounty).toContain('local test network');
   });
 
-  it('keeps the exact bytes in a drawer for builders, not in the headline', () => {
-    expect(bounty).toContain('Show the exact instruction and account list');
-    expect(bounty).toContain('DCLTRIX1');
-    expect(bounty).toContain('dclutch/resolution-cert/v3');
+  it('keeps handwritten instruction bytes off the reader page', () => {
+    expect(bounty).toContain('Open the generated route reference');
+    expect(bounty).not.toContain('DCLTRIX1');
+    expect(bounty).not.toContain('dclutch/resolution-cert/v3');
+    expect(bounty).not.toContain('Accounts, in order');
   });
 
   it('states the trust honestly in one human sentence each', () => {
     expect(smoke).toContain('You are trusting that messenger not to lie, and the market says so up front');
     expect(bounty).toContain('the walk pays once');
+    expect(bounty).toContain('No public devnet bounty exists today');
   });
 });

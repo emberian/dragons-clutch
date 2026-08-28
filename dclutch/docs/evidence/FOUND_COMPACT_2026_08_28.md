@@ -3,7 +3,9 @@
 Date: 2026-08-28
 
 This note records offline build and test evidence for decision 0013. It is not
-devnet execution evidence.
+devnet execution evidence. Its source is the current decision-0013
+implementation; its target is the next upgraded devnet generation. No
+`DCLTCOR3` Market currently exists on devnet.
 
 ## What changed
 
@@ -38,9 +40,11 @@ deployment/funding prefix followed by the exact ordinary `ProjectFound37`
 frame, for 44 account references. `DCLTGMF2` invokes no Resolution code and
 therefore does not repeat those mutable deployment accounts.
 
-The current Core Market state is the generated 360-byte `DCLTCOR3`/version-3
-layout. It persists `principal_cap_sets` at offset 288 and refuses zero. The
-older finalized 352-byte devnet Market generation is retained only as explicit
+The current source/target Core Market layout is the generated 360-byte
+`DCLTCOR3`/version-3 layout. It persists `principal_cap_sets` at offset 288 and
+refuses zero. This describes the source tree and the next-generation target,
+not current devnet state: zero `DCLTCOR3` Markets exist there today. The older
+finalized 352-byte devnet Market generation is retained only as explicit
 legacy-refusal evidence; it is not decoded or promoted to the current shape.
 
 ## Compiled transaction census

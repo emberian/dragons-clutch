@@ -10,6 +10,14 @@ Artifacts: `/private/tmp/dclutch-sdkcli/run2/` (spec, evidence, ledger,
 founding transcript) and `docs/evidence/cli-trader-loop-2026-08-27.transcript.txt`
 (the session below, unabridged).
 
+**Current-state note (2026-08-28).** This document preserves a local-validator
+checkpoint for the retired `DCLTPCB1`/`DCLTGMF1` generation. It is not evidence
+of a current devnet market or public-site trade. The replacement founding
+target is `DCLTPCB2`/`DCLTGMF2`. The public CLI's `buy` and `sell` commands now
+refuse before reading a session, route, or key, and the public browser exposes
+Direct arithmetic inspection only; neither surface currently submits a Direct
+trade.
+
 ## What ran, in order
 
 Every command is the shipped `dclutch` binary talking to the running
@@ -52,13 +60,13 @@ part of this Market's founding, which is the Market's own choice, not an
 outage
 ```
 
-This is the measured answer to "why no `buy` in this transcript": the
-demo-market recipe founds without the Direct capability entry, so the chain
-itself would refuse a trade, and the spine says so from one read. The
-`buy`/`sell` construction path (intent signing, crossing, compile, submit)
-is the same code the web trade workspace ships and is pinned by the SDK
-suite; executing it live needs a market founded with the Direct capability,
-which is the frontend journey lane's running campaign, not this one.
+This was the measured answer to "why no `buy` in this transcript": the local
+demo recipe founded without the Direct capability entry, so that chain would
+have refused a trade and the spine said so from one read. At this historical
+checkpoint, construction code existed for intent signing, crossing, compiling,
+and submission. It is not the current public execution boundary: `buy` and
+`sell` now refuse before key access, and the browser does not sign, compile, or
+submit Direct transactions.
 
 ### 4. `dclutch portfolio` — the founder's position through derived keys
 
@@ -142,11 +150,12 @@ refusal is the protocol working, and the terminal reads it as such.
   seeded-key derivation reproduced a campaign key byte-for-byte, so a
   terminal user can hold the founder's own position.
 
-What is *not* here, and why: a live `buy`. The demo-market recipe founds
-without the Direct capability entry, so the chain would refuse a trade and
-`spine` says so from one read (§3). The construction path is the same code
-the web trade workspace ships, pinned by the SDK suite; exercising it live
-needs a Direct-capable market, which is a different campaign than this one.
+What is *not* here, and why: a live `buy`. The local demo recipe founded
+without the Direct capability entry, so its chain would refuse a trade and
+`spine` said so from one read (§3). This record does not establish a safe
+current submitter. The present CLI refuses `buy` and `sell`, and the browser is
+a read-only arithmetic inspector until the exact execution journal, finalized
+acknowledgement, and poststate checks are accepted.
 
 Raw session: `docs/evidence/cli-trader-loop-2026-08-27.transcript.txt`,
 committed alongside this doc.

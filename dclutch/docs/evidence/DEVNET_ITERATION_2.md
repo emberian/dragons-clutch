@@ -69,6 +69,12 @@ before the first program-extension or Upgrade transaction.
 
 ## 2. Public-site baseline
 
+This section is a timestamped baseline, not a floating description of the
+currently deployed site. Each statement below is bound to its named wrapper
+commit, source commit, workflow run, and HTTP observation. Later deployments
+must add their own coordinates in §8; do not infer current site contents from
+this checkpoint.
+
 The same pre-write check requested `https://clutch.dregg.pro/` over HTTPS. It
 returned HTTP 200 from GitHub Pages. The response identified the current page
 as last modified `2026-08-28T02:30:25Z`. This establishes reachability only;
@@ -87,9 +93,12 @@ devnet, there is no open/sample market, and there is nothing to buy or place at
 risk. This remains a reachability and reader-truth checkpoint, not the owed
 post-Market cold-browser acceptance.
 
-The wrapper source later advanced to `9b965990` with the frame and replay-safety
-checkpoint, but no Pages workflow was dispatched for that source-only sync.
-The deployed site therefore remains the exact, verified `e7f49c02` artifact.
+At the time of this checkpoint, the wrapper source later advanced to
+`9b965990` with the frame and replay-safety checkpoint, but no Pages workflow
+was dispatched for that source-only sync. The last deployment observed by this
+record was therefore the exact, verified `e7f49c02` artifact. That sentence is
+date-bound and must not be read as the current deployment after a later manual
+Pages run.
 
 ## 3. Implementation gates already landed
 

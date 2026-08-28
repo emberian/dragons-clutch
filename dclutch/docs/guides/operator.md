@@ -33,19 +33,25 @@ none exists to defend.
 
 ## Opening the market
 
-Creating a market — the protocol calls it **founding** — is two
-transactions:
+Creating a market — the protocol calls it **founding** — now has three
+ordered stages:
 
-1. **The custody prestate.** Opens the market's vault (the Hoard) and its
-   funding accounts. After this the collateral physically exists, walled
-   off, before any claim does.
-2. **The founding.** Five steps — lock custody, create the market, make
-   it real, set up claims, open trading last — in a single all-or-nothing
-   transaction. Either your market opens whole or nothing happened at
-   all.
+1. **Project the market.** The Core program authenticates the complete
+   Registry graph and authorizes the exact projection for this future market.
+2. **Stage custody and controller funding.** The `DCLTPCB2` transaction opens
+   the empty Hoard, creates the one-shot projected custody state, funds the
+   named obligations, and records the exact controller-owned funding ledgers.
+   It does not create claims or open the market.
+3. **Found atomically.** The `DCLTGMF2` transaction locks custody, creates the
+   market, makes it real, sets up claims, and opens trading last in one
+   all-or-nothing rollback domain.
 
-The founding transaction is big: it runs at over 90% of Solana's
-per-transaction compute limit, and its measured cost is tracked in
+This is the current source-tree route targeted for the next devnet program
+update. It has passed the compiled-message lock census, but it has not opened a
+market on devnet yet. Its predecessor exceeded 90% of Solana's per-transaction
+compute limit; the replacement's compute cost must be remeasured before it is
+installed. The current measurements and their evidence level are in
+[the compact-founding record](../evidence/FOUND_COMPACT_2026_08_28.md) and
 [the budgets reference](../reference/budgets.md).
 
 ## Funding named obligations
