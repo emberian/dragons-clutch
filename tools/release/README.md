@@ -91,3 +91,38 @@ symlink. `devnet-upgrade-v1` requires the separately recorded gate digest and
 source commit/tree, rehashes every referenced file, and requires `--elf` to be
 the selected permanent role's exact canonical gate file. A handwritten
 `checked_release_accepted: true` document has no authority.
+
+## All-workspace gate
+
+The checked candidate owns the shipped SBF link set. It does not replace the
+repository-wide Cargo gate: the root workspace cannot see independent fixture,
+program-test, generator, and tool workspaces. Run the dynamic archived-source
+gate at the same accepted commit:
+
+```sh
+tools/release/check-all-workspaces.py \
+  --work /private/tmp/dclutch-all-workspaces-<commit>-<unique-run> \
+  --commit <commit>
+```
+
+The output root must not exist. The checker discovers every archived
+`Cargo.toml` with its own `[workspace]` table, requires its adjacent committed
+`Cargo.lock`, and runs `cargo check --workspace --all-targets --locked
+--offline` in a fresh isolated target. It hashes every archived `Cargo.lock`
+before and after the full run, including stray member locks that Cargo never
+reads, so the summary's `cargo_lock_count` is discovered rather than frozen to
+a historical number. A release result is green only when the pass count equals
+the workspace count and complete lock immutability says `passed`.
+
+On hbox, place the work root on `/tank` and keep the whole run under the shared
+machine's scheduler:
+
+```sh
+SWARM_MEM_MAX=32G CARGO_BUILD_JOBS=4 swarm-build \
+  tools/release/check-all-workspaces.py \
+    --work /tank/dregg-build/dclutch-all-workspaces-<commit>-<unique-run> \
+    --commit <commit>
+```
+
+`--inventory-only` is a quick way to inspect the discovered workspace and lock
+counts. It intentionally emits no admitted summary.
