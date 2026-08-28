@@ -23,6 +23,7 @@ mod rpc;
 mod runtime;
 mod seed;
 mod terminal_lifecycle;
+mod terminal_sequence;
 mod upgrade;
 mod user_position_admission;
 mod wallet_terminal;
@@ -85,6 +86,9 @@ fn run() -> Result<()> {
         }
         Some("terminal-lifecycle-plan") => {
             terminal_lifecycle::run_terminal_lifecycle_plan(arguments.collect())
+        }
+        Some("devnet-terminal-sequence-v1") => {
+            terminal_sequence::run_terminal_sequence(arguments.collect())
         }
         Some("wallet-terminal-payout-alt-plan") => wallet_terminal::run_alt(arguments.collect()),
         Some("wallet-terminal-payout-plan") => wallet_terminal::run(arguments.collect()),
@@ -1228,6 +1232,7 @@ fn usage() {
     println!("{}", upgrade::usage());
     println!("{}", terminal_lifecycle::usage());
     println!("{}", terminal_lifecycle::lifecycle_usage());
+    println!("{}", terminal_sequence::usage());
     println!("{}", user_position_admission::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", wallet_terminal::usage());

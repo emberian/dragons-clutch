@@ -25,6 +25,8 @@ pub mod dealer_equity_hot_v3;
 pub mod dealer_scenario_hot_v4;
 /// Exact delegated-allowance Custody successor CPI construction.
 pub mod delegated_custody;
+/// Chain-derived unsigned Direct root retirement construction.
+pub mod direct_begin_retiring_v1;
 /// Chain-derived action-selected Direct V3 inline execution construction.
 pub mod direct_inline_v3;
 /// Exact unsigned signing material for the Direct V2 successor.
@@ -65,6 +67,8 @@ pub mod resolution_core_v3 {
 pub mod series_hot_v3;
 /// Compact projected-Market Series Consume instruction-data construction.
 pub mod series_projected_v2;
+/// Chain-derived Direct close and retirement replay-handoff construction.
+pub mod terminal_retirement_v1;
 /// Wallet-authorized Claims terminal payout and exact v0 routing construction.
 pub mod wallet_terminal_payout_v3;
 /// Chain-derived address-table lifecycle and versioned-message construction.

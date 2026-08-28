@@ -63,19 +63,33 @@ const TERMINAL_COMPOSITION_LABELS_V1: [&str; 4] = [
     "terminal_composition_exposure_record",
 ];
 
-#[derive(Debug, Deserialize)]
-struct PayoutEvidenceV1 {
-    plan_sha256: String,
+pub(crate) const DIRECT_BEGIN_RETIRING_LABELS_V1: [&str; 3] = [
+    "direct_begin_retiring_account_profile_record",
+    "direct_begin_retiring_effect_record",
+    "direct_begin_retiring_descriptor_record",
+];
+
+pub(crate) const DIRECT_NATIVE_CLOSE_LABELS_V1: [&str; 3] = [
+    "direct_native_close_account_profile_record",
+    "direct_native_close_effect_record",
+    "direct_native_close_descriptor_record",
+];
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct PayoutEvidenceV1 {
+    pub(crate) plan_sha256: String,
     #[serde(rename = "foundingCustodyContext")]
-    founding_custody_context: String,
-    accounts: BTreeMap<String, PayoutAccountEvidenceV1>,
+    pub(crate) founding_custody_context: String,
+    #[serde(rename = "directSelectedManifestEntryIndex")]
+    pub(crate) direct_selected_manifest_entry_index: u16,
+    pub(crate) accounts: BTreeMap<String, PayoutAccountEvidenceV1>,
 }
 
-#[derive(Debug, Deserialize)]
-struct PayoutAccountEvidenceV1 {
-    address: String,
-    owner: String,
-    data_sha256: String,
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct PayoutAccountEvidenceV1 {
+    pub(crate) address: String,
+    pub(crate) owner: String,
+    pub(crate) data_sha256: String,
 }
 
 struct ArgumentsV1 {
@@ -236,6 +250,7 @@ pub(crate) fn run_terminal_lifecycle_plan(arguments: Vec<String>) -> Result<()> 
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
     let evidence: PayoutEvidenceV1 = serde_json::from_slice(&std::fs::read(&arguments.evidence)?)?;
     authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
+    require_direct_retirement_evidence(&evidence)?;
     let persisted_market = pubkey(&required_account(&evidence, "founding_market")?.address)?;
     if persisted_market != arguments.market {
         return Err(Error::new(format!(
@@ -550,6 +565,12 @@ fn plan_resolution_close(
             "Resolution closure receipt destination is not a vacant System account",
         ));
     }
+    if close_snapshot.closure_destination.lamports > receipt_rent {
+        return Err(Error::new(format!(
+            "Resolution closure receipt carries {} lamports but exact rent is {receipt_rent}; surplus prepayment is refused",
+            close_snapshot.closure_destination.lamports
+        )));
+    }
     if close_snapshot.closure_destination.lamports < receipt_rent {
         let mut projected = close_snapshot.clone();
         projected.closure_destination.lamports = receipt_rent;
@@ -589,7 +610,7 @@ fn plan_resolution_close(
     ))
 }
 
-fn decode_routed_market(
+pub(crate) fn decode_routed_market(
     account: &ObservedAccount,
     core: Pubkey,
     plan: &SuccessorPlan,
@@ -610,7 +631,7 @@ fn decode_routed_market(
     Ok(market)
 }
 
-fn authenticate_zero_claims(
+pub(crate) fn authenticate_zero_claims(
     account: &ObservedAccount,
     expected: Pubkey,
     claims: Pubkey,
@@ -659,7 +680,7 @@ fn post_resolution_close_blocker(market: CoreState) -> Error {
     )
 }
 
-fn routed_record(
+pub(crate) fn routed_record(
     evidence: &PayoutEvidenceV1,
     label: &str,
     registry: Pubkey,
@@ -677,7 +698,7 @@ fn routed_record(
     Ok(pair)
 }
 
-fn finalized_snapshot(rpc: &mut Rpc, keys: &[Pubkey]) -> Result<FinalizedSnapshotV1> {
+pub(crate) fn finalized_snapshot(rpc: &mut Rpc, keys: &[Pubkey]) -> Result<FinalizedSnapshotV1> {
     let mut keys = keys.to_vec();
     keys.sort_unstable();
     keys.dedup();
@@ -686,7 +707,7 @@ fn finalized_snapshot(rpc: &mut Rpc, keys: &[Pubkey]) -> Result<FinalizedSnapsho
     FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &keys, values)
 }
 
-fn observed(snapshot: &FinalizedSnapshotV1, key: Pubkey) -> Result<ObservedAccount> {
+pub(crate) fn observed(snapshot: &FinalizedSnapshotV1, key: Pubkey) -> Result<ObservedAccount> {
     snapshot.account(key).cloned()
 }
 
@@ -946,7 +967,7 @@ fn stable_parent_context_v1(
     Ok(context)
 }
 
-fn authenticate_plan_source(source: &[u8], expected: &str) -> Result<()> {
+pub(crate) fn authenticate_plan_source(source: &[u8], expected: &str) -> Result<()> {
     let expected = hex32(expected)?;
     let observed: [u8; 32] = Sha256::digest(source).into();
     if observed != expected {
@@ -974,7 +995,27 @@ fn require_terminal_composition_evidence(evidence: &PayoutEvidenceV1) -> Result<
     Ok(())
 }
 
-fn required_account<'a>(
+pub(crate) fn require_direct_retirement_evidence(evidence: &PayoutEvidenceV1) -> Result<()> {
+    for label in DIRECT_BEGIN_RETIRING_LABELS_V1
+        .into_iter()
+        .chain(DIRECT_NATIVE_CLOSE_LABELS_V1)
+        .chain([
+            "direct_program_set_record",
+            "direct_execution_config_record",
+            "direct_capability_root",
+            "direct_trading_funding_ledger",
+        ])
+    {
+        required_account(evidence, label).map_err(|_| {
+            Error::new(format!(
+                "terminal sequence is blocked: campaign evidence omitted exact Direct lifecycle label {label}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn required_account<'a>(
     evidence: &'a PayoutEvidenceV1,
     label: &str,
 ) -> Result<&'a PayoutAccountEvidenceV1> {
@@ -1350,6 +1391,7 @@ mod tests {
         let evidence = PayoutEvidenceV1 {
             plan_sha256: hex(&[1; 32]),
             founding_custody_context: hex(&[2; 32]),
+            direct_selected_manifest_entry_index: 0,
             accounts: BTreeMap::new(),
         };
         let error = require_terminal_composition_evidence(&evidence)
@@ -1365,6 +1407,7 @@ mod tests {
         let decoded: PayoutEvidenceV1 = serde_json::from_value(serde_json::json!({
             "plan_sha256": hex(&[1; 32]),
             "foundingCustodyContext": hex(&[2; 32]),
+            "directSelectedManifestEntryIndex": 0,
             "accounts": {
                 "terminal_composition_descriptor_record": {
                     "address": Pubkey::new_unique().to_string(),
@@ -1378,6 +1421,43 @@ mod tests {
         .expect("campaign evidence projection");
         assert_eq!(decoded.plan_sha256, hex(&[1; 32]));
         assert_eq!(decoded.founding_custody_context, hex(&[2; 32]));
+        assert_eq!(decoded.direct_selected_manifest_entry_index, 0);
+    }
+
+    #[test]
+    fn direct_retirement_requires_exact_three_selector_evidence_labels() {
+        let row = || PayoutAccountEvidenceV1 {
+            address: Pubkey::new_unique().to_string(),
+            owner: Pubkey::new_unique().to_string(),
+            data_sha256: hex(&[3; 32]),
+        };
+        let mut accounts = BTreeMap::new();
+        for label in DIRECT_BEGIN_RETIRING_LABELS_V1
+            .into_iter()
+            .chain(DIRECT_NATIVE_CLOSE_LABELS_V1)
+            .chain([
+                "direct_program_set_record",
+                "direct_execution_config_record",
+                "direct_capability_root",
+                "direct_trading_funding_ledger",
+            ])
+        {
+            accounts.insert(label.into(), row());
+        }
+        let exact = PayoutEvidenceV1 {
+            plan_sha256: hex(&[1; 32]),
+            founding_custody_context: hex(&[2; 32]),
+            direct_selected_manifest_entry_index: 0,
+            accounts: accounts.clone(),
+        };
+        require_direct_retirement_evidence(&exact).expect("exact Direct retirement evidence");
+        for label in DIRECT_BEGIN_RETIRING_LABELS_V1 {
+            let mut hostile = exact.clone();
+            hostile.accounts.remove(label);
+            let error = require_direct_retirement_evidence(&hostile)
+                .expect_err("missing begin-retiring label must refuse");
+            assert!(error.to_string().contains(label));
+        }
     }
 
     #[test]
