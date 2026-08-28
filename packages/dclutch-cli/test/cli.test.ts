@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { decodeSession } from '../src/context';
 import { nameRefusals } from '../src/output';
 import { decodeWalkBook } from '../src/commands/walk';
-import { intentFromJson, parseRouteManifestFile } from '../src/commands/trade';
+import { intentFromJson } from '../src/commands/trade';
 
 function key(byte: number): string {
   return new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -105,18 +105,5 @@ describe('trade wire formats', () => {
       signature: 'ab'.repeat(64),
       intent: { side: 0, lifecycle: 0, outcome: 1, market: key(4), generation: '-1', nonce: '2', validFrom: '10', validThrough: '160', maximumFill: '5', limitPrice: '4', feeBasisPoints: 30, collateralAccount: key(5) },
     })).toThrow(/generation/);
-  });
-
-  it('parses the same route-manifest JSON the web workspace accepts', () => {
-    const manifest = parseRouteManifestFile(JSON.stringify({
-      payer: key(6),
-      fixedAccounts: [{ address: key(7), isSigner: false, isWritable: true }],
-      strategyAccounts: [],
-      runtimeAccounts: [{ address: key(8), isSigner: false, isWritable: false }],
-      lookupTables: [key(9)],
-    }));
-    expect(manifest.payer).toBe(key(6));
-    expect(manifest.fixedAccounts[0]?.isWritable).toBe(true);
-    expect(manifest.checkedInfrastructure).toBeNull();
   });
 });

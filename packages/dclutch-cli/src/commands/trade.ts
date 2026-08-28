@@ -23,7 +23,8 @@ import {
   type CompactIntentV2Input,
   type SignedDirectIntentV3,
 } from '@dclutch/sdk/directInlineV3';
-import { inspectDirectHotRouteV3, type DirectHotRouteInspectionV3, type DirectHotRouteManifestV3 } from '@dclutch/sdk/directHotChain';
+import { type DirectHotRouteInspectionV3 } from '@dclutch/sdk/directHotChain';
+import { inspectDirectHotRouteManifestJsonV3 } from '@dclutch/sdk/directHotRouteManifest';
 import type { Keypair } from '@solana/web3.js';
 import type { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import nacl from 'tweetnacl';
@@ -33,50 +34,10 @@ import { assertExactDevnetMutation, devnetGenesisAcknowledgment } from '../mutat
 import { block, type Io } from '../output';
 import { submitAndConfirm } from '../submit';
 
-// ------------------------------------------------------------- route manifest
-
-function coordinate(value: unknown, field: string): { address: string; isSigner: boolean; isWritable: boolean } {
-  if (typeof value !== 'object' || value === null) throw new Error(`${field} must be one object`);
-  const input = value as Record<string, unknown>;
-  if (typeof input.address !== 'string' || typeof input.isSigner !== 'boolean' || typeof input.isWritable !== 'boolean') {
-    throw new Error(`${field} must carry address/isSigner/isWritable exactly`);
-  }
-  return { address: input.address, isSigner: input.isSigner, isWritable: input.isWritable };
-}
-
-/**
- * The same JSON the web trade workspace accepts, from a file: payer, the
- * three coordinate arrays, lookup tables, and optionally the checked
- * infrastructure record as base64 under `checkedInfrastructure`.
- */
-export function parseRouteManifestFile(text: string): DirectHotRouteManifestV3 {
-  const value: unknown = JSON.parse(text);
-  if (typeof value !== 'object' || value === null) throw new Error('route manifest must be one JSON object');
-  const input = value as Record<string, unknown>;
-  if (typeof input.payer !== 'string' || !Array.isArray(input.fixedAccounts) || !Array.isArray(input.strategyAccounts)
-      || !Array.isArray(input.runtimeAccounts) || !Array.isArray(input.lookupTables)
-      || input.lookupTables.some((entry) => typeof entry !== 'string')) {
-    throw new Error('route manifest has the wrong exact field types');
-  }
-  let checkedInfrastructure: Uint8Array | null = null;
-  if (typeof input.checkedInfrastructure === 'string' && input.checkedInfrastructure.length > 0) {
-    checkedInfrastructure = Uint8Array.from(Buffer.from(input.checkedInfrastructure, 'base64'));
-  }
-  return Object.freeze({
-    payer: input.payer,
-    fixedAccounts: Object.freeze(input.fixedAccounts.map((entry, index) => coordinate(entry, `fixed account ${index}`))),
-    strategyAccounts: Object.freeze(input.strategyAccounts.map((entry, index) => coordinate(entry, `strategy account ${index}`))),
-    runtimeAccounts: Object.freeze(input.runtimeAccounts.map((entry, index) => coordinate(entry, `runtime account ${index}`))),
-    lookupTables: Object.freeze(input.lookupTables as string[]),
-    checkedInfrastructure,
-  });
-}
-
 async function inspectRoute(context: CliContext, client = rpcClient(context)): Promise<DirectHotRouteInspectionV3> {
   const routePath = context.flags.route;
-  if (typeof routePath !== 'string') throw new Error('pass --route <json> naming the Direct hot route (payer, fixed/strategy/runtime accounts, lookup tables)');
-  const manifest = parseRouteManifestFile(readFileSync(routePath, 'utf8'));
-  return inspectDirectHotRouteV3(client, manifest);
+  if (typeof routePath !== 'string') throw new Error('pass --route <json> naming one checked Direct hot route manifest');
+  return inspectDirectHotRouteManifestJsonV3(client, readFileSync(routePath));
 }
 
 // ------------------------------------------------------------------- intents

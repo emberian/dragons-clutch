@@ -40,6 +40,7 @@ export * from './lib/directTradeSpine';
 export * from './lib/directMakerReplay';
 export * from './lib/directTicket';
 export * from './lib/directInlineV3';
+export * from './lib/directHotRouteManifest';
 export * from './lib/solanaLimits';
 
 // Redemption: the Claims-role Custody replay the chain demands, then the

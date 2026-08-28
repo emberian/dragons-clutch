@@ -23,6 +23,9 @@ dclutch --session session.json markets show <market>
 dclutch --session session.json spine --market <market> --keypair me.json
 
 # Direct settlement is bilateral: a maker signs an intent, a taker crosses it
+# route.json must be one dclutch-direct-hot-route-manifest-v3 document carrying
+# the exact 39 named fixed rows, runtime rows, sole frozen lookup table, and the
+# complete checked-infrastructure bytes plus their lowercase SHA-256.
 dclutch --session session.json intent sell --route route.json \
     --outcome 1 --fill 5 --price 400000 --collateral <acct> \
     --keypair maker.json --out sell-intent.json
@@ -50,6 +53,14 @@ dclutch refusal 0x5000            # any custom code, named via the band registry
 - Refusals render by NAME (band registry, decision 0007) on every error
   path; a refusal is the protocol working, and this tool says which program
   refused and why instead of printing a bare number.
+- `--route` is hostile input, not authority. The SDK bounds and scans its
+  original UTF-8 before ordinary decoding, refuses duplicate keys at every
+  object level, unknown or missing fields, aliases, noncanonical addresses,
+  privileges, roles, evidence encodings and digests, then reacquires the whole
+  route from finalized chain state. `intent`, `buy`, and `sell` receive no route
+  until the existing Direct authenticator recognizes the checked outer
+  deployment evidence and exact frozen lookup table. No public route producer
+  is shipped yet; these commands do not invent or default one.
 - `redeem` checks the market, your position, the receiving token account, the
   winning claim, and the full available quantity at finalized commitment. You
   can pass a completed campaign with `--spec <plan> --payout-evidence
