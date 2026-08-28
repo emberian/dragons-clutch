@@ -226,6 +226,19 @@ ELF SHA-256; do not report one draw or an observed minimum as a margin.
   never reached. Preserve the gate, workspace census, and M-61 result as build
   evidence only; a larger onchain CU repair and a fresh runtime candidate are
   required.
+- Resolution descendant `68f6f7d6` collapsed the remaining duplicate
+  pre-Market authentication. In its fixed-payer focused harness, whole-caller
+  work fell from 861,269 to 813,778 CU (47,491 CU observed reduction) and
+  Resolution-exclusive work fell from 512,659 to 474,174 CU (38,485 CU
+  observed reduction). The evidence root is
+  `/tank/dregg-build/dclutch-resolution-cu2.WDJYpG`; host tests passed 4/4,
+  the compiled-SBF positive and Found37-alias rollback cases passed, and all
+  133 measured frames were below 4,096 bytes with a 1,920-byte pre-Market
+  maximum. This focused harness does not contain Trading's post-child work.
+  Direct and PRIVATE therefore selected a durable Prepared funding checkpoint
+  as required architecture; do not emit another gate for the old one-transaction
+  DCLTPCB2 shape. Run the next all-13/frame/M-61 gate only after that vertical
+  slice freezes.
 
 ## Other preserved intermediate evidence
 
