@@ -1,12 +1,19 @@
 # DEPLOY-1 — the durable devnet deploy
 
-**Date: 2026-08-27/28. Lane: DEPLOY-1, keyed by ember (keyDEPLOY-1). Status:
-IN FLIGHT — this file is being written as the stages land and says so until
-this line is removed.**
+**Date: 2026-08-27/28. Lane: DEPLOY-1, keyed by ember (keyDEPLOY-1).**
 
 Charter: `WAVE.md`'s DEPLOY-1 queue over decision 0012's substrate — mutable,
 slot-pinned, iterated by `Upgrade`, nothing recycled. Every number below is
 measured, not predicted, unless it says otherwise.
+
+**Status, by section.** The deployment record — the gate (§1), the substrate
+(§2), the record layer and five-role activation (§3), the wallet arithmetic
+through activation (§4), and the founding wiring (§5) — is **complete and
+final**: every act in those sections is executed, byte-verified, and
+detector-confirmed on Solana devnet, and their contents will not change. The
+market foundings (§6), the life (§7-adjacent items), and the closing ledgers
+carry their own status lines and grow as each act lands; a section that is
+still in progress says so in its own words.
 
 ## 1. The gate
 
@@ -130,7 +137,45 @@ over venue facts read off real mainnet.
 
 ## 6. The markets
 
-*(filled as each founding lands)*
+### 6.1 The SOL/USD range-protection flagship
+
+**Status: founding IN PROGRESS on devnet (the campaign is executing as this
+revision is committed); the addresses below are the derived targets the
+founding detector reported before execution and are final either way.**
+
+The story: protection against SOL/USD leaving the 120.00–180.00 band at a
+real terminal window, resolved by the real devnet Pyth receiver. Founded
+under kappa as a founder-side discipline (the on-chain cap is the
+RECORDS-MIGRATE row; SMOKE-0 §6.8's framing stands).
+
+| fact | value |
+|---|---|
+| **Open Market** | `HEzCuDvrKP9ScVK8dZqULRzw78U3922yk5q7cu3riqK` |
+| Found31 Market (generation 1) | `9oww4URBNczg83g6ZzRD8zvcFfVeKTimAutwKm6qAuZa` |
+| abort-lane Market (generation 3, staged and unwound) | `5ZtTvhPLeP1HjLfHBWwnfZ2B5wrNj8AamzZoGof8uGHk` |
+| collateral mint (Token-2022, 6 decimals) | `YyQtrWnqAFqx4D2MZdnS3eK8TgM1Ewabx9waExH99aD` |
+| realm record | `2D4qAzXUyDK5qwVa5HxDvvRtPQR5iojXUAF4Am5dAAeu` |
+| band | cuts 12,000 / 18,000 at denominator 100 (USD cents); coefficients 1,0,1,0 — either tail pays |
+| terminal window | 2026-08-28 01:05:58Z → 01:35:58Z (1,800 s = ~5.75 measured cadences) |
+| `max_age_seconds` | 86,400 — a deliberate submission-latency budget so the resolution tooling that follows this deploy can still submit an in-window publication; the window bounds WHAT resolves, the budget only bounds how long after publication a submission may land |
+| provider | the committed devnet Pyth row (`devnet_release_v1`), SOL/USD `PriceUpdateV2` at `7AviUf9nL62mcxNbQGKm4nKDQnPjswo6c5MX4D57HmyE` |
+
+*(the founding transcript's facts — transaction counts, DCLTGMF1 CU, the
+Open poststate — land here when the campaign completes)*
+
+### 6.2 The abandoned market (relayed, relayer deliberately silent)
+
+**Status: input compiled (real venue facts, failure-shaped window, 250,000
+lamport walk bounty disclosed in the manifest quote); founding queued behind
+the flagship.**
+
+### 6.3 The mainnet-observer graduation market (relayed, operated daemon)
+
+**Status: gated, deliberately.** The founding pins an `account_set_id` this
+lane derived as `63918468…` over the real watched set; the operated daemon's
+own `show-config` must independently print the same value before anything is
+founded against it — two authors, one number. Founding proceeds on that
+cross-check.
 
 ## 7. Frictions and findings
 
@@ -146,4 +191,4 @@ over venue facts read off real mainnet.
 
 ## 8. What SMOKE-1 still needs
 
-*(closed at yield)*
+**Status: collected during the run; closed at the lane's yield.**
