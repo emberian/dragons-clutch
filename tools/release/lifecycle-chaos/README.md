@@ -31,6 +31,13 @@ The upstream must return `BlockhashNotFound`, and recovery must poll the exact
 wire signature without another client send. Every injected send is refused
 unless the selected owner projection is already durably `submitted`.
 
+Refusal journal prefixes are exact. Corrupt/replaced evidence and wallet
+underfund/surplus expose no lifecycle stage. Expiry has founding, participant,
+ALT, and seal finalized, Hot submitted, and nothing later. Late-child refusal
+has every stage through payout finalized and no retirement projection at all.
+The shell rejects a merely ordered-looking result that advances past one of
+those boundaries.
+
 ## Driver projection
 
 `lifecycle_chaos.py` consumes a strict `dclutch-lifecycle-chaos-spec-v1` JSON
@@ -70,6 +77,8 @@ exports a private key or packet.
 For wallet underfund/surplus, the driver applies the local-only fault while
 still stopped before `GO`, then writes `control/FAULT_ARMED.json`. The
 supervisor observes that faulty prestate before allowing the session to run.
+Both sides of the exact authorized fee/rent budget are prestate refusals; a
+surplus is not silently admitted or swept.
 For a late-child refusal, `GO` advances the valid prefix; immediately before
 the selected child call the driver writes `FAULT_ARMED.json` and waits. The
 supervisor observes that exact boundary and writes `control/FAULT_GO.json`.
