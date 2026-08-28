@@ -35,9 +35,7 @@ use dclutch_direct_codec::{
     ordinary_effect_artifacts_v3::{
         DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3, DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3,
     },
-};
-use dclutch_product_runtime_v2::{
-    DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
+    ordinary_geometry_v3::DirectOrdinaryGeometryV3,
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
@@ -63,9 +61,6 @@ pub const STALE_DIRECT_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
     0x42, 0x7d, 0x4d, 0x71, 0xec, 0x44, 0x64, 0xf3, 0xee, 0x3b, 0x2c, 0x15, 0x88, 0xd3, 0xe8, 0xb4,
 ];
 
-const CLAIMS_ROW_BYTES: usize = 8;
-const CLAIMS_MARKET_HEADER_BYTES: usize = 256;
-const CLAIMS_POSITION_HEADER_BYTES: usize = 128;
 const TOKEN_MINT_BYTES: u32 = 82;
 const TOKEN_ACCOUNT_BYTES: u32 = 165;
 
@@ -123,10 +118,18 @@ pub enum DirectHotFixtureErrorV5 {
 }
 
 /// Build the exact current Direct fixed-topology artifacts using real deployment widths.
+///
+/// The geometry decides only what account observations this fixture STATES.
+/// It does not decide the artifacts: every runtime-width coordinate is an
+/// affine rule the runtime resolves against the transaction's own Product
+/// tail, so the emitted bundle is the same bytes -- and the same content
+/// identities -- at every geometry. `the_artifacts_are_the_same_bytes_at_every_geometry`
+/// is that claim, executed.
 pub fn build_direct_hot_artifact_fixture_v5(
     deployment: DirectHotDeploymentWidthsV5,
+    geometry: DirectOrdinaryGeometryV3,
 ) -> Result<DirectHotArtifactFixtureV5, DirectHotFixtureErrorV5> {
-    let logical_data_lengths = direct_logical_data_lengths_v5(deployment)?;
+    let logical_data_lengths = direct_logical_data_lengths_v5(deployment, geometry)?;
     let bundle = build_direct_inline_ordinary_hot_bundle_v4(DirectInlineOrdinaryHotBundleInputV4 {
         account_profile: DirectInlineOrdinaryAccountProfileInputV3 {
             logical_data_lengths: &logical_data_lengths,
@@ -194,6 +197,7 @@ pub fn validate_direct_hot_artifact_fixture_v5(
 
 fn direct_logical_data_lengths_v5(
     deployment: DirectHotDeploymentWidthsV5,
+    geometry: DirectOrdinaryGeometryV3,
 ) -> Result<Vec<u32>, DirectHotFixtureErrorV5> {
     let mut output = vec![0_u32; usize::from(DIRECT_INLINE_ORDINARY_FIXED_ACCOUNTS_V3)];
     put_width(
@@ -209,17 +213,7 @@ fn direct_logical_data_lengths_v5(
         dclutch_direct_codec::successor::DIRECT_EXECUTION_CONFIG_BYTES_V1,
     )?;
     put_width(&mut output, 2, PRODUCT_RECORD_BYTES_V2)?;
-    put_width(
-        &mut output,
-        3,
-        PORTFOLIO_HEADER_BYTES
-            .checked_add(
-                3_usize
-                    .checked_mul(PORTFOLIO_COEFFICIENT_BYTES)
-                    .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
-            )
-            .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
-    )?;
+    put_geometry_width(&mut output, 3, geometry.portfolio_record_bytes())?;
     put_width(
         &mut output,
         4,
@@ -236,31 +230,10 @@ fn direct_logical_data_lengths_v5(
     // Coordinate 10 is the executable Rent program that owns the credit. Its
     // rule is opaque, so this width is descriptive only and never pinned.
     put_width(&mut output, 10, LOADER_V3_PROGRAM_BYTES)?;
-    put_width(
-        &mut output,
-        13,
-        CLAIMS_MARKET_HEADER_BYTES
-            .checked_add(
-                3_usize
-                    .checked_mul(CLAIMS_ROW_BYTES)
-                    .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
-            )
-            .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
-    )?;
+    put_geometry_width(&mut output, 13, geometry.claims_aggregate_record_bytes())?;
     alias_width(&mut output, 14, 4)?;
     put_width(&mut output, 16, PRODUCT_RECORD_BYTES_V2)?;
-    put_width(
-        &mut output,
-        18,
-        DOMAIN_HEADER_BYTES
-            .checked_sub(
-                2_usize
-                    .checked_mul(DOMAIN_CUT_BYTES)
-                    .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
-            )
-            .and_then(|base| base.checked_add(3_usize.checked_mul(DOMAIN_CUT_BYTES)?))
-            .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
-    )?;
+    put_geometry_width(&mut output, 18, geometry.result_domain_record_bytes())?;
     alias_width(&mut output, 20, 3)?;
     *output
         .get_mut(22)
@@ -280,16 +253,10 @@ fn direct_logical_data_lengths_v5(
         .get_mut(31)
         .ok_or(DirectHotFixtureErrorV5::InvalidWidth)? = deployment.core_programdata_bytes;
     for coordinate in [32_usize, 33] {
-        put_width(
+        put_geometry_width(
             &mut output,
             coordinate,
-            CLAIMS_POSITION_HEADER_BYTES
-                .checked_add(
-                    3_usize
-                        .checked_mul(CLAIMS_ROW_BYTES)
-                        .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
-                )
-                .ok_or(DirectHotFixtureErrorV5::InvalidWidth)?,
+            geometry.claims_position_record_bytes(),
         )?;
     }
     alias_width(&mut output, 35, 23)?;
@@ -389,6 +356,19 @@ fn put_width(
     Ok(())
 }
 
+/// Write one geometry-derived record width, or carry its refusal.
+fn put_geometry_width(
+    output: &mut [u32],
+    coordinate: usize,
+    value: Result<u32, dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryErrorV3>,
+) -> Result<(), DirectHotFixtureErrorV5> {
+    *output
+        .get_mut(coordinate)
+        .ok_or(DirectHotFixtureErrorV5::InvalidWidth)? =
+        value.map_err(|_| DirectHotFixtureErrorV5::InvalidWidth)?;
+    Ok(())
+}
+
 fn alias_width(
     output: &mut [u32],
     coordinate: usize,
@@ -439,7 +419,11 @@ mod tests {
 
     #[test]
     fn final_artifact_and_set_identities_are_fresh() {
-        let fixture = build_direct_hot_artifact_fixture_v5(real_widths()).expect("fixture");
+        let fixture = build_direct_hot_artifact_fixture_v5(
+            real_widths(),
+            DirectOrdinaryGeometryV3::CANONICAL,
+        )
+        .expect("fixture");
         assert_eq!(fixture.descriptor_id, DIRECT_HOT_FIXTURE_DESCRIPTOR_ID_V5);
         assert_eq!(fixture.program_set_id, DIRECT_HOT_FIXTURE_PROGRAM_SET_ID_V5);
         assert_eq!(
@@ -471,7 +455,11 @@ mod tests {
 
     #[test]
     fn real_widths_bind_exact_rent_activation_and_program_geometry() {
-        let fixture = build_direct_hot_artifact_fixture_v5(real_widths()).expect("fixture");
+        let fixture = build_direct_hot_artifact_fixture_v5(
+            real_widths(),
+            DirectOrdinaryGeometryV3::CANONICAL,
+        )
+        .expect("fixture");
         assert_eq!(fixture.logical_data_lengths.get(7), Some(&128));
         assert_eq!(
             fixture.logical_data_lengths.get(10),
@@ -501,7 +489,11 @@ mod tests {
 
     #[test]
     fn stale_profile_and_lifecycle_v4_substitutions_refuse() {
-        let fixture = build_direct_hot_artifact_fixture_v5(real_widths()).expect("fixture");
+        let fixture = build_direct_hot_artifact_fixture_v5(
+            real_widths(),
+            DirectOrdinaryGeometryV3::CANONICAL,
+        )
+        .expect("fixture");
         assert_eq!(
             validate_direct_hot_artifact_fixture_v5(&with_stale_account_profile_id_v5(
                 fixture.bundle
@@ -516,11 +508,53 @@ mod tests {
         );
     }
 
+    /// The whole artifact set, and every identity it carries, is the same at
+    /// every market geometry.
+    ///
+    /// This is the executable form of the family's central geometry claim, at
+    /// the layer that actually installs accounts on a chain. If a founder's
+    /// market has four outcomes rather than three, it does not need its own
+    /// emission, its own descriptor, its own ProgramSet or its own seal -- it
+    /// selects the SAME ones, and the Hot executor resolves every
+    /// runtime-width rule against the transaction's own Product tail.
+    #[test]
+    fn the_artifacts_are_the_same_bytes_at_every_geometry() {
+        let canonical = build_direct_hot_artifact_fixture_v5(
+            real_widths(),
+            DirectOrdinaryGeometryV3::CANONICAL,
+        )
+        .expect("canonical fixture");
+        for outcomes in 2..=16_u32 {
+            let geometry =
+                DirectOrdinaryGeometryV3::from_outcome_count(outcomes).expect("geometry");
+            let emitted =
+                build_direct_hot_artifact_fixture_v5(real_widths(), geometry).expect("fixture");
+            assert_eq!(
+                emitted.bundle, canonical.bundle,
+                "the artifact bundle moved at {outcomes} outcomes"
+            );
+            assert_eq!(emitted.program_set, canonical.program_set);
+            assert_eq!(emitted.descriptor_id, DIRECT_HOT_FIXTURE_DESCRIPTOR_ID_V5);
+            assert_eq!(emitted.program_set_id, DIRECT_HOT_FIXTURE_PROGRAM_SET_ID_V5);
+            // The observations DO move -- that is the point. What does not
+            // move is what the artifacts say about them.
+            assert_ne!(
+                emitted.logical_data_lengths == canonical.logical_data_lengths,
+                outcomes != DirectOrdinaryGeometryV3::CANONICAL.outcome_count()
+            );
+        }
+    }
+
     #[test]
     fn placeholder_programdata_width_is_not_a_profile_authority() {
-        let real = build_direct_hot_artifact_fixture_v5(real_widths()).expect("real fixture");
+        let real = build_direct_hot_artifact_fixture_v5(
+            real_widths(),
+            DirectOrdinaryGeometryV3::CANONICAL,
+        )
+        .expect("real fixture");
         let placeholder = build_direct_hot_artifact_fixture_v5(
             DirectHotDeploymentWidthsV5::new(1, 1, 1).expect("placeholder widths"),
+            DirectOrdinaryGeometryV3::CANONICAL,
         )
         .expect("opaque fixture");
         assert_eq!(
@@ -539,7 +573,11 @@ mod tests {
             DirectHotDeploymentWidthsV5::new(0, 971_053, 934_037),
             Err(DirectHotFixtureErrorV5::InvalidWidth)
         );
-        let mut fixture = build_direct_hot_artifact_fixture_v5(real_widths()).expect("fixture");
+        let mut fixture = build_direct_hot_artifact_fixture_v5(
+            real_widths(),
+            DirectOrdinaryGeometryV3::CANONICAL,
+        )
+        .expect("fixture");
         // The V1 RentCredit width the profile used to pin; the adapter
         // authenticates 128 bytes of LifecycleRentCreditV2.
         *fixture.logical_data_lengths.get_mut(7).expect("RentCredit") = 48;

@@ -26,6 +26,7 @@ use dclutch_core_contract::ContentId;
 use dclutch_direct_codec::native_evidence_v3::{
     DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
 };
+use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -609,6 +610,34 @@ pub fn direct_case_v3(
     vacant_seal: bool,
     substrate: FixtureSubstrateV1,
 ) -> DirectCase {
+    direct_case_v4(
+        test,
+        releases,
+        artifacts,
+        corrupt_destination,
+        vacant_seal,
+        substrate,
+        DirectOrdinaryGeometryV3::CANONICAL,
+    )
+}
+
+/// [`direct_case_v3`] at an explicitly named market geometry.
+///
+/// The geometry moves the market's Product, Claims and Position records and
+/// the transaction's Product tail count. It does NOT move the Direct
+/// artifacts: their runtime-width coordinates are affine rules the executor
+/// resolves against that tail, so the same descriptor, the same seal and the
+/// same content identities serve every geometry. The canonical three-outcome
+/// demo is one cut; the journey's four-outcome market is two.
+pub fn direct_case_v4(
+    test: &mut ProgramTest,
+    releases: Releases,
+    artifacts: &Elves,
+    corrupt_destination: bool,
+    vacant_seal: bool,
+    substrate: FixtureSubstrateV1,
+    geometry: DirectOrdinaryGeometryV3,
+) -> DirectCase {
     let payer = fixture_keypair(0);
     let makers = [fixture_keypair(1), fixture_keypair(2)];
     // The maker replays this fixture signs are valid for `clock_slot +- 1` and
@@ -670,6 +699,7 @@ pub fn direct_case_v3(
         payer: payer.pubkey(),
         makers: [makers[0].pubkey(), makers[1].pubkey()],
         clock_slot: clock.slot,
+        geometry,
         // `add_release_waist` binds Trading at semantic release 0x33; the
         // validated-artifact seal is filed under exactly that release.
         trading_semantic_release: [0x33; 32],

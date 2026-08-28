@@ -38,7 +38,7 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::STATE_BYTES as CORE_STATE_BYTES;
 use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use dclutch_product_runtime_v2::{
-    DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
+    DOMAIN_CUT_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
     PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
@@ -94,12 +94,14 @@ const CUSTODY_AUTHORITY_ACCOUNT: u16 = DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_STA
 const FEE_TOKEN_ACCOUNT: u16 = DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3 + 11;
 const ROOT_BYTES: usize = CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1;
 const BASIS_PREFIX_BYTES: usize = BASIS_WIDTH_OFFSET_V3 + 4;
-// Product Runtime V2 defines `outcome_count = cut_count + 2`: the fixed
-// domain header already carries the two boundary outcomes, so only `N - 2`
-// cuts are affine. Keeping those cuts in the item term would overstate every
-// canonical domain by two rows.
-const DOMAIN_AFFINE_BASE_BYTES: usize = DOMAIN_HEADER_BYTES - 2 * DOMAIN_CUT_BYTES;
-const CLAIMS_ROW_BYTES: usize = 8;
+// Both live in `ordinary_geometry_v3`, which owns what a market geometry is
+// and what each runtime-width record measures at one. Re-exported here under
+// the names this file's rules and tests already read.
+use crate::ordinary_geometry_v3::{
+    DIRECT_ORDINARY_CLAIMS_ROW_BYTES_V3 as CLAIMS_ROW_BYTES,
+    DIRECT_ORDINARY_DOMAIN_AFFINE_BASE_BYTES_V3 as DOMAIN_AFFINE_BASE_BYTES,
+    DirectOrdinaryGeometryV3,
+};
 
 /// Exact encoded fixed-topology Profile14 width for inline ordinary Direct execution.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3: usize = FIXED_DATA_PREDICATE_HEADER_BYTES
@@ -724,38 +726,20 @@ fn validate_lengths(lengths: &[u32]) -> Result<(), DirectOrdinaryAccountArtifact
     {
         return Err(DirectOrdinaryAccountArtifactErrorV3::Geometry);
     }
-    let portfolio_count = affine_count(
+    // The five runtime-width records must state ONE market geometry, and the
+    // arithmetic that decides which one is `ordinary_geometry_v3`'s -- this
+    // file owns which coordinates carry those records, not what a width means.
+    // The geometry itself is then DISCARDED: the emitted profile is the same
+    // bytes at every geometry, because each of these coordinates is stated as
+    // an affine rule the runtime resolves against the transaction's own tail.
+    DirectOrdinaryGeometryV3::from_observed_record_bytes(
         length_at(lengths, 3)?,
-        PORTFOLIO_HEADER_BYTES,
-        PORTFOLIO_COEFFICIENT_BYTES,
-    )?;
-    let claims_count = affine_count(
         length_at(lengths, usize::from(CLAIMS_MARKET_ACCOUNT))?,
-        LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
-        CLAIMS_ROW_BYTES,
-    )?;
-    let domain_count = affine_count(
         length_at(lengths, 18)?,
-        DOMAIN_AFFINE_BASE_BYTES,
-        DOMAIN_CUT_BYTES,
-    )?;
-    let source_count = affine_count(
         length_at(lengths, usize::from(CLAIMS_SOURCE_POSITION_ACCOUNT))?,
-        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-        CLAIMS_ROW_BYTES,
-    )?;
-    let destination_count = affine_count(
         length_at(lengths, usize::from(CLAIMS_DESTINATION_POSITION_ACCOUNT))?,
-        LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
-        CLAIMS_ROW_BYTES,
-    )?;
-    if portfolio_count == 0
-        || [claims_count, domain_count, source_count, destination_count]
-            .iter()
-            .any(|count| *count != portfolio_count)
-    {
-        return Err(DirectOrdinaryAccountArtifactErrorV3::Geometry);
-    }
+    )
+    .map_err(|_| DirectOrdinaryAccountArtifactErrorV3::Geometry)?;
     for (account, representative) in ROUTE_ALIASES {
         if length_at(lengths, usize::from(*account))?
             != length_at(lengths, usize::from(*representative))?
@@ -788,20 +772,6 @@ fn length_at(lengths: &[u32], index: usize) -> Result<u32, DirectOrdinaryAccount
     lengths
         .get(index)
         .copied()
-        .ok_or(DirectOrdinaryAccountArtifactErrorV3::Geometry)
-}
-
-fn affine_count(
-    bytes: u32,
-    base: usize,
-    stride: usize,
-) -> Result<u32, DirectOrdinaryAccountArtifactErrorV3> {
-    let base = width(base)?;
-    let stride = width(stride)?;
-    bytes
-        .checked_sub(base)
-        .filter(|tail| *tail % stride == 0)
-        .map(|tail| tail / stride)
         .ok_or(DirectOrdinaryAccountArtifactErrorV3::Geometry)
 }
 

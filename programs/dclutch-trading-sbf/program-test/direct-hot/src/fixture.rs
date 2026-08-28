@@ -115,13 +115,13 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 use solana_sdk_ids::{system_program, sysvar};
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
+use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
+
 use crate::{
     DirectHotArtifactFixtureV5, DirectHotDeploymentWidthsV5, DirectHotFixtureErrorV5,
     build_direct_hot_artifact_fixture_v5, chain::DirectHotInstallAccountV5,
 };
 
-const OUTCOME_COUNT: usize = 3;
-const OUTCOME_COUNT_U32: u32 = 3;
 const GENERATION: u64 = 9;
 const PRICE_SCALE: u64 = 100;
 const FEE_BPS: u16 = 0;
@@ -165,6 +165,14 @@ pub struct DirectHotChainInputV5 {
     pub makers: [Pubkey; 2],
     /// Current trusted Clock slot encoded into both intents.
     pub clock_slot: u64,
+    /// The founded market's geometry.
+    ///
+    /// One number, not a pair: Product Runtime V2 pins
+    /// `outcome_count = cut_count + 2`, so the canonical three-outcome demo is
+    /// one cut and the journey's four-outcome market is two. Every
+    /// runtime-width record this fixture installs is derived from it, and the
+    /// Direct artifacts do not move with it.
+    pub geometry: DirectOrdinaryGeometryV3,
     /// Trading interpreter semantic release the activation cache authenticates.
     ///
     /// Decision 0005: it is a seed of the validated-artifact seal, so a Trading
@@ -223,13 +231,13 @@ pub enum DirectHotChainFixtureErrorV5 {
     Profile,
 }
 
-/// Build one canonical executable three-outcome Direct Hot fixture.
+/// Build one executable Direct Hot fixture at the geometry its input states.
 pub fn build_direct_hot_chain_fixture_v5(
     input: DirectHotChainInputV5,
 ) -> Result<DirectHotChainFixtureV5, DirectHotChainFixtureErrorV5> {
     validate_input(input)?;
     let rent = Rent::default();
-    let artifacts = build_direct_hot_artifact_fixture_v5(input.deployment_widths)
+    let artifacts = build_direct_hot_artifact_fixture_v5(input.deployment_widths, input.geometry)
         .map_err(DirectHotChainFixtureErrorV5::Artifact)?;
     let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
@@ -265,7 +273,7 @@ pub fn build_direct_hot_chain_fixture_v5(
     )?;
     let profile = AccountProfileV2::decode(&artifacts.bundle.account_profile)
         .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?;
-    let runtime = pack_runtime(profile, &mut logical)?;
+    let runtime = pack_runtime(profile, input.geometry.outcome_count(), &mut logical)?;
     let fixed = fixed_hot_accounts(
         input,
         &rent,
@@ -470,15 +478,16 @@ fn product_fixture(
         coordinate_domain_id: coordinate_domain.to_bytes(),
         result_unit_id: result_unit.to_bytes(),
         evaluator_release_id: [0x55; 32],
-        basis_width: u32::try_from(OUTCOME_COUNT)
-            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+        basis_width: input.geometry.outcome_count(),
         payout_scale: 1,
         knot_denominator: 1,
         knots: &[],
         terms: &[],
         failure_payouts: &[],
     };
-    let basis_bytes = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT, 0, 0)
+    let outcomes = usize::try_from(input.geometry.outcome_count())
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let basis_bytes = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, outcomes, 0, 0)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut provisional = vec![0_u8; basis_bytes];
     compile_basis_v3(provisional_input, &mut provisional)
@@ -491,8 +500,11 @@ fn product_fixture(
         semantic.suffix(),
     ])
     .to_bytes();
-    let cuts = [0_i128];
-    let coefficients = [1_u64, 1, 1];
+    // Strictly increasing cut numerators, one fewer than the ordinary regions
+    // and two fewer than the outcomes. A CategoricalQ1 portfolio weights every
+    // outcome equally, so the coefficients are one per outcome.
+    let cuts: Vec<i128> = (0..i128::from(input.geometry.cut_count())).collect();
+    let coefficients = vec![1_u64; outcomes];
     let mut product_bytes = vec![0_u8; PRODUCT_RECORD_BYTES_V2];
     let mut domain_bytes = vec![
         0_u8;
@@ -623,16 +635,27 @@ fn market_and_claims(
         custody_context: [0x64; 32],
         generation: GENERATION,
     };
-    let mut claims_bytes = vec![0_u8; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + OUTCOME_COUNT * 8];
-    encode_liability_basis_market_into_v2(claims_input, &[100, 100, 100], &mut claims_bytes)
+    let outcomes = usize::try_from(input.geometry.outcome_count())
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    let mut claims_bytes = vec![0_u8; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + outcomes * 8];
+    let supplies = vec![100_u64; outcomes];
+    encode_liability_basis_market_into_v2(claims_input, &supplies, &mut claims_bytes)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    // The seller holds the whole supply of the traded outcome, which is
+    // coordinate zero of the Product tail at every geometry; the buyer holds
+    // nothing until this transition lands.
+    let mut seller_balances = vec![0_u64; outcomes];
+    *seller_balances
+        .first_mut()
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)? = 100;
+    let buyer_balances = vec![0_u64; outcomes];
     let seller = position(
         input.claims_program,
         claims_market,
         input.makers[0],
         product.semantic_basis,
         SELLER_POSITION_REVISION,
-        [100, 0, 0],
+        &seller_balances,
     )?;
     let buyer = position(
         input.claims_program,
@@ -640,7 +663,7 @@ fn market_and_claims(
         input.makers[1],
         product.semantic_basis,
         BUYER_POSITION_REVISION,
-        [0, 0, 0],
+        &buyer_balances,
     )?;
     let _ = rent;
     Ok(StateFixture {
@@ -658,12 +681,12 @@ fn position(
     owner: Pubkey,
     basis: [u8; 32],
     revision: u64,
-    balances: [u64; OUTCOME_COUNT],
+    balances: &[u64],
 ) -> Result<(Pubkey, Vec<u8>), DirectHotChainFixtureErrorV5> {
     let seeds = ProtocolPositionSeedsV2::new(claims_market.to_bytes(), owner.to_bytes())
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let account = Pubkey::find_program_address(&seeds.as_slices(), &claims_program).0;
-    let mut bytes = vec![0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + OUTCOME_COUNT * 8];
+    let mut bytes = vec![0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + balances.len() * 8];
     encode_liability_basis_position_into_v2(
         LiabilityBasisPositionInputV2 {
             revision,
@@ -671,7 +694,7 @@ fn position(
             owner: owner.to_bytes(),
             basis_id: basis,
         },
-        &balances,
+        balances,
         &mut bytes,
     )
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
@@ -972,8 +995,7 @@ fn claims_request(
         expected_destination_revision: BUYER_POSITION_REVISION,
         generation: GENERATION,
         outcome: 0,
-        claim_count: u32::try_from(OUTCOME_COUNT)
-            .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?,
+        claim_count: input.geometry.outcome_count(),
         quantity: FILL,
     })
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)
@@ -1908,22 +1930,23 @@ fn logical_accounts(
 
 fn pack_runtime(
     profile: AccountProfileV2<'_>,
+    tail_count: u32,
     logical: &mut [ChainAccount],
 ) -> Result<Vec<ChainAccount>, DirectHotChainFixtureErrorV5> {
     if logical.len()
         != profile
-            .logical_account_count(OUTCOME_COUNT_U32)
+            .logical_account_count(tail_count)
             .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?
     {
         return Err(DirectHotChainFixtureErrorV5::Profile);
     }
     let count = profile
-        .physical_account_count_with_dynamic_spans(OUTCOME_COUNT_U32, &[])
+        .physical_account_count_with_dynamic_spans(tail_count, &[])
         .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?;
     let mut packed: Vec<Option<ChainAccount>> = vec![None; count];
     for (coordinate, value) in logical.iter().enumerate() {
         let ordinal = profile
-            .physical_account_ordinal_with_dynamic_spans(OUTCOME_COUNT_U32, &[], coordinate)
+            .physical_account_ordinal_with_dynamic_spans(tail_count, &[], coordinate)
             .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?;
         match packed
             .get_mut(ordinal)
@@ -1942,7 +1965,7 @@ fn pack_runtime(
         .map(|(ordinal, value)| {
             let mut value = value.ok_or(DirectHotChainFixtureErrorV5::Profile)?;
             let geometry = profile
-                .physical_account_geometry_with_dynamic_spans(OUTCOME_COUNT_U32, &[], ordinal)
+                .physical_account_geometry_with_dynamic_spans(tail_count, &[], ordinal)
                 .map_err(|_| DirectHotChainFixtureErrorV5::Profile)?;
             value.meta.is_writable = geometry.privileges().writable();
             value.meta.is_signer = value.key
@@ -2200,6 +2223,7 @@ mod tests {
             payer: key(11),
             makers: [key(12), key(13)],
             clock_slot: 50,
+            geometry: DirectOrdinaryGeometryV3::CANONICAL,
             trading_semantic_release: [0x33; 32],
         }
     }
@@ -2209,7 +2233,8 @@ mod tests {
         let input = input();
         let rent = Rent::default();
         let artifacts =
-            build_direct_hot_artifact_fixture_v5(input.deployment_widths).expect("artifacts");
+            build_direct_hot_artifact_fixture_v5(input.deployment_widths, input.geometry)
+                .expect("artifacts");
         let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
             .expect("config")
             .encode();
@@ -2251,7 +2276,7 @@ mod tests {
         let profile =
             AccountProfileV2::decode(&artifacts.bundle.account_profile).expect("AccountProfile");
         let physical = profile
-            .physical_account_count_with_dynamic_spans(OUTCOME_COUNT_U32, &[])
+            .physical_account_count_with_dynamic_spans(input.geometry.outcome_count(), &[])
             .expect("physical account count");
         assert_eq!(
             fixture.hot_instruction.accounts.len(),
@@ -2282,7 +2307,8 @@ mod tests {
         let input = input();
         let rent = Rent::default();
         let artifacts =
-            build_direct_hot_artifact_fixture_v5(input.deployment_widths).expect("artifacts");
+            build_direct_hot_artifact_fixture_v5(input.deployment_widths, input.geometry)
+                .expect("artifacts");
         let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
             .expect("config")
             .encode();
@@ -2584,8 +2610,9 @@ pub mod via_builder {
     ) -> Result<DirectHotChainFixtureV5, DirectHotChainFixtureErrorV5> {
         validate_input(input)?;
         let rent = Rent::default();
-        let artifacts = build_direct_hot_artifact_fixture_v5(input.deployment_widths)
-            .map_err(DirectHotChainFixtureErrorV5::Artifact)?;
+        let artifacts =
+            build_direct_hot_artifact_fixture_v5(input.deployment_widths, input.geometry)
+                .map_err(DirectHotChainFixtureErrorV5::Artifact)?;
         let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
             .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
             .encode();
@@ -2957,7 +2984,7 @@ pub mod via_builder {
         ];
         let scenario = ScenarioV1 {
             family_request: &request,
-            tail_count: OUTCOME_COUNT_U32,
+            tail_count: input.geometry.outcome_count(),
             clock_slot: input.clock_slot,
             generation: GENERATION,
             ed25519_evidence: Some(&evidence),
@@ -3075,6 +3102,7 @@ pub mod via_builder {
                 payer: key(11),
                 makers: [key(12), key(13)],
                 clock_slot: 50,
+                geometry: DirectOrdinaryGeometryV3::CANONICAL,
                 trading_semantic_release: [0x33; 32],
             }
         }
