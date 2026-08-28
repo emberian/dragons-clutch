@@ -1,0 +1,3258 @@
+{
+  "schema": "dclutch-devnet-economic-scenario-v1",
+  "version": 1,
+  "scenarioId": "flagship-four-outcome",
+  "bodyDigestScope": "canonical-compact-scenario-body-json-v1",
+  "bodySha256": "f4bc86dd28f610068a93288bec81b20033e8c4c27d987ee6dd5ad0897ef03727",
+  "body": {
+    "scenarioId": "flagship-four-outcome",
+    "title": "Flagship SOL/USD range market",
+    "description": "Four wallets split complete sets, cross buyer/seller roles through partial and full Direct fills, then resolve categorically. Every positive claim balance is burned, so both winners and zero-payout losers are visible and the projected Market is retirement-eligible.",
+    "clusterTarget": "devnet",
+    "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "evidenceLevel": "scenario-only",
+    "market": {
+      "profile": "flagship",
+      "marketRef": "market.flagship-four-outcome",
+      "inputArtifact": null,
+      "outcomeCount": 4,
+      "collateralMintRef": "mint.flagship-four-outcome.collateral",
+      "claimMintRefs": [
+        "mint.flagship-four-outcome.claim.0",
+        "mint.flagship-four-outcome.claim.1",
+        "mint.flagship-four-outcome.claim.2",
+        "mint.flagship-four-outcome.claim.3"
+      ],
+      "resolution": {
+        "kind": "categorical",
+        "selector": 2,
+        "payoutAtomsPerClaim": [
+          "0",
+          "0",
+          "1",
+          "0"
+        ]
+      },
+      "priceScaleAtoms": "1000",
+      "feeDenominator": "10000",
+      "feeBasisPointsPerSide": 50,
+      "feeRecipientAccountRef": "token.flagship-four-outcome.deployer.collateral",
+      "hoardPrincipalAccountRef": "token.flagship-four-outcome.hoard-principal"
+    },
+    "limits": {
+      "maxConcurrency": 1,
+      "minDispatchIntervalMs": 1500,
+      "maxTransactions": 96,
+      "pollIntervalMs": 1000,
+      "maxPolls": 180
+    },
+    "wallets": [
+      {
+        "id": "ash",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.flagship-four-outcome.ash.collateral",
+        "claimAccountRefs": [
+          "token.flagship-four-outcome.ash.claim.0",
+          "token.flagship-four-outcome.ash.claim.1",
+          "token.flagship-four-outcome.ash.claim.2",
+          "token.flagship-four-outcome.ash.claim.3"
+        ],
+        "positionAccountRef": "position.flagship-four-outcome.ash"
+      },
+      {
+        "id": "birch",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.flagship-four-outcome.birch.collateral",
+        "claimAccountRefs": [
+          "token.flagship-four-outcome.birch.claim.0",
+          "token.flagship-four-outcome.birch.claim.1",
+          "token.flagship-four-outcome.birch.claim.2",
+          "token.flagship-four-outcome.birch.claim.3"
+        ],
+        "positionAccountRef": "position.flagship-four-outcome.birch"
+      },
+      {
+        "id": "cobalt",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.flagship-four-outcome.cobalt.collateral",
+        "claimAccountRefs": [
+          "token.flagship-four-outcome.cobalt.claim.0",
+          "token.flagship-four-outcome.cobalt.claim.1",
+          "token.flagship-four-outcome.cobalt.claim.2",
+          "token.flagship-four-outcome.cobalt.claim.3"
+        ],
+        "positionAccountRef": "position.flagship-four-outcome.cobalt"
+      },
+      {
+        "id": "dahlia",
+        "roles": [
+          "participant",
+          "seller",
+          "buyer",
+          "redeemer"
+        ],
+        "fundingLamports": "50000000",
+        "collateralAccountRef": "token.flagship-four-outcome.dahlia.collateral",
+        "claimAccountRefs": [
+          "token.flagship-four-outcome.dahlia.claim.0",
+          "token.flagship-four-outcome.dahlia.claim.1",
+          "token.flagship-four-outcome.dahlia.claim.2",
+          "token.flagship-four-outcome.dahlia.claim.3"
+        ],
+        "positionAccountRef": "position.flagship-four-outcome.dahlia"
+      },
+      {
+        "id": "deployer",
+        "roles": [
+          "fee-payer",
+          "fee-recipient",
+          "retirement-beneficiary"
+        ],
+        "fundingLamports": "150000000",
+        "collateralAccountRef": "token.flagship-four-outcome.deployer.collateral",
+        "claimAccountRefs": [],
+        "positionAccountRef": null
+      }
+    ],
+    "accounts": [
+      {
+        "id": "market.flagship-four-outcome",
+        "kind": "market",
+        "address": null,
+        "expectedOwnerRef": "program.core",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "certificate.flagship-four-outcome",
+        "kind": "certificate",
+        "address": null,
+        "expectedOwnerRef": "program.resolution",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.flagship-four-outcome.hoard-principal",
+        "kind": "hoard-principal",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.collateral",
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "wallet.ash",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.flagship-four-outcome.ash.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "ash"
+      },
+      {
+        "id": "token.flagship-four-outcome.ash.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "ash"
+      },
+      {
+        "id": "token.flagship-four-outcome.ash.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "ash"
+      },
+      {
+        "id": "token.flagship-four-outcome.ash.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "ash"
+      },
+      {
+        "id": "token.flagship-four-outcome.ash.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "ash"
+      },
+      {
+        "id": "position.flagship-four-outcome.ash",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "ash"
+      },
+      {
+        "id": "wallet.birch",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.flagship-four-outcome.birch.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "birch"
+      },
+      {
+        "id": "token.flagship-four-outcome.birch.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "birch"
+      },
+      {
+        "id": "token.flagship-four-outcome.birch.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "birch"
+      },
+      {
+        "id": "token.flagship-four-outcome.birch.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "birch"
+      },
+      {
+        "id": "token.flagship-four-outcome.birch.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "birch"
+      },
+      {
+        "id": "position.flagship-four-outcome.birch",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "birch"
+      },
+      {
+        "id": "wallet.cobalt",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.flagship-four-outcome.cobalt.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "cobalt"
+      },
+      {
+        "id": "token.flagship-four-outcome.cobalt.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "cobalt"
+      },
+      {
+        "id": "token.flagship-four-outcome.cobalt.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "cobalt"
+      },
+      {
+        "id": "token.flagship-four-outcome.cobalt.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "cobalt"
+      },
+      {
+        "id": "token.flagship-four-outcome.cobalt.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "cobalt"
+      },
+      {
+        "id": "position.flagship-four-outcome.cobalt",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "cobalt"
+      },
+      {
+        "id": "wallet.dahlia",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.flagship-four-outcome.dahlia.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "dahlia"
+      },
+      {
+        "id": "token.flagship-four-outcome.dahlia.claim.0",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.0",
+        "tokenAuthorityWalletRef": "dahlia"
+      },
+      {
+        "id": "token.flagship-four-outcome.dahlia.claim.1",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.1",
+        "tokenAuthorityWalletRef": "dahlia"
+      },
+      {
+        "id": "token.flagship-four-outcome.dahlia.claim.2",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.2",
+        "tokenAuthorityWalletRef": "dahlia"
+      },
+      {
+        "id": "token.flagship-four-outcome.dahlia.claim.3",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.claim.3",
+        "tokenAuthorityWalletRef": "dahlia"
+      },
+      {
+        "id": "position.flagship-four-outcome.dahlia",
+        "kind": "position",
+        "address": null,
+        "expectedOwnerRef": "program.claims",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": "dahlia"
+      },
+      {
+        "id": "wallet.deployer",
+        "kind": "wallet",
+        "address": null,
+        "expectedOwnerRef": "solana-system-program",
+        "mintRef": null,
+        "tokenAuthorityWalletRef": null
+      },
+      {
+        "id": "token.flagship-four-outcome.deployer.collateral",
+        "kind": "token",
+        "address": null,
+        "expectedOwnerRef": "realm.token-program",
+        "mintRef": "mint.flagship-four-outcome.collateral",
+        "tokenAuthorityWalletRef": "deployer"
+      }
+    ],
+    "initialSnapshot": {
+      "accountStates": [
+        {
+          "accountRef": "certificate.flagship-four-outcome",
+          "state": "absent"
+        },
+        {
+          "accountRef": "market.flagship-four-outcome",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.ash",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.birch",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.cobalt",
+          "state": "absent"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.dahlia",
+          "state": "absent"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.deployer.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.hoard-principal",
+          "state": "absent"
+        },
+        {
+          "accountRef": "wallet.ash",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.birch",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.cobalt",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.dahlia",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.deployer",
+          "state": "present"
+        }
+      ],
+      "tokenBalances": [
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "50000"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "50000"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "50000"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "50000"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.deployer.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.hoard-principal",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "0"
+        }
+      ],
+      "positionRevisions": [
+        {
+          "positionAccountRef": "position.flagship-four-outcome.ash",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.flagship-four-outcome.birch",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.flagship-four-outcome.cobalt",
+          "revision": "0"
+        },
+        {
+          "positionAccountRef": "position.flagship-four-outcome.dahlia",
+          "revision": "0"
+        }
+      ]
+    },
+    "operations": [
+      {
+        "id": "flagship-four-outcome-found",
+        "order": 0,
+        "kind": "found",
+        "predecessorId": null,
+        "dependencyIds": [],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market + campaign/found",
+        "callerAvailability": "public-executable",
+        "callerSchema": "MarketRunInput (bare deny-unknown-fields projection)",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-found",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "found",
+          "marketRef": "market.flagship-four-outcome",
+          "marketInputArtifact": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.flagship-four-outcome",
+              "before": "absent",
+              "after": "present"
+            },
+            {
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.flagship-four-outcome",
+              "before": "absent",
+              "after": "present"
+            },
+            {
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        }
+      },
+      {
+        "id": "flagship-four-outcome-participant-ash",
+        "order": 1,
+        "kind": "participant",
+        "predecessorId": "flagship-four-outcome-found",
+        "dependencyIds": [
+          "flagship-four-outcome-found"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-participant-ash",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "ash",
+          "completeSetAtoms": "1000",
+          "collateralPrincipalAtoms": "1000"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.ash",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.ash",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-participant-birch",
+        "order": 2,
+        "kind": "participant",
+        "predecessorId": "flagship-four-outcome-participant-ash",
+        "dependencyIds": [
+          "flagship-four-outcome-participant-ash"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-participant-birch",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "birch",
+          "completeSetAtoms": "700",
+          "collateralPrincipalAtoms": "700"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-700"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.birch",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.birch",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-700"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.birch",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.birch",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-participant-cobalt",
+        "order": 3,
+        "kind": "participant",
+        "predecessorId": "flagship-four-outcome-participant-birch",
+        "dependencyIds": [
+          "flagship-four-outcome-participant-birch"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-participant-cobalt",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "cobalt",
+          "completeSetAtoms": "400",
+          "collateralPrincipalAtoms": "400"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-400"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.cobalt",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.cobalt",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-400"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.cobalt",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.cobalt",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-participant-dahlia",
+        "order": 4,
+        "kind": "participant",
+        "predecessorId": "flagship-four-outcome-participant-cobalt",
+        "dependencyIds": [
+          "flagship-four-outcome-participant-cobalt"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/devnet-market-participant-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-devnet-market-participant-operation-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-participant-dahlia",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "participant",
+          "walletRef": "dahlia",
+          "completeSetAtoms": "250",
+          "collateralPrincipalAtoms": "250"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-250"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.dahlia",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-250"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "250"
+            }
+          ],
+          "accountStateChanges": [
+            {
+              "accountRef": "position.flagship-four-outcome.dahlia",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "0",
+              "afterRevision": "1",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-direct-ash-birch-o0-partial",
+        "order": 5,
+        "kind": "direct",
+        "predecessorId": "flagship-four-outcome-participant-dahlia",
+        "dependencyIds": [
+          "flagship-four-outcome-participant-dahlia"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-direct-ash-birch-o0-partial",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "ash",
+          "buyerWalletRef": "birch",
+          "outcome": 0,
+          "claimMintRef": "mint.flagship-four-outcome.claim.0",
+          "fillAtoms": "400",
+          "remainingBeforeAtoms": "800",
+          "remainingAfterAtoms": "400",
+          "completion": "partial",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "250",
+          "grossCollateralAtoms": "100",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "0",
+          "buyerFeeAtoms": "0",
+          "sellerNetAtoms": "100",
+          "buyerDebitAtoms": "100",
+          "feeRecipientCreditAtoms": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-400"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "100"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-100"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.deployer.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.flagship-four-outcome.birch",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-direct-birch-cobalt-o1-full",
+        "order": 6,
+        "kind": "direct",
+        "predecessorId": "flagship-direct-ash-birch-o0-partial",
+        "dependencyIds": [
+          "flagship-direct-ash-birch-o0-partial"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-direct-birch-cobalt-o1-full",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "birch",
+          "buyerWalletRef": "cobalt",
+          "outcome": 1,
+          "claimMintRef": "mint.flagship-four-outcome.claim.1",
+          "fillAtoms": "700",
+          "remainingBeforeAtoms": "700",
+          "remainingAfterAtoms": "0",
+          "completion": "full",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "500",
+          "grossCollateralAtoms": "350",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "1",
+          "buyerFeeAtoms": "1",
+          "sellerNetAtoms": "349",
+          "buyerDebitAtoms": "351",
+          "feeRecipientCreditAtoms": "2"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-700"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "349"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-351"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.deployer.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.birch",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.flagship-four-outcome.cobalt",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-direct-cobalt-dahlia-o2-full",
+        "order": 7,
+        "kind": "direct",
+        "predecessorId": "flagship-direct-birch-cobalt-o1-full",
+        "dependencyIds": [
+          "flagship-direct-birch-cobalt-o1-full"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-direct-cobalt-dahlia-o2-full",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "cobalt",
+          "buyerWalletRef": "dahlia",
+          "outcome": 2,
+          "claimMintRef": "mint.flagship-four-outcome.claim.2",
+          "fillAtoms": "400",
+          "remainingBeforeAtoms": "400",
+          "remainingAfterAtoms": "0",
+          "completion": "full",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "750",
+          "grossCollateralAtoms": "300",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "1",
+          "buyerFeeAtoms": "1",
+          "sellerNetAtoms": "299",
+          "buyerDebitAtoms": "301",
+          "feeRecipientCreditAtoms": "2"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-400"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "299"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-301"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.deployer.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "2"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.cobalt",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "1",
+              "afterRevision": "2",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-direct-dahlia-ash-o3-partial",
+        "order": 8,
+        "kind": "direct",
+        "predecessorId": "flagship-direct-cobalt-dahlia-o2-full",
+        "dependencyIds": [
+          "flagship-direct-cobalt-dahlia-o2-full"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "direct-accepted-transition",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-direct-dahlia-ash-o3-partial",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "direct",
+          "sellerWalletRef": "dahlia",
+          "buyerWalletRef": "ash",
+          "outcome": 3,
+          "claimMintRef": "mint.flagship-four-outcome.claim.3",
+          "fillAtoms": "100",
+          "remainingBeforeAtoms": "200",
+          "remainingAfterAtoms": "100",
+          "completion": "partial",
+          "priceScaleAtoms": "1000",
+          "executionPriceAtoms": "900",
+          "grossCollateralAtoms": "90",
+          "feeBasisPoints": 50,
+          "sellerFeeAtoms": "0",
+          "buyerFeeAtoms": "0",
+          "sellerNetAtoms": "90",
+          "buyerDebitAtoms": "90",
+          "feeRecipientCreditAtoms": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-100"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "100"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "90"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-90"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.deployer.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            },
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "2",
+              "afterRevision": "3",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-resolve",
+        "order": 9,
+        "kind": "resolve",
+        "predecessorId": "flagship-direct-dahlia-ash-o3-partial",
+        "dependencyIds": [
+          "flagship-direct-dahlia-ash-o3-partial"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/flagship-resolution-v1",
+        "callerAvailability": "public-executable",
+        "callerSchema": "dclutch-flagship-resolution-input-v1",
+        "mutationExpected": true,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-resolve",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "resolve",
+          "certificateAccountRef": "certificate.flagship-four-outcome",
+          "selector": 2,
+          "payoutAtomsPerClaim": [
+            "0",
+            "0",
+            "1",
+            "0"
+          ],
+          "expectedOwnerRef": "program.resolution",
+          "dataSha256": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "certificate.flagship-four-outcome",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "certificate.flagship-four-outcome",
+              "before": "absent",
+              "after": "present"
+            }
+          ],
+          "positionChanges": []
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-ash-o0",
+        "order": 10,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-resolve",
+        "dependencyIds": [
+          "flagship-four-outcome-resolve"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-ash-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "ash",
+          "outcome": 0,
+          "claimAtomsBurned": "600",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-600"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-ash-o1",
+        "order": 11,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-ash-o0",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-ash-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-ash-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "ash",
+          "outcome": 1,
+          "claimAtomsBurned": "1000",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-ash-o2",
+        "order": 12,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-ash-o1",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-ash-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-ash-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "ash",
+          "outcome": 2,
+          "claimAtomsBurned": "1000",
+          "payoutAtomsPerClaim": "1",
+          "collateralAtomsCredited": "1000",
+          "hoardPrincipalAtomsDebited": "1000"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1000"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "1000"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1000"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-ash-o3",
+        "order": 13,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-ash-o2",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-ash-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-ash-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "ash",
+          "outcome": 3,
+          "claimAtomsBurned": "1100",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1100"
+            },
+            {
+              "walletRef": "ash",
+              "accountRef": "token.flagship-four-outcome.ash.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.ash",
+              "beforeRevision": "6",
+              "afterRevision": "7",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-birch-o0",
+        "order": 14,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-ash-o3",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-ash-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-birch-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "birch",
+          "outcome": 0,
+          "claimAtomsBurned": "1100",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1100"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.birch",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-birch-o2",
+        "order": 15,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-birch-o0",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-birch-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-birch-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "birch",
+          "outcome": 2,
+          "claimAtomsBurned": "700",
+          "payoutAtomsPerClaim": "1",
+          "collateralAtomsCredited": "700",
+          "hoardPrincipalAtomsDebited": "700"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "700"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-700"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.birch",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-birch-o3",
+        "order": 16,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-birch-o2",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-birch-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-birch-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "birch",
+          "outcome": 3,
+          "claimAtomsBurned": "700",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-700"
+            },
+            {
+              "walletRef": "birch",
+              "accountRef": "token.flagship-four-outcome.birch.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.birch",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-cobalt-o0",
+        "order": 17,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-birch-o3",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-birch-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-cobalt-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "cobalt",
+          "outcome": 0,
+          "claimAtomsBurned": "400",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.cobalt",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-cobalt-o1",
+        "order": 18,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-cobalt-o0",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-cobalt-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-cobalt-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "cobalt",
+          "outcome": 1,
+          "claimAtomsBurned": "1100",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-1100"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.cobalt",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-cobalt-o3",
+        "order": 19,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-cobalt-o1",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-cobalt-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-cobalt-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "cobalt",
+          "outcome": 3,
+          "claimAtomsBurned": "400",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-400"
+            },
+            {
+              "walletRef": "cobalt",
+              "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.cobalt",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-dahlia-o0",
+        "order": 20,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-cobalt-o3",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-cobalt-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-dahlia-o0",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "dahlia",
+          "outcome": 0,
+          "claimAtomsBurned": "250",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.0",
+              "mintRef": "mint.flagship-four-outcome.claim.0",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "3",
+              "afterRevision": "4",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-dahlia-o1",
+        "order": 21,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-dahlia-o0",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-dahlia-o0"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-dahlia-o1",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "dahlia",
+          "outcome": 1,
+          "claimAtomsBurned": "250",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.1",
+              "mintRef": "mint.flagship-four-outcome.claim.1",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-250"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "4",
+              "afterRevision": "5",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-dahlia-o2",
+        "order": 22,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-dahlia-o1",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-dahlia-o1"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-dahlia-o2",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "dahlia",
+          "outcome": 2,
+          "claimAtomsBurned": "650",
+          "payoutAtomsPerClaim": "1",
+          "collateralAtomsCredited": "650",
+          "hoardPrincipalAtomsDebited": "650"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+              "mintRef": "mint.flagship-four-outcome.claim.2",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-650"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "650"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-650"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "5",
+              "afterRevision": "6",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-redeem-dahlia-o3",
+        "order": 23,
+        "kind": "redeem",
+        "predecessorId": "flagship-four-outcome-redeem-dahlia-o2",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-dahlia-o2"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "dclutch-local-successor-bootstrap/wallet-terminal-payout-input",
+        "callerAvailability": "preflight-only",
+        "callerSchema": "dclutch-wallet-terminal-payout-plan-input-v1",
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-redeem-dahlia-o3",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "redeem",
+          "walletRef": "dahlia",
+          "outcome": 3,
+          "claimAtomsBurned": "150",
+          "payoutAtomsPerClaim": "0",
+          "collateralAtomsCredited": "0",
+          "hoardPrincipalAtomsDebited": "0"
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+              "mintRef": "mint.flagship-four-outcome.claim.3",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "-150"
+            },
+            {
+              "walletRef": "dahlia",
+              "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            },
+            {
+              "walletRef": null,
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "mintRef": "mint.flagship-four-outcome.collateral",
+              "beforeState": "present",
+              "afterState": "present",
+              "deltaAtoms": "0"
+            }
+          ],
+          "accountStateChanges": [],
+          "positionChanges": [
+            {
+              "positionAccountRef": "position.flagship-four-outcome.dahlia",
+              "beforeRevision": "6",
+              "afterRevision": "7",
+              "beforeDataSha256": null,
+              "afterDataSha256": null
+            }
+          ]
+        }
+      },
+      {
+        "id": "flagship-four-outcome-retire",
+        "order": 24,
+        "kind": "retire",
+        "predecessorId": "flagship-four-outcome-redeem-dahlia-o3",
+        "dependencyIds": [
+          "flagship-four-outcome-redeem-dahlia-o3"
+        ],
+        "feePayerWalletRef": "deployer",
+        "callerTarget": "terminal-retirement",
+        "callerAvailability": "adapter-required",
+        "callerSchema": null,
+        "mutationExpected": false,
+        "evidenceOutputRef": "evidence.flagship-four-outcome.flagship-four-outcome-retire",
+        "capture": {
+          "signature": null,
+          "finalizedSlot": null,
+          "transactionFeeLamports": null
+        },
+        "input": {
+          "kind": "retire",
+          "eligible": true,
+          "closureAccountRefs": [
+            "market.flagship-four-outcome",
+            "certificate.flagship-four-outcome",
+            "position.flagship-four-outcome.ash",
+            "position.flagship-four-outcome.birch",
+            "position.flagship-four-outcome.cobalt",
+            "position.flagship-four-outcome.dahlia",
+            "token.flagship-four-outcome.hoard-principal"
+          ],
+          "rentRefundWalletRef": "deployer",
+          "rentRefundLamports": null
+        },
+        "expectedObservedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [],
+          "positionChanges": []
+        },
+        "projectedAcceptedDelta": {
+          "lamportDeltas": [],
+          "tokenDeltas": [],
+          "accountStateChanges": [
+            {
+              "accountRef": "market.flagship-four-outcome",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "certificate.flagship-four-outcome",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.flagship-four-outcome.ash",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.flagship-four-outcome.birch",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.flagship-four-outcome.cobalt",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "position.flagship-four-outcome.dahlia",
+              "before": "present",
+              "after": "closed"
+            },
+            {
+              "accountRef": "token.flagship-four-outcome.hoard-principal",
+              "before": "present",
+              "after": "closed"
+            }
+          ],
+          "positionChanges": []
+        }
+      }
+    ],
+    "finalSnapshot": {
+      "accountStates": [
+        {
+          "accountRef": "certificate.flagship-four-outcome",
+          "state": "closed"
+        },
+        {
+          "accountRef": "market.flagship-four-outcome",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.ash",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.birch",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.cobalt",
+          "state": "closed"
+        },
+        {
+          "accountRef": "position.flagship-four-outcome.dahlia",
+          "state": "closed"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.0",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.1",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.deployer.collateral",
+          "state": "present"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.hoard-principal",
+          "state": "closed"
+        },
+        {
+          "accountRef": "wallet.ash",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.birch",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.cobalt",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.dahlia",
+          "state": "present"
+        },
+        {
+          "accountRef": "wallet.deployer",
+          "state": "present"
+        }
+      ],
+      "tokenBalances": [
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.ash.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "50010"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.birch.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "50249"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.cobalt.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "49548"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.0",
+          "mintRef": "mint.flagship-four-outcome.claim.0",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.1",
+          "mintRef": "mint.flagship-four-outcome.claim.1",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.2",
+          "mintRef": "mint.flagship-four-outcome.claim.2",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.claim.3",
+          "mintRef": "mint.flagship-four-outcome.claim.3",
+          "atoms": "0"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.dahlia.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "50189"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.deployer.collateral",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "4"
+        },
+        {
+          "accountRef": "token.flagship-four-outcome.hoard-principal",
+          "mintRef": "mint.flagship-four-outcome.collateral",
+          "atoms": "0"
+        }
+      ],
+      "positionRevisions": [
+        {
+          "positionAccountRef": "position.flagship-four-outcome.ash",
+          "revision": "7"
+        },
+        {
+          "positionAccountRef": "position.flagship-four-outcome.birch",
+          "revision": "6"
+        },
+        {
+          "positionAccountRef": "position.flagship-four-outcome.cobalt",
+          "revision": "6"
+        },
+        {
+          "positionAccountRef": "position.flagship-four-outcome.dahlia",
+          "revision": "7"
+        }
+      ]
+    },
+    "retireEligible": true
+  }
+}
