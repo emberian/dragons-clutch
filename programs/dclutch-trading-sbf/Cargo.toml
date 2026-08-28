@@ -77,6 +77,7 @@ dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
 dclutch-shadow-accelerator-auth-v4 = { path = "../../crates/dclutch-shadow-accelerator-auth-v4" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm", optional = true }
+dclutch-user-position-admission-contract = { path = "../../crates/dclutch-user-position-admission-contract" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-instructions-sysvar = "=3.0.1"
 solana-sdk-ids = "=3.1.0"

@@ -142,6 +142,8 @@ pub mod resolution_composition_v3;
 pub mod series;
 /// Family-neutral read-only Shadow-AOT comparison CPI.
 pub mod shadow_composition_v3;
+/// Wallet-authorized caller for one canonical Claims User Position.
+pub mod user_position_admission_v1;
 
 /// Stable refusal from the canonical Trading SBF boundary.
 #[repr(u32)]
@@ -264,6 +266,13 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     require_instruction_account_bound_v3(accounts.len())?;
+    if dclutch_user_position_admission_contract::is_user_position_admission_v1(instruction_data) {
+        return user_position_admission_v1::process_user_position_admission_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     #[cfg(any(
         feature = "families",
         feature = "series-family",
