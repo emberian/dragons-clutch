@@ -566,6 +566,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "solana-address-lookup-table-interface",
+ "solana-compute-budget-interface",
  "solana-hash 4.6.0",
  "solana-loader-v3-interface",
  "solana-program",
