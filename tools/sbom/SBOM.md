@@ -3,16 +3,16 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace (there is no single one — 47 independent lockfiles, listed in [Coverage](#coverage)) and the web app's npm tree. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify` (also wired into `tools/gauntlet` — see `tools/sbom/README.md`).
 
-**31 manifests, 1840 unique dependency rows (1024 cargo, 816 npm), 53 flagged for human review.**
+**42 manifests, 1853 unique dependency rows (1037 cargo, 816 npm), 53 flagged for human review.**
 
 ## Counts by license
 
 | License | Rows |
 |---|---|
-| `MIT` | 759 |
+| `MIT` | 760 |
 | `Apache-2.0` | 387 |
-| `MIT OR Apache-2.0` | 302 |
-| `AGPL-3.0-or-later` | 122 |
+| `MIT OR Apache-2.0` | 303 |
+| `AGPL-3.0-or-later` | 133 |
 | `MIT/Apache-2.0` | 55 |
 | `Apache-2.0 OR MIT` | 39 |
 | `MPL-2.0` | 28 |
@@ -263,6 +263,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `cmov` | 0.5.4 | `Apache-2.0 OR MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `colorchoice` | 1.0.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `combine` | 3.8.1 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `combine` | 4.6.7 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `combine` | 4.6.8 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `compression-codecs` | 0.4.38 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `compression-core` | 0.4.32 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -314,7 +315,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-custody-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-custody-contract` | declared |
 | `dclutch-custody-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-custody-sbf` | declared |
 | `dclutch-custody-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-custody-sbf/test-programs/caller` | inherited-default (publish=false, undeclared) |
+| `dclutch-dealer-accelerator-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-dealer-accelerator-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf` | declared |
+| `dclutch-dealer-accelerator-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller` | declared |
 | `dclutch-dealer-codec` | 0.1.0 | `MIT OR Apache-2.0` | `path+crates/dclutch-dealer-codec` | declared |
 | `dclutch-dealer-family-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-dealer-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-sbf` | declared |
@@ -324,6 +327,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-direct-aot-v3-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-direct-aot-v3-contract` | declared |
 | `dclutch-direct-codec` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-direct-codec` | declared |
 | `dclutch-direct-hot-program-test-support` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/direct-hot` | declared |
+| `dclutch-direct-translation-validator` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/direct-translation-validator` | declared |
 | `dclutch-economic-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-economic-kernel` | declared |
 | `dclutch-economic-slice-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-economic-slice-kernel` | declared |
 | `dclutch-effect-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-effect-kernel` | declared |
@@ -332,6 +336,9 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-fractional-claim-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claim-kernel` | declared |
 | `dclutch-fractional-claim-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claim-operator` | declared |
 | `dclutch-fractional-claims-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-fractional-claims-kernel` | declared |
+| `dclutch-fractional-signed-delta-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/fractional-signed-delta` | inherited-default (publish=false, undeclared) |
+| `dclutch-fractional-signed-delta-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller` | inherited-default (publish=false, undeclared) |
+| `dclutch-gauntlet-direct-campaign` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/direct/producer` | declared |
 | `dclutch-general-accelerator-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-general-accelerator-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf` | declared |
 | `dclutch-general-accelerator-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf/test-programs/general-caller` | declared |
@@ -391,8 +398,11 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-resolution-core-v3-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-resolution-core-v3-operator` | declared |
 | `dclutch-resolution-policy-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-resolution-policy-kernel` | declared |
 | `dclutch-resolution-proof-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-resolution-proof-sbf` | declared |
+| `dclutch-resolution-receipt-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-svm-harness/test-programs/resolution-receipt-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-route-census` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/census` | declared |
 | `dclutch-series-consume-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-core-sbf/test-programs/series-consume-caller` | declared |
+| `dclutch-series-shadow-bundle-generator` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf/generator` | declared |
+| `dclutch-series-shadow-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf/program-test` | declared |
 | `dclutch-series-shadow-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-series-shadow-sbf` | declared |
 | `dclutch-series-v3-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-series-v3-kernel` | declared |
 | `dclutch-sha256-adapter` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-sha256-adapter` | declared |
@@ -401,11 +411,13 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `dclutch-structured-v2-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-structured-v2-contract` | declared |
 | `dclutch-structured-v2-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-structured-v2-kernel` | declared |
 | `dclutch-structured-v2-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-structured-v2-operator` | declared |
+| `dclutch-svm-harness` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-svm-harness` | inherited-default (publish=false, undeclared) |
 | `dclutch-terminal-settlement-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-token-behavior-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-token-svm/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-token-svm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-token-svm` | declared |
 | `dclutch-trading-core-caller-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/core-caller` | declared |
 | `dclutch-trading-dealer-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/dealer-program-test` | declared |
+| `dclutch-trading-dealer-wave-fixture` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/test-programs/dealer-wave` | declared |
 | `dclutch-trading-outer-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/trading-outer` | declared |
 | `dclutch-trading-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test` | declared |
 | `dclutch-trading-registry-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/registry` | declared |
@@ -642,6 +654,7 @@ Never a mechanical guess, never silently classified: every row below needs a hum
 | `radium` | 0.7.0 | `MIT` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.10.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.7.3 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
+| `rand` | 0.8.7 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.8.8 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand` | 0.9.5 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `rand_chacha` | 0.2.2 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1979,14 +1992,18 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `Cargo.toml` | 830 |
 | `apps/dclutch-web/fixtures/founding/generator/Cargo.toml` | 21 |
 | `apps/dclutch-web/package.json` | 727 |
+| `crates/dclutch-svm-harness/Cargo.toml` | 787 |
+| `crates/dclutch-svm-harness/test-programs/resolution-receipt-caller/Cargo.toml` | 166 |
 | `crates/dclutch-token-svm/program-test/Cargo.toml` | 757 |
 | `packages/dclutch-cli/package.json` | 299 |
 | `packages/dclutch-sdk/package.json` | 270 |
 | `programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml` | 771 |
+| `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml` | 782 |
 | `programs/dclutch-claims-sbf/program-test/protocol-position/Cargo.toml` | 780 |
 | `programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml` | 780 |
 | `programs/dclutch-claims-sbf/program-test/sparse-chain/Cargo.toml` | 781 |
 | `programs/dclutch-claims-sbf/test-programs/affine-batch-caller/Cargo.toml` | 173 |
+| `programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller/Cargo.toml` | 182 |
 | `programs/dclutch-claims-sbf/test-programs/liability-basis-caller/Cargo.toml` | 162 |
 | `programs/dclutch-claims-sbf/test-programs/rational-lifecycle-caller/Cargo.toml` | 173 |
 | `programs/dclutch-claims-sbf/test-programs/rational-v2-caller/Cargo.toml` | 176 |
@@ -1994,35 +2011,26 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller/Cargo.toml` | 173 |
 | `programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml` | 175 |
 | `programs/dclutch-custody-sbf/test-programs/caller/Cargo.toml` | 165 |
+| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 790 |
+| `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml` | 196 |
 | `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 770 |
 | `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 798 |
 | `programs/dclutch-general-accelerator-sbf/test-programs/general-caller/Cargo.toml` | 160 |
+| `programs/dclutch-series-shadow-sbf/generator/Cargo.toml` | 192 |
+| `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml` | 780 |
 | `programs/dclutch-trading-sbf/dealer-program-test/Cargo.toml` | 733 |
 | `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 794 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/core-caller/Cargo.toml` | 163 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml` | 163 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/trading-outer/Cargo.toml` | 186 |
+| `programs/dclutch-trading-sbf/test-programs/dealer-wave/Cargo.toml` | 161 |
+| `tools/direct-translation-validator/Cargo.toml` | 42 |
 | `tools/gauntlet/census/Cargo.toml` | 22 |
+| `tools/gauntlet/direct/producer/Cargo.toml` | 753 |
 | `tools/gauntlet/journey/Cargo.toml` | 353 |
 | `tools/gauntlet/relayed-vertical/Cargo.toml` | 354 |
-| `tools/local-validator/bootstrap/successor/Cargo.toml` | 352 |
+| `tools/local-validator/bootstrap/successor/Cargo.toml` | 353 |
 | `tools/relayer/Cargo.toml` | 221 |
-
-## Unresolvable manifests (stale lockfile, not a license question)
-
-Each manifest below refused `cargo metadata --locked --offline`: its `Cargo.lock` does not match its `Cargo.toml` (typically a dependency edge added or changed without re-running cargo in that mini-workspace). This tool cannot see that manifest's dependency graph at all until its owning lane runs `cargo metadata`/`cargo check` there and commits the refreshed lock — recorded here as owed work, not folded into the flagged-license review list above, and not failing `--verify` by itself, since it is a reproducibility gap rather than an unclassified license.
-
-- `crates/dclutch-svm-harness/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `crates/dclutch-svm-harness/test-programs/resolution-receipt-caller/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-series-shadow-sbf/generator/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-trading-sbf/test-programs/dealer-wave/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `tools/direct-translation-validator/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `tools/gauntlet/direct/producer/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
 
 ## Stray lockfiles (not read by cargo, not part of this closure)
 
@@ -3034,6 +3042,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - color-convert 2.0.1 (npm)
 - color-name 1.1.4 (npm)
 - combine 3.8.1 (cargo)
+- combine 4.6.7 (cargo)
 - combine 4.6.8 (cargo)
 - commander 14.0.3 (npm)
 - commander 2.20.3 (npm)
@@ -3625,6 +3634,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - quote 1.0.47 (cargo)
 - rand 0.10.2 (cargo)
 - rand 0.7.3 (cargo)
+- rand 0.8.7 (cargo)
 - rand 0.8.8 (cargo)
 - rand 0.9.5 (cargo)
 - rand_chacha 0.2.2 (cargo)
