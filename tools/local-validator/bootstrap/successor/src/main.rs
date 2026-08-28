@@ -6,6 +6,12 @@ use solana_sdk::pubkey::Pubkey;
 
 mod campaign;
 mod cluster;
+// The journey campaign's conservation engine, shared textually the same way
+// the journey shares this tree's modules back. Its unused-in-this-binary
+// helpers stay allowed the way every #[path] include here is.
+#[path = "../../../../gauntlet/journey/src/ledger.rs"]
+#[allow(dead_code)]
+mod ledger;
 mod market;
 mod model;
 mod plan;
@@ -66,6 +72,7 @@ fn run() -> Result<()> {
         Some("demo-market") => run_demo_market(arguments.collect()),
         Some("devnet-market") => run_devnet_market(arguments.collect()),
         Some("graduation-market") => run_graduation_market(arguments.collect()),
+        Some("ledger-census") => run_ledger_census(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
         Some("campaign") => run_campaign(arguments.collect()),
         Some("help" | "-h" | "--help") | None => {
@@ -321,6 +328,161 @@ fn run_devnet_market(arguments: Vec<String>) -> Result<()> {
     let mut stdout = std::io::stdout();
     stdout.write_all(&serde_json::to_vec_pretty(&input)?)?;
     stdout.write_all(b"\n")?;
+    Ok(())
+}
+
+/// One conservation-ledger census against a live cluster.
+///
+/// The engine is the journey campaign's own `ConservationLedgerV1` — the
+/// same seven laws, the same arithmetic — pointed at an EXTERNAL chain
+/// through the driver's origin rails instead of at a validator the journey
+/// launched. Each invocation takes one census and evaluates every law;
+/// `--prior` reloads a previous invocation's observations so the delta laws
+/// (Hoard movement declared, tracked-set movement declared) evaluate across
+/// process boundaries. The lamport law records itself inapplicable with the
+/// stated reason: this census does not drive the transactions between
+/// boundaries and refuses to guess their fees.
+///
+/// Exit is nonzero if ANY law is violated at the new boundary.
+fn run_ledger_census(arguments: Vec<String>) -> Result<()> {
+    let mut rpc_url = None;
+    let mut acknowledgment = None;
+    let mut mint = None;
+    let mut payer = None;
+    let mut hoard = None;
+    let mut aggregate = None;
+    let mut claim_unit = None;
+    let mut stage = None;
+    let mut declared_collateral = None;
+    let mut declared_hoard = None;
+    let mut prior = None;
+    let mut output = None;
+    let mut tokens: Vec<(String, Pubkey)> = Vec::new();
+    let mut positions: Vec<(String, Pubkey)> = Vec::new();
+    let mut watches: Vec<(String, Pubkey)> = Vec::new();
+    fn labeled(value: &str, flag: &str) -> Result<(String, Pubkey)> {
+        let (label, address) = value.split_once('=').ok_or_else(|| {
+            Error::new(format!("{flag} takes LABEL=PUBKEY, got {value:?}"))
+        })?;
+        Ok((label.to_owned(), plan::pubkey(address)?))
+    }
+    let mut iterator = arguments.into_iter();
+    while let Some(argument) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+        match argument.as_str() {
+            "--token" => {
+                tokens.push(labeled(&value, "--token")?);
+                continue;
+            }
+            "--position" => {
+                positions.push(labeled(&value, "--position")?);
+                continue;
+            }
+            "--watch" => {
+                watches.push(labeled(&value, "--watch")?);
+                continue;
+            }
+            _ => {}
+        }
+        let slot = match argument.as_str() {
+            "--rpc-url" => &mut rpc_url,
+            campaign::DEVNET_ACKNOWLEDGMENT_FLAG_NAME => &mut acknowledgment,
+            "--mint" => &mut mint,
+            "--payer" => &mut payer,
+            "--hoard" => &mut hoard,
+            "--aggregate" => &mut aggregate,
+            "--claim-unit-atoms" => &mut claim_unit,
+            "--stage" => &mut stage,
+            "--declared-collateral-delta" => &mut declared_collateral,
+            "--declared-hoard-delta" => &mut declared_hoard,
+            "--prior" => &mut prior,
+            "--output" => &mut output,
+            _ => {
+                return Err(Error::new(format!(
+                    "unknown ledger-census argument: {argument}"
+                )));
+            }
+        };
+        if slot.replace(value).is_some() {
+            return Err(Error::new(format!("{argument} may be supplied only once")));
+        }
+    }
+    let origin = cluster::ClusterOriginV1::parse(
+        &required(rpc_url, "--rpc-url")?,
+        acknowledgment.as_deref(),
+    )?;
+    let mut rpc = rpc::Rpc::connect_cluster(&origin, rpc::WritePolicyV1::ReadsOnly)?;
+    let mut census = ledger::ConservationLedgerV1::new(
+        parse_pubkey(mint, "--mint")?,
+        parse_pubkey(payer, "--payer")?,
+    );
+    if let Some(path) = prior {
+        let observations: Vec<ledger::ObservationV1> =
+            serde_json::from_slice(&std::fs::read(absolute(Some(path), "--prior")?)?)?;
+        census.restore_observations(observations);
+    }
+    for (label, address) in &tokens {
+        census.track_token_account(label, *address);
+    }
+    for (label, address) in &positions {
+        census.track_position(label, *address);
+    }
+    for (label, address) in &watches {
+        census.watch(label, *address);
+    }
+    census.admit_founding(
+        parse_pubkey(hoard, "--hoard")?,
+        parse_pubkey(aggregate, "--aggregate")?,
+        required(claim_unit, "--claim-unit-atoms")?
+            .parse::<u64>()
+            .map_err(|_| Error::new("--claim-unit-atoms must be a decimal u64"))?,
+    );
+    let parse_delta = |value: Option<String>, label: &str| -> Result<i128> {
+        match value {
+            None => Ok(0),
+            Some(text) => text
+                .parse::<i128>()
+                .map_err(|_| Error::new(format!("{label} must be a decimal i128"))),
+        }
+    };
+    census.observe(
+        &mut rpc,
+        &required(stage, "--stage")?,
+        parse_delta(declared_collateral, "--declared-collateral-delta")?,
+        parse_delta(declared_hoard, "--declared-hoard-delta")?,
+        ledger::LamportClaimV1::inapplicable(
+            "external census: the transactions between boundaries were not driven by this \
+             ledger, and it refuses to guess their fees",
+        ),
+    )?;
+    let observations = census.observations();
+    std::fs::write(
+        absolute(output, "--output")?,
+        serde_json::to_vec_pretty(&observations)?,
+    )?;
+    let newest = observations
+        .last()
+        .ok_or_else(|| Error::new("census produced no observation"))?;
+    let mut violated = 0_usize;
+    for verdict in &newest.verdicts {
+        if verdict.status == "violated" {
+            violated += 1;
+        }
+        println!(
+            "{} {}: {}",
+            verdict.status.to_uppercase(),
+            verdict.law,
+            verdict.detail
+        );
+    }
+    if violated > 0 {
+        return Err(Error::new(format!(
+            "{violated} conservation law(s) VIOLATED at stage {}",
+            newest.stage
+        )));
+    }
     Ok(())
 }
 

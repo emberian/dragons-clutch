@@ -68,7 +68,7 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_token_svm::{MINT_BYTES, Mint, TokenAccount};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 
 use crate::{Error, Result, rpc::Rpc};
@@ -78,7 +78,7 @@ use crate::{Error, Result, rpc::Rpc};
 /// `fees_lamports` is never a prediction: it is summed off the stage's own
 /// transaction evidence, so L7 compares the chain against what the chain
 /// charged rather than against a number this campaign chose.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct LamportClaimV1 {
     /// Fees the stage's own transactions paid, summed from their evidence.
     pub(crate) fees_lamports: u64,
@@ -131,7 +131,7 @@ impl LamportClaimV1 {
 }
 
 /// One law's outcome at one stage boundary.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct VerdictV1 {
     /// `L1`..`L7`.
     pub(crate) law: String,
@@ -172,7 +172,7 @@ impl VerdictV1 {
 }
 
 /// The exact state of one account the ledger tracks.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AccountStateV1 {
     pub(crate) address: String,
     pub(crate) exists: bool,
@@ -182,7 +182,7 @@ pub(crate) struct AccountStateV1 {
 }
 
 /// One complete census of the economic state, plus every law evaluated on it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ObservationV1 {
     /// The stage boundary this census was taken at.
     pub(crate) stage: String,
@@ -751,6 +751,18 @@ impl ConservationLedgerV1 {
     }
 
     /// Every census taken, in order.
+    /// Reload observations a previous invocation of an EXTERNAL census took,
+    /// so the delta laws (L2, L5, L7's fee history) evaluate across process
+    /// boundaries. The chain stays the authority for every ABSOLUTE law; what
+    /// this restores is only what a prior census DECLARED and read.
+    ///
+    /// Used by the successor driver's `ledger-census`; the journey itself
+    /// never restores — its boundaries all live in one process.
+    #[allow(dead_code)]
+    pub(crate) fn restore_observations(&mut self, observations: Vec<ObservationV1>) {
+        self.observations = observations;
+    }
+
     pub(crate) fn observations(&self) -> &[ObservationV1] {
         &self.observations
     }
