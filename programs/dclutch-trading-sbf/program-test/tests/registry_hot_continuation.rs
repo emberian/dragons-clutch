@@ -40,7 +40,7 @@ use dclutch_direct_hot_program_test_support::waist::{
     Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses,
     direct_case, direct_case_v2, direct_case_v4, direct_registry_instructions, elves,
     fixture_substrate, legacy_registry_hot_instruction, program_test, registry_hot_instruction,
-    submit_v0,
+    start_with_substrate, submit_v0,
 };
 
 // --- Named refusals ----------------------------------------------------------
@@ -224,7 +224,7 @@ async fn assert_registry_refusal(
     let addresses =
         canonical_lookup_addresses(core::slice::from_ref(&instruction), Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = activation_snapshot(&mut context, releases.activation).await;
     let refusal = submit_v0(&mut context, &[instruction], addresses, None, &[])
         .await
@@ -472,7 +472,7 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     let units = submit_v0(
         &mut context,
@@ -549,7 +549,7 @@ async fn a_four_outcome_market_trades_on_the_canonical_artifacts() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     let units = submit_v0(
         &mut context,
@@ -608,7 +608,7 @@ async fn trade_at_geometry(artifacts: &Elves, outcomes: u32) -> Result<u64, Refu
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     submit_v0(
         &mut context,
         &instructions,
@@ -739,7 +739,7 @@ async fn late_custody_refusal_rolls_back_registry_hot_claims_and_lifecycle() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     let refusal = submit_v0(
         &mut context,
@@ -781,7 +781,7 @@ async fn corrupt_profile14_root_reserved_byte_refuses_without_mutation() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     corrupt_account_byte(
         &mut context,
         direct.chain.root,
@@ -863,7 +863,7 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let prestate = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     submit_v0(
         &mut context,
@@ -985,7 +985,7 @@ async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
     let addresses =
         canonical_lookup_addresses(core::slice::from_ref(&canonical), direct.payer.pubkey());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
 
     assert!(
         maybe_account(&mut context, direct.chain.capability_seal)
@@ -1032,7 +1032,7 @@ async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
     ];
     let addresses = canonical_lookup_addresses(&hostile, direct.payer.pubkey());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
 
     // The control is `the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects`:
     // the same fixture and the same instruction builder, differing only in the
@@ -1074,7 +1074,7 @@ async fn hot_refuses_a_missing_seal_and_a_seal_written_for_another_release() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let refused = submit_v0(
         &mut context,
         &instructions,
@@ -1138,7 +1138,7 @@ async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
         let instructions = direct_registry_instructions(releases, &direct);
         let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
         add_lookup_table(&mut test, &addresses);
-        let mut context = test.start_with_context().await;
+        let mut context = start_with_substrate(test, fixture_substrate()).await;
         // The alteration is made THROUGH THE BANK, and this is not a style
         // choice. It used to be made against `direct.chain.accounts` after
         // `direct_case` returned -- and `direct_case` installs those accounts
