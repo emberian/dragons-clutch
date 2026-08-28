@@ -3710,6 +3710,42 @@ mod tests {
     }
 
     #[test]
+    fn terminal_campaign_evidence_authenticates_exact_market_digest() {
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-campaign-terminal-market-digest-{}.json",
+            Pubkey::new_unique()
+        ));
+        let report = terminal_consumable_report(&path, checkpoint_value());
+        let encoded = serde_json::to_vec(&report).expect("terminal report JSON");
+        let evidence = parse_campaign_terminal_evidence_v1(&encoded)
+            .expect("exact Market digest is terminal-consumable");
+        assert_eq!(evidence.market_sha256, "22".repeat(32));
+
+        let mut missing = report.clone();
+        missing
+            .as_object_mut()
+            .expect("report object")
+            .remove("market_sha256");
+        let refusal = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&missing).expect("missing digest JSON"),
+        )
+        .expect_err("missing Market digest must refuse");
+        assert!(refusal.0.contains("omitted market_sha256"), "{}", refusal.0);
+
+        let mut malformed = report;
+        malformed["market_sha256"] = json!("22".repeat(31));
+        let refusal = parse_campaign_terminal_evidence_v1(
+            &serde_json::to_vec(&malformed).expect("malformed digest JSON"),
+        )
+        .expect_err("malformed Market digest must refuse");
+        assert!(
+            refusal.0.contains("expected 64 lowercase hex characters"),
+            "{}",
+            refusal.0
+        );
+    }
+
+    #[test]
     fn campaign_evidence_lease_refuses_a_racer_and_releases_only_its_owned_link() {
         let evidence = std::env::temp_dir().join(format!(
             "dclutch-campaign-evidence-lease-{}.json",
