@@ -622,6 +622,7 @@ mod tests {
     use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness};
     use dclutch_operator::{Finality, Observation, ObservedAccount};
     use serde_json::Value;
+    use solana_sdk::signature::{Keypair, Signer as _};
     use solana_sdk_ids::system_program;
 
     use super::*;
@@ -881,6 +882,49 @@ mod tests {
         let mut local: serde_json::Value =
             serde_json::from_slice(&exact).expect("local campaign projection");
         local["cluster"] = serde_json::json!("loopback");
+        let fixture_source = Pubkey::new_unique();
+        let fixture_owner = Pubkey::new_unique();
+        let fixture_mint = Pubkey::new_unique();
+        let fixture_signature = Keypair::new()
+            .sign_message(b"terminal local fixture")
+            .to_string();
+        let fixture_account = |address: Pubkey| {
+            serde_json::json!({
+                "address": address.to_string(),
+                "owner": owner.clone(),
+                "lamports": 1,
+                "executable": false,
+                "data_len": 1,
+                "data_sha256": hex(&[3; 32]),
+                "account_sha256": hex(&[4; 32])
+            })
+        };
+        local["execution"]["localParticipantFixtureLiquidity"] = serde_json::json!({
+            "sourceTokenAccount": fixture_source.to_string(),
+            "sourceOwner": fixture_owner.to_string(),
+            "quantityAtoms": 100_000_000,
+            "foundingCollateralAtoms": 1_000_000_000u64,
+            "totalSupplyAtoms": 1_100_000_000u64,
+            "mint": fixture_mint.to_string(),
+            "mintAuthorityRemoved": true,
+            "transactionSignature": fixture_signature.clone(),
+            "finalizedSlot": 77,
+            "computeUnitsConsumed": 88_000
+        });
+        local["execution"]["transactions"] = serde_json::json!([{
+            "label": "create local fixture",
+            "signature": fixture_signature,
+            "slot": 77,
+            "transaction_metadata_available": true,
+            "fee_lamports": 5_000,
+            "fee_only_balance_change": false,
+            "compute_units_consumed": 88_000,
+            "error": null,
+            "logs": []
+        }]);
+        local["execution"]["market"]["accounts"]["local_participant_fixture_source"] =
+            fixture_account(fixture_source);
+        local["execution"]["market"]["accounts"]["collateral_mint"] = fixture_account(fixture_mint);
         crate::campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
             &serde_json::to_vec(&local).expect("local campaign bytes"),
             crate::cluster::ExpectedClusterV1::OwnedLoopback,
