@@ -130,9 +130,9 @@ export default function RationalRepresentationWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <ConsoleHeader path="/redeem" title="Representation" purpose="A claim holder transfers claim tokens, or prepares the open and retirement steps of redemption from live market state." />
+    <ConsoleHeader path="/redeem" title="Representation" purpose="Inspect claim-transfer and redemption constructors for a local or compatible custom chain." />
 
-    <section className="trade-v3-hero"><div><h1>Claims &amp;<br /><em>redemption.</em></h1><p>Claim tokens are ordinary tokens: you can transfer them today, and the transfer route is selected from the market&apos;s own on-chain state. Opening a representation and retiring a receipt produce unsigned candidates below; where a step is not executable yet, the console says exactly what is missing.</p></div><aside><span>Executable now</span><strong>Bearer transfer</strong><p>Open and retirement expose bounded unsigned candidates. Terminal redemption is real and SBF-tested, while this browser remains read-only until it consumes the canonical Rust SignedDelta/Custody emitter.</p></aside></section>
+    <section className="trade-v3-hero"><div><h1>Claims &amp;<br /><em>redemption.</em></h1><p>The constructors below have local execution evidence and derive their routes from on-chain state. No current devnet market can supply that route today. Opening a representation and retiring a receipt produce unsigned candidates; where a step is unavailable, the console says exactly what is missing.</p></div><aside><span>Local/custom chain</span><strong>Bearer transfer</strong><p>No current devnet market can use this surface. Terminal redemption is SBF-tested, while browser payout remains read-only until it consumes the canonical Rust emitter.</p></aside></section>
 
     <section className="trade-v3-card">
       <header><span>00</span><div><h2>Successor route truth, without pretending incomplete Hot paths execute</h2><p>Transfer is the normal Token-2022 instruction. Wrap/open/redeem/retire are distinct privileged lifecycle actions; this interface will expose them only from their finalized SetV2/CapabilityV4 operators.</p></div></header>

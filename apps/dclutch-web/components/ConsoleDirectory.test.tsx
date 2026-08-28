@@ -12,10 +12,11 @@ describe('the console index', () => {
     }
   });
 
-  it('says who each console is for and defines the one internal term it uses', () => {
-    expect(html).toContain('For operators deploying the protocol');
+  it('states readiness boundaries and names the provenance answer key', () => {
+    expect(html).toContain('does not update programs');
+    expect(html).toContain('does not mean its mutation route is live');
     expect(html).toContain('For market authors');
-    expect(html).toContain('the evidence bundle the build pipeline produces');
+    expect(html).toContain('No current devnet market can use them');
     // Names the provenance answer key and its standard.
     expect(html).toContain('The artifacts, and where they come from');
     expect(html).toContain('a bug in the console');

@@ -109,8 +109,10 @@ poststates from finalized history.
 
 ## Redeeming
 
-You can complete a wallet payout from the terminal client or the web app.
-The full flow has three separately finalized parts: create the market's
+The payout constructor and finalizer have local execution evidence. There is
+no current devnet Market that can use this route, so the example below is for
+a local validator or a compatible custom deployment. The full flow has three
+separately finalized parts: create the market's
 payment record if it does not exist, publish and freeze the payout lookup
 table, then sign the payout itself. Do not combine those steps into one
 optimistic submit loop.
@@ -176,7 +178,8 @@ floor at or above the transaction slot; the response may be at a later
 slot. The SDK finalizer performs those checks and refuses altered wire
 bytes, signatures, fees, return data, account order, or payout poststate.
 The `dclutch redeem` command adds a durable filesystem journal and is the
-reference for crash recovery.
+reference for local/custom-deployment crash recovery. Its presence does not
+mean a devnet payout is currently available.
 
 ## Founding a market
 

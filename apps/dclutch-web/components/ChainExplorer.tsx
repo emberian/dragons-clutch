@@ -886,7 +886,7 @@ export default function ChainExplorer() {
       <Nav current="/explorer" status="read-only projection" />
 
       <section className="xp-hero">
-        <p className="eyebrow">The protocol, live · no wallet, no setup</p>
+        <p className="eyebrow">Seven devnet programs, live · no wallet, no setup</p>
         <h1>Every record the protocol writes, decoded by its own schema.</h1>
         <p className="lede">
           The app knows its own deployment: the seven role programs below are the baked {deployment.label} manifest, read
