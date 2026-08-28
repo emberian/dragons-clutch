@@ -47,7 +47,7 @@ use dclutch_representation_composition_v3_operator::native_categorical_v1::{
 use sha2::{Digest as _, Sha256};
 use solana_sdk::{pubkey::Pubkey, rent::Rent};
 use solana_sdk_ids::{bpf_loader_upgradeable, sysvar};
-use std::{io::Read as _, path::Path};
+use std::{collections::BTreeSet, io::Read as _, path::Path};
 
 use crate::{
     Error, Result,
@@ -152,6 +152,48 @@ struct DirectDevnetPolicyObservationV1 {
     deployment: DirectDeploymentWidthsV1,
 }
 
+trait DirectPlanEvidenceV1 {
+    fn reauthenticate_checked_set(
+        &self,
+        checked: &crate::model::CheckedUpgradeSetPinV1,
+    ) -> Result<()>;
+
+    fn authenticate_activation(&self, plan: &SuccessorPlan) -> Result<()>;
+}
+
+struct ProductionDirectPlanEvidenceV1;
+
+impl DirectPlanEvidenceV1 for ProductionDirectPlanEvidenceV1 {
+    fn reauthenticate_checked_set(
+        &self,
+        checked: &crate::model::CheckedUpgradeSetPinV1,
+    ) -> Result<()> {
+        crate::upgrade::reauthenticate_checked_deployment_set_pin(checked)
+    }
+
+    fn authenticate_activation(&self, plan: &SuccessorPlan) -> Result<()> {
+        crate::runtime::authenticate_checked_activation_projection(plan)
+    }
+}
+
+trait DirectFinalizedSnapshotV1 {
+    fn finalized_accounts(
+        &mut self,
+        addresses: &[Pubkey],
+        minimum_slot: u64,
+    ) -> Result<(u64, Vec<Option<RpcAccount>>)>;
+}
+
+impl DirectFinalizedSnapshotV1 for Rpc {
+    fn finalized_accounts(
+        &mut self,
+        addresses: &[Pubkey],
+        minimum_slot: u64,
+    ) -> Result<(u64, Vec<Option<RpcAccount>>)> {
+        Rpc::finalized_accounts(self, addresses, minimum_slot)
+    }
+}
+
 fn decode_exact_json_v1<T>(bytes: &[u8], label: &str) -> Result<T>
 where
     T: serde::de::DeserializeOwned + serde::Serialize,
@@ -196,7 +238,11 @@ where
     decode_exact_json_v1(&bytes, label)
 }
 
-fn authenticate_devnet_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result<()> {
+fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
+    plan: &SuccessorPlan,
+    registry: Pubkey,
+    evidence_authenticator: &E,
+) -> Result<()> {
     if plan.schema != "dclutch-local-successor-infrastructure-plan-v2"
         || plan.record_publication != "transaction"
         || crate::plan::pubkey(&plan.registry.program_id)? != registry
@@ -215,15 +261,23 @@ fn authenticate_devnet_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result
     let checked = plan.checked_upgrade_set.as_ref().ok_or_else(|| {
         Error::new("Direct devnet planning requires a checked mixed deployment-set plan")
     })?;
-    if checked.devnet_genesis_hash != DEVNET_GENESIS_HASH {
+    if checked.schema != crate::upgrade::CHECKED_SET_PREPARE_SCHEMA
+        || checked.semantic_derivation != crate::upgrade::SEMANTIC_DERIVATION_V1
+        || checked.roles.len() != 7
+        || checked.devnet_genesis_hash != DEVNET_GENESIS_HASH
+    {
         return Err(Error::new(
-            "checked deployment-set plan does not name devnet's genesis hash",
+            "checked deployment-set schema, role closure, semantic derivation, or devnet genesis is invalid",
         ));
     }
-    crate::upgrade::reauthenticate_checked_deployment_set_pin(checked)?;
+    evidence_authenticator.reauthenticate_checked_set(checked)?;
     let retained = crate::plan::pubkey(&checked.retained_upgrade_authority)?;
+    let retained_text = retained.to_string();
+    let mut loader_coordinates = BTreeSet::new();
     for (role, pin, disposition) in checked_plan_roles_v1(plan) {
         let evidence = checked_role_v1(checked, role)?;
+        let program = crate::plan::pubkey(&pin.program_id)?;
+        let programdata = crate::plan::pubkey(&pin.programdata_id)?;
         if evidence.disposition != disposition
             || evidence.program_id != pin.program_id
             || evidence.programdata_id != pin.programdata_id
@@ -233,15 +287,24 @@ fn authenticate_devnet_plan_v1(plan: &SuccessorPlan, registry: Pubkey) -> Result
             || evidence.deployment_slot != pin.deployment_slot
             || evidence.programdata_account_sha256 != pin.programdata_sha256
             || evidence.semantic_release_id != pin.semantic_release_id
-            || pin.upgrade_authority.as_deref() != Some(retained.to_string().as_str())
+            || pin.elf_path != pin.checked_candidate_elf_path
+            || pin.elf_sha256 != pin.checked_candidate_elf_sha256
+            || pin.upgrade_authority.as_deref() != Some(retained_text.as_str())
             || pin.deployment_source != "observed-programdata-account"
+            || !loader_coordinates.insert(program)
+            || !loader_coordinates.insert(programdata)
         {
             return Err(Error::new(format!(
                 "checked deployment-set role {role} differs from the exact Direct plan pin"
             )));
         }
     }
-    crate::runtime::authenticate_checked_activation_projection(plan)?;
+    if loader_coordinates.len() != 14 {
+        return Err(Error::new(
+            "Direct deployment plan must contain 14 pairwise-distinct Loader coordinates",
+        ));
+    }
+    evidence_authenticator.authenticate_activation(plan)?;
     Ok(())
 }
 
@@ -302,8 +365,8 @@ fn checked_role_v1<'a>(
     Ok(selected)
 }
 
-fn observe_devnet_policy_v1(
-    rpc: &mut Rpc,
+fn observe_devnet_policy_v1<R: DirectFinalizedSnapshotV1>(
+    rpc: &mut R,
     plan: &SuccessorPlan,
 ) -> Result<DirectDevnetPolicyObservationV1> {
     let checked = plan.checked_upgrade_set.as_ref().ok_or_else(|| {
@@ -326,6 +389,11 @@ fn observe_devnet_policy_v1(
         addresses.push(crate::plan::pubkey(&pin.programdata_id)?);
     }
     let (finalized_slot, accounts) = rpc.finalized_accounts(&addresses, floor)?;
+    if finalized_slot < floor || accounts.len() != addresses.len() {
+        return Err(Error::new(
+            "finalized Direct snapshot was below its checked floor or changed its exact 15-account width",
+        ));
+    }
     let rent_account = accounts
         .first()
         .and_then(Option::as_ref)
@@ -498,6 +566,34 @@ impl DirectMarketCompilerOwnedV1 {
         fee_basis_points: Option<u16>,
         fee_recipient: Option<Pubkey>,
     ) -> Result<Self> {
+        Self::load_devnet_with_v1(
+            plan_path,
+            rpc_url,
+            devnet_acknowledgment,
+            registry,
+            fee_basis_points,
+            fee_recipient,
+            &ProductionDirectPlanEvidenceV1,
+            |origin| Rpc::connect_cluster(origin, WritePolicyV1::ReadsOnly),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn load_devnet_with_v1<E, R, C>(
+        plan_path: &Path,
+        rpc_url: &str,
+        devnet_acknowledgment: Option<&str>,
+        registry: Pubkey,
+        fee_basis_points: Option<u16>,
+        fee_recipient: Option<Pubkey>,
+        evidence_authenticator: &E,
+        connect: C,
+    ) -> Result<Self>
+    where
+        E: DirectPlanEvidenceV1,
+        R: DirectFinalizedSnapshotV1,
+        C: FnOnce(&ClusterOriginV1) -> Result<R>,
+    {
         let origin = ClusterOriginV1::parse(rpc_url, devnet_acknowledgment)?;
         if !matches!(origin, ClusterOriginV1::AcknowledgedDevnet { .. }) {
             return Err(Error::new(
@@ -505,9 +601,9 @@ impl DirectMarketCompilerOwnedV1 {
             ));
         }
         let plan = read_exact_json_v1::<SuccessorPlan>(plan_path, "successor plan")?;
-        authenticate_devnet_plan_v1(&plan, registry)?;
+        authenticate_devnet_plan_v1(&plan, registry, evidence_authenticator)?;
         let fee = DirectFeeSelectionV1::explicit(fee_basis_points, fee_recipient)?;
-        let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+        let mut rpc = connect(&origin)?;
         let observation = observe_devnet_policy_v1(&mut rpc, &plan)?;
         Ok(Self {
             deployment: observation.deployment,
@@ -1178,6 +1274,8 @@ fn set_width(output: &mut [u32], coordinate: usize, value: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::Cell, fs, path::PathBuf, rc::Rc};
+
     use dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2;
     use dclutch_direct_codec::{
         native_close_bundle_v1::DIRECT_NATIVE_CLOSE_SELECTOR_V1,
@@ -1201,6 +1299,768 @@ mod tests {
     #[derive(Debug, serde::Deserialize, serde::Serialize)]
     struct ExactJsonNestedV1 {
         value: u64,
+    }
+
+    struct FixtureRoleV1 {
+        elf: PathBuf,
+        sha256: String,
+        deployment: crate::plan::RoleDeploymentInputV1,
+    }
+
+    struct DevnetPlannerFixtureV1 {
+        root: PathBuf,
+        plan_path: PathBuf,
+        plan: SuccessorPlan,
+        checked: crate::model::CheckedUpgradeSetPinV1,
+        registry: Pubkey,
+        retained_authority: Pubkey,
+        addresses: Vec<Pubkey>,
+        accounts: Vec<Option<RpcAccount>>,
+        floor: u64,
+        finalized_slot: u64,
+    }
+
+    impl Drop for DevnetPlannerFixtureV1 {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[derive(Clone)]
+    struct FixturePlanEvidenceV1 {
+        expected: crate::model::CheckedUpgradeSetPinV1,
+        checked_calls: Rc<Cell<u32>>,
+        activation_calls: Rc<Cell<u32>>,
+    }
+
+    impl DirectPlanEvidenceV1 for FixturePlanEvidenceV1 {
+        fn reauthenticate_checked_set(
+            &self,
+            checked: &crate::model::CheckedUpgradeSetPinV1,
+        ) -> Result<()> {
+            self.checked_calls
+                .set(self.checked_calls.get().saturating_add(1));
+            if checked != &self.expected {
+                return Err(Error::new(
+                    "fixture checked deployment set differs from its authenticated journal",
+                ));
+            }
+            Ok(())
+        }
+
+        fn authenticate_activation(&self, plan: &SuccessorPlan) -> Result<()> {
+            self.activation_calls
+                .set(self.activation_calls.get().saturating_add(1));
+            crate::runtime::authenticate_checked_activation_projection(plan)
+        }
+    }
+
+    struct PassThroughPlanEvidenceV1;
+
+    impl DirectPlanEvidenceV1 for PassThroughPlanEvidenceV1 {
+        fn reauthenticate_checked_set(
+            &self,
+            _checked: &crate::model::CheckedUpgradeSetPinV1,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        fn authenticate_activation(&self, plan: &SuccessorPlan) -> Result<()> {
+            crate::runtime::authenticate_checked_activation_projection(plan)
+        }
+    }
+
+    struct FixtureSnapshotRpcV1 {
+        expected_addresses: Vec<Pubkey>,
+        expected_floor: u64,
+        returned_slot: u64,
+        accounts: Vec<Option<RpcAccount>>,
+        calls: Rc<Cell<u32>>,
+    }
+
+    impl DirectFinalizedSnapshotV1 for FixtureSnapshotRpcV1 {
+        fn finalized_accounts(
+            &mut self,
+            addresses: &[Pubkey],
+            minimum_slot: u64,
+        ) -> Result<(u64, Vec<Option<RpcAccount>>)> {
+            let next = self.calls.get().saturating_add(1);
+            self.calls.set(next);
+            if next != 1
+                || addresses != self.expected_addresses
+                || minimum_slot != self.expected_floor
+            {
+                return Err(Error::new(
+                    "Direct planner changed its one-shot 15-account snapshot",
+                ));
+            }
+            Ok((self.returned_slot, self.accounts.clone()))
+        }
+    }
+
+    fn fixture_role_v1(
+        root: &Path,
+        label: &str,
+        tag: u8,
+        slot: u64,
+        retained_authority: Pubkey,
+    ) -> FixtureRoleV1 {
+        let elf = vec![0x7f, b'E', b'L', b'F', tag];
+        let elf_path = root.join(format!("{label}.so"));
+        fs::write(&elf_path, &elf).expect("write fixture ELF");
+        let programdata =
+            crate::plan::loader_programdata_bytes(&elf, slot, Some(retained_authority));
+        let observed = root.join(format!("{label}-programdata.bin"));
+        fs::write(&observed, &programdata).expect("write fixture ProgramData");
+        FixtureRoleV1 {
+            elf: elf_path,
+            sha256: hex(&Sha256::digest(&elf)),
+            deployment: crate::plan::RoleDeploymentInputV1 {
+                observed_programdata: Some(observed),
+                observed_programdata_bytes: None,
+                expected_live_elf_sha256: Some(hex(&Sha256::digest(&elf))),
+                genesis_deployment_slot: 0,
+                expected_upgrade_authority: Some(retained_authority),
+            },
+        }
+    }
+
+    fn devnet_planner_fixture_v1() -> DevnetPlannerFixtureV1 {
+        let root = std::env::temp_dir().join(format!(
+            "dclutch-direct-devnet-planner-{}",
+            Pubkey::new_unique()
+        ));
+        fs::create_dir(&root).expect("create Direct planner fixture");
+        let retained_authority = Pubkey::new_from_array([0xa1; 32]);
+        let registry = Pubkey::new_from_array([1; 32]);
+        let registry_role = fixture_role_v1(&root, "registry", 1, 101, retained_authority);
+        let core_role = fixture_role_v1(&root, "core", 2, 107, retained_authority);
+        let claims_role = fixture_role_v1(&root, "claims", 3, 105, retained_authority);
+        let trading_role = fixture_role_v1(&root, "trading", 4, 106, retained_authority);
+        let resolution_role = fixture_role_v1(&root, "resolution", 5, 104, retained_authority);
+        let custody_role = fixture_role_v1(&root, "custody", 6, 103, retained_authority);
+        let rent_role = fixture_role_v1(&root, "rent", 7, 102, retained_authority);
+        let plan_path = root.join("plan.json");
+        let mut plan = crate::plan::prepare(crate::plan::PrepareArgs {
+            account_dir: root.join("accounts"),
+            plan_path: plan_path.clone(),
+            registry_program: registry,
+            registry_elf: registry_role.elf,
+            registry_sha256: registry_role.sha256,
+            registry_semantic_release_id: hex(&[0x11; 32]),
+            core_program: Pubkey::new_from_array([2; 32]),
+            core_elf: core_role.elf,
+            core_sha256: core_role.sha256,
+            core_semantic_release_id: hex(&[0x12; 32]),
+            core_bootstrap_upgrade_authority: retained_authority,
+            claims_program: Pubkey::new_from_array([3; 32]),
+            claims_elf: claims_role.elf,
+            claims_sha256: claims_role.sha256,
+            claims_semantic_release_id: hex(&[0x13; 32]),
+            trading_program: Pubkey::new_from_array([4; 32]),
+            trading_elf: trading_role.elf,
+            trading_sha256: trading_role.sha256,
+            trading_semantic_release_id: hex(&dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1),
+            resolution_program: Pubkey::new_from_array([5; 32]),
+            resolution_elf: resolution_role.elf,
+            resolution_sha256: resolution_role.sha256,
+            resolution_semantic_release_id: hex(
+                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            ),
+            custody_program: Pubkey::new_from_array([6; 32]),
+            custody_elf: custody_role.elf,
+            custody_sha256: custody_role.sha256,
+            custody_semantic_release_id: hex(&[0x16; 32]),
+            record_publication: crate::plan::RecordPublicationV1::Transaction,
+            deployments: crate::plan::RoleDeploymentsV1 {
+                registry: registry_role.deployment,
+                core: core_role.deployment,
+                claims: claims_role.deployment,
+                trading: trading_role.deployment,
+                resolution: resolution_role.deployment,
+                custody: custody_role.deployment,
+                rent_credit: rent_role.deployment,
+            },
+            rent_credit_program: Pubkey::new_from_array([7; 32]),
+            rent_credit_elf: rent_role.elf,
+            rent_credit_sha256: rent_role.sha256,
+            rent_credit_semantic_release_id: hex(&[0x17; 32]),
+            checked_upgrade_set: None,
+        })
+        .expect("prepare Direct planner fixture");
+
+        let roles = checked_plan_roles_v1(&plan)
+            .into_iter()
+            .map(|(role, pin, disposition)| {
+                let carry = disposition == CheckedDeploymentDispositionV1::CarryForward;
+                let record = match role {
+                    "registry" => Some(&plan.records["registry_artifact_release"]),
+                    "rent" => Some(&plan.records["rent_artifact_release"]),
+                    _ => None,
+                };
+                CheckedUpgradeRolePinV1 {
+                    role: role.into(),
+                    disposition,
+                    program_id: pin.program_id.clone(),
+                    programdata_id: pin.programdata_id.clone(),
+                    baseline_path: (!carry).then(|| pin.checked_candidate_elf_path.clone()),
+                    baseline_sha256: (!carry).then(|| pin.checked_candidate_elf_sha256.clone()),
+                    receipt_path: (!carry).then(|| {
+                        root.join(format!("{role}-receipt.json"))
+                            .display()
+                            .to_string()
+                    }),
+                    receipt_sha256: (!carry).then(|| hex(&[0x31; 32])),
+                    dump_path: pin.checked_candidate_elf_path.clone(),
+                    dump_sha256: pin.live_elf_sha256.clone(),
+                    checked_candidate_elf_path: pin.checked_candidate_elf_path.clone(),
+                    checked_candidate_elf_sha256: pin.checked_candidate_elf_sha256.clone(),
+                    live_elf_sha256: pin.live_elf_sha256.clone(),
+                    deployment_slot: pin.deployment_slot,
+                    programdata_account_sha256: pin.programdata_sha256.clone(),
+                    semantic_release_id: pin.semantic_release_id.clone(),
+                    artifact_release_body_hex: record.map(|pair| pair.body_hex.clone()),
+                    artifact_release_id: record.map(|_| pin.artifact_release_id.clone()),
+                    carried_programdata_base64: carry.then(|| "fixture-programdata".into()),
+                }
+            })
+            .collect();
+        let checked = crate::model::CheckedUpgradeSetPinV1 {
+            schema: crate::upgrade::CHECKED_SET_PREPARE_SCHEMA.into(),
+            journal_path: root.join("deployment-set.json").display().to_string(),
+            journal_sha256: hex(&[0x21; 32]),
+            final_set_sha256: hex(&[0x22; 32]),
+            checked_release_gate_path: root.join("checked-release.json").display().to_string(),
+            checked_release_gate_sha256: hex(&[0x23; 32]),
+            source_revision: "fixture-source".into(),
+            source_tree_sha256: hex(&[0x24; 32]),
+            devnet_genesis_hash: DEVNET_GENESIS_HASH.into(),
+            solana_cli_version: "fixture-solana".into(),
+            retained_upgrade_authority: retained_authority.to_string(),
+            fee_payer: Pubkey::new_from_array([0xa2; 32]).to_string(),
+            semantic_derivation: crate::upgrade::SEMANTIC_DERIVATION_V1.into(),
+            infrastructure_carry_forward: crate::model::CheckedInfrastructureCarryForwardPinV1 {
+                snapshot_path: root.join("carry.json").display().to_string(),
+                snapshot_sha256: hex(&[0x25; 32]),
+                context_slot: 200,
+                profile_address: plan.infrastructure_profile.address.clone(),
+                profile_account_sha256: hex(&[0x26; 32]),
+                profile_body_sha256: plan.infrastructure_profile.body_sha256.clone(),
+                profile_body_hex: plan.infrastructure_profile.body_hex.clone(),
+                registry_raw_address: plan.records["registry_artifact_release"].raw.clone(),
+                registry_staging_address: plan.records["registry_artifact_release"].staging.clone(),
+                registry_programdata_account_sha256: plan.registry.programdata_sha256.clone(),
+                rent_raw_address: plan.records["rent_artifact_release"].raw.clone(),
+                rent_staging_address: plan.records["rent_artifact_release"].staging.clone(),
+                rent_programdata_account_sha256: plan.rent_credit.programdata_sha256.clone(),
+            },
+            roles,
+        };
+        plan.checked_upgrade_set = Some(checked.clone());
+        fs::write(
+            &plan_path,
+            serde_json::to_vec_pretty(&plan).expect("encode Direct planner plan"),
+        )
+        .expect("replace Direct planner plan");
+
+        let mut addresses = vec![sysvar::rent::ID];
+        let mut accounts = vec![Some(RpcAccount {
+            lamports: 1,
+            owner: sysvar::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: bincode::serialize(&Rent::default()).expect("Rent sysvar"),
+        })];
+        for (_, pin, _) in checked_plan_roles_v1(&plan) {
+            let program = crate::plan::pubkey(&pin.program_id).expect("fixture Program");
+            let programdata =
+                crate::plan::pubkey(&pin.programdata_id).expect("fixture ProgramData");
+            let mut program_body = Vec::with_capacity(LOADER_V3_PROGRAM_BYTES);
+            program_body.extend_from_slice(&2_u32.to_le_bytes());
+            program_body.extend_from_slice(programdata.as_ref());
+            let candidate = fs::read(&pin.checked_candidate_elf_path).expect("fixture candidate");
+            let programdata_body = crate::plan::loader_programdata_bytes(
+                &candidate,
+                pin.deployment_slot,
+                Some(retained_authority),
+            );
+            assert_eq!(
+                hex(&Sha256::digest(&programdata_body)),
+                pin.programdata_sha256
+            );
+            addresses.extend([program, programdata]);
+            accounts.extend([
+                Some(RpcAccount {
+                    lamports: 1,
+                    owner: bpf_loader_upgradeable::ID,
+                    executable: true,
+                    rent_epoch: 0,
+                    data: program_body,
+                }),
+                Some(RpcAccount {
+                    lamports: 1,
+                    owner: bpf_loader_upgradeable::ID,
+                    executable: false,
+                    rent_epoch: 0,
+                    data: programdata_body,
+                }),
+            ]);
+        }
+        let floor = 200;
+        DevnetPlannerFixtureV1 {
+            root,
+            plan_path,
+            plan,
+            checked,
+            registry,
+            retained_authority,
+            addresses,
+            accounts,
+            floor,
+            finalized_slot: 240,
+        }
+    }
+
+    fn write_fixture_plan_v1(fixture: &DevnetPlannerFixtureV1, plan: &SuccessorPlan) {
+        fs::write(
+            &fixture.plan_path,
+            serde_json::to_vec_pretty(plan).expect("encode hostile plan"),
+        )
+        .expect("write hostile plan");
+    }
+
+    struct FixtureLoadProbeV1 {
+        result: Result<DirectMarketCompilerOwnedV1>,
+        checked_calls: Rc<Cell<u32>>,
+        activation_calls: Rc<Cell<u32>>,
+        rpc_calls: Rc<Cell<u32>>,
+    }
+
+    fn load_fixture_v1(
+        fixture: &DevnetPlannerFixtureV1,
+        plan: &SuccessorPlan,
+        accounts: Vec<Option<RpcAccount>>,
+        finalized_slot: u64,
+        fee_basis_points: Option<u16>,
+        fee_recipient: Option<Pubkey>,
+    ) -> FixtureLoadProbeV1 {
+        write_fixture_plan_v1(fixture, plan);
+        let checked_calls = Rc::new(Cell::new(0));
+        let activation_calls = Rc::new(Cell::new(0));
+        let rpc_calls = Rc::new(Cell::new(0));
+        let evidence = FixturePlanEvidenceV1 {
+            expected: fixture.checked.clone(),
+            checked_calls: Rc::clone(&checked_calls),
+            activation_calls: Rc::clone(&activation_calls),
+        };
+        let rpc = FixtureSnapshotRpcV1 {
+            expected_addresses: fixture.addresses.clone(),
+            expected_floor: fixture.floor,
+            returned_slot: finalized_slot,
+            accounts,
+            calls: Rc::clone(&rpc_calls),
+        };
+        let result = DirectMarketCompilerOwnedV1::load_devnet_with_v1(
+            &fixture.plan_path,
+            "https://api.devnet.solana.com",
+            Some(DEVNET_GENESIS_HASH),
+            fixture.registry,
+            fee_basis_points,
+            fee_recipient,
+            &evidence,
+            |origin| {
+                if origin.url() != "https://api.devnet.solana.com/" {
+                    return Err(Error::new("fixture received the wrong devnet origin"));
+                }
+                Ok(rpc)
+            },
+        );
+        FixtureLoadProbeV1 {
+            result,
+            checked_calls,
+            activation_calls,
+            rpc_calls,
+        }
+    }
+
+    #[test]
+    fn production_devnet_planner_closes_plan_rpc_and_market_authority() {
+        let fixture = devnet_planner_fixture_v1();
+        let recipient = Pubkey::new_from_array([0xb1; 32]);
+        let probe = load_fixture_v1(
+            &fixture,
+            &fixture.plan,
+            fixture.accounts.clone(),
+            fixture.finalized_slot,
+            Some(37),
+            Some(recipient),
+        );
+        let loaded = probe
+            .result
+            .expect("authenticated production devnet planner");
+        assert_eq!(probe.checked_calls.get(), 1);
+        assert_eq!(probe.activation_calls.get(), 1);
+        assert_eq!(probe.rpc_calls.get(), 1);
+        assert_eq!(fixture.addresses.len(), 15);
+        assert_eq!(
+            fixture.retained_authority,
+            Pubkey::new_from_array([0xa1; 32])
+        );
+
+        let compiler = loaded.compiler();
+        assert_eq!(
+            compiler.activation_deadline_slot,
+            fixture.finalized_slot + DEVNET_DIRECT_ACTIVATION_WINDOW_SLOTS_V1
+        );
+        assert_eq!(
+            compiler.root_rent_minimum_lamports,
+            Rent::default().minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1)
+        );
+        let input = crate::market::demo_market_input(fixture.registry, compiler)
+            .expect("market from authenticated Direct planner");
+        assert_eq!(input.collateral_display_decimals, 6);
+        let payload = input.direct_capability.as_ref().expect("Direct payload");
+        assert_eq!(
+            payload.activation_deadline_slot,
+            fixture.finalized_slot + DEVNET_DIRECT_ACTIVATION_WINDOW_SLOTS_V1
+        );
+        assert_eq!(
+            payload.root_rent_minimum_lamports,
+            Rent::default().minimum_balance(DIRECT_CAPABILITY_ROOT_BYTES_V1)
+        );
+        let config_bytes = decode_hex(&payload.execution_config_hex).expect("execution config");
+        let config_id: [u8; 32] = Sha256::digest(&config_bytes).into();
+        let config = DirectExecutionConfigV1::decode_selected(config_id, config_id, &config_bytes)
+            .expect("canonical execution config");
+        assert_eq!(config.price_scale(), 1_000_000);
+        assert_eq!(config.fee_basis_points(), 37);
+        assert_eq!(config.fee_recipient(), recipient.to_bytes());
+        let manifest_bytes =
+            decode_hex(&input.capability_manifest_hex).expect("capability manifest");
+        let manifest =
+            CapabilityManifestV1::decode(&manifest_bytes).expect("canonical capability manifest");
+        assert_eq!(
+            manifest
+                .entry(payload.selected_manifest_entry_index)
+                .expect("Direct manifest entry")
+                .funding_quote()
+                .amounts()
+                .rent()
+                .amount(),
+            payload.root_rent_minimum_lamports
+        );
+    }
+
+    #[test]
+    fn production_devnet_entry_refuses_loopback_before_file_or_rpc_access() {
+        let missing = Path::new("/this/direct-plan-must-not-be-read.json");
+        assert!(
+            DirectMarketCompilerOwnedV1::load_devnet(
+                missing,
+                "http://127.0.0.1:8899",
+                None,
+                Pubkey::new_from_array([0xb2; 32]),
+                Some(0),
+                Some(Pubkey::new_from_array([0xb3; 32])),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn production_devnet_planner_refuses_missing_fee_before_rpc_connect() {
+        let fixture = devnet_planner_fixture_v1();
+        for (basis_points, recipient) in [
+            (None, Some(Pubkey::new_from_array([0xb4; 32]))),
+            (Some(0), None),
+            (Some(10_001), Some(Pubkey::new_from_array([0xb4; 32]))),
+            (Some(1), Some(Pubkey::default())),
+        ] {
+            let probe = load_fixture_v1(
+                &fixture,
+                &fixture.plan,
+                fixture.accounts.clone(),
+                fixture.finalized_slot,
+                basis_points,
+                recipient,
+            );
+            assert!(probe.result.is_err());
+            assert_eq!(probe.checked_calls.get(), 1);
+            assert_eq!(probe.activation_calls.get(), 1);
+            assert_eq!(probe.rpc_calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn production_devnet_planner_refuses_every_snapshot_coordinate_substitution() {
+        let fixture = devnet_planner_fixture_v1();
+        for index in 0..fixture.accounts.len() {
+            let mut accounts = fixture.accounts.clone();
+            let account = accounts[index].as_mut().expect("fixture account");
+            if index == 0 {
+                account.data.push(0);
+            } else if index % 2 == 1 {
+                account.data[4] ^= 1;
+            } else {
+                *account.data.last_mut().expect("ProgramData ELF") ^= 1;
+            }
+            let probe = load_fixture_v1(
+                &fixture,
+                &fixture.plan,
+                accounts,
+                fixture.finalized_slot,
+                Some(0),
+                Some(Pubkey::new_from_array([0xb5; 32])),
+            );
+            assert!(
+                probe.result.is_err(),
+                "snapshot coordinate {index} was admitted"
+            );
+            assert_eq!(probe.checked_calls.get(), 1);
+            assert_eq!(probe.activation_calls.get(), 1);
+            assert_eq!(probe.rpc_calls.get(), 1);
+        }
+    }
+
+    #[test]
+    fn every_loader_role_refuses_each_independent_linkage_substitution() {
+        let fixture = devnet_planner_fixture_v1();
+        for (index, (role, original_pin, _)) in
+            checked_plan_roles_v1(&fixture.plan).into_iter().enumerate()
+        {
+            let original_program = fixture.accounts[1 + index * 2]
+                .as_ref()
+                .expect("fixture Program")
+                .clone();
+            let original_programdata = fixture.accounts[2 + index * 2]
+                .as_ref()
+                .expect("fixture ProgramData")
+                .clone();
+            authenticate_live_role_v1(role, original_pin, &original_program, &original_programdata)
+                .expect("exact Loader role");
+
+            let mut program = original_program.clone();
+            program.owner = Pubkey::new_from_array([0xc1; 32]);
+            assert!(
+                authenticate_live_role_v1(role, original_pin, &program, &original_programdata)
+                    .is_err()
+            );
+            let mut program = original_program.clone();
+            program.executable = false;
+            assert!(
+                authenticate_live_role_v1(role, original_pin, &program, &original_programdata)
+                    .is_err()
+            );
+            let mut program = original_program.clone();
+            program.data[4] ^= 1;
+            assert!(
+                authenticate_live_role_v1(role, original_pin, &program, &original_programdata)
+                    .is_err()
+            );
+
+            let mut programdata = original_programdata.clone();
+            programdata.owner = Pubkey::new_from_array([0xc2; 32]);
+            assert!(
+                authenticate_live_role_v1(role, original_pin, &original_program, &programdata)
+                    .is_err()
+            );
+            let mut programdata = original_programdata.clone();
+            programdata.executable = true;
+            assert!(
+                authenticate_live_role_v1(role, original_pin, &original_program, &programdata)
+                    .is_err()
+            );
+
+            let mut pin = original_pin.clone();
+            pin.programdata_sha256 = hex(&[0xc3; 32]);
+            assert!(
+                authenticate_live_role_v1(role, &pin, &original_program, &original_programdata)
+                    .is_err()
+            );
+            let mut pin = original_pin.clone();
+            pin.deployment_slot = pin.deployment_slot.saturating_add(1);
+            assert!(
+                authenticate_live_role_v1(role, &pin, &original_program, &original_programdata)
+                    .is_err()
+            );
+            let mut pin = original_pin.clone();
+            pin.upgrade_authority = Some(Pubkey::new_from_array([0xc4; 32]).to_string());
+            assert!(
+                authenticate_live_role_v1(role, &pin, &original_program, &original_programdata)
+                    .is_err()
+            );
+            let mut pin = original_pin.clone();
+            pin.live_elf_sha256 = hex(&[0xc5; 32]);
+            assert!(
+                authenticate_live_role_v1(role, &pin, &original_program, &original_programdata)
+                    .is_err()
+            );
+            let mut pin = original_pin.clone();
+            pin.checked_candidate_elf_sha256 = hex(&[0xc6; 32]);
+            assert!(
+                authenticate_live_role_v1(role, &pin, &original_program, &original_programdata)
+                    .is_err()
+            );
+            let hostile_candidate = fixture.root.join(format!("{role}-hostile-candidate.so"));
+            let hostile_candidate_bytes = [0x7f, b'E', b'L', b'F', 0xfe];
+            fs::write(&hostile_candidate, hostile_candidate_bytes)
+                .expect("write hostile candidate");
+            let mut pin = original_pin.clone();
+            pin.checked_candidate_elf_path = hostile_candidate.display().to_string();
+            pin.checked_candidate_elf_sha256 = hex(&Sha256::digest(hostile_candidate_bytes));
+            assert!(
+                authenticate_live_role_v1(role, &pin, &original_program, &original_programdata)
+                    .is_err()
+            );
+            let mut pin = original_pin.clone();
+            pin.live_elf_padding_bytes = pin.live_elf_padding_bytes.saturating_add(1);
+            assert!(
+                authenticate_live_role_v1(role, &pin, &original_program, &original_programdata)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn production_devnet_planner_refuses_snapshot_width_and_context_drift() {
+        let fixture = devnet_planner_fixture_v1();
+        let mut short = fixture.accounts.clone();
+        short.pop();
+        let short_probe = load_fixture_v1(
+            &fixture,
+            &fixture.plan,
+            short,
+            fixture.finalized_slot,
+            Some(0),
+            Some(Pubkey::new_from_array([0xb6; 32])),
+        );
+        assert!(short_probe.result.is_err());
+        assert_eq!(short_probe.rpc_calls.get(), 1);
+
+        let stale_probe = load_fixture_v1(
+            &fixture,
+            &fixture.plan,
+            fixture.accounts.clone(),
+            fixture.floor - 1,
+            Some(0),
+            Some(Pubkey::new_from_array([0xb7; 32])),
+        );
+        assert!(stale_probe.result.is_err());
+        assert_eq!(stale_probe.rpc_calls.get(), 1);
+
+        for mutate in [
+            |account: &mut RpcAccount| account.owner = Pubkey::new_from_array([0xbc; 32]),
+            |account: &mut RpcAccount| account.executable = true,
+        ] {
+            let mut accounts = fixture.accounts.clone();
+            mutate(accounts[0].as_mut().expect("Rent account"));
+            let rent_probe = load_fixture_v1(
+                &fixture,
+                &fixture.plan,
+                accounts,
+                fixture.finalized_slot,
+                Some(0),
+                Some(Pubkey::new_from_array([0xbd; 32])),
+            );
+            assert!(rent_probe.result.is_err());
+            assert_eq!(rent_probe.rpc_calls.get(), 1);
+        }
+    }
+
+    #[test]
+    fn production_devnet_planner_refuses_mixed_set_activation_and_alias_substitutions() {
+        let fixture = devnet_planner_fixture_v1();
+
+        let mut mixed = fixture.plan.clone();
+        mixed
+            .checked_upgrade_set
+            .as_mut()
+            .expect("checked set")
+            .roles[2]
+            .disposition = CheckedDeploymentDispositionV1::CarryForward;
+        let mixed_probe = load_fixture_v1(
+            &fixture,
+            &mixed,
+            fixture.accounts.clone(),
+            fixture.finalized_slot,
+            Some(0),
+            Some(Pubkey::new_from_array([0xb8; 32])),
+        );
+        assert!(mixed_probe.result.is_err());
+        assert_eq!(mixed_probe.checked_calls.get(), 1);
+        assert_eq!(mixed_probe.activation_calls.get(), 0);
+        assert_eq!(mixed_probe.rpc_calls.get(), 0);
+
+        let mut alias = fixture.plan.clone();
+        alias.trading.elf_path = alias.claims.elf_path.clone();
+        let alias_probe = load_fixture_v1(
+            &fixture,
+            &alias,
+            fixture.accounts.clone(),
+            fixture.finalized_slot,
+            Some(0),
+            Some(Pubkey::new_from_array([0xb9; 32])),
+        );
+        assert!(alias_probe.result.is_err());
+        assert_eq!(alias_probe.checked_calls.get(), 1);
+        assert_eq!(alias_probe.activation_calls.get(), 0);
+        assert_eq!(alias_probe.rpc_calls.get(), 0);
+
+        let mut activation = fixture.plan.clone();
+        activation.activation = Pubkey::new_from_array([0xba; 32]).to_string();
+        let activation_probe = load_fixture_v1(
+            &fixture,
+            &activation,
+            fixture.accounts.clone(),
+            fixture.finalized_slot,
+            Some(0),
+            Some(Pubkey::new_from_array([0xbb; 32])),
+        );
+        assert!(activation_probe.result.is_err());
+        assert_eq!(activation_probe.checked_calls.get(), 1);
+        assert_eq!(activation_probe.activation_calls.get(), 1);
+        assert_eq!(activation_probe.rpc_calls.get(), 0);
+
+        let mut activation_body = fixture.plan.clone();
+        let release_set = activation_body
+            .records
+            .get_mut("execution_release_set")
+            .expect("execution release set");
+        let mut body = decode_hex(&release_set.body_hex).expect("release-set body");
+        body[0] ^= 1;
+        release_set.body_hex = hex(&body);
+        let activation_probe = load_fixture_v1(
+            &fixture,
+            &activation_body,
+            fixture.accounts.clone(),
+            fixture.finalized_slot,
+            Some(0),
+            Some(Pubkey::new_from_array([0xbe; 32])),
+        );
+        assert!(activation_probe.result.is_err());
+        assert_eq!(activation_probe.checked_calls.get(), 1);
+        assert_eq!(activation_probe.activation_calls.get(), 1);
+        assert_eq!(activation_probe.rpc_calls.get(), 0);
+
+        let mut coordinate_alias = fixture.plan.clone();
+        coordinate_alias.claims.program_id = coordinate_alias.trading.program_id.clone();
+        let claims_evidence = coordinate_alias
+            .checked_upgrade_set
+            .as_mut()
+            .expect("checked set")
+            .roles
+            .iter_mut()
+            .find(|role| role.role == "claims")
+            .expect("Claims evidence");
+        claims_evidence.program_id = coordinate_alias.claims.program_id.clone();
+        assert!(
+            authenticate_devnet_plan_v1(
+                &coordinate_alias,
+                fixture.registry,
+                &PassThroughPlanEvidenceV1,
+            )
+            .is_err()
+        );
     }
 
     #[test]
