@@ -565,14 +565,17 @@ class ActivityTests(unittest.TestCase):
     def test_reconciled_wallet_debit_is_exact_and_bounded(self) -> None:
         value = {
             "schema": activity.RECONCILIATION_SCHEMA,
-            "wallets": [
-                {"activityLamportDelta": "-42"},
-                {"activityLamportDelta": "7"},
-                {"activityLamportDelta": "-8"},
+            "activity": [
+                {
+                    "transactions": [
+                        {"walletLamportDeltas": {"alice": "-42", "bob": "7"}},
+                        {"walletLamportDeltas": {"alice": "20", "bob": "-8"}},
+                    ]
+                },
             ],
         }
         self.assertEqual(activity.reconciled_wallet_debit_lamports(value), 50)
-        value["wallets"][0]["activityLamportDelta"] = "-0"
+        value["activity"][0]["transactions"][0]["walletLamportDeltas"]["alice"] = "-0"
         with self.assertRaisesRegex(activity.Refusal, "canonical signed"):
             activity.reconciled_wallet_debit_lamports(value)
 

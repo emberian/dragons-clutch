@@ -2522,16 +2522,36 @@ def reconciled_wallet_debit_lamports(value: Mapping[str, Any]) -> int:
     if value.get("schema") != RECONCILIATION_SCHEMA:
         raise Refusal("supervisor reconciliation has another schema")
     debit = 0
-    for index, raw in enumerate(exact_list(value.get("wallets"), "reconciliation wallets")):
-        wallet = exact_object(raw, f"reconciliation wallet {index}")
-        delta = signed_decimal(
-            wallet.get("activityLamportDelta"),
-            f"reconciliation wallet {index} activityLamportDelta",
+    for activity_index, raw_activity in enumerate(
+        exact_list(value.get("activity"), "reconciliation activity")
+    ):
+        activity_row = exact_object(
+            raw_activity, f"reconciliation activity {activity_index}"
         )
-        if delta < 0:
-            debit += -delta
-    if debit > 2**64 - 1:
-        raise Refusal("reconciled wallet debit exceeds u64")
+        for transaction_index, raw_transaction in enumerate(
+            exact_list(
+                activity_row.get("transactions"),
+                f"reconciliation activity {activity_index} transactions",
+            )
+        ):
+            transaction = exact_object(
+                raw_transaction,
+                f"reconciliation activity {activity_index} transaction {transaction_index}",
+            )
+            deltas = exact_object(
+                transaction.get("walletLamportDeltas"),
+                f"reconciliation activity {activity_index} transaction {transaction_index} wallet deltas",
+            )
+            for wallet_id, raw_delta in deltas.items():
+                stable_id(wallet_id, "reconciled wallet id")
+                delta = signed_decimal(
+                    raw_delta,
+                    f"reconciliation activity {activity_index} transaction {transaction_index} wallet {wallet_id} delta",
+                )
+                if delta < 0:
+                    debit += -delta
+                if debit > 2**64 - 1:
+                    raise Refusal("reconciled wallet debit exceeds u64")
     return debit
 
 
