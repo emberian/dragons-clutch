@@ -76,6 +76,21 @@ enum PhaseV1 {
     Finalized,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryActionV1 {
+    SignAndSubmit,
+    PollExactSignature,
+    AuthenticateFinalized,
+}
+
+const fn recovery_action(phase: PhaseV1) -> RecoveryActionV1 {
+    match phase {
+        PhaseV1::Planned => RecoveryActionV1::SignAndSubmit,
+        PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => RecoveryActionV1::PollExactSignature,
+        PhaseV1::Finalized => RecoveryActionV1::AuthenticateFinalized,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExpectedAccountV1 {
@@ -178,7 +193,6 @@ struct ArgumentsV1 {
 }
 
 struct PlanningV1 {
-    input: PlanInputV1,
     input_sha256: String,
     selected: SelectedInputV1,
     report: WalletTerminalPayoutReportV3,
@@ -417,7 +431,6 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, journals: &[JournalV1]) -> Resul
             .last()
             .ok_or_else(|| refusal("journal sequence vanished"))?;
         return Ok(PlanningV1 {
-            input,
             input_sha256,
             selected,
             report,
@@ -451,7 +464,6 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1, journals: &[JournalV1]) -> Resul
         ));
     };
     Ok(PlanningV1 {
-        input,
         input_sha256,
         selected,
         report,
@@ -612,9 +624,9 @@ fn resume_transaction(
     journal: &mut JournalV1,
 ) -> Result<()> {
     authenticate_journal(planning, arguments, journal)?;
-    match journal.phase {
-        PhaseV1::Finalized => authenticate_finalized_history(rpc, journal),
-        PhaseV1::SignedNotSubmitted | PhaseV1::Submitted => {
+    match recovery_action(journal.phase) {
+        RecoveryActionV1::AuthenticateFinalized => authenticate_finalized_history(rpc, journal),
+        RecoveryActionV1::PollExactSignature => {
             let signature = journal
                 .expected_signature
                 .as_deref()
@@ -628,7 +640,7 @@ fn resume_transaction(
             finalize_transaction(rpc, planning, journal, &history)?;
             persist_update(path, journal)
         }
-        PhaseV1::Planned => {
+        RecoveryActionV1::SignAndSubmit => {
             authenticate_planned_message(planning, arguments, journal)?;
             let current_height = rpc
                 .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
@@ -1421,8 +1433,15 @@ fn authenticate_evidence_value(
         return Err(refusal("wallet payout evidence identity changed"));
     }
     let journals = load_journals(arguments)?;
-    let journal = journals
-        .last()
+    let journal = authenticate_evidence_journal(evidence, journals.last())?;
+    authenticate_finalized_history(rpc, journal)
+}
+
+fn authenticate_evidence_journal<'a>(
+    evidence: &EvidenceV1,
+    journal: Option<&'a JournalV1>,
+) -> Result<&'a JournalV1> {
+    let journal = journal
         .filter(|journal| journal.stage == StageV1::Payout && journal.phase == PhaseV1::Finalized)
         .ok_or_else(|| refusal("wallet payout evidence omitted its finalized payout journal"))?;
     if journal.state_sha256 != evidence.journal_state_sha256
@@ -1438,7 +1457,7 @@ fn authenticate_evidence_value(
             "wallet payout evidence and finalized journal diverged",
         ));
     }
-    authenticate_finalized_history(rpc, journal)
+    Ok(journal)
 }
 
 fn preflight(planning: &PlanningV1, journal: Option<&JournalV1>) -> Value {
@@ -1885,6 +1904,33 @@ mod tests {
         (journal, history)
     }
 
+    fn evidence_for(journal: &JournalV1) -> EvidenceV1 {
+        EvidenceV1 {
+            schema: EVIDENCE_SCHEMA.into(),
+            cluster: "owned-loopback".into(),
+            input_sha256: journal.input_sha256.clone(),
+            payout_intent_sha256: journal.payout_intent_sha256.clone(),
+            journal_state_sha256: journal.state_sha256.clone(),
+            signature: journal.expected_signature.clone().unwrap(),
+            finalized_slot: journal.finalized_slot.unwrap(),
+            fee_lamports: journal.fee_lamports.unwrap(),
+            compute_units_consumed: journal.compute_units_consumed.unwrap(),
+            fee_payer: journal.fee_payer.clone(),
+            owner: journal.owner.clone(),
+            market: Pubkey::new_unique().to_string(),
+            recipient: Pubkey::new_unique().to_string(),
+            payout: "1".into(),
+            lookup_table: journal.lookup_table.clone(),
+            lookup_addresses_sha256: journal.lookup_addresses_sha256.clone(),
+            payout_instruction_sha256: journal.payout_instruction_sha256.clone(),
+            custody_request_sha256: journal.custody_request_sha256.clone(),
+            return_data_producer: journal.return_data_producer.clone().unwrap(),
+            return_data_base64: journal.return_data_base64.clone().unwrap(),
+            poststates: journal.finalized_poststates.clone(),
+            evidence_sha256: String::new(),
+        }
+    }
+
     #[test]
     fn journal_digest_refuses_substitution() {
         let journal = journal();
@@ -1908,7 +1954,39 @@ mod tests {
                 PhaseV1::SignedNotSubmitted | PhaseV1::Submitted
             ));
             assert!(journal.expected_signature.is_some());
+            assert_eq!(
+                recovery_action(journal.phase),
+                RecoveryActionV1::PollExactSignature
+            );
         }
+        assert_eq!(
+            recovery_action(PhaseV1::Planned),
+            RecoveryActionV1::SignAndSubmit
+        );
+        assert_eq!(
+            recovery_action(PhaseV1::Finalized),
+            RecoveryActionV1::AuthenticateFinalized
+        );
+    }
+
+    #[test]
+    fn finalized_evidence_requires_its_exact_payout_journal() {
+        let (mut journal, _) = history_fixture();
+        journal.stage = StageV1::Payout;
+        journal.phase = PhaseV1::Finalized;
+        journal.finalized_slot = Some(55);
+        journal.fee_lamports = Some(5_000);
+        journal.compute_units_consumed = Some(321);
+        journal.return_data_producer = Some(Pubkey::new_unique().to_string());
+        journal.return_data_base64 = Some(BASE64.encode([7]));
+        refresh_state_sha256(&mut journal).unwrap();
+        let evidence = evidence_for(&journal);
+        assert!(authenticate_evidence_journal(&evidence, Some(&journal)).is_ok());
+        assert!(authenticate_evidence_journal(&evidence, None).is_err());
+        let mut substituted = journal;
+        substituted.payout_intent_sha256 = "ff".repeat(32);
+        refresh_state_sha256(&mut substituted).unwrap();
+        assert!(authenticate_evidence_journal(&evidence, Some(&substituted)).is_err());
     }
 
     #[test]
@@ -1955,6 +2033,34 @@ mod tests {
         ])
         .unwrap_err();
         assert!(error.to_string().contains("not loopback"));
+    }
+
+    #[test]
+    fn owned_loopback_refuses_mainnet_genesis_even_through_a_tunnel() {
+        let origin = ClusterOriginV1::parse("http://127.0.0.1:18899/", None).unwrap();
+        assert!(
+            origin
+                .authenticate_genesis(crate::cluster::MAINNET_BETA_GENESIS_HASH)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn execute_key_reader_refuses_owner_substitution() {
+        let keypair = Keypair::new();
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-wallet-payout-key-{}-{}.json",
+            std::process::id(),
+            keypair.pubkey()
+        ));
+        fs::write(
+            &path,
+            serde_json::to_vec(&keypair.to_bytes().to_vec()).unwrap(),
+        )
+        .unwrap();
+        assert!(read_keypair(&path, keypair.pubkey(), "test-owner").is_ok());
+        assert!(read_keypair(&path, Pubkey::new_unique(), "test-owner").is_err());
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
