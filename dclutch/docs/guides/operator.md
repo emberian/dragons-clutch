@@ -6,8 +6,10 @@ admin keys, you cannot change its rules, and you are not the referee:
 everything that happens next is either open to everyone or refused for
 everyone. This guide walks through the decisions that are yours.
 
-Nothing is deployed yet; today you create markets against a local test
-chain. Exact costs, routes, and codes live in the
+Seven protocol programs are deployed at permanent addresses on Solana
+devnet, but the first open market is not live yet. Today you rehearse market
+creation against a local test chain and use the public app to inspect the
+devnet deployment. Exact costs, routes, and codes live in the
 [reference](../reference/README.md).
 
 ## What you fix at creation, forever

@@ -9,10 +9,11 @@ tells you what you'd actually be holding, why the payout can't be walked
 back, and how there's a standing bounty you can collect just for paying
 attention.
 
-First, the disclaimer you actually care about: **none of this is deployed.
-There is no token. There is nothing to buy today.** It runs on local test
-validators while it gets finished. You're early — this page is so you know
-what it is before it ships.
+First, the disclaimer you actually care about: **seven protocol programs
+are deployed on Solana devnet, but there is no open market, no token, and
+nothing to buy today.** The complete market and trading rehearsals still run
+on local test validators while the first public test market is prepared.
+You're early — this page is so you know what it is before that market opens.
 
 ## What a claim is
 
@@ -96,17 +97,18 @@ oracle ghosted" cost the market instead of costing you.
 
 ## The honest part
 
-- Not deployed. No token. Local validators only, today.
-- You can't redeem a winning position from your own wallet yet — the last
-  payout step is still being wired up ([the CLI](../../packages/dclutch-cli/README.md)
-  does the part that works and tells you exactly where it stops).
+- Seven programs are live on devnet. No open market and no token exist
+  today.
+- A winning-position payout has not completed end to end from a user's
+  wallet on devnet yet. [The CLI](../../packages/dclutch-cli/README.md)
+  tells you exactly which checks and submission steps it can perform.
 - Where something isn't finished, the tools say so to your face instead of
   spinning. That's the house style: the chain refuses loudly, and no
   partial state survives a refused transaction.
 
-When it ships, the pitch will be the same one this page just made: the
-money is where you can see it, the math is fixed before you enter, and even
-the disaster case pays somebody — might as well be you.
+When the first market opens, the promise will be the same one this page just
+made: the money is where you can see it, the math is fixed before you enter,
+and even the disaster case pays somebody — might as well be you.
 
 The numbers behind everything here — payouts, fees, every refusal code —
 are in the [reference](../reference/README.md), and the
