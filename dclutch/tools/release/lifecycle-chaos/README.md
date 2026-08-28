@@ -7,11 +7,12 @@ owned by the successor commands and their journals.
 
 The gate runs one clean baseline plus sixteen hostile cases:
 
-- process death immediately after durable `Submitted` at founding,
+- process death after durable `Submitted` and exact upstream delivery, while
+  the RPC response is withheld, at founding,
   participant admission, ALT creation, capability seal, Direct Hot execution,
   Resolution, wallet payout, and retirement;
 - a lost RPC response, an exact injected duplicate `sendTransaction`, and a
-  blockhash-expiry refusal at Hot;
+  real block-height expiry plus upstream `BlockhashNotFound` refusal at Hot;
 - corrupted and atomically replaced evidence, wallet underfund and surplus,
   and a late child refusal.
 
@@ -21,6 +22,14 @@ must preserve its independently observed pre-fault snapshot byte-for-byte.
 The RPC trace rejects a second client `sendTransaction` for one frozen journal
 intent; the deliberately duplicated request is marked as supervisor-injected,
 so it cannot disguise a caller retry.
+
+For the expiry case the proxy records the exact recent blockhash and first
+signature from the frozen Solana wire, binds it to an observed
+`getLatestBlockhash` response, waits until finalized `getBlockHeight` is above
+the returned last-valid height, and only then forwards the unchanged packet.
+The upstream must return `BlockhashNotFound`, and recovery must poll the exact
+wire signature without another client send. Every injected send is refused
+unless the selected owner projection is already durably `submitted`.
 
 ## Driver projection
 
@@ -55,6 +64,15 @@ pre-fault observation and corrupt only copied evidence before any transaction.
 Local wallet and late-child hostiles are requested through an fsynced
 `control/FAULT.json`; the accepted driver owns their construction and never
 exports a private key or packet.
+
+For wallet underfund/surplus, the driver applies the local-only fault while
+still stopped before `GO`, then writes `control/FAULT_ARMED.json`. The
+supervisor observes that faulty prestate before allowing the session to run.
+For a late-child refusal, `GO` advances the valid prefix; immediately before
+the selected child call the driver writes `FAULT_ARMED.json` and waits. The
+supervisor observes that exact boundary and writes `control/FAULT_GO.json`.
+The refused poststate must equal the corresponding armed snapshot, so valid
+earlier stages are not confused with partial effects from the refused child.
 
 Each durable boundary is projected as `<journalDir>/<stage>.json`:
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import http.server
 import importlib.util
@@ -11,7 +12,10 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 
 ROOT = Path(__file__).resolve().parent
@@ -36,12 +40,48 @@ class _RpcHandler(http.server.BaseHTTPRequestHandler):
         with self.server.lock:
             self.server.methods.append(method)
         if method == "sendTransaction":
-            result: object = "fake-signature"
+            if self.server.block_height > self.server.last_valid_block_height:
+                response: dict[str, object] = {
+                    "jsonrpc": "2.0",
+                    "id": call["id"],
+                    "error": {
+                        "code": -32002,
+                        "message": "Transaction simulation failed: Blockhash not found",
+                        "data": {"err": "BlockhashNotFound"},
+                    },
+                }
+            else:
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": call["id"],
+                    "result": MODULE.base58_encode(b"\0" * 64),
+                }
         elif method == "getSignatureStatuses":
-            result = {"context": {"slot": 9}, "value": [{"confirmationStatus": "finalized"}]}
+            response = {
+                "jsonrpc": "2.0",
+                "id": call["id"],
+                "result": {"context": {"slot": 9}, "value": [{"confirmationStatus": "finalized"}]},
+            }
+        elif method == "getLatestBlockhash":
+            response = {
+                "jsonrpc": "2.0",
+                "id": call["id"],
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {
+                        "blockhash": MODULE.base58_encode(b"\x07" * 32),
+                        "lastValidBlockHeight": self.server.last_valid_block_height,
+                    },
+                },
+            }
+        elif method == "getBlockHeight":
+            with self.server.lock:
+                self.server.block_height += 1
+                height = self.server.block_height
+            response = {"jsonrpc": "2.0", "id": call["id"], "result": height}
         else:
-            result = None
-        body = json.dumps({"jsonrpc": "2.0", "id": call["id"], "result": result}).encode()
+            response = {"jsonrpc": "2.0", "id": call["id"], "result": None}
+        body = json.dumps(response).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
@@ -57,6 +97,8 @@ class _RpcUpstream(http.server.ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _RpcHandler)
         self.methods: list[str] = []
         self.lock = threading.Lock()
+        self.block_height = 0
+        self.last_valid_block_height = 2
 
 
 @contextlib.contextmanager
@@ -138,20 +180,28 @@ class LifecycleChaosTests(unittest.TestCase):
             )
             self.assertEqual(
                 [row["method"] for row in timeout_trace["rows"] if row["source"] == "client"],
-                ["sendTransaction", "getSignatureStatuses"],
+                ["getLatestBlockhash", "sendTransaction", "getSignatureStatuses"],
             )
             duplicate_trace = MODULE.read_unique_json(
                 work / "cases" / "duplicate-send" / "RPC_TRACE.json", "duplicate trace"
             )
             self.assertEqual(
                 len([row for row in duplicate_trace["rows"] if row["source"] == "client"]),
-                1,
+                2,
             )
             self.assertEqual(
                 len([row for row in duplicate_trace["rows"] if row["source"] == "injected-forward"]),
                 2,
             )
             self.assertGreaterEqual(server.methods.count("sendTransaction"), 3)
+            expiry_trace = MODULE.read_unique_json(
+                work / "cases" / "blockhash-expiry" / "RPC_TRACE.json", "expiry trace"
+            )
+            expired = next(
+                row for row in expiry_trace["rows"] if row["source"] == "injected-expired-forward"
+            )
+            self.assertGreater(expired["observedBlockHeight"], expired["lastValidBlockHeight"])
+            self.assertEqual(expired["transactionSignature"], MODULE.base58_encode(b"\0" * 64))
 
     def test_snapshot_refuses_digest_total_and_order_substitutions(self) -> None:
         canonical = json.loads((ROOT / "fixture" / "state.json").read_text())
@@ -212,6 +262,87 @@ class LifecycleChaosTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(MODULE.Refusal, "instead of polling"):
             MODULE.validate_poll_only(trace, "hostile")
+
+        wrong_signature = [
+            {
+                "source": "client",
+                "method": "sendTransaction",
+                "stage": "hot",
+                "intentSha256": "a" * 64,
+            },
+            {
+                "source": "injected-forward",
+                "method": "sendTransaction",
+                "transactionSignature": "expected-signature",
+            },
+            {
+                "source": "client",
+                "method": "getSignatureStatuses",
+                "signatureStatusValues": ["substituted-signature"],
+            },
+        ]
+        with self.assertRaisesRegex(MODULE.Refusal, "another signature"):
+            MODULE.validate_poll_only(wrong_signature, "rpc-timeout")
+
+    def test_wire_parser_binds_legacy_and_v0_signature_and_blockhash(self) -> None:
+        signature = bytes(range(64))
+        blockhash = b"\x08" * 32
+        for prefix in (b"", b"\x80"):
+            message = prefix + b"\x01\x00\x00\x01" + b"\0" * 32 + blockhash + b"\x00"
+            wire = b"\x01" + signature + message
+            call = {
+                "params": [
+                    base64.b64encode(wire).decode(),
+                    {"encoding": "base64", "maxRetries": 0},
+                ]
+            }
+            digest, actual_signature, actual_blockhash = MODULE.frozen_transaction(call)
+            self.assertEqual(digest, MODULE.sha256_bytes(wire))
+            self.assertEqual(actual_signature, MODULE.base58_encode(signature))
+            self.assertEqual(actual_blockhash, MODULE.base58_encode(blockhash))
+
+    def test_proxy_refuses_send_before_durable_submitted(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text, upstream() as (_server, rpc_url):
+            root = Path(root_text)
+            journal = root / "hot.json"
+            journal.write_text(
+                json.dumps(
+                    {
+                        "schema": MODULE.STAGE_JOURNAL_SCHEMA,
+                        "stage": "hot",
+                        "phase": "signed-not-submitted",
+                        "intentSha256": "a" * 64,
+                    }
+                )
+            )
+            proxy = MODULE.RpcFaultProxy(
+                rpc_url,
+                MODULE.RpcRule("duplicate-send", "sendTransaction", "hot"),
+                root,
+                2,
+            )
+            wire = b"\x01" + b"\0" * 64 + b"\x01\x00\x00\x01" + b"\0" * 65
+            call = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "sendTransaction",
+                    "params": [base64.b64encode(wire).decode(), {"encoding": "base64"}],
+                }
+            ).encode()
+            with proxy:
+                request = urlrequest.Request(
+                    proxy.url,
+                    data=call,
+                    headers={"content-type": "application/json"},
+                )
+                with self.assertRaises(urlerror.HTTPError) as raised:
+                    urlrequest.urlopen(request, timeout=1)  # noqa: S310 test loopback
+                raised.exception.close()
+                deadline = time.monotonic() + 1
+                while proxy.state.failure is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertIn("before durable Submitted", proxy.state.failure)
 
 
 if __name__ == "__main__":
