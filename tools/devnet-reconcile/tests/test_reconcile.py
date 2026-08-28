@@ -558,6 +558,38 @@ def rewrite_owned_loopback_receipt(receipt: dict, receipt_path: pathlib.Path) ->
 
 
 class ReconcileTest(unittest.TestCase):
+    def test_owned_loopback_dossier_is_create_new_mode_0600_and_confined(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            dossier = {"schema": reconcile.OWNED_LOOPBACK_DOSSIER_SCHEMA, "value": "exact"}
+            output = root / "dossier.json"
+            reconcile.write_dossier(output, dossier, owned_loopback_terminal=True)
+            self.assertEqual(output.read_bytes(), reconcile.canonical_bytes(dossier))
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            with self.assertRaisesRegex(reconcile.Refusal, "already exists"):
+                reconcile.write_dossier(output, dossier, owned_loopback_terminal=True)
+
+            victim = root / "victim.json"
+            victim.write_text("unchanged", encoding="utf-8")
+            symlink_output = root / "symlink-output.json"
+            symlink_output.symlink_to(victim)
+            with self.assertRaisesRegex(reconcile.Refusal, "already exists"):
+                reconcile.write_dossier(
+                    symlink_output, dossier, owned_loopback_terminal=True
+                )
+            self.assertEqual(victim.read_text(encoding="utf-8"), "unchanged")
+
+            ordinary_parent = root / "ordinary-parent"
+            ordinary_parent.mkdir()
+            symlink_parent = root / "symlink-parent"
+            symlink_parent.symlink_to(ordinary_parent, target_is_directory=True)
+            with self.assertRaisesRegex(reconcile.Refusal, "canonical ordinary directory"):
+                reconcile.write_dossier(
+                    symlink_parent / "dossier.json",
+                    dossier,
+                    owned_loopback_terminal=True,
+                )
+
     def test_complete_captured_activity_emits_deterministic_unsigned_dossier(self):
         manifest, capture = fixture()
         dossier = reconcile.reconcile(manifest, reconcile.CapturedRpc(capture))
@@ -783,7 +815,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_owned_loopback_cli_emits_separately_typed_local_dossier(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
+            root = pathlib.Path(directory).resolve()
             manifest, _, _, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
             out_path = root / "dossier.json"
             status = reconcile.main(

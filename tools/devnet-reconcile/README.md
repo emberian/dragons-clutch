@@ -98,6 +98,10 @@ uses `dclutch-owned-loopback-activity-dossier-v1`. Public devnet and mainnet
 genesis hashes refuse on all three local inputs. The receipt SHA-256 is an
 independent required argument, so changing an ELF, ProgramData genesis digest,
 journal, capture, or receipt after PRIVATE publishes its digest refuses.
+The owned-loopback `--out` path must be absent and absolute beneath an existing
+canonical ordinary parent directory. The dossier is published without
+clobbering at mode `0600`; an existing file, output symlink, or symlinked parent
+refuses.
 
 The receipt carries one clean source commit, checked-release digest, the exact
 ordered seven dClutch plus Pyth Receiver/Router program closure, each Program

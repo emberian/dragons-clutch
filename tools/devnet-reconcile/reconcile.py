@@ -12,7 +12,9 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import pathlib
+import secrets
 import struct
 import sys
 import time
@@ -2078,12 +2080,69 @@ def captured_owned_loopback(path: pathlib.Path) -> OwnedLoopbackCapturedRpc:
     return OwnedLoopbackCapturedRpc(value, sha256_bytes(raw))
 
 
-def write_dossier(path: pathlib.Path | None, dossier: dict[str, Any]) -> None:
+def write_dossier(
+    path: pathlib.Path | None,
+    dossier: dict[str, Any],
+    *,
+    owned_loopback_terminal: bool = False,
+) -> None:
     encoded = canonical_bytes(dossier)
     if path is None:
         sys.stdout.buffer.write(encoded)
-    else:
+    elif not owned_loopback_terminal:
         path.write_bytes(encoded)
+    else:
+        if not path.is_absolute() or path.name in ("", ".", ".."):
+            refuse("owned-loopback dossier output must be one absent absolute file")
+        parent = path.parent
+        try:
+            parent_metadata = parent.lstat()
+            canonical_parent = parent.resolve(strict=True)
+        except OSError as error:
+            refuse(f"owned-loopback dossier output parent is absent: {error}")
+        if parent.is_symlink() or not parent.is_dir() or parent != canonical_parent:
+            refuse("owned-loopback dossier output parent is not one canonical ordinary directory")
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            refuse(f"cannot inspect owned-loopback dossier output: {error}")
+        else:
+            refuse("owned-loopback dossier output already exists")
+
+        temporary = parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        file_descriptor: int | None = None
+        try:
+            file_descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            with os.fdopen(file_descriptor, "wb") as output:
+                file_descriptor = None
+                output.write(encoded)
+                output.flush()
+                os.fsync(output.fileno())
+            os.link(temporary, path, follow_symlinks=False)
+            directory_descriptor = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        except FileExistsError:
+            refuse("owned-loopback dossier output already exists")
+        except OSError as error:
+            refuse(f"cannot publish owned-loopback dossier output: {error}")
+        finally:
+            if file_descriptor is not None:
+                os.close(file_descriptor)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                refuse(f"cannot remove owned-loopback dossier temporary file: {error}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -2152,7 +2211,11 @@ def main(argv: list[str] | None = None) -> int:
                         time.sleep(args.interval_seconds)
             if dossier is None:
                 raise last or Refusal("bounded polling produced no complete dossier")
-        write_dossier(args.out, dossier)
+        write_dossier(
+            args.out,
+            dossier,
+            owned_loopback_terminal=args.command == "owned-loopback-captured",
+        )
         return 0
     except Refusal as error:
         print(f"REFUSED: {error}", file=sys.stderr)
