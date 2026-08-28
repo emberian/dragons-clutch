@@ -10,6 +10,9 @@ describe('operator surface presentation', () => {
     expect(html).toContain('Every route still requires its own preflight');
     expect(html).toContain('does not prove that a route is executable');
     expect(html).toContain('Constructor readiness map');
+    expect(html).toContain('Prepare the current founding campaign');
+    expect(html).toContain('Inspect a Direct route and its arithmetic');
+    expect(html).toContain('Mutation waits for the accepted caller');
     expect(html).toContain('Reacquire the multiprogram deployment');
     expect(html).toContain('Create registered order');
     expect(html).toContain('Initialize / collect / materialize / distribute');
