@@ -1,5 +1,5 @@
 /**
- * dclutch — the dClutch trader loop from a terminal.
+ * dclutch — the dClutch terminal client.
  *
  * Command dispatch and flag parsing only; each command lives in
  * `commands/` and every chain fact it states comes through @dclutch/sdk,
@@ -19,7 +19,7 @@ import { intentCommand, tradeCommand } from './commands/trade';
 import { walk } from './commands/walk';
 import { fail, STDIO, type Io } from './output';
 
-const USAGE = `dclutch — the dClutch trader loop from a terminal
+const USAGE = `dclutch — the dClutch terminal client
 
 usage: dclutch [global flags] <command> [args]
 
@@ -27,9 +27,9 @@ commands:
   markets ls                       enumerate and decode markets under the Core program
   markets show <address>           one market, in full, at one finalized floor
   portfolio [owner]                indexer-free position rollup (owner defaults to --keypair)
-  intent sell|buy                  sign one Direct compact intent to a file (--out)
-  buy                              cross a sell intent (--take, or --counter-keypair) and submit
-  sell                             cross a buy intent (--take, or --counter-keypair) and submit
+  intent sell|buy                  authenticate a route and sign one off-chain Direct intent (--out; never submits)
+  buy                              disabled: refuses before context, keys, signing, or RPC access
+  sell                             disabled: refuses before context, keys, signing, or RPC access
   spine                            is this market Direct-tradable now, and which walls stand (--market)
   redeem                           resume or finalize one exact wallet payout
   found                            drive the run-spec founding producer (--spec; --demo to preview)
@@ -41,7 +41,7 @@ global flags:
   --session <json>       a run spec, run evidence, or dclutch session file carrying program ids + markets
   --keypair <path>       Solana JSON keypair; also $DCLUTCH_KEYPAIR (never a default wallet path)
   --json                 machine-readable output where a command supports it
-  --dry-run              build and print, sign and submit nothing
+  --dry-run              where supported, build and print without signing or submitting; never enables buy/sell
   --payout-input <json>  exact Rust payout-plan input for redeem
   --payout-evidence <json>
                          completed campaign evidence paired with --spec
@@ -53,7 +53,7 @@ global flags:
                          crash-safe unsigned/submitted payout operation journal
   --discard-unsigned-payout
                          archive an unsigned payout journal without signing it
-  --i-mean-devnet <hash> name devnet by its full genesis hash for buy, sell, redeem, and walk
+  --i-mean-devnet <hash> name devnet by its full genesis hash for redeem and walk
 
 program ids come from --session or explicit --core-program/--claims-program/... flags.
 refusal codes: band = code >> 12; codes below 0x1000 are provably not dClutch's. See docs/guides/client-developers.md.`;
@@ -119,6 +119,15 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
     io.out(USAGE);
     return command === undefined && parsed.values.help !== true ? 2 : 0;
   }
+  // These public mutation verbs are closed before `resolveContext`: even a
+  // caller-named session, route, or key file is outside their reachable set.
+  if (command === 'buy' || command === 'sell') {
+    try {
+      return await tradeCommand(command);
+    } catch (error) {
+      return fail(io, error);
+    }
+  }
   const context = resolveContext(parsed.values, env);
   try {
     switch (command) {
@@ -133,10 +142,6 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
         return await portfolio(context, io, rest[0], env);
       case 'intent':
         return await intentCommand(context, io, rest[0], env);
-      case 'buy':
-        return await tradeCommand(context, io, 'buy', env);
-      case 'sell':
-        return await tradeCommand(context, io, 'sell', env);
       case 'spine':
         return await spine(context, io, rest[0], env);
       case 'redeem':

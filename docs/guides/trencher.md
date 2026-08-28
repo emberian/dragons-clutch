@@ -56,10 +56,15 @@ dclutch markets ls
 dclutch markets show <market>
 dclutch intent buy --route route.json --outcome 1 --fill 5 \
     --price 400000 --collateral <acct> --keypair me.json --out my-bid.json
-dclutch buy --route route.json --take their-ask.json --fill 5 --price 400000 \
-    --collateral <acct> --keypair me.json
 dclutch portfolio
 ```
+
+That intent is an off-chain handoff, not a submitted trade. The public `buy`
+and `sell` commands currently refuse before they read your session, route, or
+key. They stay closed until the client can journal the exact packet before your
+key is opened, authenticate the chain's `HotExecutionAckV3`, and reconcile all
+ten writable accounts at finality. Use `spine` to inspect whether a market is
+Direct-tradable; there is no public Direct submitter to trust yet.
 
 When the chain says no, you get told who said no and why — the actual
 program and the actual reason, not a hex number and a shrug:
