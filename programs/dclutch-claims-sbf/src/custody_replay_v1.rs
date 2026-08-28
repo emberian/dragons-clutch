@@ -261,6 +261,7 @@ pub fn process(
 /// independently authenticates the same Core Market and activation before it
 /// mutates anything; neither program accepts this projection on the other's
 /// word.
+#[inline(never)]
 fn authenticate_core_rent_refund(
     accounts: &[AccountInfo<'_>],
     aggregate: LiabilityBasisMarketViewV2,
@@ -327,6 +328,7 @@ fn authenticate_core_rent_refund(
     Ok(state.rent_beneficiary.to_bytes())
 }
 
+#[inline(never)]
 fn authenticate_aggregate(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -361,6 +363,7 @@ fn authenticate_aggregate(
     Ok(view)
 }
 
+#[inline(never)]
 fn authenticate_frame(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -413,6 +416,7 @@ fn authenticate_frame(
     Ok(())
 }
 
+#[inline(never)]
 fn invoke_custody(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
@@ -467,6 +471,7 @@ fn invoke_custody(
     Ok(())
 }
 
+#[inline(never)]
 fn authenticate_created_replay(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
