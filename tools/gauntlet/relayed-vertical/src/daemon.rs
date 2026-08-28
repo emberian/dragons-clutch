@@ -6,6 +6,9 @@
 //! boundary is exactly what would cross it in production — a TOML file, an
 //! artifact directory, and transactions on a loopback RPC.
 
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -23,7 +26,14 @@ pub(crate) fn write_keypair_file(
     std::fs::create_dir_all(directory)?;
     let path = directory.join(name);
     let bytes = keypair.to_bytes().to_vec();
-    std::fs::write(&path, serde_json::to_string(&bytes)?)?;
+    let encoded = serde_json::to_vec(&bytes)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(&encoded)?;
+    file.sync_all()?;
     Ok(path)
 }
 
