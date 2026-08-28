@@ -107,6 +107,18 @@ canonical ordered source-journal set, and one finalized complete PRIVATE
 session. Missing programs or journals, substituted bytes, provisional evidence,
 and partial lifecycle stage sets refuse before reconciliation.
 
+The receipt must include exactly one
+`dclutch-owned-loopback-terminal-sequence-completion-v1` journal. The reconciler
+does not stop at its `/status`: it reopens the terminal session and every
+ordered internal mutation journal, checks their SHA-256 values, and compares
+the completion projection with the persisted mutation, fee payer, signature,
+slot, fee, compute units, and canonical protocol-lamport deltas. It requires
+the exact lookup create/strict-prefix extends/freeze sequence when the caller
+created a table, at most one receipt prepay, and the six retirement mutations
+in their sole order. Aggregate slot, fee, and compute arithmetic is recomputed;
+self-consistent edits to the completion that disagree with a source journal
+refuse.
+
 Each journal row names an exact RFC6901 `completionPointer` and requires the
 pointed value to be `"finalized"`. This admits Direct's nested Hot journal
 without pretending its aggregate evidence owns a top-level phase. The activity
@@ -119,8 +131,9 @@ capture. The consumer hostile-decodes each Loader-v3 Program link and
 ProgramData header, then recomputes the full ProgramData and ELF-tail digests.
 It also decodes the ProgramData upgrade-authority option: the seven dClutch
 programs must share one non-null retained disposable authority, while Pyth
-Receiver and Router must be immutable. Receipt strings alone are not Loader
-evidence.
+Receiver and Router must be immutable slot-zero genesis programs. A slot-zero
+dClutch deployment or a mutable local provider refuses. Receipt strings alone
+are not Loader evidence.
 
 ## Adapter and capture shapes
 

@@ -31,6 +31,15 @@ OWNED_LOOPBACK_MANIFEST_SCHEMA = "dclutch-owned-loopback-activity-reconcile-mani
 OWNED_LOOPBACK_CAPTURE_SCHEMA = "dclutch-owned-loopback-captured-finalized-rpc-v1"
 OWNED_LOOPBACK_RECEIPT_SCHEMA = "dclutch-owned-loopback-reconcile-session-receipt-v1"
 OWNED_LOOPBACK_DOSSIER_SCHEMA = "dclutch-owned-loopback-activity-dossier-v1"
+OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA = (
+    "dclutch-owned-loopback-terminal-sequence-completion-v1"
+)
+OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA = (
+    "dclutch-owned-loopback-terminal-sequence-journal-v1"
+)
+OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA = (
+    "dclutch-owned-loopback-terminal-sequence-session-v1"
+)
 EVENT_KINDS = ("founding", "participant", "direct", "resolution", "payout", "retirement")
 OWNED_LOOPBACK_COMPLETED_STAGES = (
     "founding", "participant", "alt", "seal", "direct", "resolution", "payout", "retirement",
@@ -1002,6 +1011,373 @@ def json_pointer(value: Any, pointer: Any, label: str) -> Any:
     return current
 
 
+def canonical_directory(root: pathlib.Path, value: Any, label: str) -> pathlib.Path:
+    path = pathlib.Path(text(value, label))
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = resolved.lstat()
+    except OSError as error:
+        refuse(f"{label} is absent: {error}")
+    if path != resolved or not resolved.is_dir() or resolved.is_symlink():
+        refuse(f"{label} is not one canonical ordinary directory")
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        refuse(f"{label} escapes the owned-loopback evidence root")
+    return resolved
+
+
+def canonical_file(root: pathlib.Path, value: Any, label: str) -> pathlib.Path:
+    path = pathlib.Path(text(value, label))
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = path.lstat()
+    except OSError as error:
+        refuse(f"{label} is absent: {error}")
+    if path != resolved or not path.is_file() or path.is_symlink():
+        refuse(f"{label} is not one canonical ordinary file")
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        refuse(f"{label} escapes the owned-loopback evidence root")
+    return resolved
+
+
+def terminal_mutation(value: Any, label: str) -> tuple[str, int | None]:
+    row = exact_keys(value, {"kind"}, {"prefixLen"}, label)
+    kind = text(row["kind"], f"{label} kind")
+    if kind == "lookup-extend":
+        if set(row) != {"kind", "prefixLen"}:
+            refuse(f"{label} lookup extension omitted its exact prefixLen")
+        prefix = decimal(row["prefixLen"], f"{label} prefixLen")
+        if prefix == 0:
+            refuse(f"{label} prefixLen is zero")
+        return kind, prefix
+    if set(row) != {"kind"}:
+        refuse(f"{label} non-extension mutation carries prefixLen")
+    admitted = {
+        "lookup-create",
+        "lookup-freeze",
+        "resolution-receipt-prepay",
+        "core-begin-retiring",
+        "direct-begin-retiring",
+        "resolution-close-fund",
+        "direct-close-capability",
+        "retirement-replay-handoff",
+        "aggregate-retirement",
+    }
+    if kind not in admitted:
+        refuse(f"{label} has an unknown mutation kind")
+    return kind, None
+
+
+def persisted_terminal_mutation(value: Any, label: str) -> tuple[str, int | None]:
+    row = exact_keys(value, {"kind"}, {"prefixLen", "stage"}, label)
+    kind = text(row["kind"], f"{label} kind")
+    if kind == "lookup-extend":
+        if set(row) != {"kind", "prefixLen"} or not isinstance(row["prefixLen"], int):
+            refuse(f"{label} lookup extension has another prefix")
+        if isinstance(row["prefixLen"], bool) or row["prefixLen"] <= 0:
+            refuse(f"{label} lookup extension prefix is not positive")
+        return kind, row["prefixLen"]
+    if kind == "protocol":
+        if set(row) != {"kind", "stage"}:
+            refuse(f"{label} protocol mutation omitted its stage")
+        stage = text(row["stage"], f"{label} stage")
+        admitted = {
+            "core-begin-retiring",
+            "direct-begin-retiring",
+            "resolution-close-fund",
+            "direct-close-capability",
+            "retirement-replay-handoff",
+            "aggregate-retirement",
+        }
+        if stage not in admitted:
+            refuse(f"{label} has another protocol stage")
+        return stage, None
+    if set(row) != {"kind"} or kind not in {
+        "lookup-create", "lookup-freeze", "resolution-receipt-prepay"
+    }:
+        refuse(f"{label} has another durable mutation")
+    return kind, None
+
+
+def authenticate_terminal_completion(
+    source_path: pathlib.Path,
+    source: dict[str, Any],
+    evidence_root: pathlib.Path,
+    genesis: str,
+    capture_slot: int,
+) -> dict[str, Any]:
+    source = exact_keys(
+        source,
+        {
+            "schema", "status", "cluster", "genesisHash", "invocation", "session",
+            "journalDirectory", "market", "payer", "lookupTable", "journals",
+            "finalizedSlot", "transactionFeesLamports", "computeUnitsConsumed",
+        },
+        set(),
+        "owned-loopback terminal completion",
+    )
+    if (
+        source["schema"] != OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA
+        or source["status"] != "finalized"
+        or source["cluster"] != "owned-loopback"
+        or source["genesisHash"] != genesis
+    ):
+        refuse("terminal completion names another schema, phase, or cluster")
+    market = pubkey(source["market"], "terminal completion market")
+    payer = pubkey(source["payer"], "terminal completion payer")
+    lookup_table = pubkey(source["lookupTable"], "terminal completion lookup table")
+    invocation = exact_keys(
+        source["invocation"],
+        {
+            "command", "rpcUrl", "planPath", "marketInputPath", "evidencePath",
+            "market", "feePayer", "feePayerKeypairPath", "sessionPath",
+            "journalDirectory", "completionPath", "suppliedLookupTable", "execute",
+        },
+        set(),
+        "terminal completion invocation",
+    )
+    if (
+        invocation["command"] != "local-private-validator-terminal-sequence-v1"
+        or invocation["market"] != market
+        or invocation["feePayer"] != payer
+        or invocation["execute"] is not True
+    ):
+        refuse("terminal completion invocation is not the exact executed owned-loopback command")
+    text(invocation["rpcUrl"], "terminal completion RPC URL")
+    for field in ("planPath", "marketInputPath", "evidencePath", "feePayerKeypairPath"):
+        text(invocation[field], f"terminal completion invocation {field}")
+    completion_path = canonical_file(
+        evidence_root, invocation["completionPath"], "terminal completion invocation output"
+    )
+    if completion_path != source_path.resolve(strict=True):
+        refuse("terminal completion invocation names another completion output")
+    journal_directory = canonical_directory(
+        evidence_root,
+        invocation["journalDirectory"],
+        "terminal completion invocation journal directory",
+    )
+    journal_relative = text(source["journalDirectory"], "terminal completion journalDirectory")
+    relative_parts = pathlib.PurePosixPath(journal_relative)
+    if relative_parts.is_absolute() or journal_relative != relative_parts.as_posix():
+        refuse("terminal completion journalDirectory is not canonical relative evidence")
+    if (evidence_root / journal_relative).resolve(strict=True) != journal_directory:
+        refuse("terminal completion journalDirectory projection changed")
+    supplied = invocation["suppliedLookupTable"]
+    if supplied is not None and pubkey(supplied, "supplied terminal lookup table") != lookup_table:
+        refuse("terminal completion supplied another lookup table")
+
+    session_ref = exact_keys(
+        source["session"],
+        {"path", "sha256", "schema", "sessionSha256"},
+        set(),
+        "terminal completion session",
+    )
+    session_path, session_relative = canonical_relative_evidence(
+        evidence_root, session_ref["path"], "terminal completion session"
+    )
+    if canonical_file(evidence_root, invocation["sessionPath"], "terminal invocation session") != session_path:
+        refuse("terminal completion invocation names another session")
+    session_raw, session = read_evidence_file(session_path)
+    if (
+        digest(session_ref["sha256"], "terminal session sha256") != sha256_bytes(session_raw)
+        or session_ref["schema"] != OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA
+        or session.get("schema") != session_ref["schema"]
+        or digest(session_ref["sessionSha256"], "terminal session internal digest")
+        != session.get("sessionSha256")
+    ):
+        refuse("terminal completion session is missing or substituted")
+
+    rows = source["journals"]
+    if not isinstance(rows, list) or not rows or len(rows) > 64:
+        refuse("terminal completion has no bounded journal sequence")
+    seen_paths: set[str] = set()
+    seen_signatures: set[str] = set()
+    mutations: list[tuple[str, int | None]] = []
+    projected: list[dict[str, Any]] = []
+    total_fees = 0
+    total_compute = 0
+    prior_slot = 0
+    max_slot = 0
+    for index, raw_row in enumerate(rows):
+        row = exact_keys(
+            raw_row,
+            {
+                "path", "sha256", "schema", "mutation", "phase", "feePayer",
+                "signature", "finalizedSlot", "computeUnitsConsumed",
+                "transactionFeeLamports", "protocolLamportDeltas",
+            },
+            set(),
+            f"terminal completion journal {index}",
+        )
+        path, relative = canonical_relative_evidence(
+            evidence_root, row["path"], f"terminal completion journal {index}"
+        )
+        try:
+            path.relative_to(journal_directory)
+        except ValueError:
+            refuse("terminal completion journal escaped its journalDirectory")
+        raw, persisted = read_evidence_file(path)
+        signature = text(row["signature"], f"terminal completion journal {index} signature")
+        if len(b58decode(signature, f"terminal completion journal {index} signature")) != 64:
+            refuse("terminal completion journal signature is not 64 bytes")
+        if (
+            relative in seen_paths
+            or signature in seen_signatures
+            or digest(row["sha256"], f"terminal completion journal {index} sha256") != sha256_bytes(raw)
+            or row["schema"] != OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA
+            or persisted.get("schema") != row["schema"]
+            or row["phase"] != "finalized"
+            or persisted.get("phase") != "finalized"
+            or pubkey(row["feePayer"], f"terminal completion journal {index} fee payer") != payer
+        ):
+            refuse("terminal completion journal identity, bytes, phase, or payer changed")
+        seen_paths.add(relative)
+        seen_signatures.add(signature)
+        slot = decimal(row["finalizedSlot"], f"terminal completion journal {index} slot")
+        compute = decimal(row["computeUnitsConsumed"], f"terminal completion journal {index} CU")
+        fee = decimal(row["transactionFeeLamports"], f"terminal completion journal {index} fee")
+        if slot == 0 or compute == 0 or slot < prior_slot or slot > capture_slot:
+            refuse("terminal completion journal has invalid/regressing/out-of-capture execution")
+        prior_slot = slot
+        max_slot = max(max_slot, slot)
+        total_fees += fee
+        total_compute += compute
+        if total_fees > 2**64 - 1 or total_compute > 2**64 - 1:
+            refuse("terminal completion aggregate arithmetic exceeds u64")
+        deltas = row["protocolLamportDeltas"]
+        if not isinstance(deltas, list):
+            refuse("terminal completion protocolLamportDeltas is not a list")
+        prior_address = ""
+        delta_sum = 0
+        projected_deltas: list[dict[str, str]] = []
+        for delta_index, raw_delta in enumerate(deltas):
+            delta = exact_keys(
+                raw_delta,
+                {"accountAddress", "deltaLamports"},
+                set(),
+                f"terminal completion journal {index} delta {delta_index}",
+            )
+            address = pubkey(delta["accountAddress"], "terminal delta account")
+            amount = decimal(delta["deltaLamports"], "terminal delta lamports", signed=True)
+            if prior_address >= address:
+                refuse("terminal completion deltas are not unique canonical address order")
+            prior_address = address
+            delta_sum += amount
+            projected_deltas.append({"accountAddress": address, "deltaLamports": str(amount)})
+        if delta_sum != 0:
+            refuse("terminal completion protocol deltas do not conserve before fee")
+        mutation = terminal_mutation(row["mutation"], f"terminal completion journal {index} mutation")
+        intent = exact_keys(
+            persisted.get("intent"),
+            {"mutation", "payer", "transactionFeeLamports", "protocolLamportDeltas"},
+            {
+                "observationSlot", "observationUnixTimestamp", "programId", "programClass",
+                "accounts", "instructionDataBase64", "instructionDataSha256", "lookupTable",
+                "lookupTableAddresses", "lookupTableAddressesSha256", "loadedWritable",
+                "loadedReadonly", "resolvedAccountKeys", "preBalances", "postBalances",
+                "recentBlockhash", "lastValidBlockHeight", "wireBytes", "messageBase64",
+                "messageSha256", "prestate", "expectedAccounts", "expectedReturnData",
+            },
+            f"terminal persisted journal {index} intent",
+        )
+        finalized = exact_keys(
+            persisted.get("finalized"),
+            {"signature", "slot", "feeLamports", "computeUnitsConsumed", "packetSha256", "poststate"},
+            set(),
+            f"terminal persisted journal {index} finalization",
+        )
+        persisted_deltas = intent["protocolLamportDeltas"]
+        if not isinstance(persisted_deltas, dict):
+            refuse("terminal persisted protocolLamportDeltas is not an object")
+        projected_persisted_deltas: list[dict[str, str]] = []
+        for address, amount in persisted_deltas.items():
+            pubkey(address, "terminal persisted delta account")
+            if not isinstance(amount, int) or isinstance(amount, bool):
+                refuse("terminal persisted delta is not an integer")
+            projected_persisted_deltas.append(
+                {"accountAddress": address, "deltaLamports": str(amount)}
+            )
+        if (
+            persisted_terminal_mutation(
+                intent["mutation"], f"terminal persisted journal {index} mutation"
+            )
+            != mutation
+            or intent["payer"] != payer
+            or intent["transactionFeeLamports"] != fee
+            or projected_persisted_deltas != projected_deltas
+            or finalized["signature"] != signature
+            or finalized["slot"] != slot
+            or finalized["feeLamports"] != fee
+            or finalized["computeUnitsConsumed"] != compute
+        ):
+            refuse("terminal completion row differs from its persisted semantic-owner journal")
+        mutations.append(mutation)
+        projected.append(
+            {
+                "path": relative,
+                "sha256": row["sha256"],
+                "mutation": row["mutation"],
+                "signature": signature,
+                "finalizedSlot": str(slot),
+                "computeUnitsConsumed": str(compute),
+                "transactionFeeLamports": str(fee),
+                "protocolLamportDeltas": projected_deltas,
+            }
+        )
+
+    index = 0
+    if supplied is None:
+        if mutations[index] != ("lookup-create", None):
+            refuse("terminal completion omitted lookup creation")
+        index += 1
+        prior_prefix = 0
+        while index < len(mutations) and mutations[index][0] == "lookup-extend":
+            prefix = mutations[index][1]
+            assert prefix is not None
+            if prefix <= prior_prefix:
+                refuse("terminal completion lookup prefixes are not strictly increasing")
+            prior_prefix = prefix
+            index += 1
+        if prior_prefix == 0 or index >= len(mutations) or mutations[index] != ("lookup-freeze", None):
+            refuse("terminal completion omitted lookup extension/freeze")
+        index += 1
+    elif any(kind.startswith("lookup-") for kind, _ in mutations):
+        refuse("terminal completion mutated a supplied lookup table")
+    if index < len(mutations) and mutations[index] == ("resolution-receipt-prepay", None):
+        index += 1
+    required_tail = [
+        ("core-begin-retiring", None),
+        ("direct-begin-retiring", None),
+        ("resolution-close-fund", None),
+        ("direct-close-capability", None),
+        ("retirement-replay-handoff", None),
+        ("aggregate-retirement", None),
+    ]
+    if mutations[index:] != required_tail:
+        refuse("terminal completion mutation sequence is partial or noncanonical")
+    if (
+        decimal(source["finalizedSlot"], "terminal completion finalizedSlot") != max_slot
+        or decimal(source["transactionFeesLamports"], "terminal completion fee total") != total_fees
+        or decimal(source["computeUnitsConsumed"], "terminal completion CU total") != total_compute
+    ):
+        refuse("terminal completion aggregate slot, fee, or CU arithmetic changed")
+    return {
+        "schema": OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA,
+        "sha256": sha256_bytes(source_path.read_bytes()),
+        "sessionPath": session_relative,
+        "market": market,
+        "payer": payer,
+        "lookupTable": lookup_table,
+        "finalizedSlot": str(max_slot),
+        "transactionFeesLamports": str(total_fees),
+        "computeUnitsConsumed": str(total_compute),
+        "journals": projected,
+    }
+
+
 def authenticate_loader_v3_program(
     rpc_capture: OwnedLoopbackCapturedRpc,
     role: str,
@@ -1137,7 +1513,9 @@ def authenticate_owned_loopback_session(
         program_ids.add(program_id)
         programdata_ids.add(programdata_id)
         slot = decimal(program["deploymentSlot"], f"{expected_role} deploymentSlot")
-        if slot == 0 or slot > rpc_capture.finalized_slot:
+        if slot > rpc_capture.finalized_slot or (
+            slot == 0 and not expected_role.startswith("pyth-")
+        ):
             refuse(f"{expected_role} deployment is absent from the finalized capture boundary")
         elf_sha256 = digest(program["elfSha256"], f"{expected_role} elfSha256")
         genesis_programdata_sha256 = digest(
@@ -1208,6 +1586,7 @@ def authenticate_owned_loopback_session(
         refuse("owned-loopback receipt has no bounded canonical journal set")
     projected_journals: list[dict[str, str]] = []
     journal_paths: set[str] = set()
+    terminal_completion: dict[str, Any] | None = None
     for index, raw_journal in enumerate(journals):
         journal = exact_keys(
             raw_journal,
@@ -1231,6 +1610,12 @@ def authenticate_owned_loopback_session(
             or json_pointer(source, completion_pointer, f"journal {relative}") != "finalized"
         ):
             refuse(f"journal {relative} is missing, substituted, provisional, or partial")
+        if source_schema == OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA:
+            if terminal_completion is not None:
+                refuse("owned-loopback receipt repeats terminal completion")
+            terminal_completion = authenticate_terminal_completion(
+                path, source, root, genesis, rpc_capture.finalized_slot
+            )
         projected_journals.append(
             {
                 "path": relative,
@@ -1249,6 +1634,8 @@ def authenticate_owned_loopback_session(
     event_paths = {event["sourcePath"] for event in manifest["events"]}
     if not event_paths.issubset(journal_paths):
         refuse("owned-loopback receipt omits a lifecycle event source journal")
+    if terminal_completion is None:
+        refuse("owned-loopback receipt omits typed terminal completion")
 
     private_session = exact_keys(
         receipt["privateSession"],
@@ -1280,6 +1667,7 @@ def authenticate_owned_loopback_session(
         "programs": projected_programs,
         "journalSetSha256": receipt["journalSetSha256"],
         "privateSessionSha256": private_session["sha256"],
+        "terminalCompletion": terminal_completion,
     }
 
 

@@ -272,6 +272,14 @@ def owned_loopback_fixture(root: pathlib.Path):
         "status": "finalized",
     }
     (evidence / "session.json").write_bytes(reconcile.canonical_bytes(session))
+    terminal_session = {
+        "schema": reconcile.OWNED_LOOPBACK_TERMINAL_SESSION_SCHEMA,
+        "phase": "finalized",
+        "sessionSha256": "aa" * 32,
+    }
+    (evidence / "terminal-session.json").write_bytes(
+        reconcile.canonical_bytes(terminal_session)
+    )
     manifest_path = root / "manifest.json"
     capture_path = evidence / "capture.json"
     receipt_path = root / "receipt.json"
@@ -287,9 +295,102 @@ def owned_loopback_fixture(root: pathlib.Path):
             "completionValue": "finalized",
         }
 
+    terminal_directory = evidence / "terminal"
+    terminal_directory.mkdir()
+    terminal_rows = []
+    terminal_kinds = [
+        "core-begin-retiring",
+        "direct-begin-retiring",
+        "resolution-close-fund",
+        "direct-close-capability",
+        "retirement-replay-handoff",
+        "aggregate-retirement",
+    ]
+    payer, _ = key(82)
+    market, _ = key(83)
+    lookup_table, _ = key(84)
+    for index, kind in enumerate(terminal_kinds):
+        relative = f"terminal/{index:02d}-{kind}.json"
+        signature = b58(bytes([150 + index]) * 64)
+        terminal_source = {
+            "schema": reconcile.OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA,
+            "phase": "finalized",
+            "intent": {
+                "mutation": {"kind": "protocol", "stage": kind},
+                "payer": payer,
+                "transactionFeeLamports": 5000,
+                "protocolLamportDeltas": {},
+            },
+            "finalized": {
+                "signature": signature,
+                "slot": 150 + index,
+                "feeLamports": 5000,
+                "computeUnitsConsumed": 100,
+                "packetSha256": "bb" * 32,
+                "poststate": {},
+            },
+        }
+        (evidence / relative).write_bytes(reconcile.canonical_bytes(terminal_source))
+        terminal_rows.append(
+            {
+                "path": relative,
+                "sha256": hashlib.sha256((evidence / relative).read_bytes()).hexdigest(),
+                "schema": reconcile.OWNED_LOOPBACK_TERMINAL_JOURNAL_SCHEMA,
+                "mutation": {"kind": kind},
+                "phase": "finalized",
+                "feePayer": payer,
+                "signature": signature,
+                "finalizedSlot": str(150 + index),
+                "computeUnitsConsumed": "100",
+                "transactionFeeLamports": "5000",
+                "protocolLamportDeltas": [],
+            }
+        )
+    terminal_completion_path = evidence / "terminal-completion.json"
+    terminal_completion = {
+        "schema": reconcile.OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA,
+        "status": "finalized",
+        "cluster": "owned-loopback",
+        "genesisHash": genesis,
+        "invocation": {
+            "command": "local-private-validator-terminal-sequence-v1",
+            "rpcUrl": "http://127.0.0.1:18899/",
+            "planPath": str(evidence / "plan.json"),
+            "marketInputPath": str(evidence / "market-input.json"),
+            "evidencePath": str(evidence / "terminal-evidence.json"),
+            "market": market,
+            "feePayer": payer,
+            "feePayerKeypairPath": str(evidence / "payer.json"),
+            "sessionPath": str((evidence / "terminal-session.json").resolve()),
+            "journalDirectory": str(terminal_directory.resolve()),
+            "completionPath": str(terminal_completion_path.resolve()),
+            "suppliedLookupTable": lookup_table,
+            "execute": True,
+        },
+        "session": {
+            "path": "terminal-session.json",
+            "sha256": hashlib.sha256((evidence / "terminal-session.json").read_bytes()).hexdigest(),
+            "schema": terminal_session["schema"],
+            "sessionSha256": terminal_session["sessionSha256"],
+        },
+        "journalDirectory": "terminal",
+        "market": market,
+        "payer": payer,
+        "lookupTable": lookup_table,
+        "journals": terminal_rows,
+        "finalizedSlot": "155",
+        "transactionFeesLamports": "30000",
+        "computeUnitsConsumed": "600",
+    }
+    terminal_completion_path.write_bytes(reconcile.canonical_bytes(terminal_completion))
     journals = [
         journal("fixture-journal.json", source["schema"], "/phase"),
         journal("session.json", session["schema"], "/status"),
+        journal(
+            "terminal-completion.json",
+            reconcile.OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA,
+            "/status",
+        ),
     ]
     programs = []
     loader = reconcile.LOADER_V3_PROGRAM_ID
@@ -297,7 +398,7 @@ def owned_loopback_fixture(root: pathlib.Path):
     for index, role in enumerate(reconcile.OWNED_LOOPBACK_PROGRAM_ROLES):
         program_id, _ = key(100 + index)
         programdata, programdata_raw = key(120 + index)
-        slot = index + 1
+        slot = 0 if role.startswith("pyth-") else index + 1
         elf = b"\x7fELF" + bytes([index + 1]) * 60
         program_bytes = struct.pack("<I", 2) + programdata_raw
         programdata_bytes = bytearray(45)
@@ -755,6 +856,58 @@ class ReconcileTest(unittest.TestCase):
             with self.assertRaisesRegex(reconcile.Refusal, "partial"):
                 reconcile.authenticate_owned_loopback_session(
                     receipt_path, hashlib.sha256(receipt_path.read_bytes()).hexdigest(), evidence, manifest_path, capture_path, manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_missing_typed_terminal_completion_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            receipt["journals"] = [
+                row for row in receipt["journals"]
+                if row["schema"] != reconcile.OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA
+            ]
+            receipt["journalSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(receipt["journals"])
+            ).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "omits typed terminal completion"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path,
+                    hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    evidence,
+                    manifest_path,
+                    capture_path,
+                    manifest,
+                    reconcile.captured_owned_loopback(capture_path),
+                )
+
+    def test_owned_loopback_terminal_completion_cannot_lie_about_persisted_fee(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest, _, receipt, manifest_path, capture_path, receipt_path, evidence = owned_loopback_fixture(root)
+            completion_path = evidence / "terminal-completion.json"
+            completion = json.loads(completion_path.read_text())
+            completion["journals"][0]["transactionFeeLamports"] = "5001"
+            completion["transactionFeesLamports"] = "30001"
+            completion_path.write_bytes(reconcile.canonical_bytes(completion))
+            descriptor = next(
+                row for row in receipt["journals"]
+                if row["schema"] == reconcile.OWNED_LOOPBACK_TERMINAL_COMPLETION_SCHEMA
+            )
+            descriptor["sha256"] = hashlib.sha256(completion_path.read_bytes()).hexdigest()
+            receipt["journalSetSha256"] = hashlib.sha256(
+                reconcile.canonical_bytes(receipt["journals"])
+            ).hexdigest()
+            rewrite_owned_loopback_receipt(receipt, receipt_path)
+            with self.assertRaisesRegex(reconcile.Refusal, "persisted semantic-owner journal"):
+                reconcile.authenticate_owned_loopback_session(
+                    receipt_path,
+                    hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+                    evidence,
+                    manifest_path,
+                    capture_path,
+                    manifest,
                     reconcile.captured_owned_loopback(capture_path),
                 )
 
