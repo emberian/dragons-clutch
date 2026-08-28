@@ -63,11 +63,18 @@ This decision adopts five linked changes:
    - ProgramData accounts, deployment slots, Registry/Rent artifact records,
      and staging-vacancy finality witnesses remain checked.
 
-5. Per-entry `FundingStateV1` accounts become one manifest-keyed,
-   fixed-layout `FundingLedgerV2`. The ledger preserves an ordered, physically
-   segregated slot for every manifest entry and authenticates the immutable
-   manifest before deriving `released = quote - remaining`. A logical Direct
-   entry therefore does not add another transaction lock.
+5. Per-entry `FundingStateV1` accounts become canonical controller-subset
+   `FundingLedgerV2` accounts. Each ledger is keyed by controller program,
+   Market, generation, manifest identity, and a nonzero selected-entry mask.
+   Its fixed-layout rows are the selected manifest indices in ascending order.
+   The ledgers presented to founding must be controller-homogeneous, pairwise
+   disjoint, and cover the exact required entry set. They authenticate the
+   immutable manifest before deriving `released = quote - remaining`.
+
+   A Direct-capable Market therefore presents two ledgers: one Resolution-owned
+   ledger for the three Resolution entries and one Trading-owned ledger for the
+   Direct entry. This preserves each controller's authority and independent
+   close/rent lifecycle without adding a Resolution-to-Trading CPI boundary.
 
 No fee rate or fee destination changes in this decision.
 
@@ -84,20 +91,21 @@ transaction adds two keys that the old guard omitted:
 The actual current transaction therefore locks 66 keys against devnet's limit
 of 64. Address lookup tables change message size, not this count.
 
-The selected changes have this budget:
+The selected changes have this Direct-capable budget:
 
 ```text
-current three-entry transaction                  66
-FundingLedgerV2 replaces three physical states   -2
-activation cache replaces execution-release pair -2
-projected state replaces Realm pair               -2
-projected state replaces SourceMaterial pair      -2
-----------------------------------------------------
-projected founding v2 transaction                 58
+current four-entry transaction                    67
+two subset ledgers replace four physical states   -2
+activation cache replaces execution-release pair  -2
+projected state replaces Realm pair                -2
+projected state replaces SourceMaterial pair       -2
+-----------------------------------------------------
+Direct-capable projected founding v2 transaction  59
 ```
 
-A fourth Direct capability remains 58 because it occupies another logical
-ledger slot rather than another account. Six keys of devnet headroom remain.
+A Resolution-only three-entry Market uses one ledger and compiles to 58 keys.
+Adding Direct adds its distinct Trading-owned subset ledger, producing 59.
+Five keys of devnet headroom remain.
 The shipped census must compile the actual bounded v0 message and assert its
 complete `account_keys` length; counting instruction metas is not sufficient.
 
