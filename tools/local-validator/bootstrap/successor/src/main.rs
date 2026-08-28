@@ -19,6 +19,7 @@ mod relayed;
 mod rpc;
 mod runtime;
 mod seed;
+mod terminal_lifecycle;
 mod upgrade;
 mod wallet_terminal;
 
@@ -75,6 +76,9 @@ fn run() -> Result<()> {
         Some("devnet-market") => run_devnet_market(arguments.collect()),
         Some("graduation-market") => run_graduation_market(arguments.collect()),
         Some("ledger-census") => run_ledger_census(arguments.collect()),
+        Some("wallet-terminal-payout-input") => {
+            terminal_lifecycle::run_wallet_terminal_input(arguments.collect())
+        }
         Some("wallet-terminal-payout-alt-plan") => wallet_terminal::run_alt(arguments.collect()),
         Some("wallet-terminal-payout-plan") => wallet_terminal::run(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
@@ -870,6 +874,7 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 fn usage() {
     usage_supervisor();
     println!("{}", upgrade::usage());
+    println!("{}", terminal_lifecycle::usage());
     println!("{}", wallet_terminal::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \

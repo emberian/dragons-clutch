@@ -76,7 +76,7 @@ use crate::{
 
 use dclutch_versioned_message_operator::EXTEND_ADDRESSES_PER_TRANSACTION_V1;
 
-const INPUT_FORMAT: &str = "dclutch-wallet-terminal-payout-plan-input-v1";
+pub(crate) const INPUT_FORMAT: &str = "dclutch-wallet-terminal-payout-plan-input-v1";
 const OUTPUT_FORMAT: &str = "dclutch-wallet-terminal-payout-v3";
 const ALT_OUTPUT_FORMAT: &str = "dclutch-wallet-terminal-payout-alt-plan-v1";
 // Compilation is a geometry/ALT admission check only. The browser obtains a
@@ -85,70 +85,70 @@ const GEOMETRY_BLOCKHASH: [u8; 32] = [0xa5; 32];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProgramSelectorsV1 {
-    registry: String,
-    core: String,
-    claims: String,
-    custody: String,
+pub(crate) struct ProgramSelectorsV1 {
+    pub(crate) registry: String,
+    pub(crate) core: String,
+    pub(crate) claims: String,
+    pub(crate) custody: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RecordSelectorsV1 {
-    realm: String,
-    product: String,
-    result_domain: String,
-    portfolio: String,
-    product_basis: String,
-    execution_descriptor: String,
-    composition_descriptor: String,
-    composition_graph: String,
-    composition_translation: String,
-    composition_exposure: String,
-    terminal_record: String,
+pub(crate) struct RecordSelectorsV1 {
+    pub(crate) realm: String,
+    pub(crate) product: String,
+    pub(crate) result_domain: String,
+    pub(crate) portfolio: String,
+    pub(crate) product_basis: String,
+    pub(crate) execution_descriptor: String,
+    pub(crate) composition_descriptor: String,
+    pub(crate) composition_graph: String,
+    pub(crate) composition_translation: String,
+    pub(crate) composition_exposure: String,
+    pub(crate) terminal_record: String,
 }
 
 /// Immutable selectors and wallet coordinates for one checked payout.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PlanInputV1 {
-    format: String,
-    market: String,
-    owner: String,
-    recipient_owner: String,
-    recipient: String,
-    collateral_mint: String,
-    token_program: String,
-    quantity: String,
-    claim_index: u32,
-    transfer_index: u16,
-    parent_context: String,
-    custody_context: String,
-    release_set: String,
+pub(crate) struct PlanInputV1 {
+    pub(crate) format: String,
+    pub(crate) market: String,
+    pub(crate) owner: String,
+    pub(crate) recipient_owner: String,
+    pub(crate) recipient: String,
+    pub(crate) collateral_mint: String,
+    pub(crate) token_program: String,
+    pub(crate) quantity: String,
+    pub(crate) claim_index: u32,
+    pub(crate) transfer_index: u16,
+    pub(crate) parent_context: String,
+    pub(crate) custody_context: String,
+    pub(crate) release_set: String,
     #[serde(
         default,
         deserialize_with = "optional_lookup_table",
         skip_serializing_if = "Option::is_none"
     )]
-    lookup_table: Option<String>,
-    programs: ProgramSelectorsV1,
-    records: RecordSelectorsV1,
+    pub(crate) lookup_table: Option<String>,
+    pub(crate) programs: ProgramSelectorsV1,
+    pub(crate) records: RecordSelectorsV1,
 }
 
 #[derive(Clone, Copy)]
-struct RecordPairV1 {
-    schema: [u8; 32],
-    digest: [u8; 32],
-    raw: Pubkey,
-    staging: Pubkey,
+pub(crate) struct RecordPairV1 {
+    pub(crate) schema: [u8; 32],
+    pub(crate) digest: [u8; 32],
+    pub(crate) raw: Pubkey,
+    pub(crate) staging: Pubkey,
 }
 
 #[derive(Clone)]
-struct SelectedInputV1 {
-    market: Pubkey,
-    owner: Pubkey,
+pub(crate) struct SelectedInputV1 {
+    pub(crate) market: Pubkey,
+    pub(crate) owner: Pubkey,
     recipient_owner: Pubkey,
-    recipient: Pubkey,
+    pub(crate) recipient: Pubkey,
     collateral_mint: Pubkey,
     token_program: Pubkey,
     quantity: u64,
@@ -156,43 +156,46 @@ struct SelectedInputV1 {
     transfer_index: u16,
     parent_context: [u8; 32],
     custody_context: [u8; 32],
-    release_set: [u8; 32],
+    pub(crate) release_set: [u8; 32],
     lookup_table: Option<Pubkey>,
     registry: Pubkey,
     core: Pubkey,
     claims: Pubkey,
     custody: Pubkey,
-    realm: RecordPairV1,
-    product: RecordPairV1,
-    result_domain: RecordPairV1,
-    portfolio: RecordPairV1,
-    product_basis: RecordPairV1,
-    execution_descriptor: RecordPairV1,
-    composition_descriptor: RecordPairV1,
-    composition_graph: RecordPairV1,
-    composition_translation: RecordPairV1,
-    composition_exposure: RecordPairV1,
-    terminal_record_digest: [u8; 32],
-    terminal_coordinate: RecordPairV1,
-    aggregate: Pubkey,
-    position: Pubkey,
+    pub(crate) realm: RecordPairV1,
+    pub(crate) product: RecordPairV1,
+    pub(crate) result_domain: RecordPairV1,
+    pub(crate) portfolio: RecordPairV1,
+    pub(crate) product_basis: RecordPairV1,
+    pub(crate) execution_descriptor: RecordPairV1,
+    pub(crate) composition_descriptor: RecordPairV1,
+    pub(crate) composition_graph: RecordPairV1,
+    pub(crate) composition_translation: RecordPairV1,
+    pub(crate) composition_exposure: RecordPairV1,
+    pub(crate) terminal_record_digest: [u8; 32],
+    pub(crate) terminal_coordinate: RecordPairV1,
+    pub(crate) aggregate: Pubkey,
+    pub(crate) position: Pubkey,
     activation_cache: Pubkey,
     claims_programdata: Pubkey,
     core_programdata: Pubkey,
     custody_programdata: Pubkey,
-    custody_replay: Pubkey,
+    pub(crate) custody_replay: Pubkey,
     custody_authority: Pubkey,
-    hoard: Pubkey,
+    pub(crate) hoard: Pubkey,
 }
 
 #[derive(Clone, Copy)]
-enum LookupTableRequirementV1 {
+pub(crate) enum LookupTableRequirementV1 {
     Present,
     Absent,
 }
 
 impl SelectedInputV1 {
-    fn parse(input: &PlanInputV1, requirement: LookupTableRequirementV1) -> Result<Self> {
+    pub(crate) fn parse(
+        input: &PlanInputV1,
+        requirement: LookupTableRequirementV1,
+    ) -> Result<Self> {
         if input.format != INPUT_FORMAT {
             return Err(Error::new(format!(
                 "wallet payout input format must be {INPUT_FORMAT}"
@@ -377,7 +380,7 @@ impl SelectedInputV1 {
         })
     }
 
-    fn addresses(&self) -> Vec<Pubkey> {
+    pub(crate) fn addresses(&self) -> Vec<Pubkey> {
         let mut values = vec![
             self.market,
             self.recipient,
@@ -422,13 +425,13 @@ impl SelectedInputV1 {
     }
 }
 
-struct FinalizedSnapshotV1 {
-    observation: Observation,
-    accounts: BTreeMap<Pubkey, ObservedAccount>,
+pub(crate) struct FinalizedSnapshotV1 {
+    pub(crate) observation: Observation,
+    pub(crate) accounts: BTreeMap<Pubkey, ObservedAccount>,
 }
 
 impl FinalizedSnapshotV1 {
-    fn from_rpc(
+    pub(crate) fn from_rpc(
         slot: u64,
         unix_timestamp: i64,
         keys: &[Pubkey],
@@ -482,7 +485,7 @@ impl FinalizedSnapshotV1 {
             .ok_or_else(|| Error::new(format!("wallet payout snapshot omitted {key}")))
     }
 
-    fn required(&self, key: Pubkey, label: &str) -> Result<&ObservedAccount> {
+    pub(crate) fn required(&self, key: Pubkey, label: &str) -> Result<&ObservedAccount> {
         let account = self.account(key)?;
         if account.lamports == 0 {
             return Err(Error::new(format!(
@@ -692,7 +695,7 @@ pub(crate) fn usage() -> &'static str {
      unconditionally."
 }
 
-fn build_report(
+pub(crate) fn build_report(
     selected: &SelectedInputV1,
     snapshot: &FinalizedSnapshotV1,
 ) -> Result<WalletTerminalPayoutReportV3> {
@@ -1334,7 +1337,7 @@ fn array_at<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::borrow::Cow;
 
     use dclutch_claims_svm::{
@@ -1361,7 +1364,7 @@ mod tests {
         hex(&[byte; 32])
     }
 
-    fn input() -> PlanInputV1 {
+    pub(crate) fn input() -> PlanInputV1 {
         PlanInputV1 {
             format: INPUT_FORMAT.into(),
             market: key(1),
