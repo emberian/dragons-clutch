@@ -355,7 +355,7 @@ pub(crate) struct TransactionEvidence {
     pub(crate) logs: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AccountEvidence {
     pub(crate) address: String,
     pub(crate) owner: String,
