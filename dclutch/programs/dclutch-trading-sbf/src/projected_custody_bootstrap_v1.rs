@@ -47,8 +47,9 @@ use dclutch_custody_contract::{
     ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
-    Action, GENERIC_FOUNDING_REQUEST_BYTES_V1, GenericFoundingRequestV1, GenericFoundingStageV1,
-    Identity, ProjectFoundRequestV2, Request, generic_founding_funding_list_id_v1,
+    Action, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3, GENERIC_FOUNDING_REQUEST_BYTES_V1,
+    GenericFoundingRequestV1, GenericFoundingStageV1, Identity, ProjectFoundRequestV2, Request,
+    generic_founding_funding_list_id_v1,
 };
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -132,7 +133,6 @@ const INITIALIZE_PAYER: usize = 8;
 // account is what binds the funding states to the manifest Core authenticated,
 // rather than to one the caller supplies a second time.
 const INITIALIZE_FOUND_START: usize = 11;
-const CORE_FOUND_MANIFEST_RAW: usize = 14;
 const INITIALIZE_RENT: usize = 9;
 const INITIALIZE_SYSTEM: usize = 10;
 
@@ -491,7 +491,7 @@ fn stage_founding_capability_funding_v2(
 ) -> Result<(), ProgramError> {
     let manifest_raw = account(
         frame.initialize,
-        INITIALIZE_FOUND_START + CORE_FOUND_MANIFEST_RAW,
+        INITIALIZE_FOUND_START + FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
     )?;
     let payer = account(frame.initialize, INITIALIZE_PAYER)?;
     let rent_account = account(frame.initialize, INITIALIZE_RENT)?;

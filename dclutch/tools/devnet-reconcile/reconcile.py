@@ -22,10 +22,19 @@ from typing import Any
 
 
 DEVNET_GENESIS_HASH = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
 MANIFEST_SCHEMA = "dclutch-activity-reconcile-manifest-v1"
 CAPTURE_SCHEMA = "dclutch-captured-finalized-rpc-v1"
 DOSSIER_SCHEMA = "dclutch-public-activity-dossier-v1"
+OWNED_LOOPBACK_MANIFEST_SCHEMA = "dclutch-owned-loopback-activity-reconcile-manifest-v1"
+OWNED_LOOPBACK_CAPTURE_SCHEMA = "dclutch-owned-loopback-captured-finalized-rpc-v1"
+OWNED_LOOPBACK_RECEIPT_SCHEMA = "dclutch-owned-loopback-reconcile-session-receipt-v1"
+OWNED_LOOPBACK_DOSSIER_SCHEMA = "dclutch-owned-loopback-activity-dossier-v1"
 EVENT_KINDS = ("founding", "participant", "direct", "resolution", "payout", "retirement")
+OWNED_LOOPBACK_PROGRAM_ROLES = (
+    "registry", "rent", "custody", "resolution", "claims", "trading", "core",
+    "pyth-receiver", "pyth-router",
+)
 MAX_JSON_BYTES = 32 * 1024 * 1024
 MAX_EVENTS = 128
 MAX_ACCOUNTS = 512
@@ -289,6 +298,32 @@ class CapturedRpc:
         return decimal(observed["contextSlot"], f"account {address} contextSlot"), observed["value"]
 
 
+class OwnedLoopbackCapturedRpc(CapturedRpc):
+    def __init__(self, value: dict[str, Any], capture_sha256: str | None = None) -> None:
+        super().__init__(value, capture_sha256)
+        self.finalized_slot = decimal(value.get("finalizedSlot"), "owned-loopback capture finalizedSlot")
+
+    def provenance(self) -> dict[str, str]:
+        return {
+            "mode": "owned-loopback-captured-finalized-rpc-replay",
+            "captureSha256": self.capture_sha256,
+            "finalizedSlot": str(self.finalized_slot),
+        }
+
+    def transaction(self, signature: str) -> Any:
+        result = super().transaction(signature)
+        slot = result.get("slot") if isinstance(result, dict) else None
+        if not isinstance(slot, int) or slot > self.finalized_slot:
+            refuse(f"owned-loopback transaction {signature} is not covered by the finalized capture slot")
+        return result
+
+    def account(self, address: str) -> tuple[int, Any]:
+        slot, value = super().account(address)
+        if slot > self.finalized_slot:
+            refuse(f"owned-loopback account {address} is not covered by the finalized capture slot")
+        return slot, value
+
+
 class LiveRpc:
     def __init__(self, url: str, timeout: float) -> None:
         if not url.startswith("https://"):
@@ -398,14 +433,22 @@ def parse_delta_list(values: Any, field: str, accounts: dict[str, dict[str, Any]
     return out
 
 
-def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+def validate_manifest_for(
+    manifest: Any,
+    *,
+    manifest_schema: str,
+    cluster_kind: str,
+    genesis_hash: str,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     manifest = exact_keys(manifest, {"schema", "activityId", "cluster", "accounts", "events", "finalAccounts", "sourceSetSha256"}, set(), "manifest")
-    if manifest["schema"] != MANIFEST_SCHEMA:
+    if manifest["schema"] != manifest_schema:
         refuse("activity manifest schema is not admitted")
     text(manifest["activityId"], "activityId")
     cluster = exact_keys(manifest["cluster"], {"kind", "genesisHash"}, set(), "cluster")
-    if cluster["kind"] != "devnet" or cluster["genesisHash"] != DEVNET_GENESIS_HASH:
-        refuse("activity manifest is not pinned to exact Solana devnet")
+    if cluster["kind"] != cluster_kind or cluster["genesisHash"] != genesis_hash:
+        if cluster_kind == "devnet":
+            refuse("activity manifest is not pinned to exact Solana devnet")
+        refuse(f"activity manifest is not pinned to exact {cluster_kind} genesis")
     digest(manifest["sourceSetSha256"], "sourceSetSha256")
     raw_accounts = manifest["accounts"]
     if not isinstance(raw_accounts, list) or not raw_accounts or len(raw_accounts) > MAX_ACCOUNTS:
@@ -523,8 +566,38 @@ def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[di
     return accounts, events
 
 
-def authenticate_sources(manifest: dict[str, Any], journal_root: pathlib.Path) -> None:
-    _, events = validate_manifest(manifest)
+def validate_manifest(manifest: Any) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    return validate_manifest_for(
+        manifest,
+        manifest_schema=MANIFEST_SCHEMA,
+        cluster_kind="devnet",
+        genesis_hash=DEVNET_GENESIS_HASH,
+    )
+
+
+def validate_owned_loopback_manifest(
+    manifest: Any,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    cluster = manifest.get("cluster") if isinstance(manifest, dict) else None
+    if not isinstance(cluster, dict):
+        refuse("owned-loopback manifest omitted its cluster identity")
+    genesis = pubkey(cluster.get("genesisHash"), "owned-loopback manifest genesisHash")
+    if genesis in (DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH):
+        refuse("owned-loopback manifest carries a public cluster genesis hash")
+    return validate_manifest_for(
+        manifest,
+        manifest_schema=OWNED_LOOPBACK_MANIFEST_SCHEMA,
+        cluster_kind="owned-loopback",
+        genesis_hash=genesis,
+    )
+
+
+def authenticate_sources_for(
+    manifest: dict[str, Any],
+    journal_root: pathlib.Path,
+    validator: Any,
+) -> None:
+    _, events = validator(manifest)
     try:
         root = journal_root.resolve(strict=True)
     except OSError as error:
@@ -549,6 +622,16 @@ def authenticate_sources(manifest: dict[str, Any], journal_root: pathlib.Path) -
             observed[relative] = sha256_bytes(raw)
         if observed[relative] != event["sourceSha256"]:
             refuse(f"event {event['id']} source journal digest differs from exact bytes")
+
+
+def authenticate_sources(manifest: dict[str, Any], journal_root: pathlib.Path) -> None:
+    authenticate_sources_for(manifest, journal_root, validate_manifest)
+
+
+def authenticate_owned_loopback_sources(
+    manifest: dict[str, Any], journal_root: pathlib.Path
+) -> None:
+    authenticate_sources_for(manifest, journal_root, validate_owned_loopback_manifest)
 
 
 def reconcile_event(event: dict[str, Any], accounts: dict[str, dict[str, Any]], rpc: Any, collateral_mint: str) -> dict[str, Any]:
@@ -756,8 +839,17 @@ def reconcile_final_accounts(manifest: dict[str, Any], accounts: dict[str, dict[
     return out
 
 
-def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
-    accounts, events = validate_manifest(manifest)
+def reconcile_for(
+    manifest: dict[str, Any],
+    rpc: Any,
+    *,
+    validator: Any,
+    cluster_kind: str,
+    dossier_schema: str,
+    expected_genesis: str,
+    session_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    accounts, events = validator(manifest)
     direct_events = [event for event in events if "direct" in event]
     collateral_mint = pubkey(direct_events[0]["direct"]["mint"], "lifecycle collateral mint")
     for direct_event in direct_events:
@@ -774,8 +866,10 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
             if ref not in accounts or accounts[ref].get("mint") != collateral_mint:
                 refuse("payout account inventory differs from the lifecycle collateral mint")
     genesis = rpc.genesis_hash()
-    if genesis != DEVNET_GENESIS_HASH:
-        refuse(f"RPC genesis {genesis!r} is not exact Solana devnet")
+    if genesis != expected_genesis:
+        if cluster_kind == "devnet":
+            refuse(f"RPC genesis {genesis!r} is not exact Solana devnet")
+        refuse(f"RPC genesis {genesis!r} is not exact owned-loopback genesis")
     projections = [reconcile_event(event, accounts, rpc, collateral_mint) for event in events]
     last_lamports: dict[str, int] = {}
     last_tokens: dict[str, int] = {}
@@ -816,9 +910,11 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
         "sourceDigests": source_digests,
         "rpc": rpc.provenance(),
     }
+    if session_evidence is not None:
+        evidence_core["ownedLoopbackSession"] = session_evidence
     dossier: dict[str, Any] = {
-        "schema": DOSSIER_SCHEMA, "signatureScheme": "none", "activityId": manifest["activityId"],
-        "cluster": {"kind": "devnet", "genesisHash": genesis}, "evidence": evidence_core,
+        "schema": dossier_schema, "signatureScheme": "none", "activityId": manifest["activityId"],
+        "cluster": {"kind": cluster_kind, "genesisHash": genesis}, "evidence": evidence_core,
         "accounts": manifest["accounts"], "events": projections, "finalAccounts": final,
         "totals": {
             "transactionFeesLamports": str(transaction_fees),
@@ -831,12 +927,263 @@ def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
     return dossier
 
 
+def reconcile(manifest: dict[str, Any], rpc: Any) -> dict[str, Any]:
+    return reconcile_for(
+        manifest,
+        rpc,
+        validator=validate_manifest,
+        cluster_kind="devnet",
+        dossier_schema=DOSSIER_SCHEMA,
+        expected_genesis=DEVNET_GENESIS_HASH,
+    )
+
+
+def reconcile_owned_loopback(
+    manifest: dict[str, Any],
+    rpc: OwnedLoopbackCapturedRpc,
+    session_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    genesis = manifest.get("cluster", {}).get("genesisHash")
+    return reconcile_for(
+        manifest,
+        rpc,
+        validator=validate_owned_loopback_manifest,
+        cluster_kind="owned-loopback",
+        dossier_schema=OWNED_LOOPBACK_DOSSIER_SCHEMA,
+        expected_genesis=genesis,
+        session_evidence=session_evidence,
+    )
+
+
+def canonical_relative_evidence(
+    root: pathlib.Path, relative: Any, label: str
+) -> tuple[pathlib.Path, str]:
+    value = text(relative, f"{label} path")
+    parts = pathlib.PurePosixPath(value)
+    if parts.is_absolute() or value != parts.as_posix() or any(
+        part in ("", ".", "..") for part in parts.parts
+    ):
+        refuse(f"{label} path is not canonical relative evidence")
+    candidate = root / value
+    try:
+        candidate.lstat()
+        if candidate.is_symlink() or not candidate.is_file():
+            refuse(f"{label} is not one regular non-symlink evidence file")
+        path = candidate.resolve(strict=True)
+        path.relative_to(root)
+    except (OSError, ValueError) as error:
+        refuse(f"{label} path escapes or is absent: {error}")
+    return path, value
+
+
+def authenticate_owned_loopback_session(
+    receipt_path: pathlib.Path,
+    expected_receipt_sha256: str,
+    evidence_root: pathlib.Path,
+    manifest_path: pathlib.Path,
+    capture_path: pathlib.Path,
+    manifest: dict[str, Any],
+    rpc_capture: OwnedLoopbackCapturedRpc,
+) -> dict[str, Any]:
+    try:
+        root = evidence_root.resolve(strict=True)
+    except OSError as error:
+        refuse(f"cannot resolve owned-loopback evidence root: {error}")
+    if not root.is_dir():
+        refuse("owned-loopback evidence root is not a directory")
+    raw, receipt = read_evidence_file(receipt_path)
+    if digest(expected_receipt_sha256, "expected session receipt sha256") != sha256_bytes(raw):
+        refuse("owned-loopback session receipt differs from its expected SHA-256")
+    receipt = exact_keys(
+        receipt,
+        {
+            "schema", "status", "cluster", "sourceCommit", "checkedReleaseGateSha256",
+            "programs", "manifestSha256", "capture", "journals", "journalSetSha256",
+            "privateSession",
+        },
+        set(),
+        "owned-loopback session receipt",
+    )
+    if receipt["schema"] != OWNED_LOOPBACK_RECEIPT_SCHEMA or receipt["status"] != "finalized":
+        refuse("owned-loopback session receipt is provisional or another schema")
+    cluster = exact_keys(receipt["cluster"], {"kind", "genesisHash"}, set(), "receipt cluster")
+    genesis = pubkey(cluster["genesisHash"], "receipt genesisHash")
+    if cluster["kind"] != "owned-loopback" or genesis in (DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH):
+        refuse("owned-loopback session receipt names a public cluster")
+    if manifest.get("cluster") != cluster or rpc_capture.genesis_hash() != genesis:
+        refuse("owned-loopback manifest, receipt, and capture genesis identities differ")
+    source_commit = text(receipt["sourceCommit"], "receipt sourceCommit")
+    if len(source_commit) != 40 or any(ch not in "0123456789abcdef" for ch in source_commit):
+        refuse("receipt sourceCommit is not one full lowercase Git commit")
+    gate_sha256 = digest(receipt["checkedReleaseGateSha256"], "checkedReleaseGateSha256")
+    if digest(receipt["manifestSha256"], "manifestSha256") != sha256_bytes(manifest_path.read_bytes()):
+        refuse("owned-loopback receipt manifest digest differs from exact bytes")
+
+    programs = receipt["programs"]
+    if not isinstance(programs, list) or len(programs) != len(OWNED_LOOPBACK_PROGRAM_ROLES):
+        refuse("owned-loopback receipt omitted the exact seven-plus-provider program closure")
+    program_ids: set[str] = set()
+    programdata_ids: set[str] = set()
+    projected_programs: list[dict[str, str]] = []
+    for index, (raw_program, expected_role) in enumerate(zip(programs, OWNED_LOOPBACK_PROGRAM_ROLES, strict=True)):
+        program = exact_keys(
+            raw_program,
+            {
+                "role", "programId", "programDataAddress", "deploymentSlot", "elfSha256",
+                "genesisProgramDataSha256",
+            },
+            set(),
+            f"owned-loopback program {index}",
+        )
+        if program["role"] != expected_role:
+            refuse("owned-loopback receipt program roles are absent, substituted, or noncanonical")
+        program_id = pubkey(program["programId"], f"{expected_role} programId")
+        programdata_id = pubkey(program["programDataAddress"], f"{expected_role} programDataAddress")
+        if program_id in program_ids or programdata_id in programdata_ids or program_id == programdata_id:
+            refuse("owned-loopback receipt aliases a Program or ProgramData identity")
+        program_ids.add(program_id)
+        programdata_ids.add(programdata_id)
+        slot = decimal(program["deploymentSlot"], f"{expected_role} deploymentSlot")
+        if slot == 0 or slot > rpc_capture.finalized_slot:
+            refuse(f"{expected_role} deployment is absent from the finalized capture boundary")
+        elf_sha256 = digest(program["elfSha256"], f"{expected_role} elfSha256")
+        genesis_programdata_sha256 = digest(
+            program["genesisProgramDataSha256"], f"{expected_role} genesisProgramDataSha256"
+        )
+        projected_programs.append(
+            {
+                "role": expected_role,
+                "programId": program_id,
+                "programDataAddress": programdata_id,
+                "deploymentSlot": str(slot),
+                "elfSha256": elf_sha256,
+                "genesisProgramDataSha256": genesis_programdata_sha256,
+            }
+        )
+    if program_ids & programdata_ids:
+        refuse("owned-loopback Program and ProgramData closures overlap")
+
+    capture = exact_keys(
+        receipt["capture"],
+        {"path", "sha256", "schema", "commitment", "finalizedSlot"},
+        set(),
+        "owned-loopback capture receipt",
+    )
+    receipt_capture_path, _ = canonical_relative_evidence(root, capture["path"], "capture")
+    try:
+        actual_capture = capture_path.resolve(strict=True)
+    except OSError as error:
+        refuse(f"cannot resolve supplied owned-loopback capture: {error}")
+    if receipt_capture_path != actual_capture:
+        refuse("owned-loopback receipt binds another capture path")
+    if (
+        digest(capture["sha256"], "capture sha256") != rpc_capture.capture_sha256
+        or capture["schema"] != OWNED_LOOPBACK_CAPTURE_SCHEMA
+        or capture["commitment"] != "finalized"
+        or decimal(capture["finalizedSlot"], "capture finalizedSlot") != rpc_capture.finalized_slot
+    ):
+        refuse("owned-loopback receipt substitutes or does not finalize its RPC capture")
+
+    journals = receipt["journals"]
+    if not isinstance(journals, list) or not journals or len(journals) > MAX_EVENTS + 32:
+        refuse("owned-loopback receipt has no bounded canonical journal set")
+    projected_journals: list[dict[str, str]] = []
+    journal_paths: set[str] = set()
+    for index, raw_journal in enumerate(journals):
+        journal = exact_keys(
+            raw_journal,
+            {"path", "sha256", "schema", "completionField"},
+            set(),
+            f"owned-loopback journal {index}",
+        )
+        path, relative = canonical_relative_evidence(root, journal["path"], f"journal {index}")
+        if relative in journal_paths:
+            refuse("owned-loopback receipt repeats a journal path")
+        journal_paths.add(relative)
+        source_raw, source = read_evidence_file(path)
+        source_schema = text(journal["schema"], f"journal {relative} schema")
+        completion_field = text(journal["completionField"], f"journal {relative} completionField")
+        if completion_field not in ("phase", "status"):
+            refuse(f"journal {relative} names another completion field")
+        if (
+            digest(journal["sha256"], f"journal {relative} sha256") != sha256_bytes(source_raw)
+            or source.get("schema") != source_schema
+            or source.get(completion_field) != "finalized"
+        ):
+            refuse(f"journal {relative} is missing, substituted, provisional, or partial")
+        projected_journals.append(
+            {
+                "path": relative,
+                "sha256": journal["sha256"],
+                "schema": source_schema,
+                "completionField": completion_field,
+            }
+        )
+    if [row["path"] for row in projected_journals] != sorted(journal_paths):
+        refuse("owned-loopback receipt journals are not in canonical path order")
+    if digest(receipt["journalSetSha256"], "journalSetSha256") != sha256_bytes(
+        canonical_bytes(projected_journals)
+    ):
+        refuse("owned-loopback journalSetSha256 differs from its exact ordered rows")
+    event_paths = {event["sourcePath"] for event in manifest["events"]}
+    if not event_paths.issubset(journal_paths):
+        refuse("owned-loopback receipt omits a lifecycle event source journal")
+
+    private_session = exact_keys(
+        receipt["privateSession"],
+        {"path", "sha256", "schema", "status", "completedStages"},
+        set(),
+        "owned-loopback private session",
+    )
+    session_path, session_relative = canonical_relative_evidence(
+        root, private_session["path"], "private session"
+    )
+    session_raw, session = read_evidence_file(session_path)
+    completed = private_session["completedStages"]
+    if (
+        session_relative not in journal_paths
+        or digest(private_session["sha256"], "private session sha256") != sha256_bytes(session_raw)
+        or session.get("schema") != private_session["schema"]
+        or private_session["status"] != "finalized"
+        or session.get("status", session.get("phase")) != "finalized"
+        or completed != list(EVENT_KINDS)
+    ):
+        refuse("owned-loopback private session is missing, substituted, provisional, or partial")
+
+    return {
+        "classification": "owned-loopback-local-evidence-not-public-devnet-or-live-observation",
+        "sessionReceiptSha256": sha256_bytes(raw),
+        "sourceCommit": source_commit,
+        "checkedReleaseGateSha256": gate_sha256,
+        "finalizedCaptureSlot": str(rpc_capture.finalized_slot),
+        "programs": projected_programs,
+        "journalSetSha256": receipt["journalSetSha256"],
+        "privateSessionSha256": private_session["sha256"],
+    }
+
+
 def captured(path: pathlib.Path) -> CapturedRpc:
     raw, value = read_evidence_file(path)
     value = exact_keys(value, {"schema", "genesisHash", "transactions", "accounts"}, set(), "captured RPC")
     if value["schema"] != CAPTURE_SCHEMA:
         refuse("captured RPC schema is not admitted")
     return CapturedRpc(value, sha256_bytes(raw))
+
+
+def captured_owned_loopback(path: pathlib.Path) -> OwnedLoopbackCapturedRpc:
+    raw, value = read_evidence_file(path)
+    value = exact_keys(
+        value,
+        {"schema", "genesisHash", "commitment", "finalizedSlot", "transactions", "accounts"},
+        set(),
+        "owned-loopback captured RPC",
+    )
+    genesis = pubkey(value["genesisHash"], "owned-loopback capture genesisHash")
+    if value["schema"] != OWNED_LOOPBACK_CAPTURE_SCHEMA or value["commitment"] != "finalized":
+        refuse("owned-loopback captured RPC schema or commitment is not admitted")
+    if genesis in (DEVNET_GENESIS_HASH, MAINNET_GENESIS_HASH):
+        refuse("owned-loopback captured RPC carries a public cluster genesis hash")
+    return OwnedLoopbackCapturedRpc(value, sha256_bytes(raw))
 
 
 def write_dossier(path: pathlib.Path | None, dossier: dict[str, Any]) -> None:
@@ -855,6 +1202,16 @@ def parser() -> argparse.ArgumentParser:
     offline.add_argument("--rpc-capture", required=True, type=pathlib.Path)
     offline.add_argument("--journal-root", required=True, type=pathlib.Path)
     offline.add_argument("--out", type=pathlib.Path)
+    loopback = sub.add_parser(
+        "owned-loopback-captured",
+        help="reconcile an authenticated finalized owned-loopback lifecycle capture",
+    )
+    loopback.add_argument("--manifest", required=True, type=pathlib.Path)
+    loopback.add_argument("--rpc-capture", required=True, type=pathlib.Path)
+    loopback.add_argument("--session-receipt", required=True, type=pathlib.Path)
+    loopback.add_argument("--expected-session-receipt-sha256", required=True)
+    loopback.add_argument("--evidence-root", required=True, type=pathlib.Path)
+    loopback.add_argument("--out", type=pathlib.Path)
     follow = sub.add_parser("follow", help="bounded finalized-only devnet polling")
     follow.add_argument("--manifest", required=True, type=pathlib.Path)
     follow.add_argument("--rpc-url", required=True)
@@ -870,10 +1227,24 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         manifest = load_json(args.manifest)
-        authenticate_sources(manifest, args.journal_root)
         if args.command == "captured":
+            authenticate_sources(manifest, args.journal_root)
             dossier = reconcile(manifest, captured(args.rpc_capture))
+        elif args.command == "owned-loopback-captured":
+            authenticate_owned_loopback_sources(manifest, args.evidence_root)
+            loopback_rpc = captured_owned_loopback(args.rpc_capture)
+            session_evidence = authenticate_owned_loopback_session(
+                args.session_receipt,
+                args.expected_session_receipt_sha256,
+                args.evidence_root,
+                args.manifest,
+                args.rpc_capture,
+                manifest,
+                loopback_rpc,
+            )
+            dossier = reconcile_owned_loopback(manifest, loopback_rpc, session_evidence)
         else:
+            authenticate_sources(manifest, args.journal_root)
             if not 1 <= args.max_polls <= MAX_POLLS or not 0 <= args.interval_seconds <= 60 or not 1 <= args.timeout_seconds <= 30:
                 refuse("poll count, interval, or timeout exceeds the bounded live policy")
             client = LiveRpc(args.rpc_url, args.timeout_seconds)

@@ -7,7 +7,8 @@
 
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_market_core_codec::{
-    Action, Identity, MarketCoreStateSeedsV2, MarketIdentity, REQUEST_BYTES, Request, STATE_BYTES,
+    Action, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2,
+    MarketIdentity, REQUEST_BYTES, Request, STATE_BYTES,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -54,7 +55,7 @@ use crate::{
 };
 
 /// Exact number of accounts in the Runtime V2 ordinary Core Found V3 frame.
-pub const FOUND_ACCOUNT_COUNT_V3: usize = 37;
+pub use dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3;
 
 /// One non-Product finalized raw/staging record observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -835,7 +836,7 @@ fn decode_rent(account: AccountObservationV2<'_>) -> Result<Rent> {
 }
 
 fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
-    vec![
+    let accounts = vec![
         AccountMeta::new(state.payer.key, true),
         AccountMeta::new(state.market.key, false),
         AccountMeta::new_readonly(state.rent_credit.key, false),
@@ -873,7 +874,14 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
         AccountMeta::new_readonly(state.rent_artifact.raw.key, false),
         AccountMeta::new_readonly(state.rent_artifact.staging.key, false),
         AccountMeta::new_readonly(state.rent_programdata.key, false),
-    ]
+    ];
+    debug_assert_eq!(
+        accounts
+            .get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
+            .map(|meta| meta.pubkey),
+        Some(state.capability_manifest.record.raw.key),
+    );
+    accounts
 }
 
 fn projection_accounts(

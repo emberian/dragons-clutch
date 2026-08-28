@@ -30,10 +30,11 @@ use dclutch_direct_codec::{
     COMPILED_DIRECT_RELEASE_ID_V1, execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
 };
 use dclutch_market_core_codec::{
-    Action, CoreState, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
-    Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, ProjectFoundReceiptV2,
-    ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
-    SeriesFoundingPermitSeedsV1, generic_founding_funding_list_id_v1,
+    Action, CoreState, FOUND_ACCOUNT_COUNT_V3, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3,
+    FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1, Identity,
+    MarketCoreStateSeedsV2, MarketIdentity, Phase, ProjectFoundReceiptV2, ProjectFoundRequestV2,
+    Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    generic_founding_funding_list_id_v1,
 };
 use dclutch_market_founding_v1_operator::{
     authenticate_generic_market_founding_artifact_v1, construct_generic_founding_root_selection_v1,
@@ -2027,7 +2028,7 @@ fn found_snapshot_keys(
     let registry_artifact = record(plan, "registry_artifact_release")?;
     let rent_artifact = record(plan, "rent_artifact_release")?;
     let floor = manipulation_floor_pair(pubkey(&plan.registry.program_id)?, records);
-    Ok(vec![
+    let keys = vec![
         payer,
         market,
         credit,
@@ -2065,7 +2066,15 @@ fn found_snapshot_keys(
         rent_artifact.0,
         rent_artifact.1,
         pubkey(&plan.rent_credit.programdata_id)?,
-    ])
+    ];
+    if keys.len() != FOUND_ACCOUNT_COUNT_V3
+        || keys.get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3) != Some(&records.manifest.raw)
+    {
+        return Err(Error::new(
+            "ordinary Found37 capability-manifest coordinate drifted",
+        ));
+    }
+    Ok(keys)
 }
 
 /// The compact ProjectedFound V2 prefix consumed inside DCLTGMF2.

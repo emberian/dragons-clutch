@@ -2,16 +2,18 @@
 
 This tool reads finalized Solana RPC evidence independently of the SDK, web
 client, CLI projections, or an indexer. It checks one complete activity chain
-and writes a deterministic, unsigned public dossier. It never reads a key,
-builds a transaction, signs, submits, or mutates an account.
+and writes a deterministic, unsigned dossier. Public devnet and an owned local
+validator are separate input and output types; local evidence is never labeled
+public, live, or devnet. It never reads a key, builds a transaction, signs,
+submits, or mutates an account.
 
-The current lifecycle tools persist operation-scoped evidence. They do not yet
-publish one frozen aggregate activity schema. A small adapter must therefore
-project the exact facts owned by those journals into
-`dclutch-activity-reconcile-manifest-v1`. Every projected event carries the
-SHA-256 digest of its source journal. The reconciler does not accept the
-tentative private-validator session spelling and does not trust a static client
-as a source of chain truth.
+The current lifecycle tools persist operation-scoped evidence. A small adapter
+projects the exact facts owned by those journals into the cluster-specific
+reconcile manifest. Every projected event carries the SHA-256 digest of its
+source journal. The reconciler does not trust a static client as a source of
+chain truth. The owned-loopback producer remains gated on the accepted PRIVATE
+session and Direct completion schemas; a synthetic test receipt proves the
+parser, not a completed protocol lifecycle.
 
 ## What is checked
 
@@ -76,6 +78,35 @@ Live follow intentionally refuses until every operation has a finalized source
 journal and the adapter supplies the complete six-event chain. In particular,
 the current Direct public manifest is not execution evidence.
 
+An owned local validator uses a different command and four different schemas:
+
+```sh
+python3 tools/devnet-reconcile/reconcile.py owned-loopback-captured \
+  --manifest owned-loopback-activity-manifest.json \
+  --rpc-capture evidence/finalized-rpc.json \
+  --session-receipt owned-loopback-session-receipt.json \
+  --expected-session-receipt-sha256 <sha256-from-private-summary> \
+  --evidence-root evidence \
+  --out owned-loopback-activity-dossier.json
+```
+
+The command accepts no RPC URL. Its manifest must use
+`dclutch-owned-loopback-activity-reconcile-manifest-v1`; its capture must use
+`dclutch-owned-loopback-captured-finalized-rpc-v1`; its authenticated receipt
+must use `dclutch-owned-loopback-reconcile-session-receipt-v1`; and its output
+uses `dclutch-owned-loopback-activity-dossier-v1`. Public devnet and mainnet
+genesis hashes refuse on all three local inputs. The receipt SHA-256 is an
+independent required argument, so changing an ELF, ProgramData genesis digest,
+journal, capture, or receipt after PRIVATE publishes its digest refuses.
+
+The receipt carries one clean source commit, checked-release digest, the exact
+ordered seven dClutch plus Pyth Receiver/Router program closure, each Program
+and ProgramData identity, deployment slot, ELF digest, and genesis ProgramData
+digest. It also binds the exact manifest bytes, finalized capture and slot,
+canonical ordered source-journal set, and one finalized complete PRIVATE
+session. Missing programs or journals, substituted bytes, provisional evidence,
+and partial lifecycle stage sets refuse before reconciliation.
+
 ## Adapter and capture shapes
 
 All integer quantities in the adapter are canonical decimal strings. Account
@@ -95,7 +126,7 @@ contains:
 - `finalAccounts`: exact current owner/lamports/data digest and Token-2022 fields,
   or `closed: true`.
 
-The capture schema is `dclutch-captured-finalized-rpc-v1`. Its `transactions`
+The devnet capture schema is `dclutch-captured-finalized-rpc-v1`. Its `transactions`
 map contains unmodified JSON-encoded `getTransaction` results keyed by first
 signature. Its `accounts` map contains
 `{"contextSlot":"...","value":<getAccountInfo value>}` keyed by address.
@@ -104,6 +135,12 @@ forks, missing evidence, mixed mints, and substituted raw state all refuse.
 Source paths are confined beneath `--journal-root`; absolute paths, traversal,
 symlink escapes, non-JSON journals, and digest substitutions refuse before any
 RPC read.
+
+The owned-loopback capture additionally carries `commitment: "finalized"` and
+one `finalizedSlot`. Every captured transaction and final account observation
+must be at or below that boundary. Its dossier says
+`owned-loopback-local-evidence-not-public-devnet-or-live-observation` and uses
+`owned-loopback-captured-finalized-rpc-replay` provenance.
 
 Run the local hostile corpus with:
 

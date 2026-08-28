@@ -6,7 +6,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use crate::CoreSbfError;
 
 /// Exact ordinary Found/ProjectFound V3 account count.
-pub const FOUND_ACCOUNT_COUNT_V3: usize = 37;
+pub use dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3;
 /// Exact projected generic-Found V2 prefix account count.
 pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 25;
 /// Exact account count for one-time infrastructure-profile initialization.
@@ -126,6 +126,12 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         else {
             return Err(CoreSbfError::AccountFrame);
         };
+        debug_assert_eq!(
+            accounts
+                .get(dclutch_market_core_codec::FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
+                .map(|account| account.key),
+            Some(manifest_raw.key),
+        );
         require_distinct(accounts)?;
         if payer.is_signer != mutating
             || payer.is_writable != mutating
