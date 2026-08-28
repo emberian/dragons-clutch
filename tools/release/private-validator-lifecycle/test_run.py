@@ -225,6 +225,21 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
         self.assertEqual(MODULE.PYTH_JOURNAL_FILES[-1], "07-encoded-vaa-verify.json")
         self.assertEqual(len(set(MODULE.PYTH_JOURNAL_FILES)), 8)
 
+    def test_validator_uses_only_plan_owned_eighteen_account_genesis(self) -> None:
+        argv = MODULE.validator_argv(
+            Path("/tools/solana-test-validator"),
+            Path("/work/ledger"),
+            "/work/mutable/account-dir",
+            "Mint111111111111111111111111111111111111111",
+            20890,
+        )
+        self.assertEqual(argv.count("--account-dir"), 1)
+        self.assertEqual(argv[argv.index("--account-dir") + 1], "/work/mutable/account-dir")
+        self.assertNotIn("--upgradeable-program", argv)
+        self.assertNotIn("receiver.so", " ".join(argv))
+        self.assertNotIn("router.so", " ".join(argv))
+        self.assertEqual(argv[argv.index("--rpc-port") + 1], "20890")
+
     def test_checked_mutable_slot_floor_comes_from_the_seven_roles(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             path = Path(root_text) / "plan.json"

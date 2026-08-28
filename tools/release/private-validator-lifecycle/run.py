@@ -563,6 +563,45 @@ def funding_argv(solana: Path, url: str, address: str) -> list[str]:
     ]
 
 
+def validator_argv(
+    validator: Path,
+    ledger: Path,
+    account_dir: str,
+    mint_address: str,
+    port: int,
+) -> list[str]:
+    """Launch only the exact plan-owned eighteen-account transaction genesis.
+
+    Provider programs are already present in ``account_dir`` as immutable
+    Loader-v3 Program/ProgramData pairs. Adding ``--upgradeable-program`` here
+    would replace their tag-0 authority with Agave's tag-1 default pubkey.
+    """
+
+    return [
+        str(validator),
+        "--config",
+        "/dev/null",
+        "--ledger",
+        str(ledger),
+        "--account-dir",
+        account_dir,
+        "--mint",
+        mint_address,
+        "--ticks-per-slot",
+        "16",
+        "--bind-address",
+        "127.0.0.1",
+        "--rpc-port",
+        str(port),
+        "--faucet-port",
+        str(port + 2),
+        "--gossip-port",
+        str(port + 3),
+        "--dynamic-port-range",
+        f"{port + 10}-{port + 41}",
+    ]
+
+
 def require_role_key(report: dict[str, Any], role: str) -> Path:
     keypairs = report.get("keypairs")
     if not isinstance(keypairs, dict) or not isinstance(keypairs.get(role), str):
@@ -903,7 +942,6 @@ def run_one(
     )
 
     ledger = run / "ledger"
-    fixture = paths.repo / "fixtures" / "pyth" / "local-upgraded-2026-08-22"
     validator_log = (run / "validator.log").open("wb")
     child: subprocess.Popen[bytes] | None = None
     watchdog: subprocess.Popen[bytes] | None = None
@@ -911,37 +949,13 @@ def run_one(
         mint_key = require_role_key(report, VALIDATOR_MINT_ROLE)
         mint_address = key_address(paths.solana, mint_key)
         child = subprocess.Popen(
-            [
-                str(paths.validator),
-                "--config",
-                "/dev/null",
-                "--ledger",
-                str(ledger),
-                "--account-dir",
+            validator_argv(
+                paths.validator,
+                ledger,
                 report["account_dir"],
-                "--mint",
                 mint_address,
-                "--ticks-per-slot",
-                "16",
-                "--bind-address",
-                "127.0.0.1",
-                "--rpc-port",
-                str(port),
-                "--faucet-port",
-                str(port + 2),
-                "--gossip-port",
-                str(port + 3),
-                "--dynamic-port-range",
-                f"{port + 10}-{port + 41}",
-                "--upgradeable-program",
-                "rec2HHDDnjLfj4kE7VyEtFA1HPGQLK33259532cRyHp",
-                str(fixture / "receiver.so"),
-                "none",
-                "--upgradeable-program",
-                "HDw2E7P8X1SkCyjvoGsfBGAVUutKcj874bXjHrpVYrVL",
-                str(fixture / "router.so"),
-                "none",
-            ],
+                port,
+            ),
             stdin=subprocess.DEVNULL,
             stdout=validator_log,
             stderr=subprocess.STDOUT,
