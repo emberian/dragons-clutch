@@ -92,6 +92,7 @@ fn run() -> Result<()> {
         Some("devnet-upgrade-baseline-v1") => upgrade::run_baseline(arguments.collect()),
         Some("devnet-upgrade-extend-v1") => upgrade::run_extension(arguments.collect()),
         Some("devnet-upgrade-v1") => upgrade::run(arguments.collect()),
+        Some("devnet-upgrade-set-journal-v1") => upgrade::run_set_journal(arguments.collect()),
         Some("devnet-user-position-admission-v1") => {
             user_position_admission::run(arguments.collect())
         }

@@ -253,8 +253,14 @@ describe('bounded finalized RPC client', () => {
   it('reads one finalized transaction as exact bytes, balances, and logs', async () => {
     const signature = '8'.repeat(88);
     const bytes = Uint8Array.from([1, 2, 3, 4]);
+    const hotAck = new Uint8Array(280);
+    hotAck.set(new TextEncoder().encode('DCLTHAK3'));
+    new DataView(hotAck.buffer).setUint16(8, 3, true);
+    new DataView(hotAck.buffer).setUint16(10, 1, true);
     let binary = '';
     for (const byte of bytes) binary += String.fromCharCode(byte);
+    let returnBinary = '';
+    for (const byte of hotAck) returnBinary += String.fromCharCode(byte);
     const fetcher: typeof fetch = async (_input, init) => {
       const request = JSON.parse(String(init?.body)) as { method: string; params: unknown[] };
       expect(request.method).toBe('getTransaction');
@@ -263,7 +269,14 @@ describe('bounded finalized RPC client', () => {
         slot: 92,
         blockTime: 1790000101,
         transaction: [btoa(binary), 'base64'],
-        meta: { err: null, fee: 5000, preBalances: [10, 20], postBalances: [5, 25], logMessages: ['Program log: ok'] },
+        meta: {
+          err: null,
+          fee: 5000,
+          preBalances: [10, 20],
+          postBalances: [5, 25],
+          logMessages: ['Program log: ok'],
+          returnData: { programId: '11111111111111111111111111111111', data: [btoa(returnBinary), 'base64'] },
+        },
       });
     };
     const observation = await new SolanaRpcClient('http://127.0.0.1:8899', fetcher).transaction(signature);
@@ -272,8 +285,21 @@ describe('bounded finalized RPC client', () => {
       preBalances: ['10', '20'], postBalances: ['5', '25'], logMessages: ['Program log: ok'],
     });
     expect(Array.from(observation?.transactionBytes ?? [])).toEqual([1, 2, 3, 4]);
+    expect(observation?.returnData?.programId).toBe('11111111111111111111111111111111');
+    expect(observation?.returnData?.data).toEqual(hotAck);
     // Bytes that are not one canonical versioned transaction decode no account list.
     expect(observation?.accountAddresses).toEqual([]);
+  });
+
+  it('reports missing finalized return data as explicit absence', async () => {
+    const fetcher: typeof fetch = async () => response({
+      slot: 92,
+      blockTime: null,
+      transaction: [btoa(String.fromCharCode(1, 2, 3, 4)), 'base64'],
+      meta: { err: null, fee: 5000, preBalances: [], postBalances: [], logMessages: [] },
+    });
+    const observation = await new SolanaRpcClient('http://127.0.0.1:8899', fetcher).transaction('8'.repeat(88));
+    expect(observation?.returnData).toBeNull();
   });
 
   it('reports an unserved transaction as null rather than inventing one', async () => {

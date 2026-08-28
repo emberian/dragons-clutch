@@ -2,6 +2,10 @@ import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 
 import { decodeBase64 } from './bytes';
 import {
+  decodeTransactionReturnDataV1,
+  type TransactionReturnDataObservationV1,
+} from './transactionReturnData';
+import {
   AccountProjection,
   classifyHeader,
   crossCheckBindings,
@@ -98,6 +102,8 @@ export type TransactionMetaObservation = Readonly<{
   preBalances: ReadonlyArray<string>;
   postBalances: ReadonlyArray<string>;
   logMessages: ReadonlyArray<string>;
+  /** Exact final program return data, or explicit absence. */
+  returnData: TransactionReturnDataObservationV1 | null;
   transactionBytes: Uint8Array;
 }>;
 
@@ -478,6 +484,7 @@ export class SolanaRpcClient {
       logMessages: Object.freeze(Array.isArray(meta.logMessages)
         ? meta.logMessages.slice(0, 64).map((entry, index) => exactText(entry, `log message ${index}`, 512))
         : []),
+      returnData: decodeTransactionReturnDataV1(meta.returnData),
       transactionBytes: bytes,
     });
   }

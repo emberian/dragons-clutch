@@ -1485,20 +1485,7 @@ pub(crate) fn publish_routing_table(
     instructions: &[Instruction],
     transactions: &mut Vec<TransactionEvidence>,
 ) -> Result<(Observation, Vec<ObservedAccount>)> {
-    let mut addresses: Vec<Pubkey> = Vec::new();
-    let push = |key: Pubkey, addresses: &mut Vec<Pubkey>| {
-        if key != payer.pubkey() && !addresses.contains(&key) {
-            addresses.push(key);
-        }
-    };
-    for instruction in instructions {
-        push(instruction.program_id, &mut addresses);
-        for meta in &instruction.accounts {
-            if !meta.is_signer {
-                push(meta.pubkey, &mut addresses);
-            }
-        }
-    }
+    let addresses = canonical_routing_addresses_v1(payer.pubkey(), instructions);
     let recent_slot = rpc.finalized_slot()?;
     let plan =
         build_lookup_table_creation_v1(payer.pubkey(), payer.pubkey(), recent_slot, &addresses)
@@ -2804,6 +2791,45 @@ fn raw_request_schema_v1(role: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// Derive a raw-request Record's complete canonical coordinate without writing it.
+///
+/// DCLTGMF2 uses this before any pre-funding or publication so the final
+/// compiled-message lock census is an admission guard, not post-spend evidence.
+fn derive_raw_request_record_v1(
+    registry: Pubkey,
+    role: &str,
+    content: &[u8],
+) -> Result<PublishedRecord> {
+    let schema = raw_request_schema_v1(role);
+    let (raw, staging, digest) = derive_record_addresses_v1(
+        registry,
+        RecordPublicationContentV1 {
+            schema_release_id: schema,
+            content,
+        },
+    )
+    .map_err(|error| Error::new(format!("derive {role} record address: {error:?}")))?;
+    Ok(PublishedRecord {
+        schema,
+        digest,
+        raw,
+        staging,
+    })
+}
+
+fn require_published_record_matches_derivation_v1(
+    role: &str,
+    expected: PublishedRecord,
+    published: PublishedRecord,
+) -> Result<()> {
+    if published != expected {
+        return Err(Error::new(format!(
+            "published {role} record coordinate/digest differed from its pre-mutation derivation"
+        )));
+    }
+    Ok(())
+}
+
 /// What a staged projected-Custody prestate is being staged *for*.
 ///
 /// Both lanes run the identical four-stage `DCLTPCB2` ladder. They differ in
@@ -3720,6 +3746,244 @@ const GENERIC_MARKET_FOUNDING_MAGIC_V2: [u8; 8] = *b"DCLTGMF2";
 /// (12), Claims (32), and Open (23). The total is
 /// `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2 + physical_funding_count`.
 const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2: usize = 129;
+const GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V2: usize = 2;
+const GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V2: usize = 59;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GenericMarketFoundingLockExpectationV2 {
+    frame_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug)]
+struct PreparedGenericMarketFoundingV2 {
+    instruction: Instruction,
+    lock_expectation: GenericMarketFoundingLockExpectationV2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CompleteLockCensusV1 {
+    complete_keys: usize,
+    required_signatures: usize,
+    static_keys: usize,
+    loaded_writable: usize,
+    loaded_readonly: usize,
+    key_privilege_digest: [u8; 32],
+}
+
+fn exact_instruction_frame_digest_v1(instruction: &Instruction) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/successor/exact-instruction-frame/v1");
+    hasher.update(instruction.program_id.as_ref());
+    hasher.update(
+        u64::try_from(instruction.accounts.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for meta in &instruction.accounts {
+        hasher.update(meta.pubkey.as_ref());
+        hasher.update([u8::from(meta.is_signer), u8::from(meta.is_writable)]);
+    }
+    hasher.update(
+        u64::try_from(instruction.data.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(&instruction.data);
+    hasher.finalize().into()
+}
+
+fn canonical_routing_addresses_v1(payer: Pubkey, instructions: &[Instruction]) -> Vec<Pubkey> {
+    let mut addresses = Vec::new();
+    let push = |key: Pubkey, addresses: &mut Vec<Pubkey>| {
+        if key != payer && !addresses.contains(&key) {
+            addresses.push(key);
+        }
+    };
+    for instruction in instructions {
+        push(instruction.program_id, &mut addresses);
+        for meta in &instruction.accounts {
+            if !meta.is_signer {
+                push(meta.pubkey, &mut addresses);
+            }
+        }
+    }
+    addresses
+}
+
+fn compiled_complete_lock_census_v1(
+    payer: Pubkey,
+    instruction: &Instruction,
+) -> Result<CompleteLockCensusV1> {
+    let addresses = canonical_routing_addresses_v1(payer, std::slice::from_ref(instruction));
+    let routing = build_lookup_table_creation_v1(payer, payer, 1, &addresses)
+        .map_err(|error| Error::new(format!("DCLTGMF2 census table: {error:?}")))?;
+    let bounded = bounded_instructions(std::slice::from_ref(instruction), Some(256_u32 * 1024))?;
+    let table = AddressLookupTableAccount {
+        key: routing.lookup_table,
+        addresses: routing.addresses,
+    };
+    let message = v0::Message::try_compile(
+        &payer,
+        &bounded,
+        std::slice::from_ref(&table),
+        Hash::new_from_array([0x43; 32]),
+    )
+    .map_err(|error| Error::new(format!("DCLTGMF2 census compile: {error}")))?;
+
+    let required_signatures = usize::from(message.header.num_required_signatures);
+    let readonly_signed = usize::from(message.header.num_readonly_signed_accounts);
+    let readonly_unsigned = usize::from(message.header.num_readonly_unsigned_accounts);
+    let static_keys = message.account_keys.len();
+    let writable_signed = required_signatures
+        .checked_sub(readonly_signed)
+        .ok_or_else(|| Error::new("DCLTGMF2 signed privilege census underflow"))?;
+    let writable_unsigned_end = static_keys
+        .checked_sub(readonly_unsigned)
+        .ok_or_else(|| Error::new("DCLTGMF2 unsigned privilege census underflow"))?;
+    let mut resolved = Vec::new();
+    for (index, key) in message.account_keys.iter().copied().enumerate() {
+        let signer = index < required_signatures;
+        let writable = if signer {
+            index < writable_signed
+        } else {
+            index < writable_unsigned_end
+        };
+        resolved.push((key, signer, writable, 0_u8));
+    }
+    let mut loaded_writable = 0_usize;
+    let mut loaded_readonly = 0_usize;
+    for lookup in &message.address_table_lookups {
+        if lookup.account_key != table.key {
+            return Err(Error::new(
+                "DCLTGMF2 census selected an unknown lookup table",
+            ));
+        }
+        for index in &lookup.writable_indexes {
+            let key = table
+                .addresses
+                .get(usize::from(*index))
+                .copied()
+                .ok_or_else(|| Error::new("DCLTGMF2 writable lookup index was out of range"))?;
+            resolved.push((key, false, true, 1_u8));
+            loaded_writable = loaded_writable
+                .checked_add(1)
+                .ok_or_else(|| Error::new("DCLTGMF2 writable census overflow"))?;
+        }
+        for index in &lookup.readonly_indexes {
+            let key = table
+                .addresses
+                .get(usize::from(*index))
+                .copied()
+                .ok_or_else(|| Error::new("DCLTGMF2 readonly lookup index was out of range"))?;
+            resolved.push((key, false, false, 2_u8));
+            loaded_readonly = loaded_readonly
+                .checked_add(1)
+                .ok_or_else(|| Error::new("DCLTGMF2 readonly census overflow"))?;
+        }
+    }
+
+    let mut expected = BTreeMap::<Pubkey, (bool, bool)>::new();
+    expected.insert(payer, (true, true));
+    for bounded_instruction in &bounded {
+        expected
+            .entry(bounded_instruction.program_id)
+            .or_insert((false, false));
+        for meta in &bounded_instruction.accounts {
+            expected
+                .entry(meta.pubkey)
+                .and_modify(|privilege| {
+                    privilege.0 |= meta.is_signer;
+                    privilege.1 |= meta.is_writable;
+                })
+                .or_insert((meta.is_signer, meta.is_writable));
+        }
+    }
+    let mut unique = BTreeMap::new();
+    for (key, signer, writable, class) in &resolved {
+        if unique.insert(*key, (*signer, *writable, *class)).is_some() {
+            return Err(Error::new(
+                "DCLTGMF2 compiled complete-key list contained a duplicate",
+            ));
+        }
+        if expected.get(key).copied() != Some((*signer, *writable)) {
+            return Err(Error::new(
+                "DCLTGMF2 compiled key privilege differed from the complete instruction union",
+            ));
+        }
+    }
+    if unique.len() != expected.len() {
+        return Err(Error::new(
+            "DCLTGMF2 compiled complete-key list omitted an instruction key",
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"dclutch/successor/dcltgmf2-complete-lock-census/v1");
+    hasher.update(
+        u64::try_from(resolved.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for (key, signer, writable, class) in &resolved {
+        hasher.update(key.as_ref());
+        hasher.update([u8::from(*signer), u8::from(*writable), *class]);
+    }
+    Ok(CompleteLockCensusV1 {
+        complete_keys: resolved.len(),
+        required_signatures,
+        static_keys,
+        loaded_writable,
+        loaded_readonly,
+        key_privilege_digest: hasher.finalize().into(),
+    })
+}
+
+fn require_devnet_complete_key_limit_v1(census: CompleteLockCensusV1) -> Result<()> {
+    if census.complete_keys > DEVNET_ACCOUNT_LOCK_LIMIT_V1 {
+        return Err(Error::new(format!(
+            "compiled transaction locks {} complete keys, above devnet's {}-key limit",
+            census.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1
+        )));
+    }
+    Ok(())
+}
+
+fn authenticate_generic_market_founding_lock_census_v2(
+    payer: Pubkey,
+    prepared: &PreparedGenericMarketFoundingV2,
+) -> Result<CompleteLockCensusV1> {
+    let instruction = &prepared.instruction;
+    let expected_frame = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2
+        .checked_add(GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V2)
+        .ok_or_else(|| Error::new("DCLTGMF2 expected frame overflow"))?;
+    if instruction.data != GENERIC_MARKET_FOUNDING_MAGIC_V2
+        || instruction.accounts.len() != expected_frame
+        || instruction.accounts.iter().any(|meta| meta.is_signer)
+        || instruction.accounts.iter().any(|meta| meta.pubkey == payer)
+        || exact_instruction_frame_digest_v1(instruction) != prepared.lock_expectation.frame_digest
+    {
+        return Err(Error::new(
+            "DCLTGMF2 exact frame/key/order/privilege expectation changed before compilation",
+        ));
+    }
+    let census = compiled_complete_lock_census_v1(payer, instruction)?;
+    require_devnet_complete_key_limit_v1(census)?;
+    if census.complete_keys != GENERIC_MARKET_FOUNDING_COMPLETE_KEYS_V2
+        || census.required_signatures != 1
+        || census.static_keys != 3
+        || census.loaded_writable != 11
+        || census.loaded_readonly != 45
+    {
+        return Err(Error::new(format!(
+            "DCLTGMF2 compiled lock census refused: {} complete, {} static, {} writable loaded, {} readonly loaded, {} signatures",
+            census.complete_keys,
+            census.static_keys,
+            census.loaded_writable,
+            census.loaded_readonly,
+            census.required_signatures,
+        )));
+    }
+    Ok(census)
+}
 
 /// Exact normal replay revision the founding's Realize stage commits.
 ///
@@ -4133,7 +4397,7 @@ fn build_generic_market_founding_v2(
     requests: [Pubkey; 4],
     founder: Pubkey,
     mint: Pubkey,
-) -> Result<Instruction> {
+) -> Result<PreparedGenericMarketFoundingV2> {
     let trading = pubkey(&plan.trading.program_id)?;
     let trading_programdata = pubkey(&plan.trading.programdata_id)?;
     let core = pubkey(&plan.core.program_id)?;
@@ -4337,10 +4601,16 @@ fn build_generic_market_founding_v2(
             distinct_writable.len()
         )));
     }
-    Ok(Instruction {
+    let instruction = Instruction {
         program_id: trading,
         accounts,
         data: GENERIC_MARKET_FOUNDING_MAGIC_V2.to_vec(),
+    };
+    Ok(PreparedGenericMarketFoundingV2 {
+        lock_expectation: GenericMarketFoundingLockExpectationV2 {
+            frame_digest: exact_instruction_frame_digest_v1(&instruction),
+        },
+        instruction,
     })
 }
 
@@ -4407,6 +4677,45 @@ fn execute_generic_market_founding(
         }
     }
 
+    // Admission comes before mutation. Derive all three still-vacant request
+    // coordinates from their exact content, assemble the same frame the outer
+    // will receive, and compile its complete bounded-v0 message now. A lock
+    // drift must stop here, before the five rent transfers or any Registry/ALT
+    // publication can be planned or sent.
+    let expected_realize_record =
+        derive_raw_request_record_v1(registry, "projected-custody-realize", &outer.realize_raw)?;
+    let expected_claims_record =
+        derive_raw_request_record_v1(registry, "claims-founding-v5", &outer.claims_raw)?;
+    let expected_substituted_claims_record = derive_raw_request_record_v1(
+        registry,
+        "claims-founding-v5-substituted-founder",
+        &outer.substituted_claims_raw,
+    )?;
+    let prepared_founding = build_generic_market_founding_v2(
+        plan,
+        coordinates,
+        &outer,
+        records,
+        [
+            found_raw_account,
+            lock_raw_account,
+            expected_realize_record.raw,
+            expected_claims_record.raw,
+        ],
+        founder,
+        mint,
+    )?;
+    let initial_founding_census =
+        authenticate_generic_market_founding_lock_census_v2(payer.pubkey(), &prepared_founding)?;
+    eprintln!(
+        "campaign: DCLTGMF2 pre-mutation compiled-message lock census: {} complete keys ({} static, {} writable loaded, {} readonly loaded), digest {}",
+        initial_founding_census.complete_keys,
+        initial_founding_census.static_keys,
+        initial_founding_census.loaded_writable,
+        initial_founding_census.loaded_readonly,
+        hex(&initial_founding_census.key_privilege_digest),
+    );
+
     // Nothing in the protocol funds these five. Core allocates the Market and
     // the permit and Claims allocates its three accounts with `allocate` and
     // `assign` only, never a transfer, so each must already hold its rent. The
@@ -4437,44 +4746,64 @@ fn execute_generic_market_founding(
         rpc,
         registry,
         payer,
-        raw_request_schema_v1("projected-custody-realize"),
+        expected_realize_record.schema,
         &outer.realize_raw,
         None,
         transactions,
+    )?;
+    require_published_record_matches_derivation_v1(
+        "projected-custody-realize",
+        expected_realize_record,
+        realize_record,
     )?;
     let claims_record = publish_record(
         rpc,
         registry,
         payer,
-        raw_request_schema_v1("claims-founding-v5"),
+        expected_claims_record.schema,
         &outer.claims_raw,
         None,
         transactions,
+    )?;
+    require_published_record_matches_derivation_v1(
+        "claims-founding-v5",
+        expected_claims_record,
+        claims_record,
     )?;
     let substituted_claims_record = publish_record(
         rpc,
         registry,
         payer,
-        raw_request_schema_v1("claims-founding-v5-substituted-founder"),
+        expected_substituted_claims_record.schema,
         &outer.substituted_claims_raw,
         None,
         transactions,
     )?;
-
-    let founding = build_generic_market_founding_v2(
-        plan,
-        coordinates,
-        &outer,
-        records,
-        [
-            found_raw_account,
-            lock_raw_account,
-            realize_record.raw,
-            claims_record.raw,
-        ],
-        founder,
-        mint,
+    require_published_record_matches_derivation_v1(
+        "claims-founding-v5-substituted-founder",
+        expected_substituted_claims_record,
+        substituted_claims_record,
     )?;
+
+    // Recompile immediately before ALT publication. The exact instruction and
+    // canonical record coordinates must still produce the byte-identical
+    // complete-key/privilege digest admitted before any write.
+    let founding_census =
+        authenticate_generic_market_founding_lock_census_v2(payer.pubkey(), &prepared_founding)?;
+    if founding_census != initial_founding_census {
+        return Err(Error::new(
+            "DCLTGMF2 pre-ALT lock census differed from its pre-mutation admission",
+        ));
+    }
+    eprintln!(
+        "campaign: DCLTGMF2 pre-ALT compiled-message lock census recheck: {} complete keys ({} static, {} writable loaded, {} readonly loaded), digest {}",
+        founding_census.complete_keys,
+        founding_census.static_keys,
+        founding_census.loaded_writable,
+        founding_census.loaded_readonly,
+        hex(&founding_census.key_privilege_digest),
+    );
+    let founding = prepared_founding.instruction;
     let (routing, tables) = publish_routing_table(
         rpc,
         payer,
@@ -5490,6 +5819,47 @@ mod tests {
         )
     }
 
+    fn generic_market_founding_census_fixture_v2() -> (Pubkey, PreparedGenericMarketFoundingV2) {
+        let payer = Pubkey::new_from_array([0xf1; 32]);
+        let program_id = Pubkey::new_from_array([0xf2; 32]);
+        let distinct = (0_u8..56)
+            .map(|index| Pubkey::new_from_array([index.saturating_add(1); 32]))
+            .collect::<Vec<_>>();
+        let mut accounts = distinct
+            .iter()
+            .enumerate()
+            .map(|(index, key)| {
+                if index < 11 {
+                    AccountMeta::new(*key, false)
+                } else {
+                    AccountMeta::new_readonly(*key, false)
+                }
+            })
+            .collect::<Vec<_>>();
+        let unique_width = accounts.len();
+        while accounts.len()
+            < GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V2
+                + GENERIC_MARKET_FOUNDING_PHYSICAL_FUNDING_ACCOUNTS_V2
+        {
+            accounts.push(accounts[accounts.len() % unique_width].clone());
+        }
+        let instruction = Instruction {
+            program_id,
+            accounts,
+            data: GENERIC_MARKET_FOUNDING_MAGIC_V2.to_vec(),
+        };
+        let lock_expectation = GenericMarketFoundingLockExpectationV2 {
+            frame_digest: exact_instruction_frame_digest_v1(&instruction),
+        };
+        (
+            payer,
+            PreparedGenericMarketFoundingV2 {
+                instruction,
+                lock_expectation,
+            },
+        )
+    }
+
     #[test]
     fn projected_bootstrap_actual_compiler_census_pins_the_62_64_65_wall() {
         let (payer, base) = projected_bootstrap_census_fixture_v2();
@@ -5519,6 +5889,106 @@ mod tests {
         assert_eq!(refused.complete_keys, 65);
         assert_eq!(refused.message_bytes, 394);
         assert_eq!(refused.packet_bytes, 523);
+    }
+
+    #[test]
+    fn generic_founding_final_compiler_census_pins_the_59_key_shape() {
+        let (payer, prepared) = generic_market_founding_census_fixture_v2();
+        let census = authenticate_generic_market_founding_lock_census_v2(payer, &prepared)
+            .expect("canonical DCLTGMF2 census");
+        assert_eq!(census.complete_keys, 59);
+        assert_eq!(census.required_signatures, 1);
+        assert_eq!(census.static_keys, 3);
+        assert_eq!(census.loaded_writable, 11);
+        assert_eq!(census.loaded_readonly, 45);
+        assert_eq!(
+            hex(&census.key_privilege_digest),
+            "0f48017b92eda4e9e5d6d9e8eb8038710dade54a1914861bb5b796c5dce751bb"
+        );
+        assert_eq!(
+            census,
+            authenticate_generic_market_founding_lock_census_v2(payer, &prepared)
+                .expect("deterministic census")
+        );
+    }
+
+    #[test]
+    fn generic_founding_complete_key_census_enforces_the_64_65_wall() {
+        let (payer, prepared) = generic_market_founding_census_fixture_v2();
+        let admitted = compiled_complete_lock_census_v1(
+            payer,
+            &append_distinct_census_accounts_v1(&prepared.instruction, 5),
+        )
+        .expect("64-key census");
+        let refused = compiled_complete_lock_census_v1(
+            payer,
+            &append_distinct_census_accounts_v1(&prepared.instruction, 6),
+        )
+        .expect("65-key census");
+        assert_eq!(admitted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1);
+        assert!(require_devnet_complete_key_limit_v1(admitted).is_ok());
+        assert_eq!(refused.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
+        assert!(require_devnet_complete_key_limit_v1(refused).is_err());
+    }
+
+    #[test]
+    fn generic_founding_65_key_drift_plans_zero_writes_or_transactions() {
+        let (payer, mut prepared) = generic_market_founding_census_fixture_v2();
+        let width = prepared.instruction.accounts.len();
+        for offset in 0_u8..6 {
+            prepared.instruction.accounts[width - 1 - usize::from(offset)].pubkey =
+                Pubkey::new_from_array([0xa0 + offset; 32]);
+        }
+        prepared.lock_expectation.frame_digest =
+            exact_instruction_frame_digest_v1(&prepared.instruction);
+        let drifted = compiled_complete_lock_census_v1(payer, &prepared.instruction)
+            .expect("same-width 65-key census");
+        assert_eq!(drifted.complete_keys, DEVNET_ACCOUNT_LOCK_LIMIT_V1 + 1);
+
+        let mut planned_writes = Vec::<Pubkey>::new();
+        let mut planned_transactions = Vec::<Instruction>::new();
+        let admission = (|| -> Result<()> {
+            authenticate_generic_market_founding_lock_census_v2(payer, &prepared)?;
+            planned_writes.push(prepared.instruction.accounts[0].pubkey);
+            planned_transactions.push(prepared.instruction.clone());
+            Ok(())
+        })();
+        assert!(admission.is_err());
+        assert!(planned_writes.is_empty());
+        assert!(planned_transactions.is_empty());
+    }
+
+    #[test]
+    fn generic_founding_census_refuses_substitution_duplicate_order_and_privilege_drift() {
+        let (payer, prepared) = generic_market_founding_census_fixture_v2();
+
+        let mut substituted = prepared.clone();
+        substituted.instruction.accounts[0].pubkey = Pubkey::new_from_array([0xe1; 32]);
+        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &substituted).is_err());
+
+        let mut duplicate = prepared.clone();
+        let removed = duplicate.instruction.accounts[55].pubkey;
+        let retained = duplicate.instruction.accounts[54].pubkey;
+        for meta in &mut duplicate.instruction.accounts {
+            if meta.pubkey == removed {
+                meta.pubkey = retained;
+            }
+        }
+        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &duplicate).is_err());
+        duplicate.lock_expectation.frame_digest =
+            exact_instruction_frame_digest_v1(&duplicate.instruction);
+        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &duplicate).is_err());
+
+        let mut reordered = prepared.clone();
+        reordered.instruction.accounts.swap(0, 1);
+        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &reordered).is_err());
+
+        let mut privilege = prepared.clone();
+        privilege.instruction.accounts[11].is_writable = true;
+        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &privilege).is_err());
+        privilege.lock_expectation.frame_digest =
+            exact_instruction_frame_digest_v1(&privilege.instruction);
+        assert!(authenticate_generic_market_founding_lock_census_v2(payer, &privilege).is_err());
     }
 
     #[test]

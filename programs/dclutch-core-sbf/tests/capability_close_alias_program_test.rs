@@ -106,6 +106,10 @@ enum Fault {
     ShiftedAlias,
     PairSubstitution,
     ExtraAlias,
+    DependencyWritable,
+    DependencyReordered,
+    DependencySubstitution,
+    DependencyMutated,
 }
 
 struct Artifacts {
@@ -118,10 +122,13 @@ struct Fixture {
     instruction: Instruction,
     market: Pubkey,
     root: Pubkey,
+    dependency_funding: Pubkey,
     funding: Pubkey,
     rent_credit: Pubkey,
     root_lamports: u64,
     funding_lamports: u64,
+    dependency_funding_data: Vec<u8>,
+    dependency_funding_lamports: u64,
 }
 
 fn artifacts() -> Artifacts {
@@ -478,7 +485,12 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         CompartmentFundingV1::not_applicable(),
     )
     .expect("funding amounts");
-    let entry = CapabilityEntryV1::new(
+    let mut direct_dependencies = [0_u8; MAX_DEPENDENCIES_PER_CAPABILITY];
+    direct_dependencies
+        .get_mut(..3)
+        .expect("Direct dependency prefix")
+        .copy_from_slice(&[0, 1, 2]);
+    let direct_entry = CapabilityEntryV1::new(
         content(ordinary_descriptor.kind().to_bytes()),
         content(release.program_set_id),
         content(config_digest),
@@ -487,13 +499,35 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         content(ordinary_descriptor.derivation_policy().to_bytes()),
         ActivationPolicy::PrepaidLazy,
         u64::MAX,
-        0,
-        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        3,
+        direct_dependencies,
         FundingQuoteV1::new(amounts, None).expect("funding quote"),
     )
-    .expect("manifest entry");
-    let mut manifest = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
-    CapabilityManifestV1::encode_into(&[entry], &mut manifest).expect("manifest");
+    .expect("Direct manifest entry");
+    let dependency_entries = [0x10_u8, 0x11, 0x12].map(|kind| {
+        CapabilityEntryV1::new(
+            content([kind; 32]),
+            content([kind.wrapping_add(0x10); 32]),
+            content([kind.wrapping_add(0x20); 32]),
+            content([kind.wrapping_add(0x30); 32]),
+            content([kind.wrapping_add(0x40); 32]),
+            content([kind.wrapping_add(0x50); 32]),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(amounts, None).expect("dependency funding quote"),
+        )
+        .expect("Resolution dependency entry")
+    });
+    let entries = [
+        dependency_entries[0],
+        dependency_entries[1],
+        dependency_entries[2],
+        direct_entry,
+    ];
+    let mut manifest = vec![0; MANIFEST_HEADER_BYTES + 4 * CAPABILITY_ENTRY_BYTES];
+    CapabilityManifestV1::encode_into(&entries, &mut manifest).expect("manifest");
     let manifest_digest = hash(&manifest).to_bytes();
     let manifest_id = content(manifest_digest);
 
@@ -543,7 +577,7 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     );
 
     let wire_selection = CapabilityExecutionSelectionV1::new(
-        0,
+        3,
         manifest_id,
         content(ordinary_descriptor.kind().to_bytes()),
         content(release.program_set_id),
@@ -633,10 +667,58 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     );
 
     let decoded_manifest = CapabilityManifestV1::decode(&manifest).expect("decoded manifest");
+    let mut dependency_funding_data =
+        vec![0; funding_ledger_bytes_v2(3).expect("dependency funding width")];
+    FundingLedgerV2::initialize(
+        &mut dependency_funding_data,
+        manifest_id,
+        decoded_manifest,
+        0b0111,
+    )
+    .expect("dependency funding initialize");
+    for entry_index in 0_u16..3 {
+        FundingLedgerV2::activate_in_place(
+            &mut dependency_funding_data,
+            manifest_id,
+            decoded_manifest,
+            entry_index,
+            u64::from(entry_index) + 1,
+        )
+        .expect("dependency funding activate");
+    }
+    let dependency_derivation = CapabilityFundingLedgerDerivationV2::new(
+        RESOLUTION_PROGRAM_ID.to_bytes(),
+        market.to_bytes(),
+        GENERATION,
+        manifest_id,
+        FundingLedgerV2::decode(&dependency_funding_data).expect("dependency funding ledger"),
+    )
+    .expect("dependency funding derivation");
+    let dependency_funding = Pubkey::find_program_address(
+        &dependency_derivation.seed_components(),
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
+    let dependency_funding_lamports =
+        Rent::default().minimum_balance(dependency_funding_data.len());
+    let mut observed_dependency_funding_data = dependency_funding_data.clone();
+    if matches!(fault, Fault::DependencyMutated) {
+        *observed_dependency_funding_data
+            .last_mut()
+            .expect("nonempty dependency ledger") ^= 1;
+    }
+    add_account_with_lamports(
+        &mut test,
+        dependency_funding,
+        RESOLUTION_PROGRAM_ID,
+        observed_dependency_funding_data.clone(),
+        dependency_funding_lamports,
+    );
+
     let mut funding_data = vec![0; funding_ledger_bytes_v2(1).expect("funding width")];
-    FundingLedgerV2::initialize(&mut funding_data, manifest_id, decoded_manifest, 1)
+    FundingLedgerV2::initialize(&mut funding_data, manifest_id, decoded_manifest, 0b1000)
         .expect("funding initialize");
-    FundingLedgerV2::activate_in_place(&mut funding_data, manifest_id, decoded_manifest, 0, 1)
+    FundingLedgerV2::activate_in_place(&mut funding_data, manifest_id, decoded_manifest, 3, 4)
         .expect("funding activate");
     let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
         TRADING_PROGRAM_ID.to_bytes(),
@@ -658,7 +740,7 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     );
 
     let family_request = direct_native_close_request_v1();
-    let funding_header = CapabilityFundingHeaderV2::new(1, 1, 1).expect("funding header");
+    let funding_header = CapabilityFundingHeaderV2::new(2, 4, 0b1111).expect("funding header");
     let mut role_request = wire_selection.to_bytes().to_vec();
     role_request.extend_from_slice(&funding_header.encode());
     role_request.extend_from_slice(&family_request);
@@ -707,6 +789,7 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         AccountMeta::new_readonly(realm_staging, false),
         AccountMeta::new_readonly(manifest_raw, false),
         AccountMeta::new_readonly(manifest_staging, false),
+        AccountMeta::new_readonly(dependency_funding, false),
         AccountMeta::new(funding, false),
         AccountMeta::new(root, false),
         AccountMeta::new_readonly(cache, false),
@@ -742,15 +825,19 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
     ];
     match fault {
         Fault::None => {}
-        Fault::MissingAlias => accounts[25] = AccountMeta::new_readonly(hostile, false),
-        Fault::ShiftedAlias => accounts[25] = accounts[8].clone(),
+        Fault::MissingAlias => accounts[26] = AccountMeta::new_readonly(hostile, false),
+        Fault::ShiftedAlias => accounts[26] = accounts[9].clone(),
         Fault::PairSubstitution => {
-            accounts[7] = AccountMeta::new_readonly(hostile, false);
-            accounts[25] = AccountMeta::new_readonly(hostile, false);
+            accounts[8] = AccountMeta::new_readonly(hostile, false);
+            accounts[26] = AccountMeta::new_readonly(hostile, false);
         }
-        Fault::ExtraAlias => accounts[32] = accounts[35].clone(),
+        Fault::ExtraAlias => accounts[33] = accounts[36].clone(),
+        Fault::DependencyWritable => accounts[5].is_writable = true,
+        Fault::DependencyReordered => accounts.swap(5, 6),
+        Fault::DependencySubstitution => accounts[5] = AccountMeta::new_readonly(hostile, false),
+        Fault::DependencyMutated => {}
     }
-    assert_eq!(accounts.len(), 37);
+    assert_eq!(accounts.len(), 38);
     (
         test,
         Fixture {
@@ -761,10 +848,13 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
             },
             market,
             root,
+            dependency_funding,
             funding,
             rent_credit,
             root_lamports,
             funding_lamports,
+            dependency_funding_data: observed_dependency_funding_data,
+            dependency_funding_lamports,
         },
     )
 }
@@ -1043,6 +1133,14 @@ async fn canonical_high_selector_closes_through_real_core_and_trading() {
     let credit_before = account(&mut context, fixture.rent_credit)
         .await
         .expect("RentCredit");
+    let dependency_before = account(&mut context, fixture.dependency_funding)
+        .await
+        .expect("Resolution dependency ledger");
+    assert_eq!(dependency_before.data, fixture.dependency_funding_data);
+    assert_eq!(
+        dependency_before.lamports,
+        fixture.dependency_funding_lamports
+    );
     submit(&mut context, fixture.instruction.clone())
         .await
         .expect("Core-to-Trading native close");
@@ -1056,6 +1154,12 @@ async fn canonical_high_selector_closes_through_real_core_and_trading() {
     let market = account(&mut context, fixture.market).await.expect("Market");
     let state = CoreState::decode(&market.data).expect("Core poststate");
     assert_eq!(state.outstanding_capabilities, 0);
+    assert_eq!(
+        account(&mut context, fixture.dependency_funding)
+            .await
+            .expect("preserved Resolution dependency ledger"),
+        dependency_before
+    );
     let credit = account(&mut context, fixture.rent_credit)
         .await
         .expect("RentCredit poststate");
@@ -1091,6 +1195,37 @@ async fn shifted_substituted_and_extra_aliases_refuse_with_rollback() {
         let after = [
             account(&mut context, fixture.market).await,
             account(&mut context, fixture.root).await,
+            account(&mut context, fixture.funding).await,
+            account(&mut context, fixture.rent_credit).await,
+        ];
+        assert_eq!(after, before);
+    }
+}
+
+#[tokio::test]
+async fn dependency_writable_reordered_substituted_and_mutated_refuse_with_rollback() {
+    for fault in [
+        Fault::DependencyWritable,
+        Fault::DependencyReordered,
+        Fault::DependencySubstitution,
+        Fault::DependencyMutated,
+    ] {
+        let (test, fixture) = build_fixture(fault);
+        let mut context = test.start_with_context().await;
+        let before = [
+            account(&mut context, fixture.market).await,
+            account(&mut context, fixture.root).await,
+            account(&mut context, fixture.dependency_funding).await,
+            account(&mut context, fixture.funding).await,
+            account(&mut context, fixture.rent_credit).await,
+        ];
+        submit(&mut context, fixture.instruction)
+            .await
+            .expect_err("hostile dependency frame refuses");
+        let after = [
+            account(&mut context, fixture.market).await,
+            account(&mut context, fixture.root).await,
+            account(&mut context, fixture.dependency_funding).await,
             account(&mut context, fixture.funding).await,
             account(&mut context, fixture.rent_credit).await,
         ];

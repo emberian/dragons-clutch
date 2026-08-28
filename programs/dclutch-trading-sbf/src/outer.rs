@@ -732,7 +732,11 @@ pub fn process_close(
         .effect_accounts
         .get(CLOSE_RENT_CREDIT..)
         .ok_or(TradingSbfError::Content)?;
-    let runtime = RuntimeFrameV2::new(&framed, close_runtime_accounts)?;
+    let runtime = RuntimeFrameV2::new_close(
+        &framed,
+        close_runtime_accounts,
+        request.selection().entry_index(),
+    )?;
     let mut input_scalars = vec![0_u64; usize::from(profile.scalar_count())];
     let mut input_identities = vec![[0_u8; 32]; usize::from(profile.identity_count())];
     seed_common_registers(
@@ -1276,7 +1280,8 @@ fn authenticate_finalized_record(
 
 struct RuntimeFrameV2<'accounts, 'info> {
     accounts: Vec<&'accounts AccountInfo<'info>>,
-    funding_count: usize,
+    funding: Vec<&'accounts AccountInfo<'info>>,
+    close_selected_funding_index: Option<usize>,
 }
 
 impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
@@ -1297,7 +1302,50 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         accounts.extend(effect_accounts.iter());
         Ok(Self {
             accounts,
-            funding_count: framed.funding().len(),
+            funding: framed.funding().iter().collect(),
+            close_selected_funding_index: None,
+        })
+    }
+
+    /// Project a native close through only root, selected Trading ledger, and
+    /// RentCredit. All physical ledgers remain in `funding` for complete
+    /// dependency authentication and poststate commitments, but a foreign
+    /// dependency can never acquire a descriptor-owned runtime permission.
+    fn new_close(
+        framed: &TradingActivationAccountsV2<'accounts, 'info>,
+        effect_accounts: &'accounts [AccountInfo<'info>],
+        selected_entry_index: u16,
+    ) -> Result<Self, ProgramError> {
+        let selected_bit = 1_u16
+            .checked_shl(u32::from(selected_entry_index))
+            .ok_or(TradingSbfError::Content)?;
+        let mut selected = None;
+        for (index, account) in framed.funding().iter().enumerate() {
+            let data = account
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)?;
+            let ledger = FundingLedgerV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+            if ledger.selected_mask() & selected_bit != 0
+                && selected.replace((index, account)).is_some()
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+        let (selected_index, selected_account) = selected.ok_or(TradingSbfError::Content)?;
+        let count = 2_usize
+            .checked_add(effect_accounts.len())
+            .ok_or(TradingSbfError::Content)?;
+        if count > MAX_RUNTIME_ACCOUNTS_V2 {
+            return Err(TradingSbfError::Content.into());
+        }
+        let mut accounts = Vec::with_capacity(count);
+        accounts.push(framed.child_root());
+        accounts.push(selected_account);
+        accounts.extend(effect_accounts.iter());
+        Ok(Self {
+            accounts,
+            funding: framed.funding().iter().collect(),
+            close_selected_funding_index: Some(selected_index),
         })
     }
 
@@ -1431,26 +1479,23 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             &mut output_request,
         )
         .map_err(|_| TradingSbfError::Content)?;
-        require_activation_local_effects(effect, scalars, identities, self.funding_count)?;
+        require_activation_local_effects(effect, scalars, identities, self.funding.len())?;
 
         let manifest =
             CapabilityManifestV1::decode(manifest_bytes).map_err(|_| TradingSbfError::Content)?;
         let manifest_id = content(request.selection().manifest().to_bytes())?;
-        let mut ledger_masks = Vec::with_capacity(self.funding_count);
-        let mut funding_after = Vec::with_capacity(self.funding_count);
+        let mut ledger_masks = Vec::with_capacity(self.funding.len());
+        let mut funding_after = Vec::with_capacity(self.funding.len());
         let selected_entry_index = request.selection().entry_index();
         let selected_bit = 1_u16
             .checked_shl(u32::from(selected_entry_index))
             .ok_or(TradingSbfError::Content)?;
         let mut selected_present = false;
         let mut selected_funding_index = None;
-        for (index, account) in self
-            .accounts
-            .iter()
-            .enumerate()
-            .skip(1)
-            .take(self.funding_count)
-        {
+        for (physical_index, account) in self.funding.iter().enumerate() {
+            let index = physical_index
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?;
             let pre_bytes = account
                 .try_borrow_data()
                 .map_err(|_| TradingSbfError::Content)?;
@@ -1694,17 +1739,11 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         let selected_bit = 1_u16
             .checked_shl(u32::from(selected_entry_index))
             .ok_or(TradingSbfError::Content)?;
-        let mut ledger_masks = Vec::with_capacity(self.funding_count);
-        let mut funding_after = Vec::with_capacity(self.funding_count);
+        let mut ledger_masks = Vec::with_capacity(self.funding.len());
+        let mut funding_after = Vec::with_capacity(self.funding.len());
         let mut selected_funding_index = None;
         let mut selected_close = None;
-        for (index, account) in self
-            .accounts
-            .iter()
-            .enumerate()
-            .skip(1)
-            .take(self.funding_count)
-        {
+        for (physical_index, account) in self.funding.iter().enumerate() {
             let pre_bytes = account
                 .try_borrow_data()
                 .map_err(|_| TradingSbfError::Content)?;
@@ -1714,12 +1753,17 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
                 .authenticate(manifest_id, manifest)
                 .map_err(|_| TradingSbfError::Content)?;
             let selected_mask = ledger.selected_mask();
-            let writes_data = profile
-                .rule(u16::try_from(index).map_err(|_| TradingSbfError::Content)?)
-                .map_err(|_| TradingSbfError::Content)?
-                .effect_permissions()
-                & EFFECT_PERMISSION_WRITE_DATA
-                != 0;
+            let carries_selected = selected_mask & selected_bit != 0;
+            let writes_data = if carries_selected {
+                profile
+                    .rule(1)
+                    .map_err(|_| TradingSbfError::Content)?
+                    .effect_permissions()
+                    & EFFECT_PERMISSION_WRITE_DATA
+                    != 0
+            } else {
+                false
+            };
             let selected = require_funding_ledger_access(
                 program_id,
                 account.owner,
@@ -1769,7 +1813,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             if selected {
                 require_profile_permissions(
                     profile,
-                    index,
+                    1,
                     EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
                 )?;
                 let mut post_bytes = pre_bytes.to_vec();
@@ -1795,8 +1839,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
                 {
                     return Err(TradingSbfError::Content.into());
                 }
-                selected_funding_index =
-                    Some(index.checked_sub(1).ok_or(TradingSbfError::Content)?);
+                selected_funding_index = Some(physical_index);
                 selected_close = Some(close);
                 // The physical account closes, so no ledger bytes survive even
                 // though the logical tombstone was validated above.
@@ -1812,6 +1855,9 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         )
         .map_err(|_| TradingSbfError::Content)?;
         let selected_funding_index = selected_funding_index.ok_or(TradingSbfError::Content)?;
+        if self.close_selected_funding_index != Some(selected_funding_index) {
+            return Err(TradingSbfError::Content.into());
+        }
         let close = selected_close.ok_or(TradingSbfError::Content)?;
         let exact_root_rent = rent.minimum_balance(
             self.accounts
@@ -1827,13 +1873,14 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             .checked_add(close.ledger_rent_lamports())
             .and_then(|value| value.checked_add(close.ledger_lamport_donation()))
             .ok_or(TradingSbfError::Content)?;
-        let selected_runtime_index = 1_usize
-            .checked_add(selected_funding_index)
-            .ok_or(TradingSbfError::Content)?;
+        let selected_runtime_index = 1_usize;
         if self
             .accounts
             .get(selected_runtime_index)
-            .is_none_or(|account| account.lamports() != ledger_total)
+            .zip(self.funding.get(selected_funding_index))
+            .is_none_or(|(runtime, physical)| {
+                runtime.key != physical.key || runtime.lamports() != ledger_total
+            })
         {
             return Err(TradingSbfError::Content.into());
         }
