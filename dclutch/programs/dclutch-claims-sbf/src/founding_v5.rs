@@ -919,6 +919,24 @@ fn build_candidates_boxed(
     market: MarketViewV2,
     request_digest: [u8; 32],
 ) -> Result<Box<FoundingCandidates>, ProgramError> {
+    let (aggregate, position) = build_liability_candidates(accounts, request, market)?;
+    let admission = build_admission_candidate(program_id, accounts, request)?;
+    if request_digest == [0; 32] {
+        return Err(ClaimsFoundingSbfErrorV5::Receipt.into());
+    }
+    Ok(Box::new(FoundingCandidates {
+        aggregate,
+        position,
+        admission,
+    }))
+}
+
+#[inline(never)]
+fn build_liability_candidates(
+    accounts: FoundingAccounts<'_, '_>,
+    request: &ClaimsFoundingRequestV5,
+    market: MarketViewV2,
+) -> Result<(Vec<u8>, Vec<u8>), ProgramError> {
     let count = usize::try_from(request.claim_count())
         .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
     let quantities = vec![request.quantity(); count];
@@ -947,6 +965,15 @@ fn build_candidates_boxed(
         &quantities,
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    Ok((aggregate, position))
+}
+
+#[inline(never)]
+fn build_admission_candidate(
+    program_id: &Pubkey,
+    accounts: FoundingAccounts<'_, '_>,
+    request: &ClaimsFoundingRequestV5,
+) -> Result<[u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2], ProgramError> {
     let admission_request = ProtocolPositionRequestV2 {
         action: ProtocolPositionActionV2::Admit,
         owner_kind: ProtocolPositionOwnerKindV2::User,
@@ -989,14 +1016,7 @@ fn build_candidates_boxed(
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?
     .to_state_bytes()
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
-    if request_digest == [0; 32] {
-        return Err(ClaimsFoundingSbfErrorV5::Receipt.into());
-    }
-    Ok(Box::new(FoundingCandidates {
-        aggregate,
-        position,
-        admission,
-    }))
+    Ok(admission)
 }
 
 #[inline(never)]

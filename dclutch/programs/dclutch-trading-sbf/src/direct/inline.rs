@@ -178,7 +178,7 @@ pub fn prepare_inline_ordinary_physical_v2(
         return Err(DirectPhysicalError::Width);
     }
 
-    let custody = compile_custody(direct, context, collateral, settlement)?;
+    let custody = compile_custody(&direct, &context, &collateral, &settlement)?;
     encode_inline_claims_request_v2(direct, context, claims_scratch, claims_output)?;
 
     Ok(Box::new(DirectInlinePhysicalPlanV2 {
@@ -442,7 +442,7 @@ fn validate_context(
         return Err(DirectPhysicalError::Binding);
     }
     let custody_program = release.bindings[4].program.to_bytes();
-    let probe = base_custody_request(context, 0, 1)?;
+    let probe = base_custody_request(&context, 0, 1)?;
     let authority = CustodyAuthoritySeedsV1::from_request(probe);
     if derive(custody_program, &authority.as_slices()).0 != context.custody_authority {
         return Err(DirectPhysicalError::Binding);
@@ -503,7 +503,7 @@ fn validate_replay(context: DirectInlinePhysicalContextV2) -> Result<()> {
     {
         return Err(DirectPhysicalError::Binding);
     }
-    let probe = base_custody_request(context, 0, 0)?;
+    let probe = base_custody_request(&context, 0, 0)?;
     let replay_seeds = CustodyReplaySeedsV1::from_request(probe);
     if derive(custody_program, &replay_seeds.as_slices()).0 != context.custody_replay {
         return Err(DirectPhysicalError::Binding);
@@ -550,11 +550,14 @@ fn validate_collateral(
     Ok(())
 }
 
+// Keep the authenticated frame borrowed through the request-builder call chain.
+// These inputs are large fixed-layout values; copying them into this SBF frame
+// and again into `custody_request` can exhaust one SBPF v0 call frame.
 fn compile_custody(
-    direct: InlineOrdinaryInputV2,
-    context: DirectInlinePhysicalContextV2,
-    collateral: DirectInlineCollateralFrameV2,
-    settlement: InlineOrdinarySettlementV2,
+    direct: &InlineOrdinaryInputV2,
+    context: &DirectInlinePhysicalContextV2,
+    collateral: &DirectInlineCollateralFrameV2,
+    settlement: &InlineOrdinarySettlementV2,
 ) -> Result<Box<CustodyCompilationV2>> {
     let mut effects = [None; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2];
     let mut count = 0_usize;
@@ -573,11 +576,11 @@ fn compile_custody(
     for (amount, destination) in [
         (
             settlement.effects.seller_net_collateral_credit,
-            collateral.seller_destination,
+            &collateral.seller_destination,
         ),
         (
             settlement.effects.total_fee_transfer,
-            collateral.fee_destination,
+            &collateral.fee_destination,
         ),
     ] {
         if amount == 0 {
@@ -588,62 +591,33 @@ fn compile_custody(
         } else {
             fee_after
         };
-        source_after = source_after
-            .checked_sub(amount)
+        let target = effects
+            .get_mut(count)
             .ok_or(DirectPhysicalError::Arithmetic)?;
-        delegated_after = delegated_after
-            .checked_sub(amount)
-            .ok_or(DirectPhysicalError::Arithmetic)?;
-        let destination_after = destination_before
-            .checked_add(amount)
-            .ok_or(DirectPhysicalError::Arithmetic)?;
-        let custody = custody_request(
+        let step = compile_custody_effect(
             direct,
             context,
-            collateral.buyer_source,
+            &collateral.buyer_source,
             destination,
             count,
             amount,
-        )?;
-        let terminal = count
-            .checked_add(1)
-            .ok_or(DirectPhysicalError::Arithmetic)?
-            == positive_count;
-        let request = DelegatedCustodyRequestV2 {
-            custody,
-            starts_atomic_debit: count == 0,
-            terminal,
-            delegate_before: context.custody_authority,
-            delegate_after: if terminal {
-                [0; 32]
-            } else {
-                context.custody_authority
-            },
-            total_debit: settlement.effects.buyer_collateral_debit,
-            allowance_before: delegated_after
-                .checked_add(amount)
-                .ok_or(DirectPhysicalError::Arithmetic)?,
-            allowance_after: delegated_after,
-        };
-        request
-            .validate()
-            .map_err(|_| DirectPhysicalError::Custody)?;
-        *effects
-            .get_mut(count)
-            .ok_or(DirectPhysicalError::Arithmetic)? = Some(DirectInlineCustodyEffectV2 {
-            request,
             source_after,
             delegated_after,
-            destination_after,
-        });
+            destination_before,
+            positive_count,
+            settlement.effects.buyer_collateral_debit,
+            target,
+        )?;
+        source_after = step.source_after;
+        delegated_after = step.delegated_after;
         count = count
             .checked_add(1)
             .ok_or(DirectPhysicalError::Arithmetic)?;
         if destination.account == collateral.seller_destination.account {
-            seller_after = destination_after;
+            seller_after = step.destination_after;
         }
         if destination.account == collateral.fee_destination.account {
-            fee_after = destination_after;
+            fee_after = step.destination_after;
         }
     }
     if source_after
@@ -671,6 +645,72 @@ fn compile_custody(
     }))
 }
 
+struct CustodyStepV2 {
+    source_after: u64,
+    delegated_after: u64,
+    destination_after: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn compile_custody_effect(
+    direct: &InlineOrdinaryInputV2,
+    context: &DirectInlinePhysicalContextV2,
+    source: &DirectExternalDebitV2,
+    destination: &DirectExternalCollateralV2,
+    transfer_index: usize,
+    amount: u64,
+    source_before: u64,
+    delegated_before: u64,
+    destination_before: u64,
+    positive_count: usize,
+    total_debit: u64,
+    target: &mut Option<DirectInlineCustodyEffectV2>,
+) -> Result<CustodyStepV2> {
+    let source_after = source_before
+        .checked_sub(amount)
+        .ok_or(DirectPhysicalError::Arithmetic)?;
+    let delegated_after = delegated_before
+        .checked_sub(amount)
+        .ok_or(DirectPhysicalError::Arithmetic)?;
+    let destination_after = destination_before
+        .checked_add(amount)
+        .ok_or(DirectPhysicalError::Arithmetic)?;
+    let custody = custody_request(direct, context, source, destination, transfer_index, amount)?;
+    let terminal = transfer_index
+        .checked_add(1)
+        .ok_or(DirectPhysicalError::Arithmetic)?
+        == positive_count;
+    let request = DelegatedCustodyRequestV2 {
+        custody,
+        starts_atomic_debit: transfer_index == 0,
+        terminal,
+        delegate_before: context.custody_authority,
+        delegate_after: if terminal {
+            [0; 32]
+        } else {
+            context.custody_authority
+        },
+        total_debit,
+        allowance_before: delegated_before,
+        allowance_after: delegated_after,
+    };
+    request
+        .validate()
+        .map_err(|_| DirectPhysicalError::Custody)?;
+    *target = Some(DirectInlineCustodyEffectV2 {
+        request,
+        source_after,
+        delegated_after,
+        destination_after,
+    });
+    Ok(CustodyStepV2 {
+        source_after,
+        delegated_after,
+        destination_after,
+    })
+}
+
 struct CustodyCompilationV2 {
     effects: [Option<DirectInlineCustodyEffectV2>; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2],
     count: u8,
@@ -681,10 +721,10 @@ struct CustodyCompilationV2 {
 }
 
 fn custody_request(
-    direct: InlineOrdinaryInputV2,
-    context: DirectInlinePhysicalContextV2,
-    source: DirectExternalDebitV2,
-    destination: DirectExternalCollateralV2,
+    direct: &InlineOrdinaryInputV2,
+    context: &DirectInlinePhysicalContextV2,
+    source: &DirectExternalDebitV2,
+    destination: &DirectExternalCollateralV2,
     transfer_index: usize,
     amount: u64,
 ) -> Result<CustodyRequestV1> {
@@ -710,7 +750,7 @@ fn custody_request(
 }
 
 fn base_custody_request(
-    context: DirectInlinePhysicalContextV2,
+    context: &DirectInlinePhysicalContextV2,
     transfer_index: usize,
     amount: u64,
 ) -> Result<CustodyRequestV1> {
