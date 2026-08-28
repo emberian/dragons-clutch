@@ -80,6 +80,7 @@
 #   tools/gauntlet/hot-cu/run-hot-cu.sh --seeds 40
 #   tools/gauntlet/hot-cu/run-hot-cu.sh --substrate slot-pinned
 #   tools/gauntlet/hot-cu/run-hot-cu.sh --elf-dir /path/to/deploy   # no build
+#   tools/gauntlet/hot-cu/run-hot-cu.sh --trading-elf /path/to/final.so
 #
 # Outputs land under --work (default /private/tmp/dclutch-hot-cu), never under
 # the shared `target/`: parallel lanes share this working tree, and the gauntlet
@@ -89,6 +90,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WORK="/private/tmp/dclutch-hot-cu"
 ELF_DIR=""
+TRADING_ELF_OVERRIDE=""
 COMMIT=""
 SEEDS=20
 SUBSTRATE="immutable"
@@ -107,6 +109,12 @@ usage: tools/gauntlet/hot-cu/run-hot-cu.sh [options]
                    The digest is reported either way, and per M-61 the digest
                    is what the numbers belong to -- so an --elf-dir from
                    another revision produces a valid, differently-drawn sweep.
+  --trading-elf PATH
+                   replace only dclutch_trading_sbf.so after the base artifact
+                   set is built or supplied. The file must be absolute, regular,
+                   and not a symlink. Its digest is reported explicitly. This is
+                   the bounded handoff for a final Direct ELF; all seven fixture
+                   support ELFs remain byte-identical to the base set.
   --commit REV     build the ELFs from a clean `git archive` of REV instead of
                    from the working tree. Use this whenever the number is going
                    to be quoted at a revision: this is a SHARED checkout and a
@@ -133,6 +141,7 @@ while [ "$#" -gt 0 ]; do
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --elf-dir) ELF_DIR="${2:?--elf-dir needs a value}"; shift 2 ;;
+        --trading-elf) TRADING_ELF_OVERRIDE="${2:?--trading-elf needs a value}"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --seeds) SEEDS="${2:?--seeds needs a value}"; shift 2 ;;
         --substrate) SUBSTRATE="${2:?--substrate needs a value}"; shift 2 ;;
@@ -157,7 +166,18 @@ say() { printf '\n== %s\n' "$*"; }
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 
 command -v cargo >/dev/null 2>&1 || die "cargo not found"
-[ -d "$REPO/.git" ] || die "not a repository: $REPO"
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 \
+    || die "not a repository: $REPO"
+if [ -n "$TRADING_ELF_OVERRIDE" ]; then
+    case "$TRADING_ELF_OVERRIDE" in
+        /*) ;;
+        *) die "--trading-elf must be absolute" ;;
+    esac
+    [ -f "$TRADING_ELF_OVERRIDE" ] \
+        || die "--trading-elf is not a regular file: $TRADING_ELF_OVERRIDE"
+    [ ! -L "$TRADING_ELF_OVERRIDE" ] \
+        || die "--trading-elf must not be a symlink: $TRADING_ELF_OVERRIDE"
+fi
 
 LOGS="$WORK/logs"
 # Per substrate, not shared. Three arms swept into one directory would blend
@@ -284,9 +304,9 @@ if [ -n "$NEEDS_BUILD" ]; then
         # complete command, so an unset variable would abort the run.
         if [ -n "$SBF_TARGET_DIR" ]; then export CARGO_TARGET_DIR="$SBF_TARGET_DIR"; fi
         if [ -n "$WRAP" ]; then
-            "$WRAP" cargo build-sbf --manifest-path "$1" --sbf-out-dir "$ELF_DIR"
+            "$WRAP" cargo build-sbf --manifest-path "$1" --sbf-out-dir "$ELF_DIR" -- --locked --offline
         else
-            cargo build-sbf --manifest-path "$1" --sbf-out-dir "$ELF_DIR"
+            cargo build-sbf --manifest-path "$1" --sbf-out-dir "$ELF_DIR" -- --locked --offline
         fi
     )
 
@@ -335,6 +355,28 @@ programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml"
     if [ -n "$STAMP" ]; then printf '%s\n' "$REVISION" > "$STAMP"; fi
 fi
 
+# Keep the base artifact directory immutable. A Direct lane may finish its
+# Trading link after the other seven fixture ELFs are already checked; stage an
+# overlay and replace exactly one canonical filename. Copy the override to a
+# temporary regular file first so a re-run cannot delete its own input when the
+# caller points back into a prior overlay.
+TRADING_ELF_OVERRIDE_SHA=""
+TRADING_ELF_OVERRIDE_JSON=null
+if [ -n "$TRADING_ELF_OVERRIDE" ]; then
+    TRADING_ELF_OVERRIDE_SHA="$(sha256 "$TRADING_ELF_OVERRIDE")"
+    TRADING_ELF_OVERRIDE_JSON="\"$TRADING_ELF_OVERRIDE_SHA\""
+    override_copy="$(mktemp "$WORK/trading-elf-override.XXXXXX.so")"
+    cp "$TRADING_ELF_OVERRIDE" "$override_copy"
+    overlay="$WORK/elf-with-trading-override"
+    rm -rf "$overlay"
+    mkdir -p "$overlay"
+    cp "$ELF_DIR"/*.so "$overlay/"
+    cp "$override_copy" "$overlay/dclutch_trading_sbf.so"
+    rm -f "$override_copy"
+    ELF_DIR="$overlay"
+    PROVENANCE="$PROVENANCE; Trading ELF supplied via --trading-elf ($TRADING_ELF_OVERRIDE_SHA)"
+fi
+
 TRADING_ELF="$ELF_DIR/dclutch_trading_sbf.so"
 [ -f "$TRADING_ELF" ] || die "no trading ELF at $TRADING_ELF"
 TRADING_SHA="$(sha256 "$TRADING_ELF")"
@@ -355,7 +397,7 @@ for s in $(seq 0 $((SEEDS - 1))); do
     status=0
     ( cd "$REPO" && DCLUTCH_FIXTURE_SEED="$s" SBF_OUT_DIR="$ELF_DIR" \
         DCLUTCH_FIXTURE_SUBSTRATE="$SUBSTRATE" \
-        cargo test \
+        cargo test --locked --offline \
             --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
             --test hot_heap_frame_is_inert -- --nocapture ) \
         > "$log" 2>&1 || status=$?
@@ -414,6 +456,9 @@ else
         "$SEEDS" "$SEEDS" "$pass"
 fi
 printf 'ELF  %s  dclutch_trading_sbf.so\n' "$TRADING_SHA"
+if [ -n "$TRADING_ELF_OVERRIDE_SHA" ]; then
+    printf 'OVRD %s  --trading-elf\n' "$TRADING_ELF_OVERRIDE_SHA"
+fi
 printf 'SRC  %s\n' "$PROVENANCE"
 printf 'SUB  %s  (DCLUTCH_FIXTURE_SUBSTRATE)\n' "$SUBSTRATE"
 # The harness is compiled out of --repo whatever --commit says about the ELFs,
@@ -441,6 +486,7 @@ cat > "$SUMMARY" <<EOF
   "schema": "dclutch-hot-cu-sweep-v2",
   "artifact_provenance": "$PROVENANCE",
   "trading_elf_sha256": "$TRADING_SHA",
+  "trading_elf_override_sha256": $TRADING_ELF_OVERRIDE_JSON,
   "elf_dir": "$ELF_DIR",
   "substrate": "$SUBSTRATE",
   "harness_revision": "$HARNESS_REVISION",
