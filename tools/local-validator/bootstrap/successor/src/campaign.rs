@@ -74,6 +74,7 @@ use dclutch_pyth_svm::devnet_release_v1;
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
 };
+use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Value, json};
 use solana_sdk::{
     pubkey::Pubkey,
@@ -351,6 +352,113 @@ struct GraduationMarketInputV1 {
     disclosed_failure_conflation: String,
 }
 
+#[derive(Clone, Copy)]
+struct ExactMarketJsonValueSeedV1;
+
+impl<'de> DeserializeSeed<'de> for ExactMarketJsonValueSeedV1 {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> core::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ExactMarketJsonValueVisitorV1)
+    }
+}
+
+struct ExactMarketJsonValueVisitorV1;
+
+impl<'de> Visitor<'de> for ExactMarketJsonValueVisitorV1 {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("one market JSON value with no duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> core::result::Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("market JSON number was not finite"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> core::result::Result<Self::Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> core::result::Result<Self::Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_none<E>(self) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_unit<E>(self) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> core::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        ExactMarketJsonValueSeedV1.deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> core::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+        while let Some(value) = sequence.next_element_seed(ExactMarketJsonValueSeedV1)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> core::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = serde_json::Map::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some(key) = map.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
+            let value = map.next_value_seed(ExactMarketJsonValueSeedV1)?;
+            values.insert(key, value);
+        }
+        Ok(Value::Object(values))
+    }
+}
+
+fn parse_exact_market_json_v1(bytes: &[u8]) -> Result<Value> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = ExactMarketJsonValueSeedV1
+        .deserialize(&mut deserializer)
+        .map_err(|error| Error::new(format!("market input JSON: {error}")))?;
+    deserializer
+        .end()
+        .map_err(|error| Error::new(format!("market input JSON trailing bytes: {error}")))?;
+    Ok(value)
+}
+
 /// Decode the campaign's existing bare `MarketRunInput` or the exact envelope
 /// emitted by the already-shipped `graduation-market` command.
 ///
@@ -360,7 +468,11 @@ struct GraduationMarketInputV1 {
 /// unknown fields, and the graduation envelope is authenticated all the way
 /// back into the inner source graph before its market is returned.
 fn load_market_input(bytes: &[u8]) -> Result<crate::model::MarketRunInput> {
-    let value: Value = serde_json::from_slice(bytes)?;
+    // Parse the original bytes with a recursive visitor before any ordinary
+    // `Value` normalization can collapse an earlier object member. This is the
+    // same refusal boundary as the RPC parser but stays local to the campaign
+    // input caller: neither parser makes the other's transport authoritative.
+    let value = parse_exact_market_json_v1(bytes)?;
     let input = if value.get("schema").is_some() {
         let wrapped: GraduationMarketInputV1 = serde_json::from_value(value)?;
         authenticate_graduation_market_input_v1(&wrapped)?;
@@ -1631,6 +1743,50 @@ mod tests {
         let mut market = exact;
         market["market"]["product_id"] = json!("22".repeat(32));
         assert!(load_market_input(&serde_json::to_vec(&market).expect("JSON")).is_err());
+    }
+
+    fn duplicate_field_before_original(json: &str, field: &str, value: &str) -> String {
+        let original = format!("\"{field}\":");
+        assert!(json.contains(&original), "fixture omitted {field}");
+        json.replacen(&original, &format!("\"{field}\":{value},{original}"), 1)
+    }
+
+    fn assert_duplicate_refused(json: &str, field: &str) {
+        let refusal = load_market_input(json.as_bytes())
+            .err()
+            .expect("duplicate object key must refuse");
+        assert!(
+            refusal.0.contains("duplicate JSON object key") && refusal.0.contains(field),
+            "{}",
+            refusal.0
+        );
+    }
+
+    #[test]
+    fn market_loader_recursively_refuses_duplicate_object_keys_before_normalization() {
+        let wrapped = serde_json::to_string(&graduation_market_value()).expect("wrapper JSON");
+        assert_duplicate_refused(
+            &duplicate_field_before_original(&wrapped, "schema", "\"shadow-schema\""),
+            "schema",
+        );
+        assert_duplicate_refused(
+            &duplicate_field_before_original(&wrapped, "start_unix_seconds", "0"),
+            "start_unix_seconds",
+        );
+        assert_duplicate_refused(
+            &duplicate_field_before_original(&wrapped, "generation", "0"),
+            "generation",
+        );
+
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = test_direct_compiler(registry);
+        let bare = crate::market::demo_market_input(registry, direct.compiler())
+            .expect("bare devnet market");
+        let bare = serde_json::to_string(&bare).expect("bare JSON");
+        assert_duplicate_refused(
+            &duplicate_field_before_original(&bare, "generation", "0"),
+            "generation",
+        );
     }
 
     #[test]
