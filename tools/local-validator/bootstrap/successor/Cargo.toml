@@ -19,6 +19,7 @@ dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-market-founding-v1-operator = { path = "../../../../crates/dclutch-market-founding-v1-operator" }
+dclutch-operator = { path = "../../../../crates/dclutch-operator" }
 dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
 dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2-admission = { path = "../../../../crates/dclutch-product-runtime-v2-admission" }
@@ -27,9 +28,13 @@ dclutch-pyth-svm = { path = "../../../../crates/dclutch-pyth-svm", features = ["
 dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
+dclutch-registry-activation-auth-v1 = { path = "../../../../crates/dclutch-registry-activation-auth-v1" }
 dclutch-registry-svm = { path = "../../../../crates/dclutch-registry-svm" }
+dclutch-representation-composition-v3-kernel = { path = "../../../../crates/dclutch-representation-composition-v3-kernel" }
+dclutch-representation-composition-v3-operator = { path = "../../../../crates/dclutch-representation-composition-v3-operator" }
 dclutch-relay-contract = { path = "../../../../crates/dclutch-relay-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
 dclutch-source-contract = { path = "../../../../crates/dclutch-source-contract" }
@@ -40,6 +45,7 @@ serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.149"
 sha2 = "=0.10.9"
 solana-hash = "=4.6.0"
+solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-loader-v3-interface = { version = "=6.1.0", features = ["bincode"] }
 solana-sdk = "=3.0.0"

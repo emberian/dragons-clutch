@@ -20,6 +20,7 @@ mod rpc;
 mod runtime;
 mod seed;
 mod upgrade;
+mod wallet_terminal;
 
 type Result<T> = core::result::Result<T, Error>;
 
@@ -74,6 +75,7 @@ fn run() -> Result<()> {
         Some("devnet-market") => run_devnet_market(arguments.collect()),
         Some("graduation-market") => run_graduation_market(arguments.collect()),
         Some("ledger-census") => run_ledger_census(arguments.collect()),
+        Some("wallet-terminal-payout-plan") => wallet_terminal::run(arguments.collect()),
         Some("run") => run_runtime(arguments.collect()),
         Some("campaign") => run_campaign(arguments.collect()),
         Some("devnet-upgrade-baseline-v1") => upgrade::run_baseline(arguments.collect()),
@@ -867,6 +869,7 @@ fn parse_pubkey(value: Option<String>, label: &str) -> Result<Pubkey> {
 fn usage() {
     usage_supervisor();
     println!("{}", upgrade::usage());
+    println!("{}", wallet_terminal::usage());
     println!(
         "\n  dclutch-local-successor-bootstrap campaign --rpc-url URL [{ack} GENESIS_HASH] --plan \
          ABSOLUTE_JSON [--market ABSOLUTE_JSON] --keypair-ROLE ABSOLUTE_KEYPAIR_JSON... \

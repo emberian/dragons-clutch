@@ -31,7 +31,7 @@ commands:
   buy                              cross a sell intent (--take, or --counter-keypair) and submit
   sell                             cross a buy intent (--take, or --counter-keypair) and submit
   spine                            is this market Direct-tradable now, and which walls stand (--market)
-  redeem                           create the Claims-role Custody replay; state the payout honestly
+  redeem                           admit replay; produce a checked wallet payout manifest
   found                            drive the run-spec founding producer (--spec; --demo to preview)
   walk                             the funded failure walk: commit a passed deadline, collect the bounty
   refusal <code...>                name any custom program error via the band registry
@@ -42,6 +42,8 @@ global flags:
   --keypair <path>       Solana JSON keypair; also $DCLUTCH_KEYPAIR (never a default wallet path)
   --json                 machine-readable output where a command supports it
   --dry-run              build and print, sign and submit nothing
+  --payout-input <json>  exact Rust payout-plan input for redeem
+  --i-mean-devnet <hash> name devnet by its full genesis hash for redeem
 
 program ids come from --session or explicit --core-program/--claims-program/... flags.
 refusal codes: band = code >> 12; codes below 0x1000 are provably not dClutch's. See docs/guides/client-developers.md.`;
@@ -58,6 +60,8 @@ const FLAG_OPTIONS = {
   'keypair-seed': { type: 'string' },
   'session-out': { type: 'string' },
   'bootstrap-bin': { type: 'string' },
+  'payout-input': { type: 'string' },
+  'i-mean-devnet': { type: 'string' },
   'registry-program': { type: 'string' },
   'core-program': { type: 'string' },
   'claims-program': { type: 'string' },
