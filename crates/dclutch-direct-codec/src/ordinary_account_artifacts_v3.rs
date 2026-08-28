@@ -1219,6 +1219,14 @@ mod tests {
         );
         let root = profile.rule(false, 0).expect("root");
         assert_eq!(root.effect_permissions(), EFFECT_PERMISSION_WRITE_DATA);
+        // CoreState V3 added the source-projected principal cap and grew from
+        // 352 to 360 bytes. Coordinate 23 is the semantic join that makes that
+        // clean break part of this content-addressed AccountProfile.
+        assert_eq!(CORE_STATE_BYTES, 360);
+        assert_eq!(
+            profile.rule(false, 23).expect("Core state").data_length(),
+            width(CORE_STATE_BYTES).expect("Core state width")
+        );
         let maker = profile.rule(false, 5).expect("maker");
         assert_eq!(
             maker.effect_permissions(),
@@ -1366,6 +1374,34 @@ mod tests {
         let mut hostile = lengths(256);
         *hostile.get_mut(33).expect("Claims destination") +=
             u32::try_from(CLAIMS_ROW_BYTES).expect("Claims row width");
+        assert_eq!(
+            encode_direct_inline_ordinary_account_profile_v3_atomic(
+                DirectInlineOrdinaryAccountProfileInputV3 {
+                    logical_data_lengths: &hostile,
+                },
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectOrdinaryAccountArtifactErrorV3::Geometry)
+        );
+        assert_eq!(
+            output,
+            [0x5a; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3]
+        );
+    }
+
+    /// The pre-cap CoreState V2 observation must not reproduce or select the
+    /// current Direct artifact. Founding writes only CoreState V3, whose extra
+    /// principal-cap field is authenticated through coordinate 23's exact
+    /// width before any projection or effect can execute.
+    #[test]
+    fn superseded_core_state_v2_width_refuses_atomically() {
+        let mut hostile = lengths(256);
+        *hostile.get_mut(23).expect("Core state coordinate") = 352;
+        // Coordinate 35 is a route alias of the same Core state observation.
+        *hostile.get_mut(35).expect("Core state alias") = 352;
+        let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        let mut output = [0x5a_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
         assert_eq!(
             encode_direct_inline_ordinary_account_profile_v3_atomic(
                 DirectInlineOrdinaryAccountProfileInputV3 {
