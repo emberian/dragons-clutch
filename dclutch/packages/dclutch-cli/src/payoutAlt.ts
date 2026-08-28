@@ -208,7 +208,7 @@ export function parseWalletTerminalPayoutAltPlanV1(
   const payoutInput = exactObject(object.payoutInput, [
     'format', 'market', 'owner', 'recipientOwner', 'recipient', 'collateralMint', 'tokenProgram',
     'quantity', 'claimIndex', 'transferIndex', 'parentContext', 'custodyContext', 'releaseSet',
-    'lookupTable', 'programs', 'records',
+    'terminalCertificate', 'lookupTable', 'programs', 'records',
   ], 'payoutInput');
   if (key(payoutInput.owner, 'payoutInput.owner') !== payer
       || key(payoutInput.recipientOwner, 'payoutInput.recipientOwner') !== payer

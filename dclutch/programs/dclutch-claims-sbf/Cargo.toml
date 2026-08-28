@@ -31,6 +31,7 @@ dclutch-rational-representation-v2-kernel = { path = "../../crates/dclutch-ratio
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-representation-composition-v3-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }

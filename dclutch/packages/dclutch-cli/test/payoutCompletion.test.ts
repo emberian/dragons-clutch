@@ -88,7 +88,6 @@ import {
   restoreReplayOperationJournalV1,
   signPayoutPlanV1,
   signReplayOperationV1,
-  transactionSignatureV1,
   writeUnsignedPayoutOperationJournalV1,
   writeUnsignedReplayOperationJournalV1,
   type PayoutOperationJournalV1,
@@ -97,6 +96,8 @@ import {
 
 const key = (byte: number) => new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
 const digest = (byte: number) => byte.toString(16).padStart(2, '0').repeat(32);
+const addressIdentity = (value: string) => Buffer.from(new PublicKey(value).toBytes()).toString('hex');
+const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
 function inputValue() {
   const owner = key(2);
@@ -105,31 +106,34 @@ function inputValue() {
     market: key(1), owner, recipientOwner: owner, recipient: key(3),
     collateralMint: key(4), tokenProgram: key(5), quantity: '7', claimIndex: 1,
     transferIndex: 0, parentContext: digest(6), custodyContext: digest(7), releaseSet: digest(8),
-    programs: { registry: key(9), core: key(10), claims: key(11), custody: key(12) },
+    terminalCertificate: key(22),
+    programs: { registry: key(9), core: key(10), claims: key(11), custody: key(12), resolution: key(13) },
     records: {
       realm: digest(13), product: digest(14), resultDomain: digest(15), portfolio: digest(16),
       productBasis: digest(17), compositionDescriptor: digest(18), compositionGraph: digest(19),
-      compositionTranslation: digest(20), compositionExposure: digest(21), terminalRecord: digest(22),
+      compositionTranslation: digest(20), compositionExposure: digest(21),
     },
   };
 }
 
 function evidenceValue(planBytes: Uint8Array) {
   return {
-    schema: 'dclutch-local-successor-run-evidence-v2', rpc_url: 'https://api.devnet.solana.com/',
-    ledger: '/tmp/ledger', validator_log: '/tmp/validator.log',
+    schema: 'dclutch-successor-campaign-report-v1', cluster: 'devnet',
+    rpc_url: 'https://api.devnet.solana.com/', mode: 'execute',
     plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
-    core_upgrade_authority_pubkey: key(40), private_key_persisted: false,
-    keypair_derivation: 'random-per-run', keypair_seed_sha256: null,
-    foundingCustodyContext: digest(7), directSelectedManifestEntryIndex: 0,
-    completed: ['founding', 'open'], transactions: [],
-    accounts: {
+    execution: {
+      completed: true, recoveredFinalizedFounding: false, transactions: [],
       market: {
-        address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
-        data_sha256: digest(41), account_sha256: digest(42),
+        completed: ['founding', 'open'], founding_custody_context: digest(7),
+        direct_selected_manifest_entry_index: 0,
+        accounts: {
+          founding_market: {
+            address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
+            data_sha256: digest(41), account_sha256: digest(42),
+          },
+        },
       },
     },
-    remaining_execution_seam: 'none',
   };
 }
 
@@ -138,11 +142,15 @@ function route(): WalletTerminalPayoutRouteV3 {
     'aggregate', 'linkedBasisRaw', 'linkedBasisStaging', 'productRaw', 'productStaging',
     'resultDomainRaw', 'resultDomainStaging', 'portfolioRaw', 'portfolioStaging', 'market',
     'activationCache', 'registryProgram', 'claimsProgram', 'claimsProgramData', 'coreProgram',
-    'coreProgramData', 'position', 'exposureRaw', 'exposureStaging', 'custodyProgram',
-    'terminalCoordinateRaw', 'terminalCoordinateStaging', 'realmRaw', 'realmStaging',
+    'coreProgramData', 'resolutionProgram', 'resolutionProgramData', 'position', 'exposureRaw',
+    'exposureStaging', 'custodyProgram', 'terminalCertificate', 'realmRaw', 'realmStaging',
     'custodyReplay', 'collateralMint', 'hoard', 'recipient', 'custodyAuthority', 'tokenProgram',
   ] as const;
-  const value = Object.fromEntries(names.map((name, offset) => [name, key(30 + offset)]));
+  const value = Object.fromEntries(names.map((name, offset) => [name, key(30 + offset)])) as Record<typeof names[number], string>;
+  const [resolutionProgramData] = PublicKey.findProgramAddressSync([
+    new PublicKey(value.resolutionProgram).toBytes(),
+  ], UPGRADEABLE_LOADER);
+  value.resolutionProgramData = resolutionProgramData.toBase58();
   return value as WalletTerminalPayoutRouteV3;
 }
 
@@ -162,7 +170,7 @@ function preparedFixture() {
   const request = {
     releaseSet: digest(1), market: payoutRoute.market, realm: digest(2), parentContext: digest(3),
     productRecordDigest: digest(4), exposureId: digest(5), exposureDigest: digest(6),
-    terminalRecordDigest: digest(7), owner: signer.publicKey.toBase58(), position: payoutRoute.position,
+    terminalRecordDigest: addressIdentity(payoutRoute.terminalCertificate), owner: signer.publicKey.toBase58(), position: payoutRoute.position,
     recipientOwner: signer.publicKey.toBase58(), recipient: payoutRoute.recipient,
     claimsProgram: payoutRoute.claimsProgram, custodyProgram: payoutRoute.custodyProgram,
     collateralMint: payoutRoute.collateralMint, tokenProgram: payoutRoute.tokenProgram,
@@ -389,7 +397,7 @@ describe('CLI payout completion boundary', () => {
     }))).toThrow(/missing or unknown fields/);
   });
 
-  it('refuses duplicate and trailing campaign evidence before normalization and enforces real text and array bounds', () => {
+  it('authenticates the campaign envelope without duplicating Rust execution schema truth', () => {
     const plan = Buffer.from('{"plan":"exact"}\n');
     const valid = evidenceValue(plan);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify(valid)))).not.toThrow();
@@ -402,22 +410,25 @@ describe('CLI payout completion boundary', () => {
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(`${JSON.stringify(valid)} null`)))
       .toThrow(/trailing data/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid, ledger: `/${'x'.repeat(4_096)}`,
-    })))).toThrow(/4096 bytes/);
+      ...valid, schema: 'dclutch-local-successor-run-evidence-v2',
+    })))).toThrow(/not dclutch-successor-campaign-report-v1/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid, completed: Array.from({ length: 513 }, (_, index) => `stage-${index}`),
-    })))).toThrow(/completed-stage list/);
+      plan_sha256: valid.plan_sha256, foundingCustodyContext: digest(7),
+      directSelectedManifestEntryIndex: 0, accounts: valid.execution.market.accounts,
+    })))).toThrow(/not dclutch-successor-campaign-report-v1/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid, transactions: Array.from({ length: 4_097 }, () => null),
-    })))).toThrow(/4096-row bound/);
+      ...valid, cluster: 'loopback',
+    })))).toThrow(/executed external devnet/);
     expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
-      ...valid,
-      transactions: [{
-        label: 'one', signature: transactionSignatureV1(new Uint8Array(64).fill(1)), slot: 1,
-        transaction_metadata_available: true, fee_lamports: 1, fee_only_balance_change: true,
-        compute_units_consumed: 1, error: null, logs: Array.from({ length: 513 }, () => 'log'),
-      }],
-    })))).toThrow(/inexact finalized evidence/);
+      ...valid, mode: 'preflight (reads only, enforced)',
+    })))).toThrow(/executed external devnet/);
+    expect(() => authenticateCompletedCampaignEvidenceV1(Buffer.from('other plan'), Buffer.from(JSON.stringify(valid))))
+      .toThrow(/exact plan bytes/);
+    // Nested execution is intentionally opaque here. The Rust campaign parser
+    // owns its exact key set before the first RPC request.
+    expect(() => authenticateCompletedCampaignEvidenceV1(plan, Buffer.from(JSON.stringify({
+      ...valid, execution: { thirdSchema: true },
+    })))).not.toThrow();
   });
 
   it('persists exact intent and plan digests before signing, then preserves submitted ambiguity', async () => {
@@ -460,8 +471,17 @@ describe('CLI payout completion boundary', () => {
         .rejects.toThrow(/trailing data/);
 
       const signed = signPayoutPlanV1(plan, signer);
-      const submitted = markPayoutOperationSubmittedV1(path, unsigned, signed.signature);
+      const submitted = markPayoutOperationSubmittedV1(path, unsigned, signed.signature, signed.wireBytes);
       expect(submitted).toMatchObject({ phase: 'submitted', signature: signed.signature });
+      expect(loadPayoutOperationJournalV1(path)).toEqual(submitted);
+      const submittedSource = readFileSync(path, 'utf8');
+      const changedSignedPacket = JSON.parse(submittedSource) as Record<string, unknown>;
+      const hostileWire = Buffer.from(String(changedSignedPacket.signedWireBase64), 'base64');
+      hostileWire[1] ^= 1;
+      changedSignedPacket.signedWireBase64 = hostileWire.toString('base64');
+      writeFileSync(path, JSON.stringify(changedSignedPacket));
+      expect(() => loadPayoutOperationJournalV1(path)).toThrow(/signature|signed transaction/);
+      writeFileSync(path, submittedSource);
       expect(() => archivePayoutOperationJournalV1(path, submitted, 'discarded')).toThrow(/cannot be discarded/);
       expect(loadPayoutOperationJournalV1(path)).toEqual(submitted);
     } finally {
@@ -523,8 +543,17 @@ describe('CLI payout completion boundary', () => {
 
       const restored = restoreReplayOperationJournalV1(unsigned);
       const signed = signReplayOperationV1(restored, fixture.signer);
-      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature);
+      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature, signed.wireBytes);
       expect(submitted.phase).toBe('submitted');
+      expect(loadReplayOperationJournalV1(path)).toEqual(submitted);
+      const submittedSource = readFileSync(path, 'utf8');
+      const changedSignedPacket = JSON.parse(submittedSource) as Record<string, unknown>;
+      const hostileWire = Buffer.from(String(changedSignedPacket.signedWireBase64), 'base64');
+      hostileWire[1] ^= 1;
+      changedSignedPacket.signedWireBase64 = hostileWire.toString('base64');
+      writeFileSync(path, JSON.stringify(changedSignedPacket));
+      expect(() => loadReplayOperationJournalV1(path)).toThrow(/signature|signed transaction/);
+      writeFileSync(path, submittedSource);
       expect(() => archiveReplayOperationJournalV1(path, submitted, 'discarded')).toThrow(/cannot be discarded/);
       expect(loadReplayOperationJournalV1(path)).toEqual(submitted);
     } finally {
@@ -623,7 +652,7 @@ describe('CLI payout completion boundary', () => {
       const unsigned = writeUnsignedReplayOperationJournalV1(path, key(1), fixture.plan, fixture.programs);
       const restored = restoreReplayOperationJournalV1(unsigned);
       const signed = signReplayOperationV1(restored, fixture.signer);
-      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature);
+      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature, signed.wireBytes);
       const addresses = restored.transaction.message.staticAccountKeys.map((address) => address.toBase58());
       const ownerIndex = addresses.indexOf(restored.owner); const replayIndex = addresses.indexOf(restored.replay);
       const pre = addresses.map((_, index) => index === ownerIndex ? '10000' : index === replayIndex ? '0' : '1');
@@ -681,6 +710,7 @@ describe('CLI payout completion boundary', () => {
       clusterGenesis: key(1), market: plan.report.route.market, owner: signer.publicKey.toBase58(),
       operationDigest: digest(1), intentDigest: digest(2), planDigest: digest(3),
       intent: '{}', plan: '{}', phase: 'submitted', signature: signed.signature,
+      signedWireBase64: Buffer.from(signed.wireBytes).toString('base64'),
     }) as PayoutOperationJournalV1;
     const addresses = [
       signer.publicKey.toBase58(),
@@ -714,7 +744,7 @@ describe('CLI payout completion boundary', () => {
     expect(receipt).toEqual(new Uint8Array([44, 55]));
 
     await expect(finalizePayoutOperationV1(client({ ...meta, transactionBytes: plan.wireBytes }), journal, plan, async () => {}))
-      .rejects.toThrow(/packet differs/);
+      .rejects.toThrow(/wire bytes differ/);
     await expect(finalizePayoutOperationV1(client({ ...meta, returnData: null }), journal, plan, async () => {}))
       .rejects.toThrow(/Claims-produced return receipt/);
     await expect(finalizePayoutOperationV1(client({

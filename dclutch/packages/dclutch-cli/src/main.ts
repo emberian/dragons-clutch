@@ -32,7 +32,7 @@ commands:
   sell                             disabled: refuses before context, keys, signing, or RPC access
   spine                            is this market Direct-tradable now, and which walls stand (--market)
   redeem                           resume or finalize one exact wallet payout
-  found                            drive the run-spec founding producer (--spec; --demo to preview)
+  found                            private-validator lifecycle (--spec), or durable permanent-devnet founding + participant admission
   walk                             preview the funded failure walk (--dry-run required; submission disabled)
   refusal <code...>                name any custom program error via the band registry
 
@@ -53,7 +53,11 @@ global flags:
                          crash-safe unsigned/submitted payout operation journal
   --discard-unsigned-payout
                          archive an unsigned payout journal without signing it
-  --i-mean-devnet <hash> name devnet by its full genesis hash for redeem and walk
+  --i-mean-devnet <hash> name devnet by its full genesis hash for found, redeem, and walk
+  --found-operation <json>
+                         exact permanent-devnet market + participant operation
+  --found-journal <json> durable outer journal for that operation
+  --execute              authorize the devnet founding operation after read-only preparation
 
 program ids come from --session or explicit --core-program/--claims-program/... flags.
 refusal codes: band = code >> 12; codes below 0x1000 are provably not dClutch's. See docs/guides/client-developers.md.`;
@@ -66,11 +70,13 @@ const FLAG_OPTIONS = {
   recipient: { type: 'string' },
   json: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
-  demo: { type: 'boolean' },
   spec: { type: 'string' },
   'keypair-seed': { type: 'string' },
   'session-out': { type: 'string' },
   'bootstrap-bin': { type: 'string' },
+  'found-operation': { type: 'string' },
+  'found-journal': { type: 'string' },
+  execute: { type: 'boolean' },
   'payout-input': { type: 'string' },
   'payout-evidence': { type: 'string' },
   'payout-alt-plan': { type: 'string' },

@@ -4,9 +4,11 @@
 //! the protocol 1.4M compute ceiling.  This test owns only transaction assembly
 //! and observations; Registry and Trading remain the executable authorities.
 
+use std::{env, fs, path::PathBuf};
+
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
-    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionEnvelopeV3},
+    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionAckV3, HotExecutionEnvelopeV3},
 };
 use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_ACTION_OFFSET_V1, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1,
@@ -21,7 +23,7 @@ use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
 use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_direct_codec::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
 use dclutch_registry_sbf::RegistryError;
-use dclutch_token_svm::TokenAccount;
+use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, TokenAccount};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
@@ -33,14 +35,14 @@ use solana_program::{
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::TransactionError;
-use solana_sdk_ids::system_program;
+use solana_sdk_ids::{bpf_loader, system_program};
 
 use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, DirectCase, Elves, RefusedExecution,
     Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses,
     direct_case, direct_case_v2, direct_case_v4, direct_registry_instructions, elves,
     fixture_substrate, legacy_registry_hot_instruction, program_test, registry_hot_instruction,
-    start_with_substrate, submit_v0,
+    start_with_substrate, submit_v0, submit_v0_observed,
 };
 
 // --- Named refusals ----------------------------------------------------------
@@ -70,6 +72,28 @@ const TRADING_TRANSITION_REFUSAL_CODE: u32 = TradingSbfError::Transition as u32;
 /// `TradingSbfError::NativeSignature`: instructions-sysvar or native-signature
 /// evidence was absent or not exact.
 const TRADING_NATIVE_SIGNATURE_REFUSAL_CODE: u32 = TradingSbfError::NativeSignature as u32;
+/// `TradingSbfError::Commit`: an invoked child or local poststate differed
+/// from the exact precomputed candidate after all authorized child effects.
+const TRADING_COMMIT_REFUSAL_CODE: u32 = TradingSbfError::Commit as u32;
+
+fn postjoin_hostile_elf(name: &str) -> Vec<u8> {
+    let directory =
+        PathBuf::from(env::var("POSTJOIN_SBF_OUT_DIR").expect("POSTJOIN_SBF_OUT_DIR is required"));
+    fs::read(directory.join(name)).expect("required postjoin hostile ELF")
+}
+
+fn install_postjoin_hostile_token(test: &mut ProgramTest, elf: Vec<u8>) {
+    test.add_account(
+        Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
+        Account {
+            lamports: Rent::default().minimum_balance(elf.len()).max(1),
+            data: elf,
+            owner: bpf_loader::ID,
+            executable: true,
+            rent_epoch: 0,
+        },
+    );
+}
 
 /// The custom program code the refusal carried, so a test can name it.
 fn refusal_code(error: &BanksClientError) -> Option<u32> {
@@ -474,7 +498,8 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
-    let units = submit_v0(
+    let root_before = account(&mut context, direct.chain.root).await;
+    let execution = submit_v0_observed(
         &mut context,
         &instructions,
         addresses,
@@ -483,6 +508,7 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     )
     .await
     .expect("Registry-authenticated Direct Hot execution");
+    let units = execution.compute_units_consumed;
     assert!(units > 0 && units <= COMPUTE_LIMIT);
 
     let root = account(&mut context, direct.chain.root).await;
@@ -510,6 +536,117 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
         after, before,
         "successful Direct Hot left no material state change"
     );
+    let (producer, returned) = execution
+        .return_data
+        .expect("successful Hot execution must return commit-last evidence");
+    assert_eq!(producer, TRADING_PROGRAM_ID, "ACK producer substitution");
+    let ack = HotExecutionAckV3::decode(&returned).expect("canonical Hot ACK");
+    assert_eq!(ack.to_bytes().as_slice(), returned.as_slice());
+    let (envelope, family_request) =
+        HotExecutionEnvelopeV3::split_instruction(&direct.chain.hot_instruction.data)
+            .expect("canonical fixture Hot instruction");
+    assert_eq!(ack.release_set, envelope.release_set());
+    assert_eq!(ack.market, envelope.market());
+    assert_eq!(ack.generation, envelope.generation());
+    assert_eq!(ack.root, direct.chain.root.to_bytes());
+    assert_eq!(ack.request_digest, hash(family_request).to_bytes());
+    assert_eq!(ack.selected_program, direct.chain.descriptor_digest);
+    assert_eq!(ack.root_prestate_digest, hash(&root_before.data).to_bytes());
+    assert_eq!(ack.root_poststate_digest, hash(&root.data).to_bytes());
+}
+
+async fn assert_postjoin_hostile_rolls_back(
+    test: ProgramTest,
+    releases: Releases,
+    direct: DirectCase,
+    required_child: Pubkey,
+    expected_refusal: u32,
+) {
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    let mut test = test;
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    let refusal = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("hostile child poststate unexpectedly committed");
+    assert_refusal(&refusal, expected_refusal);
+    assert!(
+        refusal.invoked(CLAIMS_PROGRAM_ID),
+        "Claims did not commit before the postjoin refusal: {:#?}",
+        refusal.logs
+    );
+    assert!(
+        refusal.invoked(required_child),
+        "the hostile child was not invoked before the postjoin refusal: {:#?}",
+        refusal.logs
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_eq!(
+        after, before,
+        "postjoin refusal failed to roll back every tracked byte and lamport"
+    );
+}
+
+#[tokio::test]
+async fn nonselected_claims_supply_corruption_after_real_child_commit_rolls_back() {
+    let mut artifacts = elves();
+    artifacts.claims = postjoin_hostile_elf("dclutch_postjoin_claims_hostile_sbf.so");
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    assert_postjoin_hostile_rolls_back(
+        test,
+        releases,
+        direct,
+        CLAIMS_PROGRAM_ID,
+        TRADING_TRANSITION_REFUSAL_CODE,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn omitted_token_close_authority_corruption_after_real_custody_commit_rolls_back() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    install_postjoin_hostile_token(
+        &mut test,
+        postjoin_hostile_elf("dclutch_postjoin_token_hostile_sbf.so"),
+    );
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    assert_postjoin_hostile_rolls_back(
+        test,
+        releases,
+        direct,
+        CUSTODY_PROGRAM_ID,
+        TRADING_COMMIT_REFUSAL_CODE,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls_back() {
+    let mut artifacts = elves();
+    artifacts.custody = postjoin_hostile_elf("dclutch_postjoin_custody_hostile_sbf.so");
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    assert_postjoin_hostile_rolls_back(
+        test,
+        releases,
+        direct,
+        CUSTODY_PROGRAM_ID,
+        TRADING_TRANSITION_REFUSAL_CODE,
+    )
+    .await;
 }
 
 /// The journey's SHAPE wall, executed: a four-outcome market trades.

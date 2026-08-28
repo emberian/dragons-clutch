@@ -182,6 +182,58 @@ use solana_program::{
 
 use crate::TradingSbfError;
 
+/// Read current CPI return data into a caller-owned allocation.
+///
+/// The SDK helper always allocates a new `Vec`. Common Hot's last child owns a
+/// wire buffer whose bytes die at the CPI boundary; reusing that exact
+/// allocation avoids a late, unreclaimable bump-heap allocation without
+/// changing the syscall, producer, width, or receipt bytes being verified.
+/// A return wider than the supplied capacity is refused rather than truncated.
+pub(crate) fn get_return_data_into_v1(
+    output: &mut Vec<u8>,
+) -> Result<Option<Pubkey>, ProgramError> {
+    let capacity = output.capacity();
+    if capacity == 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    output.clear();
+    #[cfg(target_os = "solana")]
+    {
+        let mut producer = Pubkey::default();
+        #[allow(deprecated)]
+        let returned = unsafe {
+            solana_program::syscalls::sol_get_return_data(
+                output.as_mut_ptr(),
+                u64::try_from(capacity).map_err(|_| TradingSbfError::Content)?,
+                &mut producer,
+            )
+        };
+        if returned == 0 {
+            return Ok(None);
+        }
+        let returned = usize::try_from(returned).map_err(|_| TradingSbfError::Transition)?;
+        if returned > capacity {
+            return Err(TradingSbfError::Transition.into());
+        }
+        // SAFETY: `sol_get_return_data` initialized exactly `returned` bytes
+        // in this allocation, and the checked branch above proves that range
+        // lies within its capacity.
+        unsafe { output.set_len(returned) };
+        Ok(Some(producer))
+    }
+    #[cfg(not(target_os = "solana"))]
+    {
+        let Some((producer, returned)) = solana_program::program::get_return_data() else {
+            return Ok(None);
+        };
+        if returned.len() > capacity {
+            return Err(TradingSbfError::Transition.into());
+        }
+        output.extend_from_slice(&returned);
+        Ok(Some(producer))
+    }
+}
+
 /// Accounts deserialized into the entrypoint's own stack frame at zero heap
 /// cost.
 ///

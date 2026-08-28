@@ -52,7 +52,7 @@ use dclutch_capability_program_contract::{
         HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionAckV3, HotExecutionEnvelopeV3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
     },
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
@@ -61,7 +61,46 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_capability_seal_contract::{SealedArtifactV1, SealedRoleV1, SealedStaticOwnershipV1};
+use dclutch_claims_svm::frame_spec_v1::{
+    ClaimsFrameRoleV1, SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1, SparseNativeTransferFrameSpecV1,
+};
 use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::{
+    CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
+};
+use dclutch_direct_codec::{
+    direct_finalization_v3::{
+        DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectInlineAccountPrestateV3,
+        DirectInlineAccountPrestatesV3, DirectInlineFinalizationInputV3,
+        DirectInlineFinalizationProgramsV3, DirectInlineFinalizationWorkspaceV3,
+        DirectInlinePoststateCommitmentV3,
+        HOT_CHILD_EXECUTION_DIGEST_DOMAIN_V3 as CHILD_EXECUTION_DIGEST_DOMAIN_V3,
+        HotExecutionAckInputV3, HotExecutionArtifactFactsV3,
+        prepare_direct_inline_finalization_into_v3, project_hot_execution_ack_v3,
+    },
+    execution_v3::{
+        DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
+    },
+    inline_candidate_v2::{
+        DirectExternalCollateralV2, DirectExternalDebitV2, DirectInlineCandidateContextV2,
+        DirectInlineCollateralFrameV2, DirectInlineEffectDispatchV2,
+    },
+    ordinary_v3::{
+        IDENTITY_BUYER_MAKER_ROOT_V3, IDENTITY_BUYER_TOKEN_ACCOUNT_V3,
+        IDENTITY_CUSTODY_AUTHORITY_V3, IDENTITY_FEE_TOKEN_ACCOUNT_V3,
+        IDENTITY_LINKED_BASIS_RECORD_V3, IDENTITY_MARKET_V3, IDENTITY_MINT_V3,
+        IDENTITY_PRODUCT_RECORD_DIGEST_V3, IDENTITY_REALM_V3, IDENTITY_RELEASE_SET_V3,
+        IDENTITY_SELLER_TOKEN_ACCOUNT_V3, IDENTITY_SEMANTIC_BASIS_V3, IDENTITY_TOKEN_PROGRAM_V3,
+        IDENTITY_TRADING_PROGRAM_V3, SCALAR_BUYER_POSITION_REVISION_V3,
+        SCALAR_CLAIMS_MARKET_REVISION_V3, SCALAR_CUSTODY_REVISION_V3, SCALAR_MARKET_GENERATION_V3,
+        SCALAR_SELLER_POSITION_REVISION_V3, SCALAR_SLOT_V3,
+    },
+    successor::{
+        AuthenticatedCompactIntentV2, DIRECT_ROOT_STATE_BYTES_V1, DirectExecutionConfigV1,
+        DirectRootStateV1, InlineExecutionV2, InlineOrdinaryInputV2, InlineParticipantV2,
+        MakerReplayFirstUseV1, MakerReplayObservationV1, MakerReplayRootV1, MakerReplayVacancyV1,
+    },
+};
 use dclutch_effect_kernel::{
     v2::{AccountInput, AccountPermission, FixedRole},
     v3::{ProgramV3 as EffectProgramV3, ProjectionV3, ResolvedEffectV3},
@@ -115,6 +154,7 @@ use dclutch_request_profile_contract::{
     },
     v4::{ProjectionRegistersV4, REQUEST_PROFILE_V4_SCHEMA_RELEASE_ID, RequestProfileV4},
 };
+use dclutch_token_svm::{COption as TokenCOption, TokenAccount};
 use dclutch_transition_vm::v3::{
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterKindV3, RegisterOutput,
     RegisterSpaceV3, RegisterWriteTargetV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3,
@@ -145,8 +185,10 @@ use crate::{
     },
     child_authority_v4::PreflightedCallerBumpV4,
     child_receipt_v3::{
-        ChildReceiptBankV3, ExpectedReceiptProvenanceV4, require_chain_receipt_width_v3,
+        ChildReceiptBankV3, ExpectedReceiptProvenanceV4, receipt_dependency_width_v3,
+        require_chain_receipt_width_v3,
     },
+    claims_composition_v3::claims_child_wire_capacity_v3,
     core_composition_v3::{
         CoreCompositionParentV3, execute_core_route_v3, preflight_core_route_v3,
     },
@@ -262,8 +304,6 @@ const MAX_HOT_REQUEST_BYTES_V3: usize = 8_192;
 const HOT_SELECTED_CONFIG_LOGICAL_ACCOUNT_V3: usize = 1;
 const HOT_LINKED_BASIS_LOGICAL_ACCOUNT_V3: usize = 4;
 
-const EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-execution:v3";
-const CHILD_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-child-execution:v3";
 const CHILD_RECEIPT_CONTEXT_DOMAIN_V4: &[u8] = b"dclutch:hot-child-receipt-context:v4";
 const CHILD_REQUEST_DIGEST_DOMAIN_V4: &[u8] = b"dclutch:hot-child-request:v4";
 
@@ -1891,6 +1931,18 @@ pub fn process_hot_execution_v3(
         record_bumps.config_raw(),
         record_bumps.config_staging(),
     )?;
+    let selected_kind = context.selection().kind().to_bytes();
+    let direct_config = if selected_kind == DIRECT_SUCCESSOR_KIND_ID_V3
+        && selected_action == DirectExecutionActionV3::InlineOrdinary as u32
+    {
+        let config_id = context.selection().config().to_bytes();
+        Some(
+            DirectExecutionConfigV1::decode_selected(config_id, config_id, &config_data)
+                .map_err(|_| TradingSbfError::Content)?,
+        )
+    } else {
+        None
+    };
     // The config record needs no digest of its own here either: the borrow
     // above refuses unless `hash(config_data)` is the selected config identity,
     // so re-hashing it and comparing the result against that identity could
@@ -2075,6 +2127,8 @@ pub fn process_hot_execution_v3(
         product_runtime_v3: &product_runtime_v3,
         selected_program,
         selected_action,
+        selected_kind,
+        direct_config,
         descriptor: &descriptor,
         lifecycle,
         account_profile,
@@ -2114,6 +2168,8 @@ struct AuthenticatedHotExecutionV3<'a, 'accounts, 'info, 'artifact> {
     product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
     selected_program: ContentId,
     selected_action: u32,
+    selected_kind: [u8; 32],
+    direct_config: Option<DirectExecutionConfigV1>,
     descriptor: &'a CapabilityProgramV4,
     lifecycle: StateLifecyclePolicyV5<'artifact>,
     account_profile: AccountProfileV2<'artifact>,
@@ -2147,6 +2203,8 @@ fn execute_authenticated_hot_v3(
         product_runtime_v3,
         selected_program,
         selected_action,
+        selected_kind,
+        direct_config,
         descriptor,
         lifecycle,
         account_profile,
@@ -2707,6 +2765,7 @@ fn execute_authenticated_hot_v3(
         family_request,
         request_digest,
         envelope,
+        root.continuation_child_programs,
     )?;
     hot_cu_checkpoint!("pf-composition");
     let caller_bumps = preflight_child_routes_v3(
@@ -2753,7 +2812,35 @@ fn execute_authenticated_hot_v3(
     } else {
         admitted_execution_digest
     };
+    let direct_crosscheck = prepare_direct_inline_hot_crosscheck_v3(
+        program_id,
+        selected_kind,
+        selected_action,
+        direct_config,
+        family_request,
+        request_digest,
+        tail_count,
+        &transition_output_scalars,
+        &transition_output_identities,
+        &runtime_accounts,
+        &lifecycle_plans,
+        effect,
+        &output_requests,
+        envelope,
+        selected_program,
+        immutable_root_header,
+        root_prestate,
+        strategy_execution_digest,
+        descriptor,
+        strategy,
+        context,
+        market,
+        product_runtime_v3,
+        product_outcome_count,
+        root.continuation_child_programs,
+    )?;
     hot_cu_checkpoint!("children-shadow");
+    let root_commit_plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
     hot_cu_checkpoint!("before-commit");
     let commit_status = commit_prepared_hot_v3(
         &caller_bumps,
@@ -2785,7 +2872,9 @@ fn execute_authenticated_hot_v3(
             market,
             product_runtime_v3,
             product_outcome_count,
+            root_commit_plan,
             child_walk: &child_walk,
+            direct_crosscheck,
         }),
     );
     hot_cu_checkpoint!("after-commit");
@@ -2824,9 +2913,14 @@ struct PreparedHotCommitV3<'a, 'accounts, 'info, 'artifact> {
     market: &'a CoreState,
     product_runtime_v3: &'a AuthenticatedProductRuntimeV3<'accounts, 'info>,
     product_outcome_count: u32,
+    // Allocated while the heap still has room. The commit phase only fills the
+    // exact geometry-sized bitset; it never asks the non-reclaiming allocator
+    // for its first block after child CPI.
+    root_commit_plan: RootCommitPlanV3,
     // What the preflight walk already resolved out of the same Effect, the same
     // registers and the same activation cache; see `ChildWalkResolutionV3`.
     child_walk: &'a ChildWalkResolutionV3<'a, 'info>,
+    direct_crosscheck: Option<HeapBoxV3<DirectInlineHotCrosscheckV3>>,
 }
 
 #[inline(never)]
@@ -2836,9 +2930,9 @@ fn commit_prepared_hot_v3(
     // register bank in it is eight more bytes the run does not have. See
     // `ChildCallerBumpsV4`.
     caller_bumps: &ChildCallerBumpsV4,
-    prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>,
+    mut prepared: Box<PreparedHotCommitV3<'_, '_, '_, '_>>,
 ) -> u64 {
-    match commit_prepared_hot_result_v3(caller_bumps, &prepared) {
+    match commit_prepared_hot_result_v3(caller_bumps, &mut prepared) {
         Ok(()) => 0,
         Err(error) => error.into(),
     }
@@ -2850,7 +2944,7 @@ fn commit_prepared_hot_v3(
 #[inline(never)]
 fn commit_prepared_hot_result_v3(
     caller_bumps: &ChildCallerBumpsV4,
-    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+    prepared: &mut PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<(), ProgramError> {
     apply_lifecycle_creates_v3(
         prepared.program_id,
@@ -2860,6 +2954,7 @@ fn commit_prepared_hot_result_v3(
     hot_heap_mark!("lifecycle-creates");
     let child_execution_digest = execute_prepared_child_routes_v3(caller_bumps, prepared)?;
     hot_heap_mark!("children-executed");
+    verify_direct_inline_post_children_v3(prepared)?;
     commit_prepared_post_children_v3(prepared)?;
     hot_heap_mark!("post-children");
     let root_poststate = {
@@ -2905,7 +3000,7 @@ fn execute_prepared_child_routes_v3(
 
 #[inline(never)]
 fn commit_prepared_post_children_v3(
-    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+    prepared: &mut PreparedHotCommitV3<'_, '_, '_, '_>,
 ) -> Result<(), ProgramError> {
     apply_lifecycle_closes_v3(
         prepared.program_id,
@@ -2917,7 +3012,7 @@ fn commit_prepared_post_children_v3(
         prepared.rent,
     )?;
     hot_cu_checkpoint!("commit-lifecycle-closes");
-    let plan = commit_non_root_effects_v3(
+    commit_non_root_effects_into_v3(
         prepared.effect,
         prepared.tail_count,
         prepared.scalars,
@@ -2926,6 +3021,7 @@ fn commit_prepared_post_children_v3(
         prepared.aliases,
         prepared.output_lamports,
         prepared.rent,
+        &mut prepared.root_commit_plan,
     )?;
     hot_cu_checkpoint!("commit-non-root");
     commit_root_effects_v3(
@@ -2937,9 +3033,76 @@ fn commit_prepared_post_children_v3(
         prepared.aliases,
         prepared.output_lamports,
         prepared.rent,
-        &plan,
+        &prepared.root_commit_plan,
     )?;
     hot_cu_checkpoint!("commit-root");
+    verify_direct_inline_local_poststate_v3(prepared)?;
+    Ok(())
+}
+
+#[inline(never)]
+fn verify_direct_inline_post_children_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    let Some(crosscheck) = prepared.direct_crosscheck.as_ref() else {
+        return Ok(());
+    };
+    let finalization = &crosscheck.finalization;
+    let accounts = crosscheck.poststate_accounts;
+    for (coordinate, role_index) in [
+        (accounts.claims_market, 3_usize),
+        (accounts.seller_position, 4_usize),
+        (accounts.buyer_position, 5_usize),
+        (accounts.custody_replay, 6_usize),
+        (accounts.buyer_token, 7_usize),
+        (accounts.seller_token, 8_usize),
+        (accounts.fee_token, 9_usize),
+    ] {
+        let account = direct_runtime_account_v3(prepared.runtime_accounts, coordinate)?;
+        let expected = finalization
+            .poststate(role_index)
+            .map_err(|_| TradingSbfError::Commit)?;
+        verify_direct_inline_account_poststate_v3(account, expected)?;
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn verify_direct_inline_local_poststate_v3(
+    prepared: &PreparedHotCommitV3<'_, '_, '_, '_>,
+) -> Result<(), ProgramError> {
+    let Some(crosscheck) = prepared.direct_crosscheck.as_ref() else {
+        return Ok(());
+    };
+    let finalization = &crosscheck.finalization;
+    for (coordinate, role_index) in [(0_usize, 0_usize), (5, 1), (8, 2)] {
+        let account = prepared
+            .runtime_accounts
+            .get(coordinate)
+            .ok_or(TradingSbfError::Commit)?;
+        let expected = finalization
+            .poststate(role_index)
+            .map_err(|_| TradingSbfError::Commit)?;
+        verify_direct_inline_account_poststate_v3(account, expected)?;
+    }
+    Ok(())
+}
+
+fn verify_direct_inline_account_poststate_v3(
+    account: &AccountInfo<'_>,
+    expected: &DirectInlinePoststateCommitmentV3,
+) -> Result<(), ProgramError> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Commit)?;
+    if account.key.to_bytes() != expected.address
+        || account.owner.to_bytes() != expected.owner
+        || account.lamports() != expected.lamports
+        || u32::try_from(data.len()).map_err(|_| TradingSbfError::Commit)? != expected.data_len
+        || hash(&data).to_bytes() != expected.data_digest
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
     Ok(())
 }
 
@@ -2949,42 +3112,62 @@ fn finalize_hot_ack_v3(
     child_execution_digest: [u8; 32],
     root_poststate: [u8; 32],
 ) -> Result<(), ProgramError> {
-    let execution_digest = hashv(&[
-        EXECUTION_DIGEST_DOMAIN_V3,
-        &prepared.selected_program.to_bytes(),
-        &prepared.descriptor.account_profile().program().to_bytes(),
-        &prepared.descriptor.request_profile().program().to_bytes(),
-        &prepared.strategy.strategy_program_id().to_bytes(),
-        &prepared.strategy.strategy().transition_program().to_bytes(),
-        &prepared.descriptor.effect().program().to_bytes(),
-        &prepared.descriptor.derivation_policy().to_bytes(),
-        &prepared.context.selection().config().to_bytes(),
-        &prepared.market.identity.product_record.to_bytes(),
-        &prepared
-            .product_runtime_v3
-            .linked_basis_record
-            .content_digest
-            .to_bytes(),
-        &prepared.product_runtime_v3.semantic_basis_id.to_bytes(),
-        &prepared.product_outcome_count.to_le_bytes(),
-        &prepared.request_digest,
-        &prepared.strategy_execution_digest,
-        &child_execution_digest,
-        &root_poststate,
-    ])
-    .to_bytes();
-    let ack = HotExecutionAckV3::new(HotExecutionAckV3 {
-        release_set: prepared.envelope.release_set(),
-        market: prepared.envelope.market(),
-        generation: prepared.envelope.generation(),
-        root: prepared.frame.root.key.to_bytes(),
-        request_digest: prepared.request_digest,
-        selected_program: prepared.selected_program.to_bytes(),
-        root_prestate_digest: prepared.root_prestate,
-        root_poststate_digest: root_poststate,
-        execution_digest,
-    })
+    let ack = project_hot_execution_ack_v3(
+        HotExecutionAckInputV3 {
+            release_set: prepared.envelope.release_set(),
+            market: prepared.envelope.market(),
+            generation: prepared.envelope.generation(),
+            root: prepared.frame.root.key.to_bytes(),
+            request_digest: prepared.request_digest,
+            root_prestate_digest: prepared.root_prestate,
+            artifacts: HotExecutionArtifactFactsV3 {
+                selected_program: prepared.selected_program.to_bytes(),
+                account_profile_program: prepared.descriptor.account_profile().program().to_bytes(),
+                request_profile_program: prepared.descriptor.request_profile().program().to_bytes(),
+                strategy_program: prepared.strategy.strategy_program_id().to_bytes(),
+                strategy_transition_program: prepared
+                    .strategy
+                    .strategy()
+                    .transition_program()
+                    .to_bytes(),
+                effect_program: prepared.descriptor.effect().program().to_bytes(),
+                derivation_policy: prepared.descriptor.derivation_policy().to_bytes(),
+                config: prepared.context.selection().config().to_bytes(),
+                product_record: prepared.market.identity.product_record.to_bytes(),
+                linked_basis_record_digest: prepared
+                    .product_runtime_v3
+                    .linked_basis_record
+                    .content_digest
+                    .to_bytes(),
+                semantic_basis_id: prepared.product_runtime_v3.semantic_basis_id.to_bytes(),
+                outcome_count: prepared.product_outcome_count,
+                strategy_execution_digest: prepared.strategy_execution_digest,
+            },
+        },
+        child_execution_digest,
+        root_poststate,
+    )
     .map_err(|_| TradingSbfError::Commit)?;
+    if let Some(crosscheck) = prepared.direct_crosscheck.as_ref() {
+        let finalization = &crosscheck.finalization;
+        if child_execution_digest
+            != finalization
+                .child_execution_digest()
+                .map_err(|_| TradingSbfError::Commit)?
+            || root_poststate
+                != finalization
+                    .poststate(0)
+                    .map_err(|_| TradingSbfError::Commit)?
+                    .data_digest
+            || ack != finalization.ack().map_err(|_| TradingSbfError::Commit)?
+            || ack.to_bytes()
+                != *finalization
+                    .ack_bytes()
+                    .map_err(|_| TradingSbfError::Commit)?
+        {
+            return Err(TradingSbfError::Commit.into());
+        }
+    }
     set_return_data(&ack.to_bytes());
     Ok(())
 }
@@ -2993,6 +3176,13 @@ struct AuthenticatedRootV3 {
     context: TradingFamilyContextV1,
     immutable_header: [u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
     trading_semantic_release: [u8; 32],
+    continuation_child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedContinuationChildProgramsV3 {
+    claims: [u8; 32],
+    custody: [u8; 32],
 }
 
 #[inline(never)]
@@ -3020,7 +3210,7 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
     market: &CoreState,
     role_authentication: HotRoleAuthenticationV3,
 ) -> Result<Box<AuthenticatedRootV3>, ProgramError> {
-    let trading_receipt = match role_authentication {
+    let (trading_receipt, continuation_child_programs) = match role_authentication {
         HotRoleAuthenticationV3::ReauthenticateRegistry => {
             let core_receipt = reauthenticate_role(
                 *frame,
@@ -3032,16 +3222,20 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
             if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
                 return Err(TradingSbfError::Release.into());
             }
-            reauthenticate_role(
-                *frame,
-                ExecutionRoleV1::Trading,
-                frame.trading_program,
-                frame.trading_programdata,
-                envelope.release_set(),
-            )?
+            (
+                reauthenticate_role(
+                    *frame,
+                    ExecutionRoleV1::Trading,
+                    frame.trading_program,
+                    frame.trading_programdata,
+                    envelope.release_set(),
+                )?,
+                None,
+            )
         }
         HotRoleAuthenticationV3::AuthenticatedContinuation => {
-            authenticate_continuation_root_roles_v3(*frame, envelope)?
+            let (receipt, children) = authenticate_continuation_root_roles_v3(*frame, envelope)?;
+            (receipt, Some(children))
         }
     };
     let trading_semantic_release = trading_receipt.semantic_release_id().to_bytes();
@@ -3073,6 +3267,7 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
         context,
         immutable_header: root_header.to_bytes(),
         trading_semantic_release,
+        continuation_child_programs,
     }))
 }
 
@@ -3080,9 +3275,22 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
 fn authenticate_continuation_root_roles_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
-) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    let (trading_receipt, _, _) = authenticate_accelerator_activation_v4(frame, envelope)?;
-    Ok(trading_receipt)
+) -> Result<
+    (
+        AuthenticatedRoleReceiptV1,
+        AuthenticatedContinuationChildProgramsV3,
+    ),
+    ProgramError,
+> {
+    let (trading_receipt, claims, custody) =
+        authenticate_accelerator_activation_v4(frame, envelope)?;
+    Ok((
+        trading_receipt,
+        AuthenticatedContinuationChildProgramsV3 {
+            claims: claims.to_bytes(),
+            custody: custody.to_bytes(),
+        },
+    ))
 }
 
 #[inline(never)]
@@ -3343,6 +3551,589 @@ struct ProjectedEffectsV3 {
     /// `None` when the Effect declares no child route and the answer has no
     /// consumer. Folded out of the projection's own walk.
     locally_mutated: Option<Vec<bool>>,
+}
+
+/// Direct-only semantic cross-check retained through child execution.
+///
+/// This value has no dispatch authority. The authenticated Effect continues
+/// to own the request bank and child walk; this stores the independently
+/// prepared typed candidate so post-CPI checks can join the same facts.
+struct DirectInlineHotCrosscheckV3 {
+    poststate_accounts: DirectInlinePoststateAccountsV3,
+    finalization: HeapBoxV3<DirectInlineFinalizationWorkspaceV3>,
+}
+
+#[derive(Clone, Copy)]
+struct DirectInlinePoststateAccountsV3 {
+    claims_market: u16,
+    seller_position: u16,
+    buyer_position: u16,
+    buyer_token: u16,
+    seller_token: u16,
+    fee_token: u16,
+    custody_replay: u16,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn prepare_direct_inline_hot_crosscheck_v3(
+    program_id: &Pubkey,
+    selected_kind: [u8; 32],
+    selected_action: u32,
+    direct_config: Option<DirectExecutionConfigV1>,
+    family_request: &[u8],
+    request_digest: [u8; 32],
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    runtime_accounts: &[&AccountInfo<'_>],
+    lifecycle_plans: &[PreparedLifecycleInvocationV3],
+    effect: SelectedEffectProgramV4<'_>,
+    request_bank: &[u8],
+    envelope: HotExecutionEnvelopeV3,
+    selected_program: ContentId,
+    immutable_root_header: &[u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
+    root_prestate: [u8; 32],
+    strategy_execution_digest: [u8; 32],
+    descriptor: &CapabilityProgramV4,
+    strategy: &AuthenticatedExecutionStrategyV2,
+    family_context: &TradingFamilyContextV1,
+    market: &CoreState,
+    product_runtime_v3: &AuthenticatedProductRuntimeV3<'_, '_>,
+    product_outcome_count: u32,
+    child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
+) -> Result<Option<HeapBoxV3<DirectInlineHotCrosscheckV3>>, ProgramError> {
+    if selected_kind != DIRECT_SUCCESSOR_KIND_ID_V3 {
+        return Ok(None);
+    }
+    if selected_action != DirectExecutionActionV3::InlineOrdinary as u32 {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let config = direct_config.ok_or(TradingSbfError::Content)?;
+    let request = match DirectExecutionRequestV3::decode(family_request, tail_count)
+        .map_err(|_| TradingSbfError::Content)?
+    {
+        DirectExecutionRequestV3::InlineOrdinary(request) => request,
+        _ => return Err(TradingSbfError::Content.into()),
+    };
+    let direct = prepare_direct_inline_input_v3(
+        request,
+        config,
+        tail_count,
+        scalars,
+        runtime_accounts,
+        lifecycle_plans,
+    )?;
+    let context =
+        prepare_direct_inline_context_v3(tail_count, scalars, identities, request_digest)?;
+    let (dispatch, poststate_accounts) =
+        direct_inline_effect_dispatch_v3(effect, tail_count, scalars, identities)?;
+    let collateral = prepare_direct_inline_collateral_v3(
+        runtime_accounts,
+        identities,
+        *context,
+        poststate_accounts,
+    )?;
+    let children = child_programs.ok_or(TradingSbfError::Release)?;
+    let root_account = direct_runtime_account_v3(runtime_accounts, 0)?;
+    let ack = HeapBoxV3::new(HotExecutionAckInputV3 {
+        release_set: envelope.release_set(),
+        market: envelope.market(),
+        generation: envelope.generation(),
+        root: root_account.key.to_bytes(),
+        request_digest,
+        root_prestate_digest: root_prestate,
+        artifacts: HotExecutionArtifactFactsV3 {
+            selected_program: selected_program.to_bytes(),
+            account_profile_program: descriptor.account_profile().program().to_bytes(),
+            request_profile_program: descriptor.request_profile().program().to_bytes(),
+            strategy_program: strategy.strategy_program_id().to_bytes(),
+            strategy_transition_program: strategy.strategy().transition_program().to_bytes(),
+            effect_program: descriptor.effect().program().to_bytes(),
+            derivation_policy: descriptor.derivation_policy().to_bytes(),
+            config: family_context.selection().config().to_bytes(),
+            product_record: market.identity.product_record.to_bytes(),
+            linked_basis_record_digest: product_runtime_v3
+                .linked_basis_record
+                .content_digest
+                .to_bytes(),
+            semantic_basis_id: product_runtime_v3.semantic_basis_id.to_bytes(),
+            outcome_count: product_outcome_count,
+            strategy_execution_digest,
+        },
+    })?;
+    let finalization = prepare_direct_inline_account_finalization_v3(
+        program_id,
+        runtime_accounts,
+        poststate_accounts,
+        &direct,
+        &context,
+        &collateral,
+        dispatch,
+        request_bank,
+        family_request,
+        children,
+        immutable_root_header,
+        market.identity.product_id.to_bytes(),
+        &ack,
+    )?;
+    Ok(Some(HeapBoxV3::new(DirectInlineHotCrosscheckV3 {
+        poststate_accounts,
+        finalization,
+    })?))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn prepare_direct_inline_account_finalization_v3(
+    program_id: &Pubkey,
+    runtime_accounts: &[&AccountInfo<'_>],
+    poststate_accounts: DirectInlinePoststateAccountsV3,
+    direct: &InlineOrdinaryInputV2,
+    context: &DirectInlineCandidateContextV2,
+    collateral: &DirectInlineCollateralFrameV2,
+    dispatch: DirectInlineEffectDispatchV2,
+    request_bank: &[u8],
+    family_request: &[u8],
+    children: AuthenticatedContinuationChildProgramsV3,
+    immutable_root_header: &[u8; CAPABILITY_ROOT_HEADER_BYTES_V1],
+    product_id: [u8; 32],
+    ack: &HotExecutionAckInputV3,
+) -> Result<HeapBoxV3<DirectInlineFinalizationWorkspaceV3>, ProgramError> {
+    let root_account = direct_runtime_account_v3(runtime_accounts, 0)?;
+    let seller_maker = direct_runtime_account_v3(runtime_accounts, 5)?;
+    let buyer_maker = direct_runtime_account_v3(runtime_accounts, 8)?;
+    let claims_market =
+        direct_runtime_account_v3(runtime_accounts, poststate_accounts.claims_market)?;
+    let seller_position =
+        direct_runtime_account_v3(runtime_accounts, poststate_accounts.seller_position)?;
+    let buyer_position =
+        direct_runtime_account_v3(runtime_accounts, poststate_accounts.buyer_position)?;
+    let custody_replay =
+        direct_runtime_account_v3(runtime_accounts, poststate_accounts.custody_replay)?;
+    let buyer_token = direct_runtime_account_v3(runtime_accounts, poststate_accounts.buyer_token)?;
+    let seller_token =
+        direct_runtime_account_v3(runtime_accounts, poststate_accounts.seller_token)?;
+    let fee_token = direct_runtime_account_v3(runtime_accounts, poststate_accounts.fee_token)?;
+    let mut account_data = Vec::new();
+    account_data
+        .try_reserve_exact(DIRECT_INLINE_POSTSTATE_COUNT_V3)
+        .map_err(|_| TradingSbfError::Content)?;
+    for account in [
+        root_account,
+        seller_maker,
+        buyer_maker,
+        claims_market,
+        seller_position,
+        buyer_position,
+        custody_replay,
+        buyer_token,
+        seller_token,
+        fee_token,
+    ] {
+        account_data.push(
+            account
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)?,
+        );
+    }
+    let root_data = account_data.first().ok_or(TradingSbfError::Content)?;
+    if root_data.get(..CAPABILITY_ROOT_HEADER_BYTES_V1) != Some(immutable_root_header.as_slice()) {
+        return Err(TradingSbfError::Content.into());
+    }
+    let seller_maker_data = account_data.get(1).ok_or(TradingSbfError::Content)?;
+    let buyer_maker_data = account_data.get(2).ok_or(TradingSbfError::Content)?;
+    let claims_market_data = account_data.get(3).ok_or(TradingSbfError::Content)?;
+    let seller_position_data = account_data.get(4).ok_or(TradingSbfError::Content)?;
+    let buyer_position_data = account_data.get(5).ok_or(TradingSbfError::Content)?;
+    let custody_replay_data = account_data.get(6).ok_or(TradingSbfError::Content)?;
+    let buyer_token_data = account_data.get(7).ok_or(TradingSbfError::Content)?;
+    let seller_token_data = account_data.get(8).ok_or(TradingSbfError::Content)?;
+    let fee_token_data = account_data.get(9).ok_or(TradingSbfError::Content)?;
+    let account_prestates = HeapBoxV3::new(DirectInlineAccountPrestatesV3 {
+        root: direct_account_prestate_v3(root_account, root_data),
+        seller_maker_replay: direct_account_prestate_v3(seller_maker, seller_maker_data),
+        buyer_maker_replay: direct_account_prestate_v3(buyer_maker, buyer_maker_data),
+        claims_market: direct_account_prestate_v3(claims_market, claims_market_data),
+        seller_position: direct_account_prestate_v3(seller_position, seller_position_data),
+        buyer_position: direct_account_prestate_v3(buyer_position, buyer_position_data),
+        custody_replay: direct_account_prestate_v3(custody_replay, custody_replay_data),
+        buyer_token: direct_account_prestate_v3(buyer_token, buyer_token_data),
+        seller_token: direct_account_prestate_v3(seller_token, seller_token_data),
+        fee_token: direct_account_prestate_v3(fee_token, fee_token_data),
+    })?;
+    let finalization_input = DirectInlineFinalizationInputV3 {
+        direct,
+        context,
+        product_id,
+        collateral,
+        request_bank,
+        dispatch,
+        family_request,
+        accounts: &account_prestates,
+        programs: DirectInlineFinalizationProgramsV3 {
+            trading: program_id.to_bytes(),
+            claims: children.claims,
+            custody: children.custody,
+            token: context.token_program,
+        },
+        ack,
+    };
+    let mut finalization = HeapBoxV3::new(DirectInlineFinalizationWorkspaceV3::vacant())?;
+    prepare_direct_inline_finalization_into_v3(&finalization_input, &mut finalization)
+        .map_err(|_| TradingSbfError::Transition)?;
+    Ok(finalization)
+}
+
+fn direct_account_prestate_v3<'a>(
+    account: &AccountInfo<'_>,
+    data: &'a [u8],
+) -> DirectInlineAccountPrestateV3<'a> {
+    DirectInlineAccountPrestateV3 {
+        address: account.key.to_bytes(),
+        owner: account.owner.to_bytes(),
+        lamports: account.lamports(),
+        data,
+    }
+}
+
+fn prepare_direct_inline_input_v3(
+    request: dclutch_direct_codec::execution_v3::DirectInlineOrdinaryRequestV3,
+    config: DirectExecutionConfigV1,
+    tail_count: u32,
+    scalars: &[u64],
+    runtime_accounts: &[&AccountInfo<'_>],
+    lifecycle_plans: &[PreparedLifecycleInvocationV3],
+) -> Result<HeapBoxV3<InlineOrdinaryInputV2>, ProgramError> {
+    let root_account = runtime_accounts.first().ok_or(TradingSbfError::Content)?;
+    let root_data = root_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let root_tail = root_data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(TradingSbfError::Content)?;
+    if root_tail.len() != DIRECT_ROOT_STATE_BYTES_V1 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let root = DirectRootStateV1::decode(root_tail).map_err(|_| TradingSbfError::Content)?;
+    drop(root_data);
+    let seller =
+        direct_inline_participant_v3(request.seller, 5, runtime_accounts, lifecycle_plans)?;
+    let buyer = direct_inline_participant_v3(request.buyer, 8, runtime_accounts, lifecycle_plans)?;
+    HeapBoxV3::new(InlineOrdinaryInputV2 {
+        root,
+        seller,
+        buyer,
+        execution: InlineExecutionV2 {
+            config,
+            outcome_count: tail_count,
+            slot: direct_scalar_v3(scalars, SCALAR_SLOT_V3)?,
+            fill: request.fill,
+            execution_price: request.execution_price,
+        },
+    })
+}
+
+fn prepare_direct_inline_context_v3(
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    request_digest: [u8; 32],
+) -> Result<HeapBoxV3<DirectInlineCandidateContextV2>, ProgramError> {
+    HeapBoxV3::new(DirectInlineCandidateContextV2 {
+        release_set: direct_identity_v3(identities, IDENTITY_RELEASE_SET_V3)?,
+        market: direct_identity_v3(identities, IDENTITY_MARKET_V3)?,
+        generation: direct_scalar_v3(scalars, SCALAR_MARKET_GENERATION_V3)?,
+        outcome_count: tail_count,
+        product_record_digest: direct_identity_v3(identities, IDENTITY_PRODUCT_RECORD_DIGEST_V3)?,
+        semantic_basis_id: direct_identity_v3(identities, IDENTITY_SEMANTIC_BASIS_V3)?,
+        linked_basis_record_digest: direct_identity_v3(
+            identities,
+            IDENTITY_LINKED_BASIS_RECORD_V3,
+        )?,
+        trading_program: direct_identity_v3(identities, IDENTITY_TRADING_PROGRAM_V3)?,
+        realm: direct_identity_v3(identities, IDENTITY_REALM_V3)?,
+        mint: direct_identity_v3(identities, IDENTITY_MINT_V3)?,
+        token_program: direct_identity_v3(identities, IDENTITY_TOKEN_PROGRAM_V3)?,
+        buyer_maker_root: direct_identity_v3(identities, IDENTITY_BUYER_MAKER_ROOT_V3)?,
+        custody_authority: direct_identity_v3(identities, IDENTITY_CUSTODY_AUTHORITY_V3)?,
+        parent_request_digest: request_digest,
+        claims_market_revision: direct_scalar_v3(scalars, SCALAR_CLAIMS_MARKET_REVISION_V3)?,
+        seller_position_revision: direct_scalar_v3(scalars, SCALAR_SELLER_POSITION_REVISION_V3)?,
+        buyer_position_revision: direct_scalar_v3(scalars, SCALAR_BUYER_POSITION_REVISION_V3)?,
+        custody_revision: direct_scalar_v3(scalars, SCALAR_CUSTODY_REVISION_V3)?,
+    })
+}
+
+fn direct_scalar_v3(scalars: &[u64], index: usize) -> Result<u64, ProgramError> {
+    scalars
+        .get(index)
+        .copied()
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn direct_identity_v3(identities: &[[u8; 32]], index: usize) -> Result<[u8; 32], ProgramError> {
+    identities
+        .get(index)
+        .copied()
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn direct_inline_participant_v3(
+    request: dclutch_direct_codec::execution_v3::DirectSignedParticipantV3,
+    logical_coordinate: usize,
+    runtime_accounts: &[&AccountInfo<'_>],
+    lifecycle_plans: &[PreparedLifecycleInvocationV3],
+) -> Result<InlineParticipantV2, ProgramError> {
+    let account = runtime_accounts
+        .get(logical_coordinate)
+        .ok_or(TradingSbfError::Content)?;
+    let lifecycle = lifecycle_plans
+        .iter()
+        .find(|plan| plan.state == logical_coordinate)
+        .ok_or(TradingSbfError::Content)?;
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let (maker_replay, first_use) = if data.is_empty() {
+        let StateLifecyclePlanV3::Create(plan) = lifecycle.plan else {
+            return Err(TradingSbfError::Content.into());
+        };
+        (
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
+                plan.bump,
+                account.lamports(),
+            )),
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: plan.beneficiary,
+                rent_principal: plan.historical_rent_principal,
+            }),
+        )
+    } else {
+        if !matches!(lifecycle.plan, StateLifecyclePlanV3::Authenticate(_)) {
+            return Err(TradingSbfError::Content.into());
+        }
+        (
+            MakerReplayObservationV1::Existing(
+                MakerReplayRootV1::decode(&data).map_err(|_| TradingSbfError::Content)?,
+            ),
+            None,
+        )
+    };
+    let authenticated =
+        AuthenticatedCompactIntentV2::from_adjacent_ed25519(request.maker, request.intent)
+            .map_err(|_| TradingSbfError::NativeSignature)?;
+    Ok(InlineParticipantV2 {
+        authenticated,
+        maker_replay,
+        first_use,
+    })
+}
+
+fn prepare_direct_inline_collateral_v3(
+    runtime_accounts: &[&AccountInfo<'_>],
+    identities: &[[u8; 32]],
+    context: DirectInlineCandidateContextV2,
+    accounts: DirectInlinePoststateAccountsV3,
+) -> Result<HeapBoxV3<DirectInlineCollateralFrameV2>, ProgramError> {
+    let buyer_account = direct_runtime_account_v3(runtime_accounts, accounts.buyer_token)?;
+    let seller_account = direct_runtime_account_v3(runtime_accounts, accounts.seller_token)?;
+    let fee_account = direct_runtime_account_v3(runtime_accounts, accounts.fee_token)?;
+    let token_program = Pubkey::new_from_array(context.token_program);
+    if buyer_account.owner != &token_program
+        || seller_account.owner != &token_program
+        || fee_account.owner != &token_program
+        || buyer_account.key.to_bytes()
+            != direct_identity_v3(identities, IDENTITY_BUYER_TOKEN_ACCOUNT_V3)?
+        || seller_account.key.to_bytes()
+            != direct_identity_v3(identities, IDENTITY_SELLER_TOKEN_ACCOUNT_V3)?
+        || fee_account.key.to_bytes()
+            != direct_identity_v3(identities, IDENTITY_FEE_TOKEN_ACCOUNT_V3)?
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let buyer = direct_token_account_v3(buyer_account)?;
+    let seller = direct_token_account_v3(seller_account)?;
+    let fee = direct_token_account_v3(fee_account)?;
+    if buyer.mint != context.mint || seller.mint != context.mint || fee.mint != context.mint {
+        return Err(TradingSbfError::Content.into());
+    }
+    let delegate = match buyer.delegate {
+        TokenCOption::Some(delegate) => delegate,
+        TokenCOption::None => return Err(TradingSbfError::Content.into()),
+    };
+    HeapBoxV3::new(DirectInlineCollateralFrameV2 {
+        buyer_source: DirectExternalDebitV2 {
+            account: buyer_account.key.to_bytes(),
+            owner: buyer.owner,
+            delegate,
+            delegated_amount: buyer.delegated_amount,
+            balance: buyer.amount,
+        },
+        seller_destination: DirectExternalCollateralV2 {
+            account: seller_account.key.to_bytes(),
+            owner: seller.owner,
+            balance: seller.amount,
+        },
+        fee_destination: DirectExternalCollateralV2 {
+            account: fee_account.key.to_bytes(),
+            owner: fee.owner,
+            balance: fee.amount,
+        },
+    })
+}
+
+fn direct_token_account_v3(account: &AccountInfo<'_>) -> Result<TokenAccount, ProgramError> {
+    let data = account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    TokenAccount::parse(&data).map_err(|_| TradingSbfError::Content.into())
+}
+
+fn direct_claims_local_v3(role: ClaimsFrameRoleV1) -> Result<u16, ProgramError> {
+    let spec = SparseNativeTransferFrameSpecV1;
+    (0..SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1)
+        .find(|index| {
+            spec.account(*index)
+                .is_ok_and(|account| account.role() == role)
+        })
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn direct_custody_local_v3(role: CustodyFrameRoleV1) -> Result<u16, ProgramError> {
+    let spec = CustodyFrameSpecV1::new(OperationV1::Transfer);
+    (0..TRANSFER_ACCOUNT_COUNT_V1)
+        .find(|index| {
+            spec.account(*index)
+                .is_ok_and(|account| account.role() == role)
+        })
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn direct_fixed_coordinate_v3(start: u16, local: u16) -> Result<u16, ProgramError> {
+    start
+        .checked_add(local)
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn direct_runtime_account_v3<'a, 'info>(
+    runtime_accounts: &'a [&'a AccountInfo<'info>],
+    coordinate: u16,
+) -> Result<&'a AccountInfo<'info>, ProgramError> {
+    runtime_accounts
+        .get(usize::from(coordinate))
+        .copied()
+        .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+fn direct_inline_effect_dispatch_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Result<
+    (
+        DirectInlineEffectDispatchV2,
+        DirectInlinePoststateAccountsV3,
+    ),
+    ProgramError,
+> {
+    if effect.route_count() != 5 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let claims = effect
+        .base()
+        .route(0)
+        .map_err(|_| TradingSbfError::Content)?;
+    if claims.role() != FixedRole::Claims
+        || claims.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
+        || claims.fixed_account_count() != SPARSE_NATIVE_TRANSFER_ACCOUNT_COUNT_V1
+        || effect
+            .invocation_count(0, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)?
+            != 1
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let mut custody_slots = [0_u8; 2];
+    let mut custody_count = 0_usize;
+    let mut child_dispatch_writable = [false; 4];
+    let mut custody_start = None;
+    let mut fee_start = None;
+    for slot in 0..4_usize {
+        let route_index = u16::try_from(slot + 1).map_err(|_| TradingSbfError::Content)?;
+        let route = effect
+            .base()
+            .route(route_index)
+            .map_err(|_| TradingSbfError::Content)?;
+        let count = effect
+            .invocation_count(route_index, tail_count, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)?;
+        if route.role() != FixedRole::Custody
+            || route.kind() != dclutch_effect_kernel::v3::RouteKindV3::Once
+            || route.fixed_account_count() != TRANSFER_ACCOUNT_COUNT_V1
+            || count > 1
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        if slot == 0 {
+            custody_start = Some(route.fixed_account_start());
+        }
+        if slot == 2 {
+            fee_start = Some(route.fixed_account_start());
+        }
+        if count == 1 {
+            *custody_slots
+                .get_mut(custody_count)
+                .ok_or(TradingSbfError::Content)? =
+                u8::try_from(slot).map_err(|_| TradingSbfError::Content)?;
+            *child_dispatch_writable
+                .get_mut(slot)
+                .ok_or(TradingSbfError::Content)? = true;
+            custody_count = custody_count
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?;
+        }
+    }
+    let custody_start = custody_start.ok_or(TradingSbfError::Content)?;
+    let fee_start = fee_start.ok_or(TradingSbfError::Content)?;
+    Ok((
+        DirectInlineEffectDispatchV2 {
+            custody_slots,
+            custody_count: u8::try_from(custody_count).map_err(|_| TradingSbfError::Content)?,
+            child_dispatch_writable,
+        },
+        DirectInlinePoststateAccountsV3 {
+            claims_market: direct_fixed_coordinate_v3(
+                claims.fixed_account_start(),
+                direct_claims_local_v3(ClaimsFrameRoleV1::ClaimsMarket)?,
+            )?,
+            seller_position: direct_fixed_coordinate_v3(
+                claims.fixed_account_start(),
+                direct_claims_local_v3(ClaimsFrameRoleV1::SparseSourcePosition)?,
+            )?,
+            buyer_position: direct_fixed_coordinate_v3(
+                claims.fixed_account_start(),
+                direct_claims_local_v3(ClaimsFrameRoleV1::SparseDestinationPosition)?,
+            )?,
+            buyer_token: direct_fixed_coordinate_v3(
+                custody_start,
+                direct_custody_local_v3(CustodyFrameRoleV1::TransferSource)?,
+            )?,
+            seller_token: direct_fixed_coordinate_v3(
+                custody_start,
+                direct_custody_local_v3(CustodyFrameRoleV1::TransferDestination)?,
+            )?,
+            fee_token: direct_fixed_coordinate_v3(
+                fee_start,
+                direct_custody_local_v3(CustodyFrameRoleV1::TransferDestination)?,
+            )?,
+            custody_replay: direct_fixed_coordinate_v3(
+                custody_start,
+                direct_custody_local_v3(CustodyFrameRoleV1::Replay)?,
+            )?,
+        },
+    ))
 }
 
 /// One exactly-sized projection bank, refused rather than aborted when the heap
@@ -4437,9 +5228,24 @@ impl<'info> ChildInvocationBuffersV3<'info> {
             accounts: Vec::new(),
             metas: Vec::new(),
             data: Vec::new(),
-            producer: Pubkey::new_from_array([0; 32]),
+            // A nonzero internal sentinel means the default capture allocates
+            // exactly as the SDK helper does. The walk replaces it with zero
+            // only for its last child, whose dead wire may be reused.
+            producer: Pubkey::new_from_array([1; 32]),
             returned: Vec::new(),
         }
+    }
+
+    /// Buy the exact widest authenticated child wire once, before any child
+    /// invocation can make a smaller permanent allocation on the SBF bump
+    /// heap.
+    pub fn reserve_wire_exact(&mut self, capacity: usize) -> Result<(), ProgramError> {
+        if !self.data.is_empty() {
+            return Err(TradingSbfError::Content.into());
+        }
+        self.data
+            .try_reserve_exact(capacity)
+            .map_err(|_| TradingSbfError::Content.into())
     }
 
     /// Replace the child wire with `request`, reusing the buffer's capacity.
@@ -4515,6 +5321,16 @@ impl<'info> ChildInvocationBuffersV3<'info> {
     /// Read the return-data syscall ONCE for the invocation just made.
     #[inline(never)]
     pub fn capture_return(&mut self) -> Result<(), ProgramError> {
+        if self.producer == Pubkey::default() {
+            if !self.returned.is_empty() {
+                return Err(TradingSbfError::Content.into());
+            }
+            let producer = crate::entrypoint_adapter::get_return_data_into_v1(&mut self.data)?
+                .ok_or(TradingSbfError::Transition)?;
+            core::mem::swap(&mut self.data, &mut self.returned);
+            self.producer = producer;
+            return Ok(());
+        }
         let (producer, returned) = get_return_data().ok_or(TradingSbfError::Transition)?;
         self.producer = producer;
         self.returned = returned;
@@ -6287,6 +7103,13 @@ impl<T> core::ops::Deref for HeapBoxV3<T> {
     }
 }
 
+impl<T> core::ops::DerefMut for HeapBoxV3<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        let [value] = &mut *self.0;
+        value
+    }
+}
+
 #[cfg(any(
     feature = "families",
     feature = "series-family",
@@ -6394,6 +7217,11 @@ struct ChildCallerBumpsV4 {
     /// Set once the walk produced more entries than fit. Both walks then agree
     /// to derive from the boundary on, so the cursor stays honest.
     overflowed: bool,
+    /// Widest exact child instruction wire authenticated during the same
+    /// mutation-free preflight walk.
+    max_wire_bytes: usize,
+    /// Exact number of child invocations authenticated by preflight.
+    total_invocations: usize,
 }
 
 impl Default for ChildCallerBumpsV4 {
@@ -6402,11 +7230,25 @@ impl Default for ChildCallerBumpsV4 {
             bumps: [0; INLINE_CHILD_CALLER_BUMPS_V4],
             len: 0,
             overflowed: false,
+            max_wire_bytes: 0,
+            total_invocations: 0,
         }
     }
 }
 
 impl ChildCallerBumpsV4 {
+    fn record_wire_bytes(&mut self, bytes: usize) {
+        self.max_wire_bytes = self.max_wire_bytes.max(bytes);
+    }
+
+    fn record_invocations(&mut self, count: u32) -> Result<(), ProgramError> {
+        self.total_invocations = self
+            .total_invocations
+            .checked_add(usize::try_from(count).map_err(|_| TradingSbfError::Content)?)
+            .ok_or(TradingSbfError::Content)?;
+        Ok(())
+    }
+
     /// Record what the preflight walk derived for the next invocation in order.
     fn record(&mut self, bump: u8) -> Result<(), ProgramError> {
         match self.bumps.get_mut(self.len) {
@@ -6467,6 +7309,7 @@ fn resolve_child_walk_v3<'request, 'accounts, 'info>(
     family_request: &'request [u8],
     request_digest: [u8; 32],
     envelope: HotExecutionEnvelopeV3,
+    continuation_child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
 ) -> Result<HeapBoxV3<ChildWalkResolutionV3<'request, 'info>>, ProgramError> {
     #[cfg(not(any(
         feature = "families",
@@ -6485,15 +7328,20 @@ fn resolve_child_walk_v3<'request, 'accounts, 'info>(
         family_request,
         request_digest,
         envelope,
+        continuation_child_programs,
     );
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    let claims_composition = if effect.route_count() != 0
-        && has_active_role(effect, tail_count, scalars, identities, FixedRole::Claims)?
-    {
+    let required_roles = active_roles_v3(effect, tail_count, scalars, identities)?;
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    let claims_composition = if required_roles.claims {
         Some(decode_claims_composition_boxed_v3(
             effect,
             tail_count,
@@ -6530,23 +7378,8 @@ fn resolve_child_walk_v3<'request, 'accounts, 'info>(
             effect_accounts,
             aliases,
             envelope.release_set(),
-            RequiredRolesV3 {
-                claims: claims_composition.is_some(),
-                custody: has_active_role(
-                    effect,
-                    tail_count,
-                    scalars,
-                    identities,
-                    FixedRole::Custody,
-                )?,
-                resolution: has_active_role(
-                    effect,
-                    tail_count,
-                    scalars,
-                    identities,
-                    FixedRole::Resolution,
-                )?,
-            },
+            continuation_child_programs,
+            required_roles,
         )?
     };
     hot_heap_mark!("shared-role-programs");
@@ -6647,6 +7480,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
+        caller_bumps.record_invocations(count)?;
         let mut invocation_index = 0_u32;
         while invocation_index < count {
             let invocation = effect
@@ -6658,27 +7492,37 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             require_no_common_projection_child_accounts_v3(invocation)?;
             require_child_disjoint_from_local(invocation, aliases, locally_mutated)?;
             match invocation.role {
-                FixedRole::Core => caller_bumps.record(preflight_core_route_v3(
-                    program_id,
-                    effect.base(),
-                    route,
-                    invocation_index,
-                    tail_count,
-                    scalars,
-                    identities,
-                    effect_accounts,
-                    request_bank,
-                    family_request,
-                    &mut preflight_frame,
-                    &mut preflight_wire,
-                    frame.core_program,
-                    CoreCompositionParentV3 {
-                        release_set: envelope.release_set(),
-                        market: envelope.market(),
-                        generation: envelope.generation(),
-                        trading_program: program_id.to_bytes(),
-                    },
-                )?)?,
+                FixedRole::Core => {
+                    caller_bumps.record(preflight_core_route_v3(
+                        program_id,
+                        effect.base(),
+                        route,
+                        invocation_index,
+                        tail_count,
+                        scalars,
+                        identities,
+                        effect_accounts,
+                        request_bank,
+                        family_request,
+                        &mut preflight_frame,
+                        &mut preflight_wire,
+                        frame.core_program,
+                        CoreCompositionParentV3 {
+                            release_set: envelope.release_set(),
+                            market: envelope.market(),
+                            generation: envelope.generation(),
+                            trading_program: program_id.to_bytes(),
+                        },
+                    )?)?;
+                    let suffix = usize::try_from(receipt_dependency_width_v3(invocation))
+                        .map_err(|_| TradingSbfError::Content)?;
+                    caller_bumps.record_wire_bytes(
+                        preflight_wire
+                            .len()
+                            .checked_add(suffix)
+                            .ok_or(TradingSbfError::Content)?,
+                    );
+                }
                 FixedRole::Claims => {
                     #[cfg(any(
                         feature = "families",
@@ -6700,6 +7544,11 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                         {
                             return Err(TradingSbfError::Content.into());
                         }
+                        caller_bumps.record_wire_bytes(claims_child_wire_capacity_v3(
+                            invocation,
+                            request_bank,
+                            family_request,
+                        )?);
                     }
                     #[cfg(not(any(
                         feature = "families",
@@ -6717,11 +7566,8 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                     caller_bumps.record(preflight_custody_route_v3(
                         program_id,
                         effect.base(),
-                        route,
-                        invocation_index,
+                        invocation,
                         tail_count,
-                        scalars,
-                        identities,
                         effect_accounts,
                         request_bank,
                         &mut preflight_frame,
@@ -6734,6 +7580,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             trading_program: program_id.to_bytes(),
                         },
                     )?)?;
+                    caller_bumps.record_wire_bytes(invocation.request_len);
                     #[cfg(not(any(
                         feature = "families",
                         feature = "series-family",
@@ -6768,6 +7615,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             activation_account: frame.activation_cache.key.to_bytes(),
                         },
                     )?)?;
+                    caller_bumps.record_wire_bytes(preflight_wire.len());
                     #[cfg(not(feature = "families"))]
                     return Err(TradingSbfError::UnsupportedContent.into());
                 }
@@ -6863,6 +7711,12 @@ fn execute_child_routes_v3<'accounts, 'info>(
         buffers: ChildInvocationBuffersV3::new(),
         route: 0,
     });
+    execution
+        .buffers
+        .reserve_wire_exact(caller_bumps.max_wire_bytes)?;
+    execution
+        .receipt_bank
+        .reserve_total(caller_bumps.total_invocations)?;
     hot_heap_mark!("child-execution-state");
     if effect.route_count() == 0 {
         return Ok(execution.transcript);
@@ -6893,19 +7747,35 @@ fn execute_child_routes_v3<'accounts, 'info>(
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?;
-        // The bank buys this route's room from the count the walk has just
-        // resolved for its own loop bound, so the exact reservation costs no
-        // extra resolution at all -- and resolving one here is not free:
-        // re-deriving what both walks need was measured at 78,146 CU.
-        execution
-            .receipt_bank
-            .reserve_additional(usize::try_from(count).map_err(|_| TradingSbfError::Content)?)?;
         let mut invocation = 0_u32;
         while invocation < count {
             let resolved = effect
                 .resolved_invocation(route, invocation, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
-            execution.prior_receipt_bytes.clear();
+            // Split the boxed header once. A single dependency can stay
+            // borrowed directly from the authenticated receipt bank while the
+            // disjoint CPI buffer field is mutated, avoiding a second full
+            // return-data allocation on the bump heap. Multiple dependencies
+            // retain the exact ordered concatenation path.
+            let ChildExecutionStateV3 {
+                transcript,
+                receipt_bank,
+                prior_receipt_bytes,
+                buffers,
+                route: _,
+            } = &mut *execution;
+            buffers.producer = if receipt_bank
+                .len()
+                .checked_add(1)
+                .is_some_and(|next| next == caller_bumps.total_invocations)
+            {
+                Pubkey::default()
+            } else {
+                Pubkey::new_from_array([1; 32])
+            };
+            prior_receipt_bytes.clear();
+            let borrows_single_receipt = resolved.receipt_dependencies.len() == 1;
+            let mut single_receipt = None;
             let mut dependency_index = 0_u16;
             while dependency_index < resolved.receipt_dependencies.len() {
                 let dependency = effect
@@ -6952,41 +7822,30 @@ fn execute_child_routes_v3<'accounts, 'info>(
                     request_bank,
                     family_request,
                 )?;
-                let receipt = execution
-                    .receipt_bank
-                    .resolve(
-                        Some(dependency),
-                        Some(dependency_program.key),
-                        Some(expected_provenance),
-                    )?
+                let receipt = receipt_bank
+                    .resolve(Some(dependency), Some(expected_provenance))?
                     .ok_or(TradingSbfError::Transition)?;
-                // EXACT, not amortised. `try_reserve` grows by doubling, and
-                // on an allocator that never gives a block back the doubling
-                // slack would be permanent heap. Measured on the canonical
-                // Direct bundle this changes nothing -- its two receipts are
-                // 144 and 740 bytes and the amortised path happened to land on
-                // both exactly -- so it removes a hazard, not a cost.
-                execution
-                    .prior_receipt_bytes
-                    .try_reserve_exact(receipt.len())
-                    .map_err(|_| TradingSbfError::Content)?;
-                execution.prior_receipt_bytes.extend_from_slice(receipt);
+                if borrows_single_receipt {
+                    if single_receipt.replace(receipt).is_some() {
+                        return Err(TradingSbfError::Content.into());
+                    }
+                } else {
+                    // EXACT, not amortised. `try_reserve` grows by doubling,
+                    // and on an allocator that never gives a block back the
+                    // doubling slack would be permanent heap.
+                    prior_receipt_bytes
+                        .try_reserve_exact(receipt.len())
+                        .map_err(|_| TradingSbfError::Content)?;
+                    prior_receipt_bytes.extend_from_slice(receipt);
+                }
                 dependency_index = dependency_index
                     .checked_add(1)
                     .ok_or(TradingSbfError::Content)?;
             }
             hot_heap_mark!("child-dependencies");
-            // Split the boxed header once, so the composition can hold the
-            // walk's buffer set mutably while the prior receipt is still
-            // borrowed out of the same header.
-            let ChildExecutionStateV3 {
-                transcript,
-                receipt_bank,
-                prior_receipt_bytes,
-                buffers,
-                route: _,
-            } = &mut *execution;
-            let prior_receipt = if prior_receipt_bytes.is_empty() {
+            let prior_receipt = if let Some(receipt) = single_receipt {
+                Some(receipt)
+            } else if prior_receipt_bytes.is_empty() {
                 None
             } else {
                 Some(prior_receipt_bytes.as_slice())
@@ -7034,9 +7893,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                     .copied()
                                     .ok_or(TradingSbfError::Content)?,
                                 route,
+                                invocation,
+                                resolved,
                                 tail_count,
-                                scalars,
-                                identities,
                                 effect_accounts,
                                 request_bank,
                                 family_request,
@@ -7066,9 +7925,8 @@ fn execute_child_routes_v3<'accounts, 'info>(
                             effect.base(),
                             route,
                             invocation,
+                            resolved,
                             tail_count,
-                            scalars,
-                            identities,
                             effect_accounts,
                             request_bank,
                             prior_receipt,
@@ -7304,30 +8162,35 @@ fn child_receipt_provenance_v4(
     feature = "series-family",
     feature = "dealer-family"
 ))]
-fn has_active_role(
+fn active_roles_v3(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
     identities: &[[u8; 32]],
-    role: FixedRole,
-) -> Result<bool, ProgramError> {
+) -> Result<RequiredRolesV3, ProgramError> {
+    let mut required = RequiredRolesV3 {
+        claims: false,
+        custody: false,
+        resolution: false,
+    };
     let mut route = 0_u16;
     while route < effect.route_count() {
+        let route_program = effect.route(route).map_err(|_| TradingSbfError::Content)?;
         if effect
-            .route(route)
+            .invocation_count(route, tail_count, scalars, identities)
             .map_err(|_| TradingSbfError::Content)?
-            .role()
-            == role
-            && effect
-                .invocation_count(route, tail_count, scalars, identities)
-                .map_err(|_| TradingSbfError::Content)?
-                != 0
+            != 0
         {
-            return Ok(true);
+            match route_program.role() {
+                FixedRole::Claims => required.claims = true,
+                FixedRole::Custody => required.custody = true,
+                FixedRole::Resolution => required.resolution = true,
+                FixedRole::Core => {}
+            }
         }
         route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
-    Ok(false)
+    Ok(required)
 }
 
 fn mark_local_mutation(
@@ -7560,46 +8423,56 @@ fn selected_role_programs_v3<'info>(
     accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     aliases: &[usize],
     release_set: [u8; 32],
+    continuation_child_programs: Option<AuthenticatedContinuationChildProgramsV3>,
     required: RequiredRolesV3,
 ) -> Result<SelectedRoleProgramsV3<'info>, ProgramError> {
-    let (claims, custody, resolution) = {
-        let cache = frame
-            .activation_cache
-            .try_borrow_data()
-            .map_err(|_| TradingSbfError::Release)?;
-        let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache)
-            .map_err(|_| TradingSbfError::Release)?;
-        if activated
-            .execution_release_set_id()
-            .map_err(|_| TradingSbfError::Release)?
-            .to_bytes()
-            != release_set
-        {
-            return Err(TradingSbfError::Release.into());
-        }
-        let program = |role| -> Result<[u8; 32], ProgramError> {
-            Ok(activated
-                .role(role)
+    let (claims, custody, resolution) =
+        if let Some(children) = continuation_child_programs.filter(|_| !required.resolution) {
+            (
+                required.claims.then_some(children.claims),
+                required.custody.then_some(children.custody),
+                None,
+            )
+        } else {
+            let cache = frame
+                .activation_cache
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Release)?;
+            let activated = ActivatedExecutionReleaseSetViewV1::decode(&cache)
+                .map_err(|_| TradingSbfError::Release)?;
+            if activated
+                .execution_release_set_id()
                 .map_err(|_| TradingSbfError::Release)?
-                .release()
-                .program()
-                .to_bytes())
+                .to_bytes()
+                != release_set
+            {
+                return Err(TradingSbfError::Release.into());
+            }
+            let program = |role| -> Result<[u8; 32], ProgramError> {
+                Ok(activated
+                    .role(role)
+                    .map_err(|_| TradingSbfError::Release)?
+                    .release()
+                    .program()
+                    .to_bytes())
+            };
+            let programs = (
+                required
+                    .claims
+                    .then(|| program(ExecutionRoleV1::Claims))
+                    .transpose()?,
+                required
+                    .custody
+                    .then(|| program(ExecutionRoleV1::Custody))
+                    .transpose()?,
+                required
+                    .resolution
+                    .then(|| program(ExecutionRoleV1::Resolution))
+                    .transpose()?,
+            );
+            drop(cache);
+            programs
         };
-        (
-            required
-                .claims
-                .then(|| program(ExecutionRoleV1::Claims))
-                .transpose()?,
-            required
-                .custody
-                .then(|| program(ExecutionRoleV1::Custody))
-                .transpose()?,
-            required
-                .resolution
-                .then(|| program(ExecutionRoleV1::Resolution))
-                .transpose()?,
-        )
-    };
     #[cfg(not(feature = "families"))]
     let _ = resolution;
     Ok(SelectedRoleProgramsV3 {
@@ -7730,9 +8603,9 @@ fn execute_claims_route_digest_v3<'info>(
     effect: EffectProgramV3<'_>,
     composition: ClaimsCompositionV3<'_>,
     route_index: u16,
+    invocation_index: u32,
+    invocation: dclutch_effect_kernel::v3::ResolvedInvocationV3,
     tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     family_request: &[u8],
@@ -7745,9 +8618,9 @@ fn execute_claims_route_digest_v3<'info>(
         effect,
         composition,
         route_index,
+        invocation_index,
+        invocation,
         tail_count,
-        scalars,
-        identities,
         effect_accounts,
         request_bank,
         family_request,
@@ -8734,7 +9607,7 @@ fn root_commit_ordinal_count_v3(
 
 /// Commit every non-root coordinate and record what the commit-last pass owns.
 #[allow(clippy::too_many_arguments)]
-fn commit_non_root_effects_v3(
+fn commit_non_root_effects_into_v3(
     effect: SelectedEffectProgramV4<'_>,
     tail_count: u32,
     scalars: &[u64],
@@ -8743,8 +9616,13 @@ fn commit_non_root_effects_v3(
     aliases: &[usize],
     output_lamports: &[u64],
     rent: &Rent,
-) -> Result<RootCommitPlanV3, ProgramError> {
-    let mut plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
+    plan: &mut RootCommitPlanV3,
+) -> Result<(), ProgramError> {
+    if plan.ordinals != root_commit_ordinal_count_v3(effect, tail_count)?
+        || plan.bits.iter().any(|byte| *byte != 0)
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
     commit_output_lamports_v3(accounts, aliases, output_lamports, false)?;
     let mut ordinal = 0_u32;
     let mut fixed = 0_u16;
@@ -8774,6 +9652,33 @@ fn commit_non_root_effects_v3(
         item = item.checked_add(1).ok_or(TradingSbfError::Commit)?;
     }
     require_committed_rent_exemption_v3(accounts, aliases, rent, false)?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn commit_non_root_effects_v3(
+    effect: SelectedEffectProgramV4<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+    accounts: &[&AccountInfo<'_>],
+    aliases: &[usize],
+    output_lamports: &[u64],
+    rent: &Rent,
+) -> Result<RootCommitPlanV3, ProgramError> {
+    let mut plan = RootCommitPlanV3::for_geometry(effect, tail_count)?;
+    commit_non_root_effects_into_v3(
+        effect,
+        tail_count,
+        scalars,
+        identities,
+        accounts,
+        aliases,
+        output_lamports,
+        rent,
+        &mut plan,
+    )?;
     Ok(plan)
 }
 
@@ -8908,52 +9813,72 @@ fn commit_data_effect(
     aliases: &[usize],
     root_only: bool,
 ) -> Result<bool, ProgramError> {
-    let (coordinate, offset, bytes): (usize, usize, Vec<u8>) = match resolved {
+    // Fixed writes are at most one identity wide. Keep their bytes on the
+    // stack: allocating one temporary `Vec` per effect permanently consumed
+    // bump-heap space during a long Hot commit even though each value dies at
+    // the end of this call.
+    let mut fixed = [0_u8; 32];
+    let (coordinate, offset, width): (usize, usize, usize) = match resolved {
         ResolvedEffectV3::WriteScalar {
             account,
             offset,
             value,
-        } => (
-            account,
-            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
-            Vec::from(value.to_le_bytes()),
-        ),
+        } => {
+            fixed[..8].copy_from_slice(&value.to_le_bytes());
+            (
+                account,
+                usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+                8,
+            )
+        }
         ResolvedEffectV3::WriteIdentity {
             account,
             offset,
             value,
-        } => (
-            account,
-            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
-            Vec::from(value),
-        ),
+        } => {
+            fixed = value;
+            (
+                account,
+                usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+                32,
+            )
+        }
         ResolvedEffectV3::WriteU8 {
             account,
             offset,
             value,
-        } => (
-            account,
-            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
-            Vec::from(value.to_le_bytes()),
-        ),
+        } => {
+            fixed[0] = value;
+            (
+                account,
+                usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+                1,
+            )
+        }
         ResolvedEffectV3::WriteU16 {
             account,
             offset,
             value,
-        } => (
-            account,
-            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
-            Vec::from(value.to_le_bytes()),
-        ),
+        } => {
+            fixed[..2].copy_from_slice(&value.to_le_bytes());
+            (
+                account,
+                usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+                2,
+            )
+        }
         ResolvedEffectV3::WriteU32 {
             account,
             offset,
             value,
-        } => (
-            account,
-            usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
-            Vec::from(value.to_le_bytes()),
-        ),
+        } => {
+            fixed[..4].copy_from_slice(&value.to_le_bytes());
+            (
+                account,
+                usize::try_from(offset).map_err(|_| TradingSbfError::Commit)?,
+                4,
+            )
+        }
         _ => return Ok(false),
     };
     let representative = *aliases.get(coordinate).ok_or(TradingSbfError::Commit)?;
@@ -8967,12 +9892,13 @@ fn commit_data_effect(
     let mut data = account
         .try_borrow_mut_data()
         .map_err(|_| TradingSbfError::Commit)?;
+    let bytes = fixed.get(..width).ok_or(TradingSbfError::Commit)?;
     let end = offset
         .checked_add(bytes.len())
         .ok_or(TradingSbfError::Commit)?;
     data.get_mut(offset..end)
         .ok_or(TradingSbfError::Commit)?
-        .copy_from_slice(&bytes);
+        .copy_from_slice(bytes);
     Ok(commits_last)
 }
 

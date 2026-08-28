@@ -14,6 +14,7 @@ import { basename, dirname, join } from 'node:path';
 import {
   buildWalletTerminalPayoutV3,
   parseWalletTerminalPayoutManifestV3,
+  verifyFinalizedWalletTerminalPayoutTransactionV3,
   verifyWalletTerminalPayoutPostconditionV3,
   walletTerminalPayoutSummaryV3,
   type PreparedWalletTerminalPayoutV3,
@@ -117,7 +118,7 @@ const REPLAY_JOURNAL_OPERATION = 'claims-custody-replay-create-v1' as const;
 const REPLAY_JOURNAL_PLAN_FORMAT = 'dclutch-claims-custody-replay-journal-plan-v1' as const;
 const REPLAY_JOURNAL_INTENT_FORMAT = 'dclutch-claims-custody-replay-journal-intent-v1' as const;
 const INPUT_FORMAT = 'dclutch-wallet-terminal-payout-plan-input-v1' as const;
-const EVIDENCE_FORMAT = 'dclutch-local-successor-run-evidence-v2' as const;
+const EVIDENCE_FORMAT = 'dclutch-successor-campaign-report-v1' as const;
 const MAX_JOURNAL_BYTES = 786_432;
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_PROJECTED_INPUT_BYTES = 32_768;
@@ -171,7 +172,8 @@ export type WalletTerminalPayoutPlanInputV1 = Readonly<{
   parentContext: string;
   custodyContext: string;
   releaseSet: string;
-  programs: Readonly<{ registry: string; core: string; claims: string; custody: string }>;
+  terminalCertificate: string;
+  programs: Readonly<{ registry: string; core: string; claims: string; custody: string; resolution: string }>;
   records: Readonly<{
     realm: string;
     product: string;
@@ -182,7 +184,6 @@ export type WalletTerminalPayoutPlanInputV1 = Readonly<{
     compositionGraph: string;
     compositionTranslation: string;
     compositionExposure: string;
-    terminalRecord: string;
   }>;
 }>;
 
@@ -199,6 +200,7 @@ export type PayoutOperationJournalV1 = Readonly<{
   plan: string;
   phase: 'unsigned' | 'submitted';
   signature: string | null;
+  signedWireBase64: string | null;
 }>;
 
 export type ReplayOperationJournalV1 = Readonly<{
@@ -214,6 +216,7 @@ export type ReplayOperationJournalV1 = Readonly<{
   plan: string;
   phase: 'unsigned' | 'submitted';
   signature: string | null;
+  signedWireBase64: string | null;
 }>;
 
 export type RestoredReplayOperationV1 = Readonly<{
@@ -391,14 +394,6 @@ function exactJson(source: string | Uint8Array, field: string, maximumBytes: num
   try { return JSON.parse(text); } catch { return fail('value decoder refused'); }
 }
 
-function boundedText(value: unknown, field: string, maximumBytes: number): string {
-  if (typeof value !== 'string' || value.length === 0 || value.trim() !== value
-      || new TextEncoder().encode(value).byteLength > maximumBytes) {
-    throw new Error(`${field} is not nonempty canonical text within ${maximumBytes} bytes`);
-  }
-  return value;
-}
-
 function address(value: unknown, field: string): string {
   if (typeof value !== 'string') throw new Error(`${field} is not one canonical Solana address`);
   let parsed: PublicKey;
@@ -464,86 +459,20 @@ function sha256(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-/** Hostile-check one exact completed campaign dossier before Rust consumes it. */
+/** Authenticate only the campaign envelope Rust needs before it owns the exact projection. */
 export function authenticateCompletedCampaignEvidenceV1(planBytes: Uint8Array, evidenceBytes: Uint8Array): void {
   const evidence = object(exactJson(evidenceBytes, 'campaign evidence', MAX_EVIDENCE_BYTES), 'campaign evidence');
-  exactKeys(evidence, [
-    'schema', 'rpc_url', 'ledger', 'validator_log', 'plan_sha256', 'core_upgrade_authority_pubkey',
-    'private_key_persisted', 'keypair_derivation', 'keypair_seed_sha256', 'foundingCustodyContext',
-    'directSelectedManifestEntryIndex', 'completed', 'transactions', 'accounts', 'remaining_execution_seam',
-  ], 'campaign evidence');
-  if (evidence.schema !== EVIDENCE_FORMAT || evidence.private_key_persisted !== false) {
-    throw new Error('campaign evidence has another schema, key policy, or bounded text shape');
+  if (evidence.schema !== EVIDENCE_FORMAT) {
+    throw new Error('terminal evidence is not dclutch-successor-campaign-report-v1');
   }
-  boundedText(evidence.rpc_url, 'campaign RPC URL', 2_048);
-  boundedText(evidence.ledger, 'campaign ledger path', 4_096);
-  boundedText(evidence.validator_log, 'campaign validator-log path', 4_096);
-  const derivation = boundedText(evidence.keypair_derivation, 'campaign keypair derivation', 64);
-  if (derivation !== 'random-per-run' && derivation !== 'seeded-deterministic') {
-    throw new Error('campaign keypair derivation is not one known policy');
-  }
-  boundedText(evidence.remaining_execution_seam, 'campaign remaining execution seam', 4_096);
   const expectedPlan = identity(evidence.plan_sha256, 'campaign plan digest');
   if (sha256(planBytes) !== expectedPlan) throw new Error('campaign evidence does not authenticate the exact plan bytes');
-  address(evidence.core_upgrade_authority_pubkey, 'campaign Core authority');
-  identity(evidence.foundingCustodyContext, 'founding Custody context');
-  index(evidence.directSelectedManifestEntryIndex, 'Direct selected manifest entry', 65_535);
-  if (evidence.keypair_seed_sha256 !== null) identity(evidence.keypair_seed_sha256, 'campaign keypair seed digest');
-  if (!Array.isArray(evidence.completed) || evidence.completed.length === 0 || evidence.completed.length > 512
-      || evidence.completed.some((entry) => {
-        try { boundedText(entry, 'campaign completed stage', 512); return false; } catch { return true; }
-      })
-      || new Set(evidence.completed).size !== evidence.completed.length) {
-    throw new Error('campaign evidence does not carry one nonempty ordered completed-stage list');
+  if (evidence.cluster !== 'devnet' || evidence.mode !== 'execute') {
+    throw new Error('terminal evidence requires an executed external devnet campaign');
   }
-  if (!Array.isArray(evidence.transactions) || evidence.transactions.length > 4_096) {
-    throw new Error('campaign evidence transactions are not an array within the 4096-row bound');
-  }
-  const transactionLabels = new Set<string>();
-  for (const [offset, raw] of evidence.transactions.entries()) {
-    const row = object(raw, `campaign transaction ${offset}`);
-    exactKeys(row, [
-      'label', 'signature', 'slot', 'transaction_metadata_available', 'fee_lamports',
-      'fee_only_balance_change', 'compute_units_consumed', 'error', 'logs',
-    ], `campaign transaction ${offset}`);
-    let label: string;
-    try { label = boundedText(row.label, `campaign transaction ${offset} label`, 512); } catch {
-      throw new Error(`campaign transaction ${offset} has another label shape`);
-    }
-    if (transactionLabels.has(label)) throw new Error(`campaign transaction ${offset} has another label shape`);
-    transactionLabels.add(label);
-    exactSignature(row.signature);
-    if (typeof row.slot !== 'number' || !Number.isSafeInteger(row.slot) || row.slot < 0
-        || typeof row.transaction_metadata_available !== 'boolean'
-        || (row.fee_lamports !== null && (typeof row.fee_lamports !== 'number'
-          || !Number.isSafeInteger(row.fee_lamports) || row.fee_lamports < 0))
-        || (row.compute_units_consumed !== null && (typeof row.compute_units_consumed !== 'number'
-          || !Number.isSafeInteger(row.compute_units_consumed) || row.compute_units_consumed < 0))
-        || (row.fee_only_balance_change !== null && typeof row.fee_only_balance_change !== 'boolean')
-        || !Array.isArray(row.logs) || row.logs.length > 512
-        || row.logs.some((entry) => typeof entry !== 'string'
-          || new TextEncoder().encode(entry).byteLength > 4_096)) {
-      throw new Error(`campaign transaction ${offset} has inexact finalized evidence`);
-    }
-  }
-  const accounts = object(evidence.accounts, 'campaign evidence accounts');
-  if (Object.keys(accounts).length === 0 || Object.keys(accounts).length > 4_096) {
-    throw new Error('campaign evidence persisted accounts are outside the 1..4096 row bound');
-  }
-  for (const [label, raw] of Object.entries(accounts)) {
-    if (label.length === 0 || new TextEncoder().encode(label).byteLength > 128) {
-      throw new Error('campaign evidence account label is not bounded');
-    }
-    const row = object(raw, `campaign account ${label}`);
-    exactKeys(row, ['address', 'owner', 'lamports', 'executable', 'data_len', 'data_sha256', 'account_sha256'], `campaign account ${label}`);
-    address(row.address, `campaign account ${label} address`);
-    address(row.owner, `campaign account ${label} owner`);
-    if (typeof row.lamports !== 'number' || !Number.isSafeInteger(row.lamports) || row.lamports < 0
-        || typeof row.data_len !== 'number' || !Number.isSafeInteger(row.data_len) || row.data_len < 0
-        || typeof row.executable !== 'boolean') throw new Error(`campaign account ${label} has inexact physical facts`);
-    identity(row.data_sha256, `campaign account ${label} data digest`);
-    identity(row.account_sha256, `campaign account ${label} account digest`);
-  }
+  // `campaign.rs::parse_campaign_terminal_evidence_v1` is the single exact
+  // execution/transaction/Market/account schema owner. The subprocess that
+  // consumes these bytes runs that parser before its first RPC request.
 }
 
 /** Hostile-decode the exact flat input emitted by `wallet-terminal-payout-input`. */
@@ -552,15 +481,15 @@ export function parseWalletTerminalPayoutPlanInputV1(source: string): WalletTerm
   exactKeys(value, [
     'format', 'market', 'owner', 'recipientOwner', 'recipient', 'collateralMint', 'tokenProgram',
     'quantity', 'claimIndex', 'transferIndex', 'parentContext', 'custodyContext', 'releaseSet',
-    'programs', 'records',
+    'terminalCertificate', 'programs', 'records',
   ], 'wallet payout projected input');
   if (value.format !== INPUT_FORMAT) throw new Error('wallet payout projected input has another format');
   const programs = object(value.programs, 'wallet payout programs');
-  exactKeys(programs, ['registry', 'core', 'claims', 'custody'], 'wallet payout programs');
+  exactKeys(programs, ['registry', 'core', 'claims', 'custody', 'resolution'], 'wallet payout programs');
   const records = object(value.records, 'wallet payout records');
   const recordFields = [
     'realm', 'product', 'resultDomain', 'portfolio', 'productBasis', 'compositionDescriptor',
-    'compositionGraph', 'compositionTranslation', 'compositionExposure', 'terminalRecord',
+    'compositionGraph', 'compositionTranslation', 'compositionExposure',
   ] as const;
   exactKeys(records, recordFields, 'wallet payout records');
   const owner = address(value.owner, 'wallet payout owner');
@@ -582,11 +511,13 @@ export function parseWalletTerminalPayoutPlanInputV1(source: string): WalletTerm
     parentContext: identity(value.parentContext, 'wallet payout parent context'),
     custodyContext: identity(value.custodyContext, 'wallet payout Custody context'),
     releaseSet: identity(value.releaseSet, 'wallet payout release set'),
+    terminalCertificate: address(value.terminalCertificate, 'wallet payout Resolution certificate'),
     programs: Object.freeze({
       registry: address(programs.registry, 'Registry program'),
       core: address(programs.core, 'Core program'),
       claims: address(programs.claims, 'Claims program'),
       custody: address(programs.custody, 'Custody program'),
+      resolution: address(programs.resolution, 'Resolution program'),
     }),
     records: Object.freeze(Object.fromEntries(recordFields.map((field) => [field, identity(records[field], `wallet payout ${field} record`)]))) as WalletTerminalPayoutPlanInputV1['records'],
   });
@@ -611,14 +542,16 @@ function exactJournal(source: string): PayoutOperationJournalV1 {
   const value = object(exactJson(source, 'payout journal', MAX_JOURNAL_BYTES), 'payout journal');
   exactKeys(value, [
     'format', 'operation', 'clusterGenesis', 'market', 'owner', 'operationDigest', 'intentDigest',
-    'planDigest', 'intent', 'plan', 'phase', 'signature',
+    'planDigest', 'intent', 'plan', 'phase', 'signature', 'signedWireBase64',
   ], 'payout journal');
   if (value.format !== JOURNAL_FORMAT || value.operation !== JOURNAL_OPERATION
       || (value.phase !== 'unsigned' && value.phase !== 'submitted')
       || typeof value.intent !== 'string' || typeof value.plan !== 'string') throw new Error('payout journal has another format, operation, phase, or payload shape');
   const signature = value.signature;
-  if ((value.phase === 'unsigned' && signature !== null) || (value.phase === 'submitted' && typeof signature !== 'string')) {
-    throw new Error('payout journal phase and signature disagree');
+  const signedWireBase64 = value.signedWireBase64;
+  if ((value.phase === 'unsigned' && (signature !== null || signedWireBase64 !== null))
+      || (value.phase === 'submitted' && (typeof signature !== 'string' || typeof signedWireBase64 !== 'string'))) {
+    throw new Error('payout journal phase, signature, and signed packet disagree');
   }
   const journal = Object.freeze({
     format: JOURNAL_FORMAT,
@@ -633,11 +566,19 @@ function exactJournal(source: string): PayoutOperationJournalV1 {
     plan: value.plan,
     phase: value.phase,
     signature: signature === null ? null : exactSignature(signature),
+    signedWireBase64: signedWireBase64 === null ? null : signedWireBase64 as string,
   });
   exactJson(journal.intent, 'payout journal intent', MAX_JOURNAL_BYTES);
   exactJson(journal.plan, 'saved payout verifier plan', MAX_JOURNAL_BYTES);
   if (sha256(journal.intent) !== journal.intentDigest || sha256(journal.plan) !== journal.planDigest) {
     throw new Error('payout journal intent or plan bytes differ from their stored digest');
+  }
+  if (journal.phase === 'submitted') {
+    signedJournalWireV1(
+      journal,
+      restorePayoutUnsignedWireV1(journal),
+      restorePayoutRequiredSignersV1(journal),
+    );
   }
   return journal;
 }
@@ -687,6 +628,7 @@ export function writeUnsignedPayoutOperationJournalV1(
     plan: encodedPlan,
     phase: 'unsigned' as const,
     signature: null,
+    signedWireBase64: null,
   });
   atomicWrite(path, `${JSON.stringify(journal)}\n`);
   return journal;
@@ -696,15 +638,29 @@ export function markPayoutOperationSubmittedV1(
   path: string,
   journal: PayoutOperationJournalV1,
   signature: string,
+  signedWireBytes: Uint8Array,
 ): PayoutOperationJournalV1 {
   const current = loadPayoutOperationJournalV1(path);
   if (current === null || JSON.stringify(current) !== JSON.stringify(journal)) throw new Error('payout journal changed before submission');
   const exact = exactSignature(signature);
+  const signedWireBase64 = base64(authenticateSignedWireV1(
+    restorePayoutUnsignedWireV1(current),
+    restorePayoutRequiredSignersV1(current),
+    exact,
+    signedWireBytes,
+  ));
   if (current.phase === 'submitted') {
-    if (current.signature !== exact) throw new Error('submitted payout journal names another transaction');
+    if (current.signature !== exact || current.signedWireBase64 !== signedWireBase64) {
+      throw new Error('submitted payout journal names another transaction packet');
+    }
     return current;
   }
-  const submitted = Object.freeze({ ...current, phase: 'submitted' as const, signature: exact });
+  const submitted = Object.freeze({
+    ...current,
+    phase: 'submitted' as const,
+    signature: exact,
+    signedWireBase64,
+  });
   atomicWrite(path, `${JSON.stringify(submitted)}\n`);
   return submitted;
 }
@@ -766,16 +722,17 @@ function exactReplayJournal(source: string): ReplayOperationJournalV1 {
   const value = object(exactJson(source, 'Claims replay journal', MAX_JOURNAL_BYTES), 'Claims replay journal');
   exactKeys(value, [
     'format', 'operation', 'clusterGenesis', 'market', 'owner', 'operationDigest', 'intentDigest',
-    'planDigest', 'intent', 'plan', 'phase', 'signature',
+    'planDigest', 'intent', 'plan', 'phase', 'signature', 'signedWireBase64',
   ], 'Claims replay journal');
   if (value.format !== JOURNAL_FORMAT || value.operation !== REPLAY_JOURNAL_OPERATION
       || (value.phase !== 'unsigned' && value.phase !== 'submitted')
       || typeof value.intent !== 'string' || typeof value.plan !== 'string') {
     throw new Error('Claims replay journal has another format, operation, phase, or payload shape');
   }
-  if ((value.phase === 'unsigned' && value.signature !== null)
-      || (value.phase === 'submitted' && typeof value.signature !== 'string')) {
-    throw new Error('Claims replay journal phase and signature disagree');
+  if ((value.phase === 'unsigned' && (value.signature !== null || value.signedWireBase64 !== null))
+      || (value.phase === 'submitted'
+        && (typeof value.signature !== 'string' || typeof value.signedWireBase64 !== 'string'))) {
+    throw new Error('Claims replay journal phase, signature, and signed packet disagree');
   }
   const journal = Object.freeze({
     format: JOURNAL_FORMAT,
@@ -790,11 +747,16 @@ function exactReplayJournal(source: string): ReplayOperationJournalV1 {
     plan: value.plan,
     phase: value.phase,
     signature: value.signature === null ? null : exactSignature(value.signature),
+    signedWireBase64: value.signedWireBase64 === null ? null : value.signedWireBase64 as string,
   });
   exactJson(journal.intent, 'Claims replay journal intent', MAX_JOURNAL_BYTES);
   exactJson(journal.plan, 'Claims replay journal plan', MAX_JOURNAL_BYTES);
   if (sha256(journal.intent) !== journal.intentDigest || sha256(journal.plan) !== journal.planDigest) {
     throw new Error('Claims replay journal intent or plan bytes differ from their stored digest');
+  }
+  if (journal.phase === 'submitted') {
+    const restored = restoreReplayOperationJournalV1(journal);
+    signedJournalWireV1(journal, restored.wireBytes, restored.requiredSigners);
   }
   return journal;
 }
@@ -836,6 +798,7 @@ export function writeUnsignedReplayOperationJournalV1(
     plan: encodedPlan,
     phase: 'unsigned' as const,
     signature: null,
+    signedWireBase64: null,
   });
   atomicWrite(path, `${JSON.stringify(journal)}\n`);
   return journal;
@@ -845,17 +808,32 @@ export function markReplayOperationSubmittedV1(
   path: string,
   journal: ReplayOperationJournalV1,
   signature: string,
+  signedWireBytes: Uint8Array,
 ): ReplayOperationJournalV1 {
   const current = loadReplayOperationJournalV1(path);
   if (current === null || JSON.stringify(current) !== JSON.stringify(journal)) {
     throw new Error('Claims replay journal changed before submission');
   }
   const exact = exactSignature(signature);
+  const restored = restoreReplayOperationJournalV1(current);
+  const signedWireBase64 = base64(authenticateSignedWireV1(
+    restored.wireBytes,
+    restored.requiredSigners,
+    exact,
+    signedWireBytes,
+  ));
   if (current.phase === 'submitted') {
-    if (current.signature !== exact) throw new Error('submitted Claims replay journal names another transaction');
+    if (current.signature !== exact || current.signedWireBase64 !== signedWireBase64) {
+      throw new Error('submitted Claims replay journal names another transaction packet');
+    }
     return current;
   }
-  const submitted = Object.freeze({ ...current, phase: 'submitted' as const, signature: exact });
+  const submitted = Object.freeze({
+    ...current,
+    phase: 'submitted' as const,
+    signature: exact,
+    signedWireBase64,
+  });
   atomicWrite(path, `${JSON.stringify(submitted)}\n`);
   return submitted;
 }
@@ -1103,6 +1081,14 @@ function parseJournalPlan(source: string): PayoutJournalPlanV1 {
   });
 }
 
+function restorePayoutUnsignedWireV1(journal: PayoutOperationJournalV1): Uint8Array {
+  return base64Bytes(parseJournalPlan(journal.plan).unsignedWireBase64, 'saved unsigned payout transaction');
+}
+
+function restorePayoutRequiredSignersV1(journal: PayoutOperationJournalV1): ReadonlyArray<string> {
+  return parseJournalPlan(journal.plan).requiredSigners;
+}
+
 export async function restorePayoutOperationJournalV1(journal: PayoutOperationJournalV1): Promise<Readonly<{
   manifest: WalletTerminalPayoutManifestV3;
   plan: PreparedWalletTerminalPayoutV3;
@@ -1155,19 +1141,6 @@ export function transactionSignatureV1(signature: Uint8Array): string {
   return exactSignature(`${'1'.repeat(zeroes)}${text}`);
 }
 
-function signatureBytes(value: string): Uint8Array {
-  const exact = exactSignature(value);
-  let numeric = 0n;
-  for (const character of exact) numeric = numeric * 58n + BigInt(BASE58.indexOf(character));
-  const significant: number[] = [];
-  while (numeric > 0n) { significant.push(Number(numeric & 0xffn)); numeric >>= 8n; }
-  significant.reverse();
-  let zeroes = 0; while (zeroes < exact.length && exact[zeroes] === '1') zeroes += 1;
-  const output = new Uint8Array(zeroes + significant.length); output.set(significant, zeroes);
-  if (output.length !== 64) throw new Error('payout signature is not 64 bytes');
-  return output;
-}
-
 function exactSignature(value: unknown): string {
   if (typeof value !== 'string' || value.length < 64 || value.length > 88
       || [...value].some((character) => !BASE58.includes(character))) throw new Error('payout signature is not canonical base58');
@@ -1207,17 +1180,64 @@ export function signReplayOperationV1(plan: RestoredReplayOperationV1, signer: K
   return Object.freeze({ signature, wireBytes: transaction.serialize() });
 }
 
-function exactSignedWire(unsignedWire: Uint8Array, requiredSigners: ReadonlyArray<string>, signature: string): Uint8Array {
-  const transaction = VersionedTransaction.deserialize(unsignedWire);
-  if (transaction.signatures.length !== 1 || requiredSigners.length !== 1) {
-    throw new Error('saved transaction does not have one exact signer');
+function authenticateSignedWireV1(
+  unsignedWire: Uint8Array,
+  requiredSigners: ReadonlyArray<string>,
+  signature: string,
+  signedWire: Uint8Array,
+): Uint8Array {
+  if (!(signedWire instanceof Uint8Array) || signedWire.length === 0) {
+    throw new Error('signed transaction packet is absent');
   }
-  transaction.signatures[0] = signatureBytes(signature);
-  return transaction.serialize();
+  let unsigned: VersionedTransaction;
+  let signed: VersionedTransaction;
+  try {
+    unsigned = VersionedTransaction.deserialize(unsignedWire);
+    signed = VersionedTransaction.deserialize(signedWire);
+  } catch {
+    throw new Error('saved signed transaction is not one Solana packet');
+  }
+  if (!same(signed.serialize(), signedWire)
+      || !same(unsigned.message.serialize(), signed.message.serialize())
+      || signed.signatures.length !== 1 || requiredSigners.length !== 1
+      || requiredSigners[0] !== signed.message.staticAccountKeys[0]?.toBase58()
+      || signed.signatures[0]?.every((byte) => byte === 0)
+      || transactionSignatureV1(signed.signatures[0] ?? new Uint8Array()) !== signature) {
+    throw new Error('saved signed transaction substitutes its exact message, signer, or signature');
+  }
+  return new Uint8Array(signedWire);
 }
 
-function exactSignedPacket(plan: PreparedWalletTerminalPayoutV3, signature: string): Uint8Array {
-  return exactSignedWire(plan.wireBytes, plan.requiredSigners, signature);
+function signedJournalWireV1(
+  journal: PayoutOperationJournalV1 | ReplayOperationJournalV1,
+  unsignedWire: Uint8Array,
+  requiredSigners: ReadonlyArray<string>,
+): Uint8Array {
+  if (journal.phase !== 'submitted' || journal.signature === null || journal.signedWireBase64 === null) {
+    throw new Error('submitted journal does not contain one exact signed packet');
+  }
+  return authenticateSignedWireV1(
+    unsignedWire,
+    requiredSigners,
+    journal.signature,
+    base64Bytes(journal.signedWireBase64, 'saved signed transaction'),
+  );
+}
+
+/** Read back the exact payout packet durably saved before the only send. */
+export function submittedPayoutWireBytesV1(
+  journal: PayoutOperationJournalV1,
+  plan: PreparedWalletTerminalPayoutV3,
+): Uint8Array {
+  return signedJournalWireV1(journal, plan.wireBytes, plan.requiredSigners);
+}
+
+/** Read back the exact Claims replay packet durably saved before the only send. */
+export function submittedReplayWireBytesV1(
+  journal: ReplayOperationJournalV1,
+  plan: RestoredReplayOperationV1,
+): Uint8Array {
+  return signedJournalWireV1(journal, plan.wireBytes, plan.requiredSigners);
 }
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
@@ -1230,21 +1250,6 @@ function material(account: RpcAccount | null, owner: string, field: string): Rpc
     throw new Error(`${field} is absent or has another owner, executable bit, space, or lamport shape`);
   }
   return account;
-}
-
-function verifyFeeOnlyBalances(meta: TransactionMetaObservation, payer: string): void {
-  if (meta.accountAddresses.length !== meta.preBalances.length || meta.preBalances.length !== meta.postBalances.length) {
-    throw new Error('finalized payout balance vectors do not cover its exact account list');
-  }
-  const payerIndex = meta.accountAddresses.indexOf(payer);
-  if (payerIndex < 0 || meta.accountAddresses.lastIndexOf(payer) !== payerIndex) throw new Error('finalized payout does not name one exact fee payer');
-  const fee = BigInt(meta.feeLamports);
-  for (let index = 0; index < meta.preBalances.length; index += 1) {
-    const before = BigInt(meta.preBalances[index]!); const after = BigInt(meta.postBalances[index]!);
-    if (index === payerIndex ? after + fee !== before : after !== before) {
-      throw new Error('finalized payout lamport balances differ by more than the exact payer fee');
-    }
-  }
 }
 
 function digestBytes(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
@@ -1377,7 +1382,7 @@ export async function finalizeReplayOperationV1(
   if (meta.signature !== journal.signature || !meta.succeeded) {
     throw new Error(`finalized Claims replay signature or status refused: ${meta.errorText ?? 'unknown failure'}`);
   }
-  const expectedPacket = exactSignedWire(plan.wireBytes, plan.requiredSigners, journal.signature);
+  const expectedPacket = submittedReplayWireBytesV1(journal, plan);
   if (!same(meta.transactionBytes, expectedPacket)) {
     throw new Error('finalized Claims replay packet differs from the exact signed journal transaction');
   }
@@ -1411,14 +1416,12 @@ export async function finalizePayoutOperationV1(
   if (journal.phase !== 'submitted' || journal.signature === null) throw new Error('payout journal is not submitted');
   const meta = await client.transaction(journal.signature);
   if (meta === null) throw new Error('payout transaction is not available at finalized commitment yet');
-  if (meta.signature !== journal.signature || !meta.succeeded) throw new Error(`finalized payout signature or status refused: ${meta.errorText ?? 'unknown failure'}`);
-  const expectedPacket = exactSignedPacket(plan, journal.signature);
-  if (!same(meta.transactionBytes, expectedPacket)) throw new Error('finalized payout packet differs from the exact signed journal transaction');
-  const receipt = meta.returnData;
-  if (receipt === null || receipt.programId !== plan.report.route.claimsProgram) {
-    throw new Error('finalized payout omitted the exact Claims-produced return receipt');
-  }
-  verifyFeeOnlyBalances(meta, plan.requiredSigners[0]!);
+  const receiptBytes = verifyFinalizedWalletTerminalPayoutTransactionV3(
+    meta,
+    journal.signature,
+    plan,
+    submittedPayoutWireBytesV1(journal, plan),
+  );
   const floor = await client.finalizedSlot();
   if (BigInt(floor) < BigInt(meta.slot)) throw new Error('finalized account floor has not reached the payout transaction');
   const route = plan.report.route;
@@ -1436,7 +1439,7 @@ export async function finalizePayoutOperationV1(
   const hoard = material(account(route.hoard), route.tokenProgram, 'post-payout Hoard');
   const recipient = material(account(route.recipient), route.tokenProgram, 'post-payout recipient');
   await verifyPoststate(plan.report, {
-    receiptBytes: receipt.data,
+    receiptBytes,
     aggregateBytes: aggregate.data,
     positionBytes: position.data,
     custodyReplayBytes: replay.data,

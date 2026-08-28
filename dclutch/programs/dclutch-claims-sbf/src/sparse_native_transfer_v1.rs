@@ -20,7 +20,9 @@ use dclutch_claims_svm::{
         PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionV2, ProtocolPositionSeedsV2,
     },
     sparse_native_transfer_v1::{
-        SPARSE_NATIVE_TRANSFER_BYTES_V1, SparseNativeTransferReceiptV1, SparseNativeTransferV1,
+        SPARSE_NATIVE_TRANSFER_BYTES_V1, SparseNativeTransferPoststateSlicesV1,
+        SparseNativeTransferReceiptV1, SparseNativeTransferV1,
+        sparse_native_transfer_poststate_digest_v1,
     },
 };
 use dclutch_core_contract::ContentId as CoreContentId;
@@ -33,13 +35,8 @@ use dclutch_product_runtime_v2_svm_reader::{
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
-    account_info::AccountInfo,
-    hash::{hash, hashv},
-    program::set_return_data,
-    program_error::ProgramError,
-    pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
+    account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
+    pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::sysvar;
 
@@ -73,7 +70,6 @@ const SOURCE_POSITION: usize = 20;
 const DESTINATION_POSITION: usize = 21;
 
 const SCALAR_BYTES: usize = 8;
-const RESOURCE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch/claims/sparse-native-post/v1";
 
 /// Stable sparse-transfer SBF refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -200,6 +196,16 @@ pub(super) fn process(
         .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?;
     }
 
+    execute_authenticated_transfer(program_id, accounts, request, packet_digest)
+}
+
+#[inline(never)]
+fn execute_authenticated_transfer(
+    program_id: &Pubkey,
+    accounts: Accounts<'_, '_>,
+    request: SparseNativeTransferV1,
+    packet_digest: [u8; 32],
+) -> Result<(), ProgramError> {
     let market_before = accounts
         .market
         .try_borrow_data()
@@ -264,13 +270,13 @@ pub(super) fn process(
     put_u64(&mut market_candidate, 16, post_market_revision)?;
     put_u64(&mut source_candidate, 16, post_source_revision)?;
     put_u64(&mut destination_candidate, 16, post_destination_revision)?;
-    let resource_digest = hashv(&[
-        RESOURCE_DIGEST_DOMAIN_V1,
-        &market_candidate,
-        &source_candidate,
-        &destination_candidate,
-    ])
-    .to_bytes();
+    let empty = &[][..];
+    let resource_digest =
+        sparse_native_transfer_poststate_digest_v1(SparseNativeTransferPoststateSlicesV1 {
+            market: [&market_candidate, empty, empty, empty, empty],
+            source: [&source_candidate, empty, empty, empty, empty],
+            destination: [&destination_candidate, empty, empty, empty, empty],
+        });
     let receipt = SparseNativeTransferReceiptV1::new(
         request,
         packet_digest,

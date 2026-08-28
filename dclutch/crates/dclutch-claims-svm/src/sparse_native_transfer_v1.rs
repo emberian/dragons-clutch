@@ -8,6 +8,53 @@
 
 use crate::CallerRole;
 
+/// Domain of the exact aggregate/source/destination poststate commitment.
+pub const SPARSE_NATIVE_TRANSFER_POSTSTATE_DOMAIN_V1: &[u8] =
+    b"dclutch/claims/sparse-native-post/v1";
+
+/// Fragmented exact poststate preimage in canonical aggregate, source,
+/// destination order.
+///
+/// Empty fragments are permitted because they do not change a concatenation.
+/// This lets an adapter patch fixed-width fields without allocating complete
+/// candidate accounts while retaining this module as the sole field-order and
+/// domain owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SparseNativeTransferPoststateSlicesV1<'a> {
+    /// Ordered fragments of the complete aggregate account bytes.
+    pub market: [&'a [u8]; 5],
+    /// Ordered fragments of the complete source Position bytes.
+    pub source: [&'a [u8]; 5],
+    /// Ordered fragments of the complete destination Position bytes.
+    pub destination: [&'a [u8]; 5],
+}
+
+/// SHA-256 of one exact sparse-transfer aggregate/source/destination
+/// poststate, preserving the canonical account and fragment order.
+#[must_use]
+pub fn sparse_native_transfer_poststate_digest_v1(
+    slices: SparseNativeTransferPoststateSlicesV1<'_>,
+) -> [u8; 32] {
+    dclutch_sha256_adapter::digestv(&[
+        SPARSE_NATIVE_TRANSFER_POSTSTATE_DOMAIN_V1,
+        slices.market[0],
+        slices.market[1],
+        slices.market[2],
+        slices.market[3],
+        slices.market[4],
+        slices.source[0],
+        slices.source[1],
+        slices.source[2],
+        slices.source[3],
+        slices.source[4],
+        slices.destination[0],
+        slices.destination[1],
+        slices.destination[2],
+        slices.destination[3],
+        slices.destination[4],
+    ])
+}
+
 /// Exact sparse-transfer request bytes.
 pub const SPARSE_NATIVE_TRANSFER_BYTES_V1: usize = 320;
 /// Exact sparse-transfer receipt bytes.
@@ -634,5 +681,48 @@ mod tests {
             receipt.validate_request(SparseNativeTransferV1::new(other).expect("other")),
             Err(SparseNativeTransferErrorV1::ReceiptMismatch)
         );
+    }
+
+    #[test]
+    fn poststate_digest_has_one_fragment_and_account_order_owner() {
+        let market = b"market-poststate";
+        let source = b"source-poststate";
+        let destination = b"destination-poststate";
+        let empty = &[][..];
+        let complete =
+            sparse_native_transfer_poststate_digest_v1(SparseNativeTransferPoststateSlicesV1 {
+                market: [market, empty, empty, empty, empty],
+                source: [source, empty, empty, empty, empty],
+                destination: [destination, empty, empty, empty, empty],
+            });
+        let fragmented =
+            sparse_native_transfer_poststate_digest_v1(SparseNativeTransferPoststateSlicesV1 {
+                market: [&market[..3], &market[3..], empty, empty, empty],
+                source: [&source[..2], &source[2..7], &source[7..], empty, empty],
+                destination: [
+                    &destination[..1],
+                    &destination[1..5],
+                    &destination[5..9],
+                    &destination[9..],
+                    empty,
+                ],
+            });
+        assert_eq!(complete, fragmented);
+        assert_eq!(
+            complete,
+            dclutch_sha256_adapter::digestv(&[
+                SPARSE_NATIVE_TRANSFER_POSTSTATE_DOMAIN_V1,
+                market,
+                source,
+                destination,
+            ])
+        );
+        let reordered =
+            sparse_native_transfer_poststate_digest_v1(SparseNativeTransferPoststateSlicesV1 {
+                market: [market, empty, empty, empty, empty],
+                source: [destination, empty, empty, empty, empty],
+                destination: [source, empty, empty, empty, empty],
+            });
+        assert_ne!(complete, reordered);
     }
 }

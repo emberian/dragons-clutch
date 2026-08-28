@@ -21,6 +21,7 @@ dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
 dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-market-founding-v1-operator = { path = "../../../../crates/dclutch-market-founding-v1-operator" }
+dclutch-market-retirement-v1-operator = { path = "../../../../crates/dclutch-market-retirement-v1-operator" }
 dclutch-operator = { path = "../../../../crates/dclutch-operator" }
 dclutch-product-runtime-v2 = { path = "../../../../crates/dclutch-product-runtime-v2" }
 dclutch-product-payoff-v2-codec = { path = "../../../../crates/dclutch-product-payoff-v2-codec" }
@@ -39,6 +40,7 @@ dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-
 dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
+dclutch-resolution-core-v3-operator = { path = "../../../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-source-contract = { path = "../../../../crates/dclutch-source-contract" }
 dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
 dclutch-versioned-message-operator = { path = "../../../../crates/dclutch-versioned-message-operator" }

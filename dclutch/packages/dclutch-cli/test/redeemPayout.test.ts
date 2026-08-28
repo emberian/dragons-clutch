@@ -20,6 +20,7 @@ import {
 } from '../src/commands/redeem';
 
 const DEVNET = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
 function key(byte: number): string {
   return new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -27,6 +28,10 @@ function key(byte: number): string {
 
 function identity(byte: number): string {
   return byte.toString(16).padStart(2, '0').repeat(32);
+}
+
+function addressIdentity(value: string): string {
+  return Buffer.from(new PublicKey(value).toBytes()).toString('hex');
 }
 
 function manifestValue(): Record<string, unknown> {
@@ -42,12 +47,16 @@ function manifestValue(): Record<string, unknown> {
     'aggregate', 'linkedBasisRaw', 'linkedBasisStaging', 'productRaw', 'productStaging',
     'resultDomainRaw', 'resultDomainStaging', 'portfolioRaw', 'portfolioStaging',
     'market', 'activationCache', 'registryProgram', 'claimsProgram', 'claimsProgramData',
-    'coreProgram', 'coreProgramData', 'position', 'exposureRaw', 'exposureStaging',
-    'custodyProgram', 'terminalCoordinateRaw', 'terminalCoordinateStaging', 'realmRaw',
+    'coreProgram', 'coreProgramData', 'resolutionProgram', 'resolutionProgramData', 'position',
+    'exposureRaw', 'exposureStaging', 'custodyProgram', 'terminalCertificate', 'realmRaw',
     'realmStaging', 'custodyReplay', 'collateralMint', 'hoard', 'recipient',
     'custodyAuthority', 'tokenProgram',
   ] as const;
-  const route = Object.fromEntries(routeFields.map((field, index) => [field, key(20 + index)]));
+  const route = Object.fromEntries(routeFields.map((field, index) => [field, key(20 + index)])) as Record<typeof routeFields[number], string>;
+  const [resolutionProgramData] = PublicKey.findProgramAddressSync([
+    new PublicKey(route.resolutionProgram).toBytes(),
+  ], UPGRADEABLE_LOADER);
+  route.resolutionProgramData = resolutionProgramData.toBase58();
   Object.assign(route, { market, position, claimsProgram, custodyProgram, collateralMint, tokenProgram, recipient });
   return {
     format: 'dclutch-wallet-terminal-payout-v3',
@@ -56,7 +65,7 @@ function manifestValue(): Record<string, unknown> {
     request: {
       releaseSet: identity(10), market, realm: identity(11), parentContext: identity(12),
       productRecordDigest: identity(13), exposureId: identity(14), exposureDigest: identity(15),
-      terminalRecordDigest: identity(16), owner, position, recipientOwner: owner, recipient,
+      terminalRecordDigest: addressIdentity(route.terminalCertificate), owner, position, recipientOwner: owner, recipient,
       claimsProgram, custodyProgram, collateralMint, tokenProgram, semanticBasisId: identity(17),
       linkedBasisRecordDigest: identity(18), generation: '1', expectedMarketRevision: '2',
       expectedPositionRevision: '3', expectedCustodyRevision: '4', quantity: '7',
@@ -105,30 +114,32 @@ describe('wallet terminal payout producer consumer', () => {
         format: 'dclutch-wallet-terminal-payout-plan-input-v1', market: key(1), owner,
         recipientOwner: owner, recipient, collateralMint: key(4), tokenProgram: key(5),
         quantity: '7', claimIndex: 1, transferIndex: 0, parentContext: identity(6),
-        custodyContext: identity(7), releaseSet: identity(8),
-        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13) },
+        custodyContext: identity(7), releaseSet: identity(8), terminalCertificate: key(30),
+        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13), resolution: key(14) },
         records: {
           realm: identity(20), product: identity(21), resultDomain: identity(22), portfolio: identity(23),
           productBasis: identity(24), compositionDescriptor: identity(26), compositionGraph: identity(27),
-          compositionTranslation: identity(28), compositionExposure: identity(29), terminalRecord: identity(30),
+          compositionTranslation: identity(28), compositionExposure: identity(29),
         },
       };
       writeFileSync(plan, planBytes);
       writeFileSync(evidence, JSON.stringify({
-        schema: 'dclutch-local-successor-run-evidence-v2', rpc_url: 'https://api.devnet.solana.com/',
-        ledger: '/tmp/ledger', validator_log: '/tmp/validator.log',
+        schema: 'dclutch-successor-campaign-report-v1', cluster: 'devnet',
+        rpc_url: 'https://api.devnet.solana.com/', mode: 'execute',
         plan_sha256: createHash('sha256').update(planBytes).digest('hex'),
-        core_upgrade_authority_pubkey: key(40), private_key_persisted: false,
-        keypair_derivation: 'random-per-run', keypair_seed_sha256: null,
-        foundingCustodyContext: identity(7), directSelectedManifestEntryIndex: 0,
-        completed: ['founding', 'open'], transactions: [],
-        accounts: {
+        execution: {
+          completed: true, recoveredFinalizedFounding: false, transactions: [],
           market: {
-            address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
-            data_sha256: identity(41), account_sha256: identity(42),
+            completed: ['founding', 'open'], founding_custody_context: identity(7),
+            direct_selected_manifest_entry_index: 0,
+            accounts: {
+              founding_market: {
+                address: key(1), owner: key(11), lamports: 1, executable: false, data_len: 1,
+                data_sha256: identity(41), account_sha256: identity(42),
+              },
+            },
           },
         },
-        remaining_execution_seam: 'none',
       }));
       const calls: Array<Readonly<{ binary: string; args: ReadonlyArray<string> }>> = [];
       const result = produceWalletTerminalPayoutInputV1(context(), {}, {
@@ -165,13 +176,12 @@ describe('wallet terminal payout producer consumer', () => {
         format: 'dclutch-wallet-terminal-payout-plan-input-v1', market: key(1), owner,
         recipientOwner: owner, recipient: key(3), collateralMint: key(4), tokenProgram: key(5),
         quantity: '7', claimIndex: 1, transferIndex: 0, parentContext: identity(6),
-        custodyContext: identity(7), releaseSet: identity(8),
-        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13) },
+        custodyContext: identity(7), releaseSet: identity(8), terminalCertificate: key(30),
+        programs: { registry: key(10), core: key(11), claims: key(12), custody: key(13), resolution: key(14) },
         records: {
           realm: identity(20), product: identity(21), resultDomain: identity(22), portfolio: identity(23),
-          productBasis: identity(24), executionDescriptor: identity(25), compositionDescriptor: identity(26),
+          productBasis: identity(24), compositionDescriptor: identity(26),
           compositionGraph: identity(27), compositionTranslation: identity(28), compositionExposure: identity(29),
-          terminalRecord: identity(30),
         },
       };
       const sourceBytes = Buffer.from(JSON.stringify(source));

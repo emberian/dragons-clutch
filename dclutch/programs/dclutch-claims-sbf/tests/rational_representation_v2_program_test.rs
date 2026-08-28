@@ -17,8 +17,7 @@ use dclutch_claims_sbf::custody_replay_v1::{
 };
 use dclutch_claims_sbf::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2,
-    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_liability_basis_market_v2,
-    encode_liability_basis_position_v2, encode_terminal_coordinate_v2,
+    encode_liability_basis_market_v2, encode_liability_basis_position_v2,
 };
 use dclutch_claims_sbf::signed_delta_v3::SignedDeltaSbfErrorV3;
 use dclutch_claims_svm::{
@@ -98,6 +97,7 @@ use dclutch_release_set_contract::{
 use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, RecordAdmissionV3,
 };
+use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
 use dclutch_token_svm::{PRODUCTION_ADAPTER_RELEASES, TOKEN_2022_PROGRAM_ID, TokenAccount};
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
@@ -132,6 +132,7 @@ const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe2; 32]);
 const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe3; 32]);
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe4; 32]);
 const TEST_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe5; 32]);
+const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe6; 32]);
 const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 const GENERATION: u64 = 29;
 /// The campaign basis width `K`, which is also the Product outcome width `N`.
@@ -379,6 +380,7 @@ struct Artifacts {
     custody: Vec<u8>,
     registry: Vec<u8>,
     core: Vec<u8>,
+    resolution: Vec<u8>,
     token_2022: Vec<u8>,
     caller: Vec<u8>,
 }
@@ -395,8 +397,7 @@ struct AssetFixture {
 
 #[derive(Clone, Copy)]
 struct TerminalFixture {
-    coordinate_raw: Pubkey,
-    coordinate_staging: Pubkey,
+    certificate: Pubkey,
     realm_raw: Pubkey,
     realm_staging: Pubkey,
     custody_caller: Pubkey,
@@ -426,6 +427,7 @@ struct Fixture {
     claims_programdata: Pubkey,
     custody_programdata: Pubkey,
     core_programdata: Pubkey,
+    resolution_programdata: Pubkey,
     caller_programdata: Pubkey,
     representation_authority: Pubkey,
     descriptor_id: [u8; 32],
@@ -459,7 +461,10 @@ struct Fixture {
     linked_basis_digest: [u8; 32],
     /// SHA-256 of the finalized composition-exposure bytes.
     graph_digest: [u8; 32],
-    /// The Core terminal receipt digest, when this fixture is a resolved Market.
+    /// The Core terminal receipt certificate account, when this fixture is resolved.
+    ///
+    /// The field name follows the stable V3 request member; the bytes are an
+    /// account identity, never a content digest.
     terminal_record_digest: Option<[u8; 32]>,
     /// Finalized ResultDomainV2 record digest.
     result_domain_digest: [u8; 32],
@@ -549,6 +554,7 @@ fn artifacts() -> Artifacts {
         custody: read("dclutch_custody_sbf.so"),
         registry: read("dclutch_registry_sbf.so"),
         core: read("dclutch_core_sbf.so"),
+        resolution: read("dclutch_resolution_proof_sbf.so"),
         token_2022,
         caller: read("dclutch_rational_v2_test_caller_sbf.so"),
     }
@@ -695,11 +701,12 @@ fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
     let claims = release(CLAIMS_PROGRAM_ID, 0x42, &artifacts.claims);
     let custody = release(CUSTODY_PROGRAM_ID, 0x43, &artifacts.custody);
     let trading = release(TEST_CALLER_PROGRAM_ID, 0x44, &artifacts.caller);
+    let resolution = release(RESOLUTION_PROGRAM_ID, 0x45, &artifacts.resolution);
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
         binding(claims),
         binding(trading),
-        binding(claims),
+        binding(resolution),
         binding(custody),
     )
     .expect("release set");
@@ -711,7 +718,7 @@ fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
         (ExecutionRoleV1::Core, core),
         (ExecutionRoleV1::Claims, claims),
         (ExecutionRoleV1::Trading, trading),
-        (ExecutionRoleV1::Resolution, claims),
+        (ExecutionRoleV1::Resolution, resolution),
         (ExecutionRoleV1::Custody, custody),
     ] {
         activate_execution_role_into_v1(
@@ -879,27 +886,6 @@ struct ProductClaimsFixture {
     result_domain_staging: Pubkey,
     portfolio_record: Pubkey,
     portfolio_staging: Pubkey,
-}
-
-fn add_core_finalized_record(
-    test: &mut ProgramTest,
-    schema: [u8; 32],
-    bytes: &[u8],
-) -> (Pubkey, Pubkey, [u8; 32]) {
-    let digest = hash(bytes).to_bytes();
-    let raw = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
-        &CORE_PROGRAM_ID,
-    )
-    .0;
-    let staging = Pubkey::find_program_address(
-        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
-        &CORE_PROGRAM_ID,
-    )
-    .0;
-    add_account(test, raw, CORE_PROGRAM_ID, bytes.to_vec());
-    add_account(test, staging, system_program::ID, Vec::new());
-    (raw, staging, digest)
 }
 
 fn runtime_id(value: [u8; 32]) -> RuntimeContentId {
@@ -1652,6 +1638,11 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
             artifacts.core.as_slice(),
         ),
         (
+            "dclutch_resolution_proof_sbf",
+            RESOLUTION_PROGRAM_ID,
+            artifacts.resolution.as_slice(),
+        ),
+        (
             "dclutch_rational_v2_test_caller_sbf",
             TEST_CALLER_PROGRAM_ID,
             artifacts.caller.as_slice(),
@@ -1708,18 +1699,44 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         add_finalized_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, &realm_bytes);
 
     let product_claims = add_product_claims(&mut test);
-    let terminal_coordinate = terminal.then(|| {
-        let bytes = encode_terminal_coordinate_v2(0, 1).expect("terminal coordinate");
-        add_core_finalized_record(&mut test, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, &bytes)
-    });
+    let terminal_certificate = terminal.then(|| Pubkey::new_from_array([0x86; 32]));
     let (market, core_data) = core_market(
         release_set,
         realm_id,
         product_claims.product_digest,
         product_claims.product_id,
-        terminal_coordinate.map(|(_, _, digest)| digest),
+        terminal_certificate.map(|certificate| certificate.to_bytes()),
     );
     add_account(&mut test, market, CORE_PROGRAM_ID, core_data);
+    if let Some(certificate) = terminal_certificate {
+        let bytes = ResolutionCertificateV2 {
+            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            market: market.to_bytes(),
+            route: [0x87; 32],
+            source_material: [0x63; 32],
+            product_record_digest: product_claims.product_digest,
+            provider_evidence: [0x88; 32],
+            funding_allocation: [0; 32],
+            receipt_account: certificate.to_bytes(),
+            generation: GENERATION,
+            attempt_index: 0,
+            schedule_index: 0,
+            selector: WINNER,
+            work_paid: 0,
+            funding_remaining: 0,
+            result_numerator: 1,
+            result_denominator: 1,
+            observed_at: 1,
+        }
+        .to_bytes()
+        .expect("canonical Resolution certificate");
+        add_account(
+            &mut test,
+            certificate,
+            RESOLUTION_PROGRAM_ID,
+            bytes.to_vec(),
+        );
+    }
     let aggregate = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()],
         &CLAIMS_PROGRAM_ID,
@@ -1995,6 +2012,7 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         claims_programdata: programdata_address(CLAIMS_PROGRAM_ID),
         custody_programdata: programdata_address(CUSTODY_PROGRAM_ID),
         core_programdata: programdata_address(CORE_PROGRAM_ID),
+        resolution_programdata: programdata_address(RESOLUTION_PROGRAM_ID),
         caller_programdata: programdata_address(TEST_CALLER_PROGRAM_ID),
         representation_authority,
         descriptor_id,
@@ -2019,7 +2037,7 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         semantic_basis_id: product_claims.basis_id,
         linked_basis_digest: product_claims.linked_basis_digest,
         graph_digest,
-        terminal_record_digest: terminal_coordinate.map(|(_, _, digest)| digest),
+        terminal_record_digest: terminal_certificate.map(|certificate| certificate.to_bytes()),
         result_domain_digest: product_claims.result_domain_id,
         linked_basis_bytes: product_claims.linked_basis_bytes.clone(),
         graph_bytes: graph.clone(),
@@ -2140,8 +2158,7 @@ fn fixture_with(terminal: bool, receipt_roles: ReceiptMintRoles) -> (ProgramTest
         );
         add_account(&mut test, custody_caller, system_program::ID, Vec::new());
         fixture.terminal_accounts = Some(TerminalFixture {
-            coordinate_raw: sysvar::rent::ID,
-            coordinate_staging: sysvar::rent::ID,
+            certificate: terminal_certificate.expect("terminal certificate"),
             realm_raw,
             realm_staging,
             custody_caller,
@@ -2299,8 +2316,9 @@ fn claims_accounts_for_selected(
             AccountMeta::new_readonly(terminal.custody_caller, false),
             AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
             AccountMeta::new_readonly(fixture.custody_programdata, false),
-            AccountMeta::new_readonly(terminal.coordinate_raw, false),
-            AccountMeta::new_readonly(terminal.coordinate_staging, false),
+            AccountMeta::new_readonly(terminal.certificate, false),
+            AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
+            AccountMeta::new_readonly(fixture.resolution_programdata, false),
             AccountMeta::new_readonly(terminal.realm_raw, false),
             AccountMeta::new_readonly(terminal.realm_staging, false),
             AccountMeta::new(terminal.custody_replay, false),
@@ -3784,6 +3802,13 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         None,
         Some((fixture.alternate_graph_raw, fixture.alternate_graph_staging)),
     );
+    let mut certificate_substitution = positive.clone();
+    let certificate_meta = 1 + RATIONAL_BASE_ACCOUNT_COUNT_V2 + RATIONAL_ASSET_ACCOUNT_COUNT_V2 + 3;
+    certificate_substitution
+        .accounts
+        .get_mut(certificate_meta)
+        .expect("terminal certificate meta")
+        .pubkey = sysvar::rent::ID;
     let expected_claims_accounts = RATIONAL_BASE_ACCOUNT_COUNT_V2
         + RATIONAL_ASSET_ACCOUNT_COUNT_V2
         + RATIONAL_TERMINAL_ACCOUNT_COUNT_V2;
@@ -3798,6 +3823,7 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
         late.clone(),
         descriptor_substitution.clone(),
         graph_substitution.clone(),
+        certificate_substitution.clone(),
     ];
     let addresses = lookup_addresses(payer, fixture.actor.pubkey(), &instructions);
     let (table, lookup_cu) = create_live_lookup_table(
@@ -3828,6 +3854,10 @@ async fn real_sbf_terminal_hostile_joins_and_late_child_failure_are_atomic() {
     for (label, hostile) in [
         ("same-width descriptor", descriptor_substitution),
         ("same-width graph", graph_substitution),
+        (
+            "substituted Resolution certificate",
+            certificate_substitution,
+        ),
     ] {
         let result = submit_v0(
             &mut context,
@@ -4616,6 +4646,10 @@ struct WalletPayoutOverrides {
     quantity: Option<u64>,
     /// The Core terminal receipt this request claims to settle.
     terminal_record_digest: Option<[u8; 32]>,
+    /// Certificate account presented at the authenticated Resolution seam.
+    terminal_certificate_account: Option<Pubkey>,
+    /// ProgramData presented for the activated Resolution role.
+    resolution_programdata_account: Option<Pubkey>,
     /// The optimistic Custody replay cursor.
     expected_custody_revision: Option<u64>,
     /// Coordinate 14/15, when they must not be this program.
@@ -4872,7 +4906,7 @@ fn wallet_payout_custody_caller(
     .0
 }
 
-/// The exact 35-account terminal-settlement frame for a wallet payout.
+/// The exact 36-account terminal-settlement frame for a wallet payout.
 fn wallet_payout_instruction(
     fixture: &Fixture,
     overrides: WalletPayoutOverrides,
@@ -4921,10 +4955,19 @@ fn wallet_payout_instruction(
             false,
         ),
         AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
-        // The CategoricalQ1 placeholder pair: this basis has no rational
-        // terminal coordinate, and the route pins both to the Rent sysvar.
-        AccountMeta::new_readonly(sysvar::rent::ID, false),
-        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(
+            overrides
+                .terminal_certificate_account
+                .unwrap_or(terminal.certificate),
+            false,
+        ),
+        AccountMeta::new_readonly(RESOLUTION_PROGRAM_ID, false),
+        AccountMeta::new_readonly(
+            overrides
+                .resolution_programdata_account
+                .unwrap_or(fixture.resolution_programdata),
+            false,
+        ),
         AccountMeta::new_readonly(terminal.realm_raw, false),
         AccountMeta::new_readonly(terminal.realm_staging, false),
         AccountMeta::new(terminal.custody_replay, false),
@@ -4947,13 +4990,14 @@ fn wallet_payout_instruction(
 
 /// Submit one wallet payout over a live address-lookup table.
 ///
-/// This route CANNOT ride a legacy packet. Its frame is thirty-five accounts and
-/// its request is six hundred and forty bytes: 1,869 bytes measured against the
-/// 1,232-byte limit. That is a protocol fact about terminal settlement, not a
-/// campaign choice, and it is the one asymmetry between the redemption's two
-/// steps -- step one (`custody_replay_v1`, 711 bytes) is deliberately legacy so
-/// a redeemer can always create the cursor, and step two needs a published
-/// table. Any redemption builder, including the browser's, has to publish one.
+/// This route CANNOT ride a legacy packet. Its frame is thirty-six accounts and
+/// its request is six hundred and forty bytes; the measured legacy encoding
+/// exceeds the 1,232-byte limit. That is a protocol fact about terminal
+/// settlement, not a campaign choice, and it is the one asymmetry between the
+/// redemption's two steps -- step one (`custody_replay_v1`, 711 bytes) is
+/// deliberately legacy so a redeemer can always create the cursor, and step two
+/// needs a published table. Any redemption builder, including the browser's,
+/// has to publish one.
 async fn submit_wallet_payout(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -4970,11 +5014,14 @@ async fn submit_wallet_payout(
     } else {
         context.payer.pubkey()
     };
+    // Every call must produce a distinct transaction even when a hostile keeps
+    // the instruction bytes identical. ProgramTest records failed signatures;
+    // reusing the current blockhash can therefore prove only AlreadyProcessed
+    // (with no program logs) instead of exercising Claims' refusal again.
     let blockhash = context
-        .banks_client
-        .get_latest_blockhash()
+        .get_new_latest_blockhash()
         .await
-        .expect("blockhash");
+        .expect("a distinct wallet-payout blockhash");
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &fee_payer,
@@ -5430,7 +5477,7 @@ async fn a_stale_custody_cursor_refuses_the_second_wallet_payout() {
 
 /// Every way a wallet payout can be bent, and the exact refusal for each.
 ///
-/// One fixture, one prestate, six substitutions. Each asserts the named code and
+/// One fixture, one prestate, nine substitutions. Each asserts the named code and
 /// that the Hoard, the recipient, the wallet's Position and the aggregate are
 /// byte-identical afterwards -- a refusal after a partial write would be worse
 /// than an acceptance.
@@ -5507,7 +5554,27 @@ async fn the_wallet_payout_hostiles_refuse_and_move_nothing() {
                 ..WalletPayoutOverrides::default()
             },
             ClaimsSbfError::Identity as u32,
-            "a substituted terminal certificate",
+            "a substituted certificate identity in the request",
+        ),
+        (
+            // Keeping the request honest does not permit an account
+            // substitution at the Resolution seam either.
+            WalletPayoutOverrides {
+                terminal_certificate_account: Some(sysvar::rent::ID),
+                ..WalletPayoutOverrides::default()
+            },
+            ClaimsSbfError::Identity as u32,
+            "a substituted certificate account",
+        ),
+        (
+            // The certificate owner alone is not authority: the Resolution
+            // ProgramData must be the deployment pinned by the release set.
+            WalletPayoutOverrides {
+                resolution_programdata_account: Some(fixture.core_programdata),
+                ..WalletPayoutOverrides::default()
+            },
+            ClaimsSbfError::Release as u32,
+            "a substituted Resolution ProgramData",
         ),
         (
             // Role `Claims` means THIS program is the executor. A caller program
@@ -5559,6 +5626,73 @@ async fn the_wallet_payout_hostiles_refuse_and_move_nothing() {
                 .custody_replay
                 .as_ref()
                 .expect("pre Claims-role replay"),
+        );
+    }
+}
+
+/// Core's receipt key is necessary but not sufficient: Claims independently
+/// authenticates the exact live Resolution-owned certificate account.
+#[tokio::test]
+async fn the_resolution_certificate_owner_rent_width_and_body_are_all_required() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    create_claims_custody_replay(&mut context, &fixture).await;
+    let (table, addresses) = wallet_payout_lookup_table(
+        &mut context,
+        &fixture,
+        "claims rational-representation-v2: Resolution certificate hostiles",
+    )
+    .await;
+    let before = snapshot(&mut context, &fixture).await;
+    let certificate_key = fixture
+        .terminal_accounts
+        .expect("terminal fixture")
+        .certificate;
+    let honest = observed(&mut context, certificate_key).await;
+    let decoded = ResolutionCertificateV2::decode(&honest.data).expect("fixture certificate");
+
+    let mut wrong_owner = honest.clone();
+    wrong_owner.owner = CORE_PROGRAM_ID;
+
+    let mut underfunded = honest.clone();
+    underfunded.lamports = Rent::default()
+        .minimum_balance(underfunded.data.len())
+        .checked_sub(1)
+        .expect("positive certificate rent minimum");
+
+    let mut wrong_width = honest.clone();
+    wrong_width.data.pop().expect("nonempty certificate");
+
+    let mut wrong_body = honest.clone();
+    let mut hostile_certificate = decoded;
+    hostile_certificate.market = [0x8a; 32];
+    wrong_body.data = hostile_certificate
+        .to_bytes()
+        .expect("canonical but cross-Market certificate")
+        .to_vec();
+
+    for (label, hostile) in [
+        ("another owner", wrong_owner),
+        ("less than rent exemption", underfunded),
+        ("a truncated width", wrong_width),
+        ("another Market in its canonical body", wrong_body),
+    ] {
+        context.set_account(&certificate_key, &AccountSharedData::from(hostile));
+        let result = submit_wallet_payout(
+            &mut context,
+            &fixture,
+            table,
+            &addresses,
+            WalletPayoutOverrides::default(),
+            &format!("claims rational-representation-v2: certificate with {label}"),
+        )
+        .await;
+        assert_refused_with(&result, ClaimsSbfError::Identity as u32, label);
+        context.set_account(&certificate_key, &AccountSharedData::from(honest.clone()));
+        assert_eq!(
+            snapshot(&mut context, &fixture).await,
+            before,
+            "certificate hostile {label} must move no economic resource"
         );
     }
 }

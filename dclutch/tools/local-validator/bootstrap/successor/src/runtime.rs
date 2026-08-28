@@ -24,10 +24,10 @@ use dclutch_product_runtime_v2_operator::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
-    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetV1, ActivationCacheProgressV1,
-    ArtifactActivationInputV1, ArtifactReleaseV1, DeploymentObservationV1,
-    ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
-    activation_cache_progress_v1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ActivationCacheProgressV1, ArtifactActivationInputV1,
+    ArtifactReleaseV1, DeploymentObservationV1, ExecutionReleaseActivationInputsV1,
+    activate_execution_release_set_v1, activation_cache_progress_v1,
 };
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View,
@@ -632,6 +632,7 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
         rent_credit_elf: PathBuf::from(&spec.rent_credit.elf_path),
         rent_credit_sha256: spec.rent_credit.elf_sha256.clone(),
         rent_credit_semantic_release_id: spec.rent_credit.semantic_release_id.clone(),
+        checked_upgrade_set: None,
         record_publication: match spec.record_publication.as_deref() {
             None => crate::plan::RecordPublicationV1::Genesis,
             Some(value) => crate::plan::RecordPublicationV1::parse(value)?,
@@ -651,6 +652,7 @@ fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArg
 fn role_deployment_input(input: &RunProgramInput) -> RoleDeploymentInputV1 {
     RoleDeploymentInputV1 {
         observed_programdata: input.observed_programdata.as_deref().map(PathBuf::from),
+        observed_programdata_bytes: None,
         expected_live_elf_sha256: input.observed_elf_sha256.clone(),
         genesis_deployment_slot: input.genesis_deployment_slot.unwrap_or(0),
         // The supervised `run` substrate is the genesis install this campaign
@@ -928,6 +930,73 @@ pub(crate) fn existing_finalized_record_is_exact(
         ));
     }
     Ok(true)
+}
+
+/// Price only the rent that one exact Registry publication coordinate still
+/// needs. The shared publication planner is the semantic owner for vacant,
+/// partial, complete, and conflicting record pairs, so budget arithmetic
+/// cannot silently disagree with the executor's resumability detector.
+pub(crate) fn remaining_record_publication_rent(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    label: &str,
+    sponsor: Pubkey,
+) -> Result<u64> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let (raw, staging) = record(plan, label)?;
+    let pair = plan
+        .records
+        .get(label)
+        .ok_or_else(|| Error::new(format!("plan omitted record {label}")))?;
+    let schema = hex32(&pair.schema_id)?;
+    let body = decode_hex(&pair.body_hex)?;
+    if hex(&sha2::Sha256::digest(&body)) != pair.content_sha256 {
+        return Err(Error::new(format!(
+            "record {label} body does not match its content coordinate"
+        )));
+    }
+    let keys = [
+        sponsor,
+        raw,
+        staging,
+        system_program::ID,
+        sysvar::rent::ID,
+        sysvar::clock::ID,
+    ];
+    let (slot, values) = rpc.finalized_accounts(&keys, 0)?;
+    let mut observations = publication_observations(slot, &keys, &values)?;
+    // Budgeting must report a shortfall rather than letting the planner's
+    // sponsor-balance admission hide the amount required. Identity, owner,
+    // data, and the exact refund destination remain those observed above.
+    observations[0].lamports = u64::MAX;
+    let state = RecordPublicationStateV1 {
+        sponsor: observations[0],
+        raw_record: observations[1],
+        staging_cursor: observations[2],
+        system_program: observations[3],
+        rent: observations[4],
+        clock: observations[5],
+    };
+    let publication = RecordPublicationContentV1 {
+        schema_release_id: schema,
+        content: &body,
+    };
+    remaining_record_publication_rent_from_state(registry, publication, state, label)
+}
+
+fn remaining_record_publication_rent_from_state(
+    registry: Pubkey,
+    publication: RecordPublicationContentV1<'_>,
+    state: RecordPublicationStateV1<'_>,
+    label: &str,
+) -> Result<u64> {
+    let publication =
+        build_record_publication_step_v1(registry, publication, state).map_err(|error| {
+            Error::new(format!(
+                "record {label} publication coordinate conflicts with the exact plan: {error:?}"
+            ))
+        })?;
+    Ok(publication.sponsor_debit)
 }
 
 pub(crate) fn publish_record(
@@ -1293,6 +1362,70 @@ fn expected_activation(plan: &SuccessorPlan) -> Result<ActivatedExecutionRelease
         .map_err(|error| Error::new(format!("construct expected activation: {error:?}")))
 }
 
+/// Rebuild the exact Registry/Rent infrastructure profile from its saved body.
+/// External campaign admission calls this without invoking the local
+/// supervisor's deliberately immutable-only plan validator.
+pub(crate) fn authenticate_infrastructure_profile_projection(plan: &SuccessorPlan) -> Result<()> {
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let rent = pubkey(&plan.rent_credit.program_id)?;
+    validate_program_ids(&[registry, core, rent])?;
+    let address =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], &core).0;
+    if plan.infrastructure_profile.address != address.to_string()
+        || hex32(&plan.infrastructure_profile.schema_id)?
+            != PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1
+    {
+        return Err(Error::new(
+            "infrastructure profile address or schema is not canonical",
+        ));
+    }
+    let body = decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let profile = ProtocolInfrastructureProfileV1::decode(&body)
+        .map_err(|error| Error::new(format!("infrastructure profile: {error:?}")))?;
+    let registry_artifact = artifact_id(&plan.registry.artifact_release_id)?;
+    let rent_artifact = artifact_id(&plan.rent_credit.artifact_release_id)?;
+    if profile.registry().program().to_bytes() != registry.to_bytes()
+        || profile.registry().artifact_release() != registry_artifact
+        || profile.rent().program().to_bytes() != rent.to_bytes()
+        || profile.rent().artifact_release() != rent_artifact
+        || plan.infrastructure_profile.registry_artifact_release_id
+            != plan.registry.artifact_release_id
+        || plan.infrastructure_profile.rent_artifact_release_id
+            != plan.rent_credit.artifact_release_id
+    {
+        return Err(Error::new(
+            "infrastructure profile substituted a Registry or Rent binding",
+        ));
+    }
+    if plan.infrastructure_profile.body_sha256 != hex(&sha2::Sha256::digest(&body)) {
+        return Err(Error::new("infrastructure profile body hash mismatch"));
+    }
+    Ok(())
+}
+
+/// Rebuild the activation projection from the saved record bodies and require
+/// its PDA to match. External campaign admission calls this without invoking
+/// the local supervisor's deliberately immutable-only plan validator.
+pub(crate) fn authenticate_checked_activation_projection(plan: &SuccessorPlan) -> Result<()> {
+    let expected = expected_activation(plan)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let address = Pubkey::find_program_address(
+        &[
+            ACTIVATION_PDA_DOMAIN_V1,
+            expected.execution_release_set_id().as_bytes(),
+        ],
+        &registry,
+    )
+    .0;
+    if address != pubkey(&plan.activation)? {
+        return Err(Error::new(
+            "activation address was not derived from the exact release-set body",
+        ));
+    }
+    Ok(())
+}
+
 fn checked_activation_progress(
     registry: Pubkey,
     account: &crate::rpc::RpcAccount,
@@ -1334,6 +1467,55 @@ pub(crate) fn activation_progress(
         return Ok(None);
     };
     checked_activation_progress(registry, &account, expected).map(Some)
+}
+
+/// Price exactly the activation cache that this plan derives. A valid partial
+/// already owns the full rent-exempt cache and needs no second rent payment;
+/// a substituted or underfunded existing account is a conflict, not a reason
+/// to budget over it.
+pub(crate) fn remaining_activation_rent(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<u64> {
+    let expected = expected_activation(plan)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let address = Pubkey::find_program_address(
+        &[
+            ACTIVATION_PDA_DOMAIN_V1,
+            expected.execution_release_set_id().as_bytes(),
+        ],
+        &registry,
+    )
+    .0;
+    if address != pubkey(&plan.activation)? {
+        return Err(Error::new(
+            "activation address was not derived from the exact release-set body",
+        ));
+    }
+    let minimum = rpc.minimum_balance(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)?;
+    remaining_activation_rent_for_account(
+        rpc.account(address)?.as_ref(),
+        registry,
+        expected,
+        minimum,
+    )
+}
+
+fn remaining_activation_rent_for_account(
+    account: Option<&crate::rpc::RpcAccount>,
+    registry: Pubkey,
+    expected: ActivatedExecutionReleaseSetV1,
+    minimum_balance: u64,
+) -> Result<u64> {
+    let Some(account) = account else {
+        return Ok(minimum_balance);
+    };
+    checked_activation_progress(registry, account, expected)?;
+    if account.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
+        || account.lamports < minimum_balance
+    {
+        return Err(Error::new(
+            "existing activation cache is not rent-exempt at its exact contract width",
+        ));
+    }
+    Ok(0)
 }
 
 fn verify_core_programdata(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
@@ -1537,40 +1719,7 @@ fn validate_plan(plan: &SuccessorPlan) -> Result<()> {
         ));
     }
 
-    let profile_address = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
-        &programs[1],
-    )
-    .0;
-    if plan.infrastructure_profile.address != profile_address.to_string()
-        || hex32(&plan.infrastructure_profile.schema_id)?
-            != PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1
-    {
-        return Err(Error::new(
-            "infrastructure profile address or schema is not canonical",
-        ));
-    }
-    let body = decode_hex(&plan.infrastructure_profile.body_hex)?;
-    let profile = ProtocolInfrastructureProfileV1::decode(&body)
-        .map_err(|error| Error::new(format!("infrastructure profile: {error:?}")))?;
-    let registry_artifact = artifact_id(&plan.registry.artifact_release_id)?;
-    let rent_artifact = artifact_id(&plan.rent_credit.artifact_release_id)?;
-    if profile.registry().program().to_bytes() != programs[0].to_bytes()
-        || profile.registry().artifact_release() != registry_artifact
-        || profile.rent().program().to_bytes() != programs[6].to_bytes()
-        || profile.rent().artifact_release() != rent_artifact
-        || plan.infrastructure_profile.registry_artifact_release_id
-            != plan.registry.artifact_release_id
-        || plan.infrastructure_profile.rent_artifact_release_id
-            != plan.rent_credit.artifact_release_id
-    {
-        return Err(Error::new(
-            "infrastructure profile substituted a Registry or Rent binding",
-        ));
-    }
-    if plan.infrastructure_profile.body_sha256 != hex(&sha2::Sha256::digest(&body)) {
-        return Err(Error::new("infrastructure profile body hash mismatch"));
-    }
+    authenticate_infrastructure_profile_projection(plan)?;
     for label in [
         "execution_release_set",
         "registry_artifact_release",
@@ -2055,6 +2204,149 @@ mod tests {
         );
     }
 
+    #[test]
+    fn record_budget_prices_vacancy_reuses_exact_finalized_and_refuses_conflict() {
+        use solana_program::{
+            account_info::AccountInfo, clock::Clock, rent::Rent, sysvar::SysvarSerialize as _,
+        };
+        use solana_sdk_ids::native_loader;
+
+        let registry = Pubkey::new_unique();
+        let sponsor = Pubkey::new_unique();
+        let content_bytes = b"record budget exact body";
+        let content = RecordPublicationContentV1 {
+            schema_release_id: [0x43; 32],
+            content: content_bytes,
+        };
+        let (raw, staging, _) = derive_record_addresses_v1(registry, content).expect("addresses");
+        let rent = Rent::default();
+        let mut rent_lamports = 1;
+        let mut rent_bytes = vec![0; Rent::size_of()];
+        let rent_key = sysvar::rent::ID;
+        let sysvar_owner = sysvar::ID;
+        let mut rent_info = AccountInfo::new(
+            &rent_key,
+            false,
+            false,
+            &mut rent_lamports,
+            &mut rent_bytes,
+            &sysvar_owner,
+            false,
+        );
+        rent.to_account_info(&mut rent_info).expect("Rent bytes");
+        let clock = Clock {
+            slot: 19_000,
+            ..Clock::default()
+        };
+        let mut clock_lamports = 1;
+        let mut clock_bytes = vec![0; Clock::size_of()];
+        let clock_key = sysvar::clock::ID;
+        let mut clock_info = AccountInfo::new(
+            &clock_key,
+            false,
+            false,
+            &mut clock_lamports,
+            &mut clock_bytes,
+            &sysvar_owner,
+            false,
+        );
+        clock.to_account_info(&mut clock_info).expect("Clock bytes");
+        fn observation(
+            key: Pubkey,
+            owner: Pubkey,
+            lamports: u64,
+            executable: bool,
+            data: &[u8],
+        ) -> AccountObservationV2<'_> {
+            AccountObservationV2 {
+                slot: 730,
+                key,
+                owner,
+                lamports,
+                executable,
+                data,
+            }
+        }
+        fn state<'a>(
+            sponsor: Pubkey,
+            raw: Pubkey,
+            staging: Pubkey,
+            raw_owner: Pubkey,
+            raw_lamports: u64,
+            raw_data: &'a [u8],
+            rent_bytes: &'a [u8],
+            clock_bytes: &'a [u8],
+        ) -> RecordPublicationStateV1<'a> {
+            RecordPublicationStateV1 {
+                sponsor: observation(sponsor, system_program::ID, u64::MAX, false, &[]),
+                raw_record: observation(raw, raw_owner, raw_lamports, false, raw_data),
+                staging_cursor: observation(staging, system_program::ID, 0, false, &[]),
+                system_program: observation(
+                    system_program::ID,
+                    native_loader::ID,
+                    1,
+                    true,
+                    b"system_program",
+                ),
+                rent: observation(sysvar::rent::ID, sysvar::ID, 1, false, rent_bytes),
+                clock: observation(sysvar::clock::ID, sysvar::ID, 1, false, clock_bytes),
+            }
+        }
+        let vacant = remaining_record_publication_rent_from_state(
+            registry,
+            content,
+            state(
+                sponsor,
+                raw,
+                staging,
+                system_program::ID,
+                0,
+                &[],
+                &rent_bytes,
+                &clock_bytes,
+            ),
+            "test",
+        )
+        .expect("vacant coordinate");
+        assert!(vacant > rent.minimum_balance(content_bytes.len()));
+
+        let exact = remaining_record_publication_rent_from_state(
+            registry,
+            content,
+            state(
+                sponsor,
+                raw,
+                staging,
+                registry,
+                rent.minimum_balance(content_bytes.len()),
+                content_bytes,
+                &rent_bytes,
+                &clock_bytes,
+            ),
+            "test",
+        )
+        .expect("exact finalized coordinate");
+        assert_eq!(exact, 0);
+
+        let refusal = remaining_record_publication_rent_from_state(
+            registry,
+            content,
+            state(
+                sponsor,
+                raw,
+                staging,
+                Pubkey::new_unique(),
+                1,
+                content_bytes,
+                &rent_bytes,
+                &clock_bytes,
+            ),
+            "test",
+        )
+        .expect_err("conflicting raw coordinate");
+        assert!(refusal.0.contains("conflicts"), "{}", refusal.0);
+    }
+
     fn activation_role(
         tag: u8,
         loader: dclutch_release_set_contract::ProgramIdentityV1,
@@ -2144,6 +2436,11 @@ mod tests {
             let progress = checked_activation_progress(registry, &account, expected)
                 .expect("exact partial is resumable");
             assert_eq!(progress.written_count(), written_count);
+            assert_eq!(
+                remaining_activation_rent_for_account(Some(&account), registry, expected, 1)
+                    .expect("exact partial already owns its full cache rent"),
+                0
+            );
             for (index, role) in ACTIVATION_ROLES_V1.into_iter().enumerate() {
                 assert_eq!(progress.is_written(role), index < written_count);
                 assert_eq!(
@@ -2157,6 +2454,16 @@ mod tests {
         let complete_progress = checked_activation_progress(registry, &complete_account, expected)
             .expect("exact retry is idempotent");
         assert!(complete_progress.is_complete());
+        assert_eq!(
+            remaining_activation_rent_for_account(None, registry, expected, 99)
+                .expect("missing cache"),
+            99
+        );
+        assert_eq!(
+            remaining_activation_rent_for_account(Some(&complete_account), registry, expected, 1)
+                .expect("exact complete cache"),
+            0
+        );
         assert!(
             ACTIVATION_ROLES_V1
                 .into_iter()
@@ -2176,8 +2483,17 @@ mod tests {
 
         let wrong_owner = rpc_account(Pubkey::new_unique(), false, 1, &complete);
         assert!(checked_activation_progress(registry, &wrong_owner, expected).is_err());
+        assert!(
+            remaining_activation_rent_for_account(Some(&wrong_owner), registry, expected, 1)
+                .is_err()
+        );
         let executable = rpc_account(registry, true, 1, &complete);
         assert!(checked_activation_progress(registry, &executable, expected).is_err());
+        let underfunded = rpc_account(registry, false, 0, &complete);
+        assert!(
+            remaining_activation_rent_for_account(Some(&underfunded), registry, expected, 1)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2347,7 +2663,7 @@ mod tests {
             resolution_sha256: digest(&resolution_elf),
             resolution_elf,
             resolution_semantic_release_id: hex(
-                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+                &dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
             ),
             custody_program: program(0x36),
             custody_sha256: digest(&custody_elf),
@@ -2357,6 +2673,7 @@ mod tests {
             rent_credit_elf: rent_elf,
             rent_credit_sha256: rent_sha,
             rent_credit_semantic_release_id: "17".repeat(32),
+            checked_upgrade_set: None,
             record_publication: crate::plan::RecordPublicationV1::Genesis,
             deployments: RoleDeploymentsV1::default(),
         })

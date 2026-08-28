@@ -24,6 +24,33 @@ const ACCOUNT_NATIVE_OFFSET: usize = 109;
 const ACCOUNT_DELEGATED_AMOUNT_OFFSET: usize = 121;
 const ACCOUNT_CLOSE_AUTHORITY_OFFSET: usize = 129;
 
+/// Canonical base-token Account byte coordinates.
+///
+/// This layout is the single public owner used by adapters and adversarial
+/// real-SBF fixtures that must name an exact field without restating SPL's
+/// packed offsets.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TokenAccountLayoutV1;
+
+impl TokenAccountLayoutV1 {
+    /// Mint identity.
+    pub const MINT: usize = ACCOUNT_MINT_OFFSET;
+    /// Token authority.
+    pub const OWNER: usize = ACCOUNT_OWNER_OFFSET;
+    /// Raw token amount.
+    pub const AMOUNT: usize = ACCOUNT_AMOUNT_OFFSET;
+    /// Four-byte delegate option tag followed by its 32-byte body.
+    pub const DELEGATE: usize = ACCOUNT_DELEGATE_OFFSET;
+    /// Account lifecycle state byte.
+    pub const STATE: usize = ACCOUNT_STATE_OFFSET;
+    /// Four-byte native-reserve option tag followed by its eight-byte body.
+    pub const NATIVE_RESERVE: usize = ACCOUNT_NATIVE_OFFSET;
+    /// Remaining delegated amount.
+    pub const DELEGATED_AMOUNT: usize = ACCOUNT_DELEGATED_AMOUNT_OFFSET;
+    /// Four-byte close-authority option tag followed by its 32-byte body.
+    pub const CLOSE_AUTHORITY: usize = ACCOUNT_CLOSE_AUTHORITY_OFFSET;
+}
+
 /// The SVM's fixed four-byte optional-value representation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum COption<T> {
@@ -124,6 +151,26 @@ pub struct TokenAccount {
 }
 
 impl TokenAccount {
+    /// Encode the canonical freshly initialized 165-byte base token Account.
+    ///
+    /// This is the exact poststate produced by `InitializeAccount3`: the
+    /// supplied mint and owner, zero amount, `Initialized`, and no delegate,
+    /// native reserve, or close authority. The output is hostile-decoded again
+    /// before it is returned so callers share the same total layout owner as
+    /// [`TokenAccount::parse`].
+    pub fn initialized_base_bytes(mint: Address, owner: Address) -> Result<[u8; ACCOUNT_BYTES]> {
+        let mut output = [0; ACCOUNT_BYTES];
+        write_exact(&mut output, ACCOUNT_MINT_OFFSET, &mint)?;
+        write_exact(&mut output, ACCOUNT_OWNER_OFFSET, &owner)?;
+        write_exact(
+            &mut output,
+            ACCOUNT_STATE_OFFSET,
+            &[AccountState::Initialized as u8],
+        )?;
+        Self::parse(&output)?;
+        Ok(output)
+    }
+
     /// Parse exactly 165 bytes, refusing truncation and every extension suffix.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != ACCOUNT_BYTES {
@@ -140,6 +187,68 @@ impl TokenAccount {
             close_authority: parse_coption_address(bytes, ACCOUNT_CLOSE_AUTHORITY_OFFSET)?,
         })
     }
+
+    /// Project the exact base-account bytes after a balance-only transfer.
+    ///
+    /// Every byte except the amount field is copied from the hostile-decoded
+    /// prestate. This mirrors the official base-account packer and gives
+    /// callers one layout owner for exact post-CPI joins.
+    pub fn project_amount_poststate(
+        prestate: &[u8],
+        amount_after: u64,
+    ) -> Result<[u8; ACCOUNT_BYTES]> {
+        Self::parse(prestate)?;
+        let mut output: [u8; ACCOUNT_BYTES] =
+            prestate.try_into().map_err(|_| Error::InvalidLength)?;
+        write_exact(
+            &mut output,
+            ACCOUNT_AMOUNT_OFFSET,
+            &amount_after.to_le_bytes(),
+        )?;
+        // The hostile decoder admitted every byte copied above. Replacing one
+        // fixed-width `u64` cannot invalidate any tag, state, identity, or
+        // account width, so a second complete decode would restate no check.
+        Ok(output)
+    }
+
+    /// Project exact base-account bytes after a delegated source transfer.
+    ///
+    /// The official token packer writes the four-byte option tag and writes
+    /// the body only for `Some`; a terminal `None` therefore preserves the
+    /// old body bytes while clearing the tag. All unrelated bytes are copied
+    /// exactly from the prestate.
+    pub fn project_delegated_source_poststate(
+        prestate: &[u8],
+        amount_after: u64,
+        delegate_after: COption<Address>,
+        delegated_amount_after: u64,
+    ) -> Result<[u8; ACCOUNT_BYTES]> {
+        let mut output = Self::project_amount_poststate(prestate, amount_after)?;
+        match delegate_after {
+            COption::None => {
+                write_exact(&mut output, ACCOUNT_DELEGATE_OFFSET, &[0; 4])?;
+            }
+            COption::Some(delegate) => {
+                write_exact(&mut output, ACCOUNT_DELEGATE_OFFSET, &[1, 0, 0, 0])?;
+                write_exact(&mut output, ACCOUNT_DELEGATE_OFFSET + 4, &delegate)?;
+            }
+        }
+        write_exact(
+            &mut output,
+            ACCOUNT_DELEGATED_AMOUNT_OFFSET,
+            &delegated_amount_after.to_le_bytes(),
+        )?;
+        // `project_amount_poststate` hostile-decoded the copied prestate and
+        // every write above is a canonical typed option/`u64` encoding.
+        Ok(output)
+    }
+}
+
+fn write_exact(output: &mut [u8], offset: usize, input: &[u8]) -> Result<()> {
+    let end = checked_add(offset, input.len())?;
+    let destination = output.get_mut(offset..end).ok_or(Error::InvalidLength)?;
+    destination.copy_from_slice(input);
+    Ok(())
 }
 
 fn parse_bool(value: u8) -> Result<bool> {
@@ -352,5 +461,91 @@ mod tests {
             assert_eq!(value.native_reserve, COption::None);
             assert_eq!(value.close_authority, COption::None);
         }
+    }
+
+    #[test]
+    fn exact_transfer_projection_preserves_every_unrelated_byte() {
+        let mut bytes = account(OWNER_KEY, 100);
+        put(&mut bytes, ACCOUNT_DELEGATE_OFFSET, &[1, 0, 0, 0]);
+        put(&mut bytes, ACCOUNT_DELEGATE_OFFSET + 4, &[5; 32]);
+        put(
+            &mut bytes,
+            ACCOUNT_DELEGATED_AMOUNT_OFFSET,
+            &40_u64.to_le_bytes(),
+        );
+        put(&mut bytes, ACCOUNT_NATIVE_OFFSET + 4, &[0x5a; 8]);
+        put(&mut bytes, ACCOUNT_CLOSE_AUTHORITY_OFFSET + 4, &[0x33; 32]);
+
+        let destination =
+            TokenAccount::project_amount_poststate(&bytes, 130).expect("balance-only projection");
+        let mut expected_destination = bytes;
+        put(
+            &mut expected_destination,
+            ACCOUNT_AMOUNT_OFFSET,
+            &130_u64.to_le_bytes(),
+        );
+        assert_eq!(destination, expected_destination);
+
+        let source = TokenAccount::project_delegated_source_poststate(&bytes, 70, COption::None, 0)
+            .expect("terminal delegated projection");
+        let mut expected_source = bytes;
+        put(
+            &mut expected_source,
+            ACCOUNT_AMOUNT_OFFSET,
+            &70_u64.to_le_bytes(),
+        );
+        put(&mut expected_source, ACCOUNT_DELEGATE_OFFSET, &[0; 4]);
+        put(
+            &mut expected_source,
+            ACCOUNT_DELEGATED_AMOUNT_OFFSET,
+            &0_u64.to_le_bytes(),
+        );
+        assert_eq!(source, expected_source);
+        assert_eq!(
+            TokenAccount::parse(&source).map(|value| value.delegate),
+            Ok(COption::None)
+        );
+    }
+
+    #[test]
+    fn initialized_base_bytes_round_trip_with_nonzero_identities() {
+        let mint = [0xa5; 32];
+        let owner = [0x5a; 32];
+        let bytes = TokenAccount::initialized_base_bytes(mint, owner)
+            .expect("canonical initialized base account");
+        assert_eq!(bytes.len(), ACCOUNT_BYTES);
+        assert_eq!(
+            TokenAccount::parse(&bytes),
+            Ok(TokenAccount {
+                mint,
+                owner,
+                amount: 0,
+                delegate: COption::None,
+                state: AccountState::Initialized,
+                native_reserve: COption::None,
+                delegated_amount: 0,
+                close_authority: COption::None,
+            })
+        );
+        assert!(bytes[ACCOUNT_AMOUNT_OFFSET..].iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn initialized_base_bytes_has_no_hidden_option_or_authority_state() {
+        let bytes = TokenAccount::initialized_base_bytes([1; 32], [2; 32])
+            .expect("canonical initialized base account");
+        let mut expected = [0; ACCOUNT_BYTES];
+        put(&mut expected, ACCOUNT_MINT_OFFSET, &[1; 32]);
+        put(&mut expected, ACCOUNT_OWNER_OFFSET, &[2; 32]);
+        put(
+            &mut expected,
+            ACCOUNT_STATE_OFFSET,
+            &[AccountState::Initialized as u8],
+        );
+        assert_eq!(bytes, expected);
+
+        let mut hostile = bytes;
+        put(&mut hostile, ACCOUNT_CLOSE_AUTHORITY_OFFSET, &[2, 0, 0, 0]);
+        assert_eq!(TokenAccount::parse(&hostile), Err(Error::InvalidOptionTag));
     }
 }

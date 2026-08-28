@@ -13,6 +13,31 @@ pub const DELEGATED_CUSTODY_RECEIPT_MAGIC_V2: [u8; 8] = *b"DCLCUDC2";
 pub const DELEGATED_CUSTODY_REQUEST_BYTES_V2: usize = 776;
 /// Exact successor receipt width.
 pub const DELEGATED_CUSTODY_RECEIPT_BYTES_V2: usize = 488;
+/// Domain separating the exact delegated token/replay poststate commitment.
+pub const DELEGATED_CUSTODY_POSTSTATE_DOMAIN_V2: &[u8] = b"dclutch:custody-delegated-poststate:v2";
+/// Exact bytes hashed for one delegated token/replay poststate commitment.
+pub const DELEGATED_CUSTODY_POSTSTATE_PREIMAGE_BYTES_V2: usize =
+    DELEGATED_CUSTODY_POSTSTATE_DOMAIN_V2.len() + 5 * 32 + 6 * 8;
+/// Domain separating one exact delegated-Custody child execution receipt.
+pub const DELEGATED_CUSTODY_CHILD_EXECUTION_DOMAIN_V3: &[u8] = b"dclutch:hot-custody-receipt:v3";
+
+/// Commit one exact delegated-Custody child execution in canonical route,
+/// invocation, request, receipt order.
+#[must_use]
+pub fn delegated_custody_child_execution_digest_v3(
+    route_index: u16,
+    invocation_index: u32,
+    request_digest: [u8; 32],
+    receipt: &[u8],
+) -> [u8; 32] {
+    dclutch_sha256_adapter::digestv(&[
+        DELEGATED_CUSTODY_CHILD_EXECUTION_DOMAIN_V3,
+        &route_index.to_le_bytes(),
+        &invocation_index.to_le_bytes(),
+        &request_digest,
+        receipt,
+    ])
+}
 
 const VERSION_V2: u16 = 2;
 const BASE_OFFSET: usize = 16;
@@ -53,6 +78,97 @@ impl DelegatedCustodyRequestLayoutV2 {
     pub const ALLOWANCE_BEFORE: usize = REQUEST_ALLOWANCE_BEFORE_OFFSET;
     /// Exact post-transfer delegated allowance as little-endian `u64`.
     pub const ALLOWANCE_AFTER: usize = REQUEST_ALLOWANCE_AFTER_OFFSET;
+}
+
+/// Exact token facts committed beside one delegated replay transition.
+///
+/// This is the sole contract-side owner of the adapter's SHA-256 preimage.
+/// SDK adapters hash [`Self::to_bytes`] and never restate the field order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DelegatedCustodyPoststateFactsV2 {
+    /// SHA-256 of the exact delegated request bytes.
+    pub request_digest: [u8; 32],
+    /// Source token account address.
+    pub source: [u8; 32],
+    /// Destination token account address.
+    pub destination: [u8; 32],
+    /// Source amount before transfer.
+    pub source_before: u64,
+    /// Source amount after transfer.
+    pub source_after: u64,
+    /// Destination amount before transfer.
+    pub destination_before: u64,
+    /// Destination amount after transfer.
+    pub destination_after: u64,
+    /// Delegate before transfer.
+    pub delegate_before: [u8; 32],
+    /// Delegated allowance before transfer.
+    pub allowance_before: u64,
+    /// Delegate after transfer; zero means revoked.
+    pub delegate_after: [u8; 32],
+    /// Delegated allowance after transfer.
+    pub allowance_after: u64,
+}
+
+impl DelegatedCustodyPoststateFactsV2 {
+    /// Encode the exact concatenated SHA-256 preimage, refusing malformed
+    /// identities or arithmetic rather than emitting a parallel truth.
+    pub fn to_bytes(
+        self,
+    ) -> Result<[u8; DELEGATED_CUSTODY_POSTSTATE_PREIMAGE_BYTES_V2], DelegatedCustodyErrorV2> {
+        if is_zero(self.request_digest)
+            || is_zero(self.source)
+            || is_zero(self.destination)
+            || is_zero(self.delegate_before)
+            || self.source == self.destination
+            || self.source_before.checked_sub(self.source_after)
+                != self.destination_after.checked_sub(self.destination_before)
+            || self.allowance_before.checked_sub(self.allowance_after)
+                != self.source_before.checked_sub(self.source_after)
+            || (self.allowance_after == 0) != is_zero(self.delegate_after)
+            || (self.allowance_after != 0 && self.delegate_after != self.delegate_before)
+        {
+            return Err(DelegatedCustodyErrorV2::Receipt);
+        }
+        let mut output = [0_u8; DELEGATED_CUSTODY_POSTSTATE_PREIMAGE_BYTES_V2];
+        let mut cursor = 0_usize;
+        for bytes in [
+            DELEGATED_CUSTODY_POSTSTATE_DOMAIN_V2,
+            self.request_digest.as_slice(),
+            self.source.as_slice(),
+            self.destination.as_slice(),
+        ] {
+            put(&mut output, cursor, bytes)?;
+            cursor = cursor
+                .checked_add(bytes.len())
+                .ok_or(DelegatedCustodyErrorV2::Wire)?;
+        }
+        for value in [
+            self.source_before,
+            self.source_after,
+            self.destination_before,
+            self.destination_after,
+        ] {
+            put_u64(&mut output, cursor, value)?;
+            cursor = cursor.checked_add(8).ok_or(DelegatedCustodyErrorV2::Wire)?;
+        }
+        put(&mut output, cursor, &self.delegate_before)?;
+        cursor = cursor
+            .checked_add(32)
+            .ok_or(DelegatedCustodyErrorV2::Wire)?;
+        put_u64(&mut output, cursor, self.allowance_before)?;
+        cursor = cursor.checked_add(8).ok_or(DelegatedCustodyErrorV2::Wire)?;
+        put(&mut output, cursor, &self.delegate_after)?;
+        cursor = cursor
+            .checked_add(32)
+            .ok_or(DelegatedCustodyErrorV2::Wire)?;
+        put_u64(&mut output, cursor, self.allowance_after)?;
+        cursor = cursor.checked_add(8).ok_or(DelegatedCustodyErrorV2::Wire)?;
+        if cursor != output.len() {
+            return Err(DelegatedCustodyErrorV2::Wire);
+        }
+        Ok(output)
+    }
 }
 
 /// Stable refusal from the delegated-allowance successor contract.
@@ -597,6 +713,64 @@ mod tests {
         assert_eq!(
             DelegatedCustodyRequestV2::decode(&bytes),
             Err(DelegatedCustodyErrorV2::Wire)
+        );
+    }
+
+    #[test]
+    fn delegated_poststate_preimage_is_exact_and_refuses_incoherent_facts() {
+        let facts = DelegatedCustodyPoststateFactsV2 {
+            request_digest: id(1),
+            source: id(2),
+            destination: id(3),
+            source_before: 100,
+            source_after: 60,
+            destination_before: 7,
+            destination_after: 47,
+            delegate_before: id(4),
+            allowance_before: 40,
+            delegate_after: [0; 32],
+            allowance_after: 0,
+        };
+        let bytes = facts.to_bytes().expect("preimage");
+        assert_eq!(
+            bytes.get(..DELEGATED_CUSTODY_POSTSTATE_DOMAIN_V2.len()),
+            Some(DELEGATED_CUSTODY_POSTSTATE_DOMAIN_V2)
+        );
+        assert_eq!(bytes.len(), DELEGATED_CUSTODY_POSTSTATE_PREIMAGE_BYTES_V2);
+
+        let mut hostile = facts;
+        hostile.destination_after = 46;
+        assert_eq!(hostile.to_bytes(), Err(DelegatedCustodyErrorV2::Receipt));
+        let mut residual = facts;
+        residual.allowance_after = 1;
+        assert_eq!(residual.to_bytes(), Err(DelegatedCustodyErrorV2::Receipt));
+    }
+
+    #[test]
+    fn delegated_child_execution_digest_owns_exact_field_order() {
+        let receipt = [5_u8; DELEGATED_CUSTODY_RECEIPT_BYTES_V2];
+        let digest = delegated_custody_child_execution_digest_v3(7, 9, id(4), &receipt);
+        assert_eq!(
+            digest,
+            dclutch_sha256_adapter::digestv(&[
+                DELEGATED_CUSTODY_CHILD_EXECUTION_DOMAIN_V3,
+                &7_u16.to_le_bytes(),
+                &9_u32.to_le_bytes(),
+                &id(4),
+                &receipt,
+            ])
+        );
+        assert_ne!(
+            digest,
+            delegated_custody_child_execution_digest_v3(8, 9, id(4), &receipt)
+        );
+        assert_ne!(
+            digest,
+            delegated_custody_child_execution_digest_v3(7, 10, id(4), &receipt)
+        );
+        assert_ne!(
+            digest,
+            delegated_custody_child_execution_digest_v3(7, 9, id(6), &receipt)
         );
     }
 }

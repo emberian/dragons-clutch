@@ -204,6 +204,130 @@ pub(crate) struct CoreBootstrapPin {
     pub(crate) release_recognition_requires_revoke: bool,
 }
 
+/// How one permanent devnet role entered the checked deployment set.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CheckedDeploymentDispositionV1 {
+    /// A complete, freshly reauthenticated one-role Loader Upgrade receipt.
+    Upgrade,
+    /// An authenticated existing deployment and existing finalized artifact.
+    CarryForward,
+}
+
+/// One permanent devnet role and the exact evidence that authorized its
+/// release-plan projection. Upgrade-only and carry-forward-only fields are
+/// optional at the wire level so serde can represent the tagged union; the
+/// deployment-set authenticator enforces the exact field closure for each tag.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedUpgradeRolePinV1 {
+    pub(crate) role: String,
+    pub(crate) disposition: CheckedDeploymentDispositionV1,
+    pub(crate) program_id: String,
+    pub(crate) programdata_id: String,
+    pub(crate) baseline_path: Option<String>,
+    pub(crate) baseline_sha256: Option<String>,
+    pub(crate) receipt_path: Option<String>,
+    pub(crate) receipt_sha256: Option<String>,
+    pub(crate) dump_path: String,
+    pub(crate) dump_sha256: String,
+    pub(crate) checked_candidate_elf_path: String,
+    pub(crate) checked_candidate_elf_sha256: String,
+    pub(crate) live_elf_sha256: String,
+    pub(crate) deployment_slot: u64,
+    pub(crate) programdata_account_sha256: String,
+    pub(crate) semantic_release_id: String,
+    /// Exact existing `ArtifactReleaseV1` body/id for CarryForward; absent for
+    /// an Upgrade, whose new body is derived by checked prepare.
+    pub(crate) artifact_release_body_hex: Option<String>,
+    pub(crate) artifact_release_id: Option<String>,
+    /// Exact live ProgramData account body from the carry-forward snapshot.
+    /// This is a derived transport projection, never caller-authored prepare
+    /// authority, and is absent for receipt-backed Upgrade roles.
+    pub(crate) carried_programdata_base64: Option<String>,
+}
+
+/// Exact singleton infrastructure evidence shared by the two CarryForward
+/// rows. All projected addresses and bodies are rederived while admitting the
+/// referenced one-context snapshot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedInfrastructureCarryForwardPinV1 {
+    pub(crate) snapshot_path: String,
+    pub(crate) snapshot_sha256: String,
+    pub(crate) context_slot: u64,
+    pub(crate) profile_address: String,
+    pub(crate) profile_account_sha256: String,
+    pub(crate) profile_body_sha256: String,
+    pub(crate) profile_body_hex: String,
+    pub(crate) registry_raw_address: String,
+    pub(crate) registry_staging_address: String,
+    pub(crate) registry_programdata_account_sha256: String,
+    pub(crate) rent_raw_address: String,
+    pub(crate) rent_staging_address: String,
+    pub(crate) rent_programdata_account_sha256: String,
+}
+
+/// Canonical mixed permanent deployment-set evidence consumed by checked
+/// prepare: Registry/Rent CarryForward plus five receipt-backed Upgrades.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedUpgradeSetPinV1 {
+    pub(crate) schema: String,
+    pub(crate) journal_path: String,
+    pub(crate) journal_sha256: String,
+    pub(crate) final_set_sha256: String,
+    pub(crate) checked_release_gate_path: String,
+    pub(crate) checked_release_gate_sha256: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_tree_sha256: String,
+    pub(crate) devnet_genesis_hash: String,
+    pub(crate) solana_cli_version: String,
+    pub(crate) retained_upgrade_authority: String,
+    pub(crate) fee_payer: String,
+    pub(crate) semantic_derivation: String,
+    pub(crate) infrastructure_carry_forward: CheckedInfrastructureCarryForwardPinV1,
+    pub(crate) roles: Vec<CheckedUpgradeRolePinV1>,
+}
+
+/// One exact mutable Loader pair installed into a fresh localhost validator.
+///
+/// This is not a devnet Upgrade receipt.  It binds a checked-release ELF to
+/// the ProgramData image that the local launcher installs, including the
+/// retained authority and synthetic nonzero deployment slot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalMutableRolePinV1 {
+    pub(crate) role: String,
+    pub(crate) program_id: String,
+    pub(crate) programdata_id: String,
+    pub(crate) checked_candidate_elf_path: String,
+    pub(crate) checked_candidate_elf_sha256: String,
+    pub(crate) live_elf_sha256: String,
+    pub(crate) programdata_account_sha256: String,
+    pub(crate) deployment_slot: u64,
+    pub(crate) semantic_release_id: String,
+}
+
+/// Checked provenance for the seven-role decision-0012 localhost substrate.
+///
+/// Permanent-devnet plans continue to require `checked_upgrade_set`; this
+/// sibling is admitted only for loopback and is rooted in a fresh checked
+/// release gate plus exact genesis ProgramData images.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalMutableSetPinV1 {
+    pub(crate) schema: String,
+    pub(crate) checked_release_gate_path: String,
+    pub(crate) checked_release_gate_sha256: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_tree_sha256: String,
+    pub(crate) solana_cli_version: String,
+    pub(crate) retained_upgrade_authority: String,
+    pub(crate) set_sha256: String,
+    pub(crate) roles: Vec<CheckedLocalMutableRolePinV1>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct GenesisAccountPin {
     pub(crate) address: String,
@@ -232,6 +356,14 @@ pub(crate) struct SuccessorPlan {
     pub(crate) activation: String,
     pub(crate) release_set_id: String,
     pub(crate) core_bootstrap: CoreBootstrapPin,
+    /// Present only when `prepare` authenticated the complete permanent-devnet
+    /// Upgrade journal instead of accepting caller-authored release facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checked_upgrade_set: Option<CheckedUpgradeSetPinV1>,
+    /// Present only for an exact checked-release set installed into a fresh
+    /// localhost validator with all seven decision-0012 authorities retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checked_local_mutable_set: Option<CheckedLocalMutableSetPinV1>,
     pub(crate) infrastructure_profile: InfrastructureProfilePin,
     pub(crate) records: BTreeMap<String, RecordPair>,
     /// `"genesis"` or `"transaction"`. Devnet has no genesis, so the
@@ -265,7 +397,7 @@ pub(crate) struct TransactionEvidence {
     pub(crate) logs: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AccountEvidence {
     pub(crate) address: String,
     pub(crate) owner: String,

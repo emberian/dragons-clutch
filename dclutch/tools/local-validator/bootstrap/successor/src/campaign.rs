@@ -64,17 +64,25 @@
 //! and printed; it is not silently assumed.
 
 use std::{
-    collections::BTreeMap,
-    fs,
-    io::Write as _,
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, OpenOptions},
+    io::{ErrorKind, Write as _},
+    os::unix::fs::MetadataExt as _,
     path::{Path, PathBuf},
+    str::FromStr as _,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use dclutch_pyth_svm::devnet_release_v1;
+use dclutch_registry_contract::{ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1};
 use dclutch_registry_svm::{
     LOADER_V3_PROGRAMDATA_METADATA_BYTES, ProgramDataMetadataV3View, ProgramDataV3View,
+    ProgramV3View,
 };
-use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::{
+    Deserialize,
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
+};
 use serde_json::{Value, json};
 use solana_sdk::{
     pubkey::Pubkey,
@@ -85,15 +93,213 @@ use solana_sdk_ids::bpf_loader_upgradeable;
 use crate::{
     Error, Result,
     cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
-    model::SuccessorPlan,
-    plan::{hex, pubkey},
-    rpc::{Rpc, WritePolicyV1},
+    model::{
+        CheckedDeploymentDispositionV1, CheckedLocalMutableRolePinV1, CheckedUpgradeRolePinV1,
+        ProgramPin, SuccessorPlan,
+    },
+    plan::{hex, hex32, pubkey},
+    rpc::{Rpc, WritePolicyV1, parse_json_without_duplicate_keys_v1},
     runtime,
     seed::{KeyForge, role},
 };
 
 /// The acknowledgment flag's literal spelling, for the argument table.
 pub(crate) const DEVNET_ACKNOWLEDGMENT_FLAG_NAME: &str = DEVNET_ACKNOWLEDGMENT_FLAG;
+
+const CAMPAIGN_REPORT_SCHEMA_V1: &str = "dclutch-successor-campaign-report-v1";
+const MAX_CAMPAIGN_REPORT_BYTES_V1: usize = 16 * 1024 * 1024;
+
+/// The only terminal-consumable projection of this module's campaign report.
+///
+/// The campaign emitter and this parser deliberately live together. Other
+/// clients may reject an unrelated envelope cheaply, but they must not grow a
+/// second list of the exact execution, transaction, Market, or account fields.
+#[derive(Clone, Debug)]
+pub(crate) struct CampaignTerminalEvidenceV1 {
+    pub(crate) plan_sha256: String,
+    pub(crate) founding_custody_context: String,
+    pub(crate) direct_selected_manifest_entry_index: u16,
+    pub(crate) accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CampaignAccountEvidenceV1 {
+    pub(crate) address: String,
+    pub(crate) owner: String,
+    pub(crate) lamports: u64,
+    pub(crate) executable: bool,
+    pub(crate) data_len: usize,
+    pub(crate) data_sha256: String,
+    pub(crate) account_sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TerminalExecutionV1 {
+    completed: bool,
+    recovered_finalized_founding: bool,
+    transactions: Vec<TerminalTransactionEvidenceV1>,
+    market: Option<TerminalMarketEvidenceV1>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalTransactionEvidenceV1 {
+    label: String,
+    signature: String,
+    slot: u64,
+    transaction_metadata_available: bool,
+    fee_lamports: NullableV1<u64>,
+    fee_only_balance_change: NullableV1<bool>,
+    compute_units_consumed: NullableV1<u64>,
+    error: Value,
+    logs: Vec<String>,
+}
+
+/// Required JSON field whose value may itself be null.
+struct NullableV1<T>(Option<T>);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for NullableV1<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Self)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TerminalMarketEvidenceV1 {
+    completed: Vec<String>,
+    accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
+    founding_custody_context: String,
+    direct_selected_manifest_entry_index: u16,
+}
+
+pub(crate) fn parse_campaign_terminal_evidence_v1(
+    source: &[u8],
+) -> Result<CampaignTerminalEvidenceV1> {
+    if source.is_empty() || source.len() > MAX_CAMPAIGN_REPORT_BYTES_V1 {
+        return Err(Error::new(
+            "campaign report is outside the 1..16777216 byte bound",
+        ));
+    }
+    let report: Value = parse_json_without_duplicate_keys_v1(source)?;
+    if report.get("schema").and_then(Value::as_str) != Some(CAMPAIGN_REPORT_SCHEMA_V1) {
+        return Err(Error::new(
+            "terminal evidence is not dclutch-successor-campaign-report-v1",
+        ));
+    }
+    if report.get("cluster").and_then(Value::as_str) != Some("devnet")
+        || report.get("mode").and_then(Value::as_str) != Some("execute")
+    {
+        return Err(Error::new(
+            "terminal evidence requires an executed external devnet campaign; loopback and preflight reports are non-consumable",
+        ));
+    }
+    let plan_sha256 = report
+        .get("plan_sha256")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::new("campaign report omitted plan_sha256"))?
+        .to_owned();
+    hex32(&plan_sha256)?;
+    let execution: TerminalExecutionV1 = serde_json::from_value(
+        report
+            .get("execution")
+            .cloned()
+            .ok_or_else(|| Error::new("campaign report omitted execution"))?,
+    )
+    .map_err(|error| Error::new(format!("campaign execution: {error}")))?;
+    if !execution.completed {
+        return Err(Error::new(
+            "campaign report does not carry completed execution",
+        ));
+    }
+    if execution.recovered_finalized_founding {
+        return Err(Error::new(
+            "crash-recovered founding evidence is non-consumable; a separate recovery-to-complete step must reconstruct and authenticate execution.market before terminal use",
+        ));
+    }
+    if execution.transactions.len() > 4_096 {
+        return Err(Error::new(
+            "campaign report transaction projection exceeds 4096 rows",
+        ));
+    }
+    let mut transaction_labels = BTreeSet::new();
+    for transaction in &execution.transactions {
+        if transaction.label.is_empty()
+            || transaction.label.len() > 512
+            || !transaction_labels.insert(transaction.label.as_str())
+            || solana_sdk::signature::Signature::from_str(&transaction.signature).is_err()
+            || transaction.logs.len() > 512
+            || transaction
+                .logs
+                .iter()
+                .any(|line| line.as_bytes().len() > 4_096)
+        {
+            return Err(Error::new(
+                "campaign report transaction projection is noncanonical",
+            ));
+        }
+        // Reading every field here makes the required-field contract explicit;
+        // none of these physical observations is treated as semantic authority.
+        let _routing_only_physical_facts = (
+            transaction.slot,
+            transaction.transaction_metadata_available,
+            &transaction.fee_lamports.0,
+            &transaction.fee_only_balance_change.0,
+            &transaction.compute_units_consumed.0,
+            &transaction.error,
+        );
+    }
+    let market = execution
+        .market
+        .ok_or_else(|| Error::new("campaign report omitted execution.market"))?;
+    let mut completed_names = BTreeSet::new();
+    if market.completed.is_empty()
+        || market.completed.len() > 512
+        || market.completed.iter().any(|stage| {
+            stage.is_empty() || stage.len() > 512 || !completed_names.insert(stage.as_str())
+        })
+    {
+        return Err(Error::new(
+            "campaign report market completion list is noncanonical",
+        ));
+    }
+    hex32(&market.founding_custody_context)?;
+    if market.accounts.is_empty() || market.accounts.len() > 4_096 {
+        return Err(Error::new(
+            "campaign report account projection is outside the 1..4096 row bound",
+        ));
+    }
+    if market.accounts.contains_key("terminal_record") {
+        return Err(Error::new(
+            "campaign report carries a stale terminal_record row; live Core terminal_receipt is the sole terminal certificate identity",
+        ));
+    }
+    for (label, row) in &market.accounts {
+        if label.is_empty() || label.len() > 128 {
+            return Err(Error::new("campaign report account label is not bounded"));
+        }
+        pubkey(&row.address)?;
+        pubkey(&row.owner)?;
+        hex32(&row.data_sha256)?;
+        hex32(&row.account_sha256)?;
+        let _routing_only_physical_facts = (row.lamports, row.executable);
+        if row.data_len > MAX_CAMPAIGN_REPORT_BYTES_V1 {
+            return Err(Error::new(format!(
+                "campaign account {label} data length is outside the bound"
+            )));
+        }
+    }
+    Ok(CampaignTerminalEvidenceV1 {
+        plan_sha256,
+        founding_custody_context: market.founding_custody_context,
+        direct_selected_manifest_entry_index: market.direct_selected_manifest_entry_index,
+        accounts: market.accounts,
+    })
+}
 
 /// The roles a driver run must be handed a keypair file for.
 ///
@@ -110,6 +316,7 @@ pub(crate) const REQUIRED_ROLES: &[&str] = &[
     role::FOUNDING_FOUNDER,
     role::FOUNDING_PROJECTION_WITNESS,
     role::FOUNDING_SOURCE_FUNDER,
+    role::SUBSTITUTED_FOUNDER,
 ];
 
 /// Every role a `--keypair-<role>` flag may name.
@@ -318,7 +525,9 @@ pub(crate) struct CampaignArgsV1 {
     /// runs without one; the founding stage refuses by name when it is absent.
     pub(crate) market_path: Option<PathBuf>,
     pub(crate) evidence_path: Option<PathBuf>,
-    pub(crate) keypairs: BTreeMap<String, [u8; 32]>,
+    /// Paths only. Their contents are first read after the durable key-free
+    /// plan and live-substrate preflight has been fsynced.
+    pub(crate) keypairs: BTreeMap<String, PathBuf>,
     pub(crate) execute: bool,
     pub(crate) through: StageV1,
 }
@@ -717,15 +926,134 @@ fn authenticate_graduation_market_input_v1(input: &GraduationMarketInputV1) -> R
     Ok(())
 }
 
+struct CampaignEvidenceLeaseV1 {
+    path: PathBuf,
+    parent: PathBuf,
+    file: fs::File,
+}
+
+impl CampaignEvidenceLeaseV1 {
+    fn acquire(evidence_path: &Path) -> Result<Self> {
+        let parent = evidence_path
+            .parent()
+            .ok_or_else(|| Error::new("evidence output requires a parent directory"))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            Error::new(format!(
+                "create evidence directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+        let file_name = evidence_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| Error::new("evidence output requires a UTF-8 file name"))?;
+        let path = evidence_path.with_file_name(format!("{file_name}.lock"));
+        let created_at_unix_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::new("system clock precedes the Unix epoch"))?
+            .as_secs();
+        let owner = serde_json::to_vec_pretty(&json!({
+            "schema": "dclutch-successor-campaign-evidence-lock-v1",
+            "pid": std::process::id(),
+            "evidence": evidence_path.display().to_string(),
+            "createdAtUnixSeconds": created_at_unix_seconds,
+            "stalePolicy": "never-auto-remove; confirm no live owner, then remove manually",
+        }))?;
+        let mut file = match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                return Err(Error::new(format!(
+                    "campaign evidence is locked at {}; locks are never removed automatically. Confirm that no process owns it before removing a stale lock manually",
+                    path.display()
+                )));
+            }
+            Err(error) => {
+                return Err(Error::new(format!(
+                    "create campaign evidence lock {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        let initialize = file
+            .write_all(&owner)
+            .and_then(|()| file.write_all(b"\n"))
+            .and_then(|()| file.sync_all())
+            .and_then(|()| fs::File::open(parent)?.sync_all());
+        if let Err(error) = initialize {
+            if Self::owns_link(&file, &path) {
+                let _ = fs::remove_file(&path);
+            }
+            return Err(Error::new(format!(
+                "initialize campaign evidence lock {}: {error}",
+                path.display()
+            )));
+        }
+        if !Self::owns_link(&file, &path) {
+            return Err(Error::new(format!(
+                "campaign evidence lock {} changed while it was acquired",
+                path.display()
+            )));
+        }
+        Ok(Self {
+            path,
+            parent: parent.to_path_buf(),
+            file,
+        })
+    }
+
+    fn owns_link(file: &fs::File, path: &Path) -> bool {
+        let Ok(held) = file.metadata() else {
+            return false;
+        };
+        let Ok(linked) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        held.dev() == linked.dev() && held.ino() == linked.ino()
+    }
+}
+
+impl Drop for CampaignEvidenceLeaseV1 {
+    fn drop(&mut self) {
+        if Self::owns_link(&self.file, &self.path) {
+            let _ = fs::remove_file(&self.path);
+            let _ = fs::File::open(&self.parent).and_then(|directory| directory.sync_all());
+        }
+    }
+}
+
 fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("evidence output requires a parent directory"))?;
+    fs::create_dir_all(parent).map_err(|error| {
+        Error::new(format!(
+            "create evidence directory {}: {error}",
+            parent.display()
+        ))
+    })?;
     let file_name = path
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or_else(|| Error::new("evidence output requires a UTF-8 file name"))?;
-    let temporary = path.with_file_name(format!(".{file_name}.dclutch-{}.tmp", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Error::new("system clock precedes the Unix epoch"))?
+        .as_nanos();
+    let temporary = path.with_file_name(format!(
+        ".{file_name}.dclutch-{}-{nonce}.tmp",
+        std::process::id()
+    ));
     let bytes = serde_json::to_vec_pretty(value)?;
-    fs::write(&temporary, &bytes)
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| Error::new(format!("create {}: {error}", temporary.display())))?;
+    file.write_all(&bytes)
         .map_err(|error| Error::new(format!("write {}: {error}", temporary.display())))?;
+    file.sync_all()
+        .map_err(|error| Error::new(format!("fsync {}: {error}", temporary.display())))?;
+    drop(file);
     fs::rename(&temporary, path).map_err(|error| {
         Error::new(format!(
             "atomically replace {} from {}: {error}",
@@ -733,17 +1061,32 @@ fn write_evidence_atomically(path: &Path, value: &Value) -> Result<()> {
             temporary.display()
         ))
     })?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| Error::new(format!("fsync evidence directory: {error}")))?;
     Ok(())
 }
 
-fn compatible_founding_checkpoint(
+struct PriorCampaignEvidenceV1 {
+    checkpoint: Option<crate::market::MarketExecutionCheckpointV1>,
+    terminal_consumable_source: Option<Vec<u8>>,
+}
+
+fn load_prior_campaign_evidence(
     path: &Path,
     plan_sha256: &str,
     market_sha256: Option<&str>,
-) -> Result<Option<Value>> {
+    expected_cluster: &str,
+    expected_rpc_url: &str,
+) -> Result<PriorCampaignEvidenceV1> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PriorCampaignEvidenceV1 {
+                checkpoint: None,
+                terminal_consumable_source: None,
+            });
+        }
         Err(error) => {
             return Err(Error::new(format!(
                 "read prior evidence {}: {error}",
@@ -751,13 +1094,95 @@ fn compatible_founding_checkpoint(
             )));
         }
     };
-    let prior: Value = serde_json::from_slice(&bytes)?;
-    if prior.get("plan_sha256").and_then(Value::as_str) != Some(plan_sha256)
+    if bytes.is_empty() || bytes.len() > MAX_CAMPAIGN_REPORT_BYTES_V1 {
+        return Err(Error::new(
+            "prior campaign evidence is outside the 1..16777216 byte bound",
+        ));
+    }
+    let prior = parse_json_without_duplicate_keys_v1(&bytes)?;
+    if prior.get("schema").and_then(Value::as_str) != Some(CAMPAIGN_REPORT_SCHEMA_V1)
+        || prior.get("cluster").and_then(Value::as_str) != Some(expected_cluster)
+        || prior.get("rpc_url").and_then(Value::as_str) != Some(expected_rpc_url)
+        || prior.get("plan_sha256").and_then(Value::as_str) != Some(plan_sha256)
         || prior.get("market_sha256").and_then(Value::as_str) != market_sha256
     {
-        return Ok(None);
+        return Err(Error::new(
+            "existing campaign evidence belongs to another schema, cluster, RPC origin, plan, or Market input; it was not replaced",
+        ));
     }
-    Ok(prior.get("foundingCheckpoint").cloned())
+    let checkpoint = prior
+        .get("foundingCheckpoint")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| Error::new(format!("prior founding checkpoint: {error}")))?;
+    let terminal_consumable_source = match prior.get("execution") {
+        None => None,
+        Some(execution) => {
+            let execution: TerminalExecutionV1 = serde_json::from_value(execution.clone())
+                .map_err(|error| Error::new(format!("prior campaign execution: {error}")))?;
+            if execution.completed
+                && !execution.recovered_finalized_founding
+                && execution.market.is_some()
+                && prior.get("cluster").and_then(Value::as_str) == Some("devnet")
+                && prior.get("mode").and_then(Value::as_str) == Some("execute")
+            {
+                // The canonical parser beside the emitter is the only owner of
+                // terminal-consumable report shape. A rerun returns these exact
+                // bytes rather than replacing them with a preflight downgrade.
+                parse_campaign_terminal_evidence_v1(&bytes)?;
+                Some(bytes)
+            } else {
+                None
+            }
+        }
+    };
+    Ok(PriorCampaignEvidenceV1 {
+        checkpoint,
+        terminal_consumable_source,
+    })
+}
+
+fn authenticate_keypair_paths(keypairs: &BTreeMap<String, PathBuf>) -> Result<()> {
+    let missing = REQUIRED_ROLES
+        .iter()
+        .filter(|role| !keypairs.contains_key(**role))
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(Error::new(format!(
+            "campaign omitted required keypair paths: {}",
+            missing.join(", ")
+        )));
+    }
+    let mut paths = BTreeSet::new();
+    for (role, path) in keypairs {
+        if !path.is_absolute() {
+            return Err(Error::new(format!("{role} keypair path must be absolute")));
+        }
+        if !paths.insert(path) {
+            return Err(Error::new(
+                "campaign keypair paths must be distinct before any file is read",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn load_campaign_keypairs(paths: &BTreeMap<String, PathBuf>) -> Result<BTreeMap<String, [u8; 32]>> {
+    let mut secrets = BTreeMap::new();
+    let mut pubkeys = BTreeSet::new();
+    for (role, path) in paths {
+        let secret = read_keypair_file(path, role)?;
+        let pubkey = Keypair::new_from_array(secret).pubkey();
+        if !pubkeys.insert(pubkey) {
+            return Err(Error::new(format!(
+                "{role} keypair reuses another campaign role's public key"
+            )));
+        }
+        secrets.insert(role.clone(), secret);
+    }
+    Ok(secrets)
 }
 
 /// Read one Solana CLI keypair file and return its 32-byte secret seed.
@@ -1083,19 +1508,22 @@ pub(crate) fn wallet_arithmetic(
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| Error::new("getBalance omitted a u64 value"))?;
     let mut record_rent = 0_u64;
-    for pair in plan.records.values() {
-        let body = runtime::decode_hex(&pair.body_hex)?;
-        record_rent = record_rent.saturating_add(rpc.minimum_balance(body.len())?);
+    for label in plan.records.keys() {
+        record_rent = record_rent.saturating_add(runtime::remaining_record_publication_rent(
+            rpc, plan, label, payer,
+        )?);
     }
-    let profile_rent =
-        rpc.minimum_balance(runtime::decode_hex(&plan.infrastructure_profile.body_hex)?.len())?;
-    // The activation cache's width is the contract's, not a number this tool
-    // owns; read the account if it exists and price the plan's own profile
-    // width otherwise, which is the closest honest proxy available offline.
-    let activation_rent = match rpc.account(pubkey(&plan.activation)?)? {
-        Some(account) => rpc.minimum_balance(account.data.len())?,
-        None => profile_rent,
-    };
+    let profile_address = pubkey(&plan.infrastructure_profile.address)?;
+    let profile_body = runtime::decode_hex(&plan.infrastructure_profile.body_hex)?;
+    let profile_minimum = rpc.minimum_balance(profile_body.len())?;
+    let profile_account = rpc.account(profile_address)?;
+    let profile_rent = remaining_profile_rent(
+        profile_account.as_ref(),
+        pubkey(&plan.core.program_id)?,
+        &profile_body,
+        profile_minimum,
+    )?;
+    let activation_rent = runtime::remaining_activation_rent(rpc, plan)?;
     let fees = ESTIMATED_TRANSACTIONS.saturating_mul(LAMPORTS_PER_SIGNATURE);
     let required = record_rent
         .saturating_add(profile_rent)
@@ -1110,6 +1538,27 @@ pub(crate) fn wallet_arithmetic(
         estimated_fee_lamports: fees,
         required_lamports: required,
     })
+}
+
+fn remaining_profile_rent(
+    account: Option<&crate::rpc::RpcAccount>,
+    core: Pubkey,
+    expected_body: &[u8],
+    minimum_balance: u64,
+) -> Result<u64> {
+    let Some(account) = account else {
+        return Ok(minimum_balance);
+    };
+    if account.owner != core
+        || account.executable
+        || account.data != expected_body
+        || account.lamports < minimum_balance
+    {
+        return Err(Error::new(
+            "existing infrastructure profile conflicts with the exact plan coordinate",
+        ));
+    }
+    Ok(0)
 }
 
 /// Authenticate the committed devnet Pyth release row against live accounts.
@@ -1252,66 +1701,464 @@ pub(crate) fn deploy_ladder(plan: &SuccessorPlan, origin: &ClusterOriginV1) -> V
     lines
 }
 
+fn checked_role<'a>(
+    plan: &'a SuccessorPlan,
+    set_role: &'a CheckedUpgradeRolePinV1,
+) -> Result<(&'a ProgramPin, &'static str)> {
+    checked_plan_role(plan, &set_role.role)
+}
+
+fn checked_plan_role<'a>(
+    plan: &'a SuccessorPlan,
+    role: &str,
+) -> Result<(&'a ProgramPin, &'static str)> {
+    Ok(match role {
+        "registry" => (&plan.registry, "registry_artifact_release"),
+        "rent" => (&plan.rent_credit, "rent_artifact_release"),
+        "custody" => (&plan.custody, "custody_artifact_release"),
+        "resolution" => (&plan.resolution, "resolution_artifact_release"),
+        "claims" => (&plan.claims, "claims_artifact_release"),
+        "trading" => (&plan.trading, "trading_artifact_release"),
+        "core" => (&plan.core, "core_artifact_release"),
+        other => {
+            return Err(Error::new(format!(
+                "unknown checked deployment role {other}"
+            )));
+        }
+    })
+}
+
+#[derive(Clone, Copy)]
+enum CheckedPlanRoleEvidenceV1<'a> {
+    PermanentDevnet(&'a CheckedUpgradeRolePinV1),
+    OwnedLoopback(&'a CheckedLocalMutableRolePinV1),
+}
+
+impl<'a> CheckedPlanRoleEvidenceV1<'a> {
+    fn role(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.role,
+            Self::OwnedLoopback(role) => &role.role,
+        }
+    }
+
+    fn program_id(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.program_id,
+            Self::OwnedLoopback(role) => &role.program_id,
+        }
+    }
+
+    fn programdata_id(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.programdata_id,
+            Self::OwnedLoopback(role) => &role.programdata_id,
+        }
+    }
+
+    fn checked_candidate_elf_path(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.checked_candidate_elf_path,
+            Self::OwnedLoopback(role) => &role.checked_candidate_elf_path,
+        }
+    }
+
+    fn checked_candidate_elf_sha256(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.checked_candidate_elf_sha256,
+            Self::OwnedLoopback(role) => &role.checked_candidate_elf_sha256,
+        }
+    }
+
+    fn live_elf_sha256(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.live_elf_sha256,
+            Self::OwnedLoopback(role) => &role.live_elf_sha256,
+        }
+    }
+
+    fn programdata_account_sha256(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.programdata_account_sha256,
+            Self::OwnedLoopback(role) => &role.programdata_account_sha256,
+        }
+    }
+
+    fn deployment_slot(self) -> u64 {
+        match self {
+            Self::PermanentDevnet(role) => role.deployment_slot,
+            Self::OwnedLoopback(role) => role.deployment_slot,
+        }
+    }
+
+    fn semantic_release_id(self) -> &'a str {
+        match self {
+            Self::PermanentDevnet(role) => &role.semantic_release_id,
+            Self::OwnedLoopback(role) => &role.semantic_release_id,
+        }
+    }
+
+    fn carried_artifact(self) -> Result<Option<(&'a str, &'a str)>> {
+        match self {
+            Self::PermanentDevnet(role)
+                if role.disposition == CheckedDeploymentDispositionV1::CarryForward =>
+            {
+                Ok(Some((
+                    role.artifact_release_body_hex.as_deref().ok_or_else(|| {
+                        Error::new(format!(
+                            "carried {} role omitted ArtifactRelease body",
+                            role.role
+                        ))
+                    })?,
+                    role.artifact_release_id.as_deref().ok_or_else(|| {
+                        Error::new(format!(
+                            "carried {} role omitted ArtifactRelease identity",
+                            role.role
+                        ))
+                    })?,
+                )))
+            }
+            Self::PermanentDevnet(_) | Self::OwnedLoopback(_) => Ok(None),
+        }
+    }
+}
+
+fn authenticate_checked_plan_role_projection(
+    plan: &SuccessorPlan,
+    evidence: CheckedPlanRoleEvidenceV1<'_>,
+    retained_authority: Pubkey,
+) -> Result<()> {
+    let role = evidence.role();
+    let (pin, record_label) = checked_plan_role(plan, role)?;
+    let candidate = fs::read(&pin.checked_candidate_elf_path)?;
+    let candidate_sha = hex(&<sha2::Sha256 as sha2::Digest>::digest(&candidate));
+    if pin.program_id != evidence.program_id()
+        || pin.programdata_id != evidence.programdata_id()
+        || pin.elf_path != pin.checked_candidate_elf_path
+        || pin.elf_sha256 != pin.checked_candidate_elf_sha256
+        || pin.checked_candidate_elf_path != evidence.checked_candidate_elf_path()
+        || pin.checked_candidate_elf_sha256 != evidence.checked_candidate_elf_sha256()
+        || candidate_sha != evidence.checked_candidate_elf_sha256()
+        || pin.live_elf_sha256 != evidence.live_elf_sha256()
+        || pin.semantic_release_id != evidence.semantic_release_id()
+        || pin.deployment_slot != evidence.deployment_slot()
+        || pin.programdata_sha256 != evidence.programdata_account_sha256()
+        || pin.upgrade_authority.as_deref() != Some(retained_authority.to_string().as_str())
+        || pin.deployment_source != "observed-programdata-account"
+    {
+        return Err(Error::new(format!(
+            "saved plan role {} differs from its authenticated deployment-set evidence",
+            role
+        )));
+    }
+    let pair = plan
+        .records
+        .get(record_label)
+        .ok_or_else(|| Error::new(format!("saved plan omitted {record_label}")))?;
+    if pair.schema_id != hex(&ARTIFACT_RELEASE_SCHEMA_ID_V1) {
+        return Err(Error::new(format!(
+            "saved plan {record_label} substituted the ArtifactRelease schema"
+        )));
+    }
+    let body = runtime::decode_hex(&pair.body_hex)?;
+    let body_sha = hex(&<sha2::Sha256 as sha2::Digest>::digest(&body));
+    let release = ArtifactReleaseV1::decode(&body).map_err(|error| {
+        Error::new(format!(
+            "saved plan {record_label} is not an ArtifactRelease: {error:?}"
+        ))
+    })?;
+    if pair.content_sha256 != body_sha
+        || pin.artifact_release_id != body_sha
+        || release.program().to_bytes() != pubkey(&pin.program_id)?.to_bytes()
+        || release.programdata() != pubkey(&pin.programdata_id)?.to_bytes()
+        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.semantic_release_id().as_bytes()
+            != &crate::plan::hex32(&pin.semantic_release_id)?
+        || release.elf_digest() != crate::plan::hex32(&pin.live_elf_sha256)?
+        || release.deployment_slot() != pin.deployment_slot
+        || release.upgrade_authority() != Some(retained_authority.to_bytes())
+    {
+        return Err(Error::new(format!(
+            "saved plan {record_label} differs from its checked mutable slot pin"
+        )));
+    }
+    if let Some((carried_body, carried_id)) = evidence.carried_artifact()? {
+        if carried_body != pair.body_hex || carried_id != body_sha {
+            return Err(Error::new(format!(
+                "saved plan replaced carried {role} ArtifactRelease bytes"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A saved public-cluster plan is an untrusted projection. Before any keypair
+/// file is loaded, rehash its mixed deployment-set evidence and bind every
+/// mutable Program pin and artifact body back to that owner.
+pub(crate) fn authenticate_checked_campaign_plan(
+    plan: &SuccessorPlan,
+    origin: &ClusterOriginV1,
+) -> Result<()> {
+    let mutable = runtime::role_pins(plan)
+        .into_iter()
+        .any(|(_, pin)| pin.upgrade_authority.is_some());
+    require_checked_mutable_binding(
+        mutable,
+        plan.checked_upgrade_set.is_some(),
+        plan.checked_local_mutable_set.is_some(),
+    )?;
+    if plan.checked_local_mutable_set.is_some() {
+        crate::cluster::ExpectedClusterV1::OwnedLoopback.authenticate(origin)?;
+        crate::local_mutable::authenticate_checked_local_mutable_plan_v1(plan)?;
+        let set = plan
+            .checked_local_mutable_set
+            .as_ref()
+            .ok_or_else(|| Error::new("checked local mutable set disappeared"))?;
+        let retained = pubkey(&set.retained_upgrade_authority)?;
+        for role in &set.roles {
+            authenticate_checked_plan_role_projection(
+                plan,
+                CheckedPlanRoleEvidenceV1::OwnedLoopback(role),
+                retained,
+            )?;
+            let (_, record_label) = checked_plan_role(plan, &role.role)?;
+            let _ = runtime::record(plan, record_label)?;
+        }
+        runtime::authenticate_infrastructure_profile_projection(plan)?;
+        return runtime::authenticate_checked_activation_projection(plan);
+    }
+    let Some(set) = plan.checked_upgrade_set.as_ref() else {
+        return Ok(());
+    };
+    crate::cluster::ExpectedClusterV1::Devnet.authenticate(origin)?;
+    crate::upgrade::reauthenticate_checked_deployment_set_pin(set)?;
+    if set.devnet_genesis_hash != crate::cluster::DEVNET_GENESIS_HASH
+        || plan.record_publication != "transaction"
+        || plan.core_bootstrap.release_recognition_requires_revoke
+        || plan.core_bootstrap.upgrade_authority != set.retained_upgrade_authority
+        || set.roles.len() != 7
+    {
+        return Err(Error::new(
+            "saved checked plan header differs from its permanent-devnet deployment set",
+        ));
+    }
+    let retained = pubkey(&set.retained_upgrade_authority)?;
+    for role in &set.roles {
+        authenticate_checked_plan_role_projection(
+            plan,
+            CheckedPlanRoleEvidenceV1::PermanentDevnet(role),
+            retained,
+        )?;
+        let (_, record_label) = checked_role(plan, role)?;
+        let _ = runtime::record(plan, record_label)?;
+    }
+    let carry = &set.infrastructure_carry_forward;
+    if plan.infrastructure_profile.address != carry.profile_address
+        || plan.infrastructure_profile.body_hex != carry.profile_body_hex
+        || plan.infrastructure_profile.body_sha256 != carry.profile_body_sha256
+        || plan.infrastructure_profile.registry_artifact_release_id
+            != plan.registry.artifact_release_id
+        || plan.infrastructure_profile.rent_artifact_release_id
+            != plan.rent_credit.artifact_release_id
+    {
+        return Err(Error::new(
+            "saved plan replaced the authenticated carried infrastructure profile",
+        ));
+    }
+    runtime::authenticate_infrastructure_profile_projection(plan)?;
+    runtime::authenticate_checked_activation_projection(plan)
+}
+
+fn require_checked_mutable_binding(
+    mutable: bool,
+    has_checked_upgrade_set: bool,
+    has_checked_local_set: bool,
+) -> Result<()> {
+    if has_checked_upgrade_set && has_checked_local_set {
+        return Err(Error::new(
+            "saved plan mixed permanent-devnet and owned-loopback checked deployment evidence",
+        ));
+    }
+    if mutable && !has_checked_upgrade_set && !has_checked_local_set {
+        return Err(Error::new(
+            "mutable saved plan is not bound to checked deployment-set evidence",
+        ));
+    }
+    Ok(())
+}
+
+fn authenticate_live_checked_role(
+    role: &str,
+    pin: &ProgramPin,
+    program: &crate::rpc::RpcAccount,
+    programdata: &crate::rpc::RpcAccount,
+    candidate: &[u8],
+) -> Result<()> {
+    let program_key = pubkey(&pin.program_id)?;
+    let programdata_key = pubkey(&pin.programdata_id)?;
+    let program_view = ProgramV3View::parse(&program.data)
+        .map_err(|error| Error::new(format!("{role} Program account: {error:?}")))?;
+    let programdata_view = ProgramDataV3View::parse(&programdata.data)
+        .map_err(|error| Error::new(format!("{role} ProgramData account: {error:?}")))?;
+    let authority = pin
+        .upgrade_authority
+        .as_deref()
+        .map(pubkey)
+        .transpose()?
+        .map(|key| key.to_bytes());
+    let live = programdata_view.elf();
+    if program.owner != bpf_loader_upgradeable::ID
+        || !program.executable
+        || program_view.programdata() != programdata_key.to_bytes()
+        || Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0
+            != programdata_key
+        || programdata.owner != bpf_loader_upgradeable::ID
+        || programdata.executable
+        || hex(&<sha2::Sha256 as sha2::Digest>::digest(&programdata.data)) != pin.programdata_sha256
+        || programdata_view.deployment_slot() != pin.deployment_slot
+        || programdata_view.upgrade_authority() != authority
+        || hex(&<sha2::Sha256 as sha2::Digest>::digest(live)) != pin.live_elf_sha256
+        || live.get(..candidate.len()) != Some(candidate)
+        || live.get(candidate.len()..).is_none_or(|padding| {
+            padding.len() != pin.live_elf_padding_bytes || padding.iter().any(|byte| *byte != 0)
+        })
+    {
+        return Err(Error::new(format!(
+            "{role} live Program/ProgramData/link/slot/authority differs from the checked saved plan"
+        )));
+    }
+    Ok(())
+}
+
+fn authenticate_checked_live_substrate(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<()> {
+    let (roles, floor): (Vec<(&str, &ProgramPin)>, u64) =
+        if let Some(set) = plan.checked_upgrade_set.as_ref() {
+            let floor = set
+                .roles
+                .iter()
+                .map(|role| role.deployment_slot)
+                .chain(std::iter::once(
+                    set.infrastructure_carry_forward.context_slot,
+                ))
+                .max()
+                .ok_or_else(|| Error::new("checked deployment set omitted roles"))?;
+            let roles = set
+                .roles
+                .iter()
+                .map(|role| {
+                    let (pin, _) = checked_role(plan, role)?;
+                    Ok((role.role.as_str(), pin))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (roles, floor)
+        } else if let Some(set) = plan.checked_local_mutable_set.as_ref() {
+            let floor = set
+                .roles
+                .iter()
+                .map(|role| role.deployment_slot)
+                .max()
+                .ok_or_else(|| Error::new("checked local mutable set omitted roles"))?;
+            let roles = set
+                .roles
+                .iter()
+                .map(|role| {
+                    let (pin, _) = checked_plan_role(plan, &role.role)?;
+                    Ok((role.role.as_str(), pin))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (roles, floor)
+        } else {
+            return Ok(());
+        };
+    let mut addresses = Vec::with_capacity(14);
+    for (_, pin) in &roles {
+        addresses.push(pubkey(&pin.program_id)?);
+        addresses.push(pubkey(&pin.programdata_id)?);
+    }
+    let (_, accounts) = rpc.finalized_accounts(&addresses, floor)?;
+    for (index, (role, pin)) in roles.into_iter().enumerate() {
+        let program = accounts[index * 2]
+            .as_ref()
+            .ok_or_else(|| Error::new(format!("{role} Program is absent")))?;
+        let programdata = accounts[index * 2 + 1]
+            .as_ref()
+            .ok_or_else(|| Error::new(format!("{role} ProgramData is absent")))?;
+        let candidate = fs::read(&pin.checked_candidate_elf_path)?;
+        authenticate_live_checked_role(role, pin, program, programdata, &candidate)?;
+    }
+    Ok(())
+}
+
 /// Run the driver.
 pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
+    let _evidence_lease = args
+        .evidence_path
+        .as_deref()
+        .map(CampaignEvidenceLeaseV1::acquire)
+        .transpose()?;
+    execute_with_evidence_lease(args)
+}
+
+fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
     if args.execute && args.evidence_path.is_none() {
         return Err(Error::new(
             "--execute requires --evidence ABSOLUTE_JSON so intent is durable before any mutation",
         ));
     }
-    let plan: SuccessorPlan = serde_json::from_slice(&fs::read(&args.plan_path)?)?;
-    let plan_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(fs::read(
-        &args.plan_path,
-    )?));
-    let market_sha256 = args
-        .market_path
+    authenticate_keypair_paths(&args.keypairs)?;
+    let plan_source = fs::read(&args.plan_path)?;
+    let plan: SuccessorPlan =
+        serde_json::from_value(parse_json_without_duplicate_keys_v1(&plan_source)?)?;
+    authenticate_checked_campaign_plan(&plan, &args.origin)?;
+    let plan_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(&plan_source));
+    // Decode the complete dossier before connection or key access. The same
+    // bytes are hashed into both the campaign report and its outer CLI journal.
+    let market_source = args.market_path.as_ref().map(fs::read).transpose()?;
+    let market_sha256 = market_source
         .as_ref()
-        .map(|path| fs::read(path).map(|bytes| hex(&<sha2::Sha256 as sha2::Digest>::digest(bytes))))
+        .map(|bytes| hex(&<sha2::Sha256 as sha2::Digest>::digest(bytes)));
+    let market: Option<crate::model::MarketRunInput> = market_source
+        .as_ref()
+        .map(|bytes| load_market_input(bytes))
         .transpose()?;
+    let prior = match &args.evidence_path {
+        None => PriorCampaignEvidenceV1 {
+            checkpoint: None,
+            terminal_consumable_source: None,
+        },
+        Some(path) => load_prior_campaign_evidence(
+            path,
+            &plan_sha256,
+            market_sha256.as_deref(),
+            args.origin.label(),
+            &args.origin.redacted_url(),
+        )?,
+    };
+    if let Some(source) = prior.terminal_consumable_source {
+        eprintln!(
+            "campaign: exact terminal-consumable completion already exists; preserved byte-for-byte"
+        );
+        let mut stdout = std::io::stdout();
+        stdout.write_all(&source)?;
+        stdout.write_all(b"\n")?;
+        return Ok(());
+    }
+    let compatible_checkpoint = prior.checkpoint;
     let policy = if args.execute {
         WritePolicyV1::Writes
     } else {
         WritePolicyV1::ReadsOnly
     };
     let mut rpc = Rpc::connect_cluster(&args.origin, policy)?;
+    authenticate_checked_live_substrate(&mut rpc, &plan)?;
 
-    let forge = KeyForge::persisted(args.keypairs.clone(), REQUIRED_ROLES)?;
-    let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
-
-    // The market input, decoded and validated before any detector runs so a
-    // malformed input refuses before a single RPC call, not mid-ladder.
-    let market: Option<crate::model::MarketRunInput> = match &args.market_path {
-        None => None,
-        Some(path) => Some(load_market_input(&fs::read(path)?)?),
-    };
-
-    // Every detector, always, before anything is written. A stage that is
-    // already complete is skipped; a stage in conflict stops the run.
+    // Key-free detectors first. Their authenticated result is fsynced before
+    // the process opens any keypair file.
     let (substrate, observed_roles) = substrate_state(&mut rpc, &plan)?;
     let mut states = vec![(StageV1::Substrate, substrate)];
     states.push((StageV1::Publication, publication_state(&mut rpc, &plan)?));
     states.push((StageV1::Initialize, initialize_state(&mut rpc, &plan)?));
     states.push((StageV1::Activation, activation_state(&mut rpc, &plan)?));
-    // PEEKED, never drawn: the detector must look at exactly the mint key the
-    // executor will draw, and drawing it here would shift the executor onto
-    // the next index (the measured drift `KeyForge::peek_pubkey` documents).
-    let founding_keys = match &market {
-        None => None,
-        Some(_) => Some((
-            forge.peek_pubkey(role::COLLATERAL_MINT)?,
-            forge.peek_pubkey(role::COLLATERAL_WALLET)?,
-        )),
-    };
-    let founding_targets = match (&market, founding_keys) {
-        (Some(input), Some((mint, wallet))) => {
-            let (state, targets) = founding_state(&mut rpc, &plan, input, mint, wallet)?;
-            states.push((StageV1::Founding, state));
-            Some(targets)
-        }
-        _ => None,
-    };
-
-    let wallet = wallet_arithmetic(&mut rpc, &plan, authority.pubkey())?;
     let pyth = match &args.origin {
         ClusterOriginV1::AcknowledgedDevnet { .. } => Some(authenticate_pyth_row(&mut rpc)?),
         // The committed row is a devnet fact. Authenticating it against a
@@ -1337,9 +2184,15 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
             "plan": args.plan_path.display().to_string(),
             "market": args.market_path.as_ref().map(|path| path.display().to_string()),
         },
-        "payer": authority.pubkey().to_string(),
-        "keypair_derivation": forge.derivation_label(),
-        "private_key_persisted": forge.persists_private_keys(),
+        "pre_key_checkpoint": {
+            "durable": args.evidence_path.is_some(),
+            "plan_authenticated": true,
+            "live_substrate_authenticated": true,
+            "keypair_files_read": false,
+        },
+        "payer": Value::Null,
+        "keypair_derivation": "not-read",
+        "private_key_persisted": true,
         "stages": states.iter().map(|(stage, state)| json!({
             "stage": stage.name(),
             "state": state.label(),
@@ -1365,54 +2218,98 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
             "observed_programdata_bytes": row.observed_data_len,
             "loader_metadata_bytes": LOADER_V3_PROGRAMDATA_METADATA_BYTES,
         })).collect::<Vec<_>>(),
-        "wallet": {
-            "payer": wallet.payer,
-            "balance_lamports": wallet.balance_lamports,
-            "record_rent_lamports": wallet.record_rent_lamports,
-            "profile_rent_lamports": wallet.profile_rent_lamports,
-            "activation_rent_lamports": wallet.activation_rent_lamports,
-            "estimated_fee_lamports": wallet.estimated_fee_lamports,
-            "required_lamports": wallet.required_lamports,
-            "shortfall_lamports": wallet.shortfall(),
-            "may_airdrop": args.origin.may_airdrop(),
-            "funding": if args.origin.may_airdrop() {
-                "this origin's faucet is the campaign's own, so a shortfall is not a blocker"
-            } else {
-                "this driver never airdrops: the devnet faucet is rate-limited far below a \
-                 campaign's needs, so a run that begged for lamports would fail INSIDE a ladder \
-                 rather than here. Fund the payer address above before running with --execute."
-            },
-        },
+        "wallet": Value::Null,
         "pyth_devnet_release_authentication": pyth.as_ref().map(|rows| rows.iter().map(|(what, ok, detail)| json!({
             "fact": what,
             "holds": ok,
             "observed": detail,
         })).collect::<Vec<_>>()),
-        "founding_targets": founding_targets.as_ref().map(|targets| json!({
-            "market_input": args.market_path.as_ref().map(|path| path.display().to_string()),
-            "collateral_mint": targets.collateral_mint.to_string(),
-            "realm_record": targets.realm_record.to_string(),
-            "found31_market": targets.found31_market.to_string(),
-            "open_market": targets.open_market.to_string(),
-            "abort_market": targets.abort_market.to_string(),
-        })),
+        "founding_targets": Value::Null,
         "deploy_ladder": deploy_ladder(&plan, &args.origin),
         "transport_policy": "driver traffic: paced RPC (SMOKE-0 §6.4 -- the founding ladder and \
                              life are RPC-shaped end to end). Buffer writes: TPU, via the solana \
                              CLI, never this process (SMOKE-0 §3.1 -- ~100x, and it is the CLI's \
                              ladder, not the driver's).",
     });
-
-    if let Some(path) = &args.evidence_path
-        && let Some(checkpoint) = compatible_founding_checkpoint(
-            path,
-            report["plan_sha256"].as_str().unwrap_or_default(),
-            report["market_sha256"].as_str(),
-        )?
-    {
-        report["foundingCheckpoint"] = checkpoint;
+    if let Some(checkpoint) = &compatible_checkpoint {
+        report["foundingCheckpoint"] = serde_json::to_value(checkpoint)?;
+    }
+    if let Some(path) = &args.evidence_path {
+        write_evidence_atomically(path, &report)?;
+    } else {
+        // A stdout-only read rehearsal stays completely key-free. Supplying a
+        // durable evidence path opts into the key-dependent payer/founding
+        // detector pass while still remaining mutation-free without execute.
+        let mut stdout = std::io::stdout();
+        stdout.write_all(&serde_json::to_vec_pretty(&report)?)?;
+        stdout.write_all(b"\n")?;
+        return Ok(());
     }
 
+    // This is the first private-key read in the campaign. Every parser,
+    // mutable-plan pin, live ProgramData observation, and key-free stage
+    // detector above is already represented by an fsynced report.
+    let forge = KeyForge::persisted(load_campaign_keypairs(&args.keypairs)?, REQUIRED_ROLES)?;
+    let authority = forge.keypair(role::CORE_UPGRADE_AUTHORITY);
+    // PEEKED, never drawn: the detector must name the exact next key without
+    // advancing the forge's issuance index.
+    let founding_keys = match &market {
+        None => None,
+        Some(_) => Some((
+            forge.peek_pubkey(role::COLLATERAL_MINT)?,
+            forge.peek_pubkey(role::COLLATERAL_WALLET)?,
+        )),
+    };
+    let founding_targets = match (&market, founding_keys) {
+        (Some(input), Some((mint, wallet))) => {
+            let (state, targets) = founding_state(&mut rpc, &plan, input, mint, wallet)?;
+            states.push((StageV1::Founding, state));
+            Some(targets)
+        }
+        _ => None,
+    };
+    let wallet = wallet_arithmetic(&mut rpc, &plan, authority.pubkey())?;
+    report["pre_key_checkpoint"]["keypair_files_read"] = json!(true);
+    report["payer"] = json!(authority.pubkey().to_string());
+    report["keypair_derivation"] = json!(forge.derivation_label());
+    report["private_key_persisted"] = json!(forge.persists_private_keys());
+    report["stages"] = json!(
+        states
+            .iter()
+            .map(|(stage, state)| json!({
+                "stage": stage.name(),
+                "state": state.label(),
+                "detail": state.detail(),
+            }))
+            .collect::<Vec<_>>()
+    );
+    report["wallet"] = json!({
+        "payer": wallet.payer,
+        "balance_lamports": wallet.balance_lamports,
+        "record_rent_lamports": wallet.record_rent_lamports,
+        "profile_rent_lamports": wallet.profile_rent_lamports,
+        "activation_rent_lamports": wallet.activation_rent_lamports,
+        "estimated_fee_lamports": wallet.estimated_fee_lamports,
+        "required_lamports": wallet.required_lamports,
+        "shortfall_lamports": wallet.shortfall(),
+        "may_airdrop": args.origin.may_airdrop(),
+        "funding": if args.origin.may_airdrop() {
+            "this origin's faucet is the campaign's own, so a shortfall is not a blocker"
+        } else {
+            "this driver never airdrops: fund the payer before --execute so a shortfall refuses before the ladder"
+        },
+    });
+    report["founding_targets"] = founding_targets.as_ref().map_or(Value::Null, |targets| {
+        json!({
+            "market_input": args.market_path.as_ref().map(|path| path.display().to_string()),
+            "collateral_mint": targets.collateral_mint.to_string(),
+            "realm_record": targets.realm_record.to_string(),
+            "found31_market": targets.found31_market.to_string(),
+            "open_market": targets.open_market.to_string(),
+            "abort_market": targets.abort_market.to_string(),
+        })
+    });
+    // Full key-dependent preflight is also durable before the first send.
     if let Some(path) = &args.evidence_path {
         write_evidence_atomically(path, &report)?;
     }
@@ -1440,6 +2337,7 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
             founding_keys,
             &states,
             args.through,
+            compatible_checkpoint.as_ref(),
             &mut checkpoint,
         )?
     };
@@ -1449,11 +2347,6 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
         "transactions": execution.transactions,
         "market": execution.market,
     });
-    if execution.recovered_finalized_founding && report.get("foundingCheckpoint").is_none() {
-        return Err(Error::new(
-            "the chain proves this founding complete but its crash-safe evidence has no compatible founding checkpoint",
-        ));
-    }
     if let Some(path) = &args.evidence_path {
         write_evidence_atomically(path, &report)?;
     }
@@ -1468,10 +2361,10 @@ pub(crate) fn execute(args: CampaignArgsV1) -> Result<()> {
 /// The stages through activation sign with the Core authority alone; the
 /// founding is the one that needs the forge's other roles and the market
 /// input, and it refuses by name when the input is absent.
-struct CampaignExecutionEvidenceV1 {
-    transactions: Vec<crate::model::TransactionEvidence>,
-    market: Option<crate::market::MarketExecutionEvidence>,
-    recovered_finalized_founding: bool,
+pub(crate) struct CampaignExecutionEvidenceV1 {
+    pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
+    pub(crate) market: Option<crate::market::MarketExecutionEvidence>,
+    pub(crate) recovered_finalized_founding: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1484,6 +2377,7 @@ fn execute_stages(
     founding_keys: Option<(Pubkey, Pubkey)>,
     states: &[(StageV1, StageStateV1)],
     through: StageV1,
+    compatible_checkpoint: Option<&crate::market::MarketExecutionCheckpointV1>,
     checkpoint: &mut dyn FnMut(&crate::market::MarketExecutionCheckpointV1) -> Result<()>,
 ) -> Result<CampaignExecutionEvidenceV1> {
     for (stage, state) in states {
@@ -1507,7 +2401,7 @@ fn execute_stages(
     }
     let mut transactions = Vec::new();
     let mut market_evidence = None;
-    let mut recovered_finalized_founding = false;
+    let recovered_finalized_founding = false;
     for (stage, state) in states {
         if *stage > through {
             break;
@@ -1515,7 +2409,26 @@ fn execute_stages(
         if *state == StageStateV1::Complete {
             eprintln!("campaign stage {}: already complete, skipped", stage.name());
             if *stage == StageV1::Founding {
-                recovered_finalized_founding = true;
+                let input = market.ok_or_else(|| {
+                    Error::new("completed founding recovery requires the exact Market input")
+                })?;
+                let saved = compatible_checkpoint.ok_or_else(|| {
+                    Error::new(
+                        "the chain proves this founding complete, but no compatible durable DCLTPCB2 checkpoint can reconstruct caller-consumable Market evidence",
+                    )
+                })?;
+                market_evidence = Some(crate::market::recover_completed_market_from_checkpoint(
+                    rpc,
+                    plan,
+                    input,
+                    authority,
+                    forge,
+                    &mut transactions,
+                    saved,
+                )?);
+                eprintln!(
+                    "campaign stage founding: reconstructed exact Open poststate from durable DCLTPCB2 checkpoint"
+                );
             }
             continue;
         }
@@ -1554,35 +2467,50 @@ fn execute_stages(
                 let Some(input) = market else {
                     return Err(Error::new(
                         "the founding stage needs a market input: pass --market ABSOLUTE_JSON \
-                         carrying the run spec's `market` block as its own document (the \
-                         `demo-market` subcommand prints the local-fixture shape). Every earlier \
-                         stage runs without one.",
+                         carrying the exact output of `devnet-market` or `graduation-market`. \
+                         Every earlier stage runs without one.",
                     ));
                 };
-                if let StageStateV1::Partial(detail) = state {
-                    return Err(Error::new(format!(
-                        "this founding has STARTED on this chain and the driver will not write \
-                         into a half-founded market: {detail}. Record publication is \
-                         chain-deriving and re-verifies, but the collateral, credit and market \
-                         stages are one-shot, and a founding that fails midway has real \
-                         principal behind it. Inspect the named accounts; found again at a fresh \
-                         generation (a distinct, still-vacant Market PDA) with fresh \
-                         collateral-mint/collateral-wallet keypair files, or finish this one by \
-                         hand against the same input.",
-                    )));
-                }
                 let (mint, wallet) = founding_keys.ok_or_else(|| {
                     Error::new("the founding stage reached execution without peeked keys")
                 })?;
-                let evidence = crate::market::execute_found_market_with_checkpoint(
-                    rpc,
-                    plan,
-                    input,
-                    authority,
-                    forge,
-                    &mut transactions,
-                    checkpoint,
-                )?;
+                let evidence = match state {
+                    StageStateV1::Partial(detail) => {
+                        let saved = compatible_checkpoint.ok_or_else(|| {
+                            Error::new(format!(
+                                "this founding has STARTED on this chain ({detail}), but no compatible durable DCLTPCB2 checkpoint authenticates a safe suffix resume"
+                            ))
+                        })?;
+                        crate::market::resume_found_market_from_checkpoint(
+                            rpc,
+                            plan,
+                            input,
+                            authority,
+                            forge,
+                            &mut transactions,
+                            saved,
+                        )?
+                    }
+                    StageStateV1::Absent if compatible_checkpoint.is_some() => {
+                        return Err(Error::new(
+                            "a compatible DCLTPCB2 checkpoint exists but the chain detector reads founding Absent; the journal and live chain disagree",
+                        ));
+                    }
+                    StageStateV1::Absent => crate::market::execute_found_market_with_checkpoint(
+                        rpc,
+                        plan,
+                        input,
+                        authority,
+                        forge,
+                        &mut transactions,
+                        checkpoint,
+                    )?,
+                    StageStateV1::Complete | StageStateV1::Conflict(_) => {
+                        return Err(Error::new(
+                            "founding stage changed state after the campaign preflight",
+                        ));
+                    }
+                };
                 // Detector == verifier: the same read that would have skipped
                 // this stage must pass now that it executed — against the SAME
                 // peeked mint, never a fresh draw (the executor advanced the
@@ -1629,6 +2557,136 @@ pub(crate) fn acknowledgment_help() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rpc_account(
+        owner: Pubkey,
+        lamports: u64,
+        executable: bool,
+        data: &[u8],
+    ) -> crate::rpc::RpcAccount {
+        crate::rpc::RpcAccount {
+            lamports,
+            owner,
+            executable,
+            rent_epoch: 0,
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn profile_budget_prices_only_a_missing_exact_coordinate() {
+        let core = Pubkey::new_unique();
+        let body = [7_u8; 144];
+        let minimum = 1_893_120;
+        assert_eq!(
+            remaining_profile_rent(None, core, &body, minimum).expect("missing profile"),
+            minimum
+        );
+        let exact = rpc_account(core, minimum, false, &body);
+        assert_eq!(
+            remaining_profile_rent(Some(&exact), core, &body, minimum).expect("exact profile"),
+            0,
+            "an authenticated carried singleton must not be budgeted a second time"
+        );
+    }
+
+    #[test]
+    fn profile_budget_refuses_every_conflicting_existing_shape() {
+        let core = Pubkey::new_unique();
+        let body = [9_u8; 144];
+        let minimum = 1_893_120;
+        let hostiles = [
+            rpc_account(Pubkey::new_unique(), minimum, false, &body),
+            rpc_account(core, minimum, true, &body),
+            rpc_account(core, minimum, false, &[8_u8; 144]),
+            rpc_account(core, minimum - 1, false, &body),
+        ];
+        for hostile in &hostiles {
+            let refusal = remaining_profile_rent(Some(hostile), core, &body, minimum)
+                .expect_err("conflicting profile must refuse");
+            assert!(refusal.0.contains("conflicts"), "{}", refusal.0);
+        }
+    }
+
+    #[test]
+    fn mutable_saved_plan_requires_checked_set_before_key_loading() {
+        require_checked_mutable_binding(false, false, false).expect("legacy immutable plan");
+        require_checked_mutable_binding(true, true, false).expect("checked devnet mutable plan");
+        require_checked_mutable_binding(true, false, true).expect("checked local mutable plan");
+        let refusal = require_checked_mutable_binding(true, false, false)
+            .expect_err("unbound mutable plan must refuse");
+        assert!(refusal.0.contains("not bound"), "{}", refusal.0);
+        assert!(require_checked_mutable_binding(true, true, true).is_err());
+    }
+
+    #[test]
+    fn checked_live_role_binds_program_link_full_programdata_slot_authority_and_payload() {
+        let program_key = Pubkey::new_unique();
+        let programdata_key =
+            Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID).0;
+        let authority = Pubkey::new_unique();
+        let candidate = b"\x7fELFchecked-live";
+        let mut live = candidate.to_vec();
+        live.extend_from_slice(&[0; 7]);
+        let programdata_bytes = crate::plan::loader_programdata_bytes(&live, 818, Some(authority));
+        let mut program_bytes = vec![0; 36];
+        program_bytes[..4].copy_from_slice(&2_u32.to_le_bytes());
+        program_bytes[4..].copy_from_slice(programdata_key.as_ref());
+        let mut pin = pin();
+        pin.program_id = program_key.to_string();
+        pin.programdata_id = programdata_key.to_string();
+        pin.checked_candidate_elf_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(candidate));
+        pin.elf_sha256 = pin.checked_candidate_elf_sha256.clone();
+        pin.live_elf_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(&live));
+        pin.live_elf_padding_bytes = 7;
+        pin.upgrade_authority = Some(authority.to_string());
+        pin.deployment_slot = 818;
+        pin.deployment_source = "observed-programdata-account".into();
+        pin.programdata_sha256 = hex(&<sha2::Sha256 as sha2::Digest>::digest(&programdata_bytes));
+        let program = rpc_account(bpf_loader_upgradeable::ID, 1, true, &program_bytes);
+        let programdata = rpc_account(bpf_loader_upgradeable::ID, 1, false, &programdata_bytes);
+        authenticate_live_checked_role("core", &pin, &program, &programdata, candidate)
+            .expect("exact live role");
+
+        let mut stale = pin.clone();
+        stale.deployment_slot += 1;
+        assert!(
+            authenticate_live_checked_role("core", &stale, &program, &programdata, candidate)
+                .is_err()
+        );
+        let mut substituted_authority = pin.clone();
+        substituted_authority.upgrade_authority = Some(Pubkey::new_unique().to_string());
+        assert!(
+            authenticate_live_checked_role(
+                "core",
+                &substituted_authority,
+                &program,
+                &programdata,
+                candidate,
+            )
+            .is_err()
+        );
+        let mut wrong_link_bytes = program_bytes;
+        wrong_link_bytes[4..].copy_from_slice(Pubkey::new_unique().as_ref());
+        let wrong_link = rpc_account(bpf_loader_upgradeable::ID, 1, true, &wrong_link_bytes);
+        assert!(
+            authenticate_live_checked_role("core", &pin, &wrong_link, &programdata, candidate)
+                .is_err()
+        );
+        let mut tampered_plan_pin = pin;
+        tampered_plan_pin.programdata_sha256 = "11".repeat(32);
+        assert!(
+            authenticate_live_checked_role(
+                "core",
+                &tampered_plan_pin,
+                &program,
+                &programdata,
+                candidate,
+            )
+            .is_err(),
+            "saved-plan ProgramData digest substitution must refuse"
+        );
+    }
 
     fn test_direct_compiler(registry: Pubkey) -> crate::direct_market::DirectMarketCompilerOwnedV1 {
         crate::direct_market::DirectMarketCompilerOwnedV1::for_test(
@@ -1789,62 +2847,153 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fake_runner_crash_restart_preserves_checkpoint_and_finalizes_atomically() {
-        let path = std::env::temp_dir().join(format!(
-            "dclutch-campaign-crash-restart-{}.json",
-            Pubkey::new_unique()
-        ));
-        let mut first_runner = json!({
-            "schema": "dclutch-successor-campaign-report-v1",
-            "plan_sha256": "11".repeat(32),
-            "market_sha256": "22".repeat(32),
-            "evidence_output": path.display().to_string(),
-            "intent": { "execute": true, "through": "founding" },
-        });
-        write_evidence_atomically(&path, &first_runner).expect("durable prewrite");
-        first_runner["foundingCheckpoint"] = json!({
+    fn checkpoint_value() -> Value {
+        json!({
+            "schema": "dclutch-market-dcltpcb2-checkpoint-v1",
             "market": Pubkey::new_unique().to_string(),
             "foundingCustodyContext": "33".repeat(32),
             "directSelectedManifestEntryIndex": 2,
             "direct_capability_root": Pubkey::new_unique().to_string(),
             "direct_trading_funding_ledger": Pubkey::new_unique().to_string(),
-        });
-        write_evidence_atomically(&path, &first_runner).expect("pre-mutation checkpoint");
-        drop(first_runner); // fake process death after mutation, before final evidence update
+            "expiry_slot": 91,
+            "found_record": Pubkey::new_unique().to_string(),
+            "lock_record": Pubkey::new_unique().to_string(),
+            "accounts": {},
+            "completed": ["DCLTPCB2 finalized"],
+        })
+    }
 
-        let checkpoint =
-            compatible_founding_checkpoint(&path, &"11".repeat(32), Some(&"22".repeat(32)))
-                .expect("restart reads durable evidence")
-                .expect("compatible checkpoint");
-        let mut restarted_runner = json!({
+    fn terminal_consumable_report(path: &Path, checkpoint: Value) -> Value {
+        json!({
             "schema": "dclutch-successor-campaign-report-v1",
+            "cluster": "devnet",
+            "rpc_url": "https://api.devnet.solana.com/",
+            "mode": "execute",
             "plan_sha256": "11".repeat(32),
             "market_sha256": "22".repeat(32),
             "evidence_output": path.display().to_string(),
             "foundingCheckpoint": checkpoint,
             "execution": {
                 "completed": true,
-                "recoveredFinalizedFounding": true,
+                "recoveredFinalizedFounding": false,
                 "transactions": [],
+                "market": {
+                    "completed": ["DCLTGMF2 finalized"],
+                    "accounts": {
+                        "founding_market": {
+                            "address": Pubkey::new_unique().to_string(),
+                            "owner": Pubkey::new_unique().to_string(),
+                            "lamports": 1,
+                            "executable": false,
+                            "data_len": 1,
+                            "data_sha256": "44".repeat(32),
+                            "account_sha256": "55".repeat(32),
+                        },
+                    },
+                    "founding_custody_context": "33".repeat(32),
+                    "direct_selected_manifest_entry_index": 2,
+                },
             },
-        });
-        write_evidence_atomically(&path, &restarted_runner).expect("atomic final evidence");
-        let finalized: Value =
-            serde_json::from_slice(&fs::read(&path).expect("read final evidence"))
-                .expect("decode final evidence");
-        assert_eq!(finalized["execution"]["recoveredFinalizedFounding"], true);
-        assert_eq!(
-            finalized["foundingCheckpoint"]["directSelectedManifestEntryIndex"],
-            2
-        );
+        })
+    }
+
+    #[test]
+    fn campaign_evidence_lease_refuses_a_racer_and_releases_only_its_owned_link() {
+        let evidence = std::env::temp_dir().join(format!(
+            "dclutch-campaign-evidence-lease-{}.json",
+            Pubkey::new_unique()
+        ));
+        let first = CampaignEvidenceLeaseV1::acquire(&evidence).expect("first lease");
+        let lock_path = first.path.clone();
+        assert!(lock_path.exists(), "durable lock must exist while owned");
+        let refusal = CampaignEvidenceLeaseV1::acquire(&evidence)
+            .err()
+            .expect("simultaneous campaign must refuse");
+        assert!(refusal.0.contains("locked"), "{}", refusal.0);
         assert!(
-            compatible_founding_checkpoint(&path, &"44".repeat(32), Some(&"22".repeat(32)))
-                .expect("incompatible restart")
-                .is_none()
+            refusal.0.contains("never removed automatically"),
+            "{}",
+            refusal.0
         );
-        restarted_runner = Value::Null;
-        drop(restarted_runner);
+        drop(first);
+        assert!(
+            !lock_path.exists(),
+            "owner must release its exact lock inode"
+        );
+
+        let next = CampaignEvidenceLeaseV1::acquire(&evidence).expect("released lease reacquires");
+        drop(next);
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn crash_restart_preserves_terminal_completion_and_mismatch_never_clobbers() {
+        let path = std::env::temp_dir().join(format!(
+            "dclutch-campaign-crash-restart-{}.json",
+            Pubkey::new_unique()
+        ));
+        let mut first_runner = json!({
+            "schema": "dclutch-successor-campaign-report-v1",
+            "cluster": "devnet",
+            "rpc_url": "https://api.devnet.solana.com/",
+            "plan_sha256": "11".repeat(32),
+            "market_sha256": "22".repeat(32),
+            "evidence_output": path.display().to_string(),
+            "intent": { "execute": true, "through": "founding" },
+        });
+        write_evidence_atomically(&path, &first_runner).expect("durable prewrite");
+        first_runner["foundingCheckpoint"] = checkpoint_value();
+        write_evidence_atomically(&path, &first_runner).expect("pre-mutation checkpoint");
+        drop(first_runner); // fake process death after mutation, before final evidence update
+
+        let prior = load_prior_campaign_evidence(
+            &path,
+            &"11".repeat(32),
+            Some(&"22".repeat(32)),
+            "devnet",
+            "https://api.devnet.solana.com/",
+        )
+        .expect("restart reads durable evidence");
+        assert!(prior.checkpoint.is_some());
+        assert!(prior.terminal_consumable_source.is_none());
+
+        let restarted_runner = terminal_consumable_report(
+            &path,
+            serde_json::to_value(prior.checkpoint).expect("checkpoint JSON"),
+        );
+        write_evidence_atomically(&path, &restarted_runner).expect("atomic final evidence");
+        let finalized = fs::read(&path).expect("read final evidence");
+        let completed = load_prior_campaign_evidence(
+            &path,
+            &"11".repeat(32),
+            Some(&"22".repeat(32)),
+            "devnet",
+            "https://api.devnet.solana.com/",
+        )
+        .expect("authenticate completed evidence");
+        assert_eq!(
+            completed.terminal_consumable_source.as_deref(),
+            Some(finalized.as_slice())
+        );
+        assert_eq!(
+            fs::read(&path).expect("preserved complete report"),
+            finalized
+        );
+
+        let refusal = load_prior_campaign_evidence(
+            &path,
+            &"44".repeat(32),
+            Some(&"22".repeat(32)),
+            "devnet",
+            "https://api.devnet.solana.com/",
+        )
+        .err()
+        .expect("mismatched dossier refuses");
+        assert!(refusal.0.contains("was not replaced"), "{}", refusal.0);
+        assert_eq!(
+            fs::read(&path).expect("mismatch did not clobber"),
+            finalized
+        );
         fs::remove_file(path).expect("remove isolated test evidence");
     }
 
@@ -1984,6 +3133,33 @@ mod tests {
     }
 
     #[test]
+    fn keypair_path_authentication_is_key_free_and_duplicate_safe() {
+        let root = std::env::temp_dir().join(format!(
+            "dclutch-absent-campaign-keys-{}",
+            Pubkey::new_unique()
+        ));
+        let paths = REQUIRED_ROLES
+            .iter()
+            .enumerate()
+            .map(|(index, role)| (role.to_string(), root.join(format!("{index}.json"))))
+            .collect::<BTreeMap<_, _>>();
+        authenticate_keypair_paths(&paths)
+            .expect("path-only authentication must not open absent key files");
+        assert!(load_campaign_keypairs(&paths).is_err());
+
+        let mut duplicate = paths;
+        let first = duplicate
+            .get(REQUIRED_ROLES[0])
+            .expect("first path")
+            .clone();
+        duplicate.insert(REQUIRED_ROLES[1].into(), first);
+        let refusal = authenticate_keypair_paths(&duplicate)
+            .err()
+            .expect("duplicate path refuses");
+        assert!(refusal.0.contains("distinct"), "{}", refusal.0);
+    }
+
+    #[test]
     fn every_required_role_is_one_a_keypair_flag_can_name() {
         for role in REQUIRED_ROLES {
             assert!(
@@ -2027,6 +3203,8 @@ mod tests {
                     post_revoke_programdata_sha256: String::new(),
                     release_recognition_requires_revoke: false,
                 },
+                checked_upgrade_set: None,
+                checked_local_mutable_set: None,
                 infrastructure_profile: crate::model::InfrastructureProfilePin {
                     address: String::new(),
                     schema_id: String::new(),

@@ -139,7 +139,7 @@ const FIXTURE_SHELF_LIFE_SECONDS: u32 = 31_536_000;
 
 pub(crate) const REMAINING_OPEN_SEAM: &str = "The campaign publishes the complete authenticated Product and Source graph, creates the lifecycle credit, projects the future Market through Core Found37, stages projected custody and the two controller-owned FundingLedgerV2 accounts through DCLTPCB2, and then opens the Market atomically through DCLTGMF2. The opening transaction locks the Hoard, creates Core and Claims state, realizes custody, consumes the one-shot permit, and commits Open last. Compute evidence must be remeasured for these V2 routes; the runner does not reuse pre-V2 founding measurements.";
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct MarketExecutionEvidence {
     pub(crate) completed: Vec<String>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
@@ -147,8 +147,10 @@ pub(crate) struct MarketExecutionEvidence {
     pub(crate) direct_selected_manifest_entry_index: u16,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MarketExecutionCheckpointV1 {
+    pub(crate) schema: String,
     pub(crate) market: String,
     #[serde(rename = "foundingCustodyContext")]
     pub(crate) founding_custody_context: String,
@@ -156,6 +158,11 @@ pub(crate) struct MarketExecutionCheckpointV1 {
     pub(crate) direct_selected_manifest_entry_index: u16,
     pub(crate) direct_capability_root: String,
     pub(crate) direct_trading_funding_ledger: String,
+    pub(crate) expiry_slot: u64,
+    pub(crate) found_record: String,
+    pub(crate) lock_record: String,
+    pub(crate) accounts: BTreeMap<String, AccountEvidence>,
+    pub(crate) completed: Vec<String>,
 }
 
 pub(crate) fn validate_market_input(input: &MarketRunInput) -> Result<()> {
@@ -341,6 +348,7 @@ pub(crate) fn compile_linked_basis_v3(
     Ok(bytes)
 }
 
+#[derive(Clone)]
 struct MarketRecords {
     realm: PublishedRecord,
     product: PublishedRecord,
@@ -735,6 +743,371 @@ pub(crate) fn execute_found_market_with_checkpoint(
             .as_ref()
             .ok_or_else(|| Error::new("founding evidence omitted its Direct payload"))?
             .selected_manifest_entry_index,
+    })
+}
+
+struct RecoveredFoundingContextV1 {
+    records: MarketRecords,
+    coordinates: FoundingCoordinates,
+    product: ProductContentId,
+    mint: Pubkey,
+    founder: Pubkey,
+    found_record: Pubkey,
+    lock_record: Pubkey,
+    claim_count: u32,
+}
+
+fn checkpoint_account(checkpoint: &MarketExecutionCheckpointV1, label: &str) -> Result<Pubkey> {
+    let address = checkpoint
+        .accounts
+        .get(label)
+        .ok_or_else(|| Error::new(format!("DCLTPCB2 checkpoint omitted {label}")))?
+        .address
+        .as_str();
+    pubkey(address)
+}
+
+fn authenticate_checkpoint_record_graph(
+    rpc: &mut Rpc,
+    checkpoint: &MarketExecutionCheckpointV1,
+) -> Result<()> {
+    let records = checkpoint
+        .accounts
+        .iter()
+        .filter(|(label, _)| label.ends_with("_record"))
+        .collect::<Vec<_>>();
+    if records.len() < 12 {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint omitted the complete published Market record graph",
+        ));
+    }
+    for (label, expected) in records {
+        let address = pubkey(&expected.address)?;
+        let account = rpc.required_account(address, label)?;
+        if account_evidence(address, &account) != *expected {
+            return Err(Error::new(format!(
+                "DCLTPCB2 checkpoint record {label} changed after its finalized checkpoint"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reconstruct_dcltpcb2_checkpoint_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    transactions: &mut Vec<TransactionEvidence>,
+    checkpoint: &MarketExecutionCheckpointV1,
+) -> Result<RecoveredFoundingContextV1> {
+    if checkpoint.schema != "dclutch-market-dcltpcb2-checkpoint-v1" {
+        return Err(Error::new(
+            "founding checkpoint is not the resumable DCLTPCB2 checkpoint schema",
+        ));
+    }
+    validate_market_input(input)?;
+    authenticate_checkpoint_record_graph(rpc, checkpoint)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let core = pubkey(&plan.core.program_id)?;
+    let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
+
+    // Reissue the same persisted role indices the original attempt consumed.
+    // No fresh or seeded key is admitted on devnet; campaign.rs has already
+    // loaded every required role from an explicit file.
+    let mint_keypair = forge.keypair(role::COLLATERAL_MINT);
+    let wallet_keypair = forge.keypair(role::COLLATERAL_WALLET);
+    let mint = mint_keypair.pubkey();
+    let wallet = wallet_keypair.pubkey();
+    if checkpoint_account(checkpoint, "collateral_mint")? != mint
+        || checkpoint_account(checkpoint, "collateral_wallet")? != wallet
+    {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint belongs to different collateral role keys",
+        ));
+    }
+    let mint_account = rpc.required_account(mint, "checkpoint collateral Mint")?;
+    let wallet_account = rpc.required_account(wallet, "checkpoint collateral wallet")?;
+    let parsed_mint = Mint::parse(&mint_account.data)
+        .map_err(|error| Error::new(format!("checkpoint collateral Mint: {error:?}")))?;
+    let parsed_wallet = TokenAccount::parse(&wallet_account.data)
+        .map_err(|error| Error::new(format!("checkpoint collateral wallet: {error:?}")))?;
+    if mint_account.owner != token_program
+        || wallet_account.owner != token_program
+        || parsed_mint.decimals != input.collateral_display_decimals
+        || parsed_mint.supply != input.initial_collateral_atoms
+        || !parsed_mint.is_initialized
+        || !parsed_mint.mint_authority.is_none()
+        || !parsed_mint.freeze_authority.is_none()
+        || parsed_wallet.mint != mint.to_bytes()
+        || parsed_wallet.owner != payer.pubkey().to_bytes()
+        || parsed_wallet.state != AccountState::Initialized
+    {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint collateral roles no longer match the exact founding assets",
+        ));
+    }
+
+    let targets = derive_founding_targets(plan, input, mint)?;
+    if pubkey(&checkpoint.market)? != targets.open_market {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint names another derived Open Market",
+        ));
+    }
+
+    // Every raw record was authenticated immediately above. The canonical
+    // publisher is reused solely to reconstruct the one MarketRecords owner;
+    // a complete raw graph makes every publication step Complete. A write here
+    // would therefore be an invariant failure, never an admitted repair.
+    let transaction_count = transactions.len();
+    let (records, product) = publish_market_records(
+        rpc,
+        registry,
+        input,
+        mint,
+        targets.open_market,
+        hex32(&plan.release_set_id)?,
+        payer,
+        transactions,
+    )?;
+    if transactions.len() != transaction_count {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint reconstruction attempted to republish its record graph",
+        ));
+    }
+
+    let identity_template = MarketIdentity {
+        market_id: identity([0xff; 32])?,
+        realm_id: identity(records.realm.digest)?,
+        product_record: identity(records.product.digest)?,
+        product_id: identity(product.to_bytes())?,
+        resolution_policy: identity(records.source.digest)?,
+        capability_manifest: identity(records.manifest.digest)?,
+        selected_release_set: identity(hex32(&plan.release_set_id)?)?,
+        registry_program: identity(registry.to_bytes())?,
+        generation: input.generation,
+    };
+    let found31_market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(identity_template).as_slices(),
+        &core,
+    )
+    .0;
+    if found31_market != targets.found31_market {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint reconstruction moved the Found37 Market",
+        ));
+    }
+
+    let beneficiary = forge.keypair(role::FOUNDING_BENEFICIARY);
+    let founder = forge.keypair(role::FOUNDING_FOUNDER);
+    let _projection_witness = forge.keypair(role::FOUNDING_PROJECTION_WITNESS);
+    let coordinates = derive_founding_coordinates(
+        rpc,
+        plan,
+        input,
+        &records,
+        identity_template,
+        product,
+        mint,
+        payer.pubkey(),
+        founder.pubkey(),
+        beneficiary.pubkey(),
+        PrestateLaneV1::Founding.generation(input)?,
+        checkpoint.expiry_slot,
+    )?;
+    let _source_funder = forge.keypair(role::FOUNDING_SOURCE_FUNDER);
+
+    let trading = pubkey(&plan.trading.program_id)?;
+    let trading_ledger = coordinates
+        .funding_ledgers
+        .iter()
+        .find(|ledger| ledger.controller == trading)
+        .ok_or_else(|| Error::new("reconstructed DCLTPCB2 omitted Trading FundingLedgerV2"))?;
+    let root = Pubkey::new_from_array(coordinates.found.capability_root().to_bytes());
+    if coordinates.market != targets.open_market
+        || hex(&coordinates.context) != checkpoint.founding_custody_context
+        || coordinates.capability_entry_index != checkpoint.direct_selected_manifest_entry_index
+        || root.to_string() != checkpoint.direct_capability_root
+        || trading_ledger.address.to_string() != checkpoint.direct_trading_funding_ledger
+    {
+        return Err(Error::new(
+            "reconstructed DCLTPCB2 coordinates differ from the durable checkpoint",
+        ));
+    }
+
+    let found_raw = coordinates
+        .found
+        .encode()
+        .map_err(|error| Error::new(format!("checkpoint founding artifact: {error:?}")))?;
+    let lock_raw = coordinates
+        .lock
+        .encode()
+        .map_err(|error| Error::new(format!("checkpoint terminal Lock: {error:?}")))?;
+    let found_record =
+        derive_raw_request_record_v1(registry, "generic-founding-artifact", &found_raw)?;
+    let lock_record =
+        derive_raw_request_record_v1(registry, "projected-custody-terminal-lock", &lock_raw)?;
+    if found_record.raw.to_string() != checkpoint.found_record
+        || lock_record.raw.to_string() != checkpoint.lock_record
+        || rpc
+            .required_account(found_record.raw, "checkpoint founding artifact")?
+            .data
+            != found_raw
+        || rpc
+            .required_account(lock_record.raw, "checkpoint terminal Lock")?
+            .data
+            != lock_raw
+    {
+        return Err(Error::new(
+            "DCLTPCB2 checkpoint request records differ from their reconstructed bytes",
+        ));
+    }
+
+    let claim_count = u32::try_from(input.cuts.len().saturating_add(2))
+        .map_err(|_| Error::new("checkpoint Product outcome width overflow"))?;
+    Ok(RecoveredFoundingContextV1 {
+        records,
+        coordinates,
+        product,
+        mint,
+        founder: founder.pubkey(),
+        found_record: found_record.raw,
+        lock_record: lock_record.raw,
+        claim_count,
+    })
+}
+
+/// Resume only the suffix whose durable checkpoint proves DCLTPCB2 complete.
+/// No collateral, publication, Found37, or principal-funding prefix is replayed.
+pub(crate) fn resume_found_market_from_checkpoint(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    transactions: &mut Vec<TransactionEvidence>,
+    checkpoint: &MarketExecutionCheckpointV1,
+) -> Result<MarketExecutionEvidence> {
+    let context = reconstruct_dcltpcb2_checkpoint_v1(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        transactions,
+        checkpoint,
+    )?;
+    if rpc.finalized_slot()? > checkpoint.expiry_slot {
+        return Err(Error::new(
+            "the checkpointed DCLTPCB2 founding prestate expired before resume; use its explicit abort route rather than replaying principal",
+        ));
+    }
+    authenticate_bootstrap_poststate(
+        rpc,
+        &context.coordinates,
+        pubkey(&plan.custody.program_id)?,
+        Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+        context.mint,
+        context.coordinates.lock.amount,
+    )?;
+    let mut accounts = checkpoint.accounts.clone();
+    let mut completed = checkpoint.completed.clone();
+    execute_generic_market_founding(
+        rpc,
+        plan,
+        input,
+        &context.records,
+        &context.coordinates,
+        context.product,
+        context.mint,
+        targets_found31(plan, input, context.mint)?,
+        context.founder,
+        context.found_record,
+        context.lock_record,
+        context.claim_count,
+        payer,
+        forge,
+        transactions,
+        &mut accounts,
+        &mut completed,
+    )?;
+    Ok(MarketExecutionEvidence {
+        completed,
+        accounts,
+        founding_custody_context: checkpoint.founding_custody_context.clone(),
+        direct_selected_manifest_entry_index: checkpoint.direct_selected_manifest_entry_index,
+    })
+}
+
+fn targets_found31(plan: &SuccessorPlan, input: &MarketRunInput, mint: Pubkey) -> Result<Pubkey> {
+    Ok(derive_founding_targets(plan, input, mint)?.found31_market)
+}
+
+/// Rebuild full caller-consumable evidence after the atomic DCLTGMF2 packet
+/// finalized but the process died before the campaign report update.
+pub(crate) fn recover_completed_market_from_checkpoint(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    input: &MarketRunInput,
+    payer: &Keypair,
+    forge: &KeyForge,
+    transactions: &mut Vec<TransactionEvidence>,
+    checkpoint: &MarketExecutionCheckpointV1,
+) -> Result<MarketExecutionEvidence> {
+    let context = reconstruct_dcltpcb2_checkpoint_v1(
+        rpc,
+        plan,
+        input,
+        payer,
+        forge,
+        transactions,
+        checkpoint,
+    )?;
+    let poststate = derive_founding_poststate_expectation_v1(
+        plan,
+        &context.coordinates,
+        context.founder,
+        context.claim_count,
+    )?;
+    authenticate_open_market_poststate_v1(
+        rpc,
+        &context.coordinates,
+        &poststate,
+        pubkey(&plan.core.program_id)?,
+        pubkey(&plan.claims.program_id)?,
+        pubkey(&plan.custody.program_id)?,
+        Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID),
+        context.mint,
+    )?;
+    let mut accounts = checkpoint.accounts.clone();
+    for (label, key) in [
+        ("founding_market", context.coordinates.market),
+        ("claims_aggregate", poststate.aggregate),
+        ("founder_position", poststate.position),
+        ("claims_admission", poststate.admission),
+        ("founding_hoard_vault_open", context.coordinates.hoard_vault),
+        (
+            "founding_normal_custody_replay",
+            context.coordinates.projected_replay,
+        ),
+    ] {
+        let account = rpc.required_account(key, label)?;
+        accounts.insert(label.into(), account_evidence(key, &account));
+    }
+    let mut completed = checkpoint.completed.clone();
+    completed.push(
+        "recovered finalized DCLTGMF2 poststate from the durable DCLTPCB2 checkpoint after process interruption".into(),
+    );
+    completed.push(
+        "executed DCLTGMF2: the Market is OPEN, with the Claims liability aggregate, the founder Position, the admission record, and a Hoard holding the exact collateral".into(),
+    );
+    Ok(MarketExecutionEvidence {
+        completed,
+        accounts,
+        founding_custody_context: checkpoint.founding_custody_context.clone(),
+        direct_selected_manifest_entry_index: checkpoint.direct_selected_manifest_entry_index,
     })
 }
 
@@ -2972,24 +3345,6 @@ fn execute_projected_custody_bootstrap(
         lane.generation(input)?,
         expiry_slot,
     )?;
-    if lane == PrestateLaneV1::Founding {
-        let trading = pubkey(&plan.trading.program_id)?;
-        let trading_ledger = coordinates
-            .funding_ledgers
-            .iter()
-            .find(|ledger| ledger.controller == trading)
-            .ok_or_else(|| Error::new("founding checkpoint omitted the Trading FundingLedgerV2"))?;
-        checkpoint(&MarketExecutionCheckpointV1 {
-            market: coordinates.market.to_string(),
-            founding_custody_context: hex(&coordinates.context),
-            direct_selected_manifest_entry_index: coordinates.capability_entry_index,
-            direct_capability_root: Pubkey::new_from_array(
-                coordinates.found.capability_root().to_bytes(),
-            )
-            .to_string(),
-            direct_trading_funding_ledger: trading_ledger.address.to_string(),
-        })?;
-    }
     let principal = coordinates.lock.amount;
 
     // One Token-2022 account owned by the party the principal is refundable to.
@@ -3348,6 +3703,36 @@ fn execute_projected_custody_bootstrap(
         bootstrap_geometry.message_bytes,
         bootstrap_geometry.packet_bytes,
     ));
+
+    // This checkpoint means DCLTPCB2 is COMPLETE, not merely intended. It is
+    // written only after the exact SourceFunded prestate, both controller
+    // ledgers, record graph, and rent credit have been reacquired from the
+    // finalized chain. A restart can therefore resume the still-atomic
+    // DCLTGMF2 suffix without replaying any principal movement.
+    if lane == PrestateLaneV1::Founding {
+        let trading = pubkey(&plan.trading.program_id)?;
+        let trading_ledger = coordinates
+            .funding_ledgers
+            .iter()
+            .find(|ledger| ledger.controller == trading)
+            .ok_or_else(|| Error::new("founding checkpoint omitted the Trading FundingLedgerV2"))?;
+        checkpoint(&MarketExecutionCheckpointV1 {
+            schema: "dclutch-market-dcltpcb2-checkpoint-v1".into(),
+            market: coordinates.market.to_string(),
+            founding_custody_context: hex(&coordinates.context),
+            direct_selected_manifest_entry_index: coordinates.capability_entry_index,
+            direct_capability_root: Pubkey::new_from_array(
+                coordinates.found.capability_root().to_bytes(),
+            )
+            .to_string(),
+            direct_trading_funding_ledger: trading_ledger.address.to_string(),
+            expiry_slot,
+            found_record: found_record.raw.to_string(),
+            lock_record: lock_record.raw.to_string(),
+            accounts: accounts.clone(),
+            completed: completed.clone(),
+        })?;
+    }
 
     // The prestate is complete. What it is for is the lane's business.
     match lane {
@@ -3992,6 +4377,71 @@ fn authenticate_generic_market_founding_lock_census_v2(
 /// `post_custody_revision` to equal it.
 const FOUNDING_NORMAL_REPLAY_REVISION_V1: u64 = 1;
 
+#[derive(Clone, Copy)]
+struct FoundingPoststateExpectationV1 {
+    permit: Pubkey,
+    permit_bump: u8,
+    aggregate: Pubkey,
+    position: Pubkey,
+    admission: Pubkey,
+    aggregate_width: usize,
+    position_width: usize,
+    principal: u64,
+}
+
+fn derive_founding_poststate_expectation_v1(
+    plan: &SuccessorPlan,
+    coordinates: &FoundingCoordinates,
+    founder: Pubkey,
+    claim_count: u32,
+) -> Result<FoundingPoststateExpectationV1> {
+    let core = pubkey(&plan.core.program_id)?;
+    let claims_program = pubkey(&plan.claims.program_id)?;
+    let permit_seeds = SeriesFoundingPermitSeedsV1::new(
+        coordinates.found.release_set(),
+        coordinates.found.market(),
+        coordinates.found.context(),
+    );
+    let (permit, permit_bump) = Pubkey::find_program_address(&permit_seeds.as_slices(), &core);
+    let aggregate = Pubkey::find_program_address(
+        &ClaimsFoundingAggregateSeedsV5::new(coordinates.market.to_bytes())
+            .map_err(|error| Error::new(format!("Claims aggregate seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let position = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
+            .map_err(|error| Error::new(format!("Claims position seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let admission = Pubkey::find_program_address(
+        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
+            .map_err(|error| Error::new(format!("Claims admission seeds: {error:?}")))?
+            .as_slices(),
+        &claims_program,
+    )
+    .0;
+    let aggregate_width =
+        liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, claim_count)
+            .map_err(|error| Error::new(format!("aggregate width: {error:?}")))?;
+    let position_width =
+        liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, claim_count)
+            .map_err(|error| Error::new(format!("position width: {error:?}")))?;
+    Ok(FoundingPoststateExpectationV1 {
+        permit,
+        permit_bump,
+        aggregate,
+        position,
+        admission,
+        aggregate_width,
+        position_width,
+        principal: coordinates.lock.amount,
+    })
+}
+
 /// Every coordinate the founding outer determines beyond its prestate.
 struct FoundingOuterV1 {
     found_raw: Vec<u8>,
@@ -4012,7 +4462,6 @@ struct FoundingOuterV1 {
     position_width: usize,
     market_rent: u64,
     permit_rent: u64,
-    principal: u64,
 }
 
 /// Derive the founding outer's four requests and every PDA it signs through.
@@ -4146,53 +4595,23 @@ fn derive_founding_outer_v1(
         .map_err(|error| Error::new(format!("Realize receipt encoding: {error:?}")))?;
     let realize_receipt_digest: [u8; 32] = Sha256::digest(realize_receipt_bytes).into();
 
-    // The one-shot Core-owned permit. Its bump is an intent field, so the
-    // address must be derived before the intent it commits to.
-    let permit_seeds = SeriesFoundingPermitSeedsV1::new(
-        coordinates.found.release_set(),
-        coordinates.found.market(),
-        coordinates.found.context(),
-    );
-    let (permit, permit_bump) = Pubkey::find_program_address(&permit_seeds.as_slices(), &core);
-
-    // The three Claims-owned accounts the founding allocates. Their addresses
-    // are Core's to re-derive at Found and Claims' to re-derive at FoundingV5;
-    // deriving them here is what lets the runner pre-fund them, which nothing
-    // in the protocol does.
-    let aggregate = Pubkey::find_program_address(
-        &ClaimsFoundingAggregateSeedsV5::new(coordinates.market.to_bytes())
-            .map_err(|error| Error::new(format!("Claims aggregate seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
-    )
-    .0;
-    let position = Pubkey::find_program_address(
-        &ProtocolPositionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
-            .map_err(|error| Error::new(format!("Claims position seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
-    )
-    .0;
-    let admission = Pubkey::find_program_address(
-        &ProtocolPositionAdmissionSeedsV2::new(aggregate.to_bytes(), founder.to_bytes())
-            .map_err(|error| Error::new(format!("Claims admission seeds: {error:?}")))?
-            .as_slices(),
-        &claims_program,
-    )
-    .0;
-
-    let aggregate_width =
-        liability_basis_vector_width_v2(LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, claim_count)
-            .map_err(|error| Error::new(format!("aggregate width: {error:?}")))?;
-    let position_width =
-        liability_basis_vector_width_v2(LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, claim_count)
-            .map_err(|error| Error::new(format!("position width: {error:?}")))?;
+    // One semantic owner for the final coordinates. Completed-crash recovery
+    // calls the same helper against finalized Open state; it never tries to
+    // replay the SourceFunded kernel state that DCLTGMF2 consumed and closed.
+    let poststate =
+        derive_founding_poststate_expectation_v1(plan, coordinates, founder, claim_count)?;
+    let permit = poststate.permit;
+    let aggregate = poststate.aggregate;
+    let position = poststate.position;
+    let admission = poststate.admission;
+    let aggregate_width = poststate.aggregate_width;
+    let position_width = poststate.position_width;
     let aggregate_rent = rpc.minimum_balance(aggregate_width)?;
     let position_rent = rpc.minimum_balance(position_width)?;
     let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
 
     let intent = FoundingIntentV5::new(
-        permit_bump,
+        poststate.permit_bump,
         coordinates.found.release_set(),
         coordinates.found.market(),
         identity_of(records.product.digest)?,
@@ -4346,7 +4765,6 @@ fn derive_founding_outer_v1(
         position_width,
         market_rent: coordinates.found.market_rent(),
         permit_rent: coordinates.found.permit_rent(),
-        principal,
     })
 }
 
@@ -4726,17 +5144,48 @@ fn execute_generic_market_founding(
     let aggregate_rent = rpc.minimum_balance(outer.aggregate_width)?;
     let position_rent = rpc.minimum_balance(outer.position_width)?;
     let admission_rent = rpc.minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2)?;
-    transactions.push(rpc.send(
-        "pre-fund the founding's five program-allocated accounts",
-        &[
-            transfer(&payer.pubkey(), &coordinates.market, outer.market_rent),
-            transfer(&payer.pubkey(), &outer.permit, outer.permit_rent),
-            transfer(&payer.pubkey(), &outer.aggregate, aggregate_rent),
-            transfer(&payer.pubkey(), &outer.position, position_rent),
-            transfer(&payer.pubkey(), &outer.admission, admission_rent),
-        ],
-        payer,
-    )?);
+    let prefunding = [
+        (coordinates.market, outer.market_rent),
+        (outer.permit, outer.permit_rent),
+        (outer.aggregate, aggregate_rent),
+        (outer.position, position_rent),
+        (outer.admission, admission_rent),
+    ];
+    let observed_prefunding = prefunding
+        .iter()
+        .map(|(address, _)| rpc.account(*address))
+        .collect::<Result<Vec<_>>>()?;
+    if observed_prefunding.iter().all(Option::is_none) {
+        transactions.push(
+            rpc.send(
+                "pre-fund the founding's five program-allocated accounts",
+                &prefunding
+                    .iter()
+                    .map(|(address, lamports)| transfer(&payer.pubkey(), address, *lamports))
+                    .collect::<Vec<_>>(),
+                payer,
+            )?,
+        );
+    } else if prefunding
+        .iter()
+        .zip(&observed_prefunding)
+        .all(|((_, expected), account)| {
+            account.as_ref().is_some_and(|account| {
+                account.owner == system_program::ID
+                    && !account.executable
+                    && account.data.is_empty()
+                    && account.lamports == *expected
+            })
+        })
+    {
+        eprintln!(
+            "campaign: exact DCLTGMF2 pre-funding already finalized; resumed without a second debit"
+        );
+    } else {
+        return Err(Error::new(
+            "DCLTGMF2 pre-funding is partial or differs from the five exact rent principals; never top up or overwrite it",
+        ));
+    }
     authenticate_founding_prefunding_v1(rpc, &outer, coordinates.market)?;
 
     // The Realize and Claims requests join the founding artifact and terminal
@@ -4917,16 +5366,17 @@ fn execute_generic_market_founding(
         &tables,
     )?);
 
+    let poststate =
+        derive_founding_poststate_expectation_v1(plan, coordinates, founder, claim_count)?;
     authenticate_open_market_poststate_v1(
         rpc,
         coordinates,
-        &outer,
+        &poststate,
         core,
         claims_program,
         custody,
         token_program,
         mint,
-        founder,
     )?;
     for (label, key) in [
         ("founding_market", coordinates.market),
@@ -5000,13 +5450,12 @@ fn authenticate_founding_prefunding_v1(
 fn authenticate_open_market_poststate_v1(
     rpc: &mut Rpc,
     coordinates: &FoundingCoordinates,
-    outer: &FoundingOuterV1,
+    expected: &FoundingPoststateExpectationV1,
     core: Pubkey,
     claims_program: Pubkey,
     custody: Pubkey,
     token_program: Pubkey,
     mint: Pubkey,
-    founder: Pubkey,
 ) -> Result<()> {
     let market = rpc.required_account(coordinates.market, "founded Market")?;
     let state = CoreState::decode(&market.data)
@@ -5028,7 +5477,7 @@ fn authenticate_open_market_poststate_v1(
     // The one-shot permit is consumed by the commit-last Open stage and its
     // lamports return to the lifecycle credit. A permit that survived would be
     // a second founding.
-    let permit = rpc.account(outer.permit)?;
+    let permit = rpc.account(expected.permit)?;
     if permit.is_some_and(|account| {
         account.owner != system_program::ID || account.lamports != 0 || !account.data.is_empty()
     }) {
@@ -5040,19 +5489,19 @@ fn authenticate_open_market_poststate_v1(
     for (label, key, owner, width) in [
         (
             "Claims aggregate",
-            outer.aggregate,
+            expected.aggregate,
             claims_program,
-            outer.aggregate_width,
+            expected.aggregate_width,
         ),
         (
             "founder Position",
-            outer.position,
+            expected.position,
             claims_program,
-            outer.position_width,
+            expected.position_width,
         ),
         (
             "Claims admission",
-            outer.admission,
+            expected.admission,
             claims_program,
             PROTOCOL_POSITION_ADMISSION_BYTES_V2,
         ),
@@ -5073,7 +5522,7 @@ fn authenticate_open_market_poststate_v1(
         .map_err(|error| Error::new(format!("Hoard vault: {error:?}")))?;
     if hoard.owner != token_program
         || hoard_state.mint != mint.to_bytes()
-        || hoard_state.amount != outer.principal
+        || hoard_state.amount != expected.principal
         || hoard_state.state != AccountState::Initialized
     {
         return Err(Error::new(
@@ -5112,7 +5561,6 @@ fn authenticate_open_market_poststate_v1(
             "the projected replay was not realized into the Market's normal Custody replay",
         ));
     }
-    let _ = founder;
     Ok(())
 }
 

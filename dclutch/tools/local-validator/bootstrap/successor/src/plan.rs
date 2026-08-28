@@ -22,9 +22,9 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
-    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, RESOLUTION_CONTROLLER_RELEASE_ID_V5,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use solana_program::rent::Rent;
 use solana_sdk::pubkey::Pubkey;
@@ -33,6 +33,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use crate::{
     Error, Result,
     model::{
+        CheckedDeploymentDispositionV1, CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
         CoreBootstrapPin, GenesisAccountPin, InfrastructureProfilePin, ProgramPin, RecordPair,
         SuccessorPlan,
     },
@@ -75,6 +76,7 @@ pub(crate) struct PrepareArgs {
     pub(crate) rent_credit_elf: PathBuf,
     pub(crate) rent_credit_sha256: String,
     pub(crate) rent_credit_semantic_release_id: String,
+    pub(crate) checked_upgrade_set: Option<CheckedUpgradeSetPinV1>,
 }
 
 /// Where one role's deployment slot was read from.
@@ -115,6 +117,9 @@ pub(crate) struct RoleDeploymentInputV1 {
     /// its Loader metadata and ELF tail. Present means the role's release is
     /// minted from an observation.
     pub(crate) observed_programdata: Option<PathBuf>,
+    /// Checked-mode-only exact ProgramData body derived from authenticated
+    /// CarryForward evidence. No public flag populates this field.
+    pub(crate) observed_programdata_bytes: Option<Vec<u8>>,
     /// Declared SHA-256 of the complete live ELF tail inside the observed
     /// ProgramData account, including Loader allocation padding. Required
     /// exactly when `observed_programdata` is present.
@@ -221,8 +226,16 @@ fn role_deployment(
         (Some(declared), _) => Some(declared),
         (None, fixed) => fixed,
     };
-    let (image, source) = match input.observed_programdata.as_deref() {
-        Some(path) => {
+    let (image, source) = match (
+        input.observed_programdata.as_deref(),
+        input.observed_programdata_bytes.as_deref(),
+    ) {
+        (Some(_), Some(_)) => {
+            return Err(Error::new(format!(
+                "{label} ProgramData has both a raw path and checked embedded evidence"
+            )));
+        }
+        (Some(path), None) => {
             if input.genesis_deployment_slot != 0 {
                 return Err(Error::new(format!(
                     "{label} may either observe a ProgramData account or fabricate a genesis deployment slot, not both"
@@ -230,7 +243,15 @@ fn role_deployment(
             }
             (fs::read(path)?, DeploymentSourceV1::ObservedAccount)
         }
-        None => {
+        (None, Some(bytes)) => {
+            if input.genesis_deployment_slot != 0 {
+                return Err(Error::new(format!(
+                    "{label} checked ProgramData cannot also select a genesis slot"
+                )));
+            }
+            (bytes.to_vec(), DeploymentSourceV1::ObservedAccount)
+        }
+        (None, None) => {
             // A declaration describes something already on a cluster. The
             // genesis install fabricates its own account image, so a
             // declaration here would be describing bytes this plan is about to
@@ -309,21 +330,120 @@ fn role_deployment(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct CliAccount {
     pubkey: String,
     account: CliAccountBody,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 struct CliAccountBody {
     lamports: u64,
-    data: (String, &'static str),
+    data: (String, String),
     owner: String,
     executable: bool,
     rent_epoch: u64,
     space: usize,
+}
+
+pub(crate) struct CheckedCliAccountV1 {
+    pub(crate) pubkey: Pubkey,
+    pub(crate) owner: Pubkey,
+    pub(crate) lamports: u64,
+    pub(crate) data: Vec<u8>,
+    pub(crate) executable: bool,
+    pub(crate) rent_epoch: u64,
+}
+
+const MAX_CLI_ACCOUNT_FILE_BYTES_V1: u64 = 16 * 1024 * 1024;
+
+pub(crate) fn authenticate_cli_account_file_v1(
+    path: &Path,
+    pin: &GenesisAccountPin,
+) -> Result<CheckedCliAccountV1> {
+    if !path.is_absolute() {
+        return Err(Error::new("genesis account JSON path must be absolute"));
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.len() > MAX_CLI_ACCOUNT_FILE_BYTES_V1
+    {
+        return Err(Error::new(
+            "genesis account JSON must be one bounded regular non-symlink file",
+        ));
+    }
+    let bytes = fs::read(path)?;
+    if hex(&sha256_bytes(&bytes)) != pin.json_file_sha256 {
+        return Err(Error::new(
+            "genesis account JSON bytes differ from their persisted file digest",
+        ));
+    }
+    let value = crate::rpc::parse_json_without_duplicate_keys_v1(&bytes)?;
+    let account: CliAccount = serde_json::from_value(value)?;
+    let address = pubkey(&account.pubkey)?;
+    let owner = pubkey(&account.account.owner)?;
+    if account.pubkey != pin.address
+        || account.account.owner != pin.owner
+        || account.account.lamports != pin.lamports
+        || account.account.rent_epoch != 0
+        || account.account.data.1 != "base64"
+    {
+        return Err(Error::new(
+            "genesis account JSON header differs from its persisted account pin",
+        ));
+    }
+    let data = BASE64
+        .decode(&account.account.data.0)
+        .map_err(|error| Error::new(format!("genesis account data base64: {error}")))?;
+    if BASE64.encode(&data) != account.account.data.0
+        || account.account.space != data.len()
+        || account.account.space != pin.data_len
+        || hex(&sha256_bytes(&data)) != pin.data_sha256
+        || account_sha256_v1(
+            owner,
+            account.account.lamports,
+            account.account.executable,
+            account.account.rent_epoch,
+            &data,
+        )? != pin.account_sha256
+    {
+        return Err(Error::new(
+            "genesis account JSON data, space, or account digest differs from its persisted pin",
+        ));
+    }
+    Ok(CheckedCliAccountV1 {
+        pubkey: address,
+        owner,
+        lamports: account.account.lamports,
+        data,
+        executable: account.account.executable,
+        rent_epoch: account.account.rent_epoch,
+    })
+}
+
+pub(crate) fn account_sha256_v1(
+    owner: Pubkey,
+    lamports: u64,
+    executable: bool,
+    rent_epoch: u64,
+    data: &[u8],
+) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(owner.as_ref());
+    hasher.update(lamports.to_le_bytes());
+    hasher.update([u8::from(executable)]);
+    hasher.update(rent_epoch.to_le_bytes());
+    hasher.update(
+        u64::try_from(data.len())
+            .map_err(|_| Error::new("account width does not fit u64"))?
+            .to_le_bytes(),
+    );
+    hasher.update(data);
+    Ok(hex(&hasher.finalize()))
 }
 
 struct PlanWriter {
@@ -348,6 +468,14 @@ impl PlanWriter {
         })
     }
 
+    fn sync(&self) -> Result<()> {
+        fs::File::open(&self.directory)?.sync_all()?;
+        if let Some(parent) = self.directory.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    }
+
     fn add(
         &mut self,
         label: impl Into<String>,
@@ -369,7 +497,7 @@ impl PlanWriter {
             pubkey: address.to_string(),
             account: CliAccountBody {
                 lamports,
-                data: (BASE64.encode(data), "base64"),
+                data: (BASE64.encode(data), "base64".into()),
                 owner: owner.to_string(),
                 executable,
                 rent_epoch: 0,
@@ -379,24 +507,13 @@ impl PlanWriter {
         let path = self.directory.join(format!("{address}.json"));
         let mut file_bytes = serde_json::to_vec_pretty(&output)?;
         file_bytes.push(b'\n');
-        OpenOptions::new()
+        let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
-            .map_err(|error| Error::new(format!("create {}: {error}", path.display())))?
-            .write_all(&file_bytes)?;
-
-        let mut account_hasher = Sha256::new();
-        account_hasher.update(owner.as_ref());
-        account_hasher.update(lamports.to_le_bytes());
-        account_hasher.update([u8::from(executable)]);
-        account_hasher.update(0_u64.to_le_bytes());
-        account_hasher.update(
-            u64::try_from(data.len())
-                .map_err(|_| Error::new("account width does not fit u64"))?
-                .to_le_bytes(),
-        );
-        account_hasher.update(data);
+            .map_err(|error| Error::new(format!("create {}: {error}", path.display())))?;
+        file.write_all(&file_bytes)?;
+        file.sync_all()?;
         self.accounts.insert(
             label,
             GenesisAccountPin {
@@ -405,7 +522,7 @@ impl PlanWriter {
                 lamports,
                 data_len: data.len(),
                 data_sha256: hex(&sha256_bytes(data)),
-                account_sha256: hex(&account_hasher.finalize()),
+                account_sha256: account_sha256_v1(owner, lamports, executable, 0, data)?,
                 json_file_sha256: hex(&sha256_bytes(&file_bytes)),
             },
         );
@@ -526,6 +643,160 @@ struct ReleaseFacts {
     id: ArtifactReleaseIdV1,
 }
 
+fn checked_set_role<'a>(
+    set: &'a CheckedUpgradeSetPinV1,
+    ordinal: usize,
+    role: &str,
+) -> Result<&'a CheckedUpgradeRolePinV1> {
+    let pin = set
+        .roles
+        .get(ordinal)
+        .ok_or_else(|| Error::new("checked Upgrade set omitted a permanent role"))?;
+    if pin.role != role {
+        return Err(Error::new(format!(
+            "checked Upgrade set role {ordinal} is {:?}; expected {role}",
+            pin.role
+        )));
+    }
+    Ok(pin)
+}
+
+fn validate_checked_upgrade_set(
+    args: &PrepareArgs,
+    set: &CheckedUpgradeSetPinV1,
+    deployments: [(&str, Pubkey, &Path, &str, &str, &RoleDeployment); 7],
+) -> Result<()> {
+    if args.record_publication != RecordPublicationV1::Transaction {
+        return Err(Error::new(
+            "checked permanent-devnet prepare requires transaction record publication",
+        ));
+    }
+    crate::upgrade::reauthenticate_checked_deployment_set_pin(set)?;
+    if set.schema != crate::upgrade::CHECKED_SET_PREPARE_SCHEMA
+        || set.semantic_derivation != crate::upgrade::SEMANTIC_DERIVATION_V1
+        || set.roles.len() != 7
+    {
+        return Err(Error::new(
+            "checked Upgrade-set schema, semantic derivation, or role closure is invalid",
+        ));
+    }
+    let retained = Pubkey::from_str(&set.retained_upgrade_authority)
+        .map_err(|_| Error::new("checked Upgrade-set retained authority is not a Pubkey"))?;
+    if retained != args.core_bootstrap_upgrade_authority {
+        return Err(Error::new(
+            "Core bootstrap authority differs from the checked Upgrade-set retained authority",
+        ));
+    }
+    // The set journal's canonical order differs from release-plan display
+    // order. Name both coordinates explicitly so no zip can silently swap a
+    // role while preserving internally consistent caller data.
+    let expected = [
+        checked_set_role(set, 0, "registry")?,
+        checked_set_role(set, 1, "rent")?,
+        checked_set_role(set, 2, "custody")?,
+        checked_set_role(set, 3, "resolution")?,
+        checked_set_role(set, 4, "claims")?,
+        checked_set_role(set, 5, "trading")?,
+        checked_set_role(set, 6, "core")?,
+    ];
+    for (index, pin) in expected.iter().enumerate() {
+        let carry = index < 2;
+        let exact_tag = if carry {
+            pin.disposition == CheckedDeploymentDispositionV1::CarryForward
+                && pin.baseline_path.is_none()
+                && pin.baseline_sha256.is_none()
+                && pin.receipt_path.is_none()
+                && pin.receipt_sha256.is_none()
+                && pin.artifact_release_body_hex.is_some()
+                && pin.artifact_release_id.is_some()
+                && pin.carried_programdata_base64.is_some()
+        } else {
+            pin.disposition == CheckedDeploymentDispositionV1::Upgrade
+                && pin.baseline_path.is_some()
+                && pin.baseline_sha256.is_some()
+                && pin.receipt_path.is_some()
+                && pin.receipt_sha256.is_some()
+                && pin.artifact_release_body_hex.is_none()
+                && pin.artifact_release_id.is_none()
+                && pin.carried_programdata_base64.is_none()
+        };
+        if !exact_tag {
+            return Err(Error::new(format!(
+                "checked deployment-set role {} violates its exact Upgrade/CarryForward field closure",
+                pin.role
+            )));
+        }
+    }
+    for ((label, program, elf, candidate_sha, semantic, deployment), pin) in
+        deployments.into_iter().zip(expected)
+    {
+        let canonical_elf = fs::canonicalize(elf)?;
+        if pin.role != label
+            || pin.program_id != program.to_string()
+            || pin.programdata_id != programdata(program).to_string()
+            || pin.checked_candidate_elf_path != canonical_elf.display().to_string()
+            || pin.checked_candidate_elf_sha256 != candidate_sha
+            || pin.semantic_release_id != semantic
+            || deployment.source != DeploymentSourceV1::ObservedAccount
+            || pin.live_elf_sha256 != hex(&deployment.live_elf_sha256)
+            || pin.deployment_slot != deployment.deployment_slot
+            || pin.programdata_account_sha256 != hex(&sha256_bytes(&deployment.image))
+            || deployment.upgrade_authority != Some(retained.to_bytes())
+        {
+            return Err(Error::new(format!(
+                "{label} prepare facts differ from the authenticated Upgrade-set role; raw caller substitution is refused"
+            )));
+        }
+        hex32(&pin.programdata_account_sha256).map_err(|_| {
+            Error::new(format!(
+                "{label} checked Upgrade receipt ProgramData account digest is invalid"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_carried_infrastructure_projection(
+    set: &CheckedUpgradeSetPinV1,
+    registry: ReleaseFacts,
+    rent: ReleaseFacts,
+    profile_address: Pubkey,
+    profile_bytes: &[u8],
+) -> Result<()> {
+    let registry_pin = checked_set_role(set, 0, "registry")?;
+    let rent_pin = checked_set_role(set, 1, "rent")?;
+    for (label, pin, facts) in [
+        ("registry", registry_pin, registry),
+        ("rent", rent_pin, rent),
+    ] {
+        let expected_body = pin
+            .artifact_release_body_hex
+            .as_deref()
+            .ok_or_else(|| Error::new(format!("CarryForward {label} omitted artifact body")))?;
+        let expected_id = pin
+            .artifact_release_id
+            .as_deref()
+            .ok_or_else(|| Error::new(format!("CarryForward {label} omitted artifact ID")))?;
+        if hex(&facts.release.to_bytes()) != expected_body
+            || hex(facts.id.as_bytes()) != expected_id
+        {
+            return Err(Error::new(format!(
+                "checked prepare would replace the carried {label} ArtifactRelease instead of reusing it byte-for-byte"
+            )));
+        }
+    }
+    let carry = &set.infrastructure_carry_forward;
+    if profile_address.to_string() != carry.profile_address
+        || hex(profile_bytes) != carry.profile_body_hex
+        || hex(&sha256_bytes(profile_bytes)) != carry.profile_body_sha256
+    {
+        return Err(Error::new(
+            "checked prepare would replace the carried singleton infrastructure profile instead of reusing it byte-for-byte",
+        ));
+    }
+    Ok(())
+}
+
 impl ReleaseFacts {
     fn binding(self) -> ExecutionRoleBindingV1 {
         ExecutionRoleBindingV1::new(self.release.program(), self.id)
@@ -534,6 +805,52 @@ impl ReleaseFacts {
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
+    prepare_inner(args, None)
+}
+
+pub(crate) fn prepare_checked_local_mutable(
+    args: PrepareArgs,
+    gate: &crate::local_mutable::CheckedLocalMutableGateInputV1,
+) -> Result<SuccessorPlan> {
+    prepare_inner(args, Some(gate))
+}
+
+fn prepare_inner(
+    args: PrepareArgs,
+    checked_local_mutable_gate: Option<&crate::local_mutable::CheckedLocalMutableGateInputV1>,
+) -> Result<SuccessorPlan> {
+    if checked_local_mutable_gate.is_some() && args.checked_upgrade_set.is_some() {
+        return Err(Error::new(
+            "a plan cannot mix checked localhost genesis evidence with permanent-devnet Upgrade evidence",
+        ));
+    }
+    if checked_local_mutable_gate.is_some() {
+        if args.record_publication != RecordPublicationV1::Transaction {
+            return Err(Error::new(
+                "checked localhost mutable preparation requires transaction record publication",
+            ));
+        }
+        for (role, deployment) in [
+            ("registry", &args.deployments.registry),
+            ("rent", &args.deployments.rent_credit),
+            ("custody", &args.deployments.custody),
+            ("resolution", &args.deployments.resolution),
+            ("claims", &args.deployments.claims),
+            ("trading", &args.deployments.trading),
+            ("core", &args.deployments.core),
+        ] {
+            if deployment.observed_programdata.is_none()
+                || deployment.observed_programdata_bytes.is_some()
+                || deployment.expected_upgrade_authority
+                    != Some(args.core_bootstrap_upgrade_authority)
+                || deployment.genesis_deployment_slot != 0
+            {
+                return Err(Error::new(format!(
+                    "checked localhost {role} must come from one exact observed ProgramData file under the retained authority"
+                )));
+            }
+        }
+    }
     validate_prepare(&args)?;
     if !args.plan_path.is_absolute() || args.plan_path.exists() {
         return Err(Error::new(
@@ -580,6 +897,71 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         role_deployment("Custody", &custody_elf, None, &args.deployments.custody)?;
     let rent_deployment =
         role_deployment("RentCredit", &rent_elf, None, &args.deployments.rent_credit)?;
+
+    if let Some(set) = &args.checked_upgrade_set {
+        validate_checked_upgrade_set(
+            &args,
+            set,
+            [
+                (
+                    "registry",
+                    args.registry_program,
+                    &args.registry_elf,
+                    &args.registry_sha256,
+                    &args.registry_semantic_release_id,
+                    &registry_deployment,
+                ),
+                (
+                    "rent",
+                    args.rent_credit_program,
+                    &args.rent_credit_elf,
+                    &args.rent_credit_sha256,
+                    &args.rent_credit_semantic_release_id,
+                    &rent_deployment,
+                ),
+                (
+                    "custody",
+                    args.custody_program,
+                    &args.custody_elf,
+                    &args.custody_sha256,
+                    &args.custody_semantic_release_id,
+                    &custody_deployment,
+                ),
+                (
+                    "resolution",
+                    args.resolution_program,
+                    &args.resolution_elf,
+                    &args.resolution_sha256,
+                    &args.resolution_semantic_release_id,
+                    &resolution_deployment,
+                ),
+                (
+                    "claims",
+                    args.claims_program,
+                    &args.claims_elf,
+                    &args.claims_sha256,
+                    &args.claims_semantic_release_id,
+                    &claims_deployment,
+                ),
+                (
+                    "trading",
+                    args.trading_program,
+                    &args.trading_elf,
+                    &args.trading_sha256,
+                    &args.trading_semantic_release_id,
+                    &trading_deployment,
+                ),
+                (
+                    "core",
+                    args.core_program,
+                    &args.core_elf,
+                    &args.core_sha256,
+                    &args.core_semantic_release_id,
+                    &core_deployment,
+                ),
+            ],
+        )?;
+    }
 
     // What a release BINDS is the authority its ProgramData carries AT
     // ACTIVATION, which is not always the authority observed now. Nothing in
@@ -640,7 +1022,7 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         trading_deployment.upgrade_authority,
     )?;
     let resolution_semantic = hex32(&args.resolution_semantic_release_id)?;
-    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
+    if resolution_semantic != RESOLUTION_CONTROLLER_RELEASE_ID_V5 {
         return Err(Error::new(
             "Resolution semantic release ID does not match the selected executable contract",
         ));
@@ -691,6 +1073,15 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         &args.core_program,
     )
     .0;
+    if let Some(set) = &args.checked_upgrade_set {
+        validate_carried_infrastructure_projection(
+            set,
+            registry,
+            rent,
+            infrastructure_address,
+            &infrastructure_bytes,
+        )?;
+    }
 
     let provider = local_validator_release_v1()
         .map_err(|error| Error::new(format!("local Pyth release projection: {error:?}")))?;
@@ -757,9 +1148,45 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
         )?,
     );
 
+    let registry_pin = pin(&args, ProgramKind::Registry, registry, &registry_deployment);
+    let core_pin = pin(&args, ProgramKind::Core, core, &core_deployment);
+    let claims_pin = pin(&args, ProgramKind::Claims, claims, &claims_deployment);
+    let trading_pin = pin(&args, ProgramKind::Trading, trading, &trading_deployment);
+    let resolution_pin = pin(
+        &args,
+        ProgramKind::Resolution,
+        resolution,
+        &resolution_deployment,
+    );
+    let custody_pin = pin(&args, ProgramKind::Custody, custody, &custody_deployment);
+    let rent_pin = pin(&args, ProgramKind::Rent, rent, &rent_deployment);
+
+    let checked_local_mutable_set = checked_local_mutable_gate
+        .map(|gate| {
+            crate::local_mutable::build_checked_local_mutable_set_v1(
+                gate,
+                args.core_bootstrap_upgrade_authority,
+                [
+                    ("registry", &registry_pin),
+                    ("rent", &rent_pin),
+                    ("custody", &custody_pin),
+                    ("resolution", &resolution_pin),
+                    ("claims", &claims_pin),
+                    ("trading", &trading_pin),
+                    ("core", &core_pin),
+                ],
+            )
+        })
+        .transpose()?;
+    writer.sync()?;
     let plan = SuccessorPlan {
         schema: "dclutch-local-successor-infrastructure-plan-v2".into(),
-        genesis_boundary: match publication {
+        genesis_boundary: if checked_local_mutable_gate.is_some() {
+            vec![
+                "Genesis installs seven exact checked-release Loader-v3 Program/ProgramData pairs under one disposable retained authority at canonical local slots 1 through 7. Nothing else.".into(),
+                "Every infrastructure record body, activation, founding, participant, trade, resolution, payout, and retirement remains a real localhost transaction.".into(),
+            ]
+        } else { match publication {
             RecordPublicationV1::Genesis => vec![
                 "Genesis fixtures are six immutable Loader-v3 programs, one authority-bearing pre-init Core Loader-v3 program with the same exact ELF, and finalized Registry record bodies.".into(),
                 "Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution are not genesis-prepared.".into(),
@@ -768,28 +1195,32 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
                 "Genesis fixtures are six immutable Loader-v3 programs and one authority-bearing pre-init Core Loader-v3 program with the same exact ELF. Nothing else. No protocol state exists at genesis.".into(),
                 "Every infrastructure record body, Registry activation, Core infrastructure initialization, RentCredit creation, Found, Source creation, funding, and resolution is a real transaction. This is the shape a cluster can reach.".into(),
             ],
+        }},
+        bootstrap_order: if checked_local_mutable_gate.is_some() {
+            vec![
+                "Re-authenticate the exact checked-release gate and all seven mutable Loader pairs before any key read.".into(),
+                "Publish the exact seven ArtifactRelease records and singleton infrastructure profile through Registry transactions.".into(),
+                "Activate the five-role exact-authority ExecutionReleaseSet without revoking the disposable local Upgrade authority.".into(),
+                "Execute DCLTGMF2 founding, participant admission, Direct, resolution, payout, and retirement through their accepted exterior callers.".into(),
+            ]
+        } else {
+            vec![
+                "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
+                "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
+                "Revoke Core upgrade authority to None through Loader-v3 and verify the exact tag-None fixed-offset poststate, including Loader-retained inactive authority bytes, before release recognition.".into(),
+                "Activate the five-role immutable ExecutionReleaseSet through Registry, then create RentCredit and execute canonical Found31.".into(),
+                "Create and fund Source through Core effects before consuming the captured signed Pyth PriceUpdate through Resolution.".into(),
+            ]
         },
-        bootstrap_order: vec![
-            "Authenticate immutable Registry/Rent and remaining role Loader facts; authenticate Core ELF under its ephemeral exact upgrade authority.".into(),
-            "Use that in-memory Core upgrade-authority signer to initialize the sole 144-byte ProtocolInfrastructureProfile from exact Registry and Rent artifact records.".into(),
-            "Revoke Core upgrade authority to None through Loader-v3 and verify the exact tag-None fixed-offset poststate, including Loader-retained inactive authority bytes, before release recognition.".into(),
-            "Activate the five-role immutable ExecutionReleaseSet through Registry, then create RentCredit and execute canonical Found31.".into(),
-            "Create and fund Source through Core effects before consuming the captured signed Pyth PriceUpdate through Resolution.".into(),
-        ],
         execution_blocker: "Infrastructure activation is executable in one supervised process. LifecycleRentCreditV2 and Found31 remain behind an explicit market-specific input bundle: finalized Realm, ProductV3 basis/result-domain, portfolio, resolution, execution-manifest, and lifecycle-policy records plus exact generation, immutable refund wallet, initial Hoard principal, and lifecycle-rent funding.".into(),
         account_dir: args.account_dir.display().to_string(),
-        registry: pin(&args, ProgramKind::Registry, registry, &registry_deployment),
-        core: pin(&args, ProgramKind::Core, core, &core_deployment),
-        claims: pin(&args, ProgramKind::Claims, claims, &claims_deployment),
-        trading: pin(&args, ProgramKind::Trading, trading, &trading_deployment),
-        resolution: pin(
-            &args,
-            ProgramKind::Resolution,
-            resolution,
-            &resolution_deployment,
-        ),
-        custody: pin(&args, ProgramKind::Custody, custody, &custody_deployment),
-        rent_credit: pin(&args, ProgramKind::Rent, rent, &rent_deployment),
+        registry: registry_pin,
+        core: core_pin,
+        claims: claims_pin,
+        trading: trading_pin,
+        resolution: resolution_pin,
+        custody: custody_pin,
+        rent_credit: rent_pin,
         activation: activation.to_string(),
         release_set_id: hex(&release_set_id),
         core_bootstrap: CoreBootstrapPin {
@@ -808,6 +1239,8 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
             // mutable substrate it has no revoke stage for.
             release_recognition_requires_revoke: core_activation_upgrade_authority.is_none(),
         },
+        checked_upgrade_set: args.checked_upgrade_set,
+        checked_local_mutable_set,
         infrastructure_profile: InfrastructureProfilePin {
             address: infrastructure_address.to_string(),
             schema_id: hex(&PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1),
@@ -824,11 +1257,15 @@ pub(crate) fn prepare(args: PrepareArgs) -> Result<SuccessorPlan> {
     };
     let mut bytes = serde_json::to_vec_pretty(&plan)?;
     bytes.push(b'\n');
-    OpenOptions::new()
+    let mut plan_file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&args.plan_path)?
-        .write_all(&bytes)?;
+        .open(&args.plan_path)?;
+    plan_file.write_all(&bytes)?;
+    plan_file.sync_all()?;
+    if let Some(parent) = args.plan_path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
     Ok(plan)
 }
 
@@ -964,6 +1401,21 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
         args.custody_program,
         args.rent_credit_program,
     ])?;
+    if args.checked_upgrade_set.is_none()
+        && crate::upgrade::is_permanent_devnet_program_set(&[
+            args.registry_program,
+            args.rent_credit_program,
+            args.custody_program,
+            args.resolution_program,
+            args.claims_program,
+            args.trading_program,
+            args.core_program,
+        ])
+    {
+        return Err(Error::new(
+            "the permanent devnet program set requires --upgrade-set-journal; raw release facts cannot authorize activation",
+        ));
+    }
     if args.core_bootstrap_upgrade_authority == Pubkey::default()
         || args.core_bootstrap_upgrade_authority == system_program::ID
         || args.core_bootstrap_upgrade_authority == bpf_loader_upgradeable::ID
@@ -1054,7 +1506,7 @@ fn validate_prepare(args: &PrepareArgs) -> Result<()> {
             )));
         }
         match (
-            input.observed_programdata.is_some(),
+            input.observed_programdata.is_some() || input.observed_programdata_bytes.is_some(),
             input.expected_live_elf_sha256.as_deref(),
         ) {
             (true, Some(digest)) => {
@@ -1455,7 +1907,7 @@ mod tests {
             resolution_program: program(5),
             resolution_elf,
             resolution_sha256,
-            resolution_semantic_release_id: hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+            resolution_semantic_release_id: hex(&RESOLUTION_CONTROLLER_RELEASE_ID_V5),
             custody_program: program(6),
             custody_elf,
             custody_sha256,
@@ -1464,6 +1916,7 @@ mod tests {
             rent_credit_elf,
             rent_credit_sha256,
             rent_credit_semantic_release_id: hex(&[17; 32]),
+            checked_upgrade_set: None,
             record_publication: publication,
             deployments,
         });

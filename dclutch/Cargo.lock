@@ -1612,6 +1612,7 @@ dependencies = [
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
  "dclutch-structured-v2-kernel",
  "dclutch-structured-v2-operator",
  "dclutch-token-svm",
@@ -1642,6 +1643,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-sha256-adapter",
  "dclutch-token-svm",
 ]
 
@@ -1835,6 +1837,7 @@ dependencies = [
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
  "dclutch-sha256-adapter",
+ "dclutch-token-svm",
  "dclutch-transition-vm",
  "sha2 0.10.9",
 ]
@@ -2305,6 +2308,7 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
  "dclutch-token-svm",
  "solana-program",
  "solana-program-option",

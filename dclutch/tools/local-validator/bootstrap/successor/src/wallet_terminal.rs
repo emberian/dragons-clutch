@@ -12,10 +12,7 @@ use std::{collections::BTreeMap, io::Write, path::PathBuf};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_claims_svm::{
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
-    product_basis_terminal_v3::{
-        ProductClaimsTerminalAdmissionV3, TERMINAL_COORDINATE_BYTES_V2,
-        TERMINAL_COORDINATE_MAGIC_V2, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-    },
+    product_basis_terminal_v3::ProductClaimsTerminalAdmissionV3,
     protocol_position_v2::ProtocolPositionSeedsV2,
 };
 use dclutch_custody_contract::{
@@ -54,6 +51,9 @@ use dclutch_representation_composition_v3_operator::{
     CompositionOnlyChainObservationV3, CompositionOnlyObservationV3, FinalizedRecordObservationV3,
     ProductCompositionObservationV3, authenticate_composition_only_v3,
 };
+use dclutch_resolution_codec::{
+    RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
+};
 use dclutch_token_svm::{Mint, TokenProgram};
 use serde::{Deserialize, Serialize};
 use solana_address_lookup_table_interface::instruction::{
@@ -88,6 +88,7 @@ pub(crate) struct ProgramSelectorsV1 {
     pub(crate) core: String,
     pub(crate) claims: String,
     pub(crate) custody: String,
+    pub(crate) resolution: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -102,7 +103,6 @@ pub(crate) struct RecordSelectorsV1 {
     pub(crate) composition_graph: String,
     pub(crate) composition_translation: String,
     pub(crate) composition_exposure: String,
-    pub(crate) terminal_record: String,
 }
 
 /// Immutable selectors and wallet coordinates for one checked payout.
@@ -122,6 +122,8 @@ pub(crate) struct PlanInputV1 {
     pub(crate) parent_context: String,
     pub(crate) custody_context: String,
     pub(crate) release_set: String,
+    /// Exact Resolution certificate account accepted by live Core.
+    pub(crate) terminal_certificate: String,
     #[serde(
         default,
         deserialize_with = "optional_lookup_table",
@@ -159,6 +161,7 @@ pub(crate) struct SelectedInputV1 {
     core: Pubkey,
     claims: Pubkey,
     custody: Pubkey,
+    resolution: Pubkey,
     pub(crate) realm: RecordPairV1,
     pub(crate) product: RecordPairV1,
     pub(crate) result_domain: RecordPairV1,
@@ -168,14 +171,14 @@ pub(crate) struct SelectedInputV1 {
     pub(crate) composition_graph: RecordPairV1,
     pub(crate) composition_translation: RecordPairV1,
     pub(crate) composition_exposure: RecordPairV1,
-    pub(crate) terminal_record_digest: [u8; 32],
-    pub(crate) terminal_coordinate: RecordPairV1,
+    pub(crate) terminal_certificate: Pubkey,
     pub(crate) aggregate: Pubkey,
     pub(crate) position: Pubkey,
     activation_cache: Pubkey,
     claims_programdata: Pubkey,
     core_programdata: Pubkey,
     custody_programdata: Pubkey,
+    resolution_programdata: Pubkey,
     pub(crate) custody_replay: Pubkey,
     custody_authority: Pubkey,
     pub(crate) hoard: Pubkey,
@@ -221,6 +224,9 @@ impl SelectedInputV1 {
         let core = nonzero_pubkey(&input.programs.core, "programs.core")?;
         let claims = nonzero_pubkey(&input.programs.claims, "programs.claims")?;
         let custody = nonzero_pubkey(&input.programs.custody, "programs.custody")?;
+        let resolution = nonzero_pubkey(&input.programs.resolution, "programs.resolution")?;
+        let terminal_certificate =
+            nonzero_pubkey(&input.terminal_certificate, "terminalCertificate")?;
         if recipient_owner != owner {
             return Err(Error::new(
                 "recipientOwner must equal owner for a wallet terminal payout",
@@ -280,12 +286,6 @@ impl SelectedInputV1 {
             &input.records.composition_exposure,
             "compositionExposure",
         )?;
-        let terminal_record_digest = nonzero_hex(&input.records.terminal_record, "terminalRecord")?;
-        let terminal_coordinate = record_pair(
-            core,
-            TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-            terminal_record_digest,
-        );
         let aggregate = Pubkey::find_program_address(
             &[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()],
             &claims,
@@ -347,6 +347,7 @@ impl SelectedInputV1 {
             core,
             claims,
             custody,
+            resolution,
             realm,
             product,
             result_domain,
@@ -356,14 +357,14 @@ impl SelectedInputV1 {
             composition_graph,
             composition_translation,
             composition_exposure,
-            terminal_record_digest,
-            terminal_coordinate,
+            terminal_certificate,
             aggregate,
             position,
             activation_cache: activation_cache_address_v1(&registry, &release_set),
             claims_programdata: programdata_address(claims),
             core_programdata: programdata_address(core),
             custody_programdata: programdata_address(custody),
+            resolution_programdata: programdata_address(resolution),
             custody_replay,
             custody_authority,
             hoard,
@@ -380,10 +381,13 @@ impl SelectedInputV1 {
             self.core,
             self.claims,
             self.custody,
+            self.resolution,
+            self.terminal_certificate,
             self.activation_cache,
             self.claims_programdata,
             self.core_programdata,
             self.custody_programdata,
+            self.resolution_programdata,
             self.aggregate,
             self.position,
             self.custody_replay,
@@ -403,7 +407,6 @@ impl SelectedInputV1 {
             self.composition_graph,
             self.composition_translation,
             self.composition_exposure,
-            self.terminal_coordinate,
         ] {
             values.push(pair.raw);
             values.push(pair.staging);
@@ -515,12 +518,13 @@ struct ManifestRouteV3 {
     claims_program_data: String,
     core_program: String,
     core_program_data: String,
+    resolution_program: String,
+    resolution_program_data: String,
     position: String,
     exposure_raw: String,
     exposure_staging: String,
     custody_program: String,
-    terminal_coordinate_raw: String,
-    terminal_coordinate_staging: String,
+    terminal_certificate: String,
     realm_raw: String,
     realm_staging: String,
     custody_replay: String,
@@ -720,6 +724,14 @@ pub(crate) fn build_report(
         custody_program,
         snapshot.required(selected.custody_programdata, "Custody ProgramData")?,
     )?;
+    authenticate_role(
+        registry,
+        cache,
+        selected.release_set,
+        ExecutionRoleV1::Resolution,
+        snapshot.required(selected.resolution, "Resolution program")?,
+        snapshot.required(selected.resolution_programdata, "Resolution ProgramData")?,
+    )?;
 
     let admitted = authenticate_composition_only_v3(CompositionOnlyChainObservationV3 {
         registry_program: registry,
@@ -802,10 +814,9 @@ pub(crate) fn build_report(
     let basis = admitted.product_basis();
     let exposure = admitted.exposure();
     let descriptor = admitted.composition().descriptor();
-    let terminal_digest = core
+    let terminal_certificate = core
         .terminal_receipt
-        .ok_or_else(|| Error::new("Core Market has no terminal record"))?
-        .to_bytes();
+        .ok_or_else(|| Error::new("Core Market has no terminal certificate"))?;
     if core.phase != CorePhase::Terminal
         || expected_market != selected.market
         || core.identity.market_id.to_bytes() != selected.market.to_bytes()
@@ -814,7 +825,7 @@ pub(crate) fn build_report(
         || core.identity.realm_id.to_bytes() != selected.realm.digest
         || core.identity.product_record.to_bytes() != selected.product.digest
         || core.identity.product_id.to_bytes() != product.join.product_id.to_bytes()
-        || terminal_digest != selected.terminal_record_digest
+        || terminal_certificate.to_bytes() != selected.terminal_certificate.to_bytes()
         || aggregate.logical_market != selected.market.to_bytes()
         || aggregate.release_set != selected.release_set
         || aggregate.realm_id != selected.realm.digest
@@ -828,14 +839,14 @@ pub(crate) fn build_report(
             "Core, Claims, Realm, Product, exposure, release, or Custody context did not join",
         ));
     }
-    let terminal = terminal_scenario(
+    let certificate = authenticate_terminal_certificate(
         selected,
         snapshot,
         &rent,
         core,
-        basis.kind(),
         product.join.outcome_count,
     )?;
+    let terminal = terminal_scenario(core, basis.kind(), product.join.outcome_count, certificate)?;
     let admission = ProductClaimsTerminalAdmissionV3::new(
         exposure.bundle_id(),
         exposure.bundle_digest(),
@@ -852,15 +863,6 @@ pub(crate) fn build_report(
         basis.payout_scale(),
     )
     .map_err(|error| Error::new(format!("terminal admission: {error:?}")))?;
-    let (terminal_coordinate_raw, terminal_coordinate_staging) = match terminal {
-        TerminalScenarioV3::Rational { .. } => (
-            selected.terminal_coordinate.raw,
-            selected.terminal_coordinate.staging,
-        ),
-        TerminalScenarioV3::Categorical(_) | TerminalScenarioV3::Failure => {
-            (sysvar::rent::ID, sysvar::rent::ID)
-        }
-    };
     let route = WalletTerminalPayoutRouteV3 {
         aggregate: selected.aggregate,
         linked_basis_raw: selected.product_basis.raw,
@@ -878,12 +880,13 @@ pub(crate) fn build_report(
         claims_programdata: selected.claims_programdata,
         core_program: selected.core,
         core_programdata: selected.core_programdata,
+        resolution_program: selected.resolution,
+        resolution_programdata: selected.resolution_programdata,
         position: selected.position,
         exposure_raw: selected.composition_exposure.raw,
         exposure_staging: selected.composition_exposure.staging,
         custody_program: selected.custody,
-        terminal_coordinate_raw,
-        terminal_coordinate_staging,
+        terminal_certificate: selected.terminal_certificate,
         realm_raw: selected.realm.raw,
         realm_staging: selected.realm.staging,
         custody_replay: selected.custody_replay,
@@ -897,7 +900,9 @@ pub(crate) fn build_report(
         observation: snapshot.observation,
         route,
         parent_context: selected.parent_context,
-        terminal_record_digest: selected.terminal_record_digest,
+        // The deployed Claims ABI retains this legacy field name, but Core and
+        // every admitted writer give it one meaning: certificate account key.
+        terminal_record_digest: selected.terminal_certificate.to_bytes(),
         recipient_owner: selected.recipient_owner.to_bytes(),
         transfer_index: selected.transfer_index,
         admission,
@@ -1009,12 +1014,10 @@ fn instruction_manifest(instruction: Instruction) -> InstructionManifestV1 {
 }
 
 fn terminal_scenario(
-    selected: &SelectedInputV1,
-    snapshot: &FinalizedSnapshotV1,
-    rent: &Rent,
     core: CoreState,
     kind: BasisKindV3,
     outcome_count: u32,
+    certificate: ResolutionCertificateV2,
 ) -> Result<TerminalScenarioV3> {
     if core.terminal_winner >= outcome_count {
         return Err(Error::new(
@@ -1025,35 +1028,60 @@ fn terminal_scenario(
         BasisKindV3::CategoricalQ1 => Ok(TerminalScenarioV3::Categorical(core.terminal_winner)),
         BasisKindV3::GradedExactComplement => {
             if core.terminal_winner == outcome_count.saturating_sub(1) {
+                if certificate.kind != ResolutionCertificateKindV2::ResolutionFailure {
+                    return Err(Error::new(
+                        "graded failure selector has another Resolution certificate kind",
+                    ));
+                }
                 return Ok(TerminalScenarioV3::Failure);
             }
-            let record =
-                authenticate_record(selected.terminal_coordinate, snapshot, rent, selected.core)?;
-            if record.data.len() != TERMINAL_COORDINATE_BYTES_V2
-                || record.data.get(..8) != Some(TERMINAL_COORDINATE_MAGIC_V2.as_slice())
-                || u16_at(&record.data, 8)? != 2
-                || record
-                    .data
-                    .get(10..16)
-                    .is_none_or(|bytes| bytes.iter().any(|byte| *byte != 0))
-                || record
-                    .data
-                    .get(28..32)
-                    .is_none_or(|bytes| bytes.iter().any(|byte| *byte != 0))
-            {
-                return Err(Error::new("terminal coordinate has another canonical wire"));
-            }
-            let numerator = i64_at(&record.data, 16)?;
-            let denominator = u32_at(&record.data, 24)?;
-            if denominator == 0 {
-                return Err(Error::new("terminal coordinate denominator is zero"));
+            if certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess {
+                return Err(Error::new(
+                    "graded success selector has another Resolution certificate kind",
+                ));
             }
             Ok(TerminalScenarioV3::Rational {
-                numerator: i128::from(numerator),
-                denominator: u64::from(denominator),
+                numerator: certificate.result_numerator,
+                denominator: certificate.result_denominator,
             })
         }
     }
+}
+
+fn authenticate_terminal_certificate(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+    rent: &Rent,
+    core: CoreState,
+    outcome_count: u32,
+) -> Result<ResolutionCertificateV2> {
+    let account = snapshot.required(selected.terminal_certificate, "Resolution certificate")?;
+    if account.owner != selected.resolution
+        || account.executable
+        || account.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
+        || account.lamports < rent.minimum_balance(account.data.len())
+    {
+        return Err(Error::new(
+            "Resolution certificate owner, width, executable bit, or rent refused",
+        ));
+    }
+    let certificate = ResolutionCertificateV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("Resolution certificate: {error:?}")))?;
+    if certificate.receipt_account != account.key.to_bytes()
+        || certificate.market != selected.market.to_bytes()
+        || certificate.source_material != core.identity.resolution_policy.to_bytes()
+        || certificate.product_record_digest != core.identity.product_record.to_bytes()
+        || certificate.generation != core.identity.generation
+        || certificate.selector != core.terminal_winner
+        || certificate
+            .validate_terminal_product(core.identity.product_record.to_bytes(), outcome_count)
+            .is_err()
+    {
+        return Err(Error::new(
+            "Resolution certificate does not join Core Market, Source, Product, generation, selector, or receipt account",
+        ));
+    }
+    Ok(certificate)
 }
 
 fn authenticate_record<'a>(
@@ -1170,12 +1198,13 @@ fn manifest(
             claims_program_data: route.claims_programdata.to_string(),
             core_program: route.core_program.to_string(),
             core_program_data: route.core_programdata.to_string(),
+            resolution_program: route.resolution_program.to_string(),
+            resolution_program_data: route.resolution_programdata.to_string(),
             position: route.position.to_string(),
             exposure_raw: route.exposure_raw.to_string(),
             exposure_staging: route.exposure_staging.to_string(),
             custody_program: route.custody_program.to_string(),
-            terminal_coordinate_raw: route.terminal_coordinate_raw.to_string(),
-            terminal_coordinate_staging: route.terminal_coordinate_staging.to_string(),
+            terminal_certificate: route.terminal_certificate.to_string(),
             realm_raw: route.realm_raw.to_string(),
             realm_staging: route.realm_staging.to_string(),
             custody_replay: route.custody_replay.to_string(),
@@ -1300,20 +1329,8 @@ fn position_revision(bytes: &[u8]) -> Result<u64> {
     )
 }
 
-fn u16_at(bytes: &[u8], offset: usize) -> Result<u16> {
-    Ok(u16::from_le_bytes(array_at(bytes, offset)?))
-}
-
-fn u32_at(bytes: &[u8], offset: usize) -> Result<u32> {
-    Ok(u32::from_le_bytes(array_at(bytes, offset)?))
-}
-
 fn u64_at(bytes: &[u8], offset: usize) -> Result<u64> {
     Ok(u64::from_le_bytes(array_at(bytes, offset)?))
-}
-
-fn i64_at(bytes: &[u8], offset: usize) -> Result<i64> {
-    Ok(i64::from_le_bytes(array_at(bytes, offset)?))
 }
 
 fn array_at<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
@@ -1366,12 +1383,14 @@ pub(crate) mod tests {
             parent_context: id(6),
             custody_context: id(7),
             release_set: id(8),
+            terminal_certificate: key(30),
             lookup_table: Some(key(9)),
             programs: ProgramSelectorsV1 {
                 registry: key(10),
                 core: key(11),
                 claims: key(12),
                 custody: key(13),
+                resolution: key(14),
             },
             records: RecordSelectorsV1 {
                 realm: id(20),
@@ -1383,7 +1402,6 @@ pub(crate) mod tests {
                 composition_graph: id(27),
                 composition_translation: id(28),
                 composition_exposure: id(29),
-                terminal_record: id(30),
             },
         }
     }
@@ -1405,6 +1423,110 @@ pub(crate) mod tests {
                 .windows(2)
                 .all(|pair| pair[0] < pair[1])
         );
+        assert!(
+            selected
+                .addresses()
+                .contains(&selected.terminal_certificate)
+        );
+    }
+
+    #[test]
+    fn certificate_body_is_the_only_family_specific_terminal_semantics() {
+        let success =
+            terminal_certificate(ResolutionCertificateKindV2::ResolutionSuccess, 1, -7, 10);
+        assert_eq!(
+            terminal_scenario(terminal_core(1), BasisKindV3::CategoricalQ1, 3, success)
+                .expect("categorical certificate"),
+            TerminalScenarioV3::Categorical(1)
+        );
+        assert_eq!(
+            terminal_scenario(
+                terminal_core(1),
+                BasisKindV3::GradedExactComplement,
+                3,
+                success,
+            )
+            .expect("graded certificate"),
+            TerminalScenarioV3::Rational {
+                numerator: -7,
+                denominator: 10,
+            }
+        );
+        let failure = terminal_certificate(ResolutionCertificateKindV2::ResolutionFailure, 2, 0, 0);
+        assert_eq!(
+            terminal_scenario(
+                terminal_core(2),
+                BasisKindV3::GradedExactComplement,
+                3,
+                failure,
+            )
+            .expect("graded failure certificate"),
+            TerminalScenarioV3::Failure
+        );
+        assert!(
+            terminal_scenario(
+                terminal_core(1),
+                BasisKindV3::GradedExactComplement,
+                3,
+                failure,
+            )
+            .expect_err("success selector with failure certificate must refuse")
+            .to_string()
+            .contains("another Resolution certificate kind")
+        );
+    }
+
+    fn terminal_core(winner: u32) -> CoreState {
+        use dclutch_market_core_codec::{Identity, MarketIdentity, Phase, Readiness};
+
+        let identity = |byte| Identity::new([byte; 32]).expect("nonzero identity");
+        CoreState {
+            phase: Phase::Terminal,
+            readiness: Readiness::Consumed,
+            terminal_winner: winner,
+            identity: MarketIdentity {
+                market_id: identity(1),
+                realm_id: identity(2),
+                product_record: identity(3),
+                product_id: identity(4),
+                resolution_policy: identity(5),
+                capability_manifest: identity(6),
+                selected_release_set: identity(7),
+                registry_program: identity(8),
+                generation: 1,
+            },
+            outstanding_capabilities: 0,
+            principal_cap_sets: 1,
+            rent_beneficiary: identity(9),
+            terminal_receipt: Some(identity(10)),
+        }
+    }
+
+    fn terminal_certificate(
+        kind: ResolutionCertificateKindV2,
+        selector: u32,
+        result_numerator: i128,
+        result_denominator: u64,
+    ) -> ResolutionCertificateV2 {
+        ResolutionCertificateV2 {
+            kind,
+            market: [1; 32],
+            route: [2; 32],
+            source_material: [3; 32],
+            product_record_digest: [4; 32],
+            provider_evidence: [5; 32],
+            funding_allocation: [6; 32],
+            receipt_account: [7; 32],
+            generation: 1,
+            attempt_index: 0,
+            schedule_index: 0,
+            selector,
+            work_paid: 0,
+            funding_remaining: 0,
+            result_numerator,
+            result_denominator,
+            observed_at: 1,
+        }
     }
 
     fn programdata_free_position(selected: &SelectedInputV1) -> Pubkey {
@@ -1436,12 +1558,13 @@ pub(crate) mod tests {
             claims_programdata: Pubkey::new_from_array([14; 32]),
             core_program: Pubkey::new_from_array([15; 32]),
             core_programdata: Pubkey::new_from_array([16; 32]),
+            resolution_program: Pubkey::new_from_array([29; 32]),
+            resolution_programdata: Pubkey::new_from_array([30; 32]),
             position: Pubkey::new_from_array([17; 32]),
             exposure_raw: Pubkey::new_from_array([18; 32]),
             exposure_staging: Pubkey::new_from_array([19; 32]),
             custody_program: Pubkey::new_from_array([20; 32]),
-            terminal_coordinate_raw: sysvar::rent::ID,
-            terminal_coordinate_staging: sysvar::rent::ID,
+            terminal_certificate: Pubkey::new_from_array([37; 32]),
             realm_raw: Pubkey::new_from_array([21; 32]),
             realm_staging: Pubkey::new_from_array([22; 32]),
             custody_replay: Pubkey::new_from_array([23; 32]),
@@ -1564,8 +1687,8 @@ pub(crate) mod tests {
         assert_eq!(
             Sha256::digest(&encoded).as_slice(),
             &[
-                52, 169, 11, 85, 125, 206, 162, 246, 75, 76, 228, 55, 122, 166, 101, 116, 92, 238,
-                121, 134, 109, 248, 211, 143, 111, 129, 80, 254, 88, 13, 28, 250,
+                128, 13, 1, 186, 150, 117, 150, 146, 138, 175, 134, 124, 187, 40, 18, 23, 123, 139,
+                118, 71, 79, 118, 80, 143, 79, 32, 120, 207, 172, 211, 153, 210,
             ],
             "update only after inspecting the exact seven-field JSON vector",
         );
@@ -1573,6 +1696,16 @@ pub(crate) mod tests {
         assert_eq!(value.as_object().expect("object").len(), 7);
         assert_eq!(value["format"], OUTPUT_FORMAT);
         assert_eq!(value["signedPacketBase64"], "AQIDBAU=");
+        let route = value["route"].as_object().expect("route object");
+        assert_eq!(route.len(), 31);
+        assert_eq!(route["resolutionProgram"], key(29));
+        assert_eq!(route["resolutionProgramData"], key(30));
+        assert_eq!(route["terminalCertificate"], key(37));
+        assert!(route.get("terminalCoordinateRaw").is_none());
+        assert!(route.get("terminalCoordinateStaging").is_none());
+        let request = value["request"].as_object().expect("request object");
+        assert_eq!(request.len(), 25);
+        assert_eq!(request["terminalRecordDigest"], id(37));
     }
 
     #[test]
@@ -1610,11 +1743,27 @@ pub(crate) mod tests {
             Some(plan.lookup_table.as_str())
         );
         let encoded = serde_json::to_vec(&plan).expect("ALT plan JSON");
+        let exact: serde_json::Value =
+            serde_json::from_slice(&encoded).expect("exact ALT plan JSON");
+        assert_eq!(
+            exact["payoutInput"]["terminalCertificate"],
+            serde_json::Value::String(plan.payout_input.terminal_certificate.clone())
+        );
+        assert_eq!(
+            exact["payoutInput"]["programs"]["resolution"],
+            plan.payout_input.programs.resolution
+        );
+        assert!(
+            exact["payoutInput"]["records"]
+                .get("terminalRecord")
+                .is_none(),
+            "certificate identity must not reappear as a record digest"
+        );
         assert_eq!(
             Sha256::digest(&encoded).as_slice(),
             &[
-                3, 115, 128, 77, 60, 173, 177, 59, 233, 107, 233, 83, 174, 224, 75, 4, 97, 53, 191,
-                94, 94, 79, 155, 48, 115, 118, 190, 142, 71, 38, 187, 164,
+                25, 134, 248, 38, 63, 216, 156, 108, 237, 194, 13, 217, 35, 195, 207, 206, 245,
+                118, 116, 238, 212, 53, 26, 241, 227, 118, 185, 236, 179, 159, 142, 75,
             ],
             "update only after inspecting the exact ordered ALT-plan JSON vector",
         );

@@ -105,7 +105,7 @@ const EXTENSION_FEE_RESERVE_LAMPORTS: u64 = 1_000_000;
 /// so the operator can preserve the evidence and lift this bound explicitly.
 const SIGNATURE_HISTORY_MAX_PAGES: usize = 16;
 const SIGNATURE_HISTORY_PAGE_ROWS: u64 = 1_000;
-const ROLES: &[&str] = &[
+pub(crate) const CHECKED_ROLE_ORDER_V1: [&str; 7] = [
     "registry",
     "rent",
     "custody",
@@ -456,6 +456,27 @@ struct ValidatedUpgradeGateV1 {
     solana_cli_version: String,
     raw_elf: Vec<u8>,
     raw_elf_sha256: String,
+}
+
+/// Key-free projection of one checked-release role for a localhost mutable
+/// substrate.  The local launcher consumes the same gate validator as Upgrade;
+/// it does not grow a second, weaker interpretation of the thirteen-link gate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CheckedLocalGateRoleV1 {
+    pub(crate) gate_sha256: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_tree_sha256: String,
+    pub(crate) solana_cli_version: String,
+    pub(crate) raw_elf_sha256: String,
+}
+
+struct CheckedReleaseGateSelectionV1<'a> {
+    checked_release_gate_path: &'a Path,
+    expected_checked_release_gate_sha256: &'a str,
+    expected_source_revision: &'a str,
+    expected_source_tree_sha256: &'a str,
+    role: &'a str,
+    elf_path: &'a Path,
 }
 
 struct UpgradeAdmissionV1 {
@@ -1535,7 +1556,10 @@ pub(crate) fn run_baseline(arguments: Vec<String>) -> Result<()> {
         target_rent_exempt_minimum_lamports.saturating_sub(observation.programdata_lamports);
     let mut baseline = UpgradeBaselineV1 {
         schema: BASELINE_SCHEMA.into(),
-        canonical_role_order: ROLES.iter().map(|role| (*role).into()).collect(),
+        canonical_role_order: CHECKED_ROLE_ORDER_V1
+            .iter()
+            .map(|role| (*role).into())
+            .collect(),
         role_ordinal: role_ordinal(&args.role)?,
         role: args.role,
         program_id: args.program_id.to_string(),
@@ -2967,7 +2991,7 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
-fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
+pub(crate) fn checked_semantic_release_id(role: &str, source_revision: &str) -> Result<String> {
     let fixed = match role {
         "trading" => Some(COMPILED_DIRECT_RELEASE_ID_V1),
         "resolution" => Some(RESOLUTION_CONTROLLER_RELEASE_ID_V5),
@@ -5178,18 +5202,60 @@ fn verify_complete_observation(
 }
 
 fn validate_checked_release_gate(args: &UpgradeArgsV1) -> Result<ValidatedUpgradeGateV1> {
+    validate_checked_release_gate_selection(CheckedReleaseGateSelectionV1 {
+        checked_release_gate_path: &args.checked_release_gate_path,
+        expected_checked_release_gate_sha256: &args.expected_checked_release_gate_sha256,
+        expected_source_revision: &args.expected_source_revision,
+        expected_source_tree_sha256: &args.expected_source_tree_sha256,
+        role: &args.role,
+        elf_path: &args.elf_path,
+    })
+}
+
+/// Re-authenticate one role of the exact thirteen-link checked-release gate for
+/// a localhost-only mutable substrate.  This is deliberately a projection of
+/// the Upgrade validator above: local evidence and devnet Upgrade evidence
+/// share one gate authority, while retaining different deployment journals.
+pub(crate) fn authenticate_checked_release_gate_role_for_local_v1(
+    checked_release_gate_path: &Path,
+    expected_checked_release_gate_sha256: &str,
+    expected_source_revision: &str,
+    expected_source_tree_sha256: &str,
+    role: &str,
+    elf_path: &Path,
+) -> Result<CheckedLocalGateRoleV1> {
+    let validated = validate_checked_release_gate_selection(CheckedReleaseGateSelectionV1 {
+        checked_release_gate_path,
+        expected_checked_release_gate_sha256,
+        expected_source_revision,
+        expected_source_tree_sha256,
+        role,
+        elf_path,
+    })?;
+    Ok(CheckedLocalGateRoleV1 {
+        gate_sha256: validated.gate_sha256,
+        source_revision: validated.source_revision,
+        source_tree_sha256: validated.source_tree_sha256,
+        solana_cli_version: validated.solana_cli_version,
+        raw_elf_sha256: validated.raw_elf_sha256,
+    })
+}
+
+fn validate_checked_release_gate_selection(
+    args: CheckedReleaseGateSelectionV1<'_>,
+) -> Result<ValidatedUpgradeGateV1> {
     require_digest(
-        &args.expected_checked_release_gate_sha256,
+        args.expected_checked_release_gate_sha256,
         "expected checked-release gate SHA-256",
     )?;
     require_lower_hex(
-        &args.expected_source_revision,
+        args.expected_source_revision,
         "expected source revision",
         40,
         40,
     )?;
     require_digest(
-        &args.expected_source_tree_sha256,
+        args.expected_source_tree_sha256,
         "expected source tree SHA-256",
     )?;
     let gate_metadata = fs::symlink_metadata(&args.checked_release_gate_path).map_err(|error| {
@@ -5551,7 +5617,7 @@ fn validate_frame_report(link: &CheckedGateLinkV1, bytes: &[u8]) -> Result<()> {
 }
 
 fn validate_baseline(args: &UpgradeArgsV1, baseline: &UpgradeBaselineV1) -> Result<()> {
-    let expected_order = ROLES
+    let expected_order = CHECKED_ROLE_ORDER_V1
         .iter()
         .map(|role| String::from(*role))
         .collect::<Vec<_>>();
@@ -8102,17 +8168,17 @@ fn sync_parent_directory(parent: &Path) -> Result<()> {
 }
 
 fn require_role(role: &str) -> Result<()> {
-    if !ROLES.contains(&role) {
+    if !CHECKED_ROLE_ORDER_V1.contains(&role) {
         return Err(Error::new(format!(
             "unknown Upgrade role {role:?}; one run names exactly one of {}",
-            ROLES.join(", ")
+            CHECKED_ROLE_ORDER_V1.join(", ")
         )));
     }
     Ok(())
 }
 
 fn role_ordinal(role: &str) -> Result<u8> {
-    ROLES
+    CHECKED_ROLE_ORDER_V1
         .iter()
         .position(|known| *known == role)
         .and_then(|index| u8::try_from(index).ok())
@@ -8975,7 +9041,10 @@ mod tests {
             };
             let mut baseline = UpgradeBaselineV1 {
                 schema: BASELINE_SCHEMA.into(),
-                canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
+                canonical_role_order: CHECKED_ROLE_ORDER_V1
+                    .iter()
+                    .map(|role| String::from(*role))
+                    .collect(),
                 role_ordinal: role_ordinal("custody").expect("role"),
                 role: "custody".into(),
                 program_id: program.to_string(),
@@ -9522,7 +9591,10 @@ mod tests {
                 let context_slot = 600_000 + u64::from(byte) * 10;
                 let mut baseline = UpgradeBaselineV1 {
                     schema: BASELINE_SCHEMA.into(),
-                    canonical_role_order: ROLES.iter().map(|role| String::from(*role)).collect(),
+                    canonical_role_order: CHECKED_ROLE_ORDER_V1
+                        .iter()
+                        .map(|role| String::from(*role))
+                        .collect(),
                     role_ordinal: byte,
                     role: (*role).into(),
                     program_id: program.to_string(),
@@ -10738,6 +10810,264 @@ mod tests {
             fixture.args.expected_checked_release_gate_sha256
         );
         assert_eq!(fixture.gate.links.len(), 13);
+    }
+
+    #[test]
+    fn localhost_projection_is_the_exact_upgrade_gate_validator() {
+        let fixture = Fixture::new();
+        let upgrade = validate_checked_release_gate(&fixture.args).expect("canonical gate");
+        let local = authenticate_checked_release_gate_role_for_local_v1(
+            &fixture.args.checked_release_gate_path,
+            &fixture.args.expected_checked_release_gate_sha256,
+            &fixture.args.expected_source_revision,
+            &fixture.args.expected_source_tree_sha256,
+            &fixture.args.role,
+            &fixture.args.elf_path,
+        )
+        .expect("localhost projection");
+        assert_eq!(local.gate_sha256, upgrade.gate_sha256);
+        assert_eq!(local.source_revision, upgrade.source_revision);
+        assert_eq!(local.source_tree_sha256, upgrade.source_tree_sha256);
+        assert_eq!(local.solana_cli_version, upgrade.solana_cli_version);
+        assert_eq!(local.raw_elf_sha256, digest(&fixture.raw_elf));
+
+        let error = authenticate_checked_release_gate_role_for_local_v1(
+            &fixture.args.checked_release_gate_path,
+            &fixture.args.expected_checked_release_gate_sha256,
+            &fixture.args.expected_source_revision,
+            &fixture.args.expected_source_tree_sha256,
+            "trading",
+            &fixture.args.elf_path,
+        )
+        .expect_err("role substitution must refuse");
+        assert!(
+            error.to_string().contains("selected trading ELF path"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn checked_gate_materializes_seven_exact_mutable_local_loader_pairs() {
+        let fixture = Fixture::new();
+        let work = fixture._directory.0.join("checked-local-mutable");
+        let plan_path = work.join("plan.json");
+        let report = crate::local_mutable::prepare_local_mutable_v1(vec![
+            "--work".into(),
+            work.display().to_string(),
+            "--output".into(),
+            plan_path.display().to_string(),
+            "--checked-release-gate".into(),
+            fixture.args.checked_release_gate_path.display().to_string(),
+            "--expected-checked-release-gate-sha256".into(),
+            fixture.args.expected_checked_release_gate_sha256.clone(),
+            "--expected-source-revision".into(),
+            fixture.args.expected_source_revision.clone(),
+            "--expected-source-tree-sha256".into(),
+            fixture.args.expected_source_tree_sha256.clone(),
+            "--seed".into(),
+            "51".repeat(32),
+        ])
+        .expect("prepare checked mutable localhost substrate");
+        let plan: crate::model::SuccessorPlan = serde_json::from_slice(
+            &fs::read(&plan_path).expect("checked local mutable plan bytes"),
+        )
+        .expect("checked local mutable plan JSON");
+        crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect("reauthenticate checked local mutable plan");
+        let loopback = crate::cluster::ClusterOriginV1::parse("http://127.0.0.1:20890/", None)
+            .expect("owned loopback origin");
+        crate::campaign::authenticate_checked_campaign_plan(&plan, &loopback)
+            .expect("all seven ArtifactRelease rows and the profile rejoin the checked set");
+        let checked = plan
+            .checked_local_mutable_set
+            .as_ref()
+            .expect("checked local mutable set");
+        assert_eq!(report.schema, "dclutch-local-mutable-prepare-report-v1");
+        assert_eq!(checked.roles.len(), 7);
+        assert_eq!(report.programs.len(), 7);
+        assert_eq!(report.checked_local_mutable_set_sha256, checked.set_sha256);
+        assert_eq!(
+            fs::read_dir(&report.account_dir)
+                .expect("local account directory")
+                .count(),
+            14
+        );
+        for (ordinal, role) in checked.roles.iter().enumerate() {
+            assert_eq!(role.role, CHECKED_ROLE_ORDER_V1[ordinal]);
+            assert_eq!(role.deployment_slot, ordinal as u64 + 1);
+            assert!(plan.genesis_accounts.values().any(|account| {
+                account.address == role.programdata_id
+                    && account.data_sha256 == role.programdata_account_sha256
+            }));
+        }
+        assert!(report.keypairs.len() >= crate::campaign::KEYPAIR_ROLES.len());
+
+        let mut substituted_record = plan.clone();
+        let rent_record = substituted_record
+            .records
+            .get("rent_artifact_release")
+            .expect("rent ArtifactRelease")
+            .clone();
+        substituted_record.registry.artifact_release_id = rent_record.content_sha256.clone();
+        substituted_record
+            .records
+            .insert("registry_artifact_release".into(), rent_record);
+        let error =
+            crate::campaign::authenticate_checked_campaign_plan(&substituted_record, &loopback)
+                .expect_err("coherently substituted role record must refuse");
+        assert!(
+            error.to_string().contains("checked mutable slot pin"),
+            "{error}"
+        );
+
+        let binding = |pin: &crate::model::ProgramPin| {
+            dclutch_release_set_contract::ExecutionRoleBindingV1::new(
+                dclutch_release_set_contract::ProgramIdentityV1::new(
+                    crate::plan::pubkey(&pin.program_id)
+                        .expect("program")
+                        .to_bytes(),
+                )
+                .expect("program identity"),
+                dclutch_release_set_contract::ArtifactReleaseIdV1::new(
+                    crate::plan::hex32(&pin.artifact_release_id).expect("artifact ID"),
+                )
+                .expect("artifact identity"),
+            )
+        };
+        let mut substituted_profile = plan.clone();
+        let profile = dclutch_release_set_contract::ProtocolInfrastructureProfileV1::new(
+            binding(&substituted_profile.core),
+            binding(&substituted_profile.rent_credit),
+        )
+        .expect("coherent but substituted profile");
+        let profile_bytes = profile.to_bytes();
+        substituted_profile.infrastructure_profile.body_hex = crate::plan::hex(&profile_bytes);
+        substituted_profile.infrastructure_profile.body_sha256 = digest(&profile_bytes);
+        substituted_profile
+            .infrastructure_profile
+            .registry_artifact_release_id = substituted_profile.core.artifact_release_id.clone();
+        let error =
+            crate::campaign::authenticate_checked_campaign_plan(&substituted_profile, &loopback)
+                .expect_err("coherently substituted infrastructure profile must refuse");
+        assert!(
+            error
+                .to_string()
+                .contains("substituted a Registry or Rent binding"),
+            "{error}"
+        );
+
+        let mut substituted_schema = plan.clone();
+        let registry =
+            crate::plan::pubkey(&substituted_schema.registry.program_id).expect("Registry program");
+        let pair = substituted_schema
+            .records
+            .get_mut("registry_artifact_release")
+            .expect("Registry ArtifactRelease");
+        let substituted_schema_id = [0x5a; 32];
+        let content = crate::plan::hex32(&pair.content_sha256).expect("record content digest");
+        pair.schema_id = crate::plan::hex(&substituted_schema_id);
+        pair.raw = Pubkey::find_program_address(
+            &[RAW_RECORD_PDA_SEED_V1, &substituted_schema_id, &content],
+            &registry,
+        )
+        .0
+        .to_string();
+        pair.staging = Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &substituted_schema_id, &content],
+            &registry,
+        )
+        .0
+        .to_string();
+        let error =
+            crate::campaign::authenticate_checked_campaign_plan(&substituted_schema, &loopback)
+                .expect_err("coherent ArtifactRelease schema/address substitution must refuse");
+        assert!(
+            error.to_string().contains("ArtifactRelease schema"),
+            "{error}"
+        );
+
+        let registry_program_pin = plan
+            .genesis_accounts
+            .get("loader.registry.program")
+            .expect("Registry Program account pin");
+        let registry_program_path =
+            PathBuf::from(&plan.account_dir).join(format!("{}.json", registry_program_pin.address));
+        let original_registry_program =
+            fs::read(&registry_program_path).expect("Registry Program account JSON");
+        let mut changed_registry_program = original_registry_program.clone();
+        changed_registry_program.push(b'\n');
+        fs::write(&registry_program_path, changed_registry_program)
+            .expect("change Registry Program account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect_err("changed account JSON must refuse");
+        assert!(error.to_string().contains("file digest"), "{error}");
+        fs::write(&registry_program_path, &original_registry_program)
+            .expect("restore Registry Program account JSON");
+
+        let original_registry_account = crate::plan::authenticate_cli_account_file_v1(
+            &registry_program_path,
+            registry_program_pin,
+        )
+        .expect("authenticate original Registry Program account JSON");
+        let mut surplus_plan = plan.clone();
+        let surplus_pin = surplus_plan
+            .genesis_accounts
+            .get_mut("loader.registry.program")
+            .expect("surplus Registry Program account pin");
+        let surplus_lamports = surplus_pin
+            .lamports
+            .checked_add(1)
+            .expect("one surplus lamport");
+        let mut surplus_value: serde_json::Value =
+            serde_json::from_slice(&original_registry_program).expect("account JSON value");
+        surplus_value["account"]["lamports"] = serde_json::json!(surplus_lamports);
+        let mut surplus_bytes =
+            serde_json::to_vec_pretty(&surplus_value).expect("surplus account JSON");
+        surplus_bytes.push(b'\n');
+        surplus_pin.lamports = surplus_lamports;
+        surplus_pin.account_sha256 = crate::plan::account_sha256_v1(
+            original_registry_account.owner,
+            surplus_lamports,
+            original_registry_account.executable,
+            original_registry_account.rent_epoch,
+            &original_registry_account.data,
+        )
+        .expect("surplus account digest");
+        surplus_pin.json_file_sha256 = digest(&surplus_bytes);
+        fs::write(&registry_program_path, surplus_bytes)
+            .expect("write coherent surplus Registry Program account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&surplus_plan)
+            .expect_err("coherent rent surplus must refuse");
+        assert!(error.to_string().contains("Loader pair"), "{error}");
+        fs::write(&registry_program_path, &original_registry_program)
+            .expect("restore exact-rent Registry Program account JSON");
+
+        let extra_path = PathBuf::from(&plan.account_dir).join("extra.json");
+        fs::write(&extra_path, b"{}\n").expect("write extra account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect_err("extra account JSON must refuse");
+        assert!(error.to_string().contains("missing, extra"), "{error}");
+        fs::remove_file(&extra_path).expect("remove extra account JSON");
+
+        let held_path = work.join("held-registry-program.json");
+        fs::rename(&registry_program_path, &held_path).expect("hold Registry Program account JSON");
+        let error = crate::local_mutable::authenticate_checked_local_mutable_plan_v1(&plan)
+            .expect_err("missing account JSON must refuse");
+        assert!(error.to_string().contains("missing, extra"), "{error}");
+        fs::rename(&held_path, &registry_program_path)
+            .expect("restore missing Registry Program account JSON");
+
+        let mut aliased_set = checked.clone();
+        aliased_set.roles[1].program_id = aliased_set.roles[0].programdata_id.clone();
+        let authority = crate::plan::pubkey(&aliased_set.retained_upgrade_authority)
+            .expect("retained authority");
+        let error = crate::local_mutable::authenticate_exact_local_account_dir_v1(
+            &plan,
+            &aliased_set,
+            authority,
+        )
+        .expect_err("Program/ProgramData alias must refuse");
+        assert!(error.to_string().contains("aliased"), "{error}");
     }
 
     #[test]

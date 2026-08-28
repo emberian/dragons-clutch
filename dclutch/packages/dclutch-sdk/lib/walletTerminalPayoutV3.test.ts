@@ -1,4 +1,4 @@
-import { AddressLookupTableAccount, PublicKey, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
+import { AddressLookupTableAccount, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import { hex, sha256 } from './bytes';
@@ -45,14 +45,24 @@ import {
   LIABILITY_BASIS_POSITION_REVISION_OFFSET,
   LIABILITY_BASIS_STATE_VERSION_V2,
 } from './generated/coreFound';
+import {
+  TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3,
+  TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3,
+  TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3,
+  TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3,
+} from './generated/walletTerminalPayoutV3';
 import { deriveClaimsAggregateAddressV2, deriveClaimsPositionAddressV2 } from './marketCoreV2';
+import { type RpcAccount, type TransactionMetaObservation } from './rpc';
 import {
   buildWalletTerminalPayoutV3,
   canonicalWalletTerminalPayoutLookupAddressesV3,
   compileWalletTerminalPayoutV0,
   encodeWalletTerminalPayoutRequestV3,
+  finalizeWalletTerminalPayoutV3,
   parseWalletTerminalPayoutManifestV3,
   verifyWalletTerminalPayoutPostconditionV3,
+  verifyFinalizedWalletTerminalPayoutTransactionV3,
+  type PreparedWalletTerminalPayoutV3,
   type WalletTerminalPayoutBuildInputV3,
   type WalletTerminalPayoutReportV3,
   type WalletTerminalPayoutRouteV3,
@@ -60,6 +70,7 @@ import {
 
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const LEGACY_TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const UPGRADEABLE_LOADER = new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
 
 function key(value: number): string { return new PublicKey(new Uint8Array(32).fill(value)).toBase58(); }
 function id(value: number): string { return value.toString(16).padStart(2, '0').repeat(32); }
@@ -83,6 +94,10 @@ function token(mint: string, owner: string, amount: bigint): Uint8Array {
 function fixture(): WalletTerminalPayoutBuildInputV3 {
   const market = key(10); const claimsProgram = key(40); const custodyProgram = key(41);
   const registryProgram = key(42); const owner = key(17); const collateralMint = key(43);
+  const resolutionProgram = key(67); const terminalCertificate = key(29);
+  const [resolutionProgramData] = PublicKey.findProgramAddressSync([
+    new PublicKey(resolutionProgram).toBytes(),
+  ], UPGRADEABLE_LOADER);
   const aggregate = deriveClaimsAggregateAddressV2(claimsProgram, market);
   const position = deriveClaimsPositionAddressV2(claimsProgram, aggregate, owner);
   const releaseSet = bytes(11); const realm = bytes(15); const context = bytes(16);
@@ -102,9 +117,9 @@ function fixture(): WalletTerminalPayoutBuildInputV3 {
     productStaging: key(53), resultDomainRaw: key(54), resultDomainStaging: key(55),
     portfolioRaw: key(56), portfolioStaging: key(57), market, activationCache: key(58),
     registryProgram, claimsProgram, claimsProgramData: key(59), coreProgram: key(60),
-    coreProgramData: key(61), position, exposureRaw: key(62), exposureStaging: key(63),
-    custodyProgram, terminalCoordinateRaw: SYSVAR_RENT_PUBKEY.toBase58(),
-    terminalCoordinateStaging: SYSVAR_RENT_PUBKEY.toBase58(), realmRaw: key(64), realmStaging: key(65),
+    coreProgramData: key(61), resolutionProgram, resolutionProgramData: resolutionProgramData.toBase58(),
+    position, exposureRaw: key(62), exposureStaging: key(63), custodyProgram, terminalCertificate,
+    realmRaw: key(64), realmStaging: key(65),
     custodyReplay: custodyReplay.toBase58(), collateralMint, hoard: hoard.toBase58(), recipient: key(66),
     custodyAuthority: custodyAuthority.toBase58(), tokenProgram: LEGACY_TOKEN_PROGRAM,
   });
@@ -133,7 +148,7 @@ function fixture(): WalletTerminalPayoutBuildInputV3 {
   replay.set(bytes(26), 224); replay.set(bytes(27), 256);
   const request = Object.freeze({
     releaseSet: id(11), market, realm: id(15), parentContext: id(28), productRecordDigest: id(19),
-    exposureId: id(20), exposureDigest: id(21), terminalRecordDigest: id(29), owner, position,
+    exposureId: id(20), exposureDigest: id(21), terminalRecordDigest: hex(new PublicKey(terminalCertificate).toBytes()), owner, position,
     recipientOwner: owner, recipient: route.recipient, claimsProgram, custodyProgram, collateralMint,
     tokenProgram: LEGACY_TOKEN_PROGRAM, semanticBasisId: id(14), linkedBasisRecordDigest: id(18),
     generation: '3', expectedMarketRevision: '7', expectedPositionRevision: '11', expectedCustodyRevision: '5',
@@ -176,9 +191,16 @@ describe('wallet terminal payout v3', () => {
     expect(parseWalletTerminalPayoutManifestV3(JSON.stringify(manifest)).request.position).toBe(input.route.position);
     expect(() => parseWalletTerminalPayoutManifestV3(JSON.stringify({ ...manifest, unchecked: true }))).toThrow('missing or unknown');
     expect(() => parseWalletTerminalPayoutManifestV3(JSON.stringify({ ...manifest, signedPacketBase64: 'AA' }))).toThrow('canonical base64');
+    const rest = Object.fromEntries(Object.entries(input.route).filter(([field]) => ![
+      'terminalCertificate', 'resolutionProgram', 'resolutionProgramData',
+    ].includes(field)));
+    expect(() => parseWalletTerminalPayoutManifestV3(JSON.stringify({
+      ...manifest,
+      route: { ...rest, terminalCoordinateRaw: key(201), terminalCoordinateStaging: key(202) },
+    }))).toThrow('missing or unknown');
   });
 
-  it('emits the exact 640-byte Claims request vector and 35-account wallet frame', async () => {
+  it('emits the exact 640-byte Claims request vector and 36-account certificate frame', async () => {
     const built = await report();
     expect(built.requestBytes).toHaveLength(640);
     expect(new TextDecoder().decode(built.requestBytes.slice(0, 8))).toBe('DCLTSQ03');
@@ -187,13 +209,19 @@ describe('wallet terminal payout v3', () => {
     expect(hex(built.requestBytes.slice(16, 48))).toBe(id(11));
     expect(new PublicKey(built.requestBytes.slice(272, 304)).toBase58()).toBe(key(17));
     expect(new DataView(built.requestBytes.buffer, built.requestBytes.byteOffset + 624, 8).getBigUint64(0, true)).toBe(2n);
-    expect(built.instruction.keys).toHaveLength(35);
+    expect(built.instruction.keys).toHaveLength(TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3);
     expect(built.instruction.keys[0]).toMatchObject({ isSigner: true, isWritable: false });
     expect(built.instruction.keys[1]).toMatchObject({ isSigner: false, isWritable: true });
     expect(built.instruction.keys[20]).toMatchObject({ pubkey: new PublicKey(built.route.position), isWritable: true });
     expect(built.instruction.keys[23]?.pubkey.toBase58()).toBe(built.custodyCaller);
-    expect(built.instruction.keys[31]).toMatchObject({ isWritable: true });
+    expect(built.instruction.keys[TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3]?.pubkey.toBase58()).toBe(built.route.terminalCertificate);
+    expect(built.instruction.keys[TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3]?.pubkey.toBase58()).toBe(built.route.resolutionProgram);
+    expect(built.instruction.keys[TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3]?.pubkey.toBase58()).toBe(built.route.resolutionProgramData);
+    for (const index of [TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3, TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3, TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3]) {
+      expect(built.instruction.keys[index]).toMatchObject({ isSigner: false, isWritable: false });
+    }
     expect(built.instruction.keys[32]).toMatchObject({ isWritable: true });
+    expect(built.instruction.keys[33]).toMatchObject({ isWritable: true });
     expect(hex(built.requestDigest)).toBe('956ad1ac4483ad68bbce95466bcb64bfdf61ecf0e9fc0e00d91dead0fdecbeb2');
   });
 
@@ -219,6 +247,14 @@ describe('wallet terminal payout v3', () => {
     const wrongRoute = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
     wrongRoute.signedPacket.set(await sha256(wrongRoute.__requestBytes), 80);
     await expect(buildWalletTerminalPayoutV3({ ...wrongRoute, route: { ...wrongRoute.route, recipient: key(200) } })).rejects.toThrow('substitutes a request coordinate');
+    const wrongCertificate = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
+    wrongCertificate.signedPacket.set(await sha256(wrongCertificate.__requestBytes), 80);
+    await expect(buildWalletTerminalPayoutV3({ ...wrongCertificate, route: { ...wrongCertificate.route, terminalCertificate: key(200) } }))
+      .rejects.toThrow('differs from the Core terminal receipt');
+    const wrongProgramData = fixture() as WalletTerminalPayoutBuildInputV3 & { __requestBytes: Uint8Array };
+    wrongProgramData.signedPacket.set(await sha256(wrongProgramData.__requestBytes), 80);
+    await expect(buildWalletTerminalPayoutV3({ ...wrongProgramData, route: { ...wrongProgramData.route, resolutionProgramData: key(200) } }))
+      .rejects.toThrow('canonical Loader-v3 authority coordinate');
   });
 
   it('accepts the exact finalized receipt/resources and refuses one changed token byte', async () => {
@@ -243,5 +279,65 @@ describe('wallet terminal payout v3', () => {
     await expect(verifyWalletTerminalPayoutPostconditionV3(built, post)).resolves.toBeUndefined();
     const changed = new Uint8Array(recipient); changed[64] ^= 1;
     await expect(verifyWalletTerminalPayoutPostconditionV3(built, { ...post, recipientTokenBytes: changed })).rejects.toThrow('token payout poststate');
+
+    const payer = built.request.owner;
+    const lookupAddress = key(241);
+    const lookupAddresses = canonicalWalletTerminalPayoutLookupAddressesV3(built, payer);
+    const table = new AddressLookupTableAccount({ key: new PublicKey(lookupAddress), state: {
+      deactivationSlot: MAX_U64, lastExtendedSlot: 98, lastExtendedSlotStartIndex: 0,
+      authority: new PublicKey(payer), addresses: lookupAddresses.map((address) => new PublicKey(address)),
+    } });
+    const compiled = compileWalletTerminalPayoutV0(built, {
+      payer, recentBlockhash: key(31), lookupTable: table, lookupObservedSlot: '99',
+    });
+    const plan = Object.freeze({ ...compiled, lookupTable: lookupAddress }) as PreparedWalletTerminalPayoutV3;
+    const signed = VersionedTransaction.deserialize(plan.wireBytes);
+    signed.signatures[0] = new Uint8Array(64).fill(7);
+    const signedWire = signed.serialize();
+    const signature = 'saved-exact-payout-signature';
+    const meta: TransactionMetaObservation = Object.freeze({
+      signature, slot: '100', blockTime: null, succeeded: true, errorText: null,
+      feeLamports: '5', accountAddresses: Object.freeze([payer]),
+      preBalances: Object.freeze(['100']), postBalances: Object.freeze(['95']),
+      logMessages: Object.freeze([]),
+      returnData: Object.freeze({ programId: built.route.claimsProgram, data: receipt }),
+      transactionBytes: signedWire,
+    });
+    const account = (owner: string, data: Uint8Array): RpcAccount => Object.freeze({
+      owner, data, executable: false, lamports: '1', space: data.length,
+    });
+    const rows = Object.freeze([
+      Object.freeze({ address: built.route.aggregate, account: account(built.route.claimsProgram, aggregate) }),
+      Object.freeze({ address: built.route.position, account: account(built.route.claimsProgram, position) }),
+      Object.freeze({ address: built.route.custodyReplay, account: account(built.route.custodyProgram, replay) }),
+      Object.freeze({ address: built.route.hoard, account: account(built.route.tokenProgram, hoard) }),
+      Object.freeze({ address: built.route.recipient, account: account(built.route.tokenProgram, recipient) }),
+    ]);
+    const client = (changedMeta = meta, observedSlot = '101', changedRows = rows) => Object.freeze({
+      transaction: async () => changedMeta,
+      finalizedSlot: async () => '101',
+      multipleAccounts: async () => Object.freeze({ slot: observedSlot, accounts: changedRows }),
+    });
+    await expect(finalizeWalletTerminalPayoutV3(client(), signature, plan, signedWire)).resolves.toEqual({
+      signature, observedSlot: '101', payout: built.payout,
+    });
+    const changedWire = new Uint8Array(signedWire); changedWire[changedWire.length - 1] ^= 1;
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, transactionBytes: changedWire }, signature, plan, signedWire,
+    )).toThrow(/wire bytes/);
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, postBalances: Object.freeze(['94']) }, signature, plan, signedWire,
+    )).toThrow(/payer fee/);
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, accountAddresses: Object.freeze([key(99)]) }, signature, plan, signedWire,
+    )).toThrow(/fee payer/);
+    expect(() => verifyFinalizedWalletTerminalPayoutTransactionV3(
+      { ...meta, returnData: null }, signature, plan, signedWire,
+    )).toThrow(/Claims-produced/);
+    await expect(finalizeWalletTerminalPayoutV3(client(meta, '100'), signature, plan, signedWire))
+      .rejects.toThrow(/regressed below/);
+    await expect(finalizeWalletTerminalPayoutV3(
+      client(meta, '101', Object.freeze([...rows].reverse())), signature, plan, signedWire,
+    )).rejects.toThrow(/ordered account closure/);
   });
 });

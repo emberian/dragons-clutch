@@ -3,11 +3,9 @@
 use super::*;
 
 use dclutch_custody_contract::{
-    DELEGATED_CUSTODY_RECEIPT_BYTES_V2, DelegatedAllowanceObservationV2, DelegatedCustodyReceiptV2,
-    DelegatedCustodyRequestV2,
+    DELEGATED_CUSTODY_RECEIPT_BYTES_V2, DelegatedAllowanceObservationV2,
+    DelegatedCustodyPoststateFactsV2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
 };
-
-const DELEGATED_POSTSTATE_DOMAIN_V2: &[u8] = b"dclutch:custody-delegated-poststate:v2";
 
 /// Decode and authenticate the distinct successor outside the V1 dispatcher frame.
 #[inline(never)]
@@ -118,7 +116,7 @@ fn commit_delegated(
     outcome: TransferOutcome,
 ) -> ProgramResult {
     let custody = request.custody;
-    let poststate = delegated_poststate_commitment(request_digest, outcome);
+    let poststate = delegated_poststate_commitment(request_digest, outcome)?;
     let replay = read_replay(account(accounts, REPLAY)?)?;
     let next = replay
         .advance(custody, request_digest, poststate)
@@ -192,20 +190,24 @@ fn read_delegate(
     })
 }
 
-fn delegated_poststate_commitment(request_digest: [u8; 32], outcome: TransferOutcome) -> [u8; 32] {
-    hashv(&[
-        DELEGATED_POSTSTATE_DOMAIN_V2,
-        &request_digest,
-        &outcome.source,
-        &outcome.destination,
-        &outcome.before.source.to_le_bytes(),
-        &outcome.after.source.to_le_bytes(),
-        &outcome.before.destination.to_le_bytes(),
-        &outcome.after.destination.to_le_bytes(),
-        &outcome.allowance_before.delegate,
-        &outcome.allowance_before.amount.to_le_bytes(),
-        &outcome.allowance_after.delegate,
-        &outcome.allowance_after.amount.to_le_bytes(),
-    ])
+fn delegated_poststate_commitment(
+    request_digest: [u8; 32],
+    outcome: TransferOutcome,
+) -> Result<[u8; 32], ProgramError> {
+    let preimage = DelegatedCustodyPoststateFactsV2 {
+        request_digest,
+        source: outcome.source,
+        destination: outcome.destination,
+        source_before: outcome.before.source,
+        source_after: outcome.after.source,
+        destination_before: outcome.before.destination,
+        destination_after: outcome.after.destination,
+        delegate_before: outcome.allowance_before.delegate,
+        allowance_before: outcome.allowance_before.amount,
+        delegate_after: outcome.allowance_after.delegate,
+        allowance_after: outcome.allowance_after.amount,
+    }
     .to_bytes()
+    .map_err(|_| CustodySbfError::Postcondition)?;
+    Ok(hash(&preimage).to_bytes())
 }
