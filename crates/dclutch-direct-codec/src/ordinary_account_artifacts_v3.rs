@@ -1131,7 +1131,12 @@ mod tests {
             ),
         ] {
             let mut lengths = lengths_at(4, width(BASIS_PREFIX_BYTES + 32).expect("basis"));
-            lengths[coordinate] += width(stride).expect("stride");
+            let observed = lengths
+                .get_mut(coordinate)
+                .expect("named geometry coordinate");
+            *observed = observed
+                .checked_add(width(stride).expect("stride"))
+                .expect("geometry perturbation width");
             assert_eq!(
                 encode_direct_inline_ordinary_account_profile_v3_atomic(
                     DirectInlineOrdinaryAccountProfileInputV3 {
