@@ -237,7 +237,7 @@ fn build_local_checked_release_v1(
         || hex(&basis.source_digest()) != validated.source_tree_sha256
         || basis.source_revision() != source_revision
         || basis.solana_version() != validated.solana_cli_version
-        || basis.target_triple() != "sbf-solana-solana"
+        || basis.target_triple() != "sbpf-solana-solana"
         || basis.build_command() != checked_build_command_v1(role)?
     {
         return Err(Error::new(format!(
@@ -1358,7 +1358,7 @@ mod tests {
             programdata.extend_from_slice(&elf);
             let semantic = format!("dclutch/test/local-checked/{role}/v1");
             let metadata = BuildMetadataV1::parse(&format!(
-                "dclutch-release-metadata-v1\nsemantic_kind=unowned\nprogram_id={}\nprogramdata_id={}\nloader_program_id={}\nprogram_owner={}\nprogram_executable=true\nprogramdata_owner={}\nprogramdata_executable=false\nsource_digest={}\ncargo_lock_digest={}\nsource_revision=0123456789abcdef0123456789abcdef01234567\nrustc_version=rustc 1.89.0\nsolana_version=solana-cli 4.0.2\ncargo_build_sbf_version=cargo-build-sbf 4.0.2\ntarget_triple=sbf-solana-solana\nbuild_command=cargo build-sbf --manifest-path programs/test/Cargo.toml -- --locked\nassumption=synthetic exact Loader evidence is scoped to this hostile unit test\n",
+                "dclutch-release-metadata-v1\nsemantic_kind=unowned\nprogram_id={}\nprogramdata_id={}\nloader_program_id={}\nprogram_owner={}\nprogram_executable=true\nprogramdata_owner={}\nprogramdata_executable=false\nsource_digest={}\ncargo_lock_digest={}\nsource_revision=0123456789abcdef0123456789abcdef01234567\nrustc_version=rustc 1.89.0\nsolana_version=solana-cli 4.0.2\ncargo_build_sbf_version=cargo-build-sbf 4.0.2\ntarget_triple=sbpf-solana-solana\nbuild_command=cargo build-sbf --manifest-path programs/test/Cargo.toml -- --locked\nassumption=synthetic exact Loader evidence is scoped to this hostile unit test\n",
                 hex(&program_id),
                 hex(&programdata_id),
                 hex(&loader),
