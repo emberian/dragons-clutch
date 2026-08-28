@@ -7,7 +7,9 @@ import {
   inspectUnsignedTransactionV1,
   requestWalletMessageSignatureV1,
   requestWalletTransactionSignatureV1,
+  requireSubmittedSignatureMatchV1,
   submitSignedTransactionV1,
+  transactionSignatureV1,
 } from './walletHandoff';
 
 const DEVNET_ADMISSION = Object.freeze({
@@ -16,7 +18,12 @@ const DEVNET_ADMISSION = Object.freeze({
   kind: 'devnet' as const,
 });
 
-function admittedClient(sendRawTransaction: (bytes: Uint8Array) => Promise<string> = async () => 'signature') {
+function admittedClient(
+  sendRawTransaction: (
+    bytes: Uint8Array,
+    options?: Readonly<{ maxRetries?: 0 | 3 }>,
+  ) => Promise<string> = async () => 'signature',
+) {
   return {
     assertMutationCluster: async () => DEVNET_ADMISSION,
     sendRawTransaction,
@@ -95,6 +102,20 @@ describe('unsigned wallet handoff', () => {
     expect(signed.signer).toBe(signer);
     expect(messageCalls).toBe(1);
     expect(transactionCalls).toBe(1);
+    const transactionId = transactionSignatureV1(signed.transaction.signatures[0]!);
+    expect(transactionId.length).toBeGreaterThanOrEqual(64);
+    expect(() => requireSubmittedSignatureMatchV1(transactionId, transactionId)).not.toThrow();
+    expect(() => requireSubmittedSignatureMatchV1(transactionId, transactionSignatureV1(new Uint8Array(64).fill(8))))
+      .toThrow(/not the exact signed packet id/);
+    const savedWire = new Uint8Array(signed.wireBytes);
+    signed.transaction.message.recentBlockhash = key(99).toBase58();
+    let submittedWire = new Uint8Array();
+    await submitSignedTransactionV1(admittedClient(async (wire) => {
+      submittedWire = new Uint8Array(wire);
+      return transactionId;
+    }), savedWire);
+    expect(submittedWire).toEqual(savedWire);
+    expect(submittedWire).not.toEqual(signed.transaction.serialize());
   });
 
   it('refuses a wallet message rewrite and submits only complete signatures', async () => {
@@ -110,10 +131,14 @@ describe('unsigned wallet handoff', () => {
         return candidate;
       },
     }, transaction, signer)).rejects.toThrow(/rewrote/);
-    await expect(submitSignedTransactionV1(admittedClient(async () => 'unexpected'), transaction)).rejects.toThrow(/fully signed/);
+    await expect(submitSignedTransactionV1(admittedClient(async () => 'unexpected'), transaction.serialize())).rejects.toThrow(/fully signed/);
     transaction.signatures[0] = new Uint8Array(64).fill(8);
     let submitted = 0;
-    await expect(submitSignedTransactionV1(admittedClient(async (bytes) => { submitted = bytes.length; return 'signature'; }), transaction)).resolves.toBe('signature');
+    await expect(submitSignedTransactionV1(admittedClient(async (bytes, options) => {
+      submitted = bytes.length;
+      expect(options).toEqual({ maxRetries: 0 });
+      return 'signature';
+    }), transaction.serialize())).resolves.toBe('signature');
     expect(submitted).toBe(transaction.serialize().length);
   });
 
@@ -157,7 +182,7 @@ describe('unsigned wallet handoff', () => {
         return transaction;
       },
     }, unsignedFixture(), signer);
-    await expect(submitSignedTransactionV1(client, signed.transaction)).rejects.toThrow(/genesis changed/);
+    await expect(submitSignedTransactionV1(client, signed.wireBytes)).rejects.toThrow(/genesis changed/);
     expect(admissions).toBe(2);
     expect(submitted).toBe(false);
   });

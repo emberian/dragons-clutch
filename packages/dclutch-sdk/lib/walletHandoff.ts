@@ -9,6 +9,7 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 export const SOLANA_PACKET_BYTES = 1_232;
 const MAX_UNSIGNED_TEXT_BYTES = 4_096;
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
 type CompiledInstructionView = Readonly<{ programIdIndex: number; accountKeyIndexes: Uint8Array | number[] }>;
 type MessageAccountKeysView = Readonly<{ length: number; get(index: number): PublicKey | undefined }>;
@@ -209,6 +210,37 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+/** Derive the canonical transaction id from an already-signed first signature. */
+export function transactionSignatureV1(signature: Uint8Array): string {
+  if (!(signature instanceof Uint8Array) || signature.length !== 64
+      || signature.every((byte) => byte === 0)) {
+    throw new Error('signed transaction does not carry one exact first Ed25519 signature');
+  }
+  const digits = [0];
+  for (const byte of signature) {
+    let carry = byte;
+    for (let index = 0; index < digits.length; index += 1) {
+      carry += digits[index]! * 256;
+      digits[index] = carry % 58;
+      carry = Math.floor(carry / 58);
+    }
+    while (carry > 0) { digits.push(carry % 58); carry = Math.floor(carry / 58); }
+  }
+  let leadingZeroes = 0;
+  while (leadingZeroes < signature.length && signature[leadingZeroes] === 0) leadingZeroes += 1;
+  return `${'1'.repeat(leadingZeroes)}${digits.reverse().map((digit) => BASE58_ALPHABET[digit]).join('')}`;
+}
+
+/** Refuse an RPC result that does not name the exact signed packet. */
+export function requireSubmittedSignatureMatchV1(expected: string, returned: string): void {
+  if (typeof expected !== 'string' || typeof returned !== 'string'
+      || expected.length < 64 || expected.length > 88 || returned.length < 64 || returned.length > 88
+      || [...expected, ...returned].some((character) => !BASE58_ALPHABET.includes(character))) {
+    throw new Error('transaction id is not bounded canonical base58 text');
+  }
+  if (returned !== expected) throw new Error(`RPC returned ${returned}, not the exact signed packet id ${expected}`);
+}
+
 /** Request one detached maker signature after a user-triggered wallet action. */
 export async function requestWalletMessageSignatureV1(
   client: MutationAdmissionClient,
@@ -265,11 +297,23 @@ export async function requestWalletTransactionSignatureV1(
 /** Submit only an already complete signed packet after a separate user action. */
 export async function submitSignedTransactionV1(
   client: MutationSubmissionClient,
-  transaction: VersionedTransaction,
+  signedWireBytes: Uint8Array,
 ): Promise<string> {
+  if (!(signedWireBytes instanceof Uint8Array) || signedWireBytes.length === 0
+      || signedWireBytes.length > SOLANA_PACKET_BYTES) {
+    throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
+  }
+  const exactWire = new Uint8Array(signedWireBytes);
+  let transaction: VersionedTransaction;
+  try { transaction = VersionedTransaction.deserialize(exactWire); } catch {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
+  if (!sameBytes(transaction.serialize(), exactWire)) {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
   if (transaction.signatures.length === 0 || transaction.signatures.some((signature) => signature.every((byte) => byte === 0))) {
     throw new Error('transaction is not fully signed');
   }
   await client.assertMutationCluster();
-  return client.sendRawTransaction(transaction.serialize());
+  return client.sendRawTransaction(exactWire, { maxRetries: 0 });
 }

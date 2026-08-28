@@ -170,7 +170,7 @@ import {
   deriveClaimsAggregateAddressV2,
   deriveClaimsPositionAddressV2,
 } from './marketCoreV2';
-import { type RpcAccount, type SolanaRpcClient } from './rpc';
+import { type RpcAccount, type SolanaRpcClient, type TransactionMetaObservation } from './rpc';
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const PACKET_BYTES = 1_232;
@@ -836,11 +836,71 @@ export async function prepareWalletTerminalPayoutV3(
   }), lookupTable: manifest.lookupTable });
 }
 
-function receiptFromLogs(logs: ReadonlyArray<string>, claimsProgram: string): Uint8Array {
-  const prefix = `Program return: ${claimsProgram} `;
-  const matches = logs.filter((line) => line.startsWith(prefix));
-  if (matches.length !== 1) throw new Error(`finalized transaction exposes ${matches.length} Claims return receipts instead of exactly one`);
-  return base64Bytes(matches[0]!.slice(prefix.length), 'Claims return receipt');
+function verifyFeeOnlyBalancesV3(transaction: TransactionMetaObservation, payer: string): void {
+  if (transaction.accountAddresses.length !== transaction.preBalances.length
+      || transaction.preBalances.length !== transaction.postBalances.length) {
+    throw new Error('finalized payout balance vectors do not cover its exact account list');
+  }
+  const payerIndex = transaction.accountAddresses.indexOf(payer);
+  if (payerIndex < 0 || transaction.accountAddresses.lastIndexOf(payer) !== payerIndex) {
+    throw new Error('finalized payout does not name one exact fee payer');
+  }
+  const fee = decimal(transaction.feeLamports, 'finalized payout fee');
+  for (let index = 0; index < transaction.preBalances.length; index += 1) {
+    const before = decimal(transaction.preBalances[index]!, `finalized payout pre-balance ${index}`);
+    const after = decimal(transaction.postBalances[index]!, `finalized payout post-balance ${index}`);
+    if (index === payerIndex ? after + fee !== before : after !== before) {
+      throw new Error('finalized payout lamport balances differ by more than the exact payer fee');
+    }
+  }
+}
+
+/**
+ * Authenticate the finalized transaction envelope against one already-signed
+ * packet. This is the sole client-side semantic owner for payout wire,
+ * signature, fee-payer, lamport, and return-data completion facts.
+ */
+export function verifyFinalizedWalletTerminalPayoutTransactionV3(
+  transaction: TransactionMetaObservation,
+  signature: string,
+  plan: PreparedWalletTerminalPayoutV3,
+  signedWireBytes: Uint8Array,
+): Uint8Array {
+  if (transaction.signature !== signature || !transaction.succeeded) {
+    throw new Error(`finalized payout signature or status refused: ${transaction.errorText ?? 'unknown failure'}`);
+  }
+  if (!(signedWireBytes instanceof Uint8Array) || signedWireBytes.length === 0) {
+    throw new Error('saved signed payout packet is absent');
+  }
+  let expected: VersionedTransaction;
+  let observed: VersionedTransaction;
+  try {
+    expected = VersionedTransaction.deserialize(signedWireBytes);
+    observed = VersionedTransaction.deserialize(transaction.transactionBytes);
+  } catch {
+    throw new Error('saved or finalized payout packet is not one Solana transaction');
+  }
+  if (!same(expected.serialize(), signedWireBytes)
+      || !same(observed.serialize(), transaction.transactionBytes)
+      || !same(transaction.transactionBytes, signedWireBytes)) {
+    throw new Error('finalized payout wire bytes differ from the exact signed journal packet');
+  }
+  if (!same(expected.message.serialize(), plan.transaction.message.serialize())
+      || expected.signatures.length !== plan.requiredSigners.length
+      || expected.signatures.some((candidate) => candidate.every((byte) => byte === 0))
+      || observed.signatures.length !== expected.signatures.length
+      || observed.signatures.some((candidate, index) => !same(candidate, expected.signatures[index]!))) {
+    throw new Error('finalized payout message or signature vector differs from its exact saved plan');
+  }
+  const payer = expected.message.staticAccountKeys[0]?.toBase58();
+  if (payer === undefined || plan.requiredSigners.length !== 1 || plan.requiredSigners[0] !== payer) {
+    throw new Error('saved payout packet does not name its one exact fee payer and signer');
+  }
+  verifyFeeOnlyBalancesV3(transaction, payer);
+  if (transaction.returnData === null || transaction.returnData.programId !== plan.report.route.claimsProgram) {
+    throw new Error('finalized payout omitted the exact Claims-produced return receipt');
+  }
+  return new Uint8Array(transaction.returnData.data);
 }
 
 /** Read the finalized transaction and persisted resources, then verify all of them. */
@@ -848,16 +908,28 @@ export async function finalizeWalletTerminalPayoutV3(
   client: Pick<SolanaRpcClient, 'transaction' | 'finalizedSlot' | 'multipleAccounts'>,
   signature: string,
   plan: PreparedWalletTerminalPayoutV3,
+  signedWireBytes: Uint8Array,
 ): Promise<Readonly<{ signature: string; observedSlot: string; payout: string }>> {
   const transaction = await client.transaction(signature);
   if (transaction === null) throw new Error('the payout transaction is not available at finalized commitment yet');
-  if (!transaction.succeeded) throw new Error(`the chain refused the payout transaction: ${transaction.errorText ?? 'unnamed chain error'}`);
-  const receiptBytes = receiptFromLogs(transaction.logMessages, plan.report.route.claimsProgram);
+  const receiptBytes = verifyFinalizedWalletTerminalPayoutTransactionV3(
+    transaction,
+    signature,
+    plan,
+    signedWireBytes,
+  );
   const floor = await client.finalizedSlot();
   if (BigInt(floor) < BigInt(transaction.slot)) throw new Error('the finalized account floor has not reached the payout transaction yet');
   const route = plan.report.route;
   const addresses = [route.aggregate, route.position, route.custodyReplay, route.hoard, route.recipient];
   const observation = await client.multipleAccounts(addresses, floor);
+  if (BigInt(observation.slot) < BigInt(floor)) {
+    throw new Error('payout poststate observation regressed below its finalized floor');
+  }
+  if (observation.accounts.length !== addresses.length
+      || observation.accounts.some((entry, index) => entry.address !== addresses[index])) {
+    throw new Error('payout poststate response substitutes its exact ordered account closure');
+  }
   const account = (address: string) => observation.accounts.find((entry) => entry.address === address)?.account ?? null;
   const aggregate = material(account(route.aggregate), route.claimsProgram, 'post-payout Claims aggregate');
   const position = material(account(route.position), route.claimsProgram, 'post-payout Claims Position');

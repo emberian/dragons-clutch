@@ -460,8 +460,17 @@ describe('CLI payout completion boundary', () => {
         .rejects.toThrow(/trailing data/);
 
       const signed = signPayoutPlanV1(plan, signer);
-      const submitted = markPayoutOperationSubmittedV1(path, unsigned, signed.signature);
+      const submitted = markPayoutOperationSubmittedV1(path, unsigned, signed.signature, signed.wireBytes);
       expect(submitted).toMatchObject({ phase: 'submitted', signature: signed.signature });
+      expect(loadPayoutOperationJournalV1(path)).toEqual(submitted);
+      const submittedSource = readFileSync(path, 'utf8');
+      const changedSignedPacket = JSON.parse(submittedSource) as Record<string, unknown>;
+      const hostileWire = Buffer.from(String(changedSignedPacket.signedWireBase64), 'base64');
+      hostileWire[1] ^= 1;
+      changedSignedPacket.signedWireBase64 = hostileWire.toString('base64');
+      writeFileSync(path, JSON.stringify(changedSignedPacket));
+      expect(() => loadPayoutOperationJournalV1(path)).toThrow(/signature|signed transaction/);
+      writeFileSync(path, submittedSource);
       expect(() => archivePayoutOperationJournalV1(path, submitted, 'discarded')).toThrow(/cannot be discarded/);
       expect(loadPayoutOperationJournalV1(path)).toEqual(submitted);
     } finally {
@@ -523,8 +532,17 @@ describe('CLI payout completion boundary', () => {
 
       const restored = restoreReplayOperationJournalV1(unsigned);
       const signed = signReplayOperationV1(restored, fixture.signer);
-      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature);
+      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature, signed.wireBytes);
       expect(submitted.phase).toBe('submitted');
+      expect(loadReplayOperationJournalV1(path)).toEqual(submitted);
+      const submittedSource = readFileSync(path, 'utf8');
+      const changedSignedPacket = JSON.parse(submittedSource) as Record<string, unknown>;
+      const hostileWire = Buffer.from(String(changedSignedPacket.signedWireBase64), 'base64');
+      hostileWire[1] ^= 1;
+      changedSignedPacket.signedWireBase64 = hostileWire.toString('base64');
+      writeFileSync(path, JSON.stringify(changedSignedPacket));
+      expect(() => loadReplayOperationJournalV1(path)).toThrow(/signature|signed transaction/);
+      writeFileSync(path, submittedSource);
       expect(() => archiveReplayOperationJournalV1(path, submitted, 'discarded')).toThrow(/cannot be discarded/);
       expect(loadReplayOperationJournalV1(path)).toEqual(submitted);
     } finally {
@@ -623,7 +641,7 @@ describe('CLI payout completion boundary', () => {
       const unsigned = writeUnsignedReplayOperationJournalV1(path, key(1), fixture.plan, fixture.programs);
       const restored = restoreReplayOperationJournalV1(unsigned);
       const signed = signReplayOperationV1(restored, fixture.signer);
-      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature);
+      const submitted = markReplayOperationSubmittedV1(path, unsigned, signed.signature, signed.wireBytes);
       const addresses = restored.transaction.message.staticAccountKeys.map((address) => address.toBase58());
       const ownerIndex = addresses.indexOf(restored.owner); const replayIndex = addresses.indexOf(restored.replay);
       const pre = addresses.map((_, index) => index === ownerIndex ? '10000' : index === replayIndex ? '0' : '1');
@@ -681,6 +699,7 @@ describe('CLI payout completion boundary', () => {
       clusterGenesis: key(1), market: plan.report.route.market, owner: signer.publicKey.toBase58(),
       operationDigest: digest(1), intentDigest: digest(2), planDigest: digest(3),
       intent: '{}', plan: '{}', phase: 'submitted', signature: signed.signature,
+      signedWireBase64: Buffer.from(signed.wireBytes).toString('base64'),
     }) as PayoutOperationJournalV1;
     const addresses = [
       signer.publicKey.toBase58(),
@@ -714,7 +733,7 @@ describe('CLI payout completion boundary', () => {
     expect(receipt).toEqual(new Uint8Array([44, 55]));
 
     await expect(finalizePayoutOperationV1(client({ ...meta, transactionBytes: plan.wireBytes }), journal, plan, async () => {}))
-      .rejects.toThrow(/packet differs/);
+      .rejects.toThrow(/wire bytes differ/);
     await expect(finalizePayoutOperationV1(client({ ...meta, returnData: null }), journal, plan, async () => {}))
       .rejects.toThrow(/Claims-produced return receipt/);
     await expect(finalizePayoutOperationV1(client({

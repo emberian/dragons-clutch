@@ -46,6 +46,8 @@ import {
   restoreReplayOperationJournalV1,
   signPayoutPlanV1,
   signReplayOperationV1,
+  submittedPayoutWireBytesV1,
+  submittedReplayWireBytesV1,
   writeUnsignedPayoutOperationJournalV1,
   writeUnsignedReplayOperationJournalV1,
   type WalletTerminalPayoutPlanInputV1,
@@ -454,9 +456,17 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
       throw new Error('the named replay signer is not --payer; the unsigned Claims replay journal remains preserved');
     }
     const signed = signReplayOperationV1(restored, keypair);
-    const submittedJournal = markReplayOperationSubmittedV1(replayJournalPath, unsignedJournal, signed.signature);
+    const submittedJournal = markReplayOperationSubmittedV1(
+      replayJournalPath,
+      unsignedJournal,
+      signed.signature,
+      signed.wireBytes,
+    );
     await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem Claims replay raw submission');
-    const submittedSignature = await client.sendRawTransaction(signed.wireBytes, { maxRetries: 0 });
+    const submittedSignature = await client.sendRawTransaction(
+      submittedReplayWireBytesV1(submittedJournal, restored),
+      { maxRetries: 0 },
+    );
     if (submittedSignature !== signed.signature) {
       throw new Error('the RPC returned another Claims replay signature; the submitted journal remains preserved and must not be replayed');
     }
@@ -611,9 +621,17 @@ export async function redeem(context: CliContext, io: Io, env: NodeJS.ProcessEnv
       throw new Error('the named payout signer is not --payer; the unsigned journal remains preserved');
     }
     const signed = signPayoutPlanV1(prepared, keypair);
-    const submittedJournal = markPayoutOperationSubmittedV1(journalPath, unsignedJournal, signed.signature);
+    const submittedJournal = markPayoutOperationSubmittedV1(
+      journalPath,
+      unsignedJournal,
+      signed.signature,
+      signed.wireBytes,
+    );
     await assertExactDevnetMutation(client, devnetAcknowledgment, 'redeem payout raw submission');
-    const submittedSignature = await client.sendRawTransaction(signed.wireBytes);
+    const submittedSignature = await client.sendRawTransaction(
+      submittedPayoutWireBytesV1(submittedJournal, prepared),
+      { maxRetries: 0 },
+    );
     if (submittedSignature !== signed.signature) {
       throw new Error('the RPC returned another payout signature; the submitted journal remains preserved and must not be replayed');
     }
