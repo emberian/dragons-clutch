@@ -30,12 +30,13 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use solana_program::rent::Rent;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk_ids::bpf_loader_upgradeable;
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 use crate::{
     Error, Result,
-    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
-    rpc::{Rpc, RpcAccount, WritePolicyV1, parse_json_without_duplicate_keys_v1},
+    cluster::{ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG},
+    rpc::{Rpc, RpcAccount, WritePolicyV1},
+    upgrade::{CHECKED_ROLE_ORDER_V1, PERMANENT_DEVNET_UPGRADE_TARGETS_V1},
 };
 
 const PUBLIC_DEVNET_ENDPOINT: &str = "https://api.devnet.solana.com";
@@ -43,6 +44,8 @@ const CARRY_FORWARD_SCHEMA: &str = "dclutch-carry-forward-rpc-snapshot-v1";
 const PREPARE_BUNDLE_SCHEMA: &str = "dclutch-prepare-programdata-capture-v1";
 const PREPARE_BUNDLE_DOMAIN: &[u8] = b"dclutch/prepare-programdata-capture/v1\n";
 const PREPARE_MANIFEST_FILE: &str = "manifest.json";
+const PERMANENT_SUBSTRATE_SCHEMA: &str = "dclutch-devnet-permanent-substrate-snapshot-v1";
+const PERMANENT_SUBSTRATE_DOMAIN: &[u8] = b"dclutch/devnet-permanent-substrate-snapshot/v1\n";
 
 const INFRASTRUCTURE_LABELS: [&str; 9] = [
     "registry_program",
@@ -76,6 +79,15 @@ struct PrepareCaptureArgsV1 {
     expected_upgrade_authority: Pubkey,
     minimum_context_slot: u64,
     output_dir: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct PermanentSubstrateArgsV1 {
+    origin: ClusterOriginV1,
+    expected_upgrade_authority: Pubkey,
+    fee_payer: Pubkey,
+    minimum_context_slot: u64,
+    output_path: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -139,6 +151,45 @@ struct PrepareProgramdataManifestV1 {
     canonical_role_order: Vec<String>,
     roles: Vec<PrepareProgramdataRoleV1>,
     bundle_sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PermanentSubstrateRoleV1 {
+    ordinal: u8,
+    role: String,
+    program_id: String,
+    programdata_id: String,
+    program_lamports: u64,
+    program_data_sha256: String,
+    programdata_lamports: u64,
+    programdata_account_bytes: usize,
+    programdata_account_sha256: String,
+    deployment_slot: u64,
+    live_elf_bytes: usize,
+    live_elf_sha256: String,
+}
+
+/// One finalized-context pre-write fact set for every permanent Loader pair
+/// and the exclusive fee payer. This is deliberately a compact digest
+/// projection; the carry-forward and prepare captures remain the owners of the
+/// complete account bodies their downstream consumers need.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PermanentSubstrateSnapshotV1 {
+    schema: String,
+    endpoint: String,
+    commitment: String,
+    rpc_method: String,
+    context_slot: u64,
+    expected_upgrade_authority: String,
+    fee_payer: String,
+    fee_payer_lamports: u64,
+    canonical_role_order: Vec<String>,
+    roles: Vec<PermanentSubstrateRoleV1>,
+    program_lamports_total: u64,
+    programdata_lamports_total: u64,
+    snapshot_sha256: String,
 }
 
 #[derive(Clone, Debug)]
@@ -217,6 +268,33 @@ pub(crate) fn run_prepare_programdata(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// Capture all seven permanent Loader pairs and the explicit fee payer in one
+/// finalized `getMultipleAccounts` context. The command is key-free and has no
+/// caller-supplied Program identities: decision 0012's permanent table is the
+/// only admitted set.
+pub(crate) fn run_permanent_substrate(arguments: Vec<String>) -> Result<()> {
+    let args = parse_permanent_substrate_args(arguments)?;
+    require_public_devnet(&args.origin)?;
+    require_new_file_path(&args.output_path, "permanent substrate output")?;
+
+    let programs = permanent_programs()?;
+    let mut addresses = Vec::with_capacity(programs.len() * 2 + 1);
+    for (_, program, programdata) in &programs {
+        addresses.extend([*program, *programdata]);
+    }
+    addresses.push(args.fee_payer);
+    let mut rpc = Rpc::connect_cluster(&args.origin, WritePolicyV1::ReadsOnly)?;
+    let (context_slot, accounts) = rpc.finalized_accounts(&addresses, args.minimum_context_slot)?;
+    let snapshot =
+        authenticate_permanent_substrate(&args, context_slot, &addresses, accounts, &programs)?;
+    write_json_atomic_new(&args.output_path, &snapshot)?;
+
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer_pretty(&mut stdout, &snapshot)?;
+    stdout.write_all(b"\n")?;
+    Ok(())
+}
+
 pub(crate) fn usage() -> &'static str {
     concat!(
         "  dclutch-local-successor-bootstrap devnet-carry-forward-capture-v1 \\\n",
@@ -237,7 +315,17 @@ pub(crate) fn usage() -> &'static str {
         "    --minimum-context-slot U64 --output-dir ABSOLUTE_NEW_DIR\n",
         "    Captures the five exact full ProgramData account bodies in one finalized ",
         "ten-account Program/ProgramData observation. It writes the five bodies ",
-        "before a manifest-last fsync commit and never overwrites an existing path.",
+        "before a manifest-last fsync commit and never overwrites an existing path.\n\n",
+        "  dclutch-local-successor-bootstrap devnet-permanent-substrate-capture-v1 \\\n",
+        "    --rpc-url https://api.devnet.solana.com \\\n",
+        "    --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\\n",
+        "    --expected-upgrade-authority PUBKEY --fee-payer PUBKEY \\\n",
+        "    --minimum-context-slot U64 --output ABSOLUTE_NEW_JSON\n",
+        "    Captures all seven fixed decision-0012 Program/ProgramData pairs and the ",
+        "explicit fee payer in one finalized account context. It authenticates every ",
+        "Loader link, authority, owner, privilege, slot, account digest, payload digest, ",
+        "parked-rent total, and payer balance. It is read-only, key-free, and accepts no ",
+        "caller-supplied Program set.",
     )
 }
 
@@ -347,6 +435,43 @@ fn parse_prepare_capture_args(arguments: Vec<String>) -> Result<PrepareCaptureAr
             "--minimum-context-slot",
         )?,
         output_dir: absolute_path(&take(&mut fields, "--output-dir")?, "--output-dir")?,
+    })
+}
+
+fn parse_permanent_substrate_args(arguments: Vec<String>) -> Result<PermanentSubstrateArgsV1> {
+    let mut fields = parse_pairs(
+        arguments,
+        &[
+            "--rpc-url",
+            DEVNET_ACKNOWLEDGMENT_FLAG,
+            "--expected-upgrade-authority",
+            "--fee-payer",
+            "--minimum-context-slot",
+            "--output",
+        ],
+    )?;
+    let rpc_url = take(&mut fields, "--rpc-url")?;
+    let acknowledgment = take(&mut fields, DEVNET_ACKNOWLEDGMENT_FLAG)?;
+    let expected_upgrade_authority = parse_pubkey(
+        &take(&mut fields, "--expected-upgrade-authority")?,
+        "expected retained upgrade authority",
+    )?;
+    let fee_payer = parse_pubkey(&take(&mut fields, "--fee-payer")?, "fee payer")?;
+    let programs = permanent_programs()?
+        .into_iter()
+        .map(|(_, program, _)| program)
+        .collect::<Vec<_>>();
+    require_signing_authority(expected_upgrade_authority, &programs)?;
+    require_signing_authority(fee_payer, &programs)?;
+    Ok(PermanentSubstrateArgsV1 {
+        origin: ClusterOriginV1::parse(&rpc_url, Some(&acknowledgment))?,
+        expected_upgrade_authority,
+        fee_payer,
+        minimum_context_slot: parse_nonzero_u64(
+            &take(&mut fields, "--minimum-context-slot")?,
+            "--minimum-context-slot",
+        )?,
+        output_path: absolute_path(&take(&mut fields, "--output")?, "--output")?,
     })
 }
 
@@ -644,6 +769,150 @@ fn authenticate_prepare_programdata(
     };
     manifest.bundle_sha256 = prepare_bundle_digest(&manifest, &bodies)?;
     Ok((manifest, bodies))
+}
+
+fn permanent_programs() -> Result<Vec<(&'static str, Pubkey, Pubkey)>> {
+    if PERMANENT_DEVNET_UPGRADE_TARGETS_V1.len() != CHECKED_ROLE_ORDER_V1.len() {
+        return Err(Error::new(
+            "permanent target table and canonical role order have different widths",
+        ));
+    }
+    PERMANENT_DEVNET_UPGRADE_TARGETS_V1
+        .iter()
+        .zip(CHECKED_ROLE_ORDER_V1)
+        .map(|((role, program, programdata), ordered_role)| {
+            if *role != ordered_role {
+                return Err(Error::new(
+                    "permanent target table and canonical role order diverged",
+                ));
+            }
+            let program = parse_pubkey(program, "permanent Program")?;
+            let programdata = parse_pubkey(programdata, "permanent ProgramData")?;
+            if self::programdata(program) != programdata {
+                return Err(Error::new(format!(
+                    "permanent {role} ProgramData is not the Loader-derived coordinate"
+                )));
+            }
+            Ok((*role, program, programdata))
+        })
+        .collect()
+}
+
+fn authenticate_permanent_substrate(
+    args: &PermanentSubstrateArgsV1,
+    context_slot: u64,
+    addresses: &[Pubkey],
+    accounts: Vec<Option<RpcAccount>>,
+    programs: &[(&'static str, Pubkey, Pubkey)],
+) -> Result<PermanentSubstrateSnapshotV1> {
+    let expected_width = programs
+        .len()
+        .checked_mul(2)
+        .and_then(|width| width.checked_add(1))
+        .ok_or_else(|| Error::new("permanent substrate observation width overflow"))?;
+    if context_slot < args.minimum_context_slot
+        || addresses.len() != expected_width
+        || accounts.len() != expected_width
+        || addresses.last() != Some(&args.fee_payer)
+    {
+        return Err(Error::new(
+            "permanent substrate observation context, width, or payer coordinate is invalid",
+        ));
+    }
+
+    let mut roles = Vec::with_capacity(programs.len());
+    let mut program_lamports_total = 0_u64;
+    let mut programdata_lamports_total = 0_u64;
+    for (ordinal, ((role, program, programdata), (address_pair, account_pair))) in programs
+        .iter()
+        .zip(
+            addresses[..addresses.len() - 1]
+                .chunks_exact(2)
+                .zip(accounts[..accounts.len() - 1].chunks_exact(2)),
+        )
+        .enumerate()
+    {
+        if address_pair != [*program, *programdata] {
+            return Err(Error::new(format!(
+                "permanent {role} Program/ProgramData address order is not canonical"
+            )));
+        }
+        let program_account = account_pair
+            .first()
+            .and_then(Option::as_ref)
+            .ok_or_else(|| Error::new(format!("missing permanent {role} Program account")))?;
+        let programdata_account = account_pair
+            .get(1)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| Error::new(format!("missing permanent {role} ProgramData account")))?;
+        let facts = authenticate_loader_pair(
+            role,
+            *program,
+            *programdata,
+            args.expected_upgrade_authority,
+            program_account,
+            programdata_account,
+        )?;
+        program_lamports_total = program_lamports_total
+            .checked_add(program_account.lamports)
+            .ok_or_else(|| Error::new("permanent Program lamport total overflow"))?;
+        programdata_lamports_total = programdata_lamports_total
+            .checked_add(programdata_account.lamports)
+            .ok_or_else(|| Error::new("permanent ProgramData lamport total overflow"))?;
+        roles.push(PermanentSubstrateRoleV1 {
+            ordinal: u8::try_from(ordinal)
+                .map_err(|_| Error::new("permanent role ordinal overflow"))?,
+            role: (*role).into(),
+            program_id: program.to_string(),
+            programdata_id: programdata.to_string(),
+            program_lamports: program_account.lamports,
+            program_data_sha256: digest(&program_account.data),
+            programdata_lamports: programdata_account.lamports,
+            programdata_account_bytes: programdata_account.data.len(),
+            programdata_account_sha256: digest(&programdata_account.data),
+            deployment_slot: facts.deployment_slot,
+            live_elf_bytes: facts.live_elf_bytes,
+            live_elf_sha256: facts.live_elf_sha256,
+        });
+    }
+
+    let payer = accounts
+        .last()
+        .and_then(Option::as_ref)
+        .ok_or_else(|| Error::new("explicit permanent-substrate fee payer is absent"))?;
+    require_account_shape("fee payer", payer, system_program::ID, false, Some(0))?;
+    require_rent_exempt("fee payer", payer)?;
+
+    let mut snapshot = PermanentSubstrateSnapshotV1 {
+        schema: PERMANENT_SUBSTRATE_SCHEMA.into(),
+        endpoint: PUBLIC_DEVNET_ENDPOINT.into(),
+        commitment: "finalized".into(),
+        rpc_method: "getMultipleAccounts".into(),
+        context_slot,
+        expected_upgrade_authority: args.expected_upgrade_authority.to_string(),
+        fee_payer: args.fee_payer.to_string(),
+        fee_payer_lamports: payer.lamports,
+        canonical_role_order: CHECKED_ROLE_ORDER_V1
+            .iter()
+            .map(|role| (*role).into())
+            .collect(),
+        roles,
+        program_lamports_total,
+        programdata_lamports_total,
+        snapshot_sha256: String::new(),
+    };
+    snapshot.snapshot_sha256 = permanent_substrate_digest(&snapshot)?;
+    Ok(snapshot)
+}
+
+fn permanent_substrate_digest(snapshot: &PermanentSubstrateSnapshotV1) -> Result<String> {
+    let mut canonical = snapshot.clone();
+    canonical.snapshot_sha256.clear();
+    let bytes = serde_json::to_vec(&canonical)?;
+    let mut hasher = Sha256::new();
+    hasher.update(PERMANENT_SUBSTRATE_DOMAIN);
+    hash_field(&mut hasher, &bytes)?;
+    Ok(hex(&hasher.finalize()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1114,6 +1383,7 @@ fn hex32(value: &str) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{cluster::DEVNET_GENESIS_HASH, rpc::parse_json_without_duplicate_keys_v1};
     use dclutch_core_contract::ContentId;
     use dclutch_registry_contract::ArtifactUpgradePolicyV1;
     use dclutch_release_set_contract::{
@@ -1250,6 +1520,43 @@ mod tests {
             accounts.extend([Some(program_account), Some(programdata_account)]);
         }
         (args, addresses, accounts)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn permanent_fixture() -> (
+        PermanentSubstrateArgsV1,
+        Vec<Pubkey>,
+        Vec<Option<RpcAccount>>,
+        Vec<(&'static str, Pubkey, Pubkey)>,
+    ) {
+        let programs = permanent_programs().expect("permanent table");
+        let authority = Pubkey::new_unique();
+        let payer = Pubkey::new_unique();
+        let args = PermanentSubstrateArgsV1 {
+            origin: devnet_origin(),
+            expected_upgrade_authority: authority,
+            fee_payer: payer,
+            minimum_context_slot: 1,
+            output_path: std::env::temp_dir().join("unused-permanent-substrate-fixture.json"),
+        };
+        let mut addresses = Vec::with_capacity(programs.len() * 2 + 1);
+        let mut accounts = Vec::with_capacity(programs.len() * 2 + 1);
+        for (ordinal, (_, program, expected_programdata)) in programs.iter().enumerate() {
+            let elf = vec![u8::try_from(ordinal + 1).expect("ELF fill"); 80 + ordinal];
+            let (program_account, programdata_account) = loader_accounts(
+                *program,
+                authority,
+                900 + u64::try_from(ordinal).expect("slot"),
+                &elf,
+            );
+            addresses.extend([*program, *expected_programdata]);
+            accounts.extend([Some(program_account), Some(programdata_account)]);
+        }
+        addresses.push(payer);
+        let mut payer_account = rpc_account(system_program::ID, false, Vec::new());
+        payer_account.lamports = 42_185_584_146;
+        accounts.push(Some(payer_account));
+        (args, addresses, accounts, programs)
     }
 
     fn artifact_fixture(
@@ -1505,6 +1812,141 @@ mod tests {
         let mut reordered = addresses.clone();
         reordered.swap(0, 2);
         assert!(authenticate_prepare_programdata(&args, 1, &reordered, accounts).is_err());
+    }
+
+    #[test]
+    fn permanent_snapshot_binds_seven_fixed_pairs_and_payer_in_one_context() {
+        let (args, addresses, accounts, programs) = permanent_fixture();
+        let expected_program_lamports = accounts
+            .iter()
+            .take(14)
+            .step_by(2)
+            .map(|account| account.as_ref().expect("Program").lamports)
+            .sum::<u64>();
+        let expected_programdata_lamports = accounts
+            .iter()
+            .skip(1)
+            .take(14)
+            .step_by(2)
+            .map(|account| account.as_ref().expect("ProgramData").lamports)
+            .sum::<u64>();
+        let snapshot =
+            authenticate_permanent_substrate(&args, 1_001, &addresses, accounts, &programs)
+                .expect("authenticated permanent snapshot");
+        assert_eq!(snapshot.schema, PERMANENT_SUBSTRATE_SCHEMA);
+        assert_eq!(snapshot.context_slot, 1_001);
+        assert_eq!(snapshot.roles.len(), CHECKED_ROLE_ORDER_V1.len());
+        assert_eq!(snapshot.fee_payer_lamports, 42_185_584_146);
+        assert_eq!(snapshot.program_lamports_total, expected_program_lamports);
+        assert_eq!(
+            snapshot.programdata_lamports_total,
+            expected_programdata_lamports
+        );
+        assert_eq!(
+            snapshot.snapshot_sha256,
+            permanent_substrate_digest(&snapshot).expect("canonical snapshot digest")
+        );
+        for ((row, expected_role), (_, expected_program, expected_programdata)) in snapshot
+            .roles
+            .iter()
+            .zip(CHECKED_ROLE_ORDER_V1)
+            .zip(programs)
+        {
+            assert_eq!(row.role, expected_role);
+            assert_eq!(row.program_id, expected_program.to_string());
+            assert_eq!(row.programdata_id, expected_programdata.to_string());
+        }
+    }
+
+    #[test]
+    fn permanent_snapshot_refuses_every_identity_authority_and_payer_substitution() {
+        let (args, addresses, accounts, programs) = permanent_fixture();
+
+        let mut reordered = addresses.clone();
+        reordered.swap(0, 2);
+        assert!(
+            authenticate_permanent_substrate(&args, 10, &reordered, accounts.clone(), &programs,)
+                .is_err()
+        );
+
+        let mut wrong_authority = accounts.clone();
+        *wrong_authority
+            .get_mut(3)
+            .and_then(Option::as_mut)
+            .and_then(|account| account.data.get_mut(13))
+            .expect("second ProgramData authority") ^= 1;
+        assert!(
+            authenticate_permanent_substrate(&args, 10, &addresses, wrong_authority, &programs,)
+                .is_err()
+        );
+
+        let mut wrong_program_owner = accounts.clone();
+        wrong_program_owner
+            .get_mut(8)
+            .and_then(Option::as_mut)
+            .expect("fifth Program")
+            .owner = system_program::ID;
+        assert!(
+            authenticate_permanent_substrate(
+                &args,
+                10,
+                &addresses,
+                wrong_program_owner,
+                &programs,
+            )
+            .is_err()
+        );
+
+        let mut absent_payer = accounts.clone();
+        *absent_payer.last_mut().expect("payer row") = None;
+        assert!(
+            authenticate_permanent_substrate(&args, 10, &addresses, absent_payer, &programs,)
+                .is_err()
+        );
+
+        let mut executable_payer = accounts;
+        executable_payer
+            .last_mut()
+            .and_then(Option::as_mut)
+            .expect("payer")
+            .executable = true;
+        assert!(
+            authenticate_permanent_substrate(&args, 10, &addresses, executable_payer, &programs,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn permanent_capture_cli_has_no_program_or_keypair_surface() {
+        let temp = TempDir::new("permanent-cli");
+        let authority = Pubkey::new_unique();
+        let args = vec![
+            "--rpc-url".into(),
+            PUBLIC_DEVNET_ENDPOINT.into(),
+            DEVNET_ACKNOWLEDGMENT_FLAG.into(),
+            DEVNET_GENESIS_HASH.into(),
+            "--expected-upgrade-authority".into(),
+            authority.to_string(),
+            "--fee-payer".into(),
+            authority.to_string(),
+            "--minimum-context-slot".into(),
+            "1".into(),
+            "--output".into(),
+            temp.0.join("snapshot.json").display().to_string(),
+        ];
+        let parsed = parse_permanent_substrate_args(args.clone()).expect("exact key-free CLI");
+        assert_eq!(parsed.expected_upgrade_authority, authority);
+        assert_eq!(parsed.fee_payer, authority);
+
+        let mut unknown = args;
+        unknown.extend([
+            "--expected-core-program".into(),
+            Pubkey::new_unique().to_string(),
+        ]);
+        assert!(
+            parse_permanent_substrate_args(unknown).is_err(),
+            "caller-supplied Program identities must not enter the fixed-set capture"
+        );
     }
 
     #[test]

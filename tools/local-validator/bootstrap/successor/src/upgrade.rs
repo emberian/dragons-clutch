@@ -117,7 +117,7 @@ pub(crate) const CHECKED_ROLE_ORDER_V1: [&str; 7] = [
 /// Decision-0012's permanent devnet Loader pairs. This is the operational
 /// identity owner for the seven-role set auditor; a journal can pin evidence
 /// for these accounts, never nominate a replacement set.
-const PERMANENT_DEVNET_UPGRADE_TARGETS_V1: &[(&str, &str, &str)] = &[
+pub(crate) const PERMANENT_DEVNET_UPGRADE_TARGETS_V1: &[(&str, &str, &str)] = &[
     (
         "registry",
         "Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj",

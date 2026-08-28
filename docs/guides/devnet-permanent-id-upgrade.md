@@ -38,6 +38,17 @@ Zeroes typed into a JSON file are not build or frame evidence.
 
 ## 2. Capture a fresh baseline
 
+First capture the complete permanent substrate with
+[`devnet-permanent-substrate-capture-v1`](devnet-release-capture.md). Run it at
+an immediate finalized floor before the first Upgrade. Its single account
+context must authenticate all seven fixed Program/ProgramData pairs, the
+retained authority, the Program residue and parked ProgramData lamport totals,
+and the exact fee-payer balance.
+This closes the gap that five separate role baselines cannot close: none of
+those per-role reads alone proves that the other six permanent deployments and
+the payer were one coherent pre-write state. The capture is key-free and has no
+caller-supplied Program surface.
+
 Use `devnet-upgrade-baseline-v1` with the candidate raw ELF byte length and a recent
 finalized context-slot floor. This command is key-free and read-only. After the
 health and genesis checks, it reads Program and ProgramData together in one
